@@ -18,6 +18,7 @@ from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult
 from harbor.models.trial.config import TaskConfig
 from harbor_config.errors import ErrorCategory, error_category
+from shellbox.backends.daytona.machine import DaytonaImageBuild
 from skyrl_train.inline_harbor_client import CONTROL_MESSAGE_LIMIT
 
 
@@ -95,6 +96,9 @@ async def serve_trials(control_fd: int, *, host_environment: Mapping[str, str]) 
                 raise ValueError("duplicate validation tasks")
             if any(not task.git_url or not task.git_commit_id for task in config.tasks):
                 raise ValueError("Inline validation task sources must have immutable Git revisions")
+            # The RL Daytona org rejects declarative builds; only standalone evals use them.
+            if config.environment.kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT) != DaytonaImageBuild.SNAPSHOT:
+                raise ValueError("Inline validation requires Daytona snapshot image builds")
             config = await task_cache.prepare(config)
             index = message["index"]
             config = config.model_copy(

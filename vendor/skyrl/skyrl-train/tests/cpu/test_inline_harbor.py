@@ -133,6 +133,30 @@ async def test_worker_preserves_task_download_stderr(tmp_path):
     assert "missing-repository" in stderr
 
 
+@pytest.mark.asyncio
+async def test_worker_rejects_declarative_image_builds_before_fetching_tasks(tmp_path):
+    cohort = {
+        "job": {
+            "agents": [{}],
+            "environment": {"type": "daytona", "kwargs": {"image_build": "declarative"}},
+            "tasks": [
+                {
+                    "path": "task",
+                    "git_url": (tmp_path / "missing-repository").as_uri(),
+                    "git_commit_id": "a" * 40,
+                    "download_dir": str(tmp_path / "cache"),
+                }
+            ],
+        },
+        "reward_key": "reward",
+    }
+    async with HarborTrialClient(os.environ.copy()) as client:
+        with pytest.raises(RuntimeError) as caught:
+            await client.run(cohort, 0)
+    assert "ValueError" in str(caught.value)
+    assert not (tmp_path / "cache").exists()
+
+
 @pytest.mark.parametrize("agent_error", ["AgentTimeoutError", "TurnCapExhaustedError", "ModelInitiatedTmuxFailure"])
 @pytest.mark.parametrize("unscored_error", ["ConnectionError", "VerifierRuntimeError", "VerifierTimeoutError"])
 def test_validation_scores_preserve_infrastructure_missingness(agent_error, unscored_error):

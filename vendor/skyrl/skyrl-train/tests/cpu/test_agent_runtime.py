@@ -1,6 +1,7 @@
 """Installed-agent runtime admission through the real Harbor trial boundary."""
 
 import asyncio
+import dataclasses
 from contextlib import asynccontextmanager
 
 import pytest
@@ -115,6 +116,41 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     assert len(attempts) == 1
     assert (attempts[0] / "identity.json").is_file()
     assert list((attempts[0] / "trials").glob("*/result.json"))
+
+
+def test_original_trial_rejects_declarative_image_builds(tmp_path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "environment").mkdir()
+    (package / "tests").mkdir()
+    (package / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
+    (package / "instruction.md").write_text("Write an answer.")
+    (package / "task.toml").write_text('[environment]\ndocker_image = "fixture/image:latest"\n')
+    task = harbor_trial_task(package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
+    lowered = lowered_task(task, "harbor_trial", attempt_timeout=15, total_turn_timeout=5)
+    connection = DaytonaConnection(api_key="key", api_url="https://daytona.invalid/api", target="target")
+    runtime = InstalledAgentRuntime(
+        InstalledAgentSettings(
+            agent=AgentConfig(name="pi"),
+            output_path=str(tmp_path / "attempts"),
+            setup_timeout=5,
+            run_timeout=5,
+            cleanup_timeout=5,
+            service_startup_timeout=5,
+            service_shutdown_timeout=5,
+        ),
+        AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder()),
+        128,
+        daytona_connection=connection,
+        eval_daytona_connection=connection,
+    )
+    settings = HarborTaskSettings.from_config(OmegaConf.create({}))
+    settings = dataclasses.replace(
+        settings,
+        environment=settings.environment.model_copy(update={"kwargs": {"image_build": "declarative"}}),
+    )
+    with pytest.raises(ValueError):
+        runtime.original_harness(lowered, "session", settings, "train")
 
 
 @pytest.mark.asyncio

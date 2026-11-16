@@ -105,7 +105,9 @@ Snapshots persist after the run and count against the account's snapshot quota, 
 with more distinct environments than the free quota fails with `Snapshot quota exceeded`.
 `declarative` builds the image for every sandbox instead and creates no snapshot; every
 trial repeats the build, including the base-image pull, and `snapshot-specs` rejects the
-policy. The Daytona eval account permits declarative builds; the RL account does not:
+policy. Use it only for standalone evals in the Daytona eval account. The RL account rejects
+declarative builds, and SkyRL rollouts and inline validation reject the setting. Select it
+in the eval policy:
 
 ```yaml
 environment:

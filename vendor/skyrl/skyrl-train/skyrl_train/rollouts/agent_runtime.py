@@ -19,6 +19,7 @@ from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEn
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
 from shellbox.backends.daytona.connection import DaytonaConnection
+from shellbox.backends.daytona.machine import DaytonaImageBuild
 from marinskyrl.harbor_environments import (
     HarborTaskBinding,
     apply_task_binding,
@@ -155,6 +156,9 @@ class InstalledAgentRuntime:
                 "Original Harbor trials require Shellbox Daytona; engine-owned Docker "
                 "machines use the borrowed-machine harness"
             )
+        # The RL Daytona org rejects declarative builds; only standalone evals use them.
+        if settings.environment.kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT) != DaytonaImageBuild.SNAPSHOT:
+            raise ValueError("SkyRL Harbor trials require Daytona snapshot image builds")
         kwargs = dict(settings.environment.kwargs)
         kwargs.pop("api_key_env", None)
         kwargs.pop("eval_api_key_env", None)
