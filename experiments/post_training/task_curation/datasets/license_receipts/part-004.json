@@ -1676,24 +1676,25 @@
   },
   "TaskTrove:swesmith-verifier-repaired-v5": {
     "bundled_third_party": true,
-    "dataset_id": "open-athena/swesmith-verifier-repaired-v5-20261112",
+    "dataset_id": "open-athena/campaign-release-swesmith-verifier-repaired-v5-0bfcd894-retained-20261116-v1",
     "decisions": [
       {
         "approved": true,
-        "dataset_id": "open-athena/swesmith-verifier-repaired-v5-20261112",
+        "dataset_id": "open-athena/campaign-release-swesmith-verifier-repaired-v5-0bfcd894-retained-20261116-v1",
         "evidence_urls": [
           "https://huggingface.co/datasets/SWE-bench/SWE-smith/blob/ea6d7173829c7ec8fa16c22055699ff2e9188091/README.md",
-          "https://github.com/marin-community/marin/issues/11497#issuecomment-6902843532"
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6902843532",
+          "https://huggingface.co/datasets/open-athena/campaign-release-swesmith-verifier-repaired-v5-0bfcd894-retained-20261116-v1/tree/758b28bf4cc0d0e770329f2944c9451fd578566a"
         ],
         "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6902843532",
         "kind": "exception",
-        "rationale": "The user confirmed the repackaged container carries its upstream grant: \"SWE-smith and CalibForge-rebuilt -> these should be fine theyre the same licenses as swesmith and calibforge right?\" The upstream SWE-bench/SWE-smith is MIT and the automated checker PASSes its pinned card at ea6d7173829c7ec8fa16c22055699ff2e9188091 (P1). The raw checker escalation at this pin comes from the TaskTrove aggregate card (license: apache-2.0, cc-by-4.0, mit, other) reached through the container's recorded open-athena/task-trove@0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c release pin. The candidate card revision 7374cb17fe7537b94afd35f3bcba2d8b7ec218da declares the checked upstream grant and PASSes its exact-pin check. Training use only; an exception does not transfer to a new revision.",
-        "revision": "26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd",
+        "rationale": "The user ruled (verbatim: \"TaskTrove:swesmith-verifier-repaired-v5 is just swesmith data. It should share the same simple license.\") that this remediated version shares the same license as the existing recorded decision for this source at 26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd, which records the SWE-bench/SWE-smith (MIT) grant of the SWE-smith source it repackages, with the checker-PASS upstream pin SWE-bench/SWE-smith@ea6d7173829c7ec8fa16c22055699ff2e9188091. The raw checker escalation at this pin is the open-athena/task-trove@0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c aggregate release card's multi-license list (E2), unchanged from the prior pin. Training use only at this exact pin; an exception does not transfer to a new revision.",
+        "revision": "758b28bf4cc0d0e770329f2944c9451fd578566a",
         "scope": [
           "train"
         ],
         "source_id": "TaskTrove:swesmith-verifier-repaired-v5",
-        "when": "2026-11-15T23:10:05.749250+00:00",
+        "when": "2026-11-16T11:30:00-05:00",
         "who": "user"
       }
     ],
@@ -1753,25 +1754,29 @@
       }
     ],
     "model_generated_outputs": true,
-    "resolved_at": "2026-11-15T20:37:44.794229+00:00",
+    "resolved_at": "2026-11-16T16:29:08.721625+00:00",
     "resolved_source": {
       "dataset_id": "open-athena/task-trove",
       "declaration": {
         "kind": "wrapper_source",
         "license_ids": [],
         "quoted_lines": [
-          "L10: Private repair-campaign release of the 8,045 SWE-smith candidates from `open-athena/task-trove@0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c`, under `releases/smartie-continuation-20261016/swesmith`. Every admitted task has two scored controls: the exact buggy commit, with no candidate changes, scores zero; applying allowed source changes from the task's exact reference commit scores one against the hidden tests. These measure grader behavior, not model-solving accuracy."
+          "L8: license_source:",
+          "L9:   dataset_id: open-athena/task-trove",
+          "L10:   revision: 0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c",
+          "L11:   url: https://huggingface.co/datasets/open-athena/task-trove/tree/0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c",
+          "L23: Source pin: `open-athena/swesmith-verifier-repaired-v5-20261112@26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd`. Converter: `2026.11.12.2@1509fc8638f6be3840b5c82b53348f93152a9c31`."
         ],
         "restrictive_terms": false,
-        "sha256": "10cc856281e2572d1c4e246057654debc3b42584df61d5ac67c7d7b9355dda57",
+        "sha256": "22dfb6f2da39d0c7ac9b59c899a7a2683e3fd17b48252dc7f1a55e292add432c",
         "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-athena/swesmith-verifier-repaired-v5-20261112/resolve/26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd/README.md"
+        "url": "https://huggingface.co/datasets/open-athena/campaign-release-swesmith-verifier-repaired-v5-0bfcd894-retained-20261116-v1/resolve/758b28bf4cc0d0e770329f2944c9451fd578566a/README.md"
       },
       "revision": "0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c",
       "url": "https://huggingface.co/datasets/open-athena/task-trove/tree/0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c"
     },
     "resolver_version": "atlas-license-v2",
-    "revision": "26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd",
+    "revision": "758b28bf4cc0d0e770329f2944c9451fd578566a",
     "source_id": "TaskTrove:swesmith-verifier-repaired-v5",
     "wrapper_chain": []
   },
