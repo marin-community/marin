@@ -4003,8 +4003,9 @@ excluded from the oracle-filtered population. Without a physical nop receipt,
 a completed original oracle trial with a recorded exit code and valid score
 that fails the oracle success criteria keeps the original TaskSpec without
 requiring a passing allocation qualification. Infrastructure and incomplete outcomes do not qualify as scored
-failures. Grading-channel parity compares only an original trial that actually
-produced a grade. An original verifier timeout or provider error without a grade
+failures. Grading-channel parity compares the original trial's grade with the
+nop verdict only when the original trial actually produced a grade. An original
+verifier timeout or provider error without a grade
 keeps its measured nonpassing outcome when a later nop produces a verdict;
 source, runtime, consumed-packet and resource identities must still match.
 
