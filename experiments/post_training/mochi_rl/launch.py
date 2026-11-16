@@ -84,7 +84,9 @@ RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=2, temporary_storage_tt
 
 @dataclass(frozen=True)
 class MochiProfile:
-    name: str
+    """Resource and recipe settings, with the CLI's default output artifact name."""
+
+    output_name: str
     role_plan: SkyRLRolePlan
     megatron: MegatronGeometry
     execution: IrisSkyRLExecution
@@ -111,9 +113,15 @@ def build_run(
     execution: IrisSkyRLExecution | None = None,
     retention: SkyRLRetentionPolicy = RETENTION,
 ) -> ArtifactStep[SkyRLRun]:
-    """Bind model, mixed tasks and optional native state to one RL artifact."""
+    """Build one RL artifact from already-bound model, tasks and native state.
+
+    A supplied data_sha256 requires one task source; profiles with data_namespace
+    require a digest. The caller pins that source's identity to the checked bytes.
+    The resolved file is checked during configuration materialization.
+    An execution override replaces the profile's placement and timeout settings.
+    """
     if profile.data_namespace is not None and data_sha256 is None:
-        raise ValueError(f"{profile.name} requires data_sha256")
+        raise ValueError(f"{profile.output_name} requires data_sha256")
     if data_sha256 is not None and len(train_data) != 1:
         raise ValueError("data_sha256 requires exactly one training data source")
     recipe = SkyRLRecipe.from_document(yaml.safe_load(recipe_path.read_text())).merge(profile.patch)
@@ -190,7 +198,7 @@ def build_run(
 @click.option("--data-sha256", help="SHA-256 of one data file; checked before launch and included in its identity.")
 @click.option("--data-file", default="train.parquet", show_default=True)
 @click.option("--input-version", required=True, help="Immutable version identifying the adopted input set.")
-@click.option("--name", help="Output name within your user namespace; defaults to the selected profile name.")
+@click.option("--name", help="Output name within your user namespace; defaults to the selected profile's output name.")
 @click.option("--max-steps", type=click.IntRange(min=1), required=True, help="Stop at this absolute optimizer step.")
 @click.option(
     "--job-timeout-hours",
@@ -235,7 +243,7 @@ def main(
         raise click.UsageError(f"--data-sha256 is required for {profile}")
     if data_sha256 is not None and len(data_uri) != 1:
         raise click.UsageError("--data-sha256 requires exactly one --data-uri")
-    name = user_owned_name(name or selected.name)
+    name = user_owned_name(name or selected.output_name)
     job_timeout_hours = job_timeout_hours or selected.execution.job_timeout_seconds // 3600
     version = resolve_version(name, None)
     model = ArtifactHfModel(
