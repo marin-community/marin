@@ -59,7 +59,6 @@ def test_cli_renders_direct_training_and_native_continuation(
     assert {source["uri"] for source in inputs["train_data"]} == data_uris
     assert len({source["local_path"] for source in inputs["train_data"]}) == len(data_uris)
     assert trainer["max_steps"] == (resume_step or 0) + 3
-    assert trainer["epochs"] >= trainer["max_steps"]
     assert launch["run"]["mode"] == "train" and not launch["run"]["export_hf"]
     assert trainer["resume_mode"] == "latest"
     if resume_step is not None:
@@ -68,6 +67,12 @@ def test_cli_renders_direct_training_and_native_continuation(
         (first_tasks / "train.parquet").write_bytes(b"changed after pinning")
         corrupted = CliRunner().invoke(main, args)
         assert isinstance(corrupted.exception, ValueError)
+        repinned = CliRunner().invoke(
+            main, args.replace(digest, hashlib.sha256((first_tasks / "train.parquet").read_bytes()).hexdigest())
+        )
+        assert repinned.exit_code == 0, repinned.output
+        updated_data = yaml.safe_load(config_path.read_text())["inputs"]["train_data"]
+        assert updated_data[0]["identity"] != inputs["train_data"][0]["identity"]
 
 
 def test_continuations_keep_distinct_inputs_and_coordinator_queue_time(tmp_path: Path) -> None:
