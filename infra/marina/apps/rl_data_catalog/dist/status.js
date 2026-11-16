@@ -4,7 +4,6 @@
 // links. Reason explanations render only when a label is clicked open; policy
 // prose lives in the guide.
 const STATUS_COUNTS = ['Pending', 'Available', 'Excluded', 'Deprecated'];
-const LEGACY_NOT_SELECTABLE = 'Not selectable';
 
 const state = { rows: [], explanations: {}, search: '', status: 'all', reason: 'all' };
 
@@ -143,7 +142,7 @@ async function load() {
     id: declaration.id,
     display_name: declaration.display_name,
     name: declaration.name,
-    status: declaration.status === LEGACY_NOT_SELECTABLE ? 'Excluded' : declaration.status,
+    status: declaration.status,
     reasons: declaration.exclusion_claims || [],
     notes: declaration.notes,
     receipt: catalog.snapshot_id ? `catalog snapshot ${catalog.snapshot_id}` : null,

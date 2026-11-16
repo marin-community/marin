@@ -32,11 +32,7 @@ class PendingStage(StrEnum):
     """Intake stage of a queued source that is not configured for the catalog yet."""
 
     INTAKE_QUEUED = "Intake queued"
-    """No licensed intake conversion output is recorded for the source yet."""
-
-    INTAKE_COMPLETE = "Intake complete"
-    """QUICK conversion finished; catalog measurements (census, dedup, lexical,
-    oracle, oversight) are still outstanding."""
+    """No catalog measurement receipt is recorded for the source yet."""
 
     MEASUREMENTS_PENDING = "Measurements pending"
     """Some catalog measurement receipts exist; the rest are outstanding."""

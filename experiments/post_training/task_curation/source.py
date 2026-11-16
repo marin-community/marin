@@ -76,6 +76,8 @@ POPULATION_BLOCKER_REASONS: dict[str, ExclusionReason] = {
 }
 
 _LEXICAL_EVAL_MESSAGE = "Evaluation requires a measured lexical receipt for the current dataset pin"
+_DECON_MEASUREMENT_MISSING = "Decontamination measurement and private-release admission receipt are missing"
+_DECON_BLOCKED_PREFIX = "Decontamination admission blocked: "
 
 
 def population_blocker_reason(blocker: str) -> ExclusionReason:
@@ -89,11 +91,20 @@ def lexical_blocker_reason(message: str) -> ExclusionReason:
     """Map a lexical qualification failure to its exclusion reason.
 
     The evaluation path requires a measured receipt; every training-path
-    failure requires decontamination remediation at the current pin.
+    failure requires decontamination remediation at the current pin. The
+    failure messages are produced by ``finestore.rl.curation`` and
+    ``server.admission``; the tests pin them against those modules.
     """
-    if message == _LEXICAL_EVAL_MESSAGE:
-        return ExclusionReason.LEXICAL_RECEIPT_MISSING
-    if message.startswith("Decontamination") or message.startswith("Atlas"):
+    if message in (_LEXICAL_EVAL_MESSAGE, _DECON_MEASUREMENT_MISSING) or message.startswith(_DECON_BLOCKED_PREFIX):
+        return (
+            ExclusionReason.LEXICAL_RECEIPT_MISSING
+            if message == _LEXICAL_EVAL_MESSAGE
+            else ExclusionReason.LEXICAL_REMEDIATION_REQUIRED
+        )
+    if message in (
+        "Atlas admission requires a private open-athena TaskCompendium release",
+        "Atlas remediation requires the original private open-athena snapshot",
+    ):
         return ExclusionReason.LEXICAL_REMEDIATION_REQUIRED
     raise ValueError(f"Unmapped lexical qualification failure: {message}")
 
@@ -432,7 +443,11 @@ class RlDataSource[ConfigT: CatalogConfig]:
 
         Every blocker string this source can emit maps to exactly one
         ``ExclusionReason`` with typed evidence; ``population_blocker_reason``
-        and the lexical message rules below define the mapping.
+        and the lexical message rules below define the mapping. This tree is
+        deliberately parallel to ``admission_blockers`` while the taxonomy
+        lands: the blocker strings are contract (notes, error messages and
+        tests), and a follow-up can derive them from the claims' evidence
+        messages once the status page is serving.
         """
         info = self.info
         inherited_legacy_admission = info.id in GRANDFATHERED_MARINSKYRL_SOURCES and info.inherited_admission is not None

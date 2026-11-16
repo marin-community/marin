@@ -183,7 +183,7 @@ class SourceOrigin(StrEnum):
     GPUMODE = "GPUMODE"
     HAL = "HAL"
     MAI_GYM = "MAI-Gym"
-    MIROMIND_AI = "MiroVerse"
+    MIROVERSE = "MiroVerse"
     OPENGCUA = "OpenGCUA"
     PAFITIS = "pafitis"
 

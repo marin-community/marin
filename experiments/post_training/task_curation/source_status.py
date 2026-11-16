@@ -13,41 +13,59 @@ population, conversion pipeline or schema change.
 import argparse
 import json
 import sys
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from finestore.rl.status_taxonomy import (
-    REASON_EXPLANATIONS,
-    PendingStage,
-    SourceStatus,
-)
+from finestore.rl.status_taxonomy import PendingStage, REASON_EXPLANATIONS, SourceStatus
 
+from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
+from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
+from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
+from experiments.post_training.task_curation.datasets.oracle_admitted_releases import oracle_admitted_release_receipts
+from experiments.post_training.task_curation.datasets.oracle_releases import oracle_release_receipts
+from experiments.post_training.task_curation.datasets.retained_releases import retained_release_receipts
+from experiments.post_training.task_curation.datasets.sample_qc_results import sample_qc_receipts
 from experiments.post_training.task_curation.metadata_exclusions import metadata_exclusions
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES
 from experiments.post_training.task_curation.within_source_binding import read_dedup_receipts
 
-_RECEIPT_CHECKS = {
-    "actor census": "experiments.post_training.task_curation.datasets.daytona_measurements:actor_census_receipts",
-    "lexical": "experiments.post_training.task_curation.datasets.lexical_measurements:lexical_measurements",
-    "grading": "experiments.post_training.task_curation.datasets.grading_measurements:grading_census_receipts",
-    "sample": "experiments.post_training.task_curation.datasets.sample_qc_results:sample_qc_receipts",
-    "oracle": "experiments.post_training.task_curation.datasets.oracle_releases:oracle_release_receipts",
-    "oracle admitted": (
-        "experiments.post_training.task_curation.datasets.oracle_admitted_releases:oracle_admitted_release_receipts"
-    ),
-    "retained": "experiments.post_training.task_curation.datasets.retained_releases:retained_release_receipts",
-}
+
+@dataclass(frozen=True)
+class StatusRow:
+    """One status-page row shared by pending and metadata-only sources."""
+
+    id: str
+    name: str
+    display_name: str
+    status: str
+    origin: str
+    upstream_dataset: str
+    upstream_url: str
+    notes: str
+    stage: str | None = None
+    dataset_id: str | None = None
+    dataset_revision: str | None = None
+    reasons: tuple[dict[str, Any], ...] = field(default=())
+
+    def payload(self) -> dict[str, Any]:
+        row = asdict(self)
+        row["reasons"] = list(self.reasons)
+        return row
 
 
-def _receipt_keys() -> dict[str, set[str]]:
-    """Import each receipt registry lazily and return its covered source IDs."""
-    keys: dict[str, set[str]] = {}
-    for label, target in _RECEIPT_CHECKS.items():
-        module_name, attribute = target.split(":")
-        module = __import__(module_name, fromlist=[attribute])
-        registry = getattr(module, attribute)()
-        keys[label] = set(registry)
+def receipt_registry_keys() -> dict[str, set[str]]:
+    """Return each standard measurement registry's covered source IDs."""
+    keys: dict[str, set[str]] = {
+        "actor census": set(actor_census_receipts()),
+        "lexical": set(lexical_measurements()),
+        "grading": set(grading_census_receipts()),
+        "sample": set(sample_qc_receipts()),
+        "oracle": set(oracle_release_receipts()),
+        "oracle admitted": set(oracle_admitted_release_receipts()),
+        "retained": set(retained_release_receipts()),
+    }
     dedup = read_dedup_receipts(
         Path(__file__).with_name("datasets") / "within_source_dedup.json", load_json=read_registry_json
     )
@@ -58,9 +76,10 @@ def _receipt_keys() -> dict[str, set[str]]:
 def pending_stage(source_id: str, receipts: dict[str, set[str]]) -> PendingStage:
     """Derive a pending source's stage from the measurement receipts it lacks.
 
-    The stage describes catalog-evidence state: a queued source has no receipts
-    at all, a measured source has some, and an admission-pending source has
-    every receipt the standard admission path produces.
+    The stage describes catalog-evidence state: a queued source has no
+    measurement receipts at all, a measured source has some, and an
+    admission-pending source has every receipt the standard admission path
+    produces.
     """
     covered = [source_id in keys for keys in receipts.values()]
     if all(covered):
@@ -72,20 +91,19 @@ def pending_stage(source_id: str, receipts: dict[str, set[str]]) -> PendingStage
 
 def pending_rows() -> list[dict[str, Any]]:
     """Rows for every queued source that is not configured for the catalog yet."""
-    receipts = _receipt_keys()
+    receipts = receipt_registry_keys()
     return [
-        {
-            "id": source.info.id,
-            "name": source.name,
-            "display_name": source.info.upstream_name,
-            "status": SourceStatus.PENDING.value,
-            "stage": pending_stage(source.info.id, receipts).value,
-            "origin": source.info.origin.value,
-            "upstream_dataset": source.info.upstream_dataset,
-            "upstream_url": source.info.upstream_url,
-            "notes": source.info.notes,
-            "reasons": [],
-        }
+        StatusRow(
+            id=source.info.id,
+            name=source.name,
+            display_name=source.info.upstream_name,
+            status=SourceStatus.PENDING.value,
+            origin=source.info.origin.value,
+            upstream_dataset=source.info.upstream_dataset,
+            upstream_url=source.info.upstream_url,
+            notes=source.info.notes,
+            stage=pending_stage(source.info.id, receipts).value,
+        ).payload()
         for source in PENDING_MEASUREMENT_SOURCES
     ]
 
@@ -93,20 +111,19 @@ def pending_rows() -> list[dict[str, Any]]:
 def metadata_rows() -> list[dict[str, Any]]:
     """Declaration-only Excluded rows for known-but-rejected upstreams."""
     return [
-        {
-            "id": row.id,
-            "name": row.name,
-            "display_name": row.display_name,
-            "status": SourceStatus.EXCLUDED.value,
-            "stage": None,
-            "origin": row.origin,
-            "upstream_dataset": row.upstream_dataset,
-            "upstream_url": row.upstream_url,
-            "dataset_id": row.dataset_id,
-            "dataset_revision": row.dataset_revision,
-            "notes": row.notes,
-            "reasons": [claim.model_dump(mode="json") for claim in row.claims],
-        }
+        StatusRow(
+            id=row.id,
+            name=row.name,
+            display_name=row.display_name,
+            status=SourceStatus.EXCLUDED.value,
+            origin=row.origin,
+            upstream_dataset=row.upstream_dataset,
+            upstream_url=row.upstream_url,
+            dataset_id=row.dataset_id,
+            dataset_revision=row.dataset_revision,
+            notes=row.notes,
+            reasons=[claim.model_dump(mode="json") for claim in row.claims],
+        ).payload()
         for row in metadata_exclusions().values()
     ]
 

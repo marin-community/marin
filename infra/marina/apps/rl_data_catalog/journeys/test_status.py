@@ -18,7 +18,7 @@ def extras() -> dict:
 
 
 @pytest.fixture
-def seeded_extras(page, journey: Journey):
+def seeded_extras(journey: Journey):
     """Serve the real extras plus one fixture pending row and a needs-ruling row."""
     payload = extras()
     payload["pending"] = [
@@ -87,6 +87,7 @@ def seeded_extras(page, journey: Journey):
             ],
         },
     ]
+    page = journey.page
     page.route("**/measurements/source-status-extras.json", lambda route: route.fulfill(json=payload))
     return payload
 

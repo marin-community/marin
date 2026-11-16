@@ -3,6 +3,7 @@
 
 """Tests for the source-status taxonomy, exclusion claims and the status extras artifact."""
 
+import ast
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -18,8 +19,12 @@ from finestore.rl.status_taxonomy import (
 from experiments.post_training.task_curation import source_status
 from experiments.post_training.task_curation.exclusion_registry import MANUAL_EXCLUSION_CLAIMS, NEEDS_RULING_SOURCES
 from experiments.post_training.task_curation.metadata_exclusions import metadata_exclusions
-from experiments.post_training.task_curation.source import lexical_blocker_reason, population_blocker_reason
-from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES, all_sources
+from experiments.post_training.task_curation.source import (
+    POPULATION_BLOCKER_REASONS,
+    lexical_blocker_reason,
+    population_blocker_reason,
+)
+from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES, all_sources, configured_sources
 from infra.marina.apps.rl_data_catalog.server.licensing import source_license_ban
 
 APP_DIST = Path("infra/marina/apps/rl_data_catalog/dist")
@@ -149,17 +154,20 @@ def test_pending_rows_cover_the_intake_queue():
         assert row["stage"] in {stage.value for stage in source_status.PendingStage}
 
 
-def test_blocker_reason_mappings_are_total():
-    for blocker, reason in {
-        "admission requires a nonempty retained population": ExclusionReason.RETAINED_POPULATION_EMPTY,
-        "actor census does not cover the retained population": ExclusionReason.ACTOR_CENSUS_STALE,
-        "grading census does not cover the complete retained population": ExclusionReason.GRADING_CENSUS_INCOMPLETE,
-        "grading census counts do not cover the complete retained population": (
-            ExclusionReason.GRADING_CENSUS_COUNTS_INCOMPLETE
-        ),
-        "admitted source has tasks without runnable graders": ExclusionReason.GRADER_MISSING,
-    }.items():
-        assert population_blocker_reason(blocker) is reason
+def test_admission_blocker_strings_stay_mapped():
+    """Every blocker string the population check can emit keeps its typed reason."""
+    admission = ast.parse((Path("infra/marina/apps/rl_data_catalog/server/admission.py")).read_text())
+    function = next(
+        node for node in admission.body if isinstance(node, ast.FunctionDef) and node.name == "population_admission_blocker"
+    )
+    emitted = {
+        node.value.value
+        for node in ast.walk(function)
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+    }
+    assert emitted == set(POPULATION_BLOCKER_REASONS)
+    for blocker in emitted:
+        assert population_blocker_reason(blocker) is POPULATION_BLOCKER_REASONS[blocker]
     with pytest.raises(ValueError, match="Unmapped population admission blocker"):
         population_blocker_reason("an unmapped blocker")
     for message, reason in LEXICAL_MESSAGES.items():
@@ -220,8 +228,13 @@ def test_metadata_exclusion_pins_match_the_license_check_fixtures():
         assert rule in row.claims[0].evidence.message
 
 
-def test_metadata_exclusions_carry_evidence_and_never_ingest():
+@pytest.mark.data_integration
+def test_metadata_exclusions_never_enter_the_catalog():
+    catalog_ids = {source.info.id for source in all_sources().values()} | {
+        source.info.id for source in configured_sources()
+    }
     for row in metadata_exclusions().values():
+        assert row.id not in catalog_ids, f"Metadata exclusion declared as a catalog source: {row.id}"
         assert row.claims, f"Metadata exclusion without a claim: {row.id}"
         for claim in row.claims:
             assert claim.evidence.message.strip()

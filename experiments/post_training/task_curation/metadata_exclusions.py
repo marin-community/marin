@@ -15,8 +15,6 @@ from dataclasses import dataclass
 
 from finestore.rl.status_taxonomy import ExclusionClaim, ExclusionEvidence, ExclusionEvidenceKind, ExclusionReason
 
-ISSUE_11497 = "https://github.com/marin-community/marin/issues/11497"
-
 
 @dataclass(frozen=True)
 class MetadataExclusion:
