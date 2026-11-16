@@ -479,9 +479,6 @@ pre.raw { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow
 @media (prefers-reduced-motion: reduce) { .nextup .dot { animation: none !important; } }
 .track details.launch summary { cursor: pointer; font-size: 13px; color: var(--slate); }
 .track details.launch pre { margin: 8px 0 0; font: 11.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--slate); }
-.howto .track-list { margin: 6px 0 4px; padding-left: 18px; display: grid; gap: 3px; font-size: 13.5px; }
-.howto .track-list code { background: var(--line); border-radius: 4px; padding: 1px 6px; }
-.howto .muted { color: var(--slate); font-size: 13px; }
 
 /* Status: idea checklist */
 .ck-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 10px; }

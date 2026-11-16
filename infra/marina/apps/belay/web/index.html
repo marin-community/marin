@@ -97,23 +97,7 @@
       <h2>Links</h2>
     </div>
     <h3 class="howto-h">How to contribute</h3>
-    <ol class="logs howto">
-      <li><b>Suggest</b>: post one idea per comment on <a href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">marin#9514</a>. Specify a <code>Track:</code> (the baseline it builds on and is compared to); default <code>speedrun</code>.
-        <ul class="track-list">
-          <li><code>speedrun</code> (default): the 8-minute d512 run of the current recipe, for fast iteration and to check that an idea is compatible with the recipe.</li>
-          <li><code>hero-mfu</code>: step time on one GB200 rack at hero scale, for an idea expected to change MFU a lot; skip it otherwise. A maintainer runs it.</li>
-          <li><code>ladder</code>: all four <code>competitive-*</code> rungs, launched together, at the baseline's step count; after a <code>hero-mfu</code> result, each rung's steps are adjusted for the MFU change (better MFU means more steps). A ladder run without <code>hero-mfu</code> gives a provisional verdict: the idea needs a <code>hero-mfu</code> result before it joins the recipe.</li>
-          <li><code>competitive-d512</code> … <code>competitive-d1280</code>: one rung of the ladder, against the current recipe's finished run at that size.</li>
-          <li><code>vanilla-d512</code> … <code>vanilla-d1280</code>: against a plain dense transformer (the Vanilla Track) at that size. An optional first step for a radical idea, or for a stronger signal than the recipe gives.</li>
-          <li><code>moe-d512</code> … <code>moe-d1280</code>: against a basic MoE at that size.</li>
-          <li><code>custom</code>: a study answered by an analysis of its runs, with no verdict. The approver sets its node and hours budget.</li>
-        </ul>
-        <div class="muted">The usual path: optionally a <code>vanilla-*</code> Track first for a radical idea, then <code>speedrun</code>, then <code>hero-mfu</code> if MFU will move a lot, then <code>ladder</code>. Maintainers promote ideas into the recipe from those results.</div>
-        <div class="muted">Example: <code>Track: moe-d512</code>, &ldquo;Replace the sigmoid router scoring with sqrt-softplus.&rdquo;</div></li>
-      <li><b>Approval</b>: a maintainer reviews it on this page; a 👀 reaction on your comment means it was reviewed.</li>
-      <li><b>Run</b>: an agent runs it against the track's baseline. Its plan, progress and verdict are on its row on the <a href="#status">Status</a> page and in the <a href="#status/agent-log">agent log</a>.</li>
-      <li><b>Result</b>: win, noise or loss, by the track's fixed rule: Paloma macro Δ beyond ±0.005, or for <code>hero-mfu</code> step time beyond ±0.5%. It goes to the registry and this page. A win goes to maintainers, who decide whether it joins the recipe.</li>
-    </ol>
+    <p class="howto">Post one idea per comment on <a href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">marin#9514</a>, with a <code>Track:</code> line (default <code>speedrun</code>). Each run is judged win, noise or loss by its Track's fixed rule: Paloma macro &Delta; beyond &plusmn;0.005, or for <code>hero-mfu</code> step time beyond &plusmn;0.5%. <a href="https://github.com/marin-community/marin/blob/marin_belay_v1_recipe/experiments/belay/CONTRIBUTING.md" target="_blank" rel="noopener">Read the contributor guide &rarr;</a></p>
     <div class="involve">
       <a class="link-card" href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">
         <span class="num">github · marin#9514</span>
