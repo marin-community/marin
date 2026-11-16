@@ -341,7 +341,7 @@ JUDGE_TIERS: Mapping[JudgeTier, JudgeTierDefinition] = MappingProxyType(
             ),
             context_window_tokens=131_072,
             model_identity="openai/gpt-oss-120b",
-            model_revision=None,
+            model_revision="b5c939de8f754692c1647ca79fbf85e8c1e70f8a",
             reasoning_policy="low",
         ),
         JudgeTier.MEDIUM: JudgeTierDefinition(

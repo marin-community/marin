@@ -256,6 +256,10 @@ def readability_layout(
     capture("status", focus=True)
     page.locator("#rows details > summary").evaluate_all("es => es.forEach(e => e.parentElement.open = true)")
     capture("status-reason-open", focus=True)
+    # The difficulty coverage page: computed counts plus the needs-measurement,
+    # blocked and measured tables, in both themes and at every width.
+    visit("difficulty.html", "#coverage-counts div")
+    capture("difficulty-coverage", focus=True)
     return views
 
 

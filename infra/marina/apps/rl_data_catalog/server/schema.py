@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS atlas_difficulty (
     measurement JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS atlas_difficulty_source ON atlas_difficulty (source_id, protocol_id);
+CREATE TABLE IF NOT EXISTS atlas_difficulty_coverage (
+    load_id TEXT PRIMARY KEY, coverage JSONB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS atlas_loads (
     load_id TEXT PRIMARY KEY, catalog_root TEXT NOT NULL,
     snapshot_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL,

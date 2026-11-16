@@ -14,6 +14,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from taskcompendium.source_fingerprints import DuplicateReview
 
+from experiments.post_training.task_curation.difficulty_coverage import difficulty_coverage
+
 from .audit import register_audit_routes
 from .contamination import contamination
 from .count_evidence import SOURCE_COUNTS
@@ -321,6 +323,36 @@ def create_api(services: AppletServices) -> FastAPI:
                 .all()
             )
             return {"survey_id": row["survey_id"], **row["survey"], "matrix": cells}
+
+    @api.get("/difficulty-coverage")
+    def difficulty_coverage_view() -> dict[str, Any]:
+        """The published Difficulty coverage for the selected load, computed at rebuild."""
+        with engine.connect() as connection:
+            metadata = loaded_catalog(connection)
+            row = (
+                connection.execute(
+                    text("SELECT coverage FROM atlas_difficulty_coverage WHERE load_id = :load_id"),
+                    {"load_id": metadata["load_id"]},
+                )
+                .mappings()
+                .first()
+            )
+            if row is not None:
+                return {"load_id": metadata["load_id"], "snapshot_id": metadata["snapshot_id"], **row["coverage"]}
+            # A load that predates the coverage step still serves a freshly computed document.
+            declarations = {
+                canonical_source_id(row["id"]): row["declaration"]
+                for row in connection.execute(
+                    text("SELECT id, declaration FROM atlas_sources WHERE load_id = :load_id"),
+                    {"load_id": metadata["load_id"]},
+                ).mappings()
+            }
+            document = difficulty_coverage(declarations, difficulty_records(connection))
+            return {
+                "load_id": metadata["load_id"],
+                "snapshot_id": metadata["snapshot_id"],
+                **document.model_dump(mode="json"),
+            }
 
     @api.get("/source-fingerprint")
     def source_fingerprint(source_id: str) -> dict[str, Any]:

@@ -9,10 +9,11 @@ from typing import Any
 
 import click
 from finestore.reader import ReadView
-from finestore.rl.difficulty import MEASUREMENTS, DifficultyMeasurement
+from finestore.rl.difficulty import MEASUREMENTS, DifficultyMeasurement, DifficultyObservation
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
+from experiments.post_training.task_curation.difficulty_coverage import DifficultyCoverage, difficulty_coverage
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 
@@ -54,6 +55,43 @@ def load_measurements(records: list[DifficultyMeasurement], query: AppletQuery) 
     return {"inserted": inserted, "records": len(records)}
 
 
+def difficulty_records_from_query(query: AppletQuery) -> dict[str, list[DifficultyObservation]]:
+    """The stored difficulty observations, grouped by canonical source id."""
+    records: dict[str, list[DifficultyObservation]] = {}
+    for row in query("SELECT measurement FROM atlas_difficulty", {})["rows"]:
+        record = DifficultyObservation.model_validate(row["measurement"])
+        records.setdefault(canonical_source_id(record.source_id), []).append(record)
+    return records
+
+
+def publish_coverage(query: AppletQuery, load_id: str) -> dict[str, Any]:
+    """Compute the Difficulty coverage over the loaded catalog and store it for this load.
+
+    The pure classifier runs over the loaded declarations and the stored
+    observations, so every rebuild republishes the coverage the Difficulty view
+    and the campaign-queue CLI consume — never a hand-maintained list.
+    """
+    rows = query(
+        "SELECT id, declaration FROM atlas_sources WHERE load_id = :load_id",
+        {"load_id": load_id},
+    )["rows"]
+    declarations = {canonical_source_id(row["id"]): row["declaration"] for row in rows}
+    observations = difficulty_records_from_query(query)
+    document = difficulty_coverage(declarations, observations)
+    payload = document.model_dump(mode="json", include={"sources", "counts", "generated_at"})
+    payload["load_id"] = load_id
+    stored = DifficultyCoverage.model_validate({**payload, "snapshot_id": None, "queue": []})
+    query(
+        """
+        INSERT INTO atlas_difficulty_coverage (load_id, coverage)
+        VALUES (:load_id, CAST(:coverage AS JSONB))
+        ON CONFLICT (load_id) DO UPDATE SET coverage = EXCLUDED.coverage
+        """,
+        {"load_id": load_id, "coverage": json.dumps(payload, allow_nan=False)},
+    )
+    return {"load_id": load_id, "counts": stored.counts}
+
+
 @click.command(help=__doc__)
 @click.option("--catalog-root", required=True, help="FineStore archive containing difficulty_measurements.")
 @click.option("--applet-id", required=True)
@@ -63,7 +101,11 @@ def main(catalog_root: str, applet_id: str, marina_url: str, receipt: Path) -> N
     configure_coreweave_s3()
     view = ReadView(catalog_root)
     records = read_measurements(view)
-    result = load_measurements(records, applet_query(marina_url, applet_id))
+    query = applet_query(marina_url, applet_id)
+    result = load_measurements(records, query)
+    current = query("SELECT load_id FROM atlas_current WHERE name = 'latest'", {})["rows"]
+    if current:
+        result["coverage"] = publish_coverage(query, current[0]["load_id"])
     receipt.write_text(json.dumps({"catalog_root": catalog_root, **result}, indent=2) + "\n")
     click.echo(json.dumps(result))
 

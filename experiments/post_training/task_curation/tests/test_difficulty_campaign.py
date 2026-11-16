@@ -25,6 +25,7 @@ from experiments.post_training.task_curation import difficulty_campaign
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_sampling import sampling_settings
+from experiments.post_training.task_curation.judges import JUDGE_TIERS
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
 
 
@@ -280,3 +281,10 @@ def test_same_run_output_distinguishes_resume_from_a_new_version(tmp_path):
     assert not difficulty_campaign.same_run_output(
         output, variant(previous_campaign="/other", previous_serving_sha256="3" * 64)
     )
+
+
+def test_every_judge_tier_carries_an_immutable_checkpoint_pin():
+    """Local hosting probes an immutable model revision; a tier without one cannot serve."""
+    for tier, definition in JUDGE_TIERS.items():
+        assert definition.model_revision, f"{tier.value} has no immutable checkpoint pin"
+        assert len(definition.model_revision) >= 40, f"{tier.value} pins a shortened revision"
