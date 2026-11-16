@@ -65,7 +65,13 @@ from shellbox.requirements import Requirement, Support
 from shellbox.survey import CapabilityCell
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
-from taskcompendium.backend_requirements import BackendSourceMap, BackendSurvey, backend_schema_sha256
+from taskcompendium.backend_requirements import (
+    BackendFit,
+    BackendSourceMap,
+    BackendSurvey,
+    FitSupport,
+    backend_schema_sha256,
+)
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
@@ -167,13 +173,32 @@ def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
         sources=[
             BackendSourceMap(
                 source_id=source.id,
-                basis="unassessed",
-                reason="No converted population is bound to this source in the test fixture.",
-                task_count=0,
+                basis="unassessed" if not (source.declaration.task_count or 0) else "converted_spec_census",
+                reason=(
+                    None if source.declaration.task_count else "No converted population is bound to this fixture source."
+                ),
+                task_count=source.declaration.task_count or 0,
                 inputs={},
                 demands={},
                 resource_ranges={},
-                backends={},
+                backends=(
+                    {
+                        backend: BackendFit(
+                            support=FitSupport.ROLE_ABSENT,
+                            task_counts={FitSupport.ROLE_ABSENT: source.declaration.task_count or 0},
+                            roles={
+                                "agent": {FitSupport.ROLE_ABSENT: source.declaration.task_count or 0},
+                                "grader": {FitSupport.ROLE_ABSENT: source.declaration.task_count or 0},
+                            },
+                            blockers={},
+                            not_applicable={},
+                            validation_errors={},
+                        )
+                        for backend in [*(backend.value for backend in Backend), "iris"]
+                    }
+                    if source.declaration.task_count
+                    else {}
+                ),
                 role_backend_assignments={},
                 grading_environment=(
                     source.declaration.grading_environment.model_dump(mode="json")
@@ -209,6 +234,10 @@ def test_filtered_zero_is_visible_without_admission_and_positive_output_still_ne
     root = str(tmp_path / "filtered")
     for retained in (0, 1):
         declaration = filtered_declaration(retained)
+        if retained:
+            # A positive retained population that still needs admission stays Available;
+            # Excluded rows load as metadata without population admission.
+            declaration = declaration.model_copy(update={"status": "Available"})
         snapshot_id = f"filtered-{retained}"
         source = SnapshotSource(
             snapshot_id=snapshot_id,
@@ -265,7 +294,7 @@ def test_backend_survey_refresh_and_failed_staging_preserve_selected_map(catalog
         load_surveyed_catalog(catalog, failing_query, second, identities)
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         assert client.get("/backends").json()["generated_at"] == first.generated_at
-        assert client.get("/sources").json()["sources"][0]["backend_capabilities"]["basis"] == "unassessed"
+        assert client.get("/sources").json()["sources"][0]["backend_capabilities"]["basis"] == "converted_spec_census"
     refreshed = load_surveyed_catalog(catalog, catalog_query, second, identities)
     assert refreshed["load_id"] != loaded["load_id"]
     assert not load_surveyed_catalog(catalog, catalog_query, second, identities)["changed"]
@@ -1625,7 +1654,7 @@ def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_d
             detail = client.get("/source", params={"source_id": identifier}).json()
             assert detail["declaration"]["id"] == current
             assert detail["assessment"]["pipeline_key"] == "frozen"
-            assert detail["backend_capabilities"]["basis"] == "unassessed"
+            assert detail["backend_capabilities"]["basis"] == "converted_spec_census"
             assert detail["result"] == "GOOD"
 
     with catalog_database.connect() as connection:
