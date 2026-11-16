@@ -284,6 +284,7 @@ def _row(
     job: str = "job-a",
     attempt_uid: str = "deadbeefdeadbeef",
     attempt_state: int = job_pb2.TASK_STATE_PENDING,
+    superseded: bool = False,
 ) -> ReconcileRow:
     return ReconcileRow(
         worker_id=WorkerId(_W1),
@@ -293,6 +294,7 @@ def _row(
         attempt_state=attempt_state,
         job_id=_job_id(job),
         attempt_uid=AttemptUid(attempt_uid),
+        superseded=superseded,
     )
 
 
@@ -370,6 +372,8 @@ def test_reconcile_worker_executing_states_emit_run_without_inline_spec(task_sta
         (job_pb2.TASK_STATE_WORKER_FAILED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
         (job_pb2.TASK_STATE_UNSCHEDULABLE, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
         (job_pb2.TASK_STATE_SUCCEEDED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
+        (job_pb2.TASK_STATE_KILLED, worker_pb2.Worker.STOP_REASON_CANCELLED),
+        (job_pb2.TASK_STATE_PREEMPTED, worker_pb2.Worker.STOP_REASON_PREEMPTED),
     ],
 )
 def test_reconcile_worker_controller_terminal_with_terminal_attempt_emits_stop(task_state, expected_reason):
@@ -399,7 +403,7 @@ def test_reconcile_worker_controller_terminal_with_terminal_attempt_emits_stop(t
 def test_reconcile_worker_stranded_terminal_with_live_attempt_emits_run(task_state):
     """A terminal task whose attempt is NOT yet terminal is a stranded attempt:
     re-poll (run, no spec) so the worker re-reports its real status or the
-    daemon synthesizes MISSING. Switching it to 'stop' would drop that recovery."""
+    daemon synthesizes MISSING."""
     row = _row(task_state, attempt_id=4, attempt_state=job_pb2.TASK_STATE_RUNNING)
     plan = _plan_for([row])
 
@@ -407,23 +411,6 @@ def test_reconcile_worker_stranded_terminal_with_live_attempt_emits_run(task_sta
     desired = plan.request.desired[0]
     assert desired.HasField("run")
     assert not desired.run.HasField("request")
-    assert desired.attempt_uid == row.attempt_uid
-
-
-@pytest.mark.parametrize(
-    "task_state,expected_reason",
-    [
-        (job_pb2.TASK_STATE_KILLED, worker_pb2.Worker.STOP_REASON_CANCELLED),
-        (job_pb2.TASK_STATE_PREEMPTED, worker_pb2.Worker.STOP_REASON_PREEMPTED),
-    ],
-)
-def test_reconcile_worker_stop_states_emit_stop_with_reason(task_state, expected_reason):
-    row = _row(task_state, attempt_id=2)
-    plan = _plan_for([row])
-    assert len(plan.request.desired) == 1
-    desired = plan.request.desired[0]
-    assert desired.HasField("stop")
-    assert desired.stop == expected_reason
     assert desired.attempt_uid == row.attempt_uid
 
 
@@ -461,6 +448,32 @@ def test_reconcile_worker_pending_with_terminal_attempt_emits_stop():
     assert desired.HasField("stop")
     assert desired.stop == worker_pb2.Worker.STOP_REASON_PREEMPTED
     assert desired.attempt_uid == row.attempt_uid
+
+
+@pytest.mark.parametrize(
+    "attempt_state,expected_reason",
+    [
+        # A coscheduled-sibling requeue leaves the old attempt COSCHED_FAILED.
+        (job_pb2.TASK_STATE_COSCHED_FAILED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
+        (job_pb2.TASK_STATE_RUNNING, worker_pb2.Worker.STOP_REASON_SUPERSEDED),
+    ],
+)
+def test_reconcile_worker_stops_superseded_attempt(attempt_state, expected_reason):
+    """An old attempt gets a 'stop' whatever the retry's task state is, and the
+    retry on the same worker is still dispatched."""
+    old = _row(
+        job_pb2.TASK_STATE_ASSIGNED,
+        attempt_id=0,
+        attempt_uid="aaaaaaaaaaaaaaaa",
+        attempt_state=attempt_state,
+        superseded=True,
+    )
+    retry = _row(job_pb2.TASK_STATE_ASSIGNED, attempt_id=1, attempt_uid="bbbbbbbbbbbbbbbb")
+    plan = _plan_for([old, retry], job_specs={_job_id("job-a"): _spec()})
+
+    by_uid = {d.attempt_uid: d for d in plan.request.desired}
+    assert by_uid[old.attempt_uid].stop == expected_reason
+    assert by_uid[retry.attempt_uid].HasField("run")
 
 
 def test_reconcile_worker_holds_assigned_run_while_preemption_victim_occupies_worker():
@@ -537,7 +550,14 @@ def test_reconcile_worker_mixed_rows_per_axis():
     rows = [
         _row(job_pb2.TASK_STATE_ASSIGNED, task_id="a", attempt_id=1, job="j1", attempt_uid="aaaaaaaaaaaaaaaa"),
         _row(job_pb2.TASK_STATE_RUNNING, task_id="b", attempt_id=2, job="j2", attempt_uid="bbbbbbbbbbbbbbbb"),
-        _row(job_pb2.TASK_STATE_KILLED, task_id="c", attempt_id=3, job="j3", attempt_uid="cccccccccccccccc"),
+        _row(
+            job_pb2.TASK_STATE_KILLED,
+            task_id="c",
+            attempt_id=3,
+            job="j3",
+            attempt_uid="cccccccccccccccc",
+            attempt_state=job_pb2.TASK_STATE_KILLED,
+        ),
         _row(job_pb2.TASK_STATE_SUCCEEDED, task_id="d", attempt_id=4, job="j4", attempt_uid="dddddddddddddddd"),
     ]
     plan = _plan_for(rows, job_specs={_job_id("j1"): _spec("img-j1")})
@@ -554,26 +574,17 @@ def test_reconcile_worker_mixed_rows_per_axis():
 
 
 @pytest.mark.parametrize(
-    "task_state",
+    "task_state,attempt_state",
     [
-        job_pb2.TASK_STATE_ASSIGNED,  # assign/run emit site
-        job_pb2.TASK_STATE_BUILDING,  # executing emit site
-        job_pb2.TASK_STATE_RUNNING,  # executing emit site
-        job_pb2.TASK_STATE_KILLED,  # killed → stop emit site
-        job_pb2.TASK_STATE_PREEMPTED,  # preempted → stop emit site
-        job_pb2.TASK_STATE_SUCCEEDED,  # terminal-expected emit site
-        job_pb2.TASK_STATE_FAILED,  # terminal-expected emit site
+        (job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_ASSIGNED),  # run with spec
+        (job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_RUNNING),  # status poll
+        (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_KILLED),  # stop
     ],
 )
-def test_reconcile_worker_stamps_attempt_uid_on_every_emit_site(task_state):
-    """Every ``DesiredAttempt`` _reconcile_worker emits carries the row's attempt_uid.
-
-    All five emit branches (assign/run, executing, killed, preempted,
-    terminal-expected) used to hardcode ``attempt_uid=""``; Phase 2 fills them
-    from ``ReconcileRow.attempt_uid``.
-    """
+def test_reconcile_worker_stamps_attempt_uid_on_every_emit_site(task_state, attempt_state):
+    """Every ``DesiredAttempt`` _reconcile_worker emits carries the row's attempt_uid."""
     uid = "00112233aabbccdd"
-    row = _row(task_state, attempt_id=9, job="job-uid", attempt_uid=uid)
+    row = _row(task_state, attempt_id=9, job="job-uid", attempt_uid=uid, attempt_state=attempt_state)
     # ASSIGNED needs a cached spec or the row is dropped before any emit.
     job_specs = {_job_id("job-uid"): _spec()} if task_state == job_pb2.TASK_STATE_ASSIGNED else None
     plan = _plan_for([row], job_specs=job_specs)
