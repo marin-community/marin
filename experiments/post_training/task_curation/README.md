@@ -616,6 +616,17 @@ reviewer without reserving GPUs. A resume reuses reviewed batch receipts only
 when task/runtime contracts, rubric and reviewer identity match exactly.
 Unavailable observations and unsuccessful attempts remain recorded.
 
+To retry unavailable or invalid reviews, keep the queue, queue SHA and
+`--output-root` unchanged. Batch receipts preserve records marked `REVIEWED`,
+including uncertain verdicts, and retry only unavailable or invalid records.
+Repeated invalid responses can involve the request cache; compare response bytes
+and cache-hit evidence before attributing them to replay (see
+[#11509](https://github.com/marin-community/marin/issues/11509)). A fresh versioned
+`--review-cache` namespace obtains new responses for those tasks while
+preserving the panel, reviewer and completed observations. Keep both immutable
+review artifacts and their batch attempts; select the qualifying result through
+`sample_qc_receipts` below. A fresh cache does not change the missing-review limit.
+
 A fixed SAMPLE panel qualifies with at least 95% conclusive reviewed rows:
 `SAMPLE_MAX_MISSING_FRACTION = 0.05` permits at most 5 missing rows of 100,
 with the same fractional limit for smaller panels. Unavailable and uncertain
