@@ -8,12 +8,21 @@ import os
 import time
 
 import pytest
-from taskcompendium.models import TextMessage
+from taskcompendium.models import TextMessage, verifyit_spec
 from taskcompendium.pipeline.models import ImportRejection
+from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation.datasets.lean import proofs
 from experiments.post_training.task_curation.datasets.lean.check_statements import failed_unexpectedly
+from experiments.post_training.task_curation.datasets.lean.deduplicate import build_manifest
 from experiments.post_training.task_curation.datasets.lean.eval_overlap import statement_key
+from experiments.post_training.task_curation.datasets.lean.informalization import (
+    assigned_split,
+    human_statement,
+)
+from experiments.post_training.task_curation.datasets.lean.informalization import (
+    sources as informalization_sources,
+)
 from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     Contract,
     GraderFailure,
@@ -31,6 +40,7 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
     UNCOMPILABLE,
     human_proof,
     is_human_proof_row,
+    is_human_statement_row,
 )
 from experiments.post_training.task_curation.datasets.lean.numina import proof_key as numina_proof_key
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task
@@ -46,6 +56,7 @@ from experiments.post_training.task_curation.tests.lean_rows import (
 )
 
 ADD_ZERO = Contract(prefix="import Mathlib", statement="theorem t (n : Nat) : n + 0 = n :=", target="t")
+INFORMALIZATION = {source.config.intended_use.value: source.config for source in informalization_sources()}
 
 
 def test_a_proofnet_row_freezes_its_statement_and_shows_it_with_a_sorry_proof():
@@ -332,6 +343,61 @@ def test_only_rows_with_a_human_statement_and_proof_are_selected():
     assert is_human_proof_row(numina_row(), None)
     assert not is_human_proof_row(numina_row(author="autoformalizer", ground_truth_type=None), None)
     assert not is_human_proof_row(numina_row(ground_truth_type="statement"), None)
+
+
+def test_auto_informalization_hides_the_human_statement_and_proof(tmp_path):
+    row = numina_row(ground_truth_type="statement")
+    pipeline = INFORMALIZATION[assigned_split(row)]
+    task = converted_task(pipeline, row, inputs=prime_inputs(tmp_path))
+    prompt = task.context.events[0]
+    assert isinstance(prompt, TextMessage)
+    assert row["problem"] not in prompt.content
+    assert "exact Nat.add_zero" not in prompt.content
+    assert "theorem algebra_1 (n : Nat) : n + 0 = n" in prompt.content
+    assert "Return only the natural-language problem statement" in prompt.content
+
+    spec = verifyit_spec(task.grader)
+    assert isinstance(spec, JudgeSpec)
+    assert spec.references == (row["problem"],)
+    assert spec.label_scores == {"PASS": 1.0, "FAIL": 0.0}
+    golden = human_statement(task).event
+    assert isinstance(golden, TextMessage)
+    assert golden.content == row["problem"]
+
+
+def test_auto_informalization_deduplication_removes_exact_copies_and_groups_near_matches():
+    exact = numina_row(uuid="exact", ground_truth_type="statement", formal_ground_truth="")
+    exact_copy = {**exact}
+    words = [f"term{index}" for index in range(130)]
+    near_problem = " ".join(words)
+    words[65] = "replacement"
+    near_formal = (
+        "import Mathlib\n"
+        "theorem long_statement (a b c d e f g h i j : Nat) "
+        "(h0 : a = b) (h1 : b = c) (h2 : c = d) (h3 : d = e) "
+        ": a + b + c + d + e + f + g + h + i + j = a + b + c + d + e + f + g + h + i + j := by"
+    )
+    near = numina_row(uuid="near-a", problem=near_problem, formal_statement=near_formal)
+    near_variant = numina_row(
+        uuid="near-b",
+        problem=" ".join(words),
+        formal_statement=near_formal.replace("long_statement", "renamed_statement"),
+    )
+
+    manifest = build_manifest([exact, exact_copy, near, near_variant])
+    assert manifest["counts"]["removed_exact_duplicates"] == 1
+    assert manifest["counts"]["kept_rows"] == 3
+    exact_cluster = next(cluster for cluster in manifest["clusters"] if cluster["removed"])
+    assert set(exact_cluster["kept"]).isdisjoint(item["row"] for item in exact_cluster["removed"])
+    near_cluster = next(cluster for cluster in manifest["clusters"] if len(cluster["kept"]) == 2)
+    assert not near_cluster["removed"]
+    assert any(match["rule"] == "joint_near_match" for match in near_cluster["matches"])
+
+
+def test_human_statement_selection_does_not_require_a_complete_proof():
+    row = numina_row(ground_truth_type="statement", formal_ground_truth="")
+    assert is_human_statement_row(row, None)
+    assert not is_human_proof_row(row, None)
 
 
 OLD_SUM = "theorem algebra_1 (s : Finset Nat) : \u2211 x in s, 0 = 0 := by"

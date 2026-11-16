@@ -1,0 +1,3278 @@
+{
+ "input": {
+  "url": "https://huggingface.co/datasets/project-numina/NuminaMath-LEAN/resolve/51fa67f1f647ae1ecd81eef9f19306aa8a7b3a94/data/train-00000-of-00001.parquet",
+  "sha256": "cddeac3b98ad642b53e41b1751ceb7ab34ad22019d8e542b403de67ecf337bc9"
+ },
+ "settings": {
+  "near_threshold": 0.9,
+  "shingle_size": 5,
+  "rare_shingles": 8,
+  "max_shingle_frequency": 128,
+  "eval_modulus": 20,
+  "split_salt": "numina-autoinformalization-v1"
+ },
+ "counts": {
+  "human_statement_rows": 20152,
+  "kept_rows": 20055,
+  "removed_exact_duplicates": 97,
+  "train": 19074,
+  "eval": 981
+ },
+ "clusters": [
+  {
+   "id": "002ab65b3b1d5ad5",
+   "split": "train",
+   "kept": [
+    "5868:6dd47cca-2525-5332-984d-1474491c67dd:d3307ff7850c",
+    "43273:de9a3677-8c17-5541-9128-adae8a33fcfa:a86915b2efbf"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "5868:6dd47cca-2525-5332-984d-1474491c67dd:d3307ff7850c",
+     "right": "43273:de9a3677-8c17-5541-9128-adae8a33fcfa:a86915b2efbf",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9692,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "003054964e6fcd0c",
+   "split": "train",
+   "kept": [
+    "1208:feef34fb-7640-5eb4-9fdf-374d91771d5d:8da25ff334cd"
+   ],
+   "removed": [
+    {
+     "row": "1209:feef34fb-7640-5eb4-9fdf-374d91771d5d:8da25ff334cd",
+     "kept": "1208:feef34fb-7640-5eb4-9fdf-374d91771d5d:8da25ff334cd"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1208:feef34fb-7640-5eb4-9fdf-374d91771d5d:8da25ff334cd",
+     "right": "1209:feef34fb-7640-5eb4-9fdf-374d91771d5d:8da25ff334cd",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "1208:feef34fb-7640-5eb4-9fdf-374d91771d5d:8da25ff334cd",
+     "right": "1209:feef34fb-7640-5eb4-9fdf-374d91771d5d:8da25ff334cd",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "1208:feef34fb-7640-5eb4-9fdf-374d91771d5d:8da25ff334cd",
+     "right": "1209:feef34fb-7640-5eb4-9fdf-374d91771d5d:8da25ff334cd",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "00471f3d368766a9",
+   "split": "train",
+   "kept": [
+    "47:da99963c-31ed-58cd-bc2c-53c5ab04d3e6:52ab1cd6948c"
+   ],
+   "removed": [
+    {
+     "row": "48:da99963c-31ed-58cd-bc2c-53c5ab04d3e6:6302b48e6ff0",
+     "kept": "47:da99963c-31ed-58cd-bc2c-53c5ab04d3e6:52ab1cd6948c"
+    }
+   ],
+   "matches": [
+    {
+     "left": "47:da99963c-31ed-58cd-bc2c-53c5ab04d3e6:52ab1cd6948c",
+     "right": "48:da99963c-31ed-58cd-bc2c-53c5ab04d3e6:6302b48e6ff0",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "47:da99963c-31ed-58cd-bc2c-53c5ab04d3e6:52ab1cd6948c",
+     "right": "48:da99963c-31ed-58cd-bc2c-53c5ab04d3e6:6302b48e6ff0",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "08eca0b4dafceeb1",
+   "split": "train",
+   "kept": [
+    "3325:5ad6be67-39e8-569c-a0cb-f44602cdb325:4f4d187d4724"
+   ],
+   "removed": [
+    {
+     "row": "3326:5ad6be67-39e8-569c-a0cb-f44602cdb325:06f6b83eca1a",
+     "kept": "3325:5ad6be67-39e8-569c-a0cb-f44602cdb325:4f4d187d4724"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3325:5ad6be67-39e8-569c-a0cb-f44602cdb325:4f4d187d4724",
+     "right": "3326:5ad6be67-39e8-569c-a0cb-f44602cdb325:06f6b83eca1a",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "0b5e91ec3384d92a",
+   "split": "train",
+   "kept": [
+    "3332:583440eb-de07-5e3c-a928-9c00d9dbfe04:24b0ce92ca85"
+   ],
+   "removed": [
+    {
+     "row": "3416:f8372e94-f82b-5eba-bc94-b3054a1b36f3:036febb47eb3",
+     "kept": "3332:583440eb-de07-5e3c-a928-9c00d9dbfe04:24b0ce92ca85"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3332:583440eb-de07-5e3c-a928-9c00d9dbfe04:24b0ce92ca85",
+     "right": "3416:f8372e94-f82b-5eba-bc94-b3054a1b36f3:036febb47eb3",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "3332:583440eb-de07-5e3c-a928-9c00d9dbfe04:24b0ce92ca85",
+     "right": "3416:f8372e94-f82b-5eba-bc94-b3054a1b36f3:036febb47eb3",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "0d738367ae0a00de",
+   "split": "eval",
+   "kept": [
+    "40025:e8903db6-68a8-5b57-85da-352997aeda4f:0a5c7401a4d6",
+    "43336:de743740-974e-5178-bdd5-a5c2919d28d3:2fe48a8652f0"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "40025:e8903db6-68a8-5b57-85da-352997aeda4f:0a5c7401a4d6",
+     "right": "43336:de743740-974e-5178-bdd5-a5c2919d28d3:2fe48a8652f0",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9592,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "11a6d31947e7e49a",
+   "split": "train",
+   "kept": [
+    "302:39ab51c5-2d01-53e2-a85d-874b4e79010d:1c3d882fde30"
+   ],
+   "removed": [
+    {
+     "row": "303:39ab51c5-2d01-53e2-a85d-874b4e79010d:0426eabf48bf",
+     "kept": "302:39ab51c5-2d01-53e2-a85d-874b4e79010d:1c3d882fde30"
+    }
+   ],
+   "matches": [
+    {
+     "left": "302:39ab51c5-2d01-53e2-a85d-874b4e79010d:1c3d882fde30",
+     "right": "303:39ab51c5-2d01-53e2-a85d-874b4e79010d:0426eabf48bf",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "1641c3231d954816",
+   "split": "eval",
+   "kept": [
+    "1399:a5264b8d-8eca-58db-8a7e-f4419f80dc6f:af3051761114"
+   ],
+   "removed": [
+    {
+     "row": "1400:a5264b8d-8eca-58db-8a7e-f4419f80dc6f:af3051761114",
+     "kept": "1399:a5264b8d-8eca-58db-8a7e-f4419f80dc6f:af3051761114"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1399:a5264b8d-8eca-58db-8a7e-f4419f80dc6f:af3051761114",
+     "right": "1400:a5264b8d-8eca-58db-8a7e-f4419f80dc6f:af3051761114",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "1399:a5264b8d-8eca-58db-8a7e-f4419f80dc6f:af3051761114",
+     "right": "1400:a5264b8d-8eca-58db-8a7e-f4419f80dc6f:af3051761114",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "1399:a5264b8d-8eca-58db-8a7e-f4419f80dc6f:af3051761114",
+     "right": "1400:a5264b8d-8eca-58db-8a7e-f4419f80dc6f:af3051761114",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "17a6238735bcbe38",
+   "split": "train",
+   "kept": [
+    "8543:b7306586-b8e8-527f-9bbd-3c4bef02b291:46d432a8072c",
+    "34637:aaed8f40-1d38-50b5-a165-603aae3a6747:a3e0f424acb1"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "8543:b7306586-b8e8-527f-9bbd-3c4bef02b291:46d432a8072c",
+     "right": "34637:aaed8f40-1d38-50b5-a165-603aae3a6747:a3e0f424acb1",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9333,
+     "formal_jaccard": 0.9608
+    }
+   ]
+  },
+  {
+   "id": "1911a7e12fbbadb9",
+   "split": "train",
+   "kept": [
+    "2703:856b1db4-f8f6-5b8a-80f7-4725c9e6fb64:77d34c660170"
+   ],
+   "removed": [
+    {
+     "row": "2704:856b1db4-f8f6-5b8a-80f7-4725c9e6fb64:ab41393d7848",
+     "kept": "2703:856b1db4-f8f6-5b8a-80f7-4725c9e6fb64:77d34c660170"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2703:856b1db4-f8f6-5b8a-80f7-4725c9e6fb64:77d34c660170",
+     "right": "2704:856b1db4-f8f6-5b8a-80f7-4725c9e6fb64:ab41393d7848",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "1b96cc244cc66143",
+   "split": "train",
+   "kept": [
+    "4116:d1d66dca-251d-5402-9f4f-1764b018fb60:45932cf5d125"
+   ],
+   "removed": [
+    {
+     "row": "4117:d1d66dca-251d-5402-9f4f-1764b018fb60:f514f4da71e3",
+     "kept": "4116:d1d66dca-251d-5402-9f4f-1764b018fb60:45932cf5d125"
+    }
+   ],
+   "matches": [
+    {
+     "left": "4116:d1d66dca-251d-5402-9f4f-1764b018fb60:45932cf5d125",
+     "right": "4117:d1d66dca-251d-5402-9f4f-1764b018fb60:f514f4da71e3",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "1c756af47f144cd0",
+   "split": "train",
+   "kept": [
+    "11227:1c5a22ed-fe42-5b89-812c-42fdd63bde93:da5e1e3e23f6",
+    "46126:cc09e359-b763-5d39-a799-f36ac8043a4a:9b99132414eb"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "11227:1c5a22ed-fe42-5b89-812c-42fdd63bde93:da5e1e3e23f6",
+     "right": "46126:cc09e359-b763-5d39-a799-f36ac8043a4a:9b99132414eb",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9808,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "209a37dff6e9c5a7",
+   "split": "train",
+   "kept": [
+    "5345:6b5cc7f3-8998-5d7c-b6c6-a25476bc56c7:942b1ee2b485",
+    "39196:80fc276c-6199-54de-8a69-98b643a8eb3a:148a15cc4004"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "5345:6b5cc7f3-8998-5d7c-b6c6-a25476bc56c7:942b1ee2b485",
+     "right": "39196:80fc276c-6199-54de-8a69-98b643a8eb3a:148a15cc4004",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.963,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "230f549ef001ddc2",
+   "split": "train",
+   "kept": [
+    "5157:33968beb-60ad-5cc9-9e6a-a004f381bf11:a7e599d45f79",
+    "9925:b00f4a57-517c-553e-9fd8-a64ea0442999:19dd9bd56fa3"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "5157:33968beb-60ad-5cc9-9e6a-a004f381bf11:a7e599d45f79",
+     "right": "9925:b00f4a57-517c-553e-9fd8-a64ea0442999:19dd9bd56fa3",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "244a807ba3516674",
+   "split": "train",
+   "kept": [
+    "1854:a7b6306b-d40e-59ee-b54f-1e213983c7c6:1b11b8eb6d52"
+   ],
+   "removed": [
+    {
+     "row": "1853:a7b6306b-d40e-59ee-b54f-1e213983c7c6:1b11b8eb6d52",
+     "kept": "1854:a7b6306b-d40e-59ee-b54f-1e213983c7c6:1b11b8eb6d52"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1853:a7b6306b-d40e-59ee-b54f-1e213983c7c6:1b11b8eb6d52",
+     "right": "1854:a7b6306b-d40e-59ee-b54f-1e213983c7c6:1b11b8eb6d52",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "1853:a7b6306b-d40e-59ee-b54f-1e213983c7c6:1b11b8eb6d52",
+     "right": "1854:a7b6306b-d40e-59ee-b54f-1e213983c7c6:1b11b8eb6d52",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "1853:a7b6306b-d40e-59ee-b54f-1e213983c7c6:1b11b8eb6d52",
+     "right": "1854:a7b6306b-d40e-59ee-b54f-1e213983c7c6:1b11b8eb6d52",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "25493367d9ef499d",
+   "split": "train",
+   "kept": [
+    "11220:e3087831-d6f2-5067-8cde-cfab7eb9560a:25f4cd0f7876"
+   ],
+   "removed": [
+    {
+     "row": "42117:84f3afc5-ecc3-5bfc-9355-31e3ec251773:c43c1278652f",
+     "kept": "11220:e3087831-d6f2-5067-8cde-cfab7eb9560a:25f4cd0f7876"
+    }
+   ],
+   "matches": [
+    {
+     "left": "11220:e3087831-d6f2-5067-8cde-cfab7eb9560a:25f4cd0f7876",
+     "right": "42117:84f3afc5-ecc3-5bfc-9355-31e3ec251773:c43c1278652f",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "11220:e3087831-d6f2-5067-8cde-cfab7eb9560a:25f4cd0f7876",
+     "right": "42117:84f3afc5-ecc3-5bfc-9355-31e3ec251773:c43c1278652f",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "26360fb189e9dd67",
+   "split": "train",
+   "kept": [
+    "1507:7769c4b2-a560-5899-9b3f-dcb80a8b20b5:117f47f65c82",
+    "1530:a85a85b9-e1ea-526b-9835-591686bf0b0d:fb0f9cc99e44"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "1507:7769c4b2-a560-5899-9b3f-dcb80a8b20b5:117f47f65c82",
+     "right": "1530:a85a85b9-e1ea-526b-9835-591686bf0b0d:fb0f9cc99e44",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.95,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "26fd3dd23ccb7c43",
+   "split": "train",
+   "kept": [
+    "2116:4b36796f-7e78-506f-bf13-c81320f0c806:c53c7f7d018a"
+   ],
+   "removed": [
+    {
+     "row": "626:4a34fae7-72c0-5703-8982-6738d22416da:f7ab3e829d3d",
+     "kept": "2116:4b36796f-7e78-506f-bf13-c81320f0c806:c53c7f7d018a"
+    }
+   ],
+   "matches": [
+    {
+     "left": "626:4a34fae7-72c0-5703-8982-6738d22416da:f7ab3e829d3d",
+     "right": "2116:4b36796f-7e78-506f-bf13-c81320f0c806:c53c7f7d018a",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "626:4a34fae7-72c0-5703-8982-6738d22416da:f7ab3e829d3d",
+     "right": "2116:4b36796f-7e78-506f-bf13-c81320f0c806:c53c7f7d018a",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "27b1f05991019da4",
+   "split": "train",
+   "kept": [
+    "210:ea6a5138-2e1f-56af-8080-03367d12df8e:92cfb039dc87"
+   ],
+   "removed": [
+    {
+     "row": "211:ea6a5138-2e1f-56af-8080-03367d12df8e:92cfb039dc87",
+     "kept": "210:ea6a5138-2e1f-56af-8080-03367d12df8e:92cfb039dc87"
+    }
+   ],
+   "matches": [
+    {
+     "left": "210:ea6a5138-2e1f-56af-8080-03367d12df8e:92cfb039dc87",
+     "right": "211:ea6a5138-2e1f-56af-8080-03367d12df8e:92cfb039dc87",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "210:ea6a5138-2e1f-56af-8080-03367d12df8e:92cfb039dc87",
+     "right": "211:ea6a5138-2e1f-56af-8080-03367d12df8e:92cfb039dc87",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "210:ea6a5138-2e1f-56af-8080-03367d12df8e:92cfb039dc87",
+     "right": "211:ea6a5138-2e1f-56af-8080-03367d12df8e:92cfb039dc87",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "2ad9162c80301ad3",
+   "split": "train",
+   "kept": [
+    "7511:cc358b90-579f-5de3-90dc-00365956eeeb:30cf0f5a321d"
+   ],
+   "removed": [
+    {
+     "row": "2478:d9651d91-ec96-5ef3-9e92-a98427472bfa:f43e623d2a2b",
+     "kept": "7511:cc358b90-579f-5de3-90dc-00365956eeeb:30cf0f5a321d"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2478:d9651d91-ec96-5ef3-9e92-a98427472bfa:f43e623d2a2b",
+     "right": "7511:cc358b90-579f-5de3-90dc-00365956eeeb:30cf0f5a321d",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "2478:d9651d91-ec96-5ef3-9e92-a98427472bfa:f43e623d2a2b",
+     "right": "7511:cc358b90-579f-5de3-90dc-00365956eeeb:30cf0f5a321d",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "2b319d64dec2c246",
+   "split": "train",
+   "kept": [
+    "655:994a8833-2644-560f-95da-19478b029859:6882eae4f5e3",
+    "5448:1278f55e-8ef3-5297-bdd8-3fc21bad9a66:e0eed180c4fc"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "655:994a8833-2644-560f-95da-19478b029859:6882eae4f5e3",
+     "right": "5448:1278f55e-8ef3-5297-bdd8-3fc21bad9a66:e0eed180c4fc",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "2b870601436a100e",
+   "split": "train",
+   "kept": [
+    "28818:dc3b71ef-101d-57cc-80d5-424fd2203279:e45b5dc05668",
+    "33678:9fbe456f-3e08-5ba1-b461-ff1e15654437:991fc17f15c5",
+    "44438:faeeadb5-0917-5243-b48b-200a2029810d:85fea466ec7f"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "28818:dc3b71ef-101d-57cc-80d5-424fd2203279:e45b5dc05668",
+     "right": "33678:9fbe456f-3e08-5ba1-b461-ff1e15654437:991fc17f15c5",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.94,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "33678:9fbe456f-3e08-5ba1-b461-ff1e15654437:991fc17f15c5",
+     "right": "44438:faeeadb5-0917-5243-b48b-200a2029810d:85fea466ec7f",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9038,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "2ba3296c835e6d22",
+   "split": "train",
+   "kept": [
+    "4111:22679e43-32c5-5a64-b03e-fa5b8504a500:0f89b1cc98c2",
+    "5036:118a1234-e30b-5b48-88aa-a38264a08f39:8b0c6e560a70"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "4111:22679e43-32c5-5a64-b03e-fa5b8504a500:0f89b1cc98c2",
+     "right": "5036:118a1234-e30b-5b48-88aa-a38264a08f39:8b0c6e560a70",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 0.9176
+    }
+   ]
+  },
+  {
+   "id": "2d802ae8cb66da5c",
+   "split": "train",
+   "kept": [
+    "1757:9673d879-7d97-5679-8ada-e21f0411f788:4a029023117a"
+   ],
+   "removed": [
+    {
+     "row": "1758:9673d879-7d97-5679-8ada-e21f0411f788:94757ca6fbac",
+     "kept": "1757:9673d879-7d97-5679-8ada-e21f0411f788:4a029023117a"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1757:9673d879-7d97-5679-8ada-e21f0411f788:4a029023117a",
+     "right": "1758:9673d879-7d97-5679-8ada-e21f0411f788:94757ca6fbac",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "2d94976f2ce09547",
+   "split": "train",
+   "kept": [
+    "36106:31777c0a-3dbf-508d-aa95-b6fa04011016:a175db77f144"
+   ],
+   "removed": [
+    {
+     "row": "8888:815f7595-4885-5400-87bd-427b8b6a61ae:16514e2fcec0",
+     "kept": "36106:31777c0a-3dbf-508d-aa95-b6fa04011016:a175db77f144"
+    }
+   ],
+   "matches": [
+    {
+     "left": "8888:815f7595-4885-5400-87bd-427b8b6a61ae:16514e2fcec0",
+     "right": "36106:31777c0a-3dbf-508d-aa95-b6fa04011016:a175db77f144",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "8888:815f7595-4885-5400-87bd-427b8b6a61ae:16514e2fcec0",
+     "right": "36106:31777c0a-3dbf-508d-aa95-b6fa04011016:a175db77f144",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "2df900563a073828",
+   "split": "train",
+   "kept": [
+    "312:2c38eb9b-5dbe-551a-b5f4-57bc9c12b5ae:902e10524740"
+   ],
+   "removed": [
+    {
+     "row": "40890:fcf0f18b-e5dd-57d3-b714-0ff239ade8eb:6a19b1fe59b1",
+     "kept": "312:2c38eb9b-5dbe-551a-b5f4-57bc9c12b5ae:902e10524740"
+    }
+   ],
+   "matches": [
+    {
+     "left": "312:2c38eb9b-5dbe-551a-b5f4-57bc9c12b5ae:902e10524740",
+     "right": "40890:fcf0f18b-e5dd-57d3-b714-0ff239ade8eb:6a19b1fe59b1",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "312:2c38eb9b-5dbe-551a-b5f4-57bc9c12b5ae:902e10524740",
+     "right": "40890:fcf0f18b-e5dd-57d3-b714-0ff239ade8eb:6a19b1fe59b1",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "2ebd041009eac37b",
+   "split": "train",
+   "kept": [
+    "3343:2141b3c5-ee90-5451-8117-289e911ea2a5:8639d701bbd2"
+   ],
+   "removed": [
+    {
+     "row": "3344:2141b3c5-ee90-5451-8117-289e911ea2a5:d77936244464",
+     "kept": "3343:2141b3c5-ee90-5451-8117-289e911ea2a5:8639d701bbd2"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3343:2141b3c5-ee90-5451-8117-289e911ea2a5:8639d701bbd2",
+     "right": "3344:2141b3c5-ee90-5451-8117-289e911ea2a5:d77936244464",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "2ec28167c6cdab60",
+   "split": "train",
+   "kept": [
+    "3897:eb138d28-89cd-5880-8d27-b6b75755aa15:7ec7fb326fef"
+   ],
+   "removed": [
+    {
+     "row": "3898:eb138d28-89cd-5880-8d27-b6b75755aa15:aa69752f0ee3",
+     "kept": "3897:eb138d28-89cd-5880-8d27-b6b75755aa15:7ec7fb326fef"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3897:eb138d28-89cd-5880-8d27-b6b75755aa15:7ec7fb326fef",
+     "right": "3898:eb138d28-89cd-5880-8d27-b6b75755aa15:aa69752f0ee3",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "32134ba5c493ca04",
+   "split": "train",
+   "kept": [
+    "9206:8e2ef668-317e-502b-a4e5-51c914beca25:06f485a78251",
+    "9885:b6ae1666-51fb-5446-a34d-5add5b7d0575:e4d3cbb023db",
+    "41945:b3f34988-e6cf-54c2-84c9-fc7c9ca33334:724df1a60a59"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "9206:8e2ef668-317e-502b-a4e5-51c914beca25:06f485a78251",
+     "right": "41945:b3f34988-e6cf-54c2-84c9-fc7c9ca33334:724df1a60a59",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9492,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "9206:8e2ef668-317e-502b-a4e5-51c914beca25:06f485a78251",
+     "right": "9885:b6ae1666-51fb-5446-a34d-5add5b7d0575:e4d3cbb023db",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.918,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "9885:b6ae1666-51fb-5446-a34d-5add5b7d0575:e4d3cbb023db",
+     "right": "41945:b3f34988-e6cf-54c2-84c9-fc7c9ca33334:724df1a60a59",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9333,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "328a68862e590251",
+   "split": "train",
+   "kept": [
+    "81:8c05b07b-3f86-5bbb-8c26-0074d5a9695e:ad83275da0c2"
+   ],
+   "removed": [
+    {
+     "row": "82:8c05b07b-3f86-5bbb-8c26-0074d5a9695e:ad83275da0c2",
+     "kept": "81:8c05b07b-3f86-5bbb-8c26-0074d5a9695e:ad83275da0c2"
+    }
+   ],
+   "matches": [
+    {
+     "left": "81:8c05b07b-3f86-5bbb-8c26-0074d5a9695e:ad83275da0c2",
+     "right": "82:8c05b07b-3f86-5bbb-8c26-0074d5a9695e:ad83275da0c2",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "81:8c05b07b-3f86-5bbb-8c26-0074d5a9695e:ad83275da0c2",
+     "right": "82:8c05b07b-3f86-5bbb-8c26-0074d5a9695e:ad83275da0c2",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "81:8c05b07b-3f86-5bbb-8c26-0074d5a9695e:ad83275da0c2",
+     "right": "82:8c05b07b-3f86-5bbb-8c26-0074d5a9695e:ad83275da0c2",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "3422aabbecea395d",
+   "split": "train",
+   "kept": [
+    "8797:903fc944-9078-59b3-8980-309e8b14f7f0:c296b6db79b9",
+    "10240:ebaea781-010c-560f-862c-bdca967dba38:f55fcace676d"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "8797:903fc944-9078-59b3-8980-309e8b14f7f0:c296b6db79b9",
+     "right": "10240:ebaea781-010c-560f-862c-bdca967dba38:f55fcace676d",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9286,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "35a713e1de94b885",
+   "split": "train",
+   "kept": [
+    "1455:b0918e2a-a313-5237-b769-78257de0e044:9a29c7cc04de"
+   ],
+   "removed": [
+    {
+     "row": "1456:b0918e2a-a313-5237-b769-78257de0e044:837c0e168730",
+     "kept": "1455:b0918e2a-a313-5237-b769-78257de0e044:9a29c7cc04de"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1455:b0918e2a-a313-5237-b769-78257de0e044:9a29c7cc04de",
+     "right": "1456:b0918e2a-a313-5237-b769-78257de0e044:837c0e168730",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "1455:b0918e2a-a313-5237-b769-78257de0e044:9a29c7cc04de",
+     "right": "1456:b0918e2a-a313-5237-b769-78257de0e044:837c0e168730",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "1455:b0918e2a-a313-5237-b769-78257de0e044:9a29c7cc04de",
+     "right": "1456:b0918e2a-a313-5237-b769-78257de0e044:837c0e168730",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "365073ca5ae38cad",
+   "split": "train",
+   "kept": [
+    "3440:c4e47c06-2a98-5965-8470-e0afdd069af7:764329cfde95"
+   ],
+   "removed": [
+    {
+     "row": "3441:c4e47c06-2a98-5965-8470-e0afdd069af7:06d22eb209b4",
+     "kept": "3440:c4e47c06-2a98-5965-8470-e0afdd069af7:764329cfde95"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3440:c4e47c06-2a98-5965-8470-e0afdd069af7:764329cfde95",
+     "right": "3441:c4e47c06-2a98-5965-8470-e0afdd069af7:06d22eb209b4",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "36efae924ac48dee",
+   "split": "train",
+   "kept": [
+    "5042:6b8b3e9f-7376-5a20-b7cd-de4dfbfb3fca:256b12d6f26c",
+    "10016:4a2d53aa-821e-5a07-8bb5-f850d6c3c22e:d4fd033c3438"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "5042:6b8b3e9f-7376-5a20-b7cd-de4dfbfb3fca:256b12d6f26c",
+     "right": "10016:4a2d53aa-821e-5a07-8bb5-f850d6c3c22e:d4fd033c3438",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9672,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "3a146b614369c4bf",
+   "split": "train",
+   "kept": [
+    "5281:cf9e72c4-272e-5edf-9b47-b99a832066bd:43e8cd09e489",
+    "29711:c2451ce1-8f70-5a86-8c45-7c8de8223ed7:67425c02ae17"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "5281:cf9e72c4-272e-5edf-9b47-b99a832066bd:43e8cd09e489",
+     "right": "29711:c2451ce1-8f70-5a86-8c45-7c8de8223ed7:67425c02ae17",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "3bde59c8574bcccb",
+   "split": "train",
+   "kept": [
+    "3068:f0b019df-3b7c-5c86-ac1d-05fe2cf94094:77e5e804f7ed"
+   ],
+   "removed": [
+    {
+     "row": "3069:f0b019df-3b7c-5c86-ac1d-05fe2cf94094:77e5e804f7ed",
+     "kept": "3068:f0b019df-3b7c-5c86-ac1d-05fe2cf94094:77e5e804f7ed"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3068:f0b019df-3b7c-5c86-ac1d-05fe2cf94094:77e5e804f7ed",
+     "right": "3069:f0b019df-3b7c-5c86-ac1d-05fe2cf94094:77e5e804f7ed",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "3068:f0b019df-3b7c-5c86-ac1d-05fe2cf94094:77e5e804f7ed",
+     "right": "3069:f0b019df-3b7c-5c86-ac1d-05fe2cf94094:77e5e804f7ed",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "3068:f0b019df-3b7c-5c86-ac1d-05fe2cf94094:77e5e804f7ed",
+     "right": "3069:f0b019df-3b7c-5c86-ac1d-05fe2cf94094:77e5e804f7ed",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "3c22a4758acfc2aa",
+   "split": "train",
+   "kept": [
+    "3596:2b76b51c-de7c-59ce-82eb-af5a154d1dd1:026c21a06289"
+   ],
+   "removed": [
+    {
+     "row": "3597:2b76b51c-de7c-59ce-82eb-af5a154d1dd1:026c21a06289",
+     "kept": "3596:2b76b51c-de7c-59ce-82eb-af5a154d1dd1:026c21a06289"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3596:2b76b51c-de7c-59ce-82eb-af5a154d1dd1:026c21a06289",
+     "right": "3597:2b76b51c-de7c-59ce-82eb-af5a154d1dd1:026c21a06289",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "3596:2b76b51c-de7c-59ce-82eb-af5a154d1dd1:026c21a06289",
+     "right": "3597:2b76b51c-de7c-59ce-82eb-af5a154d1dd1:026c21a06289",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "3596:2b76b51c-de7c-59ce-82eb-af5a154d1dd1:026c21a06289",
+     "right": "3597:2b76b51c-de7c-59ce-82eb-af5a154d1dd1:026c21a06289",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "3c3bde4a8fc3d8b5",
+   "split": "train",
+   "kept": [
+    "7431:cf7f7f2a-e6ab-5a52-9e82-dca0984d0faa:c26e2acb8800",
+    "11242:d3f8731b-51c8-587c-8e29-1eb67c0db32b:34f7e6559e92"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "7431:cf7f7f2a-e6ab-5a52-9e82-dca0984d0faa:c26e2acb8800",
+     "right": "11242:d3f8731b-51c8-587c-8e29-1eb67c0db32b:34f7e6559e92",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.964,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "3fc6c2dbb50cb454",
+   "split": "train",
+   "kept": [
+    "32988:0eea3a96-ba42-5104-8377-16661a2b77b2:548f4e32472e",
+    "42296:78234522-35e7-5b7d-97eb-627b12160819:821d7528d8da"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "32988:0eea3a96-ba42-5104-8377-16661a2b77b2:548f4e32472e",
+     "right": "42296:78234522-35e7-5b7d-97eb-627b12160819:821d7528d8da",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9701,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "41185be22ebedddc",
+   "split": "train",
+   "kept": [
+    "10111:3821ed1b-c97b-502d-81ae-b713a3617f7e:575c80c77441"
+   ],
+   "removed": [
+    {
+     "row": "8151:56151c6e-6d94-55cf-a412-7630e5e2ed0e:739e44e57a36",
+     "kept": "10111:3821ed1b-c97b-502d-81ae-b713a3617f7e:575c80c77441"
+    }
+   ],
+   "matches": [
+    {
+     "left": "8151:56151c6e-6d94-55cf-a412-7630e5e2ed0e:739e44e57a36",
+     "right": "10111:3821ed1b-c97b-502d-81ae-b713a3617f7e:575c80c77441",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "8151:56151c6e-6d94-55cf-a412-7630e5e2ed0e:739e44e57a36",
+     "right": "10111:3821ed1b-c97b-502d-81ae-b713a3617f7e:575c80c77441",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "417d009dc9eeaf59",
+   "split": "train",
+   "kept": [
+    "4236:eb081234-c48f-5f44-b646-6ed1f06379a5:b4e8e8332108"
+   ],
+   "removed": [
+    {
+     "row": "4237:eb081234-c48f-5f44-b646-6ed1f06379a5:b4e8e8332108",
+     "kept": "4236:eb081234-c48f-5f44-b646-6ed1f06379a5:b4e8e8332108"
+    }
+   ],
+   "matches": [
+    {
+     "left": "4236:eb081234-c48f-5f44-b646-6ed1f06379a5:b4e8e8332108",
+     "right": "4237:eb081234-c48f-5f44-b646-6ed1f06379a5:b4e8e8332108",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "4236:eb081234-c48f-5f44-b646-6ed1f06379a5:b4e8e8332108",
+     "right": "4237:eb081234-c48f-5f44-b646-6ed1f06379a5:b4e8e8332108",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "4236:eb081234-c48f-5f44-b646-6ed1f06379a5:b4e8e8332108",
+     "right": "4237:eb081234-c48f-5f44-b646-6ed1f06379a5:b4e8e8332108",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "435e6874f49a8750",
+   "split": "train",
+   "kept": [
+    "10616:f698e7cc-be4d-51c4-9e4c-a97eead7690a:c299d79345af"
+   ],
+   "removed": [
+    {
+     "row": "7302:17824f93-0860-57a8-b94a-2df4103fb8ae:956a4226aaad",
+     "kept": "10616:f698e7cc-be4d-51c4-9e4c-a97eead7690a:c299d79345af"
+    }
+   ],
+   "matches": [
+    {
+     "left": "7302:17824f93-0860-57a8-b94a-2df4103fb8ae:956a4226aaad",
+     "right": "10616:f698e7cc-be4d-51c4-9e4c-a97eead7690a:c299d79345af",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "7302:17824f93-0860-57a8-b94a-2df4103fb8ae:956a4226aaad",
+     "right": "10616:f698e7cc-be4d-51c4-9e4c-a97eead7690a:c299d79345af",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "445cb279e3bc07ea",
+   "split": "train",
+   "kept": [
+    "41800:956a18fe-c4f8-5c92-acf1-ea21d05fcd6e:45e600316b8f",
+    "43146:2dbd6b5d-d17b-5fd1-a26c-77eee93a53e2:4a6bb9c632e1"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "41800:956a18fe-c4f8-5c92-acf1-ea21d05fcd6e:45e600316b8f",
+     "right": "43146:2dbd6b5d-d17b-5fd1-a26c-77eee93a53e2:4a6bb9c632e1",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "46c6dbf255a5c00e",
+   "split": "train",
+   "kept": [
+    "4600:7256c09d-10ca-55f4-9dc3-9f0646988776:64218d9f72ad"
+   ],
+   "removed": [
+    {
+     "row": "4601:7256c09d-10ca-55f4-9dc3-9f0646988776:0cf8abc75be3",
+     "kept": "4600:7256c09d-10ca-55f4-9dc3-9f0646988776:64218d9f72ad"
+    }
+   ],
+   "matches": [
+    {
+     "left": "4600:7256c09d-10ca-55f4-9dc3-9f0646988776:64218d9f72ad",
+     "right": "4601:7256c09d-10ca-55f4-9dc3-9f0646988776:0cf8abc75be3",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "46eac13fe5fa891b",
+   "split": "train",
+   "kept": [
+    "36964:18a334fc-8782-5ef7-9c88-4cf1ee8a96d7:0b601b036b30"
+   ],
+   "removed": [
+    {
+     "row": "6942:e342a18e-6407-52ef-b019-302cfa311d1c:d85ad7da9365",
+     "kept": "36964:18a334fc-8782-5ef7-9c88-4cf1ee8a96d7:0b601b036b30"
+    },
+    {
+     "row": "7960:220f4669-2bd2-5c9e-80c3-d9a662aab1c6:e0fe38a97da3",
+     "kept": "36964:18a334fc-8782-5ef7-9c88-4cf1ee8a96d7:0b601b036b30"
+    }
+   ],
+   "matches": [
+    {
+     "left": "6942:e342a18e-6407-52ef-b019-302cfa311d1c:d85ad7da9365",
+     "right": "36964:18a334fc-8782-5ef7-9c88-4cf1ee8a96d7:0b601b036b30",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "6942:e342a18e-6407-52ef-b019-302cfa311d1c:d85ad7da9365",
+     "right": "36964:18a334fc-8782-5ef7-9c88-4cf1ee8a96d7:0b601b036b30",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "6942:e342a18e-6407-52ef-b019-302cfa311d1c:d85ad7da9365",
+     "right": "7960:220f4669-2bd2-5c9e-80c3-d9a662aab1c6:e0fe38a97da3",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "6942:e342a18e-6407-52ef-b019-302cfa311d1c:d85ad7da9365",
+     "right": "7960:220f4669-2bd2-5c9e-80c3-d9a662aab1c6:e0fe38a97da3",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "7960:220f4669-2bd2-5c9e-80c3-d9a662aab1c6:e0fe38a97da3",
+     "right": "36964:18a334fc-8782-5ef7-9c88-4cf1ee8a96d7:0b601b036b30",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "49855ab0ec004ef0",
+   "split": "train",
+   "kept": [
+    "2839:9c6d6a6a-6877-5afb-adcf-20871889e469:b6b5e681b3d8"
+   ],
+   "removed": [
+    {
+     "row": "2840:9c6d6a6a-6877-5afb-adcf-20871889e469:8eb75350b1f3",
+     "kept": "2839:9c6d6a6a-6877-5afb-adcf-20871889e469:b6b5e681b3d8"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2839:9c6d6a6a-6877-5afb-adcf-20871889e469:b6b5e681b3d8",
+     "right": "2840:9c6d6a6a-6877-5afb-adcf-20871889e469:8eb75350b1f3",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "4a5bf2fc6810c202",
+   "split": "train",
+   "kept": [
+    "3906:d0458e96-bfed-50d9-88a0-ca7d52673782:214959113b68"
+   ],
+   "removed": [
+    {
+     "row": "3907:d0458e96-bfed-50d9-88a0-ca7d52673782:214959113b68",
+     "kept": "3906:d0458e96-bfed-50d9-88a0-ca7d52673782:214959113b68"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3906:d0458e96-bfed-50d9-88a0-ca7d52673782:214959113b68",
+     "right": "3907:d0458e96-bfed-50d9-88a0-ca7d52673782:214959113b68",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "3906:d0458e96-bfed-50d9-88a0-ca7d52673782:214959113b68",
+     "right": "3907:d0458e96-bfed-50d9-88a0-ca7d52673782:214959113b68",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "3906:d0458e96-bfed-50d9-88a0-ca7d52673782:214959113b68",
+     "right": "3907:d0458e96-bfed-50d9-88a0-ca7d52673782:214959113b68",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "4cb97062483f1079",
+   "split": "train",
+   "kept": [
+    "7480:ad39313c-2ce7-521a-a670-b9df993a8004:856de1e0681d",
+    "8401:3e6b57e9-d5ed-581c-bf46-9306fa9b6806:68b54df2a190"
+   ],
+   "removed": [
+    {
+     "row": "7672:bf8eb085-bb99-56a5-87fd-1978e0703f46:1caa11a3313c",
+     "kept": "7480:ad39313c-2ce7-521a-a670-b9df993a8004:856de1e0681d"
+    }
+   ],
+   "matches": [
+    {
+     "left": "7480:ad39313c-2ce7-521a-a670-b9df993a8004:856de1e0681d",
+     "right": "7672:bf8eb085-bb99-56a5-87fd-1978e0703f46:1caa11a3313c",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "7480:ad39313c-2ce7-521a-a670-b9df993a8004:856de1e0681d",
+     "right": "7672:bf8eb085-bb99-56a5-87fd-1978e0703f46:1caa11a3313c",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "7480:ad39313c-2ce7-521a-a670-b9df993a8004:856de1e0681d",
+     "right": "8401:3e6b57e9-d5ed-581c-bf46-9306fa9b6806:68b54df2a190",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "7672:bf8eb085-bb99-56a5-87fd-1978e0703f46:1caa11a3313c",
+     "right": "8401:3e6b57e9-d5ed-581c-bf46-9306fa9b6806:68b54df2a190",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "4e2699d56651a2ca",
+   "split": "train",
+   "kept": [
+    "3480:47999174-f733-5647-9ad0-2696bb9139b3:220fb78fa297",
+    "4082:b53d6aa0-8e7d-54cd-9eb0-e037128fb12e:27bdfd57d5b8"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "3480:47999174-f733-5647-9ad0-2696bb9139b3:220fb78fa297",
+     "right": "4082:b53d6aa0-8e7d-54cd-9eb0-e037128fb12e:27bdfd57d5b8",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9512,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "5071cdc0ea8cdc00",
+   "split": "train",
+   "kept": [
+    "276:b302cccf-4a24-5ac9-96c9-b169d92a835a:010a19c1cc2c"
+   ],
+   "removed": [
+    {
+     "row": "277:b302cccf-4a24-5ac9-96c9-b169d92a835a:010a19c1cc2c",
+     "kept": "276:b302cccf-4a24-5ac9-96c9-b169d92a835a:010a19c1cc2c"
+    }
+   ],
+   "matches": [
+    {
+     "left": "276:b302cccf-4a24-5ac9-96c9-b169d92a835a:010a19c1cc2c",
+     "right": "277:b302cccf-4a24-5ac9-96c9-b169d92a835a:010a19c1cc2c",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "276:b302cccf-4a24-5ac9-96c9-b169d92a835a:010a19c1cc2c",
+     "right": "277:b302cccf-4a24-5ac9-96c9-b169d92a835a:010a19c1cc2c",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "276:b302cccf-4a24-5ac9-96c9-b169d92a835a:010a19c1cc2c",
+     "right": "277:b302cccf-4a24-5ac9-96c9-b169d92a835a:010a19c1cc2c",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "50e4e2a983eb582b",
+   "split": "train",
+   "kept": [
+    "33474:91398b2c-f1d3-5d64-8dbd-0c0b6ad712b7:defff4205b01"
+   ],
+   "removed": [
+    {
+     "row": "46993:c22417cb-5f55-5234-bb9e-d34a900f6410:96fbba381fcd",
+     "kept": "33474:91398b2c-f1d3-5d64-8dbd-0c0b6ad712b7:defff4205b01"
+    }
+   ],
+   "matches": [
+    {
+     "left": "33474:91398b2c-f1d3-5d64-8dbd-0c0b6ad712b7:defff4205b01",
+     "right": "46993:c22417cb-5f55-5234-bb9e-d34a900f6410:96fbba381fcd",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "33474:91398b2c-f1d3-5d64-8dbd-0c0b6ad712b7:defff4205b01",
+     "right": "46993:c22417cb-5f55-5234-bb9e-d34a900f6410:96fbba381fcd",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "5632ffe834af1df2",
+   "split": "train",
+   "kept": [
+    "423:6b487ff1-8652-526e-ad08-4bbba98dd3ed:f0eb94f2af5a"
+   ],
+   "removed": [
+    {
+     "row": "424:6b487ff1-8652-526e-ad08-4bbba98dd3ed:5ac822b4c196",
+     "kept": "423:6b487ff1-8652-526e-ad08-4bbba98dd3ed:f0eb94f2af5a"
+    }
+   ],
+   "matches": [
+    {
+     "left": "423:6b487ff1-8652-526e-ad08-4bbba98dd3ed:f0eb94f2af5a",
+     "right": "424:6b487ff1-8652-526e-ad08-4bbba98dd3ed:5ac822b4c196",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "59e825ccc568d814",
+   "split": "train",
+   "kept": [
+    "710:f1e6eb17-56d4-5e97-9229-757e4a2b544c:0265df5c3666"
+   ],
+   "removed": [
+    {
+     "row": "709:f1e6eb17-56d4-5e97-9229-757e4a2b544c:1d18ca822c06",
+     "kept": "710:f1e6eb17-56d4-5e97-9229-757e4a2b544c:0265df5c3666"
+    }
+   ],
+   "matches": [
+    {
+     "left": "709:f1e6eb17-56d4-5e97-9229-757e4a2b544c:1d18ca822c06",
+     "right": "710:f1e6eb17-56d4-5e97-9229-757e4a2b544c:0265df5c3666",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "5c873941fd80ad7b",
+   "split": "train",
+   "kept": [
+    "3279:a8f51a7e-0df2-59b3-8a09-83ac0ff842c1:e3fa6366f2fb"
+   ],
+   "removed": [
+    {
+     "row": "3278:a8f51a7e-0df2-59b3-8a09-83ac0ff842c1:666af4e203b3",
+     "kept": "3279:a8f51a7e-0df2-59b3-8a09-83ac0ff842c1:e3fa6366f2fb"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3278:a8f51a7e-0df2-59b3-8a09-83ac0ff842c1:666af4e203b3",
+     "right": "3279:a8f51a7e-0df2-59b3-8a09-83ac0ff842c1:e3fa6366f2fb",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "5f5f3fc3f1dcbfe9",
+   "split": "train",
+   "kept": [
+    "1944:2b7fe471-8860-5557-977c-65a20f719c17:919581b9fc6e"
+   ],
+   "removed": [
+    {
+     "row": "1945:2b7fe471-8860-5557-977c-65a20f719c17:2e95986dfeff",
+     "kept": "1944:2b7fe471-8860-5557-977c-65a20f719c17:919581b9fc6e"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1944:2b7fe471-8860-5557-977c-65a20f719c17:919581b9fc6e",
+     "right": "1945:2b7fe471-8860-5557-977c-65a20f719c17:2e95986dfeff",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "61435212cfff605e",
+   "split": "train",
+   "kept": [
+    "661:2d7512f4-6947-5345-bb26-b4f22bdc17cb:7e000c5bf55f"
+   ],
+   "removed": [
+    {
+     "row": "662:2d7512f4-6947-5345-bb26-b4f22bdc17cb:bdf25b083ff4",
+     "kept": "661:2d7512f4-6947-5345-bb26-b4f22bdc17cb:7e000c5bf55f"
+    }
+   ],
+   "matches": [
+    {
+     "left": "661:2d7512f4-6947-5345-bb26-b4f22bdc17cb:7e000c5bf55f",
+     "right": "662:2d7512f4-6947-5345-bb26-b4f22bdc17cb:bdf25b083ff4",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "62049d2acce8292b",
+   "split": "train",
+   "kept": [
+    "10520:2c90f4a4-29c5-576a-a8e3-98b927f83fb1:2a96399a614e",
+    "45070:6ec14bf2-8f40-514e-829d-9c29e42f3889:5f9deaac92d2"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "10520:2c90f4a4-29c5-576a-a8e3-98b927f83fb1:2a96399a614e",
+     "right": "45070:6ec14bf2-8f40-514e-829d-9c29e42f3889:5f9deaac92d2",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.95,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "6260f288948fc8bd",
+   "split": "train",
+   "kept": [
+    "4536:56781bc5-d063-5721-999a-54ce96c7f428:00d64fab968f"
+   ],
+   "removed": [
+    {
+     "row": "8663:d264eb7f-49ca-536c-a274-f9c8254a601d:e06b95efe9d7",
+     "kept": "4536:56781bc5-d063-5721-999a-54ce96c7f428:00d64fab968f"
+    }
+   ],
+   "matches": [
+    {
+     "left": "4536:56781bc5-d063-5721-999a-54ce96c7f428:00d64fab968f",
+     "right": "8663:d264eb7f-49ca-536c-a274-f9c8254a601d:e06b95efe9d7",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "4536:56781bc5-d063-5721-999a-54ce96c7f428:00d64fab968f",
+     "right": "8663:d264eb7f-49ca-536c-a274-f9c8254a601d:e06b95efe9d7",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "666a2c5ac3959deb",
+   "split": "train",
+   "kept": [
+    "37352:b7e3f9c4-429d-561b-97ba-f589217a8b3b:9a28bd656870"
+   ],
+   "removed": [
+    {
+     "row": "5096:24d1326e-4bbe-5f14-936f-c49ba46a510c:e5857e82f874",
+     "kept": "37352:b7e3f9c4-429d-561b-97ba-f589217a8b3b:9a28bd656870"
+    }
+   ],
+   "matches": [
+    {
+     "left": "5096:24d1326e-4bbe-5f14-936f-c49ba46a510c:e5857e82f874",
+     "right": "37352:b7e3f9c4-429d-561b-97ba-f589217a8b3b:9a28bd656870",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "5096:24d1326e-4bbe-5f14-936f-c49ba46a510c:e5857e82f874",
+     "right": "37352:b7e3f9c4-429d-561b-97ba-f589217a8b3b:9a28bd656870",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "6712102ca912d134",
+   "split": "train",
+   "kept": [
+    "824:3c6f847d-c9c1-52e3-ba2c-832c2549d7f4:bb07fb405897"
+   ],
+   "removed": [
+    {
+     "row": "825:3c6f847d-c9c1-52e3-ba2c-832c2549d7f4:bb07fb405897",
+     "kept": "824:3c6f847d-c9c1-52e3-ba2c-832c2549d7f4:bb07fb405897"
+    }
+   ],
+   "matches": [
+    {
+     "left": "824:3c6f847d-c9c1-52e3-ba2c-832c2549d7f4:bb07fb405897",
+     "right": "825:3c6f847d-c9c1-52e3-ba2c-832c2549d7f4:bb07fb405897",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "824:3c6f847d-c9c1-52e3-ba2c-832c2549d7f4:bb07fb405897",
+     "right": "825:3c6f847d-c9c1-52e3-ba2c-832c2549d7f4:bb07fb405897",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "824:3c6f847d-c9c1-52e3-ba2c-832c2549d7f4:bb07fb405897",
+     "right": "825:3c6f847d-c9c1-52e3-ba2c-832c2549d7f4:bb07fb405897",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "6771ea1b697b64c5",
+   "split": "train",
+   "kept": [
+    "986:cf0dcef7-4d43-503f-88e4-45821799ee71:3482bcdd0a89"
+   ],
+   "removed": [
+    {
+     "row": "987:cf0dcef7-4d43-503f-88e4-45821799ee71:86df49878f16",
+     "kept": "986:cf0dcef7-4d43-503f-88e4-45821799ee71:3482bcdd0a89"
+    }
+   ],
+   "matches": [
+    {
+     "left": "986:cf0dcef7-4d43-503f-88e4-45821799ee71:3482bcdd0a89",
+     "right": "987:cf0dcef7-4d43-503f-88e4-45821799ee71:86df49878f16",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "986:cf0dcef7-4d43-503f-88e4-45821799ee71:3482bcdd0a89",
+     "right": "987:cf0dcef7-4d43-503f-88e4-45821799ee71:86df49878f16",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "986:cf0dcef7-4d43-503f-88e4-45821799ee71:3482bcdd0a89",
+     "right": "987:cf0dcef7-4d43-503f-88e4-45821799ee71:86df49878f16",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "6aceb522fdd63349",
+   "split": "train",
+   "kept": [
+    "1462:a623dfad-2098-57a6-b699-3ac1de818bb9:7f89dd766e71"
+   ],
+   "removed": [
+    {
+     "row": "1461:a623dfad-2098-57a6-b699-3ac1de818bb9:c8d9688f0b32",
+     "kept": "1462:a623dfad-2098-57a6-b699-3ac1de818bb9:7f89dd766e71"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1461:a623dfad-2098-57a6-b699-3ac1de818bb9:c8d9688f0b32",
+     "right": "1462:a623dfad-2098-57a6-b699-3ac1de818bb9:7f89dd766e71",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "6d44a99894d9b20d",
+   "split": "train",
+   "kept": [
+    "10666:197b3c87-50d9-56a2-8740-d7d83df5ffba:3180e4865631",
+    "46449:3f9059e1-c4f7-5dc7-a3f4-16f65f36dc5d:0c50043df641"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "10666:197b3c87-50d9-56a2-8740-d7d83df5ffba:3180e4865631",
+     "right": "46449:3f9059e1-c4f7-5dc7-a3f4-16f65f36dc5d:0c50043df641",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.95,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "6dc4b48e454a5236",
+   "split": "train",
+   "kept": [
+    "21:56c58159-3e1a-5ee2-a155-318faaacb31c:24af698f1546"
+   ],
+   "removed": [
+    {
+     "row": "22:56c58159-3e1a-5ee2-a155-318faaacb31c:aafc297d84cf",
+     "kept": "21:56c58159-3e1a-5ee2-a155-318faaacb31c:24af698f1546"
+    }
+   ],
+   "matches": [
+    {
+     "left": "21:56c58159-3e1a-5ee2-a155-318faaacb31c:24af698f1546",
+     "right": "22:56c58159-3e1a-5ee2-a155-318faaacb31c:aafc297d84cf",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "6f59476a04a49a68",
+   "split": "train",
+   "kept": [
+    "1351:0ad33a32-afdb-5669-83cd-dd67dffa39b4:ae51ac9d7f64"
+   ],
+   "removed": [
+    {
+     "row": "1352:0ad33a32-afdb-5669-83cd-dd67dffa39b4:028708d10bdf",
+     "kept": "1351:0ad33a32-afdb-5669-83cd-dd67dffa39b4:ae51ac9d7f64"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1351:0ad33a32-afdb-5669-83cd-dd67dffa39b4:ae51ac9d7f64",
+     "right": "1352:0ad33a32-afdb-5669-83cd-dd67dffa39b4:028708d10bdf",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "1351:0ad33a32-afdb-5669-83cd-dd67dffa39b4:ae51ac9d7f64",
+     "right": "1352:0ad33a32-afdb-5669-83cd-dd67dffa39b4:028708d10bdf",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "1351:0ad33a32-afdb-5669-83cd-dd67dffa39b4:ae51ac9d7f64",
+     "right": "1352:0ad33a32-afdb-5669-83cd-dd67dffa39b4:028708d10bdf",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "734d05afa6d01a5e",
+   "split": "train",
+   "kept": [
+    "5031:ba6b2424-fce8-5de4-99aa-7690f9a3b5b4:e953fefe23f7"
+   ],
+   "removed": [
+    {
+     "row": "5030:ba6b2424-fce8-5de4-99aa-7690f9a3b5b4:7e5579480844",
+     "kept": "5031:ba6b2424-fce8-5de4-99aa-7690f9a3b5b4:e953fefe23f7"
+    }
+   ],
+   "matches": [
+    {
+     "left": "5030:ba6b2424-fce8-5de4-99aa-7690f9a3b5b4:7e5579480844",
+     "right": "5031:ba6b2424-fce8-5de4-99aa-7690f9a3b5b4:e953fefe23f7",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "7591b12f621d5c08",
+   "split": "train",
+   "kept": [
+    "4468:1ec62030-ad43-5ab5-ad26-98179cd1c106:3174b3e052c8"
+   ],
+   "removed": [
+    {
+     "row": "4469:1ec62030-ad43-5ab5-ad26-98179cd1c106:3174b3e052c8",
+     "kept": "4468:1ec62030-ad43-5ab5-ad26-98179cd1c106:3174b3e052c8"
+    }
+   ],
+   "matches": [
+    {
+     "left": "4468:1ec62030-ad43-5ab5-ad26-98179cd1c106:3174b3e052c8",
+     "right": "4469:1ec62030-ad43-5ab5-ad26-98179cd1c106:3174b3e052c8",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "4468:1ec62030-ad43-5ab5-ad26-98179cd1c106:3174b3e052c8",
+     "right": "4469:1ec62030-ad43-5ab5-ad26-98179cd1c106:3174b3e052c8",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "4468:1ec62030-ad43-5ab5-ad26-98179cd1c106:3174b3e052c8",
+     "right": "4469:1ec62030-ad43-5ab5-ad26-98179cd1c106:3174b3e052c8",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "764f998758484b3b",
+   "split": "train",
+   "kept": [
+    "10899:adb0000f-a5b7-57a4-a7ee-8cf971416489:1ac786feeb8c",
+    "12036:0490c5e2-22d7-58d0-85c9-e3d695810d49:f594cd2befdc"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "10899:adb0000f-a5b7-57a4-a7ee-8cf971416489:1ac786feeb8c",
+     "right": "12036:0490c5e2-22d7-58d0-85c9-e3d695810d49:f594cd2befdc",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9815,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "7e4a40a5bb61d289",
+   "split": "train",
+   "kept": [
+    "202:77ded476-82ca-5bee-b3c6-8f1ab2b76e0a:b266101a791c"
+   ],
+   "removed": [
+    {
+     "row": "8879:df634171-0a58-53ad-8817-7d94412605a0:51f4bebbf24b",
+     "kept": "202:77ded476-82ca-5bee-b3c6-8f1ab2b76e0a:b266101a791c"
+    }
+   ],
+   "matches": [
+    {
+     "left": "202:77ded476-82ca-5bee-b3c6-8f1ab2b76e0a:b266101a791c",
+     "right": "8879:df634171-0a58-53ad-8817-7d94412605a0:51f4bebbf24b",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "202:77ded476-82ca-5bee-b3c6-8f1ab2b76e0a:b266101a791c",
+     "right": "8879:df634171-0a58-53ad-8817-7d94412605a0:51f4bebbf24b",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "7e5e81de81f7651a",
+   "split": "train",
+   "kept": [
+    "1434:42055cbe-173e-59f6-ad04-a80412140623:42bb0a9d760b",
+    "1450:4b6e845c-ea59-5f39-9741-ca9b86927c35:45907b1e5885"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "1434:42055cbe-173e-59f6-ad04-a80412140623:42bb0a9d760b",
+     "right": "1450:4b6e845c-ea59-5f39-9741-ca9b86927c35:45907b1e5885",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9014,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "82ac15ed48d939f1",
+   "split": "train",
+   "kept": [
+    "2684:78a103cc-5431-5fe9-b894-afa8792b89e3:2cabb2f86bcd",
+    "9142:0db9431a-c3ba-5639-a9df-190e30fa67ac:f3e895609487"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "2684:78a103cc-5431-5fe9-b894-afa8792b89e3:2cabb2f86bcd",
+     "right": "9142:0db9431a-c3ba-5639-a9df-190e30fa67ac:f3e895609487",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9412,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "840570e0c73d161e",
+   "split": "train",
+   "kept": [
+    "38404:fbe69df8-ccba-58f5-bf85-eb9a2f2ff408:744fdd7cd59d"
+   ],
+   "removed": [
+    {
+     "row": "46289:f36f9831-a20e-5fe0-b563-f34688717b1a:010d9f7d98f9",
+     "kept": "38404:fbe69df8-ccba-58f5-bf85-eb9a2f2ff408:744fdd7cd59d"
+    }
+   ],
+   "matches": [
+    {
+     "left": "38404:fbe69df8-ccba-58f5-bf85-eb9a2f2ff408:744fdd7cd59d",
+     "right": "46289:f36f9831-a20e-5fe0-b563-f34688717b1a:010d9f7d98f9",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "38404:fbe69df8-ccba-58f5-bf85-eb9a2f2ff408:744fdd7cd59d",
+     "right": "46289:f36f9831-a20e-5fe0-b563-f34688717b1a:010d9f7d98f9",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "853be09da0ac148c",
+   "split": "eval",
+   "kept": [
+    "56:49c9d139-5ba6-5411-93be-f8215bb76ea9:5b1e33751dc4"
+   ],
+   "removed": [
+    {
+     "row": "57:49c9d139-5ba6-5411-93be-f8215bb76ea9:fb3d2a79e639",
+     "kept": "56:49c9d139-5ba6-5411-93be-f8215bb76ea9:5b1e33751dc4"
+    }
+   ],
+   "matches": [
+    {
+     "left": "56:49c9d139-5ba6-5411-93be-f8215bb76ea9:5b1e33751dc4",
+     "right": "57:49c9d139-5ba6-5411-93be-f8215bb76ea9:fb3d2a79e639",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "56:49c9d139-5ba6-5411-93be-f8215bb76ea9:5b1e33751dc4",
+     "right": "57:49c9d139-5ba6-5411-93be-f8215bb76ea9:fb3d2a79e639",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "56:49c9d139-5ba6-5411-93be-f8215bb76ea9:5b1e33751dc4",
+     "right": "57:49c9d139-5ba6-5411-93be-f8215bb76ea9:fb3d2a79e639",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "8887aafdbe1790f3",
+   "split": "train",
+   "kept": [
+    "2350:4b386b6b-7b20-5670-9f0a-1cc422c1b5fd:6cde139cc5b1"
+   ],
+   "removed": [
+    {
+     "row": "2351:4b386b6b-7b20-5670-9f0a-1cc422c1b5fd:6cde139cc5b1",
+     "kept": "2350:4b386b6b-7b20-5670-9f0a-1cc422c1b5fd:6cde139cc5b1"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2350:4b386b6b-7b20-5670-9f0a-1cc422c1b5fd:6cde139cc5b1",
+     "right": "2351:4b386b6b-7b20-5670-9f0a-1cc422c1b5fd:6cde139cc5b1",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "2350:4b386b6b-7b20-5670-9f0a-1cc422c1b5fd:6cde139cc5b1",
+     "right": "2351:4b386b6b-7b20-5670-9f0a-1cc422c1b5fd:6cde139cc5b1",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "2350:4b386b6b-7b20-5670-9f0a-1cc422c1b5fd:6cde139cc5b1",
+     "right": "2351:4b386b6b-7b20-5670-9f0a-1cc422c1b5fd:6cde139cc5b1",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "8f2bb4c3e4336d56",
+   "split": "train",
+   "kept": [
+    "2670:d2ec6959-03c8-52ff-968c-f136930e6421:860383e8acb8"
+   ],
+   "removed": [
+    {
+     "row": "2669:d2ec6959-03c8-52ff-968c-f136930e6421:8c7f301f1480",
+     "kept": "2670:d2ec6959-03c8-52ff-968c-f136930e6421:860383e8acb8"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2669:d2ec6959-03c8-52ff-968c-f136930e6421:8c7f301f1480",
+     "right": "2670:d2ec6959-03c8-52ff-968c-f136930e6421:860383e8acb8",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "903a61db6ce2f814",
+   "split": "train",
+   "kept": [
+    "3960:8e4b9ea5-6367-5bb6-8856-a0e3577a0fb7:e851e390540f"
+   ],
+   "removed": [
+    {
+     "row": "3961:8e4b9ea5-6367-5bb6-8856-a0e3577a0fb7:b252dce3917b",
+     "kept": "3960:8e4b9ea5-6367-5bb6-8856-a0e3577a0fb7:e851e390540f"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3960:8e4b9ea5-6367-5bb6-8856-a0e3577a0fb7:e851e390540f",
+     "right": "3961:8e4b9ea5-6367-5bb6-8856-a0e3577a0fb7:b252dce3917b",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "9181770071738b9f",
+   "split": "train",
+   "kept": [
+    "3956:19b775dc-7fb0-5477-84db-25ce36d326b1:5f83609ab698"
+   ],
+   "removed": [
+    {
+     "row": "3957:19b775dc-7fb0-5477-84db-25ce36d326b1:5f83609ab698",
+     "kept": "3956:19b775dc-7fb0-5477-84db-25ce36d326b1:5f83609ab698"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3956:19b775dc-7fb0-5477-84db-25ce36d326b1:5f83609ab698",
+     "right": "3957:19b775dc-7fb0-5477-84db-25ce36d326b1:5f83609ab698",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "3956:19b775dc-7fb0-5477-84db-25ce36d326b1:5f83609ab698",
+     "right": "3957:19b775dc-7fb0-5477-84db-25ce36d326b1:5f83609ab698",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "3956:19b775dc-7fb0-5477-84db-25ce36d326b1:5f83609ab698",
+     "right": "3957:19b775dc-7fb0-5477-84db-25ce36d326b1:5f83609ab698",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "9204dd033b502e6e",
+   "split": "train",
+   "kept": [
+    "38674:a866ac65-9b7a-5805-9fa1-f90e24b14f60:972e3529b01e",
+    "47084:dce6bbbe-b913-5d0a-a144-5464a1d7e963:a0e739da36eb"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "38674:a866ac65-9b7a-5805-9fa1-f90e24b14f60:972e3529b01e",
+     "right": "47084:dce6bbbe-b913-5d0a-a144-5464a1d7e963:a0e739da36eb",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "95fb79c38a6cda51",
+   "split": "train",
+   "kept": [
+    "3918:60631cee-aa34-59a9-ad20-a4697a67b736:08a45f8e7f49"
+   ],
+   "removed": [
+    {
+     "row": "3919:60631cee-aa34-59a9-ad20-a4697a67b736:08a45f8e7f49",
+     "kept": "3918:60631cee-aa34-59a9-ad20-a4697a67b736:08a45f8e7f49"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3918:60631cee-aa34-59a9-ad20-a4697a67b736:08a45f8e7f49",
+     "right": "3919:60631cee-aa34-59a9-ad20-a4697a67b736:08a45f8e7f49",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "3918:60631cee-aa34-59a9-ad20-a4697a67b736:08a45f8e7f49",
+     "right": "3919:60631cee-aa34-59a9-ad20-a4697a67b736:08a45f8e7f49",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "3918:60631cee-aa34-59a9-ad20-a4697a67b736:08a45f8e7f49",
+     "right": "3919:60631cee-aa34-59a9-ad20-a4697a67b736:08a45f8e7f49",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "96775248d581c27e",
+   "split": "train",
+   "kept": [
+    "2766:dbece6f1-2292-525c-8294-2220eb303453:0bd1a5edc343"
+   ],
+   "removed": [
+    {
+     "row": "2767:dbece6f1-2292-525c-8294-2220eb303453:681c95d7609f",
+     "kept": "2766:dbece6f1-2292-525c-8294-2220eb303453:0bd1a5edc343"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2766:dbece6f1-2292-525c-8294-2220eb303453:0bd1a5edc343",
+     "right": "2767:dbece6f1-2292-525c-8294-2220eb303453:681c95d7609f",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "985de26d9aca651c",
+   "split": "train",
+   "kept": [
+    "37132:6e09a8ab-0b08-5214-b09d-a5998bb287db:58846368e7cc",
+    "42847:b058871b-2328-591a-beca-a92e52099df4:59b8982fa4a4"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "37132:6e09a8ab-0b08-5214-b09d-a5998bb287db:58846368e7cc",
+     "right": "42847:b058871b-2328-591a-beca-a92e52099df4:59b8982fa4a4",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "9b15bca47c0ca3f8",
+   "split": "train",
+   "kept": [
+    "258:7635675c-3ecb-51b3-a73b-caf24b452294:9ed57415cb4a"
+   ],
+   "removed": [
+    {
+     "row": "259:7635675c-3ecb-51b3-a73b-caf24b452294:9ed57415cb4a",
+     "kept": "258:7635675c-3ecb-51b3-a73b-caf24b452294:9ed57415cb4a"
+    }
+   ],
+   "matches": [
+    {
+     "left": "258:7635675c-3ecb-51b3-a73b-caf24b452294:9ed57415cb4a",
+     "right": "259:7635675c-3ecb-51b3-a73b-caf24b452294:9ed57415cb4a",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "258:7635675c-3ecb-51b3-a73b-caf24b452294:9ed57415cb4a",
+     "right": "259:7635675c-3ecb-51b3-a73b-caf24b452294:9ed57415cb4a",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "258:7635675c-3ecb-51b3-a73b-caf24b452294:9ed57415cb4a",
+     "right": "259:7635675c-3ecb-51b3-a73b-caf24b452294:9ed57415cb4a",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "9e961a435f19c097",
+   "split": "train",
+   "kept": [
+    "689:d0045ca9-ff96-5e8a-a811-837edf1405ed:a33aad2380d0"
+   ],
+   "removed": [
+    {
+     "row": "688:d0045ca9-ff96-5e8a-a811-837edf1405ed:a33aad2380d0",
+     "kept": "689:d0045ca9-ff96-5e8a-a811-837edf1405ed:a33aad2380d0"
+    }
+   ],
+   "matches": [
+    {
+     "left": "688:d0045ca9-ff96-5e8a-a811-837edf1405ed:a33aad2380d0",
+     "right": "689:d0045ca9-ff96-5e8a-a811-837edf1405ed:a33aad2380d0",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "688:d0045ca9-ff96-5e8a-a811-837edf1405ed:a33aad2380d0",
+     "right": "689:d0045ca9-ff96-5e8a-a811-837edf1405ed:a33aad2380d0",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "688:d0045ca9-ff96-5e8a-a811-837edf1405ed:a33aad2380d0",
+     "right": "689:d0045ca9-ff96-5e8a-a811-837edf1405ed:a33aad2380d0",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "9f339592f1820511",
+   "split": "train",
+   "kept": [
+    "1891:cbff9ffc-b730-514b-83a0-8873f5d2f3e0:8c2d134dc32f"
+   ],
+   "removed": [
+    {
+     "row": "1890:cbff9ffc-b730-514b-83a0-8873f5d2f3e0:b42e393e5cf5",
+     "kept": "1891:cbff9ffc-b730-514b-83a0-8873f5d2f3e0:8c2d134dc32f"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1890:cbff9ffc-b730-514b-83a0-8873f5d2f3e0:b42e393e5cf5",
+     "right": "1891:cbff9ffc-b730-514b-83a0-8873f5d2f3e0:8c2d134dc32f",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "1890:cbff9ffc-b730-514b-83a0-8873f5d2f3e0:b42e393e5cf5",
+     "right": "1891:cbff9ffc-b730-514b-83a0-8873f5d2f3e0:8c2d134dc32f",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "1890:cbff9ffc-b730-514b-83a0-8873f5d2f3e0:b42e393e5cf5",
+     "right": "1891:cbff9ffc-b730-514b-83a0-8873f5d2f3e0:8c2d134dc32f",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "9fb886122b274f5a",
+   "split": "train",
+   "kept": [
+    "35919:cc9e73fe-4657-5325-a44e-bb59502287d8:7bb8c3a751e4",
+    "41714:6450c8f3-c247-5fb6-8680-d7d138a1929d:4d72809c5ca0",
+    "43755:b5a8442c-f719-5c59-8ec2-6ec68ab8e080:e48ff7a5f478"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "35919:cc9e73fe-4657-5325-a44e-bb59502287d8:7bb8c3a751e4",
+     "right": "41714:6450c8f3-c247-5fb6-8680-d7d138a1929d:4d72809c5ca0",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9636,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "35919:cc9e73fe-4657-5325-a44e-bb59502287d8:7bb8c3a751e4",
+     "right": "43755:b5a8442c-f719-5c59-8ec2-6ec68ab8e080:e48ff7a5f478",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9464,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "41714:6450c8f3-c247-5fb6-8680-d7d138a1929d:4d72809c5ca0",
+     "right": "43755:b5a8442c-f719-5c59-8ec2-6ec68ab8e080:e48ff7a5f478",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9815,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "9ff98d22a4169942",
+   "split": "train",
+   "kept": [
+    "2636:37b0c0ec-2ab3-5ede-8986-c9728c6a99f6:c15e99314a28"
+   ],
+   "removed": [
+    {
+     "row": "2637:37b0c0ec-2ab3-5ede-8986-c9728c6a99f6:c15e99314a28",
+     "kept": "2636:37b0c0ec-2ab3-5ede-8986-c9728c6a99f6:c15e99314a28"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2636:37b0c0ec-2ab3-5ede-8986-c9728c6a99f6:c15e99314a28",
+     "right": "2637:37b0c0ec-2ab3-5ede-8986-c9728c6a99f6:c15e99314a28",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "2636:37b0c0ec-2ab3-5ede-8986-c9728c6a99f6:c15e99314a28",
+     "right": "2637:37b0c0ec-2ab3-5ede-8986-c9728c6a99f6:c15e99314a28",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "2636:37b0c0ec-2ab3-5ede-8986-c9728c6a99f6:c15e99314a28",
+     "right": "2637:37b0c0ec-2ab3-5ede-8986-c9728c6a99f6:c15e99314a28",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "a668c8200a33e29d",
+   "split": "train",
+   "kept": [
+    "2102:899c224c-50be-52d1-b59c-b2fb98874a39:fffd30ffa121"
+   ],
+   "removed": [
+    {
+     "row": "2103:899c224c-50be-52d1-b59c-b2fb98874a39:0069ddcae0b7",
+     "kept": "2102:899c224c-50be-52d1-b59c-b2fb98874a39:fffd30ffa121"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2102:899c224c-50be-52d1-b59c-b2fb98874a39:fffd30ffa121",
+     "right": "2103:899c224c-50be-52d1-b59c-b2fb98874a39:0069ddcae0b7",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "a87e91b0433fdc88",
+   "split": "train",
+   "kept": [
+    "9799:6eb76ec2-de4e-5947-9a11-1e743c1ba8f5:d99686104096"
+   ],
+   "removed": [
+    {
+     "row": "33220:f85f6666-5baf-5557-8915-f6328443fbaa:3d1722ae107b",
+     "kept": "9799:6eb76ec2-de4e-5947-9a11-1e743c1ba8f5:d99686104096"
+    }
+   ],
+   "matches": [
+    {
+     "left": "9799:6eb76ec2-de4e-5947-9a11-1e743c1ba8f5:d99686104096",
+     "right": "33220:f85f6666-5baf-5557-8915-f6328443fbaa:3d1722ae107b",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "9799:6eb76ec2-de4e-5947-9a11-1e743c1ba8f5:d99686104096",
+     "right": "33220:f85f6666-5baf-5557-8915-f6328443fbaa:3d1722ae107b",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "a899e4cf52cd72f6",
+   "split": "train",
+   "kept": [
+    "47828:613747d8-a2b7-548a-8b05-a45ba99c5e45:a9ffc5a40c9f"
+   ],
+   "removed": [
+    {
+     "row": "1762:204a85b4-4045-563e-95d0-5394c7915d72:93e5696b882f",
+     "kept": "47828:613747d8-a2b7-548a-8b05-a45ba99c5e45:a9ffc5a40c9f"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1762:204a85b4-4045-563e-95d0-5394c7915d72:93e5696b882f",
+     "right": "47828:613747d8-a2b7-548a-8b05-a45ba99c5e45:a9ffc5a40c9f",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "1762:204a85b4-4045-563e-95d0-5394c7915d72:93e5696b882f",
+     "right": "47828:613747d8-a2b7-548a-8b05-a45ba99c5e45:a9ffc5a40c9f",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "add9feb6e5b77b6c",
+   "split": "train",
+   "kept": [
+    "3603:95b3b38a-0b8c-5f09-a9ff-ce8dda2c445b:6408867049ca"
+   ],
+   "removed": [
+    {
+     "row": "3604:95b3b38a-0b8c-5f09-a9ff-ce8dda2c445b:6408867049ca",
+     "kept": "3603:95b3b38a-0b8c-5f09-a9ff-ce8dda2c445b:6408867049ca"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3603:95b3b38a-0b8c-5f09-a9ff-ce8dda2c445b:6408867049ca",
+     "right": "3604:95b3b38a-0b8c-5f09-a9ff-ce8dda2c445b:6408867049ca",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "3603:95b3b38a-0b8c-5f09-a9ff-ce8dda2c445b:6408867049ca",
+     "right": "3604:95b3b38a-0b8c-5f09-a9ff-ce8dda2c445b:6408867049ca",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "3603:95b3b38a-0b8c-5f09-a9ff-ce8dda2c445b:6408867049ca",
+     "right": "3604:95b3b38a-0b8c-5f09-a9ff-ce8dda2c445b:6408867049ca",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "ae50b9ab99fbcc35",
+   "split": "train",
+   "kept": [
+    "2696:2182671b-0cbb-5de3-be28-f4084551b5e0:cbe442f35f2d"
+   ],
+   "removed": [
+    {
+     "row": "2697:2182671b-0cbb-5de3-be28-f4084551b5e0:24e9d54cfe60",
+     "kept": "2696:2182671b-0cbb-5de3-be28-f4084551b5e0:cbe442f35f2d"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2696:2182671b-0cbb-5de3-be28-f4084551b5e0:cbe442f35f2d",
+     "right": "2697:2182671b-0cbb-5de3-be28-f4084551b5e0:24e9d54cfe60",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "b1b735b0ff359fc2",
+   "split": "train",
+   "kept": [
+    "2958:1464dfba-f3bc-5757-8dbf-6be1b1c02ce3:789429bc74c8"
+   ],
+   "removed": [
+    {
+     "row": "2959:1464dfba-f3bc-5757-8dbf-6be1b1c02ce3:8d90eac713b7",
+     "kept": "2958:1464dfba-f3bc-5757-8dbf-6be1b1c02ce3:789429bc74c8"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2958:1464dfba-f3bc-5757-8dbf-6be1b1c02ce3:789429bc74c8",
+     "right": "2959:1464dfba-f3bc-5757-8dbf-6be1b1c02ce3:8d90eac713b7",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "2958:1464dfba-f3bc-5757-8dbf-6be1b1c02ce3:789429bc74c8",
+     "right": "2959:1464dfba-f3bc-5757-8dbf-6be1b1c02ce3:8d90eac713b7",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "2958:1464dfba-f3bc-5757-8dbf-6be1b1c02ce3:789429bc74c8",
+     "right": "2959:1464dfba-f3bc-5757-8dbf-6be1b1c02ce3:8d90eac713b7",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "b2c53a7d7301064a",
+   "split": "train",
+   "kept": [
+    "31063:e89becd5-7a43-59f7-95d7-bc3b870b38fa:eae90dbe6274",
+    "31641:452bb14f-18f8-546b-9c49-5a6786c8596a:6a22d2b2246d"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "31063:e89becd5-7a43-59f7-95d7-bc3b870b38fa:eae90dbe6274",
+     "right": "31641:452bb14f-18f8-546b-9c49-5a6786c8596a:6a22d2b2246d",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9535,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "b592d62aa18ba6ee",
+   "split": "train",
+   "kept": [
+    "2191:6dc0bdc6-60d7-5c98-a315-12e2e2514744:f15987e1b002"
+   ],
+   "removed": [
+    {
+     "row": "2190:6dc0bdc6-60d7-5c98-a315-12e2e2514744:f261ffe593d8",
+     "kept": "2191:6dc0bdc6-60d7-5c98-a315-12e2e2514744:f15987e1b002"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2190:6dc0bdc6-60d7-5c98-a315-12e2e2514744:f261ffe593d8",
+     "right": "2191:6dc0bdc6-60d7-5c98-a315-12e2e2514744:f15987e1b002",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "2190:6dc0bdc6-60d7-5c98-a315-12e2e2514744:f261ffe593d8",
+     "right": "2191:6dc0bdc6-60d7-5c98-a315-12e2e2514744:f15987e1b002",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "2190:6dc0bdc6-60d7-5c98-a315-12e2e2514744:f261ffe593d8",
+     "right": "2191:6dc0bdc6-60d7-5c98-a315-12e2e2514744:f15987e1b002",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "b616186f9bcb27eb",
+   "split": "train",
+   "kept": [
+    "2329:4cda22f0-8a90-5b7c-849e-3db38dd3f57c:977f02e7bacd"
+   ],
+   "removed": [
+    {
+     "row": "7427:7f2c06c0-082f-5377-bd9c-e38cb711f99b:9d5b67e1d516",
+     "kept": "2329:4cda22f0-8a90-5b7c-849e-3db38dd3f57c:977f02e7bacd"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2329:4cda22f0-8a90-5b7c-849e-3db38dd3f57c:977f02e7bacd",
+     "right": "7427:7f2c06c0-082f-5377-bd9c-e38cb711f99b:9d5b67e1d516",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "2329:4cda22f0-8a90-5b7c-849e-3db38dd3f57c:977f02e7bacd",
+     "right": "7427:7f2c06c0-082f-5377-bd9c-e38cb711f99b:9d5b67e1d516",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "b728d97da8b6e8d9",
+   "split": "train",
+   "kept": [
+    "4359:ef04ad99-9942-5281-8f7d-513c22864e44:96f03d26d4a0"
+   ],
+   "removed": [
+    {
+     "row": "4360:ef04ad99-9942-5281-8f7d-513c22864e44:5886e57afec9",
+     "kept": "4359:ef04ad99-9942-5281-8f7d-513c22864e44:96f03d26d4a0"
+    }
+   ],
+   "matches": [
+    {
+     "left": "4359:ef04ad99-9942-5281-8f7d-513c22864e44:96f03d26d4a0",
+     "right": "4360:ef04ad99-9942-5281-8f7d-513c22864e44:5886e57afec9",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "ba436cb7fc524d9a",
+   "split": "train",
+   "kept": [
+    "1381:addd6693-9cef-5341-88d7-647147933199:f9e6c6bd0fbb"
+   ],
+   "removed": [
+    {
+     "row": "1382:addd6693-9cef-5341-88d7-647147933199:917bfa58da66",
+     "kept": "1381:addd6693-9cef-5341-88d7-647147933199:f9e6c6bd0fbb"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1381:addd6693-9cef-5341-88d7-647147933199:f9e6c6bd0fbb",
+     "right": "1382:addd6693-9cef-5341-88d7-647147933199:917bfa58da66",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "bc03e5d45b9e5ba2",
+   "split": "train",
+   "kept": [
+    "3127:f9d92631-e0bb-5ab7-8940-32aeb5986a78:c07079837825",
+    "8637:c9fef704-47cf-5e0e-86d9-b960bb2c4840:d138be9cb5e0"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "3127:f9d92631-e0bb-5ab7-8940-32aeb5986a78:c07079837825",
+     "right": "8637:c9fef704-47cf-5e0e-86d9-b960bb2c4840:d138be9cb5e0",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "bc54fd7db4cd6c50",
+   "split": "train",
+   "kept": [
+    "3623:9d780356-4985-5c9a-9190-84a1022e369f:1e1f787bc0db"
+   ],
+   "removed": [
+    {
+     "row": "3624:9d780356-4985-5c9a-9190-84a1022e369f:dcdfc24dc8c1",
+     "kept": "3623:9d780356-4985-5c9a-9190-84a1022e369f:1e1f787bc0db"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3623:9d780356-4985-5c9a-9190-84a1022e369f:1e1f787bc0db",
+     "right": "3624:9d780356-4985-5c9a-9190-84a1022e369f:dcdfc24dc8c1",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "be86b563bcab3757",
+   "split": "train",
+   "kept": [
+    "4619:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a"
+   ],
+   "removed": [
+    {
+     "row": "4620:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "kept": "4619:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a"
+    },
+    {
+     "row": "4621:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "kept": "4619:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a"
+    }
+   ],
+   "matches": [
+    {
+     "left": "4619:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "right": "4620:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "4619:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "right": "4620:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "4619:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "right": "4620:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "rule": "source_id"
+    },
+    {
+     "left": "4619:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "right": "4621:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "4619:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "right": "4621:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "4619:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "right": "4621:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "rule": "source_id"
+    },
+    {
+     "left": "4620:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "right": "4621:49d29549-4ba0-5146-8599-f5efc1dab450:621a6d0e6f1a",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "bf8d448f8a5db840",
+   "split": "train",
+   "kept": [
+    "2683:d1c8aefb-8f7b-528b-86b8-8e2bd5b390db:ffc6dfcafd5e",
+    "8340:60d9e5aa-4e1a-59be-9fa7-3f13305520ef:1736e2e69c08"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "2683:d1c8aefb-8f7b-528b-86b8-8e2bd5b390db:ffc6dfcafd5e",
+     "right": "8340:60d9e5aa-4e1a-59be-9fa7-3f13305520ef:1736e2e69c08",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9444,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "bfbee042b7d98687",
+   "split": "train",
+   "kept": [
+    "3657:82e30830-07b1-5229-8886-6260168835f5:33c31da4f106"
+   ],
+   "removed": [
+    {
+     "row": "3658:82e30830-07b1-5229-8886-6260168835f5:33c31da4f106",
+     "kept": "3657:82e30830-07b1-5229-8886-6260168835f5:33c31da4f106"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3657:82e30830-07b1-5229-8886-6260168835f5:33c31da4f106",
+     "right": "3658:82e30830-07b1-5229-8886-6260168835f5:33c31da4f106",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "3657:82e30830-07b1-5229-8886-6260168835f5:33c31da4f106",
+     "right": "3658:82e30830-07b1-5229-8886-6260168835f5:33c31da4f106",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "3657:82e30830-07b1-5229-8886-6260168835f5:33c31da4f106",
+     "right": "3658:82e30830-07b1-5229-8886-6260168835f5:33c31da4f106",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "c0ce2189fe07d4dc",
+   "split": "train",
+   "kept": [
+    "685:a2950b17-2e51-58a2-a913-0d96b06ef615:f115c14e5ebc"
+   ],
+   "removed": [
+    {
+     "row": "684:a2950b17-2e51-58a2-a913-0d96b06ef615:f115c14e5ebc",
+     "kept": "685:a2950b17-2e51-58a2-a913-0d96b06ef615:f115c14e5ebc"
+    }
+   ],
+   "matches": [
+    {
+     "left": "684:a2950b17-2e51-58a2-a913-0d96b06ef615:f115c14e5ebc",
+     "right": "685:a2950b17-2e51-58a2-a913-0d96b06ef615:f115c14e5ebc",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "684:a2950b17-2e51-58a2-a913-0d96b06ef615:f115c14e5ebc",
+     "right": "685:a2950b17-2e51-58a2-a913-0d96b06ef615:f115c14e5ebc",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "684:a2950b17-2e51-58a2-a913-0d96b06ef615:f115c14e5ebc",
+     "right": "685:a2950b17-2e51-58a2-a913-0d96b06ef615:f115c14e5ebc",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "c47f0138f1607489",
+   "split": "train",
+   "kept": [
+    "271:fdc8991f-d8e6-5f78-bf88-dcb44a6d626b:85fc58e6522d",
+    "32915:ecdf81e5-6458-558f-9902-80f0cf5c38b3:c5925118bb64"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "271:fdc8991f-d8e6-5f78-bf88-dcb44a6d626b:85fc58e6522d",
+     "right": "32915:ecdf81e5-6458-558f-9902-80f0cf5c38b3:c5925118bb64",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "c4f7904f83558dda",
+   "split": "train",
+   "kept": [
+    "1672:d9cc1944-cdf3-58c3-8cd6-79982439065b:138fe5d5463e"
+   ],
+   "removed": [
+    {
+     "row": "1671:d9cc1944-cdf3-58c3-8cd6-79982439065b:afdeb0e056b5",
+     "kept": "1672:d9cc1944-cdf3-58c3-8cd6-79982439065b:138fe5d5463e"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1671:d9cc1944-cdf3-58c3-8cd6-79982439065b:afdeb0e056b5",
+     "right": "1672:d9cc1944-cdf3-58c3-8cd6-79982439065b:138fe5d5463e",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "c5ffa7dd66a7ed87",
+   "split": "train",
+   "kept": [
+    "3001:84f31f21-b91e-5cf7-96fd-57326908e4ea:6df44bea39a5"
+   ],
+   "removed": [
+    {
+     "row": "3002:84f31f21-b91e-5cf7-96fd-57326908e4ea:6df44bea39a5",
+     "kept": "3001:84f31f21-b91e-5cf7-96fd-57326908e4ea:6df44bea39a5"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3001:84f31f21-b91e-5cf7-96fd-57326908e4ea:6df44bea39a5",
+     "right": "3002:84f31f21-b91e-5cf7-96fd-57326908e4ea:6df44bea39a5",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "3001:84f31f21-b91e-5cf7-96fd-57326908e4ea:6df44bea39a5",
+     "right": "3002:84f31f21-b91e-5cf7-96fd-57326908e4ea:6df44bea39a5",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "3001:84f31f21-b91e-5cf7-96fd-57326908e4ea:6df44bea39a5",
+     "right": "3002:84f31f21-b91e-5cf7-96fd-57326908e4ea:6df44bea39a5",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "c677fd87ef81885d",
+   "split": "train",
+   "kept": [
+    "1149:ad6e7f8d-927a-5782-a127-00131fd9c7f9:5abb7b465b85"
+   ],
+   "removed": [
+    {
+     "row": "1150:ad6e7f8d-927a-5782-a127-00131fd9c7f9:ab266be6ce9b",
+     "kept": "1149:ad6e7f8d-927a-5782-a127-00131fd9c7f9:5abb7b465b85"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1149:ad6e7f8d-927a-5782-a127-00131fd9c7f9:5abb7b465b85",
+     "right": "1150:ad6e7f8d-927a-5782-a127-00131fd9c7f9:ab266be6ce9b",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "c9d9976333ab23c2",
+   "split": "train",
+   "kept": [
+    "29672:92daf189-2fb1-5578-81fd-3d92bdedc14a:12ccf4b24dd0",
+    "45360:e21c3f33-704a-5e85-bed2-ffa75864315c:2c3988ca3f28"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "29672:92daf189-2fb1-5578-81fd-3d92bdedc14a:12ccf4b24dd0",
+     "right": "45360:e21c3f33-704a-5e85-bed2-ffa75864315c:2c3988ca3f28",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9167,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "cd95f60ae54163e4",
+   "split": "train",
+   "kept": [
+    "4974:85c2e20c-c2c5-5955-a346-fe489616b284:f44c6109507d",
+    "39812:c2a52230-457a-597b-ae29-8598a7fe649d:2a1a7f38cdae"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "4974:85c2e20c-c2c5-5955-a346-fe489616b284:f44c6109507d",
+     "right": "39812:c2a52230-457a-597b-ae29-8598a7fe649d:2a1a7f38cdae",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9412,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "cf6a62b29cdced6c",
+   "split": "train",
+   "kept": [
+    "42032:77ff5f71-f702-591b-84e8-e4f5e8e699c5:2eb052f4fe62"
+   ],
+   "removed": [
+    {
+     "row": "5371:a6416400-1c99-5919-9041-5b6e711b6164:6539ee9a4918",
+     "kept": "42032:77ff5f71-f702-591b-84e8-e4f5e8e699c5:2eb052f4fe62"
+    }
+   ],
+   "matches": [
+    {
+     "left": "5371:a6416400-1c99-5919-9041-5b6e711b6164:6539ee9a4918",
+     "right": "42032:77ff5f71-f702-591b-84e8-e4f5e8e699c5:2eb052f4fe62",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "5371:a6416400-1c99-5919-9041-5b6e711b6164:6539ee9a4918",
+     "right": "42032:77ff5f71-f702-591b-84e8-e4f5e8e699c5:2eb052f4fe62",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "cfcbda879a3b6191",
+   "split": "train",
+   "kept": [
+    "2407:778e29a3-b1b6-5001-8cb0-ebf4a8b89a50:0f93fd3f4ff4"
+   ],
+   "removed": [
+    {
+     "row": "2406:778e29a3-b1b6-5001-8cb0-ebf4a8b89a50:e618941321f6",
+     "kept": "2407:778e29a3-b1b6-5001-8cb0-ebf4a8b89a50:0f93fd3f4ff4"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2406:778e29a3-b1b6-5001-8cb0-ebf4a8b89a50:e618941321f6",
+     "right": "2407:778e29a3-b1b6-5001-8cb0-ebf4a8b89a50:0f93fd3f4ff4",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "d04c77ab742874a8",
+   "split": "train",
+   "kept": [
+    "1537:a940b0c8-3499-5d3a-bf08-4c33c38622d9:e78bfb1cdb3b"
+   ],
+   "removed": [
+    {
+     "row": "1538:a940b0c8-3499-5d3a-bf08-4c33c38622d9:af39a0cd52c6",
+     "kept": "1537:a940b0c8-3499-5d3a-bf08-4c33c38622d9:e78bfb1cdb3b"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1537:a940b0c8-3499-5d3a-bf08-4c33c38622d9:e78bfb1cdb3b",
+     "right": "1538:a940b0c8-3499-5d3a-bf08-4c33c38622d9:af39a0cd52c6",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "d56edb9b26ec1711",
+   "split": "train",
+   "kept": [
+    "9937:a9267aa4-ac05-502c-9842-ec1a6a3d9ef6:a73c1ae08e43",
+    "38211:5610e8bb-0bd8-5800-9ad9-a621b2f955e6:ffc52d6e5425"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "9937:a9267aa4-ac05-502c-9842-ec1a6a3d9ef6:a73c1ae08e43",
+     "right": "38211:5610e8bb-0bd8-5800-9ad9-a621b2f955e6:ffc52d6e5425",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.925,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "d6f30f042e8c13ac",
+   "split": "train",
+   "kept": [
+    "2745:295a2ed0-75ee-58f7-b149-f762718b25a3:7fc8701e45c0"
+   ],
+   "removed": [
+    {
+     "row": "2744:295a2ed0-75ee-58f7-b149-f762718b25a3:7fc8701e45c0",
+     "kept": "2745:295a2ed0-75ee-58f7-b149-f762718b25a3:7fc8701e45c0"
+    }
+   ],
+   "matches": [
+    {
+     "left": "2744:295a2ed0-75ee-58f7-b149-f762718b25a3:7fc8701e45c0",
+     "right": "2745:295a2ed0-75ee-58f7-b149-f762718b25a3:7fc8701e45c0",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "2744:295a2ed0-75ee-58f7-b149-f762718b25a3:7fc8701e45c0",
+     "right": "2745:295a2ed0-75ee-58f7-b149-f762718b25a3:7fc8701e45c0",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "2744:295a2ed0-75ee-58f7-b149-f762718b25a3:7fc8701e45c0",
+     "right": "2745:295a2ed0-75ee-58f7-b149-f762718b25a3:7fc8701e45c0",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "d7af9dea1a48eb8e",
+   "split": "train",
+   "kept": [
+    "4540:03f90436-ea5d-5547-8376-725b29f7fe8e:1e438a21eb80"
+   ],
+   "removed": [
+    {
+     "row": "4541:03f90436-ea5d-5547-8376-725b29f7fe8e:1e438a21eb80",
+     "kept": "4540:03f90436-ea5d-5547-8376-725b29f7fe8e:1e438a21eb80"
+    }
+   ],
+   "matches": [
+    {
+     "left": "4540:03f90436-ea5d-5547-8376-725b29f7fe8e:1e438a21eb80",
+     "right": "4541:03f90436-ea5d-5547-8376-725b29f7fe8e:1e438a21eb80",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "4540:03f90436-ea5d-5547-8376-725b29f7fe8e:1e438a21eb80",
+     "right": "4541:03f90436-ea5d-5547-8376-725b29f7fe8e:1e438a21eb80",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "4540:03f90436-ea5d-5547-8376-725b29f7fe8e:1e438a21eb80",
+     "right": "4541:03f90436-ea5d-5547-8376-725b29f7fe8e:1e438a21eb80",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "d90c3be8ad7c15cf",
+   "split": "train",
+   "kept": [
+    "184:976bc8c3-97a8-581c-a54b-137cf418bb8d:2b9dd821c965"
+   ],
+   "removed": [
+    {
+     "row": "185:976bc8c3-97a8-581c-a54b-137cf418bb8d:6d2f3336f261",
+     "kept": "184:976bc8c3-97a8-581c-a54b-137cf418bb8d:2b9dd821c965"
+    }
+   ],
+   "matches": [
+    {
+     "left": "184:976bc8c3-97a8-581c-a54b-137cf418bb8d:2b9dd821c965",
+     "right": "185:976bc8c3-97a8-581c-a54b-137cf418bb8d:6d2f3336f261",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "dbb923a66ecb42c3",
+   "split": "train",
+   "kept": [
+    "32073:177b84cf-dd28-57ee-b355-f7bd19dd9e65:4b30e8d11ba5",
+    "39287:26948944-64e1-56df-9231-ddc3b189297e:f7822728b876"
+   ],
+   "removed": [],
+   "matches": [
+    {
+     "left": "32073:177b84cf-dd28-57ee-b355-f7bd19dd9e65:4b30e8d11ba5",
+     "right": "39287:26948944-64e1-56df-9231-ddc3b189297e:f7822728b876",
+     "rule": "joint_near_match",
+     "informal_jaccard": 0.9831,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "dcc1d23362b45a65",
+   "split": "train",
+   "kept": [
+    "366:75992bbb-9823-5567-b97e-29fea138301b:2f23250524a6"
+   ],
+   "removed": [
+    {
+     "row": "367:75992bbb-9823-5567-b97e-29fea138301b:2f23250524a6",
+     "kept": "366:75992bbb-9823-5567-b97e-29fea138301b:2f23250524a6"
+    }
+   ],
+   "matches": [
+    {
+     "left": "366:75992bbb-9823-5567-b97e-29fea138301b:2f23250524a6",
+     "right": "367:75992bbb-9823-5567-b97e-29fea138301b:2f23250524a6",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "366:75992bbb-9823-5567-b97e-29fea138301b:2f23250524a6",
+     "right": "367:75992bbb-9823-5567-b97e-29fea138301b:2f23250524a6",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "366:75992bbb-9823-5567-b97e-29fea138301b:2f23250524a6",
+     "right": "367:75992bbb-9823-5567-b97e-29fea138301b:2f23250524a6",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "e15c298d853114a3",
+   "split": "train",
+   "kept": [
+    "113:6582ca00-f32c-5ec2-a1c1-161f3df69eae:4117b3bc3fe5"
+   ],
+   "removed": [
+    {
+     "row": "114:6582ca00-f32c-5ec2-a1c1-161f3df69eae:4117b3bc3fe5",
+     "kept": "113:6582ca00-f32c-5ec2-a1c1-161f3df69eae:4117b3bc3fe5"
+    }
+   ],
+   "matches": [
+    {
+     "left": "113:6582ca00-f32c-5ec2-a1c1-161f3df69eae:4117b3bc3fe5",
+     "right": "114:6582ca00-f32c-5ec2-a1c1-161f3df69eae:4117b3bc3fe5",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "113:6582ca00-f32c-5ec2-a1c1-161f3df69eae:4117b3bc3fe5",
+     "right": "114:6582ca00-f32c-5ec2-a1c1-161f3df69eae:4117b3bc3fe5",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "113:6582ca00-f32c-5ec2-a1c1-161f3df69eae:4117b3bc3fe5",
+     "right": "114:6582ca00-f32c-5ec2-a1c1-161f3df69eae:4117b3bc3fe5",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "e16a819f049345a6",
+   "split": "train",
+   "kept": [
+    "37:f1184a71-4456-54e8-affb-87fb5bb36ec5:8fc3c6621011"
+   ],
+   "removed": [
+    {
+     "row": "38:f1184a71-4456-54e8-affb-87fb5bb36ec5:85645c86aaba",
+     "kept": "37:f1184a71-4456-54e8-affb-87fb5bb36ec5:8fc3c6621011"
+    }
+   ],
+   "matches": [
+    {
+     "left": "37:f1184a71-4456-54e8-affb-87fb5bb36ec5:8fc3c6621011",
+     "right": "38:f1184a71-4456-54e8-affb-87fb5bb36ec5:85645c86aaba",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "37:f1184a71-4456-54e8-affb-87fb5bb36ec5:8fc3c6621011",
+     "right": "38:f1184a71-4456-54e8-affb-87fb5bb36ec5:85645c86aaba",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "37:f1184a71-4456-54e8-affb-87fb5bb36ec5:8fc3c6621011",
+     "right": "38:f1184a71-4456-54e8-affb-87fb5bb36ec5:85645c86aaba",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "e1b2eef4da0b434d",
+   "split": "train",
+   "kept": [
+    "1118:76b26c58-b407-57ff-847b-05311e909c61:84dd6bc9f473"
+   ],
+   "removed": [
+    {
+     "row": "1117:76b26c58-b407-57ff-847b-05311e909c61:a563815addcc",
+     "kept": "1118:76b26c58-b407-57ff-847b-05311e909c61:84dd6bc9f473"
+    }
+   ],
+   "matches": [
+    {
+     "left": "1117:76b26c58-b407-57ff-847b-05311e909c61:a563815addcc",
+     "right": "1118:76b26c58-b407-57ff-847b-05311e909c61:84dd6bc9f473",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "1117:76b26c58-b407-57ff-847b-05311e909c61:a563815addcc",
+     "right": "1118:76b26c58-b407-57ff-847b-05311e909c61:84dd6bc9f473",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "1117:76b26c58-b407-57ff-847b-05311e909c61:a563815addcc",
+     "right": "1118:76b26c58-b407-57ff-847b-05311e909c61:84dd6bc9f473",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "e78706f24663a1dd",
+   "split": "train",
+   "kept": [
+    "32019:26580727-d8da-5c7e-9e04-dbee9b0f9055:47c0801077b6"
+   ],
+   "removed": [
+    {
+     "row": "39836:02f8b7ea-d27e-5339-aed5-3a17c89492f0:53ed083950d0",
+     "kept": "32019:26580727-d8da-5c7e-9e04-dbee9b0f9055:47c0801077b6"
+    }
+   ],
+   "matches": [
+    {
+     "left": "32019:26580727-d8da-5c7e-9e04-dbee9b0f9055:47c0801077b6",
+     "right": "39836:02f8b7ea-d27e-5339-aed5-3a17c89492f0:53ed083950d0",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "32019:26580727-d8da-5c7e-9e04-dbee9b0f9055:47c0801077b6",
+     "right": "39836:02f8b7ea-d27e-5339-aed5-3a17c89492f0:53ed083950d0",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "ecf943010b23e81a",
+   "split": "train",
+   "kept": [
+    "3516:c11f6445-8c75-5fa2-8154-be71314a36d2:88e1bd183935"
+   ],
+   "removed": [
+    {
+     "row": "3515:c11f6445-8c75-5fa2-8154-be71314a36d2:93c2aad69c75",
+     "kept": "3516:c11f6445-8c75-5fa2-8154-be71314a36d2:88e1bd183935"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3515:c11f6445-8c75-5fa2-8154-be71314a36d2:93c2aad69c75",
+     "right": "3516:c11f6445-8c75-5fa2-8154-be71314a36d2:88e1bd183935",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "f09132ad3038915a",
+   "split": "train",
+   "kept": [
+    "3306:129091b4-ace3-5f3b-a80b-08c4b89ab1d8:bba7bf440d07"
+   ],
+   "removed": [
+    {
+     "row": "3307:129091b4-ace3-5f3b-a80b-08c4b89ab1d8:bba7bf440d07",
+     "kept": "3306:129091b4-ace3-5f3b-a80b-08c4b89ab1d8:bba7bf440d07"
+    }
+   ],
+   "matches": [
+    {
+     "left": "3306:129091b4-ace3-5f3b-a80b-08c4b89ab1d8:bba7bf440d07",
+     "right": "3307:129091b4-ace3-5f3b-a80b-08c4b89ab1d8:bba7bf440d07",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "3306:129091b4-ace3-5f3b-a80b-08c4b89ab1d8:bba7bf440d07",
+     "right": "3307:129091b4-ace3-5f3b-a80b-08c4b89ab1d8:bba7bf440d07",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "3306:129091b4-ace3-5f3b-a80b-08c4b89ab1d8:bba7bf440d07",
+     "right": "3307:129091b4-ace3-5f3b-a80b-08c4b89ab1d8:bba7bf440d07",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "f1b0f6eb24400028",
+   "split": "train",
+   "kept": [
+    "4267:ba0f7b8b-a381-5f3d-96db-ce38f8eff27c:7514db0fd5d4"
+   ],
+   "removed": [
+    {
+     "row": "4268:ba0f7b8b-a381-5f3d-96db-ce38f8eff27c:7514db0fd5d4",
+     "kept": "4267:ba0f7b8b-a381-5f3d-96db-ce38f8eff27c:7514db0fd5d4"
+    }
+   ],
+   "matches": [
+    {
+     "left": "4267:ba0f7b8b-a381-5f3d-96db-ce38f8eff27c:7514db0fd5d4",
+     "right": "4268:ba0f7b8b-a381-5f3d-96db-ce38f8eff27c:7514db0fd5d4",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "4267:ba0f7b8b-a381-5f3d-96db-ce38f8eff27c:7514db0fd5d4",
+     "right": "4268:ba0f7b8b-a381-5f3d-96db-ce38f8eff27c:7514db0fd5d4",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "4267:ba0f7b8b-a381-5f3d-96db-ce38f8eff27c:7514db0fd5d4",
+     "right": "4268:ba0f7b8b-a381-5f3d-96db-ce38f8eff27c:7514db0fd5d4",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "f3b8dc4180e948d9",
+   "split": "eval",
+   "kept": [
+    "385:e674d95c-576b-5a50-ae7f-e6726cc13926:205972d4ffca"
+   ],
+   "removed": [
+    {
+     "row": "386:e674d95c-576b-5a50-ae7f-e6726cc13926:205972d4ffca",
+     "kept": "385:e674d95c-576b-5a50-ae7f-e6726cc13926:205972d4ffca"
+    }
+   ],
+   "matches": [
+    {
+     "left": "385:e674d95c-576b-5a50-ae7f-e6726cc13926:205972d4ffca",
+     "right": "386:e674d95c-576b-5a50-ae7f-e6726cc13926:205972d4ffca",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "385:e674d95c-576b-5a50-ae7f-e6726cc13926:205972d4ffca",
+     "right": "386:e674d95c-576b-5a50-ae7f-e6726cc13926:205972d4ffca",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "385:e674d95c-576b-5a50-ae7f-e6726cc13926:205972d4ffca",
+     "right": "386:e674d95c-576b-5a50-ae7f-e6726cc13926:205972d4ffca",
+     "rule": "source_id"
+    }
+   ]
+  },
+  {
+   "id": "f3c3b6139c6f7c56",
+   "split": "train",
+   "kept": [
+    "6025:3c2cbf8a-d8d5-5153-bc96-b3c251e82b2f:b1528938d0c2"
+   ],
+   "removed": [
+    {
+     "row": "6035:0c9fdc68-f128-54ac-987c-d331beac2578:35ee496021b4",
+     "kept": "6025:3c2cbf8a-d8d5-5153-bc96-b3c251e82b2f:b1528938d0c2"
+    }
+   ],
+   "matches": [
+    {
+     "left": "6025:3c2cbf8a-d8d5-5153-bc96-b3c251e82b2f:b1528938d0c2",
+     "right": "6035:0c9fdc68-f128-54ac-987c-d331beac2578:35ee496021b4",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "6025:3c2cbf8a-d8d5-5153-bc96-b3c251e82b2f:b1528938d0c2",
+     "right": "6035:0c9fdc68-f128-54ac-987c-d331beac2578:35ee496021b4",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "f6bdcf87e8853d8f",
+   "split": "train",
+   "kept": [
+    "189:9b519dc3-987c-5b74-9d43-fcc5851d3377:46042caa7ed6"
+   ],
+   "removed": [
+    {
+     "row": "46404:61b4262f-bb50-55f1-aaa0-b8d5f34eb4d8:e7acf11a9c45",
+     "kept": "189:9b519dc3-987c-5b74-9d43-fcc5851d3377:46042caa7ed6"
+    }
+   ],
+   "matches": [
+    {
+     "left": "189:9b519dc3-987c-5b74-9d43-fcc5851d3377:46042caa7ed6",
+     "right": "46404:61b4262f-bb50-55f1-aaa0-b8d5f34eb4d8:e7acf11a9c45",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "189:9b519dc3-987c-5b74-9d43-fcc5851d3377:46042caa7ed6",
+     "right": "46404:61b4262f-bb50-55f1-aaa0-b8d5f34eb4d8:e7acf11a9c45",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    }
+   ]
+  },
+  {
+   "id": "f6dc6d9dd3aa9aa8",
+   "split": "train",
+   "kept": [
+    "171:aff1f9a7-f43d-527a-950d-046fe92b7c49:bb1d6ef178e2"
+   ],
+   "removed": [
+    {
+     "row": "172:aff1f9a7-f43d-527a-950d-046fe92b7c49:bb1d6ef178e2",
+     "kept": "171:aff1f9a7-f43d-527a-950d-046fe92b7c49:bb1d6ef178e2"
+    }
+   ],
+   "matches": [
+    {
+     "left": "171:aff1f9a7-f43d-527a-950d-046fe92b7c49:bb1d6ef178e2",
+     "right": "172:aff1f9a7-f43d-527a-950d-046fe92b7c49:bb1d6ef178e2",
+     "rule": "exact_pair"
+    },
+    {
+     "left": "171:aff1f9a7-f43d-527a-950d-046fe92b7c49:bb1d6ef178e2",
+     "right": "172:aff1f9a7-f43d-527a-950d-046fe92b7c49:bb1d6ef178e2",
+     "rule": "joint_near_match",
+     "informal_jaccard": 1.0,
+     "formal_jaccard": 1.0
+    },
+    {
+     "left": "171:aff1f9a7-f43d-527a-950d-046fe92b7c49:bb1d6ef178e2",
+     "right": "172:aff1f9a7-f43d-527a-950d-046fe92b7c49:bb1d6ef178e2",
+     "rule": "source_id"
+    }
+   ]
+  }
+ ]
+}

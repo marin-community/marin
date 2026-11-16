@@ -21,21 +21,19 @@ Each output line is one match; the file records each input's URL and SHA-256 and
 import argparse
 import hashlib
 import json
-import re
-import unicodedata
 from collections import defaultdict
 from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from experiments.post_training.task_curation.datasets.lean.lean_grade import TARGET_NAME, without_comments
 from experiments.post_training.task_curation.datasets.lean.numina import (
     EVAL_OVERLAP_FILE,
     NUMINA_FILE,
     NUMINA_REVISION,
-    is_human_proof_row,
+    is_human_statement_row,
 )
 from experiments.post_training.task_curation.datasets.lean.proofs import PROOFNET_VERIFIED_REVISION
+from experiments.post_training.task_curation.datasets.lean.similarity import DECLARATION, shingles, statement_key
 
 MINIF2F_REVISION = "f0a20e14c1eeccd859d51bb4c2b3ee487889c303"
 PUTNAMBENCH_REVISION = "f423c173cef31a61fc3e69cbe606c8bc31fcb229"
@@ -57,36 +55,6 @@ PINNED_INPUTS = {
 ProofNet-Verified source and PutnamBench's informal statements."""
 
 THRESHOLD = 0.2
-SHINGLE = 5
-DECLARATION = re.compile(rf"^[ \t]*(?:theorem|lemma)\s+(?P<name>{TARGET_NAME.pattern})", re.MULTILINE)
-PROOF_START = re.compile(r"(?s)^(?P<type>.*?):=")
-"""A statement runs through its first ``:=``; a tactic block or a term proof follows."""
-BINDER_NAMES = re.compile(r"[({\[⦃]\s*(?P<names>[^:()\[\]{}⦃⦄]+?)\s*:")
-"""The names a binder group introduces, as in ``(a b : Nat)``."""
-IDENTIFIER = re.compile(r"[^\W\d]\w*'*")
-TOKEN = re.compile(r"\\[a-z]+|[^\W_]+|[=+*/<>^-]")
-LATEX_LAYOUT = re.compile(r"\\(?:left|right|displaystyle|quad|qquad|textbf|mathrm|textrm|text|operatorname)\b")
-
-
-def statement_key(declaration: str) -> str | None:
-    """The last theorem's binders and type, comment-free, with its binder names numbered in order and no
-    whitespace, so that statements that differ only in names and spacing agree."""
-    body = without_comments(declaration)
-    found = list(DECLARATION.finditer(body))
-    match = PROOF_START.match(body[found[-1].end() :]) if found else None
-    if match is None:
-        return None
-    text = match["type"]
-    names = [name for group in BINDER_NAMES.finditer(text) for name in group["names"].split()]
-    for index, name in enumerate(dict.fromkeys(name for name in names if IDENTIFIER.fullmatch(name))):
-        text = re.sub(rf"(?<![\w.']){re.escape(name)}(?![\w'])", f"#{index}", text)
-    return "".join(text.split())
-
-
-def shingles(text: str) -> frozenset[tuple[str, ...]]:
-    text = LATEX_LAYOUT.sub(" ", unicodedata.normalize("NFKC", text).casefold().replace(r"\dfrac", r"\frac"))
-    tokens = TOKEN.findall(text)
-    return frozenset(zip(*(tokens[i:] for i in range(SHINGLE)), strict=False))
 
 
 def lean_problems(path: Path) -> list[dict]:
@@ -149,7 +117,7 @@ def main() -> None:
     parser.add_argument("--putnam", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=EVAL_OVERLAP_FILE)
     args = parser.parse_args()
-    rows = [row for row in pq.read_table(args.numina).to_pylist() if is_human_proof_row(row, None)]
+    rows = [row for row in pq.read_table(args.numina).to_pylist() if is_human_statement_row(row, None)]
     found = overlaps(rows, eval_problems(args.minif2f, args.proofnet, args.putnam))
     for match in found:
         print(json.dumps(match))

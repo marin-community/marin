@@ -120,6 +120,10 @@ def is_human_proof_row(row: dict[str, Any], _context: ConversionContext | None) 
     return row.get("author") == "human" and row.get("ground_truth_type") == "complete"
 
 
+def is_human_statement_row(row: dict[str, Any], _context: ConversionContext | None) -> bool:
+    return row.get("author") == "human"
+
+
 @cache
 def prime_list(path: StoragePath) -> frozenset[str]:
     with path.open("rb") as stream:
@@ -161,11 +165,26 @@ def row_contract(
 ) -> Contract | ImportRejection:
     """The frozen contract of one row, or why the row is left out; ``listed`` names the Prime Intellect list
     that holds a uuid, if any. ``require_passing_proof`` is off only while ``PROOFS_FILE`` is written."""
-    uuid, problem, statement, proof = (
-        data.get(key) for key in ("uuid", "problem", "formal_statement", "formal_ground_truth")
-    )
-    if not all(isinstance(value, str) and value.strip() for value in (uuid, problem, statement, proof)):
+    proof = data.get("formal_ground_truth")
+    if not isinstance(proof, str) or not proof.strip():
         return source_defect("missing_input", "uuid, problem, formal_statement and formal_ground_truth are required")
+    contract = statement_row_contract(data, listed)
+    if isinstance(contract, ImportRejection):
+        return contract
+    if OLD_BIG_OPERATOR.search(without_comments(proof)):
+        return source_defect("old_big_operator_syntax", "Current Mathlib no longer parses `∑ x in s`")
+    if UNUSABLE_PROOF.search(without_comments(proof)):
+        return unsupported("unusable_proof", "The human proof cannot serve as the golden control")
+    if require_passing_proof and proof_key(data) not in PASSING_PROOFS:
+        return unsupported("proof_does_not_compile", "The human proof does not compile with the grader's toolchain")
+    return contract
+
+
+def statement_row_contract(data: Mapping[str, Any], listed: Callable[[str], str | None]) -> Contract | ImportRejection:
+    """Freeze one human statement after applying shared toolchain and contamination filters."""
+    uuid, problem, statement = (data.get(key) for key in ("uuid", "problem", "formal_statement"))
+    if not all(isinstance(value, str) and value.strip() for value in (uuid, problem, statement)):
+        return source_defect("missing_input", "uuid, problem and formal_statement are required")
     if data.get("source") in HELD_OUT_SOURCES:
         return unsupported("held_out_split", "The problem comes from a test split Marin evaluates on")
     if (name := listed(uuid)) is not None:
@@ -174,16 +193,11 @@ def row_contract(
         return source_defect("does_not_compile", "The statement does not compile with the grader's toolchain")
     if uuid in EVAL_OVERLAP:
         return unsupported("eval_overlap", "The row states a problem of the frozen Lean eval set")
-    if OLD_BIG_OPERATOR.search(without_comments(statement)) or OLD_BIG_OPERATOR.search(without_comments(proof)):
+    if OLD_BIG_OPERATOR.search(without_comments(statement)):
         return source_defect("old_big_operator_syntax", "Current Mathlib no longer parses `∑ x in s`")
-    if UNUSABLE_PROOF.search(without_comments(proof)):
-        return unsupported("unusable_proof", "The human proof cannot serve as the golden control")
     if UNUSABLE_STATEMENT.search(without_comments(statement)):
         return unsupported("unusable_statement", "The statement runs code, which the reference would run as root")
-    contract = numina_contract(statement)
-    if not isinstance(contract, ImportRejection) and require_passing_proof and proof_key(data) not in PASSING_PROOFS:
-        return unsupported("proof_does_not_compile", "The human proof does not compile with the grader's toolchain")
-    return contract
+    return numina_contract(statement)
 
 
 def convert_numina(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
