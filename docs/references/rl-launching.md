@@ -283,6 +283,12 @@ local and cloud export roots. These contain the post-TIS, post-advantage tensors
 The trainer removes group UIDs and raw rewards before dumping, so these files
 alone cannot identify source-specific rewards or advantages.
 
+Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
+driver also bounds its wait for remote tracker calls. A slow upload reports a
+warning instead of holding training cleanup until the process watchdog fires.
+Native checkpoint and mirrored training/evaluation results remain the workload
+record; an upload timeout does not prove that W&B received every record.
+
 Rollout workers run on the training driver's Ray node. Their combined CPU
 reservation (`num_workers * cpus_per_worker`) must fit that node. The driver
 checks this before it initializes model actors; free CPUs on other nodes cannot
