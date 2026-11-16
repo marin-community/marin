@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The large-data merge guard: per-file and per-directory limits with a shrink-only allowlist."""
+"""The large-data merge guard: per-file and per-change limits with a pinned allowlist."""
 
 import importlib.util
 import json
@@ -46,14 +46,10 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def _write_data(repo: Path, relative: str, kilobytes: int, binary: bool = False) -> Path:
+def _write_data(repo: Path, relative: str, kilobytes: int) -> Path:
     path = repo / relative
     path.parent.mkdir(parents=True, exist_ok=True)
-    unit = bytes(range(256))
-    payload = (
-        (unit * (kilobytes * 1024 // len(unit) + 1))[: kilobytes * 1024] if binary else b"x" * (1024 * kilobytes + 40)
-    )
-    path.write_bytes(payload)
+    path.write_bytes(b"x" * (1024 * kilobytes + 40))
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     return path
 
@@ -68,12 +64,13 @@ def test_new_large_data_file_exceeding_limit_fails(repo: Path):
     assert precommit.check_large_data([path], fix=False) == 1
 
 
-def test_directory_total_counts_committed_binaries_and_gzip(repo: Path):
-    _write_data(repo, "datasets/shards/part-000.json.gz", 90, binary=True)
-    _write_data(repo, "datasets/shards/part-001.tar", 90, binary=True)
-    _git("commit", "--quiet", "-m", "Compressed shards", cwd=repo)
-    third = _write_data(repo, "datasets/shards/part-002.zst", 90, binary=True)
-    assert precommit.check_large_data([third], fix=False) == 1
+def test_sharding_a_dataset_across_subdirectories_hits_the_change_budget(repo: Path):
+    """Three 90 KB shards in three directories each pass the per-file limit but breach the change budget."""
+    first = _write_data(repo, "datasets/shards-a/part-0.json", 90)
+    second = _write_data(repo, "datasets/shards-b/part-1.json", 90)
+    _git("commit", "--quiet", "-m", "First shards", cwd=repo)
+    third = _write_data(repo, "datasets/shards-c/part-2.json", 90)
+    assert precommit.check_large_data([first, second, third], fix=False) == 1
 
 
 def test_allowlisted_file_at_its_recorded_size_passes(repo: Path):
