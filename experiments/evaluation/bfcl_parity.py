@@ -86,12 +86,17 @@ def launch(
     if dry_run:
         for item in specs:
             batch = prepare_evaluation_batch(item)
+            geometry = batch.accelerator.geometry
             click.echo(
                 json.dumps(
                     {
                         "run_id": item.run_id,
                         "priority_band": batch.priority_band,
                         "records_prefix": batch.records_prefix,
+                        "accelerator": batch.accelerator.label,
+                        "target_cluster": batch.accelerator.target_cluster,
+                        "serving": None if geometry is None else geometry.label,
+                        "serving_tasks": 1 if geometry is None else geometry.task_count,
                         "evaluations": [
                             {"run_id": e.identity.run_id, "output": e.identity.output_dir} for e in batch.evaluations
                         ],
