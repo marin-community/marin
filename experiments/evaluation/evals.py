@@ -157,6 +157,10 @@ EVALS.update(
         "swebench": harbor_definition("swebench"),
         "swebench-lite": harbor_definition("swebench-lite", 2),
         "swebench-full": harbor_definition("swebench-full"),
+        # 300 SWE-bench Multilingual tasks across nine languages (C, C++, Go, Java, JavaScript,
+        # TypeScript, PHP, Ruby, Rust).
+        "swebench-multilingual": harbor_definition("swebench-multilingual"),
+        "swebench-multilingual-lite": harbor_definition("swebench-multilingual-lite", 2),
         "gaia": harbor_definition("gaia"),
         "bfcl": harbor_definition("bfcl"),
         "aider": harbor_definition("aider"),
