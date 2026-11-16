@@ -3652,7 +3652,16 @@ uv run iris --config lib/iris/config/marin.yaml job run \
 
 After readback, `retained_census` measures the retained actor and integrity
 population using the existing complete census. It also writes a normalized
-`task_json` view with the original serialized bytes. `remediation_binding` joins
+`task_json` view with the original serialized bytes. Populations whose TaskSpecs
+carry native Harbor `task.toml` payloads need Harbor's task-config models, so
+run those censuses with the documented wrapper:
+
+```bash
+uv run --prerelease allow --with-editable './vendor/harbor[daytona]' \
+  python -m experiments.post_training.task_curation.retained_census ...
+```
+
+`remediation_binding` joins
 these measurements to the publication receipts. Set its `--output-dir` to a fresh
 `STAGED_ROOT/experiments/post_training/task_curation/datasets/retained_release_receipts`
 directory, then use the

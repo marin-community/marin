@@ -108,6 +108,60 @@ def test_changed_license_bytes_fail_before_publication_provenance_is_written(tmp
     assert not (tmp_path / "published/publication-provenance.json").exists()
 
 
+def package_receipt(wheel: str, wheel_sha: str, metadata: dict) -> LicenseReceipt:
+    url = "https://pypi.org/pypi/reasoning_gym/0.1.25/json"
+    content = json.dumps(metadata).encode()
+    return LicenseReceipt(
+        source_id="Reasoning Gym:reasoning_gym",
+        dataset_id=wheel,
+        revision=wheel_sha,
+        resolved_at="2026-11-15T00:00:00+00:00",
+        resolver_version=LICENSE_RESOLVER_VERSION,
+        evidence=[license_evidence(url, content, "package_metadata")],
+        bundled_third_party=False,
+        model_generated_outputs=False,
+    )
+
+
+def test_package_grant_publication_declares_the_checked_wheel_pin(tmp_path, monkeypatch):
+    wheel = "reasoning_gym-0.1.25-py3-none-any.whl"
+    wheel_sha = "c" * 64
+    wheel_url = f"https://files.pythonhosted.org/packages/42/21/deadbeef/{wheel}"
+    metadata = {"info": {"license_expression": "Apache-2.0"}, "urls": [{"filename": wheel, "digests": {"sha256": wheel_sha}, "url": wheel_url}]}
+    content = json.dumps(metadata).encode()
+    receipt = package_receipt(wheel, wheel_sha, metadata)
+    monkeypatch.setattr(license_publication, "_fetch", lambda url, **kwargs: content)
+    publication = license_publication.prepare_license_publication(receipt, tmp_path / "published", use="train")
+    assert publication.metadata["license"] == "Apache-2.0"
+    assert publication.metadata["license_source"] == {"dataset_id": wheel, "revision": wheel_sha, "url": wheel_url}
+    assert publication.metadata["license_evidence_urls"] == [receipt.evidence[0].url]
+    assert publication.metadata["license_input"] == {"dataset_id": wheel, "revision": wheel_sha}
+    preserved = tmp_path / "published" / "UPSTREAM_PACKAGE_METADATA.json"
+    assert preserved.read_bytes() == content
+    assert not (tmp_path / "published" / "README.md").exists()
+
+
+def test_package_grant_publication_rejects_unbound_or_moved_wheels(tmp_path, monkeypatch):
+    wheel = "reasoning_gym-0.1.25-py3-none-any.whl"
+    wheel_url = f"https://files.pythonhosted.org/packages/42/21/deadbeef/{wheel}"
+    metadata = {
+        "info": {"license_expression": "Apache-2.0"},
+        "urls": [{"filename": wheel, "digests": {"sha256": "d" * 64}, "url": wheel_url}],
+    }
+    receipt = package_receipt(wheel, "c" * 64, metadata)
+    monkeypatch.setattr(license_publication, "_fetch", lambda url, **kwargs: json.dumps(metadata).encode())
+    with pytest.raises(ValueError, match="does not bind the checked wheel"):
+        license_publication.prepare_license_publication(receipt, tmp_path / "published", use="train")
+
+
+def test_package_grant_publication_fails_when_the_checked_metadata_changed(tmp_path, monkeypatch):
+    wheel = "reasoning_gym-0.1.25-py3-none-any.whl"
+    receipt = package_receipt(wheel, "c" * 64, {"info": {"license_expression": "Apache-2.0"}, "urls": []})
+    monkeypatch.setattr(license_publication, "_fetch", lambda url, **kwargs: b"changed")
+    with pytest.raises(ValueError, match="changed since its license check"):
+        license_publication.prepare_license_publication(receipt, tmp_path / "published", use="train")
+
+
 @pytest.mark.parametrize("use", ["train", "eval"])
 def test_publication_preflight_honors_the_requested_use(tmp_path, monkeypatch, use):
     card = b"---\nlicense: apache-2.0\n---\n"

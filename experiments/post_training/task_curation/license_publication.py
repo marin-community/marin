@@ -8,11 +8,12 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import yaml
 from finestore.rl.licenses import (
     LicenseCheckVerdict,
+    LicenseEvidence,
     LicenseReceipt,
     LicenseVerdict,
     check_license,
@@ -26,6 +27,7 @@ from experiments.post_training.task_curation.license_resolution import (
     LICENSE_FILENAME,
     MAX_EVIDENCE_BYTES,
     LicenseTarget,
+    _fetch,
     resolve_license,
 )
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned, source_license_ban
@@ -41,10 +43,76 @@ class LicensePublication:
     attribution: str
 
 
+def _package_wheel_url(receipt: LicenseReceipt, evidence: LicenseEvidence) -> tuple[str, bytes]:
+    """Locate the checked wheel's release URL inside the pinned package metadata."""
+    content = _fetch(evidence.url)
+    if hashlib.sha256(content).hexdigest() != evidence.sha256:
+        raise ValueError(f"Checked package metadata changed since its license check: {evidence.url}")
+    document = json.loads(content)
+    release = next(
+        (
+            item
+            for item in document["urls"]
+            if item["filename"] == receipt.dataset_id and item["digests"]["sha256"] == receipt.revision
+        ),
+        None,
+    )
+    if release is None:
+        raise ValueError(f"Package metadata does not bind the checked wheel: {receipt.dataset_id}")
+    url = release["url"]
+    parts = urlsplit(url)
+    if parts.hostname != "files.pythonhosted.org" or not parts.path.endswith(".whl"):
+        raise ValueError(f"Checked package release is not a pythonhosted wheel: {url}")
+    return url, content
+
+
+def _prepare_package_publication(receipt: LicenseReceipt, evidence: LicenseEvidence, output: Path) -> LicensePublication:
+    """Carry a checked package grant into the release card without reinterpreting it.
+
+    A package grant's checked evidence is the pinned PyPI metadata document bound to the
+    wheel SHA-256. The release card declares the same package pin, so the new pin's
+    exact check resolves the identical grant; the checked document is preserved beside
+    the card.
+    """
+    identifiers = sorted(set(evidence.license_ids) - {"missing"})
+    if license_verdict(tuple(identifiers)) is not LicenseVerdict.ALLOWED:
+        raise ValueError("Checked package grant supplies no publishable permissive license identifier")
+    wheel_url, content = _package_wheel_url(receipt, evidence)
+    metadata = {
+        "license": identifiers[0] if len(identifiers) == 1 else identifiers,
+        "license_source": {"dataset_id": receipt.dataset_id, "revision": receipt.revision, "url": wheel_url},
+        "license_evidence_urls": [evidence.url],
+        "license_input": {"dataset_id": receipt.dataset_id, "revision": receipt.revision},
+    }
+    output.mkdir(parents=True, exist_ok=True)
+    destination = output / "UPSTREAM_PACKAGE_METADATA.json"
+    destination.write_bytes(content)
+    provenance = [{"filename": destination.name, "source_url": evidence.url, "sha256": evidence.sha256}]
+    record = output / "publication-provenance.json"
+    record.write_text(
+        json.dumps({"metadata": metadata, "documents": provenance, "receipt": receipt.model_dump(mode="json")}, indent=2)
+        + "\n"
+    )
+    attribution = (
+        f"License source: [{receipt.dataset_id}@{receipt.revision}]({wheel_url}). "
+        "The checked package metadata is preserved in the accompanying upstream file.\n"
+    )
+    return LicensePublication(metadata, (destination, record), attribution)
+
+
 def prepare_license_publication(receipt: LicenseReceipt, output: Path, *, use: str) -> LicensePublication:
     """Archive the pinned grant and notices after validating the exact input receipt."""
     require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, use)
     require_unbanned(receipt.source_id, receipt.dataset_id, receipt)
+    package_evidence = [
+        item
+        for item in receipt.evidence
+        if item.kind == "package_metadata" and urlsplit(item.url).hostname == "pypi.org"
+    ]
+    if receipt.resolved_source is None and package_evidence:
+        if len(package_evidence) != 1:
+            raise ValueError("Package grants require exactly one checked package metadata document")
+        return _prepare_package_publication(receipt, package_evidence[0], output)
     source = receipt.resolved_source
     dataset_id = source.dataset_id if source is not None else receipt.dataset_id
     revision = source.revision if source is not None else receipt.revision
