@@ -34,7 +34,7 @@ from experiments.post_training.task_curation.datasets.lean.similarity import row
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
-MANIFEST_FILE = Path(__file__).with_name("informalization_dedup.json")
+MANIFEST_FILE = Path(__file__).with_name("numina_autoinformalization_dedup.json")
 MANIFEST = json.loads(MANIFEST_FILE.read_text())
 REMOVED_ROWS = frozenset(item["row"] for cluster in MANIFEST["clusters"] for item in cluster["removed"])
 CLUSTER_SPLITS = {
@@ -48,7 +48,8 @@ CLUSTER_IDS = {
     for key in (*cluster["kept"], *(item["row"] for item in cluster["removed"]))
 }
 
-INSTRUCTIONS = """Translate the Lean 4 theorem statement below into a self-contained natural-language mathematical problem.
+INSTRUCTIONS = """Translate the Lean 4 theorem statement below into a self-contained natural-language
+mathematical problem.
 
 Preserve every variable domain, assumption, constraint, quantifier, and the requested conclusion. Do not add a proof,
 solution, Lean code, or commentary. Return only the natural-language problem statement.
@@ -169,7 +170,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin="Hugging Face",
                 family="math-auto-informalization",
                 tags=(
-                    *(('eval', 'validation') if intended_use is IntendedUse.EVAL else ('rl', 'train')),
+                    *(("eval", "validation") if intended_use is IntendedUse.EVAL else ("rl", "train")),
                     "lean",
                     "auto-informalization",
                     "judge",

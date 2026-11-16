@@ -105,7 +105,10 @@ def exact_edges(
     seen = set()
     for rule, groups in (
         ("source_id", grouped([row["uuid"] for row in rows])),
-        ("exact_pair", grouped([f"{left}\0{right}" if left else None for left, right in zip(formal, informal)])),
+        (
+            "exact_pair",
+            grouped([f"{left}\0{right}" if left else None for left, right in zip(formal, informal, strict=True)]),
+        ),
     ):
         for indices in groups:
             first = indices[0]
@@ -155,7 +158,9 @@ def build_manifest(rows: Iterable[dict[str, Any]], input_record: Mapping[str, st
     groups: dict[int, list[int]] = defaultdict(list)
     for index in range(len(selected)):
         groups[exact_components.find(index)].append(index)
-    representatives = {root: min(indices, key=lambda index: preferred(index, selected, row_keys)) for root, indices in groups.items()}
+    representatives = {
+        root: min(indices, key=lambda index: preferred(index, selected, row_keys)) for root, indices in groups.items()
+    }
 
     near = near_edges(informal_grams, formal_grams)
     clusters = Components(len(selected))
@@ -193,11 +198,13 @@ def build_manifest(rows: Iterable[dict[str, Any]], input_record: Mapping[str, st
             }
         )
     records.sort(key=lambda record: record["id"])
-    clustered = {key: record["split"] for record in records for key in (*record["kept"], *(item["row"] for item in record["removed"]))}
+    clustered = {
+        key: record["split"]
+        for record in records
+        for key in (*record["kept"], *(item["row"] for item in record["removed"]))
+    }
     removed = {item["row"] for record in records for item in record["removed"]}
-    split_counts = Counter(
-        clustered.get(key, split_for(key)) for key in row_keys if key not in removed
-    )
+    split_counts = Counter(clustered.get(key, split_for(key)) for key in row_keys if key not in removed)
     return {
         "input": dict(input_record or {}),
         "settings": {
@@ -222,7 +229,7 @@ def build_manifest(rows: Iterable[dict[str, Any]], input_record: Mapping[str, st
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("parquet", type=Path)
-    parser.add_argument("--output", type=Path, default=Path(__file__).with_name("informalization_dedup.json"))
+    parser.add_argument("--output", type=Path, default=Path(__file__).with_name("numina_autoinformalization_dedup.json"))
     args = parser.parse_args()
     data = args.parquet.read_bytes()
     manifest = build_manifest(
