@@ -82,6 +82,12 @@ Pi stages its endpoint variables and context-budget extension under
 file in the sticky shared `/tmp` can be read by the agent yet fail its cleanup
 with `Operation not permitted`.
 
+Pi has its own HTTP idle timeout, separate from the task and agent deadlines.
+For slow hosted generation, set the agent kwarg `http_idle_timeout` in seconds
+to match the intended model deadline. Harbor writes Pi's existing
+`httpIdleTimeoutMs` setting and preserves its other settings. Omission keeps
+the image's timeout; Pi 0.87.0 defaults to five minutes.
+
 ## Snapshot preflight and reclamation
 
 Shellbox identifies snapshots for all launchers. One snapshot
