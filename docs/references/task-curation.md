@@ -3622,10 +3622,18 @@ duplicate and lexical evidence, combined exclusions and counts. Public training
 inputs with lexical exclusions also receive a private original archive.
 
 Both `remediation_publish` and `native_quick` require exact-input stage-0
-receipts before reading task payloads. By default, they read
-`experiments/post_training/task_curation/datasets/license_receipts/`.
-Use `--license-receipts RECEIPT_DIRECTORY` to replace that input with another
-directory of `part-*.json` receipt shards. Their shared
+receipts before reading task payloads. The reviewed license registry lives in
+the private Hugging Face dataset `open-athena/marin-license-receipts`; the
+committed reference index
+`experiments/post_training/task_curation/datasets/license_receipts/index.json`
+pins the dataset revision and every shard's SHA-256. Readers download through
+the index and verify bytes before parsing. Use
+`--license-receipts RECEIPT_DIRECTORY` to replace that input with a local
+staging directory of `part-*.json` receipt shards. New or updated receipts
+must go through `license_binding.append_license_receipt`, which upserts the
+shard holding the source's key at a fresh immutable dataset revision and
+stages the committed index bump for the next landing; never edit the shards or
+the index by hand. Their shared
 `license_publication` helper preserves the checked upstream license fields,
 original card and notices, and pinned evidence URLs. `license_source` identifies
 the checked dataset grant; `license_input` separately records the physical input
