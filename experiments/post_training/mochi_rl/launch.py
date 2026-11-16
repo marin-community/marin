@@ -209,6 +209,11 @@ def build_run(
     recipe = SkyRLRecipe.from_document(yaml.safe_load(recipe_path.read_text())).merge(profile.patch)
     eval_interval = recipe.trainer.eval_interval if eval_interval is None else eval_interval
     checkpoint_interval = recipe.trainer.ckpt_interval if checkpoint_interval is None else checkpoint_interval
+    if not smoke and eval_interval % checkpoint_interval:
+        raise ValueError(
+            "Normal evaluation must fall on checkpoint steps for recovery; "
+            "--eval-interval must be a multiple of --checkpoint-interval"
+        )
     context = recipe.context_budget.replace(max_new_tokens_per_turn=max_new_tokens)
     callback_updates = {
         "checkpoint": {"save_steps": checkpoint_interval},
