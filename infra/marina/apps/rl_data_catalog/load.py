@@ -205,9 +205,10 @@ def load_catalog(
     for source in sources:
         # Available rows must pass full population admission; every other status
         # publishes as metadata without admission or selectability.
-        if source.declaration.status == "Available" and filtration(source.declaration.model_dump(mode="json"))[
-            "state"
-        ] != "excluded":
+        if (
+            source.declaration.status == "Available"
+            and filtration(source.declaration.model_dump(mode="json"))["state"] != "excluded"
+        ):
             require_declaration_admission(source.declaration)
         if blocker := backend_support_blocker(
             next(row for row in backend_map.sources if row.source_id == source.id),

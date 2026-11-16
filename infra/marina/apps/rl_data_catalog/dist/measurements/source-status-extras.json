@@ -121,7 +121,7 @@
       "upstream_dataset": "OpenResearcher-Dataset",
       "upstream_url": null,
       "notes": "",
-      "stage": "Intake queued",
+      "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
       "reasons": []
