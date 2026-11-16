@@ -39,8 +39,9 @@ The normal batch is 32 groups, split equally between SWE and the combined
 reasoning/science route. This follows MA's completed three-rack batch; using it
 on one rack is a configuration choice, not a new runtime qualification.
 `--batch-groups` accepts an even count and keeps eight samples per group and
-equal route quotas. The task families, graders and sampling within each route
-remain those of the input mixture.
+equal route quotas. Ben's reference uses 64 groups and staleness two; these
+Mochi settings follow MA's workflow. The task families, graders and sampling
+within each route remain those of the input mixture.
 
 Evaluation and native checkpointing default to every two updates, following
 Ben's cadence. `--eval-interval` and `--checkpoint-interval` change them

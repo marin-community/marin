@@ -290,6 +290,7 @@ def build_run(
         if not ctx.is_fingerprint:
             source = train_data[0]
             uri = str(StoragePath(ctx.artifact_path(source.step)) / source.relative_path)
+            # CoreWeave S3 inputs need the bucket registry's endpoint and credentials.
             fs, path = filesystem_for(uri)
             with fs.open(path, "rb") as stream:
                 observed = hashlib.file_digest(stream, "sha256").hexdigest()
