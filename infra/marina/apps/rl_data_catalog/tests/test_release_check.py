@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 import requests
+from marina.client import MarinaRequestError
 
 from experiments.post_training.task_curation.tests.admission_fixtures import with_declaration_admission_census
 from infra.marina.apps.rl_data_catalog import release_check
@@ -20,6 +21,35 @@ from infra.marina.apps.rl_data_catalog.release_evidence import projected_sources
 from infra.marina.apps.rl_data_catalog.server.source_counts import SourceCounts
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_evidence, filtered_declaration
+
+
+@pytest.mark.parametrize(
+    "status,path,pipeline,allowed",
+    [
+        (404, "api/assessment?source_id=example", None, True),
+        (404, "api/assessment?source_id=example", "required-assessment", False),
+        (404, "api/assessment?source_id=unknown", None, False),
+        (404, "api/source?source_id=example", None, False),
+        (500, "api/assessment?source_id=example", None, False),
+    ],
+)
+def test_browser_preserves_empty_assessment_response_but_requires_expected_data(
+    monkeypatch: pytest.MonkeyPatch, status: int, path: str, pipeline: str | None, allowed: bool
+) -> None:
+    reader = release_check.CatalogReader("http://localhost/", requests.Session())
+
+    def unavailable(path: str) -> None:
+        raise MarinaRequestError(status, "No assessment published")
+
+    monkeypatch.setattr(reader, "get", unavailable)
+    sources = [{"id": "example", "assessment": {"pipeline_key": pipeline}}]
+    if allowed:
+        actual_status, body = release_check.browser_api_response(reader, path, sources)
+        assert actual_status == 404
+        assert "No assessment published" in body["detail"]
+    else:
+        with pytest.raises(MarinaRequestError):
+            release_check.browser_api_response(reader, path, sources)
 
 
 def test_release_counts_include_eval_pending_and_unique_static_and_final_exclusions() -> None:

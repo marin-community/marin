@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import requests
-from marina.client import applet_query, bearer_token, marina_request, marina_token_provider
+from marina.client import MarinaRequestError, applet_query, bearer_token, marina_request, marina_token_provider
 from playwright.sync_api import Route, sync_playwright
 
 from .prepare_preview import (
@@ -253,6 +253,24 @@ class CatalogReader:
         return self.cache[key]
 
 
+def browser_api_response(reader: CatalogReader, path: str, sources: list[dict[str, Any]]) -> tuple[int, Any]:
+    """Deliver the real empty-assessment response without excusing missing required data."""
+    try:
+        return 200, reader.get(path)
+    except MarinaRequestError as error:
+        parsed = urlsplit(path)
+        source_id = dict(parse_qsl(parsed.query)).get("source_id")
+        source = next((row for row in sources if row["id"] == source_id), None)
+        if (
+            error.status_code == 404
+            and parsed.path == "api/assessment"
+            and source is not None
+            and not (source.get("assessment") or {}).get("pipeline_key")
+        ):
+            return 404, {"detail": str(error)}
+        raise
+
+
 def browser_checks(
     reader: CatalogReader,
     root: str,
@@ -293,7 +311,12 @@ def browser_checks(
                 path = parsed.path[len(urlsplit(root).path) :]
                 if path.startswith("api/"):
                     try:
-                        data = reader.get(path + ("?" + parsed.query if parsed.query else ""))
+                        status, data = browser_api_response(
+                            reader, path + ("?" + parsed.query if parsed.query else ""), expected["sources"]
+                        )
+                        if status != 200:
+                            route.fulfill(status=status, json=data)
+                            return
                     except Exception as error:
                         # Playwright reconstructs callback errors; custom constructors can mask the cause.
                         raise RuntimeError(f"Release API {path}: {error}") from error
