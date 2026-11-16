@@ -13,7 +13,8 @@ class JudgeRun(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     endpoint: str
     api_model: str
-    api_key_secret: str
+    # A locally hosted tier judge needs no credential; the worker authenticates "EMPTY".
+    api_key_secret: str | None
     identity: SolverIdentity
     provider_limits: ProviderLimits
 

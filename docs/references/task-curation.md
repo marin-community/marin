@@ -1861,10 +1861,84 @@ graded real tasks end to end through the production grader:
 
 Record the judge definition, its endpoint at validation time, the verdicts and
 the agreement in the source's oversight evidence. A judge that cannot be reached
-or validated leaves the source at the conversion-only QUICK level.
+or validated leaves the source at the conversion-only QUICK level: the source
+stays admitted but is hidden from the default Atlas view and from default
+training selections; it is not excluded on oversight-level grounds.
 The production reference and checklist graders retain each parsed provider
 response, including token usage, under `judge_responses`. Confirm that every
 remote prompt plus its completion budget fits the tier's declared context.
+
+## Difficulty measurement
+
+Difficulty measures how hard a source's selected tasks are for the
+`atlas-difficulty-v3` protocol solvers (small, large, hosted, snowball). It
+never changes a source's status and never maintains its own exclusion or hold
+list: a blocking condition is recorded as typed evidence, and a SOURCE-owned
+condition becomes an exclusion candidate through the normal admission
+procedure. The campaigns run with
+`experiments/post_training/task_curation/difficulty_campaign.py` (serving and
+scheduling) and `difficulty_trials.py` (Harbor trial execution).
+
+### Typed gaps, not free text
+
+Every not-measured reason a Difficulty record carries is a `DifficultyGap`
+member (`lib/finestore/src/finestore/rl/difficulty.py`). Each member names one
+blocking condition; `DIFFICULTY_GAPS` carries its owner, meaning and clear
+condition:
+
+- `PIPELINE` gaps belong to the measurement pipeline: unscored coverage,
+  protocol input budget, provider capacity, Daytona snapshot and TaskSpec
+  preflights, Harbor trial qualification, judge route and temperature
+  qualification, interrupted dispatches and unqualified prior aggregates.
+- `SOURCE` gaps belong to the source: a declared environment artifact that
+  exists in no region, a compose document or tool-provider contract no backend
+  supports, a network policy the production policy rejects, a judge route or
+  API that cannot be served, and an invalid reference in the frozen sample.
+
+Difficulty workers may only emit enum members plus typed evidence — a detail
+after `:` (a judge model, requirement URIs, a contract token) and an evidence
+segment `qualification receipt: <uri>`. Compose reasons with
+`difficulty_gap_reason` and `join_difficulty_gap_reasons`, and call
+`require_difficulty_gaps` before writing a measurement, prepared task or
+pending record: it rejects any string that does not parse into typed gaps.
+Historical campaign spellings stay readable through
+`LEGACY_DIFFICULTY_GAP_PREFIXES` and `LEGACY_DIFFICULTY_GAP_REASONS`; new
+records never re-emit them. A test pins every observed historical string to its
+member and fails if a not-measured record carries an unmapped reason.
+
+### How PIPELINE gaps are scheduled
+
+Each member's clear condition in `DIFFICULTY_GAPS` states the work that clears
+it. Schedule that work against the coverage queue: resume or re-serve the
+campaign for unscored coverage; route Daytona sources through the declarative
+Daytona executor and the TaskSpec actor factory for their snapshot preflight;
+re-run the executability-filtered admission pass after static findings; host a
+non-GLM judge through `JUDGE_TIER_SERVING` and qualify the GLM route at the
+recorded temperature deviation where the source declares another setting. A
+run version serves exactly one judge route
+(`campaign_judge_tier` in `difficulty_campaign.py`); split a queue that mixes
+routes. The gate in `difficulty_preparation.py` accepts the GLM route and every
+`JUDGE_TIERS` model (`SERVED_JUDGE_MODELS`); a validated endpoint is confirmed
+at serving time by the judge probe and identity receipt.
+
+### How SOURCE gaps are escalated
+
+`DIFFICULTY_GAP_EXCLUSION_REASONS`
+(`lib/finestore/src/finestore/rl/status_taxonomy.py`), keyed by the member
+name, maps each SOURCE-owned gap to the `ExclusionReason` that owns its
+admission outcome. Never map it again elsewhere: `None` in that table means the
+gap is PIPELINE-owned and never excludes a source. Escalate a SOURCE gap
+through the normal admission procedure with its evidence — the requirement URI
+and its existence check, the `BackendSurvey` row, the judge identity and its
+validation, or the frozen-sample receipt — and let the user rule between
+repair, re-measure and exclusion. Current rulings: rebuild a missing
+environment artifact in region first and exclude only when it cannot be
+rebuilt; exclude a source no surveyed backend can run; re-pin a judge to a
+served tier through a private remediation version (fresh SAMPLE, admission and
+end-to-end judge validation) rather than exclude; repair an invalid reference
+in a private remediation version. Never exclude on oversight-level grounds:
+QUICK oversight admits a source while hiding it from the default view and
+default training selections.
 
 ## Sources without oracle solutions
 

@@ -25,9 +25,13 @@ from finestore.rl.difficulty import (
     PROTOCOL_ID,
     PROTOCOLS,
     DifficultyAttempt,
+    DifficultyGap,
     DifficultyMeasurement,
+    difficulty_gap_reason,
+    join_difficulty_gap_reasons,
     measurement_from_attempts,
     register_difficulty,
+    require_difficulty_gaps,
 )
 from finestore.store import DataStore
 from harbor.environments.docker_translate import MissingPreparedImageError
@@ -59,13 +63,11 @@ from experiments.post_training.task_curation.difficulty_sampling import request_
 LOGGER = logging.getLogger(__name__)
 ATTEMPT_TIMEOUT = 259200
 JUDGE_TEMPERATURE = PROTOCOLS[PROTOCOL_ID].temperature
-INPUT_BUDGET_REASON = (
-    "A candidate prompt exceeded the protocol input budget before dispatch. No solver score was assigned."
-)
-PROVIDER_WAIT_REASON = "Awaiting shared model provider capacity; provider waits are excluded from task attempts."
-MISSING_PREPARED_IMAGE_REASON = "missing_environment_artifact:prepared_image"
-UNSUPPORTED_COMPOSE_DOCUMENT_REASON = "unsupported_compose_document"
-NETWORK_POLICY_REASON = "network_policy_violation"
+INPUT_BUDGET_REASON = difficulty_gap_reason(DifficultyGap.PROTOCOL_INPUT_BUDGET_EXCEEDED)
+PROVIDER_WAIT_REASON = difficulty_gap_reason(DifficultyGap.PROVIDER_CAPACITY_WAIT)
+MISSING_PREPARED_IMAGE_REASON = difficulty_gap_reason(DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, "prepared_image")
+UNSUPPORTED_COMPOSE_DOCUMENT_REASON = difficulty_gap_reason(DifficultyGap.UNSUPPORTED_COMPOSE_DOCUMENT)
+NETWORK_POLICY_REASON = difficulty_gap_reason(DifficultyGap.NETWORK_POLICY_VIOLATION)
 MATH_DEADLINE_LIMIT = 3
 
 
@@ -486,7 +488,7 @@ def main() -> None:
             budget_relay(
                 endpoint=judge.endpoint,
                 model=judge.api_model,
-                api_key=require_secret(judge.api_key_secret),
+                api_key=require_secret(judge.api_key_secret) if judge.api_key_secret is not None else "EMPTY",
                 tokenizer_model=judge.identity.tokenizer,
                 tokenizer_revision=judge.identity.tokenizer_revision,
                 parameters={"temperature": JUDGE_TEMPERATURE},
@@ -648,7 +650,7 @@ def main() -> None:
                     converter_version=source.sample.converter_version,
                     solver=config.solver,
                     status="pending",
-                    reason="Awaiting scored coverage",
+                    reason=difficulty_gap_reason(DifficultyGap.AWAITING_SCORED_COVERAGE),
                     sample=source.sample,
                     sample_receipt=source.sample_receipt,
                     model=config.identity,
@@ -680,17 +682,19 @@ def main() -> None:
                 )
                 environment_blockers = sorted({pending_reasons[task_id] for task_id in environment_blocked_tasks})
                 if not terminal and tasks and len(environment_blocked_tasks) == len(tasks):
+                    blockers_reason = join_difficulty_gap_reasons(environment_blockers)
+                    require_difficulty_gaps(blockers_reason)
                     measurement = DifficultyMeasurement.model_validate(
                         {
                             **measurement.model_dump(mode="json"),
                             "status": "not_measured",
-                            "reason": "; ".join(environment_blockers),
+                            "reason": blockers_reason,
                         }
                     )
                 elif pending_reasons:
-                    measurement = measurement.model_copy(
-                        update={"reason": "; ".join(sorted(set(pending_reasons.values())))}
-                    )
+                    pending_reason = join_difficulty_gap_reasons(list(pending_reasons.values()))
+                    require_difficulty_gaps(pending_reason)
+                    measurement = measurement.model_copy(update={"reason": pending_reason})
                 with DataStore.open(str(output / "catalog")) as store:
                     register_difficulty(store)
                     with store.transaction() as transaction:

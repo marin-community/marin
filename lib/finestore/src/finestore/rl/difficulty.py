@@ -4,6 +4,7 @@
 """Immutable Atlas difficulty measurements and their retained-population receipts."""
 
 import math
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -77,6 +78,361 @@ class MeasurementStatus(StrEnum):
     PENDING = "pending"
     BLOCKED = "blocked"
     NOT_MEASURED = "not_measured"
+
+
+class DifficultyGapOwner(StrEnum):
+    """Who has to act on a gap: the Difficulty pipeline, or the source itself."""
+
+    PIPELINE = "pipeline"
+    SOURCE = "source"
+
+
+@dataclass(frozen=True)
+class DifficultyGapSpec:
+    """The contract behind one ``DifficultyGap`` member."""
+
+    owner: DifficultyGapOwner
+    meaning: str
+    cleared_by: str
+
+
+class DifficultyGap(StrEnum):
+    """Every typed reason a Difficulty record may carry instead of free text.
+
+    Each member names one blocking condition. ``DIFFICULTY_GAPS`` carries its
+    owner, meaning and clear condition; the member value is the canonical
+    reason token. A gap may carry one typed detail after ``:`` (a judge model,
+    requirement URIs, a contract token) and one evidence segment
+    ``qualification receipt: <uri>``. Historical records keep their original
+    strings, so ``LEGACY_DIFFICULTY_GAP_PREFIXES`` and
+    ``LEGACY_DIFFICULTY_GAP_REASONS`` map every spelling ever observed to the
+    member that now owns it.
+    """
+
+    AWAITING_SCORED_COVERAGE = "awaiting_scored_coverage"
+    PROTOCOL_INPUT_BUDGET_EXCEEDED = "protocol_input_budget_exceeded"
+    PROVIDER_CAPACITY_WAIT = "provider_capacity_wait"
+    DAYTONA_SNAPSHOT_PREFLIGHT_PENDING = "daytona_snapshot_preflight_pending"
+    DAYTONA_TASK_SPEC_FACTORY_PENDING = "daytona_task_spec_factory_pending"
+    DAYTONA_RUNTIME_QUALIFICATION_PENDING = "daytona_runtime_qualification_pending"
+    PRODUCTION_HARBOR_TRIALS_PENDING = "production_harbor_trials_pending"
+    EXECUTABILITY_ADMISSION_PENDING = "executability_admission_pending"
+    FILTRATION_FINDINGS_ADMISSION_PENDING = "filtration_findings_admission_pending"
+    JUDGE_QUALIFICATION_PENDING = "judge_qualification_pending"
+    NO_QUALIFIED_MEASUREMENT_RECORDED = "no_qualified_measurement_recorded"
+    MATH_VERIFIER_DEADLINE = "math_verifier_deadline"
+    HOSTED_NATIVE_CONTEXT_UNQUALIFIED = "hosted_native_context_unqualified"
+    HOSTED_TIMEOUT_GRADES_UNQUALIFIED = "hosted_timeout_grades_unqualified"
+    HOSTED_DISPATCH_INTERRUPTED = "hosted_dispatch_interrupted"
+    HOSTED_JUDGE_CANARY_INTERRUPTED = "hosted_judge_canary_interrupted"
+    HOSTED_UNSERVED_RAW_ZERO_GRADES = "hosted_unserved_raw_zero_grades"
+    ENVIRONMENT_ARTIFACT_MISSING = "environment_artifact_missing"
+    UNSUPPORTED_COMPOSE_DOCUMENT = "unsupported_compose_document"
+    NETWORK_POLICY_VIOLATION = "network_policy_violation"
+    NO_EXECUTABLE_GRADER = "no_executable_task_spec_grader"
+    STATE_CAPTURE_REQUIRED = "task_spec_state_capture_required"
+    TOOL_PROVIDER_REQUIRED = "task_spec_tool_provider_required"
+    SHARED_EXECUTOR_REQUIRED = "task_spec_shared_executor_required"
+    PROVIDER_CONTRACT_INVALID = "task_spec_provider_contract_invalid"
+    UNRESOLVED_DOCKER_BUILD = "task_spec_unresolved_build"
+    JUDGE_ROUTE_UNQUALIFIED = "judge_route_unqualified"
+    JUDGE_API_UNQUALIFIED = "judge_api_unqualified"
+    INVALID_REFERENCE = "invalid_reference"
+
+
+DIFFICULTY_GAPS: Mapping[DifficultyGap, DifficultyGapSpec] = MappingProxyType(
+    {
+        DifficultyGap.AWAITING_SCORED_COVERAGE: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "Selected tasks have no scored solver attempt yet.",
+            "The scheduled campaign scores every selected task or records a terminal attempt.",
+        ),
+        DifficultyGap.PROTOCOL_INPUT_BUDGET_EXCEEDED: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "A candidate prompt exceeded the protocol input budget before dispatch; no solver score exists.",
+            "The protocol budget accommodates the task, or the task is re-sampled within budget.",
+        ),
+        DifficultyGap.PROVIDER_CAPACITY_WAIT: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "The run is waiting for shared model-provider capacity; provider waits never score a task.",
+            "Capacity is granted and the affected tasks are re-served.",
+        ),
+        DifficultyGap.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "The declarative Daytona source awaits its snapshot preflight.",
+            "The snapshot preflight passes against the declarative Daytona executor.",
+        ),
+        DifficultyGap.DAYTONA_TASK_SPEC_FACTORY_PENDING: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "The TaskSpec Daytona source awaits its faithful actor factory.",
+            "The TaskSpec Daytona executor produces and qualifies the actor environment.",
+        ),
+        DifficultyGap.DAYTONA_RUNTIME_QUALIFICATION_PENDING: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "The source awaits Daytona snapshot and original-runtime qualification.",
+            "The snapshot identity and original runtime packet qualify in production.",
+        ),
+        DifficultyGap.PRODUCTION_HARBOR_TRIALS_PENDING: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "The source awaits qualified production Harbor trials with its original runtime packet.",
+            "A qualified production Harbor trial run covers the source.",
+        ),
+        DifficultyGap.EXECUTABILITY_ADMISSION_PENDING: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "Task contracts failed static executability and await the re-filtered admission population.",
+            "The executability-filtered admission population admits or rejects the contract.",
+        ),
+        DifficultyGap.FILTRATION_FINDINGS_ADMISSION_PENDING: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "Sampled filtration findings await a canonical executable admitted population.",
+            "The sampled findings are resolved into a canonical executable admitted population.",
+        ),
+        DifficultyGap.JUDGE_QUALIFICATION_PENDING: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "The judge route or temperature qualification is pending for this source's judge.",
+            "The route qualifies (recorded temperature deviation where the source declares another setting).",
+        ),
+        DifficultyGap.NO_QUALIFIED_MEASUREMENT_RECORDED: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "No qualified Harbor measurement has been recorded for this source and model.",
+            "A qualified measurement for the pinned release and converter is published.",
+        ),
+        DifficultyGap.MATH_VERIFIER_DEADLINE: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "The math verifier deadline exhausted during grading.",
+            "The shared grader deadline is fixed or the task is re-graded after repair.",
+        ),
+        DifficultyGap.HOSTED_NATIVE_CONTEXT_UNQUALIFIED: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "The hosted native client's effective context did not qualify.",
+            "The native client context qualifies against the pinned serving receipt.",
+        ),
+        DifficultyGap.HOSTED_TIMEOUT_GRADES_UNQUALIFIED: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "A prior hosted aggregate contains timeout grades that do not qualify.",
+            "Raw evidence is retained and a qualifying aggregate replaces it.",
+        ),
+        DifficultyGap.HOSTED_DISPATCH_INTERRUPTED: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "The hosted dispatch was interrupted before its traffic was sealed.",
+            "A continuation recovers or re-serves the interrupted dispatch.",
+        ),
+        DifficultyGap.HOSTED_JUDGE_CANARY_INTERRUPTED: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "The hosted judge canary was interrupted before sealing.",
+            "The judge canary is re-run and sealed.",
+        ),
+        DifficultyGap.HOSTED_UNSERVED_RAW_ZERO_GRADES: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "A prior hosted aggregate contains raw zero grades for requests that were never served.",
+            "Unserved zeros are excluded and the aggregate is re-measured.",
+        ),
+        DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING: DifficultyGapSpec(
+            DifficultyGapOwner.SOURCE,
+            "A declared environment artifact (packages lock or prepared image) exists in no storage region.",
+            "The artifact is rebuilt or repointed to a regional path (exclusion candidate otherwise).",
+        ),
+        DifficultyGap.UNSUPPORTED_COMPOSE_DOCUMENT: DifficultyGapSpec(
+            DifficultyGapOwner.SOURCE,
+            "The source declares a compose document no backend can execute.",
+            "A supported backend executes the compose document (exclusion candidate otherwise).",
+        ),
+        DifficultyGap.NETWORK_POLICY_VIOLATION: DifficultyGapSpec(
+            DifficultyGapOwner.SOURCE,
+            "The source's declared runtime fails its production network-policy qualification.",
+            "The declared runtime qualifies under the production network policy (exclusion candidate otherwise).",
+        ),
+        DifficultyGap.NO_EXECUTABLE_GRADER: DifficultyGapSpec(
+            DifficultyGapOwner.SOURCE,
+            "The task spec declares no executable grader.",
+            "The source supplies an executable grader contract.",
+        ),
+        DifficultyGap.STATE_CAPTURE_REQUIRED: DifficultyGapSpec(
+            DifficultyGapOwner.SOURCE,
+            "The contract captures state that no supported executor returns.",
+            "A supported executor captures the declared state.",
+        ),
+        DifficultyGap.TOOL_PROVIDER_REQUIRED: DifficultyGapSpec(
+            DifficultyGapOwner.SOURCE,
+            "The contract requires a tool provider no backend supports.",
+            "A supported backend provides the tool interface (exclusion candidate otherwise).",
+        ),
+        DifficultyGap.SHARED_EXECUTOR_REQUIRED: DifficultyGapSpec(
+            DifficultyGapOwner.SOURCE,
+            "The contract requires a shared executor no backend provides.",
+            "A supported backend provides the shared executor.",
+        ),
+        DifficultyGap.PROVIDER_CONTRACT_INVALID: DifficultyGapSpec(
+            DifficultyGapOwner.SOURCE,
+            "The declared tool-provider contract is invalid for its interface.",
+            "The source declares a valid provider contract.",
+        ),
+        DifficultyGap.UNRESOLVED_DOCKER_BUILD: DifficultyGapSpec(
+            DifficultyGapOwner.SOURCE,
+            "The contract requires resolving a Docker build no supported executor performs.",
+            "The Docker build is resolved declaratively or the contract changes.",
+        ),
+        DifficultyGap.JUDGE_ROUTE_UNQUALIFIED: DifficultyGapSpec(
+            DifficultyGapOwner.SOURCE,
+            "The source's own judge model has no qualified serving route.",
+            "The judge is re-pinned to a served tier, substituted, or the source is excluded.",
+        ),
+        DifficultyGap.JUDGE_API_UNQUALIFIED: DifficultyGapSpec(
+            DifficultyGapOwner.SOURCE,
+            "The source's judge API is not the qualified chat-completions contract.",
+            "The judge is re-pinned to a served API (exclusion candidate otherwise).",
+        ),
+        DifficultyGap.INVALID_REFERENCE: DifficultyGapSpec(
+            DifficultyGapOwner.SOURCE,
+            "A frozen sample task carries an invalid expected reference target.",
+            "The source is repaired in a private remediation version, or excluded.",
+        ),
+    }
+)
+
+# Legacy prefix forms with a typed detail after the prefix.
+LEGACY_DIFFICULTY_GAP_PREFIXES: tuple[tuple[str, DifficultyGap], ...] = (
+    ("awaiting_executability_filtered_admission_population:", DifficultyGap.EXECUTABILITY_ADMISSION_PENDING),
+    (
+        "Awaiting canonical executable admitted population after sampled filtration findings:",
+        DifficultyGap.FILTRATION_FINDINGS_ADMISSION_PENDING,
+    ),
+    ("Production judge route or temperature qualification pending:", DifficultyGap.JUDGE_QUALIFICATION_PENDING),
+    ("production_judge_route_not_qualified:", DifficultyGap.JUDGE_ROUTE_UNQUALIFIED),
+    ("production_judge_api_not_qualified:", DifficultyGap.JUDGE_API_UNQUALIFIED),
+    ("missing_environment_artifact:", DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING),
+)
+
+# Legacy spellings without a detail, mapped to the member that now owns them.
+LEGACY_DIFFICULTY_GAP_REASONS: Mapping[str, DifficultyGap] = MappingProxyType(
+    {
+        "Awaiting scored coverage": DifficultyGap.AWAITING_SCORED_COVERAGE,
+        "Selected tasks still lack scored solver attempts.": DifficultyGap.AWAITING_SCORED_COVERAGE,
+        "A candidate prompt exceeded the protocol input budget before dispatch. No solver score was assigned.": (
+            DifficultyGap.PROTOCOL_INPUT_BUDGET_EXCEEDED
+        ),
+        "Awaiting shared model provider capacity; provider waits are excluded from task attempts.": (
+            DifficultyGap.PROVIDER_CAPACITY_WAIT
+        ),
+        "daytona_snapshot_preflight_pending": DifficultyGap.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING,
+        "faithful_daytona_task_spec_factory_pending": DifficultyGap.DAYTONA_TASK_SPEC_FACTORY_PENDING,
+        "Faithful Daytona TaskSpec actor factory pending": DifficultyGap.DAYTONA_TASK_SPEC_FACTORY_PENDING,
+        "Daytona snapshot and original runtime qualification pending": (
+            DifficultyGap.DAYTONA_RUNTIME_QUALIFICATION_PENDING
+        ),
+        "Awaiting qualified production Harbor trials with the original source runtime packet": (
+            DifficultyGap.PRODUCTION_HARBOR_TRIALS_PENDING
+        ),
+        "No qualified Harbor measurement has been recorded for this source/model in this snapshot.": (
+            DifficultyGap.NO_QUALIFIED_MEASUREMENT_RECORDED
+        ),
+        "math_verifier_deadline": DifficultyGap.MATH_VERIFIER_DEADLINE,
+        "native_client_effective_context_unqualified": DifficultyGap.HOSTED_NATIVE_CONTEXT_UNQUALIFIED,
+        "prior_hosted_timeout_grades_unqualified": DifficultyGap.HOSTED_TIMEOUT_GRADES_UNQUALIFIED,
+        "prior_hosted_timeout_grade_unqualified": DifficultyGap.HOSTED_TIMEOUT_GRADES_UNQUALIFIED,
+        "interrupted_hosted_dispatch_unsealed": DifficultyGap.HOSTED_DISPATCH_INTERRUPTED,
+        "interrupted_hosted_judge_canary_unsealed": DifficultyGap.HOSTED_JUDGE_CANARY_INTERRUPTED,
+        "prior_hosted_unserved_requests_with_raw_zero_grades": DifficultyGap.HOSTED_UNSERVED_RAW_ZERO_GRADES,
+        "unsupported_compose_document": DifficultyGap.UNSUPPORTED_COMPOSE_DOCUMENT,
+        "network_policy_violation": DifficultyGap.NETWORK_POLICY_VIOLATION,
+        "no_executable_task_spec_grader": DifficultyGap.NO_EXECUTABLE_GRADER,
+        "task_spec_state_capture_required": DifficultyGap.STATE_CAPTURE_REQUIRED,
+        "task_spec_tool_provider_required": DifficultyGap.TOOL_PROVIDER_REQUIRED,
+        "task_spec_shared_executor_required": DifficultyGap.SHARED_EXECUTOR_REQUIRED,
+        "task_spec_provider_contract_invalid": DifficultyGap.PROVIDER_CONTRACT_INVALID,
+        "task_spec_unresolved_build": DifficultyGap.UNRESOLVED_DOCKER_BUILD,
+        "invalid_expected_target_in_frozen_sample": DifficultyGap.INVALID_REFERENCE,
+    }
+)
+
+QUALIFICATION_RECEIPT_PREFIX = "qualification receipt: "
+GAP_DETAIL_SEPARATOR = ":"
+
+
+def difficulty_gap_reason(gap: DifficultyGap, detail: str | None = None) -> str:
+    """Compose one canonical reason segment for a gap."""
+    return gap.value if detail is None else f"{gap.value}{GAP_DETAIL_SEPARATOR}{detail.strip()}"
+
+
+def join_difficulty_gap_reasons(reasons: list[str]) -> str:
+    """Join canonical reason segments; callers never hand-build separators."""
+    return "; ".join(sorted(set(reasons)))
+
+
+def _canonicalize_legacy_segments(reason: str) -> list[str]:
+    """Split a reason into segments, tolerating a legacy join that lost its separator."""
+    text = reason
+    for prefix, _ in LEGACY_DIFFICULTY_GAP_PREFIXES:
+        text = re.sub(rf"(?<=[\w/])\s+(?={re.escape(prefix)})", "; ", text)
+    for legacy in LEGACY_DIFFICULTY_GAP_REASONS:
+        text = re.sub(rf"(?<=[\w/])\s+(?={re.escape(legacy)})", "; ", text)
+    return [segment.strip() for segment in text.split("; ") if segment.strip()]
+
+
+def parse_difficulty_gap_segment(segment: str) -> tuple[DifficultyGap, str | None]:
+    """Resolve one reason segment to its gap and typed detail, or raise."""
+    if segment.startswith(QUALIFICATION_RECEIPT_PREFIX):
+        raise ValueError(f"The evidence segment is not a gap: {segment!r}")
+    if segment in LEGACY_DIFFICULTY_GAP_REASONS:
+        return LEGACY_DIFFICULTY_GAP_REASONS[segment], None
+    for prefix, gap in LEGACY_DIFFICULTY_GAP_PREFIXES:
+        if segment.startswith(prefix):
+            detail = segment[len(prefix) :].strip()
+            return gap, detail or None
+    for gap in DifficultyGap:
+        if segment == gap.value:
+            return gap, None
+        if segment.startswith(gap.value + GAP_DETAIL_SEPARATOR):
+            return gap, segment[len(gap.value) + len(GAP_DETAIL_SEPARATOR) :].strip() or None
+    raise ValueError(f"Unmapped difficulty gap reason: {segment!r}")
+
+
+def _hides_legacy_reason(text: str) -> bool:
+    """True when a legacy spelling appears anywhere inside a longer segment."""
+    if any(legacy in text and legacy != text for legacy in LEGACY_DIFFICULTY_GAP_REASONS):
+        return True
+    return any(prefix in text and not text.startswith(prefix) for prefix, _ in LEGACY_DIFFICULTY_GAP_PREFIXES)
+
+
+def difficulty_gaps(reason: str) -> list[tuple[DifficultyGap, str | None]]:
+    """Every (gap, typed detail) a reason carries, excluding its evidence segments.
+
+    Evidence stays readable through `difficulty_gap_evidence`; a reason whose
+    segments carry no gap raises through `require_difficulty_gaps`.
+    """
+    text = reason.strip()
+    if not text:
+        return []
+    if text in LEGACY_DIFFICULTY_GAP_REASONS:
+        return [(LEGACY_DIFFICULTY_GAP_REASONS[text], None)]
+    for gap in DifficultyGap:
+        if text == gap.value:
+            return [(gap, None)]
+    try:
+        whole = parse_difficulty_gap_segment(text)
+    except ValueError:
+        whole = None
+    if whole is not None and not _hides_legacy_reason(text):
+        return [whole]
+    return [
+        parse_difficulty_gap_segment(segment)
+        for segment in _canonicalize_legacy_segments(text)
+        if not segment.startswith(QUALIFICATION_RECEIPT_PREFIX)
+    ]
+
+
+def difficulty_gap_evidence(reason: str) -> str | None:
+    """The typed evidence URI a reason binds to, when one exists."""
+    for segment in _canonicalize_legacy_segments(reason):
+        if segment.startswith(QUALIFICATION_RECEIPT_PREFIX):
+            return segment[len(QUALIFICATION_RECEIPT_PREFIX) :].strip()
+    return None
+
+
+def require_difficulty_gaps(reason: str) -> None:
+    """Reject any reason a Difficulty record carries that is not a typed gap."""
+    if not difficulty_gaps(reason):
+        raise ValueError(f"Unmapped difficulty gap reason: {reason!r}")
 
 
 class SampleTask(CatalogRecord):
@@ -337,9 +693,9 @@ def measurement_from_attempts(
                 None
                 if status is MeasurementStatus.MEASURED
                 else (
-                    "; ".join(sorted(blocked_reasons))
+                    join_difficulty_gap_reasons(sorted(blocked_reasons))
                     if status is MeasurementStatus.BLOCKED
-                    else "Selected tasks still lack scored solver attempts."
+                    else DifficultyGap.AWAITING_SCORED_COVERAGE.value
                 )
             ),
             "n": n,

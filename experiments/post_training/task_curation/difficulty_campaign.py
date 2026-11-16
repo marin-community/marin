@@ -9,9 +9,11 @@ import json
 import logging
 import os
 import subprocess
-from contextlib import contextmanager
+from collections.abc import Mapping
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
+from types import MappingProxyType
 
 import httpx
 from finestore.rl.curation import ContentEvidenceReference
@@ -28,11 +30,13 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import SECRETS_DIR_ENV, forwarded_secrets, require_secret
 from rigging.timing import Duration
 from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.pipeline.reviewer_spec import JudgeTier
+from transformers import AutoTokenizer
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.task_curation.difficulty_config import CandidateRun, JudgeRun
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
-from experiments.post_training.task_curation.difficulty_preparation import prepare_source
+from experiments.post_training.task_curation.difficulty_preparation import PreparedSource, prepare_source
 from experiments.post_training.task_curation.difficulty_protocol import (
     GLM_RELAY_JOB,
     PINS,
@@ -43,7 +47,11 @@ from experiments.post_training.task_curation.difficulty_provider import Provider
 from experiments.post_training.task_curation.difficulty_recovery import CampaignParent
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
-from experiments.post_training.task_curation.difficulty_serving_probe import probe_endpoint
+from experiments.post_training.task_curation.difficulty_serving_probe import (
+    probe_endpoint,
+    probe_judge_endpoint,
+)
+from experiments.post_training.task_curation.judges import JUDGE_TIERS, LocalJudgeEndpoint
 
 LOGGER = logging.getLogger(__name__)
 # The scheduler preempts lower bands; a production campaign evicts interactive
@@ -52,6 +60,17 @@ PRIORITY_CHOICES = ("production", "interactive", "batch", "system")
 MODEL_CACHE_ROOT = "s3://marin-rno2a"
 JOB_TIMEOUT = Duration.from_seconds(259200)
 NATIVE_CONTEXT_SAFETY_BUFFER = 0
+
+# Judge tiers Difficulty hosts itself, with the pinned model YAML and its H100 count.
+# Every non-GLM judge model a source declares must be one of these tiers.
+JUDGE_TIER_SERVING: Mapping[JudgeTier, tuple[Path, int]] = MappingProxyType(
+    {
+        JudgeTier.MEDIUM: (
+            Path("experiments/post_training/task_curation/judge_model_configs/MiniMaxAI-MiniMax-M3-MXFP8-262k.yaml"),
+            8,
+        ),
+    }
+)
 
 
 def worker_limits(root: Path) -> dict:
@@ -144,6 +163,62 @@ def solver_endpoint(solver: Solver, settings: SamplingSettings, priority: int):
         yield endpoint.base_url, endpoint.model, endpoint.api_key or "EMPTY", [str(job.job_id) for job in session.jobs]
 
 
+@contextmanager
+def judge_serving(tier: JudgeTier | None, priority: int):
+    """Yield the campaign's judge route: the shared GLM relay, or one locally hosted tier.
+
+    A tier is hosted for the whole campaign lifetime; the endpoint is validated
+    against its tier pin before the first judged trial dispatches.
+    """
+    if tier is None:
+        yield resolve_glm_base_url(GLM_RELAY_JOB), GLM_MODEL, require_secret(GLM_BULK_TOKEN_ENV), []
+        return
+    if tier not in JUDGE_TIER_SERVING:
+        raise ValueError(f"Difficulty hosts no model configuration for judge tier {tier.value}")
+    definition = JUDGE_TIERS[tier]
+    model_config, gpu_count = JUDGE_TIER_SERVING[tier]
+    endpoint = LocalJudgeEndpoint(
+        tier=tier,
+        model_config=model_config,
+        context_window_tokens=definition.context_window_tokens,
+        accelerator=AcceleratorChoice(Platform.GPU, gpu_type="H100", gpu_count=gpu_count, target_cluster=TARGET_CLUSTER),
+        priority=priority,
+        env_vars={"MARIN_TEMP_PREFIX": MODEL_CACHE_ROOT},
+        worker_timeout=JOB_TIMEOUT,
+    )
+    with endpoint.serve() as session:
+        serving = session.model.endpoint
+        yield serving.base_url, serving.model, serving.api_key or "EMPTY", [str(job.job_id) for job in session.jobs]
+
+
+def campaign_judge_tier(prepared: list[PreparedSource]) -> JudgeTier | None:
+    """The single judge tier this run must host, when its judged sources need one.
+
+    A run version serves exactly one judge route. Sources whose judge is the GLM
+    route share the relay; sources declaring a hosted tier model require that
+    tier, and mixing routes inside one queue is a split-the-queue error.
+    """
+    judged_models = {
+        task.judge_model
+        for source in prepared
+        for task in source.tasks
+        if task.judge_model is not None and task.reason is None
+    }
+    tiers = {
+        tier
+        for tier, definition in JUDGE_TIERS.items()
+        if definition.spec.model in judged_models and definition.spec.model != GLM_MODEL
+    }
+    if not tiers:
+        return None
+    if len(tiers) > 1:
+        raise ValueError(f"One campaign serves one judge tier; split the source queue: {sorted(tiers)}")
+    tier = next(iter(tiers))
+    if tier not in JUDGE_TIER_SERVING:
+        raise ValueError(f"Difficulty hosts no model configuration for judge tier {tier.value}")
+    return tier
+
+
 def run_trial_worker(
     prepared_path: Path,
     config_path: Path,
@@ -157,7 +232,7 @@ def run_trial_worker(
     secrets_dir = local_root / "framework-secrets"
     secrets_dir.mkdir(mode=0o700)
     secrets = {**forwarded_secrets(), "ATLAS_DIFFICULTY_CANDIDATE_TOKEN": api_key}
-    if judge is not None:
+    if judge is not None and judge.api_key_secret is not None:
         secrets[judge.api_key_secret] = require_secret(judge.api_key_secret)
     for name, value in secrets.items():
         path = secrets_dir / name
@@ -351,181 +426,235 @@ def main() -> None:
             ]
             if changed:
                 raise ValueError("Resumed root's serving identity changed across the retry: " + ", ".join(changed))
-        judge_pin = PINS[Solver.HOSTED]
-        judge_metadata = None
-        judge_endpoint = None
-        if has_judge:
-            judge_endpoint = resolve_glm_base_url(GLM_RELAY_JOB)
-            if args.solver == Solver.HOSTED:
-                judge_probe = probe
+        judge_tier = campaign_judge_tier(prepared)
+        judge_route = (
+            judge_serving(judge_tier, priority_band_value(args.priority))
+            if has_judge
+            else nullcontext((None, None, None, []))
+        )
+        with judge_route as (
+            judge_endpoint,
+            judge_api_model,
+            judge_api_key,
+            judge_jobs,
+        ):
+            judge_metadata = None
+            if has_judge:
+                if judge_tier is None:
+                    if args.solver == Solver.HOSTED:
+                        judge_probe = probe
+                    else:
+                        # The shared GLM relay may queue the probe behind hosted traffic; a
+                        # retry succeeds once the relay drains instead of killing the campaign.
+                        for attempt_number in range(1, 4):
+                            try:
+                                judge_probe = probe_endpoint(
+                                    Solver.HOSTED,
+                                    judge_endpoint,
+                                    judge_api_model,
+                                    judge_api_key,
+                                    sampling_settings(Solver.HOSTED, []),
+                                )
+                                break
+                            except httpx.TimeoutException as error:
+                                if attempt_number == 3:
+                                    raise
+                                LOGGER.warning(
+                                    "Judge probe attempt %d timed out against the shared relay: %s",
+                                    attempt_number,
+                                    error,
+                                )
+                    judge_pin = PINS[Solver.HOSTED]
+                    judge_metadata = {
+                        "model": SOLVER_MODELS[Solver.HOSTED],
+                        "api_model": judge_api_model,
+                        "revision": (
+                            f"unexposed:{judge_probe['tools_thinking_probe']['completion']['system_fingerprint']}"
+                        ),
+                        "tokenizer": SOLVER_MODELS[Solver.HOSTED],
+                        "tokenizer_revision": judge_pin.revision,
+                        "chat_template_sha256": judge_pin.template_sha256,
+                        "effective_temperature": PROTOCOLS[PROTOCOL_ID].temperature,
+                        "recorded_temperature_deviation": (
+                            "Sources whose JudgeSpec declares temperature 0.0 are served at the protocol "
+                            "temperature 0.7; the deviation is recorded per attempt as judge_temperature."
+                        ),
+                        "token_budget": "original source request; production service enforces its served context",
+                        "basis": "Host override; original TaskSpec and requested judge parameters are retained.",
+                        "serving_probe": judge_probe,
+                    }
+                else:
+                    # A hosted tier judge is validated against its own pinned
+                    # rendering before any judged trial dispatches.
+                    definition = JUDGE_TIERS[judge_tier]
+                    judge_probe = probe_judge_endpoint(
+                        judge_endpoint, definition, definition.spec.temperature, judge_api_key
+                    )
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        definition.model_identity, revision=definition.model_revision
+                    )
+                    judge_metadata = {
+                        "model": definition.spec.model,
+                        "api_model": judge_api_model,
+                        "revision": definition.model_revision,
+                        "tokenizer": definition.model_identity,
+                        "tokenizer_revision": definition.model_revision,
+                        "chat_template_sha256": hashlib.sha256(tokenizer.chat_template.encode()).hexdigest(),
+                        "effective_temperature": definition.spec.temperature,
+                        "recorded_temperature_deviation": (
+                            "Sources whose JudgeSpec declares temperature 0.0 are served at the tier "
+                            "temperature 0.7; the deviation is recorded per attempt as judge_temperature."
+                        ),
+                        "token_budget": "original source request; production service enforces its served context",
+                        "basis": "Pinned judge tier; original TaskSpec and requested judge parameters are retained.",
+                        "serving_probe": judge_probe,
+                    }
+                if prior_serving is not None and prior_serving.get("judge") is not None:
+                    # Keep the killed attempt's judge identity for the whole run
+                    # version; a fresh fingerprint from the same shared relay would
+                    # otherwise split the version's judged history across receipts.
+                    prior_judge = prior_serving["judge"]
+                    changed_judge = [
+                        name
+                        for name, before, after in (
+                            ("model", prior_judge.get("model"), judge_metadata["model"]),
+                            ("api_model", prior_judge.get("api_model"), judge_metadata["api_model"]),
+                            ("tokenizer", prior_judge.get("tokenizer"), judge_metadata["tokenizer"]),
+                            (
+                                "tokenizer_revision",
+                                prior_judge.get("tokenizer_revision"),
+                                judge_metadata["tokenizer_revision"],
+                            ),
+                            (
+                                "chat_template_sha256",
+                                prior_judge.get("chat_template_sha256"),
+                                judge_metadata["chat_template_sha256"],
+                            ),
+                            (
+                                "effective_temperature",
+                                prior_judge.get("effective_temperature"),
+                                judge_metadata["effective_temperature"],
+                            ),
+                        )
+                        if before != after
+                    ]
+                    if changed_judge:
+                        raise ValueError(
+                            "Resumed root's judge identity changed across the retry: " + ", ".join(changed_judge)
+                        )
+                    judge_metadata = prior_judge
+            completion = probe["tools_thinking_probe"]["completion"]
+            revision = f"unexposed:{completion['system_fingerprint']}" if args.solver == Solver.HOSTED else pin.revision
+            if prior_serving is not None:
+                receipt = ContentEvidenceReference(uri=str(prior_serving_path), sha256=file_sha256(prior_serving_path))
             else:
-                # The shared GLM relay may queue the probe behind hosted traffic; a
-                # retry succeeds once the relay drains instead of killing the campaign.
-                for attempt_number in range(1, 4):
-                    try:
-                        judge_probe = probe_endpoint(
-                            Solver.HOSTED,
-                            judge_endpoint,
-                            GLM_MODEL,
-                            require_secret(GLM_BULK_TOKEN_ENV),
-                            sampling_settings(Solver.HOSTED, []),
-                        )
-                        break
-                    except httpx.TimeoutException as error:
-                        if attempt_number == 3:
-                            raise
-                        LOGGER.warning(
-                            "Judge probe attempt %d timed out against the shared relay: %s", attempt_number, error
-                        )
-            judge_metadata = {
-                "model": SOLVER_MODELS[Solver.HOSTED],
-                "api_model": GLM_MODEL,
-                "revision": f"unexposed:{judge_probe['tools_thinking_probe']['completion']['system_fingerprint']}",
-                "tokenizer": SOLVER_MODELS[Solver.HOSTED],
-                "tokenizer_revision": judge_pin.revision,
-                "chat_template_sha256": judge_pin.template_sha256,
-                "effective_temperature": PROTOCOLS[PROTOCOL_ID].temperature,
-                "token_budget": "original source request; production service enforces its served context",
-                "basis": "Host override; original TaskSpec and requested judge parameters are retained.",
-                "serving_probe": judge_probe,
-            }
-            if prior_serving is not None and prior_serving.get("judge") is not None:
-                # Keep the killed attempt's judge identity for the whole run
-                # version; a fresh fingerprint from the same shared relay would
-                # otherwise split the version's judged history across receipts.
-                prior_judge = prior_serving["judge"]
-                changed_judge = [
-                    name
-                    for name, before, after in (
-                        ("model", prior_judge.get("model"), judge_metadata["model"]),
-                        ("api_model", prior_judge.get("api_model"), judge_metadata["api_model"]),
-                        ("tokenizer", prior_judge.get("tokenizer"), judge_metadata["tokenizer"]),
-                        (
-                            "tokenizer_revision",
-                            prior_judge.get("tokenizer_revision"),
-                            judge_metadata["tokenizer_revision"],
+                receipt = write_json_evidence(
+                    output / "serving.json",
+                    {
+                        "protocol": PROTOCOL_ID,
+                        "solver": args.solver.value,
+                        "model": SOLVER_MODELS[args.solver],
+                        "requested_revision": pin.revision,
+                        "tokenizer_revision": pin.revision,
+                        "chat_template_sha256": pin.template_sha256,
+                        "model_definition": (
+                            None
+                            if args.solver == Solver.HOSTED
+                            else asdict(serving_model(args.solver, settings.context_tokens))
                         ),
-                        (
-                            "chat_template_sha256",
-                            prior_judge.get("chat_template_sha256"),
-                            judge_metadata["chat_template_sha256"],
-                        ),
-                        (
-                            "effective_temperature",
-                            prior_judge.get("effective_temperature"),
-                            judge_metadata["effective_temperature"],
-                        ),
-                    )
-                    if before != after
-                ]
-                if changed_judge:
-                    raise ValueError(
-                        "Resumed root's judge identity changed across the retry: " + ", ".join(changed_judge)
-                    )
-                judge_metadata = prior_judge
-        completion = probe["tools_thinking_probe"]["completion"]
-        revision = f"unexposed:{completion['system_fingerprint']}" if args.solver == Solver.HOSTED else pin.revision
-        if prior_serving is not None:
-            receipt = ContentEvidenceReference(uri=str(prior_serving_path), sha256=file_sha256(prior_serving_path))
-        else:
-            receipt = write_json_evidence(
-                output / "serving.json",
-                {
-                    "protocol": PROTOCOL_ID,
-                    "solver": args.solver.value,
+                        "serving_jobs": jobs,
+                        "judge_serving_jobs": judge_jobs,
+                        "placement": {
+                            "root_target_cluster": TARGET_CLUSTER,
+                            "child_region_constraint": None,
+                            "model_cache_root": MODEL_CACHE_ROOT,
+                            "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
+                        },
+                        "sampling": request_parameters(settings),
+                        "provider_limits": asdict(provider_limits),
+                        "judge_provider_limits": None if judge_limits is None else asdict(judge_limits),
+                        "judge": judge_metadata,
+                        "native_client_context_safety_buffer_tokens": NATIVE_CONTEXT_SAFETY_BUFFER,
+                        "compilation_and_cuda_graphs_requested": True,
+                        "vllm_gpu_release": None if args.solver == Solver.HOSTED else asdict(VLLM_GPU_RELEASE),
+                        **probe,
+                    },
+                )
+            config = {
+                "solver": args.solver,
+                "identity": {
                     "model": SOLVER_MODELS[args.solver],
-                    "requested_revision": pin.revision,
+                    "revision": revision,
+                    "tokenizer": SOLVER_MODELS[args.solver],
                     "tokenizer_revision": pin.revision,
                     "chat_template_sha256": pin.template_sha256,
-                    "model_definition": (
-                        None
-                        if args.solver == Solver.HOSTED
-                        else asdict(serving_model(args.solver, settings.context_tokens))
-                    ),
-                    "serving_jobs": jobs,
-                    "placement": {
-                        "root_target_cluster": TARGET_CLUSTER,
-                        "child_region_constraint": None,
-                        "model_cache_root": MODEL_CACHE_ROOT,
-                        "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
-                    },
-                    "sampling": request_parameters(settings),
-                    "provider_limits": asdict(provider_limits),
-                    "judge_provider_limits": None if judge_limits is None else asdict(judge_limits),
-                    "judge": judge_metadata,
-                    "native_client_context_safety_buffer_tokens": NATIVE_CONTEXT_SAFETY_BUFFER,
-                    "compilation_and_cuda_graphs_requested": True,
-                    "vllm_gpu_release": None if args.solver == Solver.HOSTED else asdict(VLLM_GPU_RELEASE),
-                    **probe,
+                    "serving_receipt": receipt.model_dump(mode="json"),
                 },
-            )
-        config = {
-            "solver": args.solver,
-            "identity": {
-                "model": SOLVER_MODELS[args.solver],
-                "revision": revision,
-                "tokenizer": SOLVER_MODELS[args.solver],
-                "tokenizer_revision": pin.revision,
-                "chat_template_sha256": pin.template_sha256,
-                "serving_receipt": receipt.model_dump(mode="json"),
-            },
-            "settings": settings.model_dump(mode="json"),
-            "endpoint": endpoint,
-            "api_model": api_model,
-            "api_key_secret": "ATLAS_DIFFICULTY_CANDIDATE_TOKEN",
-            "provider_limits": asdict(provider_limits),
-            "environment_options": options,
-            "workers": args.workers,
-            "gpu_count": pin.gpus,
-            "attempts_per_task": args.attempts_per_task,
-            "task_limit": args.task_limit,
-            "judge": (
-                None
-                if judge_metadata is None
-                else {
-                    "endpoint": judge_endpoint,
-                    "api_model": GLM_MODEL,
-                    "api_key_secret": GLM_BULK_TOKEN_ENV,
-                    "provider_limits": asdict(judge_limits),
-                    "identity": {
-                        **{
-                            key: judge_metadata[key]
-                            for key in ("model", "revision", "tokenizer", "tokenizer_revision", "chat_template_sha256")
+                "settings": settings.model_dump(mode="json"),
+                "endpoint": endpoint,
+                "api_model": api_model,
+                "api_key_secret": "ATLAS_DIFFICULTY_CANDIDATE_TOKEN",
+                "provider_limits": asdict(provider_limits),
+                "environment_options": options,
+                "workers": args.workers,
+                "gpu_count": pin.gpus,
+                "attempts_per_task": args.attempts_per_task,
+                "task_limit": args.task_limit,
+                "judge": (
+                    None
+                    if judge_metadata is None
+                    else {
+                        "endpoint": judge_endpoint,
+                        "api_model": judge_api_model,
+                        "api_key_secret": None if judge_tier is not None else GLM_BULK_TOKEN_ENV,
+                        "provider_limits": asdict(judge_limits),
+                        "identity": {
+                            **{
+                                key: judge_metadata[key]
+                                for key in (
+                                    "model",
+                                    "revision",
+                                    "tokenizer",
+                                    "tokenizer_revision",
+                                    "chat_template_sha256",
+                                )
+                            },
+                            "serving_receipt": receipt.model_dump(mode="json"),
                         },
-                        "serving_receipt": receipt.model_dump(mode="json"),
-                    },
-                }
-            ),
-        }
-        config_path = args.local_root / "candidate.json"
-        candidate = CandidateRun.model_validate(config)
-        config_path.write_text(candidate.model_dump_json() + "\n")
-        recovery_arguments = []
-        if resumed and prior_serving is not None:
-            # The retried attempt continues from its own sealed output: the root
-            # binds itself as the recovery parent, and its parent-campaign.json
-            # keeps the original chain intact.
-            recovery_arguments = [
-                "--previous-campaign",
-                str(output),
-                "--previous-serving-sha256",
-                receipt.sha256,
-                "--source-queue-sha256",
-                args.sources_sha256,
-            ]
-        elif args.previous_campaign is not None:
-            recovery_arguments = [
-                "--previous-campaign",
-                args.previous_campaign,
-                "--previous-serving-sha256",
-                args.previous_serving_sha256,
-                "--source-queue-sha256",
-                args.sources_sha256,
-            ]
-        run_trial_worker(
-            prepared_path, config_path, args.local_root, output, api_key, recovery_arguments, candidate.judge
-        )
-        write_json_evidence(output / "completion.json", {"solver": args.solver, "serving_jobs": jobs, "worker_exit": 0})
+                    }
+                ),
+            }
+            config_path = args.local_root / "candidate.json"
+            candidate = CandidateRun.model_validate(config)
+            config_path.write_text(candidate.model_dump_json() + "\n")
+            recovery_arguments = []
+            if resumed and prior_serving is not None:
+                # The retried attempt continues from its own sealed output: the root
+                # binds itself as the recovery parent, and its parent-campaign.json
+                # keeps the original chain intact.
+                recovery_arguments = [
+                    "--previous-campaign",
+                    str(output),
+                    "--previous-serving-sha256",
+                    receipt.sha256,
+                    "--source-queue-sha256",
+                    args.sources_sha256,
+                ]
+            elif args.previous_campaign is not None:
+                recovery_arguments = [
+                    "--previous-campaign",
+                    args.previous_campaign,
+                    "--previous-serving-sha256",
+                    args.previous_serving_sha256,
+                    "--source-queue-sha256",
+                    args.sources_sha256,
+                ]
+            run_trial_worker(
+                prepared_path, config_path, args.local_root, output, api_key, recovery_arguments, candidate.judge
+            )
+            write_json_evidence(
+                output / "completion.json", {"solver": args.solver, "serving_jobs": jobs, "worker_exit": 0}
+            )
 
 
 if __name__ == "__main__":

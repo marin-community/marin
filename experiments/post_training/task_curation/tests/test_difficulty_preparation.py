@@ -22,16 +22,17 @@ from experiments.post_training.task_curation import difficulty_preparation
 @pytest.mark.parametrize(
     "api,model,reason",
     [
-        ("responses", "", "production_judge_api_not_qualified:responses"),
+        ("responses", "", "judge_api_unqualified:responses"),
         ("chat_completions", "", None),
-        ("chat_completions", "fixture-current-glm", None),
-        ("chat_completions", "glm-5.3", "production_judge_route_not_qualified:glm-5.3"),
+        ("chat_completions", "glm-5.3", None),
+        ("chat_completions", "MiniMaxAI/MiniMax-M3-MXFP8", None),
+        ("chat_completions", "openai/gpt-oss-120b", None),
+        ("chat_completions", "gpt-4o-mini", "judge_route_unqualified:gpt-4o-mini"),
     ],
 )
 def test_prepare_source_qualifies_judge_api_and_current_model_before_staging(
     tmp_path, monkeypatch, difficulty_source, api, model, reason
 ):
-    monkeypatch.setattr(difficulty_preparation, "GLM_MODEL", "fixture-current-glm")
     task = TaskSpec(
         id="judge-task",
         context=ConversationInput(events=(TextMessage(role="user", content="Original question"),)),

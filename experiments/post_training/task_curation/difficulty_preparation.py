@@ -7,6 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
+from finestore.rl.difficulty import DifficultyGap, difficulty_gap_reason, require_difficulty_gaps
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -22,8 +23,21 @@ from experiments.post_training.task_curation.calibration_inventory import packag
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
 from experiments.post_training.task_curation.full_qc_inputs import task_contract
+from experiments.post_training.task_curation.judges import JUDGE_TIERS
 from experiments.post_training.task_curation.prebuilt import validate_native_package
 from experiments.post_training.task_curation.sample_qc import panel_task_runtimes
+
+# Judges the Difficulty campaign can serve: the unjudged default, the GLM route
+# and every pinned judge tier. The endpoint itself is validated at serving time
+# (judge probe and identity receipt), never assumed here.
+SERVED_JUDGE_MODELS = frozenset({"", GLM_MODEL, *(definition.spec.model for definition in JUDGE_TIERS.values())})
+
+
+def source_gap_reason(gap: DifficultyGap, detail: str | None = None) -> str:
+    """Compose a typed not-measured reason; Difficulty never emits free text here."""
+    reason = difficulty_gap_reason(gap, detail)
+    require_difficulty_gaps(reason)
+    return reason
 
 
 def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
@@ -39,14 +53,18 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
         native = isinstance(task.grader, NoGrader) and "harbor" in task.tags
         reason = None if native else unsupported_harbor_contract(task)
         if reason is not None:
-            reason = f"awaiting_executability_filtered_admission_population:{reason}"
+            reason = source_gap_reason(DifficultyGap.EXECUTABILITY_ADMISSION_PENDING, reason)
         judge = judge_spec(task.grader)
         if reason is None and source.backend == "daytona":
-            reason = "daytona_snapshot_preflight_pending" if native else "faithful_daytona_task_spec_factory_pending"
+            reason = source_gap_reason(
+                DifficultyGap.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING
+                if native
+                else DifficultyGap.DAYTONA_TASK_SPEC_FACTORY_PENDING
+            )
         if reason is None and judge is not None and judge.api != "chat_completions":
-            reason = f"production_judge_api_not_qualified:{judge.api}"
-        if reason is None and judge is not None and judge.model not in {"", GLM_MODEL}:
-            reason = f"production_judge_route_not_qualified:{judge.model}"
+            reason = source_gap_reason(DifficultyGap.JUDGE_API_UNQUALIFIED, judge.api)
+        if reason is None and judge is not None and judge.model not in SERVED_JUDGE_MODELS:
+            reason = source_gap_reason(DifficultyGap.JUDGE_ROUTE_UNQUALIFIED, judge.model)
         if reason is None:
             environments = [task.environment_requirements]
             if not isinstance(task.grader, NoGrader):
@@ -61,7 +79,7 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
                 }
             )
             if missing:
-                reason = "missing_environment_artifact:" + ",".join(missing)
+                reason = source_gap_reason(DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, ",".join(missing))
         directory = root / canonical_sha256(source.declaration.id)[:20] / canonical_sha256(task.id)[:20]
         if reason is None:
             if native:

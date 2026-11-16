@@ -18,73 +18,126 @@ from transformers import AutoTokenizer
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.task_curation.difficulty_protocol import PINS
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
+from experiments.post_training.task_curation.judges import JudgeTierDefinition
+
+PROBE_MESSAGES = [
+    {"role": "user", "content": "Look up record A."},
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "lookup-1",
+                "type": "function",
+                "function": {"name": "lookup_record", "arguments": '{"record_id":"A"}'},
+            }
+        ],
+    },
+    {"role": "tool", "tool_call_id": "lookup-1", "content": "Record A exists."},
+    {"role": "user", "content": "Reply with exactly OK."},
+]
+PROBE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_record",
+            "description": "Look up one record.",
+            "parameters": {
+                "type": "object",
+                "properties": {"record_id": {"type": "string"}},
+                "required": ["record_id"],
+            },
+        },
+    }
+]
 
 
 def probe_endpoint(solver: Solver, endpoint: str, api_model: str, api_key: str, settings: SamplingSettings) -> dict:
     """Verify pinned tools/thinking tokenization against authoritative serving usage."""
     pin = PINS[solver]
+    parameters = request_parameters(settings)
+    request = {
+        "model": api_model,
+        "messages": PROBE_MESSAGES,
+        "tools": PROBE_TOOLS,
+        "max_tokens": settings.output_tokens,
+        **{key: value for key, value in parameters.items() if key != "extra_body"},
+        **parameters.get("extra_body", {}),
+    }
+    return probe_serving_endpoint(
+        endpoint,
+        api_model,
+        api_key,
+        request,
+        model_identity=SOLVER_MODELS[solver],
+        model_revision=pin.revision,
+        chat_template_kwargs=request.get("chat_template_kwargs", {}),
+    )
+
+
+def probe_serving_endpoint(
+    endpoint: str,
+    api_model: str,
+    api_key: str,
+    request: dict,
+    *,
+    model_identity: str,
+    model_revision: str,
+    chat_template_kwargs: dict,
+) -> dict:
+    """Verify pinned tools/thinking tokenization against authoritative serving usage."""
     # A cold vLLM engine can still be compiling when the endpoint accepts connections;
     # the probe must outlast warmup instead of killing the campaign at 300 s.
     with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=1800) as client:
         models = client.get(endpoint.rstrip("/") + "/models")
         models.raise_for_status()
-        parameters = request_parameters(settings)
-        probe = {
-            "model": api_model,
-            "messages": [
-                {"role": "user", "content": "Look up record A."},
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": "lookup-1",
-                            "type": "function",
-                            "function": {"name": "lookup_record", "arguments": '{"record_id":"A"}'},
-                        }
-                    ],
-                },
-                {"role": "tool", "tool_call_id": "lookup-1", "content": "Record A exists."},
-                {"role": "user", "content": "Reply with exactly OK."},
-            ],
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "lookup_record",
-                        "description": "Look up one record.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"record_id": {"type": "string"}},
-                            "required": ["record_id"],
-                        },
-                    },
-                }
-            ],
-            "max_tokens": settings.output_tokens,
-            **{key: value for key, value in parameters.items() if key != "extra_body"},
-            **parameters.get("extra_body", {}),
-        }
-        tokenizer = AutoTokenizer.from_pretrained(SOLVER_MODELS[solver], revision=pin.revision)
+        tokenizer = AutoTokenizer.from_pretrained(model_identity, revision=model_revision)
         prompt_tokens = len(
             tokenizer.apply_chat_template(
-                chat_template_messages(probe["messages"]),
-                tools=probe["tools"],
+                chat_template_messages(request["messages"]),
+                tools=request["tools"],
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=False,
-                **probe.get("chat_template_kwargs", {}),
+                **chat_template_kwargs,
             )
         )
-        probe_response = client.post(endpoint.rstrip("/") + "/chat/completions", json=probe)
+        probe_response = client.post(endpoint.rstrip("/") + "/chat/completions", json=request)
         probe_response.raise_for_status()
         completion = probe_response.json()
         if completion["usage"]["prompt_tokens"] != prompt_tokens:
             raise ValueError("Pinned tools/thinking rendering differs from authoritative server usage")
     return {
         "advertised_models": models.json(),
-        "tools_thinking_probe": {"request": probe, "completion": completion, "hf_prompt_tokens": prompt_tokens},
+        "tools_thinking_probe": {"request": request, "completion": completion, "hf_prompt_tokens": prompt_tokens},
     }
+
+
+def judge_probe_request(definition: JudgeTierDefinition, temperature: float) -> dict:
+    """The tools/thinking probe request a judge tier must answer with its own rendering."""
+    return {
+        "model": definition.spec.model,
+        "messages": PROBE_MESSAGES,
+        "tools": PROBE_TOOLS,
+        "max_tokens": definition.spec.max_completion_tokens,
+        "temperature": temperature,
+        **(definition.spec.chat_template_kwargs or {}),
+    }
+
+
+def probe_judge_endpoint(endpoint: str, definition: JudgeTierDefinition, temperature: float, api_key: str) -> dict:
+    """Verify the judge tier's pinned rendering and identity against its served endpoint."""
+    if definition.model_revision is None:
+        raise ValueError(f"The {definition} tier has no immutable checkpoint pin to probe")
+    return probe_serving_endpoint(
+        endpoint,
+        definition.spec.model,
+        api_key,
+        judge_probe_request(definition, temperature),
+        model_identity=definition.model_identity,
+        model_revision=definition.model_revision,
+        chat_template_kwargs=definition.spec.chat_template_kwargs or {},
+    )
 
 
 def main() -> None:

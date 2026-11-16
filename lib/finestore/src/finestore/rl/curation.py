@@ -440,6 +440,11 @@ class GradingEnvironmentEvidence(CatalogRecord):
     status_counts: dict[str, int]
     reason_counts: dict[str, int]
     evidence_url: str
+    # Declared environment artifacts that exist in no storage region, keyed by
+    # their declared URI, valued by task count. An admission requires every
+    # declared artifact to exist; empty means the census verified them all or
+    # predates the verification.
+    missing_artifact_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class DaytonaUnsafeReason(StrEnum):

@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.retirement import retired_admission
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
 from infra.marina.apps.rl_data_catalog.server.admission import (
+    backend_support_blocker,
     require_content_result,
     require_declaration_admission,
 )
@@ -204,6 +205,11 @@ def load_catalog(
     for source in sources:
         if filtration(source.declaration.model_dump(mode="json"))["state"] != "excluded":
             require_declaration_admission(source.declaration)
+        if blocker := backend_support_blocker(
+            next(row for row in backend_map.sources if row.source_id == source.id),
+            source.declaration.status,
+        ):
+            raise ValueError(f"Backend admission blocked: {source.id}: {blocker}")
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
     if {source.id for source in sources} != {source.source_id for source in backend_map.sources}:

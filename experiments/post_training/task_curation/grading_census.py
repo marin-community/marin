@@ -25,6 +25,7 @@ from taskcompendium.grading_environment import (
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import NoGrader, TaskSpec
 
+from experiments.post_training.task_curation.calibration_inventory import packages_lock_exists
 from experiments.post_training.task_curation.grading_binding import GradingCensusReceipt
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.prebuilt import validate_native_package
@@ -80,6 +81,7 @@ def census_source(config: GradingCensusInput, output_root: str) -> GradingCensus
         raise FileExistsError(f"Grading census requires a new output version: {output}")
     counts: Counter[str] = Counter()
     unassessable: Counter[str] = Counter()
+    missing_artifacts: Counter[str] = Counter()
     digest = hashlib.sha256()
     task_count = 0
     task_evidence = output / "tasks.parquet"
@@ -107,6 +109,13 @@ def census_source(config: GradingCensusInput, output_root: str) -> GradingCensus
                             assessment = {"required": None, "declared": None, "status": "unassessable", "reason": reason}
                         else:
                             count_grading_environment(counts, assessment)
+                        environments = [task.environment_requirements]
+                        if not isinstance(task.grader, NoGrader) and task.grader.environment is not None:
+                            environments.append(task.grader.environment)
+                        for environment in environments:
+                            lock = environment.packages_lock if environment is not None else None
+                            if lock and not packages_lock_exists(lock):
+                                missing_artifacts[lock] += 1
                         assessments.append({"task_id": document["id"], "task_sha256": task_hash, **assessment})
                     writer.write_table(pa.Table.from_pylist(assessments, schema=TASK_SCHEMA))
     if task_count != population.task_count:
@@ -117,7 +126,9 @@ def census_source(config: GradingCensusInput, output_root: str) -> GradingCensus
         population_path=population.path,
         scanned_task_specs_sha256=digest.hexdigest(),
         evidence=GradingEnvironmentEvidence(
-            **grading_environment_census(counts), evidence_url=str(output / "receipt.json")
+            **grading_environment_census(counts),
+            missing_artifact_counts=dict(missing_artifacts),
+            evidence_url=str(output / "receipt.json"),
         ),
         task_evidence_uri=str(task_evidence),
         unassessable_reasons=dict(unassessable),

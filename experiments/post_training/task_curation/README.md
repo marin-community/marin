@@ -993,3 +993,24 @@ then review all new exact contracts. Preserve native 900-second actor and
 Use the [oracle filter procedure](../../../docs/references/task-curation.md#full-population-oracle-filter)
 for production Harbor trials and receipts. Staging neither publishes a dataset
 nor changes Atlas admission.
+
+## Difficulty measurement
+
+The Difficulty campaigns measure solver difficulty per source with
+`difficulty_campaign.py` (serving, judge route, scheduling) and
+`difficulty_trials.py` (Harbor trials, measurements). Two rules are absolute:
+
+1. **No ad-lib reasons.** Every not-measured reason a record carries is a
+   `DifficultyGap` member (`lib/finestore/src/finestore/rl/difficulty.py`)
+   with typed detail and typed evidence, composed through
+   `difficulty_gap_reason` and validated with `require_difficulty_gaps`.
+   Difficulty never maintains its own exclusion or hold list; see the
+   [Difficulty measurement reference](../../../docs/references/task-curation.md#difficulty-measurement)
+   for the owner split, how PIPELINE gaps are scheduled and how SOURCE gaps
+   are escalated to the admission procedure.
+
+2. **One judge route per run version.** The campaign serves the shared GLM
+   relay or one locally hosted `JUDGE_TIERS` tier
+   (`JUDGE_TIER_SERVING` in `difficulty_campaign.py`); a queue mixing routes
+   must be split. Judge endpoints are validated by the serving probe before
+   any judged trial dispatches.

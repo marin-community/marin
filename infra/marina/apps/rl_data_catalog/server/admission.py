@@ -16,10 +16,15 @@ from finestore.rl.curation import (
     require_decontamination,
 )
 from finestore.rl.licenses import require_license
+from taskcompendium.backend_requirements import BackendSourceMap, FitSupport
 
 from .licensing import require_unbanned, source_license_ban
 
 MISSING_GRADER_REASON = "No executable grader is declared"
+
+# A backend the survey measured as partial still runs part of the population;
+# admission requires that some backend can run the source at all.
+RUNNABLE_FIT = frozenset({FitSupport.SUPPORTED, FitSupport.PARTIAL})
 
 
 def population_admission_blocker(
@@ -38,7 +43,26 @@ def population_admission_blocker(
         return "grading census counts do not cover the complete retained population"
     if grading.reason_counts.get(MISSING_GRADER_REASON, 0):
         return "admitted source has tasks without runnable graders"
+    if missing := grading.missing_artifact_counts:
+        return "declared environment artifacts exist in no storage region: " + ", ".join(sorted(missing))
     return None
+
+
+def backend_support_blocker(capabilities: BackendSourceMap, status: str | None) -> str | None:
+    """Require one surveyed backend that can run the source before it is Available.
+
+    ``None`` for every non-Available status: exclusion and hold statuses never
+    need a runnable backend, and a survey row measured before this check may
+    keep its historical verdict.
+    """
+    if status != "Available":
+        return None
+    verdicts = {name: fit.support.value for name, fit in capabilities.backends.items()}
+    if any(support in RUNNABLE_FIT for support in verdicts.values()):
+        return None
+    return "no surveyed backend can run the source: " + ", ".join(
+        f"{name}={support}" for name, support in sorted(verdicts.items())
+    )
 
 
 def _require_declaration_license(declaration: SourceDeclaration) -> None:
