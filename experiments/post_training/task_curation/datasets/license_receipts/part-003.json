@@ -4950,10 +4950,29 @@
       }
     ]
   },
-  "TaskTrove:laion__swegym-tasks-patched-validated-v5": {
+  "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2": {
     "bundled_third_party": true,
-    "dataset_id": "open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-82c022d4-retained-20261114-oracle-v1",
-    "decisions": [],
+    "dataset_id": "open-athena/tasktrove-codereview-medium-quick-20261112",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/tasktrove-codereview-medium-quick-20261112",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/tasktrove-codereview-medium-quick-20261112/tree/ed08e429cc2c928907691d996b9f115cec1f33f8",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "ed08e429cc2c928907691d996b9f115cec1f33f8",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
     "evidence": [
       {
         "kind": "dataset_card",
@@ -5005,44 +5024,29 @@
       }
     ],
     "model_generated_outputs": true,
-    "resolved_at": "2026-11-15T20:37:36.986048+00:00",
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
     "resolved_source": {
       "dataset_id": "open-thoughts/TaskTrove",
       "declaration": {
         "kind": "wrapper_source",
         "license_ids": [],
         "quoted_lines": [
-          "L9: Upstream: open-thoughts/TaskTrove at 02923004846e4e73862c20962f823a6d05100e7a. https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
         ],
         "restrictive_terms": false,
-        "sha256": "df33cfa800625f36645ceaf7064879ce89818754784448a2dc5e9c48eb2a7951",
+        "sha256": "2f07b15e5f2abf792cf13c444ee6514a93aea5909db05f47a3586449327799c3",
         "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-6bceda5a-taskcompendium-20261112/resolve/8dbf618490a58626c3829928ed648a2f513ae4e9/README.md"
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-codereview-medium-quick-20261112/resolve/ed08e429cc2c928907691d996b9f115cec1f33f8/README.md"
       },
       "revision": "02923004846e4e73862c20962f823a6d05100e7a",
       "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
     },
     "resolver_version": "atlas-license-v2",
-    "revision": "f9ca8d9dbb290ca00316bd7659cd25c4c28130db",
-    "source_id": "TaskTrove:laion__swegym-tasks-patched-validated-v5",
-    "wrapper_chain": [
-      {
-        "dataset_id": "open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-6bceda5a-taskcompendium-20261112",
-        "declaration": {
-          "kind": "wrapper_source",
-          "license_ids": [],
-          "quoted_lines": [
-            "JSON /source_plan_before_oracle_filter/plan/source_dataset_id: open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-6bceda5a-taskcompendium-20261112",
-            "JSON /source_plan_before_oracle_filter/plan/source_revision: 8dbf618490a58626c3829928ed648a2f513ae4e9"
-          ],
-          "restrictive_terms": false,
-          "sha256": "a5e93ef482bb138b1c7a8f38dbff7d1e19a6983d060c90cb751fce8fd9e24863",
-          "unidentified_third_party_terms": false,
-          "url": "https://huggingface.co/datasets/open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-82c022d4-retained-20261114-oracle-v1/resolve/f9ca8d9dbb290ca00316bd7659cd25c4c28130db/manifest.json"
-        },
-        "revision": "8dbf618490a58626c3829928ed648a2f513ae4e9",
-        "url": "https://huggingface.co/datasets/open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-6bceda5a-taskcompendium-20261112/tree/8dbf618490a58626c3829928ed648a2f513ae4e9"
-      }
-    ]
+    "revision": "ed08e429cc2c928907691d996b9f115cec1f33f8",
+    "source_id": "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
+    "wrapper_chain": []
   }
 }

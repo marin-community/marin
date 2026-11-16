@@ -526,7 +526,7 @@ def sources() -> list[RlDataSource]:
                 name="curriculum-easy-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-curriculum-easy-v1-taskcompendium-20261112",
-                revision="4151b071dbb38df532b38c7de1becb12ca1e0f73",
+                revision="ca799448d14f9b72ac2846884f5f4c03025f8ea0",
                 expected_rows=505,
             ),
             info=SourceInfo(
@@ -577,7 +577,7 @@ def sources() -> list[RlDataSource]:
                 name="curriculum-medium-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-curriculum-medium-v1-taskcompendium-20261112",
-                revision="db17ab9b01d960d01f7a75c3d1d896504ceaf9fa",
+                revision="7f6df7d532912fe1b589e727bbd07f03743891f5",
                 expected_rows=488,
             ),
             info=SourceInfo(
@@ -628,7 +628,7 @@ def sources() -> list[RlDataSource]:
                 name="e2egit-v2-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-e2egit-v2-taskcompendium-20261112",
-                revision="dd34672091d917c96c922fd2ebf0d583a1dfc5b9",
+                revision="e0c56a19c77cbab15526b681110088ccd9ef0eb3",
                 expected_rows=477,
             ),
             info=SourceInfo(
@@ -681,7 +681,7 @@ def sources() -> list[RlDataSource]:
                 name="e2egit-large-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-e2egit-large-v1-taskcompendium-20261112",
-                revision="4bdaeaaf069eb6ad7b0a716d445e9e789f37a758",
+                revision="223300482ef034a5014aed9bbb1750f5d9cd89b2",
                 expected_rows=4993,
             ),
             info=SourceInfo(
@@ -731,7 +731,7 @@ def sources() -> list[RlDataSource]:
                 name="multifile-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-multifile-v1-taskcompendium-20261112",
-                revision="5accbb5851dc5774a05424aa7d22f995cbfd7e34",
+                revision="422b336d6056c3770864e6ef26825731290b2c57",
                 expected_rows=4842,
             ),
             info=SourceInfo(
@@ -883,7 +883,7 @@ def sources() -> list[RlDataSource]:
                 name="stack-pytest-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-stack-pytest-v1-taskcompendium-20261112",
-                revision="f6909b5b5fe8d207fb442f24d4140556431d02a3",
+                revision="861bb03356b5267feba839df7bfc45c14589577c",
                 expected_rows=492,
             ),
             info=SourceInfo(

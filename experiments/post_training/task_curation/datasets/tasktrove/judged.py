@@ -69,7 +69,7 @@ QUICK_COHORTS = {
         name="tasktrove-codereview",
         version="3",
         repo="open-athena/tasktrove-codereview-medium-quick-20261112",
-        revision="52c90a79a59262b1a25f76992430a1d81e42f0e4",
+        revision="ed08e429cc2c928907691d996b9f115cec1f33f8",
         expected_rows=10000,
     ),
     "tasktrove-stack_overflow": PrebuiltCohort(
@@ -77,7 +77,7 @@ QUICK_COHORTS = {
         name="tasktrove-stack_overflow",
         version="3",
         repo="open-athena/tasktrove-stack_overflow-medium-quick-20261112",
-        revision="07603684451d8db4caef836dbb07c89a4a7e0588",
+        revision="883af267edf8b57f9bb73c7543b1880b6e5a3d7c",
         expected_rows=10000,
     ),
     "tasktrove-superuser": PrebuiltCohort(
@@ -85,7 +85,7 @@ QUICK_COHORTS = {
         name="tasktrove-superuser",
         version="3",
         repo="open-athena/tasktrove-superuser-medium-quick-20261112",
-        revision="01237834f87d26f4c26f92d0e876904071dd2dd1",
+        revision="963b5a4bd4088127b8bc076dc77f685f71b41fdd",
         expected_rows=10000,
     ),
     "tasktrove-unix": PrebuiltCohort(
@@ -93,7 +93,7 @@ QUICK_COHORTS = {
         name="tasktrove-unix",
         version="3",
         repo="open-athena/tasktrove-unix-medium-quick-20261112",
-        revision="2287a9698aa508aa6ae442d923d2cd68c2b7075c",
+        revision="f43f5db7bf5e9093cc6e891a0e46790939e554c0",
         expected_rows=10000,
     ),
     "tasktrove-wizard_orca": PrebuiltCohort(
@@ -101,7 +101,7 @@ QUICK_COHORTS = {
         name="tasktrove-wizard_orca",
         version="3",
         repo="open-athena/tasktrove-wizard_orca-medium-quick-20261112",
-        revision="04b33f3773ddadb6dd0f35a79d7a56b62dd4068b",
+        revision="b005e25a8c584eb72b90f59531f9b02a3702f7ba",
         expected_rows=9999,
     ),
 }

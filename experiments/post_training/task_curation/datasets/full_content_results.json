@@ -369,7 +369,7 @@
     "source_id": "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
     "input": {
       "dataset_id": "open-athena/tasktrove-stack_overflow-medium-quick-20261112",
-      "dataset_revision": "07603684451d8db4caef836dbb07c89a4a7e0588",
+      "dataset_revision": "883af267edf8b57f9bb73c7543b1880b6e5a3d7c",
       "converter_version": "3",
       "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
       "measured_tasks": 10000,
@@ -407,7 +407,7 @@
     "source_id": "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2",
     "input": {
       "dataset_id": "open-athena/tasktrove-unix-medium-quick-20261112",
-      "dataset_revision": "2287a9698aa508aa6ae442d923d2cd68c2b7075c",
+      "dataset_revision": "f43f5db7bf5e9093cc6e891a0e46790939e554c0",
       "converter_version": "3",
       "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
       "measured_tasks": 10000,
@@ -445,7 +445,7 @@
     "source_id": "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2",
     "input": {
       "dataset_id": "open-athena/tasktrove-superuser-medium-quick-20261112",
-      "dataset_revision": "01237834f87d26f4c26f92d0e876904071dd2dd1",
+      "dataset_revision": "963b5a4bd4088127b8bc076dc77f685f71b41fdd",
       "converter_version": "3",
       "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
       "measured_tasks": 10000,
@@ -641,7 +641,7 @@
     "source_id": "TaskTrove:laion__wizardlm-orca-v4",
     "input": {
       "dataset_id": "open-athena/tasktrove-wizard_orca-medium-quick-20261112",
-      "dataset_revision": "04b33f3773ddadb6dd0f35a79d7a56b62dd4068b",
+      "dataset_revision": "b005e25a8c584eb72b90f59531f9b02a3702f7ba",
       "converter_version": "3",
       "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
       "measured_tasks": 9999,
@@ -723,7 +723,7 @@
     "source_id": "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
     "input": {
       "dataset_id": "open-athena/tasktrove-codereview-medium-quick-20261112",
-      "dataset_revision": "52c90a79a59262b1a25f76992430a1d81e42f0e4",
+      "dataset_revision": "ed08e429cc2c928907691d996b9f115cec1f33f8",
       "converter_version": "3",
       "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
       "measured_tasks": 10000,

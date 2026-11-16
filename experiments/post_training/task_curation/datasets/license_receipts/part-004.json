@@ -1,4 +1,396 @@
 {
+  "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/tasktrove-stack_overflow-medium-quick-20261112",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/tasktrove-stack_overflow-medium-quick-20261112",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/tasktrove-stack_overflow-medium-quick-20261112/tree/883af267edf8b57f9bb73c7543b1880b6e5a3d7c",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "883af267edf8b57f9bb73c7543b1880b6e5a3d7c",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "009aab34745156d7f26ceffdd90e97fd810abb227c981ae9adc1d47256ed2915",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-stack_overflow-medium-quick-20261112/resolve/883af267edf8b57f9bb73c7543b1880b6e5a3d7c/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "883af267edf8b57f9bb73c7543b1880b6e5a3d7c",
+    "source_id": "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
+    "wrapper_chain": []
+  },
+  "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/tasktrove-superuser-medium-quick-20261112",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/tasktrove-superuser-medium-quick-20261112",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/tasktrove-superuser-medium-quick-20261112/tree/963b5a4bd4088127b8bc076dc77f685f71b41fdd",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "963b5a4bd4088127b8bc076dc77f685f71b41fdd",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "c4bb6a70aee2bc5cfe861f5d87635e1ed7b6d24a40e8ac1e4538f0f4c837c807",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-superuser-medium-quick-20261112/resolve/963b5a4bd4088127b8bc076dc77f685f71b41fdd/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "963b5a4bd4088127b8bc076dc77f685f71b41fdd",
+    "source_id": "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2",
+    "wrapper_chain": []
+  },
+  "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/tasktrove-unix-medium-quick-20261112",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/tasktrove-unix-medium-quick-20261112",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/tasktrove-unix-medium-quick-20261112/tree/f43f5db7bf5e9093cc6e891a0e46790939e554c0",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "f43f5db7bf5e9093cc6e891a0e46790939e554c0",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "9d25e9c04c6956329032b434ec0e54d999bdbb7cc9d0fd7fccbd2127b1c7cfcc",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-unix-medium-quick-20261112/resolve/f43f5db7bf5e9093cc6e891a0e46790939e554c0/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "f43f5db7bf5e9093cc6e891a0e46790939e554c0",
+    "source_id": "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2",
+    "wrapper_chain": []
+  },
+  "TaskTrove:laion__swegym-tasks-patched-validated-v5": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-82c022d4-retained-20261114-oracle-v1",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:36.986048+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Upstream: open-thoughts/TaskTrove at 02923004846e4e73862c20962f823a6d05100e7a. https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "df33cfa800625f36645ceaf7064879ce89818754784448a2dc5e9c48eb2a7951",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-6bceda5a-taskcompendium-20261112/resolve/8dbf618490a58626c3829928ed648a2f513ae4e9/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "f9ca8d9dbb290ca00316bd7659cd25c4c28130db",
+    "source_id": "TaskTrove:laion__swegym-tasks-patched-validated-v5",
+    "wrapper_chain": [
+      {
+        "dataset_id": "open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-6bceda5a-taskcompendium-20261112",
+        "declaration": {
+          "kind": "wrapper_source",
+          "license_ids": [],
+          "quoted_lines": [
+            "JSON /source_plan_before_oracle_filter/plan/source_dataset_id: open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-6bceda5a-taskcompendium-20261112",
+            "JSON /source_plan_before_oracle_filter/plan/source_revision: 8dbf618490a58626c3829928ed648a2f513ae4e9"
+          ],
+          "restrictive_terms": false,
+          "sha256": "a5e93ef482bb138b1c7a8f38dbff7d1e19a6983d060c90cb751fce8fd9e24863",
+          "unidentified_third_party_terms": false,
+          "url": "https://huggingface.co/datasets/open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-82c022d4-retained-20261114-oracle-v1/resolve/f9ca8d9dbb290ca00316bd7659cd25c4c28130db/manifest.json"
+        },
+        "revision": "8dbf618490a58626c3829928ed648a2f513ae4e9",
+        "url": "https://huggingface.co/datasets/open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-6bceda5a-taskcompendium-20261112/tree/8dbf618490a58626c3829928ed648a2f513ae4e9"
+      }
+    ]
+  },
   "TaskTrove:laion__swesmith-oracle-filtered-v2": {
     "bundled_third_party": true,
     "dataset_id": "open-athena/task-trove-laion-swesmith-oracle-filtered-v2-dd428b74-retained-20261114-oracle-v1",
@@ -267,6 +659,105 @@
       }
     ]
   },
+  "TaskTrove:laion__wizardlm-orca-v4": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/tasktrove-wizard_orca-medium-quick-20261112",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/tasktrove-wizard_orca-medium-quick-20261112",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/tasktrove-wizard_orca-medium-quick-20261112/tree/b005e25a8c584eb72b90f59531f9b02a3702f7ba",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "b005e25a8c584eb72b90f59531f9b02a3702f7ba",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:laion__wizardlm-orca-v4",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "eb01bf9a9355bb0cafa6082c18e48552df1ddf76907713db1ee6b2bfe0270afb",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-wizard_orca-medium-quick-20261112/resolve/b005e25a8c584eb72b90f59531f9b02a3702f7ba/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "b005e25a8c584eb72b90f59531f9b02a3702f7ba",
+    "source_id": "TaskTrove:laion__wizardlm-orca-v4",
+    "wrapper_chain": []
+  },
   "TaskTrove:smartie-calibforge-rebuilt-v1": {
     "bundled_third_party": false,
     "dataset_id": "open-athena/calibforge-v1-rebuilt-taskcompendium-20261111",
@@ -451,6 +942,705 @@
     "resolver_version": "atlas-license-v2",
     "revision": "26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd",
     "source_id": "TaskTrove:swesmith-verifier-repaired-v5",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-code-contests-built-image": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/campaign-release-tasktrove-code-contests-built-image-d94783d8-retained-20261113-v1",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/campaign-release-tasktrove-code-contests-built-image-d94783d8-retained-20261113-v1",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/campaign-release-tasktrove-code-contests-built-image-d94783d8-retained-20261113-v1/tree/26fd6d936af6e1c8a17abac9c8202f4707661d86",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "26fd6d936af6e1c8a17abac9c8202f4707661d86",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-code-contests-built-image",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+          "L20: Source pin: `open-athena/tasktrove-code-contests-taskcompendium-20261112@5b43c6f4c2322a5808e4dbdfaf4f0052037d3607`. Converter: `2026.11.12.1@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "30719a9ffcc627797dcb90a7b30c80c41229767957be6ebf48a4146339eab01e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/campaign-release-tasktrove-code-contests-built-image-d94783d8-retained-20261113-v1/resolve/26fd6d936af6e1c8a17abac9c8202f4707661d86/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "26fd6d936af6e1c8a17abac9c8202f4707661d86",
+    "source_id": "TaskTrove:tasktrove-code-contests-built-image",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-codeforces-rebuilt-v1": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/campaign-release-tasktrove-codeforces-rebuilt-v1-e8ef857d-retained-20261113-v1",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/campaign-release-tasktrove-codeforces-rebuilt-v1-e8ef857d-retained-20261113-v1",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/campaign-release-tasktrove-codeforces-rebuilt-v1-e8ef857d-retained-20261113-v1/tree/02622e367e577bae71856d480dec705b8a88a09b",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "02622e367e577bae71856d480dec705b8a88a09b",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-codeforces-rebuilt-v1",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+          "L20: Source pin: `open-athena/tasktrove-codeforces-v1-taskcompendium-20261112@05167566303b67a1adea08743d26c39101c5c30a`. Converter: `2026.11.12.1@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "7ae6553c7b233105e95f18943cc310f4ba285770df36209c2396e7945cfb6752",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/campaign-release-tasktrove-codeforces-rebuilt-v1-e8ef857d-retained-20261113-v1/resolve/02622e367e577bae71856d480dec705b8a88a09b/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "02622e367e577bae71856d480dec705b8a88a09b",
+    "source_id": "TaskTrove:tasktrove-codeforces-rebuilt-v1",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/campaign-release-tasktrove-competitive-coding-rebuilt-v-6ce7836f-retained-20261113-v1",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/campaign-release-tasktrove-competitive-coding-rebuilt-v-6ce7836f-retained-20261113-v1",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/campaign-release-tasktrove-competitive-coding-rebuilt-v-6ce7836f-retained-20261113-v1/tree/93e1cc49e06e2efba6fd5cf1cb611596644f7f9d",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "93e1cc49e06e2efba6fd5cf1cb611596644f7f9d",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+          "L20: Source pin: `open-athena/tasktrove-competitive-coding-v1-taskcompendium-20261112@5a7b7a75eb32901947157e39516a15d894db332b`. Converter: `2026.11.12.1@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "8f7b3f807bcc9496097641c75157772f7926927043993ba021a96679bc3553f1",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/campaign-release-tasktrove-competitive-coding-rebuilt-v-6ce7836f-retained-20261113-v1/resolve/93e1cc49e06e2efba6fd5cf1cb611596644f7f9d/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "93e1cc49e06e2efba6fd5cf1cb611596644f7f9d",
+    "source_id": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/tasktrove-curriculum-easy-v1-taskcompendium-20261112",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/tasktrove-curriculum-easy-v1-taskcompendium-20261112",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/tasktrove-curriculum-easy-v1-taskcompendium-20261112/tree/ca799448d14f9b72ac2846884f5f4c03025f8ea0",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "ca799448d14f9b72ac2846884f5f4c03025f8ea0",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L13: license_source:",
+          "L14:   dataset_id: open-thoughts/TaskTrove",
+          "L15:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L16:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+          "L42: | Upstream revision | `02923004846e4e73862c20962f823a6d05100e7a` |"
+        ],
+        "restrictive_terms": false,
+        "sha256": "04957352675660bbba976c57fcbe5927c82a7af27a2a37a06b294b8c6badd908",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-curriculum-easy-v1-taskcompendium-20261112/resolve/ca799448d14f9b72ac2846884f5f4c03025f8ea0/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "ca799448d14f9b72ac2846884f5f4c03025f8ea0",
+    "source_id": "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-curriculum-medium-rebuilt-v1": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/tasktrove-curriculum-medium-v1-taskcompendium-20261112",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/tasktrove-curriculum-medium-v1-taskcompendium-20261112",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/tasktrove-curriculum-medium-v1-taskcompendium-20261112/tree/7f6df7d532912fe1b589e727bbd07f03743891f5",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "7f6df7d532912fe1b589e727bbd07f03743891f5",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-curriculum-medium-rebuilt-v1",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L13: license_source:",
+          "L14:   dataset_id: open-thoughts/TaskTrove",
+          "L15:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L16:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+          "L42: | Upstream revision | `02923004846e4e73862c20962f823a6d05100e7a` |"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a174f961356db82e43253acff32bf6b18592cc70388d8e454cdf4ffe0964d970",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-curriculum-medium-v1-taskcompendium-20261112/resolve/7f6df7d532912fe1b589e727bbd07f03743891f5/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "7f6df7d532912fe1b589e727bbd07f03743891f5",
+    "source_id": "TaskTrove:tasktrove-curriculum-medium-rebuilt-v1",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-e2egit-large-rebuilt-v1": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/tasktrove-e2egit-large-v1-taskcompendium-20261112",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/tasktrove-e2egit-large-v1-taskcompendium-20261112",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/tasktrove-e2egit-large-v1-taskcompendium-20261112/tree/223300482ef034a5014aed9bbb1750f5d9cd89b2",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "223300482ef034a5014aed9bbb1750f5d9cd89b2",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-e2egit-large-rebuilt-v1",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L13: license_source:",
+          "L14:   dataset_id: open-thoughts/TaskTrove",
+          "L15:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L16:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+          "L42: | Upstream revision | `02923004846e4e73862c20962f823a6d05100e7a` |"
+        ],
+        "restrictive_terms": false,
+        "sha256": "ba77f46e41993d62ca7ae0a1fcd4d269e97d53c7e4003b97f3ca5f3f80909803",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-e2egit-large-v1-taskcompendium-20261112/resolve/223300482ef034a5014aed9bbb1750f5d9cd89b2/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "223300482ef034a5014aed9bbb1750f5d9cd89b2",
+    "source_id": "TaskTrove:tasktrove-e2egit-large-rebuilt-v1",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-e2egit-v2-rebuilt": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/tasktrove-e2egit-v2-taskcompendium-20261112",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/tasktrove-e2egit-v2-taskcompendium-20261112",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/tasktrove-e2egit-v2-taskcompendium-20261112/tree/e0c56a19c77cbab15526b681110088ccd9ef0eb3",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "e0c56a19c77cbab15526b681110088ccd9ef0eb3",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-e2egit-v2-rebuilt",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: license_source:",
+          "L10:   dataset_id: open-thoughts/TaskTrove",
+          "L11:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L12:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "da640bcaacbc2974d056265ea1cb0ea94189d3633fc071212d8312473353910a",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-e2egit-v2-taskcompendium-20261112/resolve/e0c56a19c77cbab15526b681110088ccd9ef0eb3/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "e0c56a19c77cbab15526b681110088ccd9ef0eb3",
+    "source_id": "TaskTrove:tasktrove-e2egit-v2-rebuilt",
     "wrapper_chain": []
   },
   "TaskTrove:tasktrove-knowledge-openqa-qa": {
@@ -1004,6 +2194,205 @@
       }
     ]
   },
+  "TaskTrove:tasktrove-multifile-rebuilt-v1": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/tasktrove-multifile-v1-taskcompendium-20261112",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/tasktrove-multifile-v1-taskcompendium-20261112",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/tasktrove-multifile-v1-taskcompendium-20261112/tree/422b336d6056c3770864e6ef26825731290b2c57",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "422b336d6056c3770864e6ef26825731290b2c57",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-multifile-rebuilt-v1",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L13: license_source:",
+          "L14:   dataset_id: open-thoughts/TaskTrove",
+          "L15:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L16:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+          "L42: | Upstream revision | `02923004846e4e73862c20962f823a6d05100e7a` |"
+        ],
+        "restrictive_terms": false,
+        "sha256": "8081819e8cfb1eaad95bcef03333e9553da3a900d9b722443fa35d258505bc94",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-multifile-v1-taskcompendium-20261112/resolve/422b336d6056c3770864e6ef26825731290b2c57/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "422b336d6056c3770864e6ef26825731290b2c57",
+    "source_id": "TaskTrove:tasktrove-multifile-rebuilt-v1",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-nl2bash-rebuilt-v1": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/nl2bash-rebuilt-8671d350-oracle-filter-20261114-v1",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/nl2bash-rebuilt-8671d350-oracle-filter-20261114-v1",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/nl2bash-rebuilt-8671d350-oracle-filter-20261114-v1/tree/1ca6e4de49c4880bcea9dbce2e045c0b2c69b52f",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "1ca6e4de49c4880bcea9dbce2e045c0b2c69b52f",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "f4005a6b76d5d65fabd07ff894224f09a637f435fee60609c64729195a46aa7e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/nl2bash-rebuilt-8671d350-oracle-filter-20261114-v1/resolve/1ca6e4de49c4880bcea9dbce2e045c0b2c69b52f/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "1ca6e4de49c4880bcea9dbce2e045c0b2c69b52f",
+    "source_id": "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
+    "wrapper_chain": []
+  },
   "TaskTrove:tasktrove-puzzles-qa": {
     "bundled_third_party": true,
     "dataset_id": "open-athena/tasktrove-puzzles-taskcompendium-20261114",
@@ -1079,6 +2468,204 @@
     "resolver_version": "atlas-license-v2",
     "revision": "adfcbd4a8ddefc9e69febc91931c08ba03372bad",
     "source_id": "TaskTrove:tasktrove-puzzles-qa",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/pymethods-large-rebuilt-e427daf9-oracle-filter-20261114-v1",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/pymethods-large-rebuilt-e427daf9-oracle-filter-20261114-v1",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/pymethods-large-rebuilt-e427daf9-oracle-filter-20261114-v1/tree/fa9bb22a398fe874c0f202f4144f747dd9f63377",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "fa9bb22a398fe874c0f202f4144f747dd9f63377",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "e7aec126f4a446f9067e2ae2582b314d128a0b88ddbe44abdb883c0e5d99a219",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/pymethods-large-rebuilt-e427daf9-oracle-filter-20261114-v1/resolve/fa9bb22a398fe874c0f202f4144f747dd9f63377/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "fa9bb22a398fe874c0f202f4144f747dd9f63377",
+    "source_id": "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-pymethods2test-rebuilt-v1": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/pymethods-rebuilt-25759320-oracle-filter-20261114-v1",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/pymethods-rebuilt-25759320-oracle-filter-20261114-v1",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/pymethods-rebuilt-25759320-oracle-filter-20261114-v1/tree/95ea72e37d858bc2ffe610b47eb3504a5709aebe",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "95ea72e37d858bc2ffe610b47eb3504a5709aebe",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "fd60547a2b1b6e3b7fc600e060a852f92a3ca8b7e607e5cf436a8663e2b6c4fb",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/pymethods-rebuilt-25759320-oracle-filter-20261114-v1/resolve/95ea72e37d858bc2ffe610b47eb3504a5709aebe/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "95ea72e37d858bc2ffe610b47eb3504a5709aebe",
+    "source_id": "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
     "wrapper_chain": []
   },
   "TaskTrove:tasktrove-safety-qa": {
@@ -1233,6 +2820,403 @@
     "resolver_version": "atlas-license-v2",
     "revision": "e3b624988578da13c523fcc3e39e65f752a781ff",
     "source_id": "TaskTrove:tasktrove-science-openqa-qa",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-stack-pytest-rebuilt-v1": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/tasktrove-stack-pytest-v1-taskcompendium-20261112",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/tasktrove-stack-pytest-v1-taskcompendium-20261112",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/tasktrove-stack-pytest-v1-taskcompendium-20261112/tree/861bb03356b5267feba839df7bfc45c14589577c",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "861bb03356b5267feba839df7bfc45c14589577c",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-stack-pytest-rebuilt-v1",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L13: license_source:",
+          "L14:   dataset_id: open-thoughts/TaskTrove",
+          "L15:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L16:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+          "L42: | Upstream revision | `02923004846e4e73862c20962f823a6d05100e7a` |"
+        ],
+        "restrictive_terms": false,
+        "sha256": "ee39ec771ee068b0090207e908f787a45612be5b665617065e178c422c31fdb8",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-stack-pytest-v1-taskcompendium-20261112/resolve/861bb03356b5267feba839df7bfc45c14589577c/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "861bb03356b5267feba839df7bfc45c14589577c",
+    "source_id": "TaskTrove:tasktrove-stack-pytest-rebuilt-v1",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-taco-built-image": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/taco-built-084a8cc3-oracle-filter-20261114-v1",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/taco-built-084a8cc3-oracle-filter-20261114-v1",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/taco-built-084a8cc3-oracle-filter-20261114-v1/tree/8ffd075257ae0dc529ba702387ec64f668d9fe21",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "8ffd075257ae0dc529ba702387ec64f668d9fe21",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-taco-built-image",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "403b6e50c9863a4ac781754c931935d447c1f05d48d47f4d087e0ae265bc18c1",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/taco-built-084a8cc3-oracle-filter-20261114-v1/resolve/8ffd075257ae0dc529ba702387ec64f668d9fe21/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "8ffd075257ae0dc529ba702387ec64f668d9fe21",
+    "source_id": "TaskTrove:tasktrove-taco-built-image",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/unitsyn-large-rebuilt-228cc082-oracle-filter-20261114-v1",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/unitsyn-large-rebuilt-228cc082-oracle-filter-20261114-v1",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/unitsyn-large-rebuilt-228cc082-oracle-filter-20261114-v1/tree/443caaf3a83c8f3de3706fe5851a13c625be60fe",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "443caaf3a83c8f3de3706fe5851a13c625be60fe",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "907aa9a9107fcb5367a1047d32d65f5af443044138cc9e17dbf85ce102f7c726",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/unitsyn-large-rebuilt-228cc082-oracle-filter-20261114-v1/resolve/443caaf3a83c8f3de3706fe5851a13c625be60fe/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "443caaf3a83c8f3de3706fe5851a13c625be60fe",
+    "source_id": "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
+    "wrapper_chain": []
+  },
+  "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/unitsyn-rebuilt-64168374-oracle-filter-20261114-v1",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/unitsyn-rebuilt-64168374-oracle-filter-20261114-v1",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/unitsyn-rebuilt-64168374-oracle-filter-20261114-v1/tree/38b6f99077d1cd3028ba0924bb8b65c12eae676b",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6913101486",
+        "kind": "exception",
+        "rationale": "The user approved the card-only pin adoption (verbatim: \"Approved.\") moving this source's catalog pin to the checker-PASS candidate card revision. Verified via Git blob IDs that the candidate differs from the configured pin only in README.md and upstream-license/ license documents; every task/payload file is byte-identical, so the measured censuses carry over. The deterministic checker PASSes the adopted pin (P1). An exception does not transfer to a new revision.",
+        "revision": "38b6f99077d1cd3028ba0924bb8b65c12eae676b",
+        "scope": [
+          "train"
+        ],
+        "source_id": "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
+        "when": "2026-11-16T04:50:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T21:00:01.835778+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: open-thoughts/TaskTrove",
+          "L6:   revision: 02923004846e4e73862c20962f823a6d05100e7a",
+          "L7:   url: https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "5bf68adef2e5ec7b01126e9c28d3ef31e97cc79cfa3145db324799c55c8f446f",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/unitsyn-rebuilt-64168374-oracle-filter-20261114-v1/resolve/38b6f99077d1cd3028ba0924bb8b65c12eae676b/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "38b6f99077d1cd3028ba0924bb8b65c12eae676b",
+    "source_id": "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
     "wrapper_chain": []
   },
   "Tevatron:browsecomp-plus@bm25": {
