@@ -273,9 +273,15 @@ source and buffer wait for consumed and rejected groups. Native task workers
 emit `task_group_completed` with the source, UID, duration and projected failure
 and masking counts. Each rollout actor starts its own telemetry exporter and
 drains queued events on shutdown, including when runner cleanup fails.
-Join these records to learner batch dumps by UID to inspect
-source-specific advantages; constant-reward RLOO groups are zeroed in the learner
-rather than removed at buffer admission.
+Use these events to inspect source-specific failures, masks and delays.
+Constant-reward RLOO groups are zeroed in the learner rather than removed at
+buffer admission.
+
+`trainer.dump_data_batch: true` writes native `TrainingInputBatch` pickle files
+under `<export_root>/dumped_data/global_step_<step>_training_input.pkl`, for
+local and cloud export roots. These contain the post-TIS, post-advantage tensors.
+The trainer removes group UIDs and raw rewards before dumping, so these files
+alone cannot identify source-specific rewards or advantages.
 
 Rollout workers run on the training driver's Ray node. Their combined CPU
 reservation (`num_workers * cpus_per_worker`) must fit that node. The driver
