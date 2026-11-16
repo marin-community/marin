@@ -9,9 +9,8 @@ Qwen3-0.6B (the Delphi target arch), a small chat dataset, a Qwen3 chat template
 resolves -> native ``transform_dataset_step`` tokenize/pack -> Levanter SFT (``initialize_from_hf``)
 runs a few steps -> HF export. It is not a real training run.
 
-Marked ``cluster`` so it never runs by default; the ``marin-cluster-smoke`` workflow runs it. The
-``iris_client`` fixture binds the ``marin`` controller as the current Fray client, so ``StepRunner``
-submits there. Launch it on demand with::
+Marked ``cluster`` so it never runs by default. The ``iris_client`` fixture binds the ``marin``
+controller as the current Fray client, so ``StepRunner`` submits there. Launch it directly with::
 
     uv run pytest tests/cluster/sft/test_smoke_sft_tpu.py \
       -m cluster -o addopts= --import-mode=importlib --timeout=0 -vv -s
@@ -23,7 +22,7 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from levanter.optim.config import AdamConfig
 from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner

@@ -9,8 +9,9 @@ from unittest.mock import patch
 
 import pytest
 from fray.types import ResourceConfig
+from fsspec.implementations.memory import MemoryFileSystem
 from levanter.adaptor import LoraAdaptorConfig
-from levanter.checkpoint import CheckpointerConfig
+from levanter.checkpoint import CheckpointerConfig, discover_checkpoint_candidates
 from levanter.data.text.datasets import DatasetComponent
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceLmDataConfig
 from levanter.infra.cli_helpers import CliConfig
@@ -29,6 +30,7 @@ from marin.training.training import (
     resolve_training_env,
     temporary_checkpoint_base_path,
 )
+from rigging.filesystem.storage_path import prefix_join
 
 
 @pytest.fixture
@@ -78,13 +80,17 @@ def test_lm_config_with_train_urls_allowed_out_of_region(trainer_config):
         doublecheck_paths(config)
 
 
-def test_temporary_checkpoint_base_path_follows_output_path_region():
-    with (
-        patch("rigging.filesystem.cluster_config.urllib.request.urlopen", side_effect=OSError("not on GCP")),
-        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
+def test_temporary_checkpoint_base_path_uses_cluster_local_scratch():
+    with patch.dict(
+        os.environ,
+        {
+            "MARIN_PREFIX": "s3://marin-us-east-02a/marin",
+            "MARIN_TEMP_PREFIX": "s3://hero-checkpoints",
+        },
     ):
-        assert temporary_checkpoint_base_path("gs://marin-us-east5/experiments/grug/base-trial") == (
-            "gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
+        assert temporary_checkpoint_base_path("s3://marin-us-east-02a/experiments/grug/base-trial") == (
+            "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/"
+            "marin-us-east-02a/experiments/grug/base-trial/checkpoints"
         )
 
 
@@ -107,9 +113,52 @@ def test_apply_output_path_sets_run_specific_temp_checkpoints(trainer_config):
     assert updated.hf_save_path == "gs://marin-us-east5/experiments/grug/base-trial/hf"
 
 
+@pytest.mark.parametrize(
+    ("previous_bucket", "temp_override", "write_bucket"),
+    [
+        ("marin-us-east-02a", None, "marin-us-east-08a"),
+        ("hero-checkpoints", None, "marin-us-east-08a"),
+        ("marin-us-east-08a", "s3://hero-checkpoints", "hero-checkpoints"),
+    ],
+)
+def test_coreweave_resume_across_scratch_cutover_finds_latest_checkpoint(
+    trainer_config, previous_bucket, temp_override, write_bucket, monkeypatch, tmp_path
+):
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    if temp_override is not None:
+        monkeypatch.setenv("MARIN_TEMP_PREFIX", temp_override)
+    output_path = f"s3://marin-us-east-02a/marin/{tmp_path.name}"
+    updated = apply_output_path(train_lm.TrainLmConfig(trainer=trainer_config), output_path)
+    trainer = updated.trainer
+    permanent = f"{output_path}/checkpoints"
+    key = f"marin-us-east-02a/marin/{tmp_path.name}/checkpoints"
+    destination = f"s3://{write_bucket}/tmp/ttl=14d/checkpoints-temp/{key}"
+    previous = f"s3://{previous_bucket}/tmp/ttl=14d/checkpoints-temp/{key}"
+    filesystem = MemoryFileSystem()
+    for root, step in [(permanent, 10), (destination, 20), (previous, 30)]:
+        checkpoint = prefix_join(root, f"step-{step}")
+        filesystem.makedirs(checkpoint, exist_ok=True)
+        filesystem.pipe(
+            prefix_join(checkpoint, "metadata.json"),
+            json.dumps({"step": step, "timestamp": "2026-10-19T00:00:00"}).encode(),
+        )
+
+    paths = trainer.checkpoint_search_paths("test-run")
+    assert discover_checkpoint_candidates(*paths, fs=filesystem)[-1].path == f"{previous}/step-30"
+    assert trainer.checkpointer.temporary_base_path == destination
+
+
+def test_apply_output_path_preserves_explicit_restore_roots(trainer_config, monkeypatch):
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    trainer = dataclasses.replace(trainer_config, load_checkpoint_path=["s3://marin-us-east-02a/recovery"])
+    updated = apply_output_path(train_lm.TrainLmConfig(trainer=trainer), "s3://marin-us-east-02a/marin/run")
+    assert updated.trainer.checkpoint_search_paths("test-run") == ["s3://marin-us-east-02a/recovery"]
+
+
 def test_apply_output_path_does_not_enable_adapter_hf_export_without_steps(trainer_config):
     with patch(
-        "marin.training.training.marin_temp_bucket", return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run"
+        "marin.training.training.marin_temp_bucket",
+        return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run",
     ):
         updated = apply_output_path(
             TrainDpoConfig(
@@ -126,7 +175,8 @@ def test_apply_output_path_does_not_enable_adapter_hf_export_without_steps(train
 
 def test_apply_output_path_routes_adapter_hf_export_to_peft(trainer_config):
     with patch(
-        "marin.training.training.marin_temp_bucket", return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run"
+        "marin.training.training.marin_temp_bucket",
+        return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run",
     ):
         updated = apply_output_path(
             TrainDpoConfig(
@@ -325,3 +375,27 @@ def test_resolve_training_env_adds_collective_watchdog_for_gpu():
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in gpu_flags
     assert GPU_NCCL_TERMINATION_TIMEOUT_FLAG in gpu_flags
     assert cpu_flags == base["XLA_FLAGS"]
+
+
+@pytest.mark.parametrize(
+    "overrides, expected_time, expected_limit",
+    [
+        ({}, "60", "125000"),
+        (
+            {
+                "TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS": "300",
+                "TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES": "1",
+            },
+            "300",
+            "1",
+        ),
+    ],
+)
+def test_resolve_training_env_bounds_stalled_tensorstore_requests(overrides, expected_time, expected_limit):
+    base = {"JAX_COMPILATION_CACHE_DIR": "/tmp/cache", **overrides}
+    with patch("marin.training.training._cli_helpers_module") as mod:
+        mod.return_value.load_config.return_value = CliConfig()
+        env = resolve_training_env(base, ResourceConfig.with_gpu("H100", count=8))
+
+    assert env["TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS"] == expected_time
+    assert env["TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES"] == expected_limit

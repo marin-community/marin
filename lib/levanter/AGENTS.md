@@ -11,8 +11,8 @@ JAX-based language model training library using Haliax named tensors and Equinox
 ## Development
 
 ```bash
-# Default test suite
-uv run pytest tests
+# Full safe Levanter suite
+uv run --package marin-levanter --group test pytest lib/levanter/tests
 ```
 
 - Mark long-running tests with `@pytest.mark.slow`.

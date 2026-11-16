@@ -5,19 +5,27 @@
 import dataclasses
 import logging
 import re
+import subprocess
 import warnings
 from typing import Tuple
 
 import draccus
 import pytest
 import yaml
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance
 
 import levanter.tracker
 import levanter.tracker.tracker_fns as tracker_fns
 import levanter.tracker.wandb as wandb_tracker_mod
 from levanter.tracker import CompositeTracker, NoopTracker, TrackerConfig
 from levanter.tracker.tracker import NoopConfig
-from levanter.tracker.wandb import WandbTracker, _truncate_wandb_artifact_name, truncate_wandb_run_name
+from levanter.tracker.wandb import (
+    MAX_WANDB_ARTIFACT_BYTES,
+    WandbConfig,
+    WandbTracker,
+    _truncate_wandb_artifact_name,
+    truncate_wandb_run_name,
+)
 
 
 def test_tracker_plugin_stuff_works():
@@ -99,7 +107,7 @@ def test_tracker_logging_without_global_tracker_emits_no_warning(monkeypatch):
     assert not caught
 
 
-def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):
+def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch, tmp_path):
     monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
 
     class FakeRun:
@@ -112,14 +120,159 @@ def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):
     run = FakeRun()
     tracker = WandbTracker(run)
 
-    tracker.log_artifact("/tmp/some/deep/path/profile", type="jax_profile")
-    assert run.logged == [("/tmp/some/deep/path/profile", "profile", "jax_profile")]
+    artifact_path = tmp_path / "profile"
+    artifact_path.touch()
+    tracker.log_artifact(artifact_path, type="jax_profile")
+    assert run.logged == [(artifact_path, "profile", "jax_profile")]
 
     long_name = "run-" + "x" * 200
     truncated = _truncate_wandb_artifact_name(long_name)
     assert truncated is not None
     assert len(truncated) <= 128
     assert re.fullmatch(r".+-[0-9a-f]{7}", truncated)
+
+
+def test_wandb_tracker_rejects_artifacts_larger_than_20_mb(tmp_path):
+    class FakeRun:
+        def log_artifact(self, *args, **kwargs):
+            raise AssertionError("oversized artifacts must not reach W&B")
+
+    artifact_path = tmp_path / "oversized.bin"
+    artifact_path.touch()
+    with artifact_path.open("r+b") as artifact_file:
+        artifact_file.truncate(MAX_WANDB_ARTIFACT_BYTES + 1)
+
+    with pytest.raises(ValueError, match="20,000,000-byte limit"):
+        WandbTracker(FakeRun()).log_artifact(artifact_path)
+
+
+COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+@pytest.fixture
+def oversized_source(tmp_path):
+    source_path = tmp_path / "source"
+    source_path.mkdir()
+    large_file = source_path / "oversized.bin"
+    large_file.touch()
+    with large_file.open("r+b") as artifact_file:
+        artifact_file.truncate(MAX_WANDB_ARTIFACT_BYTES + 1)
+    return source_path
+
+
+def test_wandb_config_skips_oversized_automatic_source_capture(oversized_source, monkeypatch):
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
+
+    assert WandbConfig(save_code=str(oversized_source))._git_settings() == {}
+
+
+def test_wandb_config_records_commit_when_source_is_too_large_to_capture(oversized_source, monkeypatch):
+    monkeypatch.setenv("GIT_COMMIT", COMMIT)
+
+    assert WandbConfig(save_code=str(oversized_source))._git_settings() == {"git_commit": COMMIT}
+
+
+def test_wandb_config_records_commit_with_source_capture_off(monkeypatch):
+    monkeypatch.setenv("GIT_COMMIT", COMMIT)
+
+    assert WandbConfig(save_code=False)._git_settings() == {"git_commit": COMMIT}
+
+
+def _init_with_fake_wandb(monkeypatch, config: WandbConfig) -> dict:
+    initialized = {}
+
+    class FakeRun:
+        step = 0
+
+    def fake_init(**kwargs):
+        initialized.update(kwargs)
+        return FakeRun()
+
+    monkeypatch.setattr(wandb_tracker_mod.jax, "process_index", lambda: 1)
+    monkeypatch.setattr(wandb_tracker_mod.jax, "process_count", lambda: 1)
+    monkeypatch.setattr(wandb_tracker_mod.wandb, "init", fake_init)
+    config.init(None)
+    return initialized
+
+
+def _launch_provenance(commit: str, dirty: bool) -> str:
+    return Provenance(tree_hash="5e1f2a3b4c", base_commit=commit, dirty=dirty, branch=None, built_by="ci").to_json()
+
+
+def test_wandb_run_records_launch_commit_and_dirty_state_from_iris_provenance(tmp_path, monkeypatch):
+    # An Iris task runs from a bundle without .git; only the submitter's provenance knows the commit.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
+    monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, _launch_provenance("0123456789", dirty=True))
+
+    initialized = _init_with_fake_wandb(monkeypatch, WandbConfig(save_code=False, background=False))
+
+    assert initialized["config"] == {"git_commit": "0123456789", "git_dirty": True, "git_tree_hash": "5e1f2a3b4c"}
+    assert initialized["settings"] == {"git_commit": "0123456789"}
+
+
+def test_wandb_run_ignores_provenance_from_a_different_commit(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GIT_COMMIT", COMMIT)
+    monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, _launch_provenance("fedcba9876", dirty=True))
+
+    initialized = _init_with_fake_wandb(monkeypatch, WandbConfig(save_code=False, background=False))
+
+    assert initialized["config"] == {"git_commit": COMMIT}
+
+
+def _git(args: list[str], cwd) -> str:
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def test_wandb_run_records_dirty_state_of_the_source_checkout_outside_the_working_directory(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    _git(["init", "-b", "main"], source)
+    _git(["config", "user.email", "t@example.com"], source)
+    _git(["config", "user.name", "tester"], source)
+    (source / "train.py").write_text("print('train')\n")
+    _git(["add", "train.py"], source)
+    _git(["commit", "-m", "init"], source)
+    (source / "train.py").write_text("print('edited')\n")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
+    monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
+
+    initialized = _init_with_fake_wandb(monkeypatch, WandbConfig(save_code=str(source), background=False))
+
+    assert initialized["config"]["git_commit"] == _git(["rev-parse", "HEAD"], source)
+    assert initialized["config"]["git_dirty"] is True
+
+
+def test_wandb_config_fork_initializes_child_without_resume(monkeypatch):
+    initialized = _init_with_fake_wandb(
+        monkeypatch,
+        WandbConfig(
+            id="hero-ragged-a2a-ep-step54k",
+            fork_from="hero-12d8b6f0-dee637?_step=54000",
+            save_code=False,
+            background=False,
+        ),
+    )
+
+    assert initialized["id"] == "hero-ragged-a2a-ep-step54k"
+    assert initialized["fork_from"] == "hero-12d8b6f0-dee637?_step=54000"
+    assert "resume" not in initialized
+
+
+@pytest.mark.parametrize(
+    ("fork_from", "child_run_id"),
+    [
+        ("hero-12d8b6f0-dee637", "hero-ragged-a2a-ep-step54k"),
+        ("hero-12d8b6f0-dee637?_step=54000", "hero-12d8b6f0-dee637"),
+    ],
+)
+def test_wandb_config_rejects_invalid_fork_lineage(fork_from, child_run_id):
+    with pytest.raises(ValueError):
+        WandbConfig(id=child_run_id, fork_from=fork_from).init(None)
 
 
 def test_wandb_tracker_suppressed_logging_materializes_after_resume_step(monkeypatch):

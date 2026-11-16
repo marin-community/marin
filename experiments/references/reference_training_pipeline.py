@@ -50,12 +50,12 @@ from marin.execution.artifact import read_artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from marin.execution.step_runner import StepRunner
-from marin.experiment.evaluation import eval_report, eval_steps
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import (
+    QUALITY_MODEL_VERSION,
     SAMPLE_PREFIX,
     SAMPLE_SOURCES,
     SMOKE_SCALE,
@@ -66,6 +66,7 @@ from experiments.datakit.reference_pipeline import (
 )
 from experiments.datakit.store.datakit_store import ClusteredStoreData
 from experiments.evals.evals import core_evals
+from experiments.evals.evaluation import eval_report, eval_steps
 from experiments.grug.base.launch import GrugBaseLaunchConfig, run_grug_base_trial
 from experiments.grug.base.model import GrugModelConfig
 
@@ -74,11 +75,6 @@ logger = logging.getLogger(__name__)
 # Shared name for the train + eval + report handles. The datakit steps keep their own
 # ``datakit/*`` content-addressed names.
 REF_NAME = "references/reference-pipeline"
-
-# The datakit quality scorer is region-specific, so its identity enters the datakit hash as
-# a stable tag, not the path (see reference_pipeline.py). ``pooled-junkgate2`` is the tag for
-# the default quality-model bytes.
-QUALITY_MODEL_VERSION = "pooled-junkgate2"
 
 # A nano model: this harness measures path-liveness and delta-vs-baseline, not absolute
 # quality, so it is sized for a fast smoke on a single accelerator, not for signal. vocab_size

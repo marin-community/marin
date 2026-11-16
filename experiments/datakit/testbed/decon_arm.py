@@ -32,7 +32,7 @@ from marin.datakit.decon import DropSetSource, all_source_drop_sets_step, build_
 from marin.datakit.sources import all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import marin_prefix
+from rigging.filesystem.cluster_config import check_path_in_region, marin_prefix
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.config import (
@@ -45,11 +45,14 @@ from experiments.datakit.decontam.config import (
 )
 from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
 from experiments.datakit.testbed.sampler import build_testbed_steps
-from experiments.datakit.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
+from experiments.datakit.testbed.settings import (
+    RAW_TARGET_TOTAL_TOKENS_B,
+    TESTBED_STAGING_PREFIX,
+    TESTBED_STAGING_REGION,
+)
 
 logger = logging.getLogger(__name__)
 
-STAGING_PREFIX = "gs://marin-us-central1"
 _SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 
 # Bloom sizing mirrors experiments/datakit/reference_pipeline.py.
@@ -57,6 +60,7 @@ ESTIMATED_DOC_COUNT = 50_000_000
 FALSE_POSITIVE_RATE = 1e-9
 NGRAM_LENGTH = 13
 OVERLAP_THRESHOLD = 0.5
+MIN_MATCHED_FEATURES = 2
 # True-paragraph split (blank-line-delimited) rather than per-line: dilutes
 # isolated-line coincidences (fewer FPs) and lets short-line / inline-embedded
 # eval text be matched (higher recall). See marin#6852.
@@ -116,6 +120,7 @@ def build_testbed_decon_steps(
         eval_data_sources=[f"{marin_prefix()}/datakit/decontam/evals"],
         ngram_length=NGRAM_LENGTH,
         overlap_threshold=OVERLAP_THRESHOLD,
+        min_matched_features=MIN_MATCHED_FEATURES,
         paragraph_delimiter=PARAGRAPH_DELIMITER,
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
@@ -155,6 +160,7 @@ def build_testbed_decon_steps(
                 drop_set_source=name,
                 ngram_length=NGRAM_LENGTH,
                 overlap_threshold=OVERLAP_THRESHOLD,
+                min_matched_features=MIN_MATCHED_FEATURES,
                 paragraph_delimiter=PARAGRAPH_DELIMITER,
                 flagged_sample_size=FLAGGED_SAMPLE_SIZE,
                 estimated_doc_count=ESTIMATED_DOC_COUNT,
@@ -169,8 +175,9 @@ def build_testbed_decon_steps(
 
 
 def main() -> None:
-    os.environ.setdefault("MARIN_PREFIX", STAGING_PREFIX)
     configure_logging(logging.INFO)
+    os.environ.setdefault("MARIN_PREFIX", TESTBED_STAGING_PREFIX)
+    check_path_in_region("MARIN_PREFIX", marin_prefix(), TESTBED_STAGING_REGION)
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", nargs="*", default=None, help="restrict decon to these source names (smoke)")
     ap.add_argument(

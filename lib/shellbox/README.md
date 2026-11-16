@@ -1,0 +1,528 @@
+# Marin Shellbox (0.1)
+
+`marin-shellbox` provides execution machines and has no Harbor dependency. Harbor
+owns these adapters over the machine API:
+
+- `harbor.environments.qemu:QemuEnvironment`: one persistent QEMU system guest per Harbor trial. It uses KVM when the process can access `/dev/kvm` and QEMU can initialize it, then falls back to software emulation (TCG). Running a prebuilt bundle needs no Docker daemon, user namespace, or guest network.
+- `harbor.environments.shellsim:ShellSimEnvironment`: one in-memory [ShellSim](https://pypi.org/project/shellsim/) instance per trial. It uses ShellSim's built-in commands and ignores the task's Docker image or Dockerfile.
+
+Install the backend dependencies you need:
+
+```sh
+uv pip install 'marin-shellbox[shellsim]'
+uv pip install 'marin-shellbox[qemu]'
+uv pip install --prerelease allow 'marin-shellbox[daytona]'
+uv pip install --prerelease allow 'marin-shellbox[iris]'
+uv pip install 'marin-shellbox[gvisor]'
+```
+
+The base wheel contains the machine API and guest source. The [vendored Harbor project](../../vendor/harbor/README.md) supplies its own agents and environment adapters; its `qemu` and `shellsim` extras install the corresponding Shellbox backends. The `shellsim` extra requires ShellSim 0.1.38 or newer. The `qemu` extra requires [quicksand-qemu](https://pypi.org/project/quicksand-qemu/) 0.5.12 or newer within the 0.5 series; it bundles QEMU and its shared libraries in a platform wheel. A QEMU guest bundle still needs a Linux amd64 kernel, static BusyBox, and `bios-microvm.bin`; OCI staging also needs Skopeo, `umoci`, `mkfs.ext4`, and `cpio`. These inputs are explicit until we have a portable, licensed guest-runtime wheel. The tested quicksand-qemu Linux wheel requires glibc 2.38 or newer; use a compatible host QEMU on older clusters.
+
+## Machine API
+
+`factory.check_environment(requirements, spec)` checks task semantics, capabilities and software support before acquisition. Factories retain the requested `MachineSpec`; prepared images and bundles are backend inputs. The check does not promise available capacity or installed executables.
+
+The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`, `PreparedImage` and registry references. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
+
+Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. Harbor owns the local, Daytona, QEMU and ShellSim environment adapters. Machines retain their runtime between commands; QEMU and ShellSim also support persistent Bash sessions.
+
+| Backend | Image source | Network policy | Host requirement |
+| --- | --- | --- | --- |
+| Local gVisor | Docker image, registry image, Dockerfile | allow or deny | Docker daemon with `runsc` registered |
+| Daytona | Registry image reference or Docker build context | allow or deny | Daytona credentials and service access |
+| Iris | Registry image reference | `ALLOW`: public internet only; `DENY`: DNS only on Kubernetes, no network on Docker workers | Iris controller and workers with sandbox profile support |
+| Local | Host programs, Python packages, prepared OCI image or registry reference | allow or deny | Isolated worker with `bwrap` able to create namespaces; OCI images also need `umoci`, registry preparation needs Skopeo |
+
+The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker
+runtime on the host. The Daytona SDK and current Iris dependencies require
+`--prerelease allow`. A checkout can supply Iris as a workspace dependency.
+Iris uses `CONTAINER_PROFILE_SANDBOX`: gVisor, no cluster environment,
+credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
+addresses; `DENY` denies external traffic. Neither grants cluster access.
+
+Iris commands and file transfer use the existing `ExecInContainer` RPC and require
+`/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
+Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
+for commands and directory transfer.
+Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
+expired jobs about once a minute. An expired, killed or preempted machine raises
+`MachineTerminated`; uncertain command failures are not replayed.
+
+```python
+from shellbox.backends.daytona.machine import DaytonaMachineFactory
+from shellbox.image import RegistryImage
+from shellbox.machine import Command, MachineSpec
+
+machine = await DaytonaMachineFactory().create(MachineSpec(source=RegistryImage("ubuntu:24.04")))
+try:
+    result = await machine.run(Command(("/bin/sh", "-c", "printf hello")))
+finally:
+    await machine.close()
+```
+
+### Daytona snapshots
+
+One snapshot corresponds to one image source and one CPU, memory, disk and GPU
+request. Registry images are identified by reference; Docker build contexts by
+their current contents. Memory and disk round up to whole GiB. The name is
+`shellbox-` plus the first 40 hex characters of
+`sha256(image_source_key(source) + json(resources))`.
+
+`snapshot_request_for_spec` derives the snapshot identity from a `MachineSpec`,
+and `SnapshotRequest.as_dict`/`from_dict` are the JSON interchange for preflight.
+Harbor builds that machine spec from its task configuration and does not select
+sources, round resources or name snapshots itself.
+
+`shellbox-daytona-snapshots` inventories an account, compares it with a required
+set, creates missing snapshots and reclaims stale ones. See the
+[Daytona operations runbook](../../.agents/ops/daytona.md#snapshot-preflight-and-reclamation)
+for the account-wide one-hour purge policy.
+
+Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local
+Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="cw-rno2a")`
+for the existing Iris command and file-transfer backend. Host-side Terminus-2
+uses machine commands.
+
+Harbor selects Shellbox adapters with `environment.type`: `local` (the default),
+`daytona`, `qemu` or `shellsim`. It has no independent provider execution backend
+or custom environment import path. Supported agents can use local bubblewrap
+with prebuilt digest-pinned offline tasks and private container groups.
+The local adapter delegates commands, transfers and cleanup to `LocalMachineFactory`.
+It reads prepared image references, translates a validated Compose subset into
+container groups, and rejects guest image builds, ambient environment interpolation
+and isolation overrides. See [offline Harbor execution](../../docs/harbor-integration.md#offline-execution-through-shellbox)
+for policy and image requirements.
+
+Model and judge credentials belong to the trusted host handler used by
+`serve_http`. Keep keys out of `MachineSpec.env`, task data and command arguments.
+The existing Iris adapter supports `secret_env` for trusted private graders;
+secret-enabled factories must never run actor jobs.
+
+## Tasks and containers
+
+`shellbox.task.TaskSpec` describes one or more named `ContainerSpec` members and
+names the primary container. Every member has a `MachineSpec`, optional named
+endpoints and readiness probe. A single-container task uses this same model:
+`LocalMachineFactory.create(machine_spec)` normalizes to a one-container
+`TaskSpec` and calls `create_task`. The returned `Task` exposes all members through `containers` and
+its default execution handle through `primary`.
+
+The primary stays alive for machine commands. Supporting containers use their
+image's ENTRYPOINT and CMD unless their container spec overrides them. Images
+must already contain their dependencies. Startup overrides on the primary are
+currently unsupported by these Shellbox backends. All members use the same
+network policy; backend admission applies the sandbox restrictions separately.
+
+`LocalMachineFactory.create_task` starts each member in bubblewrap. Members
+share a private loopback network and keep separate filesystems, PID, IPC and
+UTS namespaces. Container names resolve to `127.0.0.1` inside the group.
+`group.endpoint("runtime", "http")` returns the declared private `runtime:8000`
+address. Concurrent groups may use the same ports. Every member must request
+`NetworkPolicy.DENY`; the group never falls back to host networking.
+
+The Iris adapter supports single-container machine commands and file transfer;
+it provides neither `create_task` nor process sessions.
+
+Creation starts the containers and returns handles without waiting for health.
+Start host capabilities before readiness when a container needs them:
+
+```python
+import asyncio
+
+from shellbox.http_service import serve_http
+from shellbox.task import ContainerSpec, ServiceEndpoint, TaskSpec
+
+spec = TaskSpec(
+    containers=(
+        ContainerSpec("agent", task_machine_spec),
+        ContainerSpec(
+            name="runtime",
+            machine=runtime_machine_spec,
+            endpoints=(ServiceEndpoint("http", 8000),),
+            readiness=runtime_readiness_probe,
+        ),
+    ),
+    primary="agent",
+)
+group = await factory.create_task(spec)
+try:
+    async with asyncio.TaskGroup() as service_tasks, serve_http(
+        group.primary, model_handler, task_group=service_tasks, port=18080
+    ):
+        await group.wait_ready()
+        result = await group.primary.run(agent_command)
+finally:
+    await group.close()
+```
+
+`serve_http` starts one Python HTTP listener through a persistent process session.
+The required `task_group` owns the listener pump and reports late helper failures to
+its owner, even when startup ran in a completed phase task. Close the service
+context before leaving that group.
+The host handler receives bounded requests on that process's stdout and performs only the
+operations it authorizes. Model URLs and authentication stay with the host
+handler; a runtime service uses the group-local listener URL and a dummy API key.
+The group needs no route to a model server or cloud storage. The listener requires
+Python 3 in its member image. It supports bounded nonstreaming GET and POST
+requests, with no caller headers forwarded to the host handler. Request IDs allow
+concurrent calls; responses remain whole messages, without SSE or token streaming.
+There is no per-request exec or guest control endpoint.
+Host-side Pydantic models validate and encode the wire messages, including
+base64 bodies. The guest listener uses only the Python standard library.
+
+Local, Docker, gVisor and Daytona expose `ProcessMachine.open_process`.
+Its `ProcessSession` provides incremental binary `read`/`write`, bounded stderr,
+exit status and explicit close. `Machine.run` still executes complete commands.
+Pipe and SDK adapters share `StreamProcessSession` for read/write serialization,
+bounded stderr and owned teardown. The adapter supplies its reader, writer, wait
+and stop operations. Local and Docker use raw binary pipes; Daytona uses the
+shared `process_framing` codec in its host and guest bridge because its SDK
+transports text. HTTP request/response messages sit above this byte-stream API.
+QEMU, ShellSim and Iris do not expose process sessions; online relays require a supported
+backend and fail explicitly otherwise.
+
+The same API works with `DockerMachineFactory` and `GvisorMachineFactory`.
+Create the machine with `NetworkPolicy.DENY`, then enter `serve_http` before
+running the application and close the relay before closing the machine:
+
+```python
+import asyncio
+
+from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.http_service import serve_http
+from shellbox.image import RegistryImage
+from shellbox.machine import Command, MachineSpec, NetworkPolicy
+
+machine = await DockerMachineFactory().create(
+    MachineSpec(RegistryImage("python:3.12-slim"), network=NetworkPolicy.DENY)
+)
+try:
+    async with asyncio.TaskGroup() as service_tasks, serve_http(
+        machine, authorized_handler, task_group=service_tasks, port=8787
+    ) as url:
+        result = await machine.run(
+            Command(("python3", "/app/worker.py"), env={"SERVICE_URL": url})
+        )
+finally:
+    await machine.close()
+```
+
+`authorized_handler` is a trusted application function accepting `HttpRequest`
+and returning `HttpResponse`. It must authorize each operation and select the
+upstream destination before attaching any credentials. Treat guest methods,
+paths and bodies as untrusted input. Credentials belong to that host function,
+never to the machine environment or command arguments.
+
+Docker retains `--network=none`: the listener uses guest loopback, while its
+request and response frames cross one `docker exec` stdin/stdout connection. No published port,
+host gateway or guest Docker socket is needed. The guest image needs Python 3
+in addition to the Docker backend's normal command and transfer utilities.
+Responses are buffered, with a 4 MiB body limit and at most 16 pending requests;
+streaming and arbitrary caller headers are unsupported. A shared-loopback group
+can share one listener; separate network namespaces need their own listeners.
+This relay does not add Docker task-group execution or change plain Docker's
+host-kernel isolation boundary.
+
+`group.wait_ready()` runs each container's own readiness command with its declared
+timeout, interval, start period and optional attempt limit. Timed readiness
+requires Python 3 in each container image: a guest supervisor kills the probe's
+process group when its attempt times out, allowing the next attempt without
+stopping the runtime service. Exhausted attempts, the overall readiness timeout
+or cancelled startup propagate to the task owner, which must close relay contexts
+before closing the group. Closing any member, a member exiting,
+or the job lifetime ending also tears down the group; containers are not reused
+between trials. Download outputs through machine handles before closing them.
+
+Without delegated cgroups, an ordinary command timeout or caller cancellation closes the whole local
+machine or group; successful commands preserve background processes.
+With delegation, interruption reclaims only the current command and descendants.
+Before grading, stop agent command submission and call `LocalMachine.quiesce_commands()`
+to reclaim work left by earlier successful commands, including tmux servers.
+Process sessions, relay helpers and peer containers remain alive.
+
+For agent commands that need a separate grading boundary, use
+`ProcessScopeMachine` and call
+`scope = await machine.open_process_scope()`, run those commands through
+`scope.run(command)`, then `await scope.terminate()` before collection or
+verification. Scope termination closes admission, kills detached descendants,
+and waits for confirmed exit; it raises if confirmation fails. A scoped command
+timeout or cancellation stops that command and its descendants; the scope and
+background work from earlier commands remain available. Setup, sidecar,
+and verifier commands use `machine.run` outside the scope. Local machines support
+this operation when the worker has delegated cgroup v2. Docker, gVisor, Iris,
+Daytona, QEMU, and ShellSim currently reject scope creation, so callers must
+select a separate verifier machine or fail before the agent turn on those
+backends. Declare `process_scope` in `ExecutionRequirements.capabilities` during
+execution preflight to reject unsupported hosts before allocating a machine.
+Ordinary `Machine.run` behavior is unchanged.
+
+Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
+A failed stop without confirmed completion raises an infrastructure error and closes the machine.
+Docker and Daytona also stop the process group on caller cancellation. Daytona preserves the machine only after confirming the stop and removing private command files; otherwise it closes the machine.
+
+Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
+Before Docker machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
+Daytona records process-group leader PIDs as root in a root-only directory before the command changes users.
+Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
+Model commands that run as root can stop other root-owned processes.
+
+For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
+Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
+Each machine owns and closes its client. The factory creates sandboxes from shared
+snapshots. Snapshot names derive from the registry reference or build-context contents
+and the requested resources. Use immutable image references. A mutable tag can
+select a snapshot built from an earlier image. Snapshot creation requires available organization quota.
+Machine cleanup deletes the sandbox and retains the snapshot for reuse.
+The factory accepts `DaytonaNetworkPolicy` with `block_all`, `unrestricted`,
+`network_allow_list`, or `domain_allow_list`. The two allow-list modes require a
+`value`. Without a policy override, the factory uses `MachineSpec.network`.
+`MachineSpec.startup_timeout` bounds snapshot preparation and sandbox creation. Without
+this value, the factory uses its `create_timeout` setting.
+The pinned Daytona SDK does not upload local `ADD` inputs. Dockerfiles with `ADD`
+require a prebuilt registry image.
+Other factories do not apply `MachineSpec.startup_timeout`. Callers enforce the
+deadline for the complete create operation.
+
+```python
+from shellbox.backends.qemu.image import load_qemu_bundle
+from shellbox.machine import Command, MachineSpec
+from shellbox.backends.qemu.machine import QemuMachineFactory
+
+machine = await QemuMachineFactory().create(MachineSpec(source=load_qemu_bundle(bundle_path)))
+try:
+    result = await machine.run(Command(("/bin/sh", "-c", "echo hello")))
+finally:
+    await machine.close()
+```
+
+For Docker, use `DockerMachineFactory()` and `DockerImage("image:tag")` in the same `MachineSpec`. This form requires a locally available image. Backends reject unsupported source types; QEMU also rejects guest networking.
+
+`MachineSpec` accepts `cpus`, `memory_mb`, `storage_mb`, and `gpus`. Docker passes
+these settings to its resource flags. Storage limits require a Docker storage
+driver that supports `--storage-opt size`, and GPU allocation requires a GPU
+runtime. Daytona applies CPU, memory, storage, and GPU settings through its SDK.
+It rounds memory and storage up to whole GiB. Iris applies CPU, memory, and storage settings. QEMU applies CPU and
+memory settings. Backends reject resource overrides that they cannot apply.
+
+`Command.user` selects the execution user for one command. Docker accepts a
+username or UID string. An omitted user retains the image's user. ShellSim and
+QEMU accept only root overrides. Iris rejects user overrides. Daytona starts its
+control process as root and uses `su` for other execution users. Numeric UIDs
+require `getent` and a matching guest account.
+The local backend runs other users only from a root process.
+Daytona framework commands use `/usr/sbin:/usr/bin:/sbin:/bin` for `PATH`.
+Agent commands retain the image's `PATH` and explicit task or command overrides.
+The command deadline includes account and `su` capability probes.
+Failed command-file cleanup closes the sandbox and preserves a primary command error.
+An empty Docker `MachineSpec.workdir` retains the image's working directory.
+Docker, gVisor, Iris and local machines create a nonempty `workdir` when the machine starts, so
+commands can run there even when the image lacks it.
+
+Docker and gVisor use the Docker daemon directly. `RegistryImage` pulls an image only when it is missing from Docker's cache. `DockerfileSource` builds with Docker's layer cache. `DockerImage` requires an image already present in the daemon. Private registry credentials come from Docker's login configuration.
+
+QEMU needs image layers as files to construct its guest filesystem. It uses Skopeo to copy registry images into an OCI directory, then `umoci` to unpack them. Skopeo must be on `PATH`. To prepare a QEMU registry image, use a standard image reference without `https://`:
+
+```python
+from pathlib import Path
+from shellbox.backends.qemu.image import QemuAssets
+from shellbox.image import RegistryImage
+from shellbox.machine import MachineSpec
+from shellbox.backends.qemu.machine import QemuMachineFactory
+
+spec = MachineSpec(source=RegistryImage("ghcr.io/astral-sh/uv:alpine3.21"))
+machine = await QemuMachineFactory(
+    assets=QemuAssets(
+        qemu=Path("/opt/qemu/qemu-system-x86_64"),
+        kernel=Path("/opt/qemu/vmlinuz"),
+        busybox=Path("/opt/qemu/static-busybox"),
+        firmware=Path("/opt/qemu/firmware"),
+        libraries=Path("/opt/qemu/lib"),
+        umoci=Path("/usr/bin/umoci"),
+        disk_size_mb=512,
+        runtime_id="pinned-runtime-v1",
+    ),
+    image_cache=Path("/var/cache/marin-shellbox/oci"),
+    bundle_cache=Path("/var/cache/marin-shellbox/bundles"),
+).create(spec)
+```
+
+The QEMU factory uses `ImageCache` to prepare each source once per process. Preparation selects `linux/amd64`, copies it to a local OCI layout and caches the layout by its selected manifest digest. Registry references remain snapshots within one process. For a private registry, pass a Skopeo `authfile` path to the factory. The default Skopeo policy accepts unsigned images over verified TLS; pass a Skopeo policy file path as `policy` for signature verification.
+
+For QEMU, `DockerfileSource(context=..., dockerfile=...)` builds with a local Docker daemon and exports the result through Skopeo into the OCI cache. The cache fingerprints the Dockerfile and every path in its build context on each call. An unchanged context builds once per Python process; a changed context triggers a new build. Pin `FROM` by digest for repeatable builds. `QemuMachineFactory` accepts `PreparedImage` and needs `QemuAssets` and a `bundle_cache` to construct a guest bundle. `tests/manual/check_prepared_image.py` compares command output in Docker and QEMU for one registry image. The QEMU bundle cache key includes the prepared image digest, disk size, and caller-supplied `runtime_id`; change `runtime_id` when QEMU, kernel, BusyBox, firmware, or libraries change.
+
+`run` remains noninteractive for setup and verification. It starts a new process for each call, while files persist until `close`. Its serial protocol buffers command output in the guest and streams it to the host in bounded chunks; a timeout destroys the machine. `QemuMachine.open_shell()` opens a separate PTY-backed Bash session for agent commands. `tests/manual/check_machine.py` checks one-shot command results, persistent files, and file transfer. `tests/manual/check_shell.py` checks shell state, input, interruption, jobs, bounded output, and reset.
+
+The wheel contains Python integration, guest init code, and the source for a small PTY helper. Staging compiles that helper with `cc -static` and `-lutil`; the runtime host does not need a compiler when it uses a prebuilt bundle. The runtime host needs QEMU, its libraries, firmware, a Linux kernel, and a **static** BusyBox staged into a bundle. A minimal guest can be staged with:
+
+```sh
+shellbox-stage \
+  --qemu /path/to/qemu-system-x86_64 \
+  --kernel /path/to/vmlinuz \
+  --busybox /path/to/static-busybox \
+  --firmware /path/to/qemu-firmware \
+  --libraries /path/to/qemu-libraries \
+  --output /opt/marin-shellbox/guest
+```
+
+The `firmware` directory must contain `bios-microvm.bin` from SeaBIOS. The `libraries` directory must contain every shared library required by the QEMU executable on the runtime host. The bundle can be prepared on a build machine and copied to the runtime host.
+Re-stage bundles built with an earlier prototype when updating this package; the guest and host serial protocols must match.
+
+With the `qemu` extra, `quicksand_qemu.get_bin_dir()` gives the QEMU executable at `bin/qemu-system-x86_64` and its libraries at `bin/lib`. Pass those paths as `--qemu` and `--libraries` when staging. The current quicksand-qemu wheel does not supply `bios-microvm.bin`; pass a firmware directory that does. Its QEMU modules are loaded from the staged `lib/qemu` directory.
+
+## Local backend
+
+`LocalMachineFactory` runs commands in a persistent [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) sandbox on the calling host. `HostImage()` uses host programs without a container image or VM; the dependency `bubblewrap-bin` supplies a `bwrap` binary. Use it for trusted commands, such as vendored grader scripts on an ephemeral worker: commands share the host's kernel, and the sandbox is not a boundary against hostile code.
+
+Host-program machines on NixOS expose `/nix/store` and the system program profile read-only.
+Host configuration stored there is also readable by its store path.
+Managed Python requires the host to enable `programs.nix-ld.enable = true` so generic Linux executables can run.
+
+Without a delegated cgroup, an external `SIGKILL` of the bwrap launcher during its internal startup handshake
+can strand a namespace init before Shellbox receives its identity. The local
+backend cannot guarantee reclamation in that window. Use disposable workers;
+ordinary caller cancellation waits for allocation before reclaiming the sandbox.
+
+```python
+from pathlib import Path
+from shellbox.backends.local.machine import LocalMachineFactory
+from shellbox.backends.local.python_environment import build_python_environment
+from shellbox.machine import Command, HostImage, MachineSpec
+
+environment = build_python_environment(Path("/var/tmp/grader-env"), Path("grader.lock"), "3.12.13")
+factory = LocalMachineFactory(read_only=(environment.root,), bin_dirs=(environment.bin_dir,))
+machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
+try:
+    await machine.upload(Path("grade.py"), "/tests/grade.py")
+    result = await machine.run(Command(("python3", "/tests/grade.py")))
+finally:
+    await machine.close()
+```
+
+`HostImage(read_only=(environment.root,), bin_dirs=(environment.bin_dir,))` can also supply these paths for one machine. The factory combines them with its own mounts and puts the image's `bin_dirs` first on `PATH`; this lets a factory wrapper pass the runtime through `MachineSpec`. `HostImage(mounts=(Mount(host, guest),))` shows a host file or directory read-only at another guest path; the guest path must lie outside the host system directories, where bwrap cannot create a mount point.
+
+- Each machine has a private root under the host's temporary directory, removed by `close`. Commands see the host's `/usr`, `/bin`, `/sbin` and `/lib*` read-only, together with explicit `read_only` mounts. `/etc` contains copies of only the account databases, name resolution, loader cache, timezone, alternatives and public CA certificates listed in `RUNTIME_CONFIGURATION`. Host shell startup files, `/etc/environment`, password hashes, private keys and other configuration are absent. `/sys` is empty and read-only. `/opt`, `/app`, `/tests`, `/tmp` and `HOME` belong to the machine. Software under the shared program directories and explicit mounts must be trusted and free of credentials.
+- Machines are independent, so a process may run any number of them at once.
+- Files, background processes, PID, IPC and UTS namespaces persist until `close`, with a private `/proc`, `/dev` and `/dev/shm`. Host supervisors and their namespace handles stay outside the guest PID namespace. Under `NetworkPolicy.DENY` a private network contains only loopback, which refuses TCP and UDP to the host and beyond; under `ALLOW` the machine uses the host network. A successful command may leave a server running for later commands. With writable cgroup delegation, a command timeout or cancellation kills that command and its descendants, including processes that call `setsid`, while preserving files, peers, helpers and background processes from earlier successful commands. Without delegation, interruption closes the machine and every peer. Set `LocalMachineFactory(ttl=...)` to bound the lifetime even when a caller forgets to close it.
+- `upload` and `download` run tar inside the guest with a fixed control environment, so absolute symlinks resolve inside the guest root. Uploads to read-only directories fail. Downloads preserve interior symlinks; later downloads replace those links without following them into the host. Host destination roots and ancestors must not be symlinks. A missing guest path raises `RuntimeError`, as the container backends do.
+- With `system_directories=SystemDirectories.COPY_ON_WRITE`, each host-program machine overlays `/usr`, `/bin`, `/sbin` and `/lib*` with a writable layer and makes its private `/etc` writable. Writes persist between commands and `close` discards them; the host's files never change. Writes follow file permissions. `/sys` and host submounts inside overlaid program directories stay read-only; `read_only_system_mounts()` lists those submounts. Downloading the entire host-program root is refused. This mode needs overlayfs and a temporary directory that is not itself on overlayfs.
+- Commands never inherit the host environment, which can hold cluster credentials. Host-program commands get `PATH` with `bin_dirs` ahead of the standard system directories, `HOME=/home/shellbox`, `LANG=C.UTF-8`, and `PYTHONHASHSEED` when the factory has a `hash_seed`, then `MachineSpec.env` and `Command.env`. The trusted host launcher reads configuration through a private file descriptor, keeping environment values out of host process listings, and applies task and command variables after isolation. Its own fixed environment prevents loader options such as `LD_PRELOAD` from affecting it.
+- `/bin/sh` enters the working directory and starts the program, so a missing program exits with status 127, as in the container backends. Command output goes to private temporary files, subject to the 1 GiB file-size limit; returned bytes are truncated to `output_limit_bytes` and report truncation flags.
+- Commands have no capabilities and run with `no_new_privs`, so setuid programs cannot raise their privileges. They have no core files and files of at most 1 GiB. Command deadlines reclaim the command cgroup when delegated, or close the namespace otherwise; no inherited CPU-time limit later kills a background service started by a successful command. `RLIMIT_NPROC` counts all of a user's tasks on the host, so the backend limits the command's user to the host's task count when the command starts plus 256; the kernel does not apply it to root.
+- The factory discovers the worker's writable cgroup v2 delegation and creates a machine parent with keeper and command children. `cgroup_parent` supplies an operator override. Containment requires writable `cgroup.kill` and permission to move children within the hierarchy. Each machine owns and reclaims its groups; successful commands may leave background processes in their tracked child groups, and session close reclaims only its own group. Execution preflight admits `retained_command_cancellation` and `process_scope` only when delegation is available. Declare either capability in `ExecutionRequirements.capabilities` to reject unsupported hosts before allocation. The guest sees no writable cgroup filesystem.
+- `MachineSpec.cpus` and `memory_mb` request aggregate limits across every process in a machine. The backend enables each requested controller separately and disables swapping when memory is limited. Unavailable controllers or failed limit writes produce warnings and execution continues. Process containment and cleanup still must succeed. Disk quotas and GPU allocation remain unsupported.
+- `Command.user` keeps the process's user when it is omitted or names that user. Another user requires a root process; the command then runs with that account's UID and primary group, no supplementary groups and no capabilities. A user without a host account raises `UnsupportedMachineSpec`.
+
+The factory mounts exactly the directories in `read_only` and infers nothing from `bin_dirs`, which only sets `PATH`. The caller must keep each `read_only` directory self-contained. A symlink whose target lies outside the mounted directories does not resolve in the sandbox. A uv venv, for example, links `python` to an interpreter elsewhere on the host, so mounting the venv alone leaves `python3` missing. The factory raises `ValueError` for a `read_only` path that is not an existing directory.
+
+A systemd user service can supply delegation without granting the worker host administration privileges. Set `Delegate=cpu memory pids` and `DelegateSubgroup=supervisor`. Shellbox discovers the empty service parent above the supervisor subgroup; callers do not need to supply its path. For example, on a host whose user manager has these controllers delegated, run the aggregate limit tests from the repository root:
+
+```bash
+systemd-run --user --unit=shellbox-limits --collect --wait --pipe \
+  --working-directory="$PWD" --property=Type=exec \
+  --property='Delegate=cpu memory pids' --property=DelegateSubgroup=supervisor \
+  uv run --no-sync --package marin-shellbox pytest -o addopts='' -m manual \
+  lib/shellbox/tests/test_local_cgroup.py
+```
+
+For an OCI image, pass a `PreparedImage` from `ImageCache.prepare` or a
+`RegistryImage` reference pinned by digest. Trusted host preparation
+resolves the image; `umoci unpack --rootless` then creates a fresh writable root
+for every machine, applying layers and whiteouts. No host program directories
+are mounted into this root. OCI `ENV` becomes the machine environment; use
+`MachineSpec(image, workdir="")` to select the image's working directory instead
+of the API default `/workspace`. Only root image users are currently supported.
+A container starts its image's `ENTRYPOINT` and `CMD` unless its
+`ContainerSpec` overrides them. Image defaults cannot grant host environment
+variables. Images need `/bin/sh`, `sleep` and `tar` for exec and transfers; timed readiness
+and `serve_http` additionally require Python 3. `LocalMachineFactory(umoci=...)`
+selects an explicit unpacker. No Docker daemon runs inside the guest.
+
+Install OCI preparation tools on the trusted host before using registry or
+prepared images. On Debian/Ubuntu: `sudo apt-get install umoci skopeo`.
+`umoci` applies OCI layers, whiteouts and rootless filesystem rules; Shellbox
+reuses it for local and QEMU preparation. Host-program and package machines do
+not need it. The unpacker is an external executable, not a Python dependency;
+see [umoci's rootless workflow](https://umo.ci/quick-start/rootless/).
+
+`build_python_environment(root, lock, python_version)` builds such a directory for Python. It installs a uv-managed CPython of the given full version under `root/python`, creates a venv at `root/venv` from it, and runs `uv pip sync --require-hashes` with the lock, a requirements file with hashes such as `uv pip compile --generate-hashes` writes. Every file and symlink of the environment lies under `root`, and the venv refers to its interpreter by absolute path, so the root must stay where it was built. It returns a `PythonEnvironment` whose `root` goes in `read_only` and whose `bin_dir` goes in `bin_dirs`. Concurrent builders of one root on a host take an exclusive `flock` on a file beside it, so the environment is built once. A completion marker records a finished build; a root without one is a failed or interrupted build and is removed and rebuilt. A finished root built from another lock or Python version raises `ValueError`, and a failed uv command raises `UvError` with uv's error output. The builder needs `uv` on `PATH` and network access to download the interpreter and packages.
+
+The factory checks once, when it is created, that `bwrap` can build a sandbox, and raises `SandboxUnavailable` with each candidate's error when it cannot. It tries the bundled binary, then any `bwrap` on `PATH`, or only the `bwrap` path it is given. For host-program machines run as root, `bwrap` creates namespaces without a user namespace, which needs `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`, no AppArmor confinement, and a seccomp filter that allows `pivot_root`. Container runtimes withhold all three by default. On Kubernetes, that mode needs `capabilities.add: [SYS_ADMIN, NET_ADMIN]` and `appArmorProfile: {type: Unconfined}`, and no `RuntimeDefault` seccomp profile. Prepared OCI roots always use a user namespace; host-program machines also use one when called by a non-root user. Ubuntu restricts unprivileged user namespaces to programs whose AppArmor profile allows them, including `/usr/bin/bwrap`, so there the factory uses the system binary. Commands drop all capabilities after setup in either mode.
+
+## ShellSim backend
+
+Install the `shellsim` extra for Shellsim 0.1.38 or later. A Harbor worker
+shares its Context; each trial gets private files and process state. The Harbor
+adapter is covered by `vendor/harbor/tests/unit/environments/test_shellsim.py`.
+
+Default contexts load precompiled native code from Shellsim's public catalog when a compatible artifact is available. Configure catalog, cache, offline and precompiled trust policy on `shellsim.Context`; pass it to `ShellSimEnvironment` or `ShellSimMachineFactory`. Select packages and tools through the shared `shellbox.PackageSpec`, passed as `package_spec` to the Harbor adapter or as `MachineSpec.source`. Use `PackageSpec(pypi_packages=())` for CPython alone; `PackageSpec()` keeps a shell-only environment. Construct `ShellSimEnvironment` directly when a caller owns a configured Context; job policies select the maintained `shellsim` type. Guest commands have no host filesystem or network access.
+
+Agent shell state persists between Bash actions; setup and verifier commands use fresh shell state over the same filesystem. Actions complete before returning and do not support interactive input. A command timeout or caller cancellation requests native interruption and allows five seconds for cleanup. `ShellSession.interrupt()` and `close()` use the same grace period. Cleanup within that period preserves the machine for reuse, except when closing it. If native work does not stop, the machine closes and rejects further work while its worker finishes in the background. Cleanup errors are logged without replacing the caller's cancellation. Task images and Dockerfile instructions are not applied; regular files under `environment/` are copied to the workdir. Select tasks compatible with the WASI catalog and supported commands.
+
+The default ShellSim limits per trial are 10 billion CPU units, 2 GiB modeled memory, 512 MiB virtual disk, and 128 MiB cumulative output. `cpu_limit`, `memory_mb`, `disk_limit_bytes`, and `output_limit_bytes` configure them. An action that exhausts a ShellSim resource terminates the trial. These are ShellSim fuel and working-set limits, not host CPU or RSS limits. Tasks that request internet are rejected unless `network_policy: deny` explicitly runs them offline.
+
+## OCI image ingestion
+
+On a build machine, copy a prebuilt image into an OCI layout, then stage it. For example:
+
+```sh
+skopeo copy docker://docker.io/library/ubuntu:24.04 oci:/tmp/ubuntu-oci:ubuntu
+shellbox-stage \
+  --qemu /path/to/qemu-system-x86_64 \
+  --kernel /path/to/vmlinuz \
+  --busybox /path/to/static-busybox \
+  --firmware /path/to/qemu-firmware \
+  --libraries /path/to/qemu-libraries \
+  --oci-layout /tmp/ubuntu-oci \
+  --oci-tag ubuntu \
+  --umoci /path/to/umoci \
+  --disk-size-mb 512 \
+  --output /opt/marin-shellbox/ubuntu
+```
+
+Staging uses `umoci unpack --rootless` to apply OCI layers and whiteouts, then builds an ext4 guest disk. It restores file UID/GID values from the OCI layers, which rootless unpacking cannot retain on the host. Each Harbor trial gets a private temporary QEMU snapshot over the read-only base disk. Writes persist for that machine’s lifetime and are discarded on close. QEMU skips host flushes for these disposable snapshots; this backend does not provide crash-durable guest storage. `tests/manual/check_qemu_isolation.py /path/to/bundle` checks concurrent writes, fresh-guest reset, and unchanged base bytes. The bundle records the unpacked manifest digest, image environment, and working directory. The guest uses GNU Bash when the image supplies `/bin/bash`; otherwise it uses `/bin/sh`. OCI images must be Linux amd64, provide `/bin/sh`, and specify root as their default user. Entrypoint and CMD are not run because Harbor drives commands directly.
+
+Harbor can prepare a task's `environment/Dockerfile` or `docker_image` automatically when configured as shown below. For prebuilt bundles, pass `--task-dockerfile` when staging a Dockerfile image or `--image-reference` when staging a registry image. Harbor checks the recorded Dockerfile SHA-256 or image reference before starting QEMU. These checks catch mismatched task inputs; they do not prove which Dockerfile built an OCI image. Compose tasks remain unsupported.
+
+This staging step requires `umoci`, `mkfs.ext4` built with libarchive support, and `cpio` on the build machine. `mkfs.ext4 -d` reads a tarball so the guest filesystem retains OCI file ownership. A runtime host using only prebuilt bundles needs none of these tools. For repeatable builds, pin the source image by digest before copying it to the OCI layout. See the [OCI image layout](https://specs.opencontainers.org/image-spec/image-layout/) and [umoci unpack](https://umo.ci/quick-start/workflow/) documentation for the source format and layer unpacking.
+
+The Harbor QEMU adapter accepts a prebuilt `guest_bundle` or prepares a task image
+from `docker_image` or `environment/Dockerfile`. Harbor jobs must select a
+[supported agent](../../vendor/harbor/README.md).
+
+The task must specify exactly one source: `docker_image` or `environment/Dockerfile`. The first trial in a Harbor process prepares the image. Later trials with the same source reuse it; concurrent trials wait for the same preparation. Each new process resolves registry references and rebuilds Dockerfile contexts; the OCI and QEMU bundle caches on disk reuse matching digests. For fully offline trials, prepare the image ahead of time and use a prebuilt guest bundle. Image preparation requires `skopeo` on `PATH`, `umoci`, `mkfs.ext4`, and `cpio` on the host. Dockerfile preparation also requires a working Docker builder. `registry_authfile` and `signature_policy` are optional environment kwargs for private registries and signed images; private registry authentication has not been tested end to end.
+
+The 0.1 QEMU extra supplies the emulator but does not supply the guest kernel, BusyBox, firmware, or OCI staging tools, so task-image preparation needs the explicit paths above. A prebuilt `guest_bundle` needs no staging tools on the trial host. Skopeo is available through Linux distribution packages; its upstream project does not publish a portable standalone release binary and recommends distribution packages or its container image. We therefore leave Skopeo outside the wheel for now.
+
+The guest has no network. By default, the environment rejects tasks that declare internet access. Set `environment.kwargs.network_policy: deny` to explicitly run such a task offline; commands that actually require internet will still fail. The guest defaults to 512 MiB RAM; set `environment.kwargs.guest_memory_mb` to change that limit.
+
+The guest selects QEMU's `max` CPU model. This avoids the NumPy import failures observed with the default CPU model under TCG, where missing instructions caused an illegal-instruction exit. File uploads use the guest's script-file protocol, allowing fixtures larger than Linux's single-argument limit.
+
+The microvm disables ACPI and explicitly loads the bundle's SeaBIOS `bios-microvm.bin`. This retains Linux's legacy timer fallback when TCG cannot calibrate the TSC during boot. Guest kernels must enable `CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES`; QEMU supplies block and serial device descriptors on the kernel command line. The manual shell check exercises two-vCPU discovery and the persistent shell transport with this configuration.
+
+Acceleration defaults to `auto`. This selects KVM when `/dev/kvm` is readable and writable by the Harbor process; QEMU falls back to TCG if KVM initialization fails. Set `environment.kwargs.acceleration: kvm` to require KVM or `tcg` to force software emulation. The environment logs the accelerator QEMU actually selected after startup. A host may have `/dev/kvm` but deny access to the current user; `auto` uses TCG in that case. The Python package cannot grant device access.
+
+Use `tests/manual/check_shell.py /opt/marin-shellbox/bash-image` to check
+interactive shell behavior without Harbor.
+
+`benchmarks/tasktrove/sample.py` extracts a pinned 100-task TaskTrove Clean sample into a local directory. It needs `fsspec` and `pyarrow`:
+
+```sh
+uv run --no-project python lib/shellbox/benchmarks/tasktrove/sample.py /tmp/marin-shellbox-benchmark
+```
+
+Build one Docker image per `dockerfile_id` in `sample.json`, copy each image to an OCI layout, and stage it with its `environment/Dockerfile`. Name the images `tasktrove-clean-qemu:<dockerfile_id>` and the bundles `/tmp/marin-shellbox-benchmark/bundles/<dockerfile_id>`. Then run:
+
+```sh
+uv run --project vendor/harbor --extra runtime --extra qemu --frozen \
+  vendor/harbor/benchmarks/tasktrove_compare.py /tmp/marin-shellbox-benchmark --concurrency 2
+```
+
+The comparison runs the same empty and available oracle checks through Shellbox Docker machines and fresh QEMU guests. Inputs are copied through the machine transfer API; the benchmark does not bind host directories into Docker. It writes `shellbox-results.jsonl`, keeping results from the former raw Docker path separate. It records one JSON result per check and fails on a verdict mismatch.
+
+## Current support boundary
+
+The guest has persistent files for a trial. A minimal bundle uses BusyBox `ash` for one-shot commands; an OCI bundle uses its image shell. Harbor setup and verifier commands still run as root in separate shell processes. The agent's `Bash` calls use one interactive `/bin/bash` per trial, so cwd, exports, functions, and jobs persist across calls. The verifier does not inherit that shell state. The guest has no network interface.
+
+The QEMU image must contain the task tools and verifier dependencies needed without guest internet. `Bash` runs through a guest PTY on a separate virtio-serial channel. One `Bash` tool returns JSON with `output`, `status`, `exit_code`, and `truncated`. Pass `command` to start a command; omit it to read a running command, pass `input` to send text, or set `signal` to `interrupt` to send Ctrl-C. Use at most one of `command`, `input`, and `signal` per call. `Bash` waits at most 30 seconds per call; a longer command remains active for later reads or interruption. PTY stdout and stderr are combined. A tool result retains at most 128 KiB and marks excess output as truncated; excess output cannot be retrieved later. Agents can redirect large output to a file and inspect a smaller excerpt. `exit` or shell failure resets Bash while files remain. The one-shot serial protocol still buffers setup and verifier output in guest files. Each machine writes to a private temporary overlay over the read-only ext4 base; writes persist until close and are then discarded. Extended attributes, Linux capabilities, device nodes outside `/dev`, and volume semantics have not been checked against an OCI runtime.
+
+The guest is isolated by QEMU's emulated machine boundary, but this prototype has not been security audited. It is intended for nonhostile agents on an already controlled compute node.

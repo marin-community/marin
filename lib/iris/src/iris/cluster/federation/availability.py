@@ -4,8 +4,8 @@
 """Federated availability: peer free-capacity snapshots, a generation-keyed
 reservation ledger, and the pure queued-assignment pass the control tick runs.
 
-A federation parent holds jobs it cannot place locally in a queue until a peer
-reports enough free capacity to host one, then hands it off. This module is the
+A federation parent holds jobs it cannot place locally in a queue until an
+eligible peer is available, then hands them off. This module is the
 decision logic for that queue, kept pure (no DB, no proto, no I/O) so the control
 tick can call it over a snapshot and so it is unit-testable in isolation:
 
@@ -34,19 +34,32 @@ does not fit, which is the backstop.
 
 A peer reports its capacity per priority band: a free amount plus what its admitted
 work holds at each band. A candidate's effective capacity on a backend is that free
-amount plus everything held below its own band (a numerically higher band is lower
-priority), which is what the peer's scheduler would preempt to admit the job.
+amount plus everything held below its own band, which is what the peer's scheduler
+would preempt to admit the job.
 Placement spends idle capacity first, reclaims from the lowest-priority band upward,
 and prefers a peer that needs no preemption at all.
+
+A ``--reserve <variant>`` marker filters peers by shape but adds no numeric capacity
+gate. When other scores tie, placement prefers more effective capacity for that
+variant without spending it.
 """
 
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
-from iris.cluster.constraints import AVAILABLE_PREFIX, AttributeValue, Constraint, evaluate_constraint
+from iris.cluster.constraints import (
+    AVAILABILITY_PREFIX,
+    AVAILABLE_PREFIX,
+    AttributeValue,
+    Constraint,
+    evaluate_constraint,
+    is_availability_key,
+)
 from iris.cluster.federation.router import backend_satisfies
 from iris.cluster.types import JobName
+from iris.rpc.proto_display import priority_band_rank
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +71,8 @@ logger = logging.getLogger(__name__)
 # v1: free amounts only, computed from every non-terminal pod.
 # v2: free amounts count only capacity admitted work holds (queued, unadmitted work
 #     no longer subtracts), plus the ``held_by_band`` split of the held remainder.
-AVAILABILITY_METRIC_VERSION = 2
+# v3: held-band ordering follows the explicit PriorityBand rank rather than wire values.
+AVAILABILITY_METRIC_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -178,6 +192,10 @@ class ReservationLedger:
 ANY_BAND = 0
 
 
+def _reclaimable(held_band: int, candidate_band: int) -> bool:
+    return candidate_band == ANY_BAND or priority_band_rank(held_band) > priority_band_rank(candidate_band)
+
+
 @dataclass
 class _WorkingCapacity:
     """One peer backend's spendable capacity for a single assignment pass.
@@ -191,9 +209,9 @@ class _WorkingCapacity:
     held: dict[int, dict[str, int]]
 
     def available(self, token: str, band: int) -> int:
-        """Idle capacity plus everything held below ``band`` (a higher band number)."""
+        """Idle capacity plus everything held below ``band``."""
         return self.free.get(token, 0) + sum(
-            amounts.get(token, 0) for held_band, amounts in self.held.items() if held_band > band
+            amounts.get(token, 0) for held_band, amounts in self.held.items() if _reclaimable(held_band, band)
         )
 
     def would_preempt(self, token: str, amount: int) -> bool:
@@ -212,7 +230,8 @@ class _WorkingCapacity:
         take = min(self.free.get(token, 0), amount)
         self.free[token] = self.free.get(token, 0) - take
         remaining = amount - take
-        for held_band in sorted((b for b in self.held if b > band), reverse=True):
+        reclaimable = (held_band for held_band in self.held if _reclaimable(held_band, band))
+        for held_band in sorted(reclaimable, key=priority_band_rank, reverse=True):
             if remaining <= 0:
                 return
             amounts = self.held[held_band]
@@ -263,11 +282,11 @@ def assign_queued(
     below the candidate's band, minus reservations already made this generation,
     minus what earlier candidates in this pass took) meets the ``ge`` gate. A legacy
     backend that supplies no metric is matched on shape alone, and ranks behind every
-    backend whose capacity the parent can see. Among the rest, prefer a placement that
-    needs no preemption; tie-break by best fit (least remaining capacity for the gated
-    token after placement), then peer id, then backend id, so load spreads and large
-    free blocks are preserved. Fit-aware: a candidate that fits nowhere is skipped, not
-    head-of-line-blocking the queue.
+    backend whose capacity the parent can see. Among measured backends, prefer no
+    preemption, then the tightest fit for the job's numeric capacity gate. For
+    ``--reserve`` markers, prefer more effective variant capacity. Each job has a
+    stable peer order for otherwise equal placements. A candidate that fits
+    nowhere is skipped.
 
     Returns the promotions; the caller applies each as a conditional CAS and charges
     the ledger only for confirmed ones. Does not mutate ``ledger``.
@@ -292,9 +311,7 @@ def assign_queued(
     promotions: list[Promotion] = []
 
     for candidate in candidates:
-        # (shape_only, preempts, fit, peer_id, backend_id): a _Placement widened with the
-        # peer id, which breaks ties between equally good backends on different peers.
-        best: tuple[bool, bool, float, str, str] | None = None
+        best: tuple[bool, bool, float, float, str, str, str] | None = None
         for peer in reachable_peers:
             if candidate.pinned_peer_id and candidate.pinned_peer_id != peer.peer_id:
                 continue
@@ -307,6 +324,8 @@ def assign_queued(
                 placement.shape_only,
                 placement.preempts,
                 placement.remaining,
+                placement.marker_capacity_key,
+                _spread_key(candidate.job_id, peer.peer_id),
                 peer.peer_id,
                 placement.backend_id,
             )
@@ -316,7 +335,7 @@ def assign_queued(
         if best is None:
             continue
 
-        _, _, _, peer_id, backend_id = best
+        *_, peer_id, backend_id = best
         reserved: dict[str, int] = {}
         key = (peer_id, backend_id)
         if key in working:  # a metric backend was chosen: charge and decrement its capacity
@@ -340,29 +359,17 @@ def assign_queued(
 
 
 class _Placement(NamedTuple):
-    """One backend a candidate could go to, in best-first field order.
-
-    A tuple so it doubles as the sort key: ``shape_only`` first, so a backend whose
-    capacity the parent cannot see loses to every backend that verifiably fits, even
-    one that fits only by preemption (choosing it would drop the reservation the
-    tracked placement would have charged). Then ``preempts``, so an idle backend beats
-    one that would have to evict work, then how much capacity is left after the job
-    lands (tighter fit first), then the backend id for a stable tie-break.
-    """
+    """Sort key for a candidate on one backend, in preference order."""
 
     shape_only: bool  # True for a backend matched on shape alone: no capacity metric
     preempts: bool  # True when the job fits only by reclaiming held work
     remaining: float  # capacity left across the gated tokens after placement
+    marker_capacity_key: float  # negated capacity of availability marker variants
     backend_id: str  # "" for a force-routed candidate (shapeless or pinned)
 
 
 def _shape_only_placement(backend_id: str) -> _Placement:
-    """A shape-matched backend the parent has no capacity metric for.
-
-    ``preempts`` and ``remaining`` are unknown and never consulted: ``shape_only``
-    already ranks this behind every placement whose capacity the parent can see.
-    """
-    return _Placement(shape_only=True, preempts=False, remaining=0.0, backend_id=backend_id)
+    return _Placement(shape_only=True, preempts=False, remaining=0.0, marker_capacity_key=0.0, backend_id=backend_id)
 
 
 def _place_on_peer(
@@ -390,6 +397,7 @@ def _place_on_peer(
                 shape_only=False,
                 preempts=_preempts(capacity, candidate.availability_gate),
                 remaining=_remaining_after(capacity, candidate.availability_gate, candidate.priority_band),
+                marker_capacity_key=_marker_capacity_key(capacity, candidate.shape_constraints, candidate.priority_band),
                 backend_id=backend.backend_id,
             )
         else:  # metric backend that cannot fit the job even by preemption
@@ -424,3 +432,14 @@ def _remaining_after(capacity: _WorkingCapacity, gate: list[Constraint], band: i
         need = int(constraint.values[0].value)
         total += max(0, capacity.available(_token(constraint), band) - need)
     return float(total)
+
+
+def _marker_capacity_key(capacity: _WorkingCapacity, shape: list[Constraint], band: int) -> float:
+    """Negated effective capacity of variants in ``availability:*`` markers."""
+    variants = [c.key.removeprefix(AVAILABILITY_PREFIX) for c in shape if is_availability_key(c.key)]
+    return -float(sum(capacity.available(variant, band) for variant in variants))
+
+
+def _spread_key(job_id: JobName, peer_id: str) -> str:
+    """Stable per-job tie-break across peers."""
+    return hashlib.blake2b(f"{job_id.to_wire()}\x00{peer_id}".encode(), digest_size=8).hexdigest()

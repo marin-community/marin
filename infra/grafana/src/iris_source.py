@@ -25,6 +25,7 @@ from errors import UpstreamError
 logger = logging.getLogger(__name__)
 
 _RPC_BASE = "iris.cluster.ControllerService"
+_LIST_JOBS_LIMIT = 1000
 _LIST_WORKERS_PAGE = 1000
 _MAX_WORKER_PAGES = 50
 
@@ -99,7 +100,7 @@ class IrisSource:
             return response.json()
         raise AssertionError("unreachable")
 
-    def jobs(self) -> list[dict]:
+    def job_counts(self) -> list[dict]:
         """Root-job counts by state: in-flight now plus terminal states over the last 24h."""
         result = self._post_rpc("ExecuteRawQuery", {"sql": _JOBS_SQL})
         rows = []
@@ -108,6 +109,11 @@ class IrisSource:
             bucket = "inflight" if state in _IN_FLIGHT_STATES else "last24h"
             rows.append({"bucket": bucket, "state": _state_name(state), "count": count})
         return rows
+
+    def jobs(self, cluster: str) -> list[dict]:
+        """Recent jobs visible through this controller for one federation cluster."""
+        page = self._post_rpc("ListJobs", {"query": {"cluster": cluster, "limit": _LIST_JOBS_LIMIT}})
+        return [{"job": job["jobId"]} for job in page.get("jobs", [])]
 
     def workers(self) -> list[dict]:
         """Healthy worker counts and resource totals per region (empty region -> 'unknown')."""

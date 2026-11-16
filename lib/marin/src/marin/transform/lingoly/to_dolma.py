@@ -13,8 +13,8 @@ import json
 from dataclasses import dataclass
 
 import draccus
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.readers import load_zip_members
 
 

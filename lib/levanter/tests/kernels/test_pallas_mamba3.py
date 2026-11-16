@@ -8,6 +8,7 @@ import math
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from levanter.kernels.pallas.mamba3 import (
     HybridModeConfig,
@@ -40,7 +41,16 @@ from levanter.kernels.pallas.mamba3.reference import (
 )
 from levanter.kernels.pallas.mamba3.xla import mamba3_mimo_chunked_forward_ranked_xla_batched
 from levanter.kernels.pallas.ssd import intra_chunk_log_alpha_cumsum, local_log_alpha
-from test_utils import skip_if_no_torch
+from levanter.testing.helpers import skip_if_no_torch
+
+
+# The parity tolerances below assume float32 matmuls. TPU defaults to lower-precision
+# passes for float32 inputs, which pushes the XLA-vs-reference gap past `1e-5`.
+@pytest.fixture(scope="module", autouse=True)
+def _use_float32_matmul_precision():
+    with jax.default_matmul_precision("float32"):
+        yield
+
 
 MAMBA3_MIMO_RANKED_PARITY_ATOL = 1e-4
 MAMBA3_MIMO_RANKED_PARITY_RTOL = 1e-4
@@ -528,6 +538,7 @@ def test_mamba3_hybrid_siso_from_transformed_matches_siso_api():
     assert jnp.allclose(state_hybrid, state_siso, atol=1e-5, rtol=1e-5)
 
 
+@pytest.mark.tpu
 def test_mamba3_chunked_grad_matches_reference():
     dt, lam, a, b, c, x = _sample_chunked_inputs(
         leading_shape=(),
@@ -677,6 +688,7 @@ def test_mamba3_siso_attentionish_final_k_matches_last_key_plus_bias():
     assert jnp.allclose(final_k, expected_final_k, atol=1e-5, rtol=1e-5)
 
 
+@pytest.mark.tpu
 def test_mamba3_siso_attentionish_xla_grad_matches_reference():
     dt, _lam, _a, _b, _c, _x, q, k, v, q_bias, k_bias, d, a_log_cumsum, trap = _headed_siso_attentionish_fixture(
         batch=1,
@@ -718,6 +730,7 @@ def test_mamba3_siso_attentionish_xla_grad_matches_reference():
         assert jnp.allclose(grad_xla, grad_ref, atol=1e-5, rtol=1e-5)
 
 
+@pytest.mark.tpu
 def test_mamba3_xla_longer_stress_stays_finite():
     dt, lam, a, b, c, x = _sample_chunked_inputs(
         leading_shape=(1,),
@@ -740,6 +753,7 @@ def test_mamba3_xla_longer_stress_stays_finite():
     assert jnp.all(jnp.isfinite(final_state.astype(jnp.float32)))
 
 
+@pytest.mark.tpu
 def test_mamba3_tpu_aligned_smoke_shape_compiles_under_jit():
     dt, lam, a, b, c, x = _sample_chunked_inputs(
         leading_shape=(1,),
@@ -1226,6 +1240,7 @@ def test_mamba3_hybrid_mimo_from_transformed_matches_mimo_api():
     assert jnp.allclose(state_hybrid, state_mimo, atol=1e-5, rtol=1e-5)
 
 
+@pytest.mark.tpu
 def test_mamba3_mimo_grad_matches_reference():
     dt, lam, a, b, c, x_base, z_base, w_x, w_z, w_o = _sample_mimo_chunked_inputs(
         leading_shape=(),
@@ -1360,6 +1375,7 @@ def test_mamba3_mimo_reference_matches_upstream_torch_step_reference():
     )
 
 
+@pytest.mark.tpu
 def test_mamba3_mimo_tpu_aligned_smoke_shape_compiles_under_jit():
     inputs = _sample_mimo_chunked_inputs(
         leading_shape=(1,),

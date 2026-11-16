@@ -1,0 +1,23 @@
+schema_version: 1
+code: ml-guard-after-error
+lane: robustness
+title: Defensive guard placed after the dereference
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** An `isinstance(payload, dict)` check inside the
+  `except` clause is shutting the gate after the horse left — the `.get()`
+  already ran on the wrong type and produced the exception you're now
+  catching. Guard at the boundary.
+
+  **When allowed:** Never. Move the guard before the dereference.
+
+  **Bad example:**
+  ```python
+  try:
+      return payload.get("id")
+  except AttributeError:
+      if isinstance(payload, dict):   # guard belongs above the .get call
+          ...
+  ```
+
+  ## Storage paths

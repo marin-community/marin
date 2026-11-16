@@ -49,6 +49,7 @@ def make_runner(tmp_path: Path) -> Callable[..., QueryRunner]:
     runners: list[QueryRunner] = []
 
     def factory(**config_overrides) -> QueryRunner:
+        config_overrides.setdefault("spill_directory", str(tmp_path / f"spill-{uuid.uuid4().hex}"))
         config = _make_config(str(tmp_path), **config_overrides)
         runner = QueryRunner(config, resources=_SMALL_HOST)
         runners.append(runner)
@@ -189,7 +190,7 @@ def test_opts_in_cross_region(sql, opted_in):
 
 
 # Stub region checker: any GCS bucket other than us-east5 counts as cross-region. Stands in for
-# rigging.filesystem.is_cross_region_url so the tests don't depend on live GCS metadata.
+# rigging.filesystem.cross_region.is_cross_region_url so the tests don't depend on live GCS metadata.
 def _stub_cross_region(url: str) -> bool:
     return url.lower().startswith(("gs://", "gcs://")) and "us-east5" not in url
 
@@ -479,7 +480,7 @@ def test_run_query_ignores_hive_partition_in_scratch_path(tmp_path):
     """A `ttl=Nd` segment in the scratch path must not leak a phantom partition column."""
     scratch = tmp_path / "tmp" / "ttl=7d"
     (scratch / "ducky").mkdir(parents=True)
-    runner = QueryRunner(_make_config(str(scratch)), resources=_SMALL_HOST)
+    runner = QueryRunner(_make_config(str(scratch), spill_directory=str(tmp_path / "spill")), resources=_SMALL_HOST)
     try:
         result = runner.run_query("SELECT 1 AS a, 2 AS b", uuid.uuid4().hex)
     finally:

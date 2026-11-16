@@ -1,0 +1,17 @@
+schema_version: 1
+code: ml-stale-inline-comment
+lane: prose
+title: Inline comment describes a previous version
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A comment that once said "word-level shingling" remains
+  after the code switched to character-level. Comments help readers reason;
+  outdated ones mislead about intent.
+
+  **When allowed:** Never. Update or delete.
+
+  **Bad example:**
+  ```python
+  # do word-level shingling
+  shingles = [s[i : i + k] for i in range(len(s) - k + 1)]   # actually character-level
+  ```

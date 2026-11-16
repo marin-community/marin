@@ -5,6 +5,12 @@
 
 @config '../../tailwind.config.ts';
 
+/* Native controls (select dropdowns, scrollbars, the browser's own date and
+ * time widgets) are painted by the UA, not by our classes. Declaring the scheme
+ * is what makes them follow the dashboard's theme instead of staying light. */
+:root { color-scheme: light; }
+.dark { color-scheme: dark; }
+
 /* ── Light palette (default) ─────────────────────────────── */
 /* Colors sourced from the shared palettes in types/status.ts:
  *   Categorical ............. accent, purple, orange

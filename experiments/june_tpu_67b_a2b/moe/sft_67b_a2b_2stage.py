@@ -39,7 +39,7 @@ checkpoint is read in-cluster from the CW ``s3://marin-us-east-02a`` (LOTA) mirr
 port needed. The coordinator must run in-cluster (the Mac can't reach cwlota.com).
 
 Submit (per stage, cw-us-east-02a, preemptible; MARIN_PREFIX must be s3://marin-us-east-02a/marin;
-AWS creds auto-injected in-pod via the iris-task-env secret -- do not forward AWS_*)::
+AWS credentials arrive through the submitter's file-delivered secret bundle)::
 
     cd ~/Documents/marin && source secrets.env   # or "$DC_AGENT_SECRET_ENV"
     export KUBECONFIG=~/.kube/coreweave-iris-gpu
@@ -54,9 +54,11 @@ launching; ``--version`` is required (pass ``--version dev`` to iterate).
 
 import dataclasses
 import math
+from datetime import timedelta
 
 import click
 from fray.cluster import ResourceConfig
+from levanter.checkpoint import CheckpointerConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
@@ -114,8 +116,7 @@ _model = dataclasses.replace(
     use_array_stacked_blocks=True,
     qk_mult=_QK_MULT,
     max_seq_len=_SEQ,  # training seq len = model.max_seq_len; RoPE is position-computed (no param change)
-    # H100 GPU attention backend. gpu_fa4_cute (not gpu_fa4_thd) because sliding_window=2048 is a short
-    # window; thd only handles full-causal windows (canary_ferry.py maps thd -> window=2*seq to fake it).
+    # GPU attention backend for Blackwell targets.
     attention_implementation="gpu_fa4_cute",
     # Blocked-vocab (cut) cross-entropy: avoids materializing the [tokens, vocab] logits tile at seq32k
     # (~15.7 GiB/dev on the default full-logits GPU path).
@@ -164,8 +165,8 @@ _JOB2_DATASET = DatasetSpec(
 _SMOKE_STEPS: int = 8  # validation: clear the first jit_train_step at the target geometry and bank a few steps
 
 # Base checkpoint, read in-cluster from the CoreWeave s3://marin-us-east-02a (LOTA) mirror. No
-# cross-region port needed on CW (contrast the TPU-era mirror:// pre-stage). AWS creds are injected
-# in-pod via the iris-task-env secret; the tensorstore S3 reader lists step-42150 directly.
+# cross-region port needed on CW (contrast the TPU-era mirror:// pre-stage). Submitted storage
+# credentials use native AWS file discovery; tensorstore lists step-42150 directly.
 _BASE_CKPT: str = (
     "s3://marin-us-east-02a/marin/grug/"
     "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step39k-79ebf3/"
@@ -186,8 +187,6 @@ def _grug_source(
     *,
     stage: str,
     seq: int,
-    save_interval_minutes: int = 30,
-    checkpoint_keep: list[dict] | None = None,
 ) -> GrugModel:
     """The Grug 67B model source for one stage (native weights-only init from ``init_from``)."""
     return GrugModel(
@@ -201,8 +200,6 @@ def _grug_source(
         z_loss_weight=1e-4,
         ema_beta=None,
         log_every=1,
-        save_interval_minutes=save_interval_minutes,
-        checkpoint_keep=checkpoint_keep if checkpoint_keep is not None else [{"every": 1000}],
         wandb_tags=["moe", "june_tpu", "67b_a2b", "sft", stage, f"seq{seq}", "cw-h100"],
         wandb_group="grug-67b-a2b-sft",
     )
@@ -274,13 +271,14 @@ def build_smoke(version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         name=user_namespaced_name(step_name, version),
         version=version,
         dataset=_JOB1_DATASET,
-        # Save a native checkpoint mid-smoke so the save path (and resume-on-preempt) is exercised.
-        model_source=_grug_source(
-            _BASE_CKPT, stage="smoke", seq=_SMOKE_SEQ, save_interval_minutes=5, checkpoint_keep=[{"every": 20}]
-        ),
+        model_source=_grug_source(_BASE_CKPT, stage="smoke", seq=_SMOKE_SEQ),
         steps=_SMOKE_STEPS,  # explicit few-step count, not a full epoch
         seq=_SMOKE_SEQ,
         batch=_SMOKE_BATCH,
+    )
+    # Exercise a mid-run permanent save explicitly; production stages keep only their final checkpoint.
+    spec = dataclasses.replace(
+        spec, checkpointer=CheckpointerConfig(save_interval=timedelta(minutes=5), keep=[{"every": 4}])
     )
     return sft_step(spec, _gpu_resources(_SMOKE_NODES))
 

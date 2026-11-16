@@ -19,6 +19,12 @@ from marin.profiling.publish import publish_profile_summary_artifact
 from marin.profiling.query import compare_profile_summaries, query_profile_summary
 from marin.profiling.report import build_markdown_report
 from marin.profiling.schema import ProfileSummary, profile_summary_from_dict
+from marin.profiling.trace_summary import (
+    DEFAULT_BREAKDOWN_MODE,
+    DEFAULT_HOT_OP_LIMIT,
+    DEFAULT_WARMUP_STEPS,
+    BreakdownMode,
+)
 from marin.profiling.tracking import (
     RegressionThresholds,
     append_regression_record,
@@ -28,8 +34,6 @@ from marin.profiling.tracking import (
 )
 from marin.profiling.xplane import summarize_xplane
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
-
-_BREAKDOWN_MODES = ("exclusive_per_track", "exclusive_global")
 
 
 def _add_output_option(parser: argparse.ArgumentParser, kind: str = "JSON") -> None:
@@ -51,12 +55,20 @@ def _add_summary_pair_options(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_summarization_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--warmup-steps", type=int, default=5, help="Initial steps ignored for steady-state stats.")
-    parser.add_argument("--hot-op-limit", type=int, default=25, help="Maximum number of hot ops in a summary.")
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=DEFAULT_WARMUP_STEPS,
+        help="Initial steps ignored for steady-state stats.",
+    )
+    parser.add_argument(
+        "--hot-op-limit", type=int, default=DEFAULT_HOT_OP_LIMIT, help="Maximum number of hot ops in a summary."
+    )
     parser.add_argument(
         "--breakdown-mode",
-        choices=_BREAKDOWN_MODES,
-        default="exclusive_per_track",
+        type=BreakdownMode,
+        choices=tuple(BreakdownMode),
+        default=DEFAULT_BREAKDOWN_MODE,
         help="Time-breakdown attribution mode.",
     )
 

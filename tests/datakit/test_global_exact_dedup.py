@@ -45,7 +45,7 @@ def _attribute_shards(result: GlobalExactDedupData, source: NormalizedData) -> l
     return sorted(Path(result.sources[datakit_source_key(source.main_output_dir)].attr_dir).glob("*.parquet"))
 
 
-def test_global_exact_deduplicate_writes_sparse_copartitioned_attributes(tmp_path: Path, monkeypatch):
+def test_global_exact_deduplicate_writes_one_attribute_shard_per_input(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     source_a = _normalized_source(
         tmp_path / "input-a",
@@ -81,11 +81,16 @@ def test_global_exact_deduplicate_writes_sparse_copartitioned_attributes(tmp_pat
     a_shards = _attribute_shards(result, source_a)
     b_shards = _attribute_shards(result, source_b)
     c_shards = _attribute_shards(result, source_c)
-    assert a_shards == []
-    assert [path.name for path in b_shards] == ["part-00001-of-00002.parquet"]
-    assert c_shards == []
+    # One attribute shard per input shard, empty where that shard holds no
+    # duplicate: consolidate resolves every input shard to an attribute path
+    # before reading and raises when one is absent.
+    assert [path.name for path in a_shards] == ["part-00000-of-00001.parquet"]
+    assert [path.name for path in b_shards] == ["part-00000-of-00002.parquet", "part-00001-of-00002.parquet"]
+    assert [path.name for path in c_shards] == ["part-00000-of-00002.parquet", "part-00001-of-00002.parquet"]
+    assert pq.read_table(a_shards[0]).to_pylist() == []
+    assert pq.read_table(c_shards[0]).to_pylist() == []
 
-    assert pq.read_table(b_shards[0]).to_pylist() == [
+    assert pq.read_table(b_shards[1]).to_pylist() == [
         {"id": "a-only", "dup_doc": True},
         {"id": "shared", "dup_doc": True},
     ]
@@ -138,8 +143,9 @@ def test_global_exact_deduplicate_uses_shard_order_within_source(tmp_path: Path,
     )
 
     shards = _attribute_shards(result, source)
-    assert [path.name for path in shards] == ["part-00001-of-00002.parquet"]
-    assert pq.read_table(shards[0]).to_pylist() == [
+    assert [path.name for path in shards] == ["part-00000-of-00002.parquet", "part-00001-of-00002.parquet"]
+    assert pq.read_table(shards[0]).to_pylist() == []
+    assert pq.read_table(shards[1]).to_pylist() == [
         {"id": "shared", "dup_doc": True},
     ]
 

@@ -1,0 +1,20 @@
+schema_version: 1
+code: ml-env-var-vs-param
+lane: robustness
+title: Env var used in place of an explicit parameter
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Prefer constructor/config parameters over env vars. Env
+  vars couple the call to ambient state, can't be type-checked, and divergent
+  overrides accumulate silently.
+
+  **When allowed:** Operational kill-switches and emergency circuit breakers
+  where the value must flip without a redeploy. The env var should still be
+  hoisted to a top-level constant and documented.
+
+  **Bad example:**
+  ```python
+  def fetch_mirror_url() -> str:
+      # take this as a parameter; only top-level entry points read os.environ.
+      return os.environ.get("IRIS_PYPI_MIRROR", "https://pypi.org")
+  ```

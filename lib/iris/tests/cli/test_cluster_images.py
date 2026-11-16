@@ -76,6 +76,8 @@ def test_cluster_start_pins_latest_images_seen_by_provider(
     monkeypatch.setattr(cluster_cli, "get_git_provenance", lambda: _provenance(dirty))
     monkeypatch.setattr(cluster_cli, "provider_bundle", lambda _config: SimpleNamespace(controller=ControllerProvider()))
     monkeypatch.setattr(image_build.subprocess, "run", run)
+    # This test covers image pinning; there is no controller to reach.
+    monkeypatch.setattr(cluster_cli, "_wait_controller_reachable", lambda _bundle, _address: None)
 
     result = CliRunner().invoke(cluster_cli.cluster_start, obj={"config": config, "verbose": False})
 
@@ -172,6 +174,8 @@ def test_cluster_start_single_platform_task_uses_architecture_suffix(monkeypatch
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
+    # This test covers image pinning; there is no controller to reach.
+    monkeypatch.setattr(cluster_cli, "_wait_controller_reachable", lambda _bundle, _address: None)
 
     result = CliRunner().invoke(
         cluster_cli.cluster_start,

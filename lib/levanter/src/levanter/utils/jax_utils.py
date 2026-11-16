@@ -4,9 +4,11 @@
 import contextlib
 import functools
 import json
+import threading
 import warnings
+from collections import defaultdict
 from dataclasses import fields
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Optional, Sequence, TypeVar
 
 import equinox as eqx
 import haliax as hax
@@ -49,8 +51,12 @@ def use_cpu_device():
 
 
 @contextlib.contextmanager
-def local_cpu_mesh():
-    """Temporarily sets the default device to CPU and creates a mesh with a single CPU device"""
+def local_cpu_mesh(axis_type: AxisType = AxisType.Auto):
+    """Temporarily sets the default device to CPU and creates a mesh with a single CPU device.
+
+    Pass ``AxisType.Explicit`` for models that reshard over raw PartitionSpecs (see
+    ``LmConfig.requires_explicit_mesh_axes``).
+    """
     cpu = jax.local_devices(backend="cpu")[0]
     mesh = create_mesh_from_axis_specs(
         ici_axes={
@@ -61,6 +67,7 @@ def local_cpu_mesh():
         },
         dcn_axes={},
         devices=[cpu],
+        axis_types=(axis_type,) * 4,
     )
     with use_cpu_device(), haliax.partitioning.set_mesh(mesh):
         yield mesh
@@ -124,6 +131,10 @@ def move_tree_to_memory_kind(tree: T, *, memory_kind: str) -> T:
 
 
 _sync_counter = 0
+# Barrier IDs advance separately for each group; other pipeline stages may enter
+# a different number of collectives. The process key also supports local simulations.
+_group_sync_counters: dict[tuple[int, tuple[int, ...]], int] = defaultdict(int)
+_group_sync_mutex = threading.Lock()
 
 
 def multihost_broadcast_sync(obj: X, is_source: Optional[bool] = None, timeout: float = 200.0) -> X:
@@ -158,12 +169,54 @@ def multihost_broadcast_sync(obj: X, is_source: Optional[bool] = None, timeout: 
     return obj
 
 
-def barrier_sync(timeout: float = 200):
-    """
-    Uses jax's unpublished distributed api to wait for all processes to reach a barrier. This is useful for ensuring
-    that all processes have reached a certain point in the code before continuing.
-    """
+def multihost_allgather_sync(obj: X, timeout: float = 200.0, *, process_ids: Sequence[int] | None = None) -> list[X]:
+    """Exchange a JSON-serializable value among all or selected JAX processes."""
     global _sync_counter
+    process_count = jax.process_count()
+    participants = tuple(range(process_count)) if process_ids is None else tuple(sorted(set(process_ids)))
+    if jax.process_index() not in participants:
+        raise ValueError(f"process {jax.process_index()} is not in allgather participants {participants}")
+    if len(participants) == 1:
+        return [obj]
+
+    client = jax_distributed.global_state.client
+    if client is None:
+        raise RuntimeError("multihost_allgather_sync requires jax distributed client to be initialized")
+
+    if process_ids is None:
+        sequence = _sync_counter
+        key = f"LEVANTER_MULTIHOST_ALLGATHER_SYNC{sequence}"
+        barrier = f"multihost_allgather_sync{sequence}"
+    else:
+        counter_key = (jax.process_index(), participants)
+        with _group_sync_mutex:
+            sequence = _group_sync_counters[counter_key]
+            _group_sync_counters[counter_key] += 1
+        group = "-".join(map(str, participants))
+        key = f"LEVANTER_MULTIHOST_GROUP_ALLGATHER_SYNC/{group}/{sequence}"
+        barrier = f"multihost_group_allgather_sync/{group}/{sequence}"
+    client.key_value_set(f"{key}/{jax.process_index()}", json.dumps(obj))
+    if process_ids is None:
+        client.wait_at_barrier(barrier, timeout_in_ms=int(timeout * 1000.0))
+    else:
+        client.wait_at_barrier(barrier, timeout_in_ms=int(timeout * 1000.0), process_ids=participants)
+
+    gathered = [
+        json.loads(client.blocking_key_value_get(f"{key}/{process_index}", timeout_in_ms=int(timeout * 1000.0)))
+        for process_index in participants
+    ]
+    if process_ids is None:
+        _sync_counter += 1
+    return gathered
+
+
+def barrier_sync_named(barrier_id: str, timeout: float = 200):
+    """Wait for every process at ``barrier_id``, raising once ``timeout`` seconds elapse.
+
+    Barriers are one-shot, so a caller that barriers repeatedly must vary the id. Prefer this over
+    a device collective such as ``jax.experimental.multihost_utils.sync_global_devices``, which
+    cannot be cancelled and so waits indefinitely when one process is late.
+    """
     if jax.process_count() == 1:
         return
 
@@ -177,10 +230,25 @@ def barrier_sync(timeout: float = 200):
     client: Optional[DistributedRuntimeClient] = jax_distributed.global_state.client
 
     if client is None:
-        raise RuntimeError("barrier_sync requires jax distributed client to be initialized")
+        raise RuntimeError("barrier_sync_named requires jax distributed client to be initialized")
+
+    client.wait_at_barrier(barrier_id, timeout_in_ms=int(timeout * 1000.0))
+
+
+def barrier_sync(timeout: float = 200):
+    """
+    Uses jax's unpublished distributed api to wait for all processes to reach a barrier. This is useful for ensuring
+    that all processes have reached a certain point in the code before continuing.
+
+    The barrier id comes from a process-local counter, so every process must reach this call the
+    same number of times. Use :func:`barrier_sync_named` where that cannot be guaranteed.
+    """
+    global _sync_counter
+    if jax.process_count() == 1:
+        return
 
     _sync_counter += 1
-    client.wait_at_barrier(f"levanter_barrier_sync_{_sync_counter}", timeout_in_ms=int(timeout * 1000.0))
+    barrier_sync_named(f"levanter_barrier_sync_{_sync_counter}", timeout=timeout)
 
 
 # from https://stackoverflow.com/questions/2166818/how-to-check-if-an-object-is-an-instance-of-a-namedtuple
@@ -296,6 +364,7 @@ def is_inexact_arrayish(x):
 
 
 def best_effort_sharding(shape, *, devices=None, mesh=None):
+    """Choose a staging sharding across non-replica mesh axes when the shape permits."""
     if hasattr(shape, "shape"):
         shape = shape.shape
 
@@ -327,22 +396,22 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
         sharding = NamedSharding(mesh, PartitionSpec(*axis_names))
         return sharding
     else:
-        # get the existing mesh and find the FSDP axis
-        num_devices = mesh.shape[hax.partitioning.ResourceAxis.DATA]
+        # This is a staging layout, not the model's final layout. Limiting staging to
+        # `data` replicates an entire checkpoint when data=1 and context/expert carry
+        # the model shards, exhausting HBM before the converter can reshard it.
+        remaining_shape = list(shape)
+        axis_sharding: list[list[str]] = [[] for _ in shape]
+        for axis_name, axis_size in mesh.shape.items():
+            if axis_name in {ResourceAxis.REPLICA, ResourceAxis.REPLICA_DCN} or axis_size == 1:
+                continue
+            for i in range(len(shape) - 1, -1, -1):
+                if remaining_shape[i] % axis_size == 0:
+                    axis_sharding[i].append(axis_name)
+                    remaining_shape[i] //= axis_size
+                    break
 
-        for i in range(len(shape) - 1, -1, -1):
-            shape_i = shape[i]
-            if shape_i % num_devices == 0:
-                sharded_axis = i
-                break
-        else:
-            return NamedSharding(mesh, PartitionSpec(None))
-
-        axis_sharding: list[str | None] = [None] * len(shape)
-        axis_sharding[sharded_axis] = hax.partitioning.ResourceAxis.DATA
-        sharding = NamedSharding(mesh, PartitionSpec(*axis_sharding))
-
-        return sharding
+        spec = PartitionSpec(*(tuple(axes) if len(axes) > 1 else axes[0] if axes else None for axes in axis_sharding))
+        return NamedSharding(mesh, spec)
 
 
 def estimated_free_device_memory(device=None) -> Optional[float]:

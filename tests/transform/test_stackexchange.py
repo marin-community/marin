@@ -61,7 +61,6 @@ def test_process_record_basic():
 
     result = process_record(
         row=SAMPLE_STACKEXCHANGE_RECORD,
-        extract_method="resiliparse",
         extract_config=extract_config,
         shuffle_answers_template=False,
         seed=42,
@@ -119,7 +118,6 @@ def test_process_stackexchange_dump(tmp_path: Path, write_jsonl_gz, read_all_jso
     config = StackExchangeExtractionConfig(
         input_path=str(input_dir),
         output_path=str(output_dir),
-        extract_method="resiliparse",
         extract_config=ResiliparseConfig(),
         shuffle_answers_template=False,
         seed=42,

@@ -158,7 +158,7 @@ class _FakeGCSFS:
         return self._files.get(path, b"")
 
     def cat_file(self, path: str, start=None, end=None, **kwargs) -> bytes:
-        return self._files.get(path, b"")
+        return self._files.get(path, b"")[start:end]
 
     def cat(self, path, recursive=False, on_error="raise", **kwargs):
         if isinstance(path, str):
@@ -202,6 +202,23 @@ def test_guarded_fs_skips_same_region(budget):
     guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _: False, budget=budget)
     guarded.open("local-bucket/big.bin", "rb")
     assert budget.bytes_used == 0
+
+
+@pytest.mark.parametrize("prefix", ["", "gs://", "gcs://"])
+@pytest.mark.parametrize("start,end", [(100, 200), (-100, None), (1900, 2200), (None, 100)])
+def test_guarded_ranges_charge_transferred_bytes_instead_of_object_size(budget, prefix, start, end):
+    fs = _FakeGCSFS()
+    path = f"{prefix}remote-bucket/large.parquet"
+    fs.add_file(path, b"x" * 2000)
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda bucket: bucket == "remote-bucket", budget=budget)
+
+    assert guarded.cat_file(path, start=start, end=end) == b"x" * 100
+    assert budget.bytes_used == 100
+    for _ in range(9):
+        assert guarded.cat_file(path, start=start, end=end) == b"x" * 100
+    with pytest.raises(TransferBudgetExceeded):
+        guarded.cat_file(path, start=start, end=end)
+    assert budget.bytes_used == 1000
 
 
 def test_guarded_fs_override_env_bypasses_budget(budget):

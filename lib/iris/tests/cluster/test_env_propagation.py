@@ -14,10 +14,13 @@ from dataclasses import dataclass, field
 from unittest.mock import patch
 
 import pytest
-from iris.client import IrisClient, IrisContext, iris_ctx_scope
-from iris.cluster.client.job_info import JobInfo
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.preemption import TERMINATION_GRACE_ENV
+from iris.rpc import job_pb2
+from rigging.secrets import SecretBehavior
 
 
 def dummy_entrypoint():
@@ -29,11 +32,15 @@ class _RecordingClusterClient:
     """Records submit_job kwargs without running anything."""
 
     captured_env: dict = field(default_factory=dict)
+    captured_secrets: dict = field(default_factory=dict)
     captured_constraints: list = field(default_factory=list)
+    captured_setup_scripts: list = field(default_factory=list)
 
     def submit_job(self, *, job_id=None, environment=None, constraints=None, **kwargs) -> JobName:
         if environment:
             self.captured_env = dict(environment.env_vars)
+            self.captured_secrets = dict(environment.secrets)
+            self.captured_setup_scripts = list(environment.setup_scripts)
         if constraints:
             self.captured_constraints = list(constraints)
         return job_id or JobName.root("test", "dummy")
@@ -43,8 +50,15 @@ class _RecordingClusterClient:
 
 
 @pytest.fixture
-def capturing_client():
+def capturing_client(monkeypatch, tmp_path):
     """IrisClient wired to a recording stub — no cluster boots."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    monkeypatch.delenv("CW_KEY_ID", raising=False)
+    monkeypatch.delenv("CW_KEY_SECRET", raising=False)
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    set_job_info(None)
     stub = _RecordingClusterClient()
     client = IrisClient(cluster=stub)
     return client, stub
@@ -63,13 +77,11 @@ def parent_context(capturing_client):
 def _parent_job_info(
     env: dict[str, str],
     constraints: list[Constraint] | None = None,
-    worker_region: str | None = None,
 ) -> JobInfo:
     return JobInfo(
         task_id=JobName.from_wire("/parent-job/0"),
         env=env,
         constraints=constraints or [],
-        worker_region=worker_region,
     )
 
 
@@ -111,15 +123,80 @@ def test_child_explicit_env_overrides_inherited(capturing_client, parent_context
     assert stub.captured_env["PARENT_ONLY"] == "yes"
 
 
-def test_no_env_inheritance_without_parent_context(capturing_client):
-    """Without a parent job context, no env inheritance should occur."""
+def test_submitter_credentials_use_files_and_respect_isolation(capturing_client, monkeypatch):
     client, stub = capturing_client
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    monkeypatch.setenv("HF_TOKEN", "submitter-hf")
+    monkeypatch.setenv("WANDB_API_KEY", "submitter-wandb")
+    monkeypatch.setenv("DAYTONA_API_KEY", "not-implicitly-forwarded")
+    entrypoint = Entrypoint.from_command("true")
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    client.submit(entrypoint, "no-parent-test", resources)
+    client.submit(entrypoint, "root", resources)
+    assert stub.captured_secrets == {"HF_TOKEN": "submitter-hf", "WANDB_API_KEY": "submitter-wandb"}
+    assert "HF_TOKEN" not in stub.captured_env
+    assert "WANDB_API_KEY" not in stub.captured_env
 
-    assert stub.captured_env == {}
+    client.submit(entrypoint, "override", resources, environment=EnvironmentSpec(secrets={"HF_TOKEN": "explicit-hf"}))
+    assert stub.captured_secrets == {"HF_TOKEN": "explicit-hf", "WANDB_API_KEY": "submitter-wandb"}
+
+    client.submit(
+        entrypoint,
+        "isolated",
+        resources,
+        environment=EnvironmentSpec(secrets={"HF_TOKEN": "explicit-hf"}, secret_behavior=SecretBehavior.ISOLATE),
+    )
+    assert stub.captured_secrets == {"HF_TOKEN": "explicit-hf"}
+
+    client.submit(
+        entrypoint,
+        "sandbox",
+        resources,
+        environment=EnvironmentSpec(secrets={"SERVICE_KEY": "explicit"}),
+        container_profile=job_pb2.CONTAINER_PROFILE_SANDBOX,
+    )
+    assert stub.captured_secrets == {"SERVICE_KEY": "explicit"}
+
+
+@pytest.mark.parametrize(
+    ("behavior", "profile", "expected"),
+    [
+        (
+            SecretBehavior.INHERIT,
+            job_pb2.CONTAINER_PROFILE_DEFAULT,
+            {"SERVICE_KEY": "child-value", "PARENT_ONLY": "parent"},
+        ),
+        (SecretBehavior.ISOLATE, job_pb2.CONTAINER_PROFILE_DEFAULT, {"SERVICE_KEY": "child-value"}),
+        (SecretBehavior.INHERIT, job_pb2.CONTAINER_PROFILE_SANDBOX, {"SERVICE_KEY": "child-value"}),
+    ],
+)
+def test_client_resolves_inheritance_from_current_bundle(
+    capturing_client, parent_context, tmp_path, monkeypatch, behavior, profile, expected
+):
+    client, stub = capturing_client
+    (tmp_path / "SERVICE_KEY").write_text("parent-value")
+    (tmp_path / "PARENT_ONLY").write_text("parent")
+    with (
+        iris_ctx_scope(parent_context),
+        patch("iris.client.client.get_job_info", return_value=_parent_job_info({"FLAG": "keep"})),
+    ):
+        client.submit(
+            Entrypoint.from_command("true"),
+            "child",
+            ResourceSpec(cpu=1, memory="1g"),
+            environment=EnvironmentSpec(secrets={"SERVICE_KEY": "child-value"}, secret_behavior=behavior),
+            container_profile=profile,
+        )
+    assert stub.captured_secrets == expected
+
+    child_bundle = tmp_path / "child"
+    child_bundle.mkdir()
+    for name, value in stub.captured_secrets.items():
+        (child_bundle / name).write_text(value)
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(child_bundle))
+    child_context = IrisContext(job_id=parent_context.job_id.child("child"), client=client)
+    with iris_ctx_scope(child_context):
+        client.submit(Entrypoint.from_command("true"), "grandchild", ResourceSpec(cpu=1, memory="1g"))
+    assert stub.captured_secrets == expected
 
 
 def test_child_job_inherits_parent_constraints(capturing_client, parent_context):
@@ -166,56 +243,41 @@ def test_child_explicit_constraints_override_parent(capturing_client, parent_con
     )
 
 
-def test_child_inherits_parent_worker_region(capturing_client, parent_context):
-    """Children co-locate with the parent worker's region by default."""
+@pytest.mark.parametrize(
+    ("child_constraints", "expected_regions"),
+    [
+        (None, ["us-central2"]),
+        (
+            [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")],
+            ["europe-west4"],
+        ),
+        ([any_region_constraint()], []),
+    ],
+    ids=("inherit-worker", "explicit-child", "any-region"),
+)
+def test_child_region_placement_uses_parent_worker_region(
+    capturing_client,
+    parent_context,
+    monkeypatch,
+    child_constraints,
+    expected_regions,
+):
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
+    monkeypatch.setenv("IRIS_TASK_ID", "/test-user/parent-job/0:0")
+    monkeypatch.setenv(TERMINATION_GRACE_ENV, "10000")
+    monkeypatch.setenv("IRIS_WORKER_REGION", "us-central2")
 
-    with (
-        iris_ctx_scope(parent_context),
-        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, worker_region="us-central2")),
-    ):
-        client.submit(entrypoint, "child-inherits-region", resources)
-
-    assert any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-central2" for c in stub.captured_constraints
-    )
-
-
-def test_child_explicit_region_overrides_parent_worker_region(capturing_client, parent_context):
-    """An explicit region constraint on the child wins over the inherited worker_region."""
-    client, stub = capturing_client
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-    child_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
-
-    with (
-        iris_ctx_scope(parent_context),
-        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, worker_region="us-central2")),
-    ):
-        client.submit(entrypoint, "child-explicit-region", resources, constraints=child_constraints)
+    set_job_info(None)
+    try:
+        with iris_ctx_scope(parent_context):
+            client.submit(entrypoint, "child-region", resources, constraints=child_constraints)
+    finally:
+        set_job_info(None)
 
     region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
-    assert len(region_constraints) == 1
-    assert region_constraints[0].value.string_value == "europe-west4"
-
-
-def test_child_any_region_marker_suppresses_inherited_worker_region(capturing_client, parent_context):
-    """A child carrying the ANY marker submits with no region constraint, even when the
-    parent worker has a region to inherit."""
-    client, stub = capturing_client
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-
-    with (
-        iris_ctx_scope(parent_context),
-        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, worker_region="us-central2")),
-    ):
-        client.submit(entrypoint, "child-any-region", resources, constraints=[any_region_constraint()])
-
-    region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
-    assert region_constraints == []
+    assert [constraint.value.string_value for constraint in region_constraints] == expected_regions
 
 
 def test_child_any_region_marker_clears_inherited_region_constraint(capturing_client, parent_context):
@@ -230,10 +292,67 @@ def test_child_any_region_marker_clears_inherited_region_constraint(capturing_cl
         iris_ctx_scope(parent_context),
         patch(
             "iris.client.client.get_job_info",
-            return_value=_parent_job_info({}, constraints=parent_constraints, worker_region="us-west4"),
+            return_value=_parent_job_info({}, constraints=parent_constraints),
         ),
     ):
         client.submit(entrypoint, "child-any-clears-pin", resources, constraints=[any_region_constraint()])
 
     region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
     assert region_constraints == []
+
+
+def test_sandbox_child_receives_only_its_own_env(capturing_client, parent_context, monkeypatch):
+    """A sandbox child gets neither the parent's env and setup nor the submitter's tokens."""
+    client, stub = capturing_client
+    monkeypatch.setenv("HF_TOKEN", "submitter-token")
+    monkeypatch.setenv("CW_KEY_ID", "submitter-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "submitter-secret")
+    parent = _parent_job_info({"PARENT_SECRET": "parent"})
+    parent.setup_scripts = ["uv sync"]
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch("iris.client.client.get_job_info", return_value=parent),
+    ):
+        client.submit(
+            Entrypoint.from_command("sleep", "infinity"),
+            "sandbox",
+            ResourceSpec(cpu=1, memory="1g"),
+            environment=EnvironmentSpec(env_vars={"TASK_VAR": "1"}),
+            container_profile=job_pb2.CONTAINER_PROFILE_SANDBOX,
+        )
+
+    assert stub.captured_env == {"TASK_VAR": "1"}
+    assert stub.captured_setup_scripts == []
+
+
+def test_task_client_presents_the_task_token_from_its_env(monkeypatch):
+    monkeypatch.setenv("IRIS_TASK_ID", "/alice/train/0:0")
+    monkeypatch.setenv(TERMINATION_GRACE_ENV, "10000")
+    monkeypatch.setenv("IRIS_TASK_TOKEN", "task-token")
+
+    set_job_info(None)
+    try:
+        info = get_job_info()
+        assert info is not None and info.credentials is not None
+        assert info.credentials.headers() == {"authorization": "Bearer task-token"}
+    finally:
+        set_job_info(None)
+
+
+@pytest.mark.parametrize("explicit", [None, {"CW_KEY_ID": "explicit-key", "CW_KEY_SECRET": "explicit-secret"}])
+def test_submit_forwards_personal_storage_credentials(capturing_client, monkeypatch, explicit):
+    client, stub = capturing_client
+    monkeypatch.setenv("CW_KEY_ID", "shell-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "shell-secret")
+    client.submit(
+        Entrypoint.from_command("true"),
+        "storage",
+        ResourceSpec(cpu=1, memory="1g"),
+        environment=EnvironmentSpec(env_vars=explicit, setup_scripts=[]),
+    )
+    expected = explicit or {"CW_KEY_ID": "shell-key", "CW_KEY_SECRET": "shell-secret"}
+    delivered = stub.captured_env if explicit else stub.captured_secrets
+    assert {name: delivered[name] for name in expected} == expected
+    other = stub.captured_secrets if explicit else stub.captured_env
+    assert not expected.keys() & other.keys()

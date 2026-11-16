@@ -52,6 +52,8 @@ pub struct NativeAuthConfig {
     pub federation_keys: HashMap<String, String>,
     #[serde(default)]
     pub admin_users: Vec<String>,
+    #[serde(default)]
+    pub user_roles: HashMap<String, String>,
     pub default_user_role: String,
 }
 
@@ -60,6 +62,9 @@ pub struct VerifiedIdentity {
     pub user_id: String,
     pub role: String,
     pub audience: Option<String>,
+    /// The job_id which owns this token, or None.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
     #[serde(skip)]
     pub endpoint: Option<String>,
     #[serde(skip)]
@@ -103,6 +108,8 @@ struct Claims {
     scope: Option<String>,
     #[serde(default)]
     endpoint: Option<String>,
+    #[serde(default)]
+    job_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,6 +154,7 @@ struct IapVerifier {
     public_keys_url: String,
     issuer: String,
     admin_users: Vec<String>,
+    user_roles: HashMap<String, String>,
     default_user_role: String,
     client: reqwest::Client,
     cache: Mutex<IapKeyCache>,
@@ -190,6 +198,7 @@ impl NativeVerifier {
                     config.iap_public_keys_url.clone(),
                     config.iap_issuer.clone(),
                     config.admin_users.clone(),
+                    config.user_roles.clone(),
                     config.default_user_role.clone(),
                 )
             })
@@ -368,6 +377,7 @@ impl NativeVerifier {
                         user_id: peer_id.clone(),
                         role: "federation-peer".to_string(),
                         audience: None,
+                        job_id: None,
                         endpoint: None,
                         federation_peer: Some(peer_id.clone()),
                         expires_at: token_data.claims.exp,
@@ -398,6 +408,7 @@ impl NativeVerifier {
             user_id: claims.sub,
             role: claims.role,
             audience: claims.endpoint.clone().filter(|_| proxy_scope),
+            job_id: claims.job_id.filter(|_| !proxy_scope),
             endpoint: claims.endpoint.filter(|_| proxy_scope),
             federation_peer: None,
             expires_at: claims.exp,
@@ -438,6 +449,7 @@ impl IapVerifier {
         public_keys_url: String,
         issuer: String,
         admin_users: Vec<String>,
+        user_roles: HashMap<String, String>,
         default_user_role: String,
     ) -> Result<Self, String> {
         if audience.is_empty() || public_keys_url.is_empty() || issuer.is_empty() {
@@ -452,6 +464,7 @@ impl IapVerifier {
             public_keys_url,
             issuer,
             admin_users,
+            user_roles,
             default_user_role,
             client,
             cache: Mutex::new(IapKeyCache {
@@ -507,12 +520,15 @@ impl IapVerifier {
             .claims;
         Ok(VerifiedIdentity {
             user_id: claims.email.clone(),
-            role: if self.admin_users.contains(&claims.email) {
+            role: if let Some(role) = self.user_roles.get(&claims.email) {
+                role.clone()
+            } else if self.admin_users.contains(&claims.email) {
                 ADMIN_ROLE.to_string()
             } else {
                 self.default_user_role.clone()
             },
             audience: None,
+            job_id: None,
             endpoint: None,
             federation_peer: None,
             expires_at: claims.exp,
@@ -552,6 +568,7 @@ C/edCMRM78P8eQTBCDUTK1ywSYaszvQZvneiW6gNtWEJndSreEcyyUdVvg==
             "https://unused.example/iap-keys".to_string(),
             TEST_IAP_ISSUER.to_string(),
             vec![],
+            HashMap::new(),
             "dashboard".to_string(),
         )
         .unwrap();

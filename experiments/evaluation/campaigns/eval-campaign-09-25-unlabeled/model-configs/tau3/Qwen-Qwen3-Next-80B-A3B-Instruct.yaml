@@ -1,0 +1,23 @@
+# tau3-pi-only serving override: 131072 context, 32768 per-turn output.
+# Qwen3-Next-80B-A3B-Instruct: 162 GB bf16 hybrid gated-delta-net MoE, non-thinking. TP4 follows the
+# model card's vLLM recipe; the 2 KV heads replicate across ranks. auto_overrides adds
+# --gdn-prefill-backend triton (compiler-free serve environment) and --reasoning-parser qwen3, which
+# passes content through unchanged for this instruct checkpoint.
+name: Qwen-Qwen3-Next-80B-A3B-Instruct
+location: Qwen/Qwen3-Next-80B-A3B-Instruct
+revision: 9c7f2fbe84465e40164a94cc16cd30b6999b0cc7
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 4
+serve:
+  tensor_parallel_size: 4
+  max_model_len: 131072
+  tool_call_parser: hermes
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    thinking_format: qwen-chat-template
+generation:
+  max_gen_toks: 32768

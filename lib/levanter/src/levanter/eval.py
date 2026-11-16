@@ -16,6 +16,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
+from jax._src import config as jax_config
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
 from tqdm_loggable.auto import tqdm
@@ -35,6 +36,7 @@ from levanter.data.text.examples import (
     named_lm_example_from_labeled,
 )
 from levanter.models.lm_model import LmExample, LmHeadModel
+from levanter.models.loss import next_token_ids
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.hf_utils import byte_length_of_token
 from levanter.utils.jax_utils import axis_resource_is_explicit
@@ -44,6 +46,7 @@ from levanter.utils.tree_utils import inference_mode
 
 
 logger = logging.getLogger(__name__)
+_TAGGED_EVAL_SHUFFLE_SEED = 0
 
 
 T = TypeVar("T")
@@ -59,7 +62,7 @@ BatchedTagArray = Int[Array, "... tag"]
 @dataclasses.dataclass
 class EvalResult:
     micro_avg_loss: float  # per token across all datasets
-    macro_avg_loss: float  # average of per-dataset average losses
+    macro_avg_loss: float  # average of per-dataset average losses, over tags with scored tokens
     tag_macro_losses: dict[str, float]  # per tag average-per-token loss
     tag_micro_losses: dict[str, float]  # per tag total loss, for "parent" tags
     total_eval_loading_time: float
@@ -233,7 +236,7 @@ def _default_lm_eval_loss_fn(
         model = mp.cast_to_compute(model)
     per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
     per_pos_weight = named_batch.loss_weight.array
-    per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
+    per_pos_token_id = next_token_ids(model.Pos.name, named_batch.tokens).array
     return per_pos_loss, per_pos_weight, per_pos_token_id
 
 
@@ -272,7 +275,7 @@ def _default_labeled_lm_eval_loss_fn(
     if mp is not None:
         model = mp.cast_to_compute(model)
     per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
-    per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
+    per_pos_token_id = next_token_ids(model.Pos.name, named_batch.tokens).array
     return per_pos_loss, loss_labels.array, per_pos_token_id
 
 
@@ -410,13 +413,16 @@ def cb_tagged_evaluate(
             ProgressEvent.EVALUATION_STARTED,
             ProgressEvent.EVALUATION_FINISHED,
         ):
-            if eval_current:
-                log_dict = eval_model(evaluator, step.model, prefix=prefix)
-                levanter.tracker.log(log_dict, step=step_count)
+            # AutoPGLE profiles each newly compiled module. The tagged evaluation module must not
+            # start a second CUPTI profiling session while training uses its PGLE executable.
+            with jax_config.enable_pgle(False):
+                if eval_current:
+                    log_dict = eval_model(evaluator, step.model, prefix=prefix)
+                    levanter.tracker.log(log_dict, step=step_count)
 
-            if eval_ema:
-                log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
-                levanter.tracker.log(log_dict, step=step_count)
+                if eval_ema:
+                    log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
+                    levanter.tracker.log(log_dict, step=step_count)
             last_eval_step = step_count
 
     return eval_callback
@@ -512,13 +518,18 @@ class TaggedEvaluator(Generic[Ex, M]):
         device_mesh=None,
         axis_mapping=None,
         max_examples_per_dataset=None,
+        shuffle: bool = False,
     ):
         if isinstance(EvalBatch, int):
             EvalBatch = hax.Axis("batch", EvalBatch)
         self.loss_fn = loss_fn
         self.dataset = DomainTaggedDataset(tagged_eval_sets, max_examples_per_dataset)
+        loader_dataset = self.dataset.as_async_dataset()
+        if shuffle:
+            # Keep evaluation order reproducible across hosts and repeated evaluations.
+            loader_dataset = loader_dataset.shuffle(jax.random.PRNGKey(_TAGGED_EVAL_SHUFFLE_SEED))
         self.loader = DataLoader(
-            self.dataset.as_async_dataset(),
+            loader_dataset,
             EvalBatch,
             max_buffered_batches=100,
             mesh=device_mesh,
@@ -597,16 +608,7 @@ class TaggedEvaluator(Generic[Ex, M]):
             state = self.accum_for_batch(model, state, batch, tags)
 
         micro_avg_loss = state.token_avg_loss.mean.item()
-        tag_avg_loss = state.loss_per_tag.mean
-        macro_avg_loss = jnp.mean(tag_avg_loss).item()
-
-        if self.bytes_per_token is not None:
-            micro_bpb = state.bpb.mean.item()
-            tag_avg_bpb = state.bpb_per_tag.mean
-            macro_avg_bpb = jnp.mean(tag_avg_bpb).item()
-        else:
-            micro_bpb = None
-            macro_avg_bpb = None
+        micro_bpb = state.bpb.mean.item() if self.bytes_per_token is not None else None
 
         tag_macro_loss: dict[str, float] = {}
         tag_micro_loss: dict[str, float] = {}
@@ -618,10 +620,19 @@ class TaggedEvaluator(Generic[Ex, M]):
         mean_bits_per_tag_cpu = np.array(state.bpb_per_tag.mean)
         total_bytes_per_tag_cpu = np.array(state.bpb_per_tag.total)
 
+        # A tag with no scored tokens has no loss. Keep it out of the macros and the logged series.
+        scored_tags = total_tokens_per_tag_cpu > 0
+        macro_avg_loss = float(np.mean(mean_loss_per_tag_cpu, where=scored_tags))
+        macro_avg_bpb = None
+        if self.bytes_per_token is not None:
+            macro_avg_bpb = float(np.mean(mean_bits_per_tag_cpu, where=scored_tags))
+
         for parent, children in self.hierarchy.items():
             mask = np.zeros(self.dataset.num_tags, dtype=bool)
             mask[children] = 1
-            mask = mask & (total_tokens_per_tag_cpu > 0)
+            mask = mask & scored_tags
+            if not mask.any():
+                continue
 
             tag_macro_loss[parent] = np.mean(mean_loss_per_tag_cpu, where=mask)
             tag_micro_loss[parent] = np.average(mean_loss_per_tag_cpu, weights=total_tokens_per_tag_cpu * mask)
@@ -631,6 +642,9 @@ class TaggedEvaluator(Generic[Ex, M]):
                 tag_micro_bpb[parent] = np.average(mean_bits_per_tag_cpu, weights=total_bytes_per_tag_cpu * mask)
 
         for tag, index in self.dataset.tag_to_index.items():
+            if not scored_tags[index]:
+                logger.warning(f"Eval tag {tag} has no scored tokens; leaving it out of the macros and logs")
+                continue
             tag_micro_loss[tag] = float(mean_loss_per_tag_cpu[index])
             if self.bytes_per_token is not None:
                 tag_micro_bpb[tag] = float(mean_bits_per_tag_cpu[index])

@@ -228,37 +228,42 @@ class GPUHangSupervisor:
                 seen_heartbeat = True
                 age = time.time() - hb_mtime
                 if age > deadman_timeout:
-                    logger.warning("deadman: no heartbeat for %.1fs (> %.1fs); killing child", age, deadman_timeout)
-                    self._kill_process_group(child)
-                    return child.wait(), True
+                    deadman_fired = self._kill_process_group(child)
+                    if deadman_fired:
+                        logger.warning("deadman: no heartbeat for %.1fs (> %.1fs); killed child", age, deadman_timeout)
+                    return child.wait(), deadman_fired
             elif not seen_heartbeat and now - spawn_time > self.startup_timeout:
-                logger.warning("startup: no first heartbeat within %.1fs; killing child", self.startup_timeout)
-                self._kill_process_group(child)
-                return child.wait(), True
+                deadman_fired = self._kill_process_group(child)
+                if deadman_fired:
+                    logger.warning("startup: no first heartbeat within %.1fs; killed child", self.startup_timeout)
+                return child.wait(), deadman_fired
 
             time.sleep(self.poll_interval)
 
     # -- process lifecycle ----------------------------------------------
 
-    def _kill_process_group(self, child: subprocess.Popen) -> None:
-        """SIGTERM the child's group, escalate to SIGKILL if it lingers."""
+    def _kill_process_group(self, child: subprocess.Popen) -> bool:
+        """Terminate the child's group and report whether the supervisor sent a signal."""
         if child.poll() is not None:
-            return
+            return False
         try:
             pgid = os.getpgid(child.pid)
         except ProcessLookupError:
-            return
+            return False
+        sent_signal = False
         for sig in (signal.SIGTERM, signal.SIGKILL):
             try:
                 os.killpg(pgid, sig)
             except ProcessLookupError:
-                return
+                return sent_signal
+            sent_signal = True
             try:
                 child.wait(timeout=_KILL_ESCALATION_GRACE)
-                return
+                return sent_signal
             except subprocess.TimeoutExpired:
                 logger.warning("child did not exit on %s; escalating", sig.name)
         logger.error("child survived SIGKILL escalation; giving up on clean kill")
+        return sent_signal
 
     def _kill_active_child(self) -> None:
         if self._active_child is not None and self._active_child.poll() is None:

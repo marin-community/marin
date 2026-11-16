@@ -7,7 +7,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from levanter.eval_harness import TaskConfig
+from levanter.eval_harness_config import TaskConfig
 
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
 
@@ -26,6 +26,12 @@ class EvalTaskConfig:
     """Whether scoring executes model-generated code."""
     completion_only: bool = False
     """Whether generation must use the completions API even for chat-template models."""
+
+
+def eval_task_directory(name: str, num_fewshot: int | None, task_alias: str | None) -> str:
+    """Return the durable results-directory identity for an eval task."""
+    shots = "default" if num_fewshot is None else str(num_fewshot)
+    return task_alias or f"{name}_{shots}shot"
 
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:

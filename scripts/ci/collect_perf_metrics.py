@@ -4,15 +4,16 @@
 """Collect a structured perf report for a finished datakit ferry run.
 
 Given an iris job id, this uses the Iris client to extract:
-- per-step wall times derived from deterministic ``zephyr-<step>-*`` child-job
-  names + ``started_at``/``finished_at`` on the job tree
+- per-stage wall times from the ``Step <name>_<hash> succeeded in <elapsed>``
+  lines that StepRunner logs in the ferry driver
 - aggregated preemption / failure / task-state counts across the whole tree
 - per-task peak memory and a heuristic bucket classification of non-succeeded
   tasks, fetched from each leaf worker job
 
 The report is written as JSON locally and (optionally) mirrored to a GCS prefix
-under a ``report_<utc-ts>_<short-name>/`` directory so that runs can be compared
-across time and architecture changes.
+under a ``report_<utc-ts>_<short-name>/`` directory so that canary operation can
+be compared across time and architecture changes. It reports Iris lifecycle and
+resource telemetry. Per-stage Zephyr CPU statistics are outside its scope.
 
 Used by the scheduled ``marin-canary-datakit-tier{1,2,3}`` workflows.
 """
@@ -28,44 +29,38 @@ from pathlib import Path
 
 import click
 from connectrpc.errors import ConnectError
-from google.protobuf import json_format
 from iris.cli.connect import connect_controller, rpc_client
-from iris.cli.job import build_job_summary
-from iris.client import IrisClient
+from iris.client.client import IrisClient
+from iris.client.workload import JobStatus
+from iris.client.workload_summary import job_summary_data
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2, query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Each ferry step that fans out work submits a child iris job with a
-# deterministic name prefix. ``zephyr-fuzzy-dups-...-pN-aM`` etc. share a
-# prefix, so multi-phase steps (CC iterations, levanter cache prep) sum
-# naturally. ``zephyr-levanter-cache-{copy,probe}-*`` belong to the tokenize
-# step. ``download`` is optional — the nemotron ferry verifies a pre-staged
-# dump rather than downloading.
-_STEP_PREFIXES: dict[str, str] = {
-    "zephyr-download-hf-": "download",
-    "zephyr-normalize-": "normalize",
-    "zephyr-minhash-attrs-": "minhash",
-    "zephyr-fuzzy-dups-": "fuzzy_dups",
-    "zephyr-consolidate-filter-": "consolidate",
-    "zephyr-tokenize-train-": "tokenize",
-    "zephyr-levanter-cache-copy-": "tokenize",
-    "zephyr-levanter-cache-probe-": "tokenize",
-}
+# StepRunner logs one line per completed step in the driver task. Stages that run
+# on the shared Zephyr pool have no child job of their own, so this line is the
+# only per-stage clock.
+_STEP_RUNNER_LOGGER = "marin.execution.step_runner"
+_STEP_SUCCEEDED = re.compile(r"Step (?P<name>\S+)_[0-9a-f]{8} succeeded in (?P<elapsed>\d+:\d{2}:\d{2}(?:\.\d+)?)")
+_STEP_SKIPPED = re.compile(r"Skip (?P<name>\S+)_[0-9a-f]{8}: already succeeded")
+_DRIVER_LOG_MAX_LINES = 10_000
 
-# Non-fatal warning if any of these step names is missing from the parsed
-# durations. ``download`` is intentionally absent — see _STEP_PREFIXES above.
+# Non-fatal warning if any of these stages is missing from the parsed durations.
 EXPECTED_STEPS: tuple[str, ...] = (
     "normalize",
-    "minhash",
-    "fuzzy_dups",
-    "consolidate",
     "tokenize",
+    "embed",
+    "quality",
+    "decontam",
+    "minhash",
+    "dedup",
+    "verify_fuzzy_clusters",
+    "store",
 )
 
 # Buckets surfaced in ``infra_failures``. Order preserved so JSON output is
@@ -105,32 +100,6 @@ SELECT task_wall_ms FROM (
       {state_filter}
 )"""
 
-# Per-direct-child breakdown: the recursive CTE carries child_job_id (the
-# direct child of the root job each descendant belongs to) so we can group by it.
-_TASK_WALL_TIME_BY_CHILD_SQL = """\
-SELECT child_job_id, SUM(duration_ms) AS task_wall_ms FROM (
-    WITH RECURSIVE descendants(job_id, child_job_id) AS (
-        SELECT job_id, job_id AS child_job_id FROM jobs WHERE parent_job_id = '{job_id}'
-        UNION ALL
-        SELECT j.job_id, d.child_job_id FROM jobs j
-        JOIN descendants d ON j.parent_job_id = d.job_id
-    ),
-    leaves(job_id, child_job_id) AS (
-        SELECT d.job_id, d.child_job_id FROM descendants d
-        WHERE NOT EXISTS (SELECT 1 FROM jobs c WHERE c.parent_job_id = d.job_id)
-    )
-    SELECT ta.finished_at_ms - ta.started_at_ms AS duration_ms, leaves.child_job_id
-    FROM task_attempts ta
-    JOIN tasks t ON t.task_id = ta.task_id
-    JOIN leaves USING (job_id)
-    WHERE ta.started_at_ms IS NOT NULL
-      AND ta.finished_at_ms IS NOT NULL
-      AND ta.finished_at_ms > ta.started_at_ms
-      {state_filter}
-)
-GROUP BY child_job_id
-ORDER BY child_job_id"""
-
 
 @dataclass
 class PerfReport:
@@ -142,7 +111,6 @@ class PerfReport:
     wall_seconds_total: float | None = None
     stage_wall_seconds: dict[str, float] = field(default_factory=dict)
     sum_task_wall_seconds_total: float | None = None
-    stage_sum_task_wall_seconds: dict[str, float | None] = field(default_factory=dict)
     cached_steps: list[str] = field(default_factory=list)
     ooms: int = 0
     failed_shards: int = 0
@@ -170,19 +138,29 @@ class PerfReport:
 # --------------------------------------------------------------------------- #
 
 
-def _job_status_to_dict(job: job_pb2.JobStatus) -> dict:
-    data = json_format.MessageToDict(job, preserving_proto_field_name=True)
-    data["has_children"] = bool(job.has_children)
-    return data
+def _job_tree_entry_dict(job: JobStatus) -> dict:
+    def timestamp_dict(value):
+        return {"epoch_ms": value.epoch_ms()} if value is not None else None
+
+    return {
+        "job_id": str(job.job_id),
+        "state": job.state.name.lower(),
+        "started_at": timestamp_dict(job.started_at),
+        "finished_at": timestamp_dict(job.finished_at),
+        "failure_count": job.failure_count,
+        "preemption_count": job.preemption_count,
+        "task_state_counts": {state.name.lower(): count for state, count in job.task_state_counts.items()},
+        "has_children": job.has_children,
+    }
 
 
-def fetch_job_summary(client: IrisClient, job_id: str) -> dict | None:
-    """Return a job summary, or None when the Iris RPC fails."""
+def fetch_job_description(client: IrisClient, job_id: str) -> dict | None:
+    """Return a Job description, or None when the Iris RPC fails."""
     try:
         job_name = JobName.from_wire(job_id)
-        return build_job_summary(client.status(job_name), client.list_tasks(job_name))
+        return job_summary_data(client.job_status(job_name), client.list_tasks(job_name))
     except ConnectError as exc:
-        logger.warning("iris client job summary failed for %s: %s", job_id, exc)
+        logger.warning("iris client Job description failed for %s: %s", job_id, exc)
         return None
 
 
@@ -196,8 +174,8 @@ def fetch_job_tree(client: IrisClient, job_id: str) -> list[dict] | None:
     """
     try:
         jobs = client.list_jobs(prefix=job_id)
-        jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
-        return [_job_status_to_dict(job) for job in jobs]
+        jobs.sort(key=lambda job: job.submitted_at.epoch_ms() if job.submitted_at is not None else 0, reverse=True)
+        return [_job_tree_entry_dict(job) for job in jobs]
     except ConnectError as exc:
         logger.warning("iris client job list failed for prefix %s: %s", job_id, exc)
         return None
@@ -220,7 +198,7 @@ def fetch_leaf_summaries(client: IrisClient, job_tree: list[dict]) -> list[dict]
         job_id = job.get("job_id")
         if not job_id:
             continue
-        s = fetch_job_summary(client, job_id)
+        s = fetch_job_description(client, job_id)
         if s is not None:
             summaries.append(s)
     return summaries
@@ -248,40 +226,6 @@ def fetch_raw_query_task_wall_ms(
     except (ConnectError, json.JSONDecodeError, KeyError, ValueError) as exc:
         logger.warning("iris query task_wall_ms failed: %s", exc)
         return None
-
-
-def fetch_raw_query_task_wall_ms_by_child(
-    controller: ControllerServiceClientSync, job_id: str, *, include_failed: bool = False
-) -> dict[str, int] | None:
-    """Return per-direct-child task wall ms via ExecuteRawQuery, keyed by child job_id."""
-    state_filter = "" if include_failed else f"AND t.state = {_TASK_STATE_SUCCEEDED}"
-    sql = _TASK_WALL_TIME_BY_CHILD_SQL.format(job_id=job_id.replace("'", "''"), state_filter=state_filter)
-    try:
-        rows = _query_rows(controller, sql)
-        return {str(row["child_job_id"]): int(row["task_wall_ms"]) for row in rows}
-    except (ConnectError, json.JSONDecodeError, KeyError, ValueError) as exc:
-        logger.warning("iris query by_child failed: %s", exc)
-        return None
-
-
-def bucket_by_step(by_child: dict[str, int], parent_id: str) -> dict[str, int | None]:
-    """Bucket per-child task_wall_ms into step names using the same prefix logic as compute_stage_wall_seconds.
-
-    All EXPECTED_STEPS are always present; steps with no matching child jobs have value None.
-    """
-    parent_depth = _job_depth(parent_id)
-    by_step: dict[str, int | None] = {step: None for step in EXPECTED_STEPS}
-    for child_job_id, task_wall_ms in by_child.items():
-        if not child_job_id.startswith(parent_id):
-            continue
-        if _job_depth(child_job_id) != parent_depth + 1:
-            continue
-        name = child_job_id.rsplit("/", 1)[-1]
-        for prefix, step in _STEP_PREFIXES.items():
-            if name.startswith(prefix):
-                by_step[step] = (by_step.get(step) or 0) + task_wall_ms
-                break
-    return by_step
 
 
 def aggregate_per_task_metrics(summaries: list[dict]) -> tuple[int, dict[str, int], int, int]:
@@ -317,10 +261,10 @@ def aggregate_per_task_metrics(summaries: list[dict]) -> tuple[int, dict[str, in
 def aggregate_job_tree(jobs: list[dict]) -> dict:
     """Sum preemption / failure / task-state counts across every job in the tree.
 
-    Returns a dict with the same field names as ``iris job summary``:
+    Returns a dict with the same field names as ``iris job describe``:
     ``preemption_count``, ``failure_count``, ``task_state_counts``, plus
     ``job_count`` for sanity-checking. Used to override the parent-only
-    counts that ``iris job summary <parent>`` returns, since those only
+    counts that ``iris job describe <parent>`` returns, since those only
     describe the launcher task and miss the fan-out workers.
     """
     preemption_count = 0
@@ -340,54 +284,52 @@ def aggregate_job_tree(jobs: list[dict]) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Per-step wall times derived from the iris job tree
+# Per-stage wall times from the driver's StepRunner log
 # --------------------------------------------------------------------------- #
 
 
-def _job_depth(job_id: str) -> int:
-    """Number of ``/`` separators — proxies for tree depth in the iris namespace."""
-    return job_id.count("/")
+def fetch_driver_step_lines(client: IrisClient, job_id: str) -> list[str] | None:
+    """Return the StepRunner log lines of the ferry driver task, or None when the RPC fails."""
+    try:
+        entries = client.task(JobName.from_wire(job_id).task(0)).logs(
+            substring=_STEP_RUNNER_LOGGER, max_lines=_DRIVER_LOG_MAX_LINES
+        )
+    except ConnectError as exc:
+        logger.warning("iris driver logs failed for %s: %s", job_id, exc)
+        return None
+    return [entry.data for entry in entries]
 
 
-def compute_stage_wall_seconds(
-    jobs: list[dict],
-    parent_id: str,
-) -> tuple[dict[str, float], list[str]]:
-    """Bucket direct-child iris jobs into ferry steps and sum their wall times.
+def _stage(step_name: str) -> str:
+    """Map ``datakit/quality/<source>`` to ``quality`` and ``<ferry>/normalize`` to ``normalize``."""
+    parts = step_name.split("/")
+    return parts[1] if parts[0] == "datakit" and len(parts) > 1 else parts[-1]
 
-    For each direct child of ``parent_id``, look up its name prefix in
-    ``_STEP_PREFIXES`` and accumulate ``finished_at - started_at``. Multi-phase
-    steps (``zephyr-fuzzy-dups-...-pN-aM``, ``zephyr-tokenize-train-pN-aM``)
-    share a prefix, so their per-phase durations sum.
 
-    We restrict to direct children because workers nested under coordinators
-    would double-count their parent's wall time.
+def _seconds(elapsed: str) -> float:
+    hours, minutes, seconds = elapsed.split(":")
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
 
-    Returns ``(stage_wall_seconds, cached_steps)``. Steps in ``EXPECTED_STEPS``
-    that don't appear in the tree are reported with ``0.0`` and added to
-    ``cached_steps`` — those steps always run unless the artifact already
-    exists, so absence implies a cache hit.
+
+def compute_stage_wall_seconds(step_lines: list[str]) -> tuple[dict[str, float], list[str]]:
+    """Return each stage's StepRunner wall time.
+
+    A stage with several steps (one per source, or several reports) adds their
+    times together; a single-source ferry has one step per stage. Returns
+    ``(stage_wall_seconds, cached_steps)``. A stage whose steps the runner only
+    skipped as already succeeded is reported with ``0.0`` in ``cached_steps``.
+    A stage with no line at all is left out.
     """
-    parent_depth = _job_depth(parent_id)
     durations: dict[str, float] = {}
+    skipped: set[str] = set()
+    for line in step_lines:
+        if match := _STEP_SUCCEEDED.search(line):
+            stage = _stage(match["name"])
+            durations[stage] = durations.get(stage, 0.0) + _seconds(match["elapsed"])
+        elif match := _STEP_SKIPPED.search(line):
+            skipped.add(_stage(match["name"]))
 
-    for job in jobs:
-        job_id = job.get("job_id") or ""
-        if not job_id.startswith(parent_id):
-            continue
-        if _job_depth(job_id) != parent_depth + 1:
-            continue
-        name = job_id.rsplit("/", 1)[-1]
-        for prefix, step in _STEP_PREFIXES.items():
-            if not name.startswith(prefix):
-                continue
-            start_ms = int((job.get("started_at") or {}).get("epoch_ms") or 0)
-            end_ms = int((job.get("finished_at") or {}).get("epoch_ms") or 0)
-            if start_ms and end_ms and end_ms > start_ms:
-                durations[step] = durations.get(step, 0.0) + (end_ms - start_ms) / 1000.0
-            break
-
-    cached_steps = sorted(s for s in EXPECTED_STEPS if s not in durations)
+    cached_steps = sorted(skipped - durations.keys())
     for s in cached_steps:
         durations[s] = 0.0
     return durations, cached_steps
@@ -459,17 +401,18 @@ def build_report(
     summary: dict | None,
     job_tree: list[dict] | None,
     leaf_summaries: list[dict],
+    step_lines: list[str] | None,
     status: dict | None,
     workflow_env: dict[str, str | None],
 ) -> PerfReport:
     """Assemble a PerfReport from iris summary + tree + leaf summaries + status.
 
     Sources, in order of who-knows-what:
-    - parent ``iris job summary``: launcher task duration → ``wall_seconds_total``.
-    - ``iris job list --prefix``: per-step wall times (deterministic zephyr-*
-      child names) and aggregated preemption / failure / task-state counts
-      across the whole tree.
-    - per-leaf ``iris job summary``: per-task ``memory_peak_mb`` and ``error``
+    - parent ``iris job describe``: launcher task duration → ``wall_seconds_total``.
+    - driver StepRunner log: per-stage wall times.
+    - ``iris job list --prefix``: aggregated preemption / failure / task-state
+      counts across the whole tree.
+    - per-leaf ``iris job describe``: per-task ``memory_peak_mb`` and ``error``
       strings, which only live on the leaf workers, not on the parent.
     """
     report = PerfReport(
@@ -488,7 +431,7 @@ def build_report(
         report.warnings.append("ferry_status_path: not readable; status/marin_prefix unset")
 
     if summary is None:
-        report.warnings.append("iris client job summary failed; wall_seconds_total unavailable")
+        report.warnings.append("iris client Job description failed; wall_seconds_total unavailable")
     else:
         tasks = summary.get("tasks") or []
         durations = [t.get("duration_ms") for t in tasks if t.get("duration_ms")]
@@ -522,12 +465,15 @@ def build_report(
     if report.task_state_counts.get("preempted"):
         report.warnings.append("task_state_counts.preempted > 0: stage durations may be split across attempts")
 
-    if job_tree is not None:
-        report.stage_wall_seconds, report.cached_steps = compute_stage_wall_seconds(job_tree, job_id)
+    if step_lines is not None:
+        report.stage_wall_seconds, report.cached_steps = compute_stage_wall_seconds(step_lines)
         if all(report.stage_wall_seconds.get(s, 0.0) == 0.0 for s in EXPECTED_STEPS):
-            report.warnings.append("all expected steps cache-hit; pipeline may not have done any work")
+            report.warnings.append("no expected step ran; pipeline may not have done any work")
+        missing = [s for s in EXPECTED_STEPS if s not in report.stage_wall_seconds]
+        if missing:
+            report.warnings.append(f"expected steps neither ran nor were cached: {', '.join(missing)}")
     else:
-        report.warnings.append("iris job tree unavailable; stage_wall_seconds empty")
+        report.warnings.append("driver step log unavailable; stage_wall_seconds empty")
 
     if report.wall_seconds_total is None:
         report.warnings.append("wall_seconds_total: launcher duration_ms missing from iris summary")
@@ -581,7 +527,7 @@ def upload_report_to_gcs(report: PerfReport, gcs_prefix: str, report_name: str, 
     "--status",
     "status_path",
     default=None,
-    help="Optional FERRY_STATUS_PATH gs:// URL written by the ferry's _write_status helper.",
+    help="Optional FERRY_STATUS_PATH gs:// URL written by infra.ci.run_status.",
 )
 @click.option(
     "--report-name",
@@ -644,9 +590,10 @@ def main(
             IrisClient.remote(endpoint.url, workspace=_REPO_ROOT, credentials=endpoint.credentials) as client,
             rpc_client(endpoint.url, endpoint.credentials) as controller,
         ):
-            summary = fetch_job_summary(client, job_id)
+            summary = fetch_job_description(client, job_id)
             job_tree = fetch_job_tree(client, job_id)
             leaf_summaries = fetch_leaf_summaries(client, job_tree) if job_tree else []
+            step_lines = fetch_driver_step_lines(client, job_id)
             status = load_ferry_status(status_path)
 
             report = build_report(
@@ -654,6 +601,7 @@ def main(
                 summary=summary,
                 job_tree=job_tree,
                 leaf_summaries=leaf_summaries,
+                step_lines=step_lines,
                 status=status,
                 workflow_env=workflow_env,
             )
@@ -664,14 +612,6 @@ def main(
                     report.warnings.append("iris query task_wall_ms: failed; sum_task_wall_seconds_total unset")
                 else:
                     report.sum_task_wall_seconds_total = task_wall_ms / 1000.0
-                by_child = fetch_raw_query_task_wall_ms_by_child(controller, job_id)
-                if by_child is None:
-                    report.warnings.append("iris query by_child: failed; stage_sum_task_wall_seconds empty")
-                else:
-                    report.stage_sum_task_wall_seconds = {
-                        step: ms / 1000.0 if ms is not None else None
-                        for step, ms in bucket_by_step(by_child, job_id).items()
-                    }
 
     if out is not None:
         write_report_local(report, out)

@@ -3,11 +3,10 @@
 
 """Drop the ``backends`` table.
 
-``0033`` created it and seeded one row per backend, and nothing ever read it back:
-the controller builds its backend registry from cluster config at startup, and the
-meta-scheduler routes against what each backend advertises in memory. Its last
-distinguishing column, ``allow_policy_json``, held the per-backend allow policy,
-which is gone — admission belongs to the cluster a job lands on.
+``0033`` created it and seeded one row per backend, and nothing ever read it back.
+The controller builds its backend from cluster config at startup. The table's
+last distinguishing column, ``allow_policy_json``, held a backend allow policy,
+which is gone—admission belongs to the cluster a job lands on.
 
 Idempotent, and it carries no data: ``DROP TABLE IF EXISTS`` no-ops on a fresh DB,
 whose baseline never declares the table, and on a re-run after a crash. A legacy DB

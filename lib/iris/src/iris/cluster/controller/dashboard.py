@@ -32,11 +32,14 @@ import functools
 import logging
 import os
 import secrets
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
 from rigging.server_auth import (
     PolicyAuthInterceptor,
@@ -54,7 +57,7 @@ from starlette.routing import Mount, Route
 from starlette.types import ASGIApp
 
 from iris.cluster.controller.auth import VERIFIED_IDENTITY_HEADER, JwtTokenManager
-from iris.cluster.controller.backend import backend_descriptor
+from iris.cluster.controller.backend import dashboard_backend_descriptor
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.native_proxy import (
@@ -76,7 +79,7 @@ from iris.cluster.dashboard_common import (
     static_files_mount,
 )
 from iris.cluster.types import JobName
-from iris.rpc.async_adapter import AsyncServiceAdapter
+from iris.rpc.async_adapter import AsyncServiceAdapter, BoundedThreadExecutor
 from iris.rpc.auth import SESSION_COOKIE, authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication, EndpointServiceASGIApplication
@@ -85,6 +88,21 @@ from iris.rpc.interceptors import RequestTimingInterceptor
 logger = logging.getLogger(__name__)
 
 FederationOwnerCheck = Callable[[JobName, str], bool]
+CONTROLLER_SHUTTING_DOWN = "Controller is shutting down"
+# Kubernetes exec can block for minutes. Limit both active calls and queued work
+# independently of the controller's ordinary RPC handler pool.
+_EXEC_RPC_THREADS = 128
+_EXEC_RPC_PENDING = 1024
+
+
+class _ControllerDrainingInterceptor:
+    def __init__(self, draining: threading.Event):
+        self._draining = draining
+
+    async def intercept_unary(self, call_next, request, ctx):
+        if self._draining.is_set():
+            raise ConnectError(Code.UNAVAILABLE, CONTROLLER_SHUTTING_DOWN)
+        return await call_next(request, ctx)
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +221,12 @@ class ControllerDashboard:
         # cluster that receives federation, None otherwise.
         self._federation_owner_check = federation_owner_check
         self._proxy_decision_secret = proxy_decision_secret
+        self._draining = threading.Event()
+        self._exec_executor = BoundedThreadExecutor(
+            max_workers=_EXEC_RPC_THREADS,
+            max_pending=_EXEC_RPC_PENDING,
+            thread_name_prefix="rpc-exec",
+        )
         self._app = self._create_app()
 
     @property
@@ -216,6 +240,10 @@ class ControllerDashboard:
             raise RuntimeError("native proxy decisions are not configured")
         return self._proxy_decision_secret
 
+    def begin_shutdown(self) -> None:
+        """Reject new control-plane requests while the controller shuts down."""
+        self._draining.set()
+
     def _create_app(self) -> ASGIApp:
         include_tb = bool(os.environ.get("IRIS_DEBUG"))
         controller_timing = RequestTimingInterceptor(include_traceback=include_tb)
@@ -225,11 +253,10 @@ class ControllerDashboard:
             unauthenticated_methods=_UNAUTHENTICATED_RPCS,
             authorize=authorize_method,
         )
-        controller_interceptors = [auth_interceptor, controller_timing]
-        # @on_loop handlers run inline on the event loop; everything else
-        # is dispatched to a thread by AsyncServiceAdapter.
+        controller_interceptors = [_ControllerDrainingInterceptor(self._draining), auth_interceptor, controller_timing]
+        # AsyncServiceAdapter dispatches each sync handler to a thread.
         rpc_asgi_app = ControllerServiceASGIApplication(
-            service=AsyncServiceAdapter(self._service),
+            service=AsyncServiceAdapter(self._service, isolated_methods={"exec_in_container": self._exec_executor}),
             interceptors=controller_interceptors,
             compressions=IRIS_RPC_COMPRESSIONS,
         )
@@ -323,7 +350,10 @@ class ControllerDashboard:
         ]
         routes.append(static_files_mount())
 
-        app = Starlette(routes=routes)
+        async def shutdown_exec_executor() -> None:
+            self._exec_executor.shutdown()
+
+        app = Starlette(routes=routes, lifespan=on_shutdown(shutdown_exec_executor))
         # Starlette's default trailing-slash redirect builds an absolute
         # Location from ``scope["server"]`` (or the request's Host header).
         # Behind GCP IAP / a load balancer whose backend Host is the internal
@@ -368,23 +398,24 @@ class ControllerDashboard:
             if self._reports_native_identity
             else _request_is_authenticated(self._auth_policy, request)
         )
-        descriptors = {bid: backend_descriptor(b) for bid, b in self._service.backends.items()}
-        union_capabilities = sorted({cap for d in descriptors.values() for cap in d.capabilities})
-        representative = backend_descriptor(self._service.provider)
+        backend = self._service.backend
+        descriptor = dashboard_backend_descriptor(backend)
         return JSONResponse(
             {
                 "auth_enabled": self._auth_provider is not None,
                 "provider": self._auth_provider,
                 "authenticated": authenticated,
-                # Union of every backend's capabilities gates which tabs the dashboard shows.
-                "capabilities": union_capabilities,
+                "capabilities": descriptor.capabilities,
                 "backends": [
-                    {"id": bid, "name": d.name, "capabilities": d.capabilities} for bid, d in descriptors.items()
+                    {
+                        "id": backend.descriptor.backend_id,
+                        "name": descriptor.name,
+                        "capabilities": descriptor.capabilities,
+                    }
                 ],
-                # Representative backend for the single-backend frontend path.
                 "backend": {
-                    "name": representative.name,
-                    "capabilities": representative.capabilities,
+                    "name": descriptor.name,
+                    "capabilities": descriptor.capabilities,
                 },
                 "optional": self._auth_optional,
             }
@@ -420,10 +451,15 @@ class ControllerDashboard:
         return response
 
     @public
-    def _health(self, _request: Request) -> JSONResponse:
+    async def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
+        if self._draining.is_set():
+            return JSONResponse(
+                {"status": "unavailable", "reason": CONTROLLER_SHUTTING_DOWN},
+                status_code=503,
+            )
         try:
-            checkpoint_epoch_ms = self._service.probe_database()
+            checkpoint_epoch_ms = await run_in_threadpool(self._service.probe_database)
         except SQLAlchemyError:
             logger.exception("Controller database health probe failed")
             return JSONResponse({"status": "unhealthy", "database": "error"}, status_code=503)

@@ -19,12 +19,13 @@ Areas covered:
   control-cycle   — the per-tick ControlSnapshot built via load_control_snapshot
 """
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, Row, bindparam, case, exists, func, literal_column, select, tuple_
+from sqlalchemy.sql.selectable import FromClause
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.attempt_counts import (
@@ -51,6 +52,7 @@ from iris.cluster.controller.schema import (
     jobs_table,
     local_tasks,
     slices_table,
+    task_attempt_outputs_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -59,13 +61,16 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     DISPATCHED_TASK_STATES,
+    EXECUTING_TASK_STATES,
     ActiveTaskRow,
+    AttemptDetailRow,
     RunningTaskEntry,
     TaskDetailRow,
     task_row_can_be_scheduled,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection, HandoffState
+from iris.cluster.runtime.env import TASK_OUTPUT_FINALIZING_STATUS
 from iris.cluster.types import (
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
@@ -107,9 +112,11 @@ class PendingDispatchRow:
     constraints_json: str | None
     task_image: str
     timeout_ms: int | None
+    termination_grace_ms: int
     # Coscheduling + priority drive Kueue gang admission on the direct path.
     has_coscheduling: bool
     coscheduling_group_by: str  # "" when not coscheduled
+    coscheduling_group_sizes: list[int]
     # Current tasks.priority_band. Before first direct dispatch, the drain
     # resolves parent inheritance from job_config and stamps the result; a
     # redrive reads that fixed band back from the task row.
@@ -117,6 +124,8 @@ class PendingDispatchRow:
     # Requested container security profile (job_config). UNSPECIFIED(0) resolves
     # to DEFAULT when the backend applies it.
     container_profile: int  # job_pb2.ContainerProfile
+    egress_policy: int  # job_pb2.EgressPolicy
+    egress_allow_json: list[str]  # rule strings; see iris.cluster.egress
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,7 +296,6 @@ def _apply_job_filters(
     *,
     depth_filter: int | None,
     parent_filter: str | None,
-    state_ids: tuple[int, ...],
     name_filter: str,
     job_id_prefix: str,
     backend_id_filter: str = "",
@@ -368,7 +376,6 @@ def list_jobs(
         stmt,
         depth_filter=depth_filter,
         parent_filter=parent_filter,
-        state_ids=state_ids,
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
         backend_id_filter=query.backend_id,
@@ -384,7 +391,6 @@ def list_jobs(
         select(func.count()).select_from(jobs_table),
         depth_filter=depth_filter,
         parent_filter=parent_filter,
-        state_ids=state_ids,
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
         backend_id_filter=query.backend_id,
@@ -552,6 +558,15 @@ def get_job_state(tx: Tx, job_id: JobName) -> int | None:
     return int(row.state) if row is not None else None
 
 
+def get_job_submitting_user(tx: Tx, job_id: JobName) -> str | None:
+    """Return the authenticated submitter stored for ``job_id``, or None if absent."""
+    row = tx.execute(
+        select(jobs_table.c.submitting_user).where(jobs_table.c.job_id == bindparam("job_id")),
+        {"job_id": job_id},
+    ).first()
+    return str(row.submitting_user) if row is not None else None
+
+
 def find_prunable_job(tx: Tx, terminal_states: Iterable[int], before_ts: Timestamp) -> JobName | None:
     """Return one terminal *local* job finished before ``before_ts``, or None.
 
@@ -624,6 +639,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             job_config_table.c.constraints_json,
             job_config_table.c.has_coscheduling,
             job_config_table.c.coscheduling_group_by,
+            job_config_table.c.coscheduling_group_sizes,
             job_config_table.c.scheduling_timeout_ms,
             job_config_table.c.max_task_failures,
             job_config_table.c.entrypoint_json,
@@ -633,11 +649,14 @@ def get_job_detail(tx: Tx, job_id: JobName):
             job_config_table.c.max_retries_failure,
             job_config_table.c.max_retries_preemption,
             job_config_table.c.timeout_ms,
+            job_config_table.c.termination_grace_ms,
             job_config_table.c.preemption_policy,
             job_config_table.c.existing_job_policy,
             job_config_table.c.priority_band,
             job_config_table.c.task_image,
             job_config_table.c.container_profile,
+            job_config_table.c.egress_policy,
+            job_config_table.c.egress_allow_json,
             job_config_table.c.submit_argv_json,
             job_config_table.c.fail_if_exists,
         )
@@ -774,20 +793,10 @@ def resource_usage_by_worker(tx: Tx) -> dict[WorkerId, WorkerResourceUsage]:
     }
 
 
-_SCHEDULER_ACTIVE_TASK_STATES = (
-    int(job_pb2.TASK_STATE_ASSIGNED),
-    int(job_pb2.TASK_STATE_BUILDING),
-    int(job_pb2.TASK_STATE_RUNNING),
-)
-
-
 _RUNNING_TASKS_BY_WORKER_STMT = select(tasks_table.c.current_worker_id.label("worker_id"), tasks_table.c.task_id).where(
     tasks_table.c.current_worker_id.in_(bindparam("worker_ids", expanding=True)),
     tasks_table.c.state.in_(bindparam("states", expanding=True)),
 )
-
-
-_BUILDING_COUNTS_STATES = (job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED)
 
 
 _BUILDING_COUNTS_STMT = (
@@ -809,7 +818,7 @@ def building_counts(tx: Tx, worker_ids: Sequence[WorkerId]) -> dict[WorkerId, in
         return {}
     rows = tx.execute(
         _BUILDING_COUNTS_STMT,
-        {"worker_ids": list(worker_ids), "states": list(_BUILDING_COUNTS_STATES)},
+        {"worker_ids": list(worker_ids), "states": sorted(DISPATCHED_TASK_STATES)},
     ).all()
     return {row.worker_id: int(row.cnt) for row in rows}
 
@@ -820,7 +829,7 @@ def running_tasks_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId,
         return {}
     rows = tx.execute(
         _RUNNING_TASKS_BY_WORKER_STMT,
-        {"worker_ids": list(worker_ids), "states": list(_SCHEDULER_ACTIVE_TASK_STATES)},
+        {"worker_ids": list(worker_ids), "states": sorted(ACTIVE_TASK_STATES)},
     ).all()
     running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
     for row in rows:
@@ -858,6 +867,7 @@ def _row_to_pending_task(row: Row) -> PendingTask:
     return PendingTask(
         task_id=row.task_id,
         job_id=row.job_id,
+        submitting_user=str(row.submitting_user),
         backend_id=str(row.backend_id),
         state=int(row.state),
         current_attempt_id=int(row.current_attempt_id),
@@ -886,6 +896,7 @@ _PENDING_TASKS_STMT = (
         *PENDING_TASK_COLS,
         # job columns (label job_state to avoid clash with tasks.state)
         jobs_table.c.state.label("job_state"),
+        jobs_table.c.submitting_user,
         jobs_table.c.scheduling_deadline_epoch_ms,
         # job_config columns
         job_config_table.c.scheduling_timeout_ms,
@@ -969,9 +980,9 @@ _USER_SPEND_STMT = (
 def user_spend_rows(tx: Tx) -> Sequence[Row]:
     """Return per-job resource rows for active, non-BATCH tasks (budget spend basis).
 
-    Each row carries ``(job_id, res_cpu_millicores, res_memory_bytes,
-    res_device_json, task_count)``. ``job_config.priority_band`` (the user's
-    requested band) drives the BATCH exclusion, not the stamped
+    Each row carries ``(job_id, res_cpu_millicores,
+    res_memory_bytes, res_device_json, task_count)``. ``job_config.priority_band``
+    (the user's requested band) drives the BATCH exclusion, not the stamped
     ``tasks.priority_band``, so scheduler-downgraded jobs still count.
     """
     return tx.execute(_USER_SPEND_STMT, {"states": list(ACTIVE_TASK_STATES)}).all()
@@ -995,12 +1006,26 @@ ATTEMPT_COLS = (
     task_attempts_table.c.pod_name,
     task_attempts_table.c.pod_uid,
     task_attempts_table.c.node_name,
+    task_attempts_table.c.topology_json,
     task_attempts_table.c.terminal_reason,
+    task_attempt_outputs_table.c.archive_json.label("output_archive_json"),
 )
+
+ATTEMPTS_WITH_OUTPUT = task_attempts_table.outerjoin(
+    task_attempt_outputs_table,
+    (task_attempt_outputs_table.c.task_id == task_attempts_table.c.task_id)
+    & (task_attempt_outputs_table.c.attempt_id == task_attempts_table.c.attempt_id),
+)
+
+
+def attempt_select(from_clause: FromClause = ATTEMPTS_WITH_OUTPUT):
+    """Select attempt rows with their optional output archive metadata."""
+    return select(*ATTEMPT_COLS).select_from(from_clause)
+
 
 _BULK_GET_CHUNK_SIZE = 450
 
-_BULK_GET_ATTEMPTS_STMT = select(*ATTEMPT_COLS).where(
+_BULK_GET_ATTEMPTS_STMT = attempt_select().where(
     tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(bindparam("keys", expanding=True))
 )
 
@@ -1076,7 +1101,7 @@ def attempt_counts_for_jobs(tx: Tx, job_ids: Sequence[JobName]) -> dict[JobName,
     }
 
 
-def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, tuple[object, ...]]:
+def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, tuple[AttemptDetailRow, ...]]:
     """Return ``{task_id: (attempt_row, ...)}`` with every attempt per task, ascending by attempt id.
 
     Returns the complete attempt history per task, with no per-task cap.
@@ -1084,14 +1109,15 @@ def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName,
     if not task_ids:
         return {}
     rows = tx.execute(
-        select(*ATTEMPT_COLS)
+        attempt_select()
         .where(task_attempts_table.c.task_id.in_(bindparam("task_ids", expanding=True)))
         .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc()),
         {"task_ids": list(task_ids)},
     ).all()
-    grouped: dict[JobName, list[object]] = {}
+    grouped: dict[JobName, list[AttemptDetailRow]] = {}
     for row in rows:
-        grouped.setdefault(row.task_id, []).append(row)
+        attempt = AttemptDetailRow.from_row(row)
+        grouped.setdefault(attempt.task_id, []).append(attempt)
     return {task_id: tuple(attempts) for task_id, attempts in grouped.items()}
 
 
@@ -1422,8 +1448,8 @@ def list_active_tasks_for_jobs(
     return result
 
 
-def count_active_tasks_for_user(tx: Tx, user_id: str) -> int:
-    """Return the number of non-terminal tasks across all jobs owned by ``user_id``."""
+def count_active_tasks_for_budget_user(tx: Tx, user_id: str) -> int:
+    """Return non-terminal local tasks owned by ``user_id``."""
     return int(
         tx.execute(
             select(func.count())
@@ -1495,6 +1521,10 @@ def get_worker_detail(tx: Tx, worker_id: WorkerId):
         select(*WORKER_DETAIL_COLS).where(workers_table.c.worker_id == bindparam("worker_id")),
         {"worker_id": worker_id},
     ).first()
+
+
+def all_worker_ids(tx: Tx) -> set[WorkerId]:
+    return {WorkerId(str(row.worker_id)) for row in tx.execute(select(workers_table.c.worker_id)).all()}
 
 
 def _healthy_active_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
@@ -1663,11 +1693,15 @@ PENDING_DISPATCH_COLS = (
     job_config_table.c.constraints_json,
     job_config_table.c.task_image,
     job_config_table.c.timeout_ms,
+    job_config_table.c.termination_grace_ms,
     job_config_table.c.has_coscheduling,
     job_config_table.c.coscheduling_group_by,
+    job_config_table.c.coscheduling_group_sizes,
     # Current stamped task band; see PendingDispatchRow.priority_band.
     local_tasks.c.priority_band,
     job_config_table.c.container_profile,
+    job_config_table.c.egress_policy,
+    job_config_table.c.egress_allow_json,
 )
 
 
@@ -1692,10 +1726,14 @@ def pending_dispatch_row(r) -> PendingDispatchRow:
         constraints_json=r.constraints_json,
         task_image=str(r.task_image),
         timeout_ms=int(_tms) if _tms is not None else None,
+        termination_grace_ms=int(r.termination_grace_ms),
         has_coscheduling=bool(r.has_coscheduling),
         coscheduling_group_by=str(r.coscheduling_group_by),
+        coscheduling_group_sizes=list(r.coscheduling_group_sizes),
         priority_band=int(r.priority_band),
         container_profile=int(r.container_profile),
+        egress_policy=int(r.egress_policy),
+        egress_allow_json=list(r.egress_allow_json),
     )
 
 
@@ -1722,23 +1760,6 @@ def row_counts(tx: Tx) -> RowCounts:
     )
 
 
-def worker_scale_groups(tx: Tx) -> dict[WorkerId, str]:
-    """Return ``{worker_id: scale_group}`` for every persisted worker.
-
-    The controller maps each worker's scale group to its owning backend to
-    partition the per-tick snapshot. Workers with no scale group map to ``""``.
-    """
-    rows = tx.execute(select(workers_table.c.worker_id, workers_table.c.scale_group)).all()
-    return {WorkerId(str(row.worker_id)): str(row.scale_group or "") for row in rows}
-
-
-def owned_worker_ids(tx: Tx, owns_scale_group: Callable[[str], bool]) -> set[WorkerId]:
-    """The workers whose scale group ``owns_scale_group`` claims, in the read ``tx``."""
-    return {wid for wid, scale_group in worker_scale_groups(tx).items() if owns_scale_group(scale_group)}
-
-
-_EXECUTING_TASK_STATES = (int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING))
-
 _EXECUTION_TIMEOUT_STMT = (
     select(
         local_tasks.c.task_id,
@@ -1757,6 +1778,7 @@ _EXECUTION_TIMEOUT_STMT = (
         job_config_table.c.timeout_ms.is_not(None),
         job_config_table.c.timeout_ms > 0,
         task_attempts_table.c.started_at_ms.is_not(None),
+        local_tasks.c.status_message.is_distinct_from(TASK_OUTPUT_FINALIZING_STATUS),
     )
 )
 
@@ -1767,7 +1789,7 @@ def scan_execution_timeout_rows(tx: Tx) -> Sequence[Row]:
     Whether a task has actually exceeded its deadline is left to the caller,
     which holds the tick clock; this only returns the candidates.
     """
-    return tx.execute(_EXECUTION_TIMEOUT_STMT, {"executing_states": list(_EXECUTING_TASK_STATES)}).all()
+    return tx.execute(_EXECUTION_TIMEOUT_STMT, {"executing_states": sorted(EXECUTING_TASK_STATES)}).all()
 
 
 _RECONCILE_ROWS_STMT = (
@@ -1779,14 +1801,9 @@ _RECONCILE_ROWS_STMT = (
         task_attempts_table.c.state.label("attempt_state"),
         local_tasks.c.job_id,
         task_attempts_table.c.attempt_uid,
+        local_tasks.c.current_attempt_id,
     )
-    .select_from(
-        task_attempts_table.join(
-            local_tasks,
-            (local_tasks.c.task_id == task_attempts_table.c.task_id)
-            & (local_tasks.c.current_attempt_id == task_attempts_table.c.attempt_id),
-        )
-    )
+    .select_from(task_attempts_table.join(local_tasks, local_tasks.c.task_id == task_attempts_table.c.task_id))
     .where(
         task_attempts_table.c.worker_id.is_not(None),
         task_attempts_table.c.finished_at_ms.is_(None),
@@ -1807,6 +1824,10 @@ def load_reconcile_rows(tx: Tx, worker_ids: Iterable[WorkerId]) -> list[Reconcil
     chance to report -- with the real terminal status or via the MISSING
     synthesis in ``handle_reconcile`` -- so the reconcile path can stamp
     finished_at_ms. Without this, a single lost RPC strands the attempt forever.
+
+    Superseded attempts are included too: a preempted worker-bound attempt keeps
+    its capacity charge (``finished_at_ms`` NULL) after a retry assigns the task a
+    newer attempt, so it stays in the plan until the worker confirms termination.
     """
     target_ids = set(worker_ids)
     if not target_ids:
@@ -1821,6 +1842,7 @@ def load_reconcile_rows(tx: Tx, worker_ids: Iterable[WorkerId]) -> list[Reconcil
             attempt_state=int(row.attempt_state),
             job_id=row.job_id,
             attempt_uid=AttemptUid(str(row.attempt_uid)),
+            superseded=int(row.attempt_id) != int(row.current_attempt_id),
         )
         for row in rows
         if row.worker_id in target_ids
@@ -1829,12 +1851,11 @@ def load_reconcile_rows(tx: Tx, worker_ids: Iterable[WorkerId]) -> list[Reconcil
 
 @dataclass(frozen=True, slots=True)
 class ControlSnapshot:
-    """The DB-less per-tick input the controller hands to a :class:`TaskBackend`.
+    """Controller-owned intermediate rows for reconcile and timeout phases.
 
-    One snapshot type feeds all three uniform backend methods; each control loop
-    populates the section its phase needs and leaves the rest empty (the
-    ``scan_timeouts`` flag is the pattern). The backend reads its section and
-    never touches the database.
+    Backends never receive this aggregate. The controller converts worker rows
+    into ``WorkerFleetReconcileRequest``, direct-dispatch rows into
+    ``DirectReconcileRequest``, and timeout rows into controller decisions.
 
     * ``worker_addresses`` — ``{worker_id: address}`` for active + healthy workers.
     * ``reconcile_rows`` — live ``(task, attempt, worker)`` tuples across those
@@ -1842,12 +1863,12 @@ class ControlSnapshot:
     * ``timeout_rows`` — executing tasks past their declared deadline; empty
       unless the caller requested the timeout sweep this tick.
     * ``job_specs`` — per-job ``RunTaskRequest`` templates for ASSIGNED reconcile
-      rows, so a worker-daemon backend can build its per-worker reconcile plans.
+      rows used to build per-worker reconcile plans.
     * ``tasks_to_run`` / ``running_tasks`` — the dispatch drain for a cluster
       backend that owns placement (built only when that backend reconciles).
 
     Worker liveness is never persisted and never read off the snapshot: the
-    controller owns its in-memory :class:`WorkerHealthTracker` directly and folds
+    controller owns its in-memory :class:`WorkerHealthTracker` directly and applies
     backend-observed health events into it. The tracker is passed to
     :func:`load_control_snapshot` only to select the live worker set.
     """

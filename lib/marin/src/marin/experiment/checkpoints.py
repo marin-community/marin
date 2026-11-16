@@ -77,8 +77,7 @@ def resolve_lm_config(model_type: str, hf_id: str, hf_revision: str) -> LmConfig
     architecture is an identity-bearing input, not something reconstructed only on the worker.
     """
     config_cls = LmConfig.get_choice_class(model_type)
-    converter = config_cls().hf_checkpoint_converter().replaced(reference_checkpoint=RepoRef(hf_id, hf_revision))
-    return converter.default_config
+    return config_cls().hf_checkpoint_converter().config_from_hf_checkpoint(RepoRef(hf_id, hf_revision))
 
 
 def run_hf_to_levanter(config: HfToLevanterConfig) -> None:

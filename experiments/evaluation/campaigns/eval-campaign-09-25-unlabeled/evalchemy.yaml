@@ -1,0 +1,67 @@
+evaluations:
+  triviaqa:
+    benchmark: triviaqa
+  cruxeval:
+    benchmark: cruxeval
+  math500:
+    benchmark: math500
+  truthfulqa:
+    benchmark: truthfulqa
+  olympiadbench:
+    benchmark: olympiadbench
+    run:
+      seed: 42
+      judge:
+        deployment: together
+        models:
+          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
+        default_model: openai/gpt-oss-120b
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key:
+      - env:TOGETHER_API_KEY
+      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+  boolq:
+    benchmark: boolq
+  piqa:
+    benchmark: piqa
+  gsm8k-0shot:
+    benchmark: gsm8k
+    num_fewshot: 0
+  mbppplus:
+    benchmark: mbppplus
+  ifbench:
+    benchmark: ifbench
+  aime24:
+    benchmark: aime24
+    run:
+      seed: 42
+  mrcr-65k:
+    benchmark: mrcr
+    protocol: 65k
+  humanevalplus:
+    benchmark: humanevalplus
+  gpqa-diamond:
+    benchmark: gpqa-diamond
+  financebench:
+    benchmark: financebench
+    run:
+      judge:
+        deployment: together
+        models:
+          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
+        default_model: openai/gpt-oss-120b
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key:
+      - env:TOGETHER_API_KEY
+      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+  mrcr-32k:
+    benchmark: mrcr
+    protocol: 32k
+  mmlu-pro:
+    benchmark: mmlu-pro
+  nupa:
+    benchmark: nupa5k-loose
+  winogrande:
+    benchmark: winogrande
+  mrcr:
+    benchmark: mrcr

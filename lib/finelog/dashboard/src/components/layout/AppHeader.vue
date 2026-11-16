@@ -24,7 +24,7 @@ function toggleDark() {
   <header class="border-b border-surface-border bg-surface px-6 py-3 flex items-center justify-between">
     <div class="flex items-baseline gap-3">
       <h1 class="text-base font-semibold tracking-tight">Finelog</h1>
-      <span class="text-xs text-text-muted font-mono">stats &amp; logs</span>
+      <span class="text-xs text-text-muted font-mono">operator console</span>
     </div>
     <div class="flex items-center gap-2">
       <div class="inline-flex rounded border border-surface-border overflow-hidden" role="group" aria-label="Timestamp display">

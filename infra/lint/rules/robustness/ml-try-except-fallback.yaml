@@ -1,0 +1,21 @@
+schema_version: 1
+code: ml-try-except-fallback
+lane: robustness
+title: '`try/except` fallback instead of fail-fast'
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Let exceptions propagate by default. Silent fallbacks
+  obscure whether the code is handling a real recoverable case or papering over
+  a bug.
+
+  **When allowed:** Real system boundaries (network, filesystem,
+  deserialization) where graceful degradation is the documented contract and
+  the fallback path is tested. Document it.
+
+  **Bad example:**
+  ```python
+  try:
+      return json.loads(payload)
+  except Exception:
+      return {}   # caller now can't tell empty-result from parse-failure.
+  ```

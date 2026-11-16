@@ -19,12 +19,13 @@ from iris.cluster.constraints import (
     Constraint,
     peer_availability_gate,
     routing_constraints,
-    strip_backend_constraints,
     strip_cluster_constraints,
 )
 from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.codec import reconstruct_launch_job_request
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.federation_budget import BudgetContext
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
@@ -36,6 +37,7 @@ from iris.cluster.federation.store import (
     HandoffState,
 )
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName
+from iris.rpc.proto_display import priority_band_rank
 from iris.time_proto import duration_from_proto, timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -47,14 +49,16 @@ logger = logging.getLogger(__name__)
 FEDERATED_ENDPOINT_MIRROR_TTL = Duration.from_minutes(5)
 
 
-def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
+def build_queued_candidates(tx: Tx, *, budget_context: BudgetContext | None = None) -> list[QueuedCandidate]:
     """Read the queued federated jobs into candidates for the tick's federation pass.
 
     Each candidate carries its shape (routing constraints) and its
     ``ge(available:<token>, amount)`` availability gate, derived from the job's stored
-    request. Ordered by priority band ascending (lower band = higher priority), then
-    oldest submission first — the order the assignment pass consumes them in.
+    request. Ordered by priority band, then oldest submission first — the order the
+    assignment pass consumes them in.
     """
+    spend = budget_context.spend if budget_context is not None else {}
+    limits = budget_context.limits if budget_context is not None else {}
     candidates: list[QueuedCandidate] = []
     for handle in reads.queued_handoff_handles(tx):
         job = reads.get_job_detail(tx, handle.job_id)
@@ -66,18 +70,22 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
         # Shape only — this pass reads constraints and resources, never the payload.
         request = reconstruct_launch_job_request(job, workdir_files={})
         constraints = [Constraint.from_proto(c) for c in request.constraints]
-        shape = routing_constraints(strip_cluster_constraints(strip_backend_constraints(constraints)))
+        shape = routing_constraints(strip_cluster_constraints(constraints))
         candidates.append(
             QueuedCandidate(
                 job_id=handle.job_id,
                 pinned_peer_id=handle.peer_id,
-                priority_band=job.priority_band,
+                priority_band=(
+                    compute_effective_band(job.priority_band, job.job_id.user, spend, limits, budget_context.defaults)
+                    if budget_context is not None
+                    else job.priority_band
+                ),
                 submitted_at_ms=job.submitted_at_ms.epoch_ms() if job.submitted_at_ms is not None else 0,
                 shape_constraints=shape,
                 availability_gate=peer_availability_gate(request.resources.device, request.replicas),
             )
         )
-    candidates.sort(key=lambda c: (c.priority_band, c.submitted_at_ms))
+    candidates.sort(key=lambda c: (priority_band_rank(c.priority_band), c.submitted_at_ms))
     return candidates
 
 
@@ -292,6 +300,9 @@ class ControllerFederationStore:
             cur, peer_id, local_job_id, summary
         ):
             return
+        if delta.HasField("limits"):
+            writes.mirror_federated_job_limits(cur, local_job_id, delta.limits)
+            cur.caches[RunTemplatesProjection].invalidate_for_job(cur, local_job_id)
         writes.mirror_federated_job(
             cur,
             job_id=local_job_id,
@@ -341,9 +352,9 @@ class ControllerFederationStore:
         only a defensive guard; the child is re-created on its next delta.
 
         Writes the ``job_config`` companion the dashboard reads join against, so the
-        child renders like any other job. Only the peer-reported resources are known
-        here — the parent never authored a request for this job and never runs it —
-        so the rest of the config keeps its column defaults.
+        child renders like any other job. The peer-reported resources are inserted
+        here and requested limits are applied by the sync. Execution-only fields
+        keep their column defaults because this controller never runs the child.
         """
         parent = local_job_id.parent
         if parent is None:

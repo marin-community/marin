@@ -1,0 +1,25 @@
+n_concurrent_trials: 4
+retry:
+  max_retries: 10
+  include_exceptions:
+    - RuntimeError
+    - InternalServerError
+    - APIConnectionError
+    - APITimeoutError
+  exclude_exceptions: []
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - name: hf://penfever/cyberseceval2-judge-harbor
+    ref: main
+verifier:
+  env:
+    OPENAI_API_KEY: "${TOGETHER_API_KEY}"
+    OPENAI_BASE_URL: "https://api.together.xyz/v1"
+    TOGETHER_API_KEY: "${TOGETHER_API_KEY}"
+    JUDGE_MODEL: "together_ai/openai/gpt-oss-120b"

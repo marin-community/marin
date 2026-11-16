@@ -3,10 +3,11 @@
 
 """ClusterClient protocol defining the interface for cluster client implementations."""
 
+from collections.abc import Sequence
 from typing import Protocol
 
 from finelog.rpc import logging_pb2
-from rigging.timing import Duration
+from rigging.timing import Deadline, Duration
 
 from iris.cluster.types import EndpointAccess, Entrypoint, JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
@@ -34,11 +35,14 @@ class ClusterClient(Protocol):
         max_retries_preemption: int = 1000,
         max_task_failures: int = 0,
         timeout: Duration | None = None,
+        termination_grace: Duration | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+        egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
+        egress_allow: Sequence[job_pb2.EgressRule] = (),
         submit_argv: list[str] | None = None,
     ) -> JobName: ...
 
@@ -63,9 +67,12 @@ class ClusterClient(Protocol):
         poll_interval: float = 30.0,
         since_ms: int = 0,
         min_level: str = "",
+        substring: str = "",
     ) -> job_pb2.JobStatus: ...
 
     def terminate_job(self, job_id: JobName) -> None: ...
+
+    def complete_job(self, job_id: JobName) -> None: ...
 
     def register_endpoint(
         self,
@@ -99,7 +106,9 @@ class ClusterClient(Protocol):
         page_size: int = 500,
     ) -> list[job_pb2.JobStatus]: ...
 
-    def get_task_status(self, task_name: JobName) -> job_pb2.TaskStatus: ...
+    def get_task_status(self, task_name: JobName, *, deadline: Deadline | None = None) -> job_pb2.TaskStatus: ...
+
+    def get_task_description(self, task_name: JobName) -> controller_pb2.Controller.GetTaskStatusResponse: ...
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]: ...
 

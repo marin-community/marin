@@ -1,0 +1,23 @@
+schema_version: 1
+code: ml-duplicate-constant
+lane: cruft
+title: Hardcoded constant duplicated when a canonical source exists
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A frozenset of supported regions re-declared in three
+  modules will drift when a region is added. Derive from one canonical
+  source.
+
+  **When allowed:** Where the apparent "constant" is genuinely two unrelated
+  sets that happen to share members today.
+
+  **Bad example:**
+  ```python
+  # in a.py
+  _SUPPORTED_MULTI_REGIONS = frozenset({"us", "eu"})
+
+  # in b.py
+  SUPPORTED_MULTI_REGIONS = frozenset({"us", "eu"})   # import the one in bootstrap.
+  ```
+
+  ## Test quality

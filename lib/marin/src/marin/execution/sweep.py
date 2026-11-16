@@ -29,7 +29,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from marin.execution.artifact import JSONValue, StepRecordIdentity, payload_json, write_step_record
 from marin.execution.step_status import (

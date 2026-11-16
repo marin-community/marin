@@ -5,6 +5,13 @@ import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import jax.numpy as jnp
+from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+    MOE_VALID_ASSIGNMENTS_METRIC,
+)
+
 from experiments.grug.moe_hero_fsdp import launch, train
 
 
@@ -21,8 +28,30 @@ def test_build_hero_run_uses_run_id_argument(monkeypatch):
     assert step.name == "grug/cli-run"
 
 
-def test_run_grug_applies_xla_command_buffer_default_and_keeps_override(monkeypatch):
+def test_drop_metrics_separates_padding_from_capacity_drops():
+    metrics = train._drop_metrics(
+        jnp.array([2], dtype=jnp.int32),
+        jnp.array([4], dtype=jnp.int32),
+        jnp.array([12], dtype=jnp.int32),
+        batch_size=2,
+        sequence_length=4,
+        top_k=2,
+        num_layers=1,
+    )
+
+    assert metrics == {
+        MOE_DROPPED_ASSIGNMENTS_METRIC: 2,
+        "moe/drop_fraction": 2 / 12,
+        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: 4,
+        "moe/skipped_padding_fraction": 4 / 16,
+        MOE_VALID_ASSIGNMENTS_METRIC: 12,
+    }
+
+
+def test_run_grug_applies_runtime_defaults_and_keeps_overrides(monkeypatch):
     monkeypatch.setenv("XLA_FLAGS", "--xla_gpu_enable_latency_hiding_scheduler=true")
+    monkeypatch.delenv("LD_PRELOAD", raising=False)
+    monkeypatch.delenv("MALLOC_CONF", raising=False)
     config = SimpleNamespace(
         trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
         resources=object(),
@@ -37,9 +66,15 @@ def test_run_grug_applies_xla_command_buffer_default_and_keeps_override(monkeypa
             "--xla_gpu_enable_latency_hiding_scheduler=true",
             train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
         ]
+        assert os.environ["LD_PRELOAD"] == "libjemalloc.so.2"
+        assert os.environ["MALLOC_CONF"] == "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2"
 
         explicit_flags = "--xla_gpu_enable_command_buffer=FUSION"
         monkeypatch.setenv("XLA_FLAGS", explicit_flags)
+        monkeypatch.setenv("LD_PRELOAD", "/opt/custom/liballocator.so")
+        monkeypatch.setenv("MALLOC_CONF", "narenas:8")
         train.run_grug(config)
 
         assert os.environ["XLA_FLAGS"] == explicit_flags
+        assert os.environ["LD_PRELOAD"] == "/opt/custom/liballocator.so"
+        assert os.environ["MALLOC_CONF"] == "narenas:8"

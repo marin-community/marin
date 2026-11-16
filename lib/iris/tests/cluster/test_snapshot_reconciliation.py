@@ -46,10 +46,6 @@ class StubWorkerHandle:
     def internal_address(self) -> str:
         return self._address
 
-    @property
-    def bootstrap_log(self) -> str:
-        return ""
-
     def status(self) -> WorkerStatus:
         return WorkerStatus(state=CloudWorkerState.RUNNING)
 

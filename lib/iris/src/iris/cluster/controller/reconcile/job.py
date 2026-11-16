@@ -31,6 +31,7 @@ def recompute_state(state: Overlay, job_id: JobName) -> int | None:
     counts = basis.task_state_counts
     total = sum(counts.values())
     new_state = current_state
+    error = basis.first_task_error
     now = state.now
     if total > 0 and counts.get(job_pb2.TASK_STATE_SUCCEEDED, 0) == total:
         new_state = job_pb2.JOB_STATE_SUCCEEDED
@@ -46,6 +47,12 @@ def recompute_state(state: Overlay, job_id: JobName) -> int | None:
         # different task and no single task ever exhausts its per-task retry budget.
         # Preemptions are retried by Iris and never counted here, so they are excluded.
         new_state = job_pb2.JOB_STATE_FAILED
+        error = (
+            "Cumulative failed task attempts exceeded max_task_failures: "
+            f"failures={basis.total_failures}, limit={max_task_failures}"
+        )
+        if basis.first_task_error:
+            error = f"{error}; {basis.first_task_error}"
     elif counts.get(job_pb2.TASK_STATE_UNSCHEDULABLE, 0) > 0:
         new_state = job_pb2.JOB_STATE_UNSCHEDULABLE
     elif counts.get(job_pb2.TASK_STATE_KILLED, 0) > 0:
@@ -83,7 +90,6 @@ def recompute_state(state: Overlay, job_id: JobName) -> int | None:
         new_state = job_pb2.JOB_STATE_PENDING
     if new_state == current_state:
         return new_state
-    error = basis.first_task_error
     state.merge_job_state(
         JobRowDelta(
             job_id=job_id,

@@ -18,11 +18,8 @@ import enum
 from enum import StrEnum
 from typing import Annotated, Literal
 
+from finelog.deploy.config import FinelogConfig, load_finelog_config
 from iris.cluster.config import IrisClusterConfig, load_config
-from iris.cluster.platforms.k8s.kueue_manifests import (
-    DEFAULT_CLIENT_CONNECTION_BURST,
-    DEFAULT_CLIENT_CONNECTION_QPS,
-)
 from iris.cluster.platforms.k8s.network_manifests import DEFAULT_CLUSTER_ISSUER
 from iris.cluster.platforms.k8s.types import parse_k8s_quantity
 from pydantic import BaseModel, Field, field_validator
@@ -35,7 +32,16 @@ from rigging.config_discovery import resolve_cluster_config
 # reproducible and review-gated, never from a private local override. Relative to the marin
 # project root (resolved by rigging.config_discovery).
 IAC_CLUSTER_CONFIG_DIR = "lib/iris/config"
+IAC_FINELOG_CONFIG_DIR = "lib/finelog/config"
 MIN_KUEUE_MANAGER_MEMORY = "2Gi"
+# IaC-managed CoreWeave clusters need enough memory to retain their watched Pods
+# and Workloads during startup resync. East08 OOM-killed at 10,466 Workloads with
+# the 2Gi default (https://echo.oa.dev/wiki/65), and East02 repeated the failure at
+# 6,893 Workloads. The higher API client limits keep leader renewal responsive as
+# the larger heap lets resync progress.
+DEFAULT_KUEUE_MANAGER_MEMORY = "8Gi"
+DEFAULT_KUEUE_CLIENT_CONNECTION_QPS = 1000.0
+DEFAULT_KUEUE_CLIENT_CONNECTION_BURST = 2000
 
 
 class Provider(StrEnum):
@@ -53,8 +59,8 @@ class CksClusterSpec(BaseModel):
 class KueueClientConnectionSpec(BaseModel):
     """Kubernetes API client rate limit for the Kueue controller-manager."""
 
-    qps: float = Field(default=DEFAULT_CLIENT_CONNECTION_QPS, gt=0)
-    burst: int = Field(default=DEFAULT_CLIENT_CONNECTION_BURST, gt=0)
+    qps: float = Field(default=DEFAULT_KUEUE_CLIENT_CONNECTION_QPS, gt=0)
+    burst: int = Field(default=DEFAULT_KUEUE_CLIENT_CONNECTION_BURST, gt=0)
 
 
 class KueueProvisioningSpec(BaseModel):
@@ -73,7 +79,7 @@ class KueueProvisioningSpec(BaseModel):
     # controllerManager.manager.resources memory request and limit. Kueue retains
     # every watched Pod and Workload during restart resync, so the chart's 512Mi
     # default is too small for Marin clusters.
-    manager_memory_limit: str = MIN_KUEUE_MANAGER_MEMORY
+    manager_memory_limit: str = DEFAULT_KUEUE_MANAGER_MEMORY
     # Override Iris's shared Kueue client-side API rate limit.
     client_connection: KueueClientConnectionSpec = Field(default_factory=KueueClientConnectionSpec)
 
@@ -134,6 +140,12 @@ class GrafanaObserverRbacSpec(BaseModel):
     usernames: tuple[str, ...] = Field(min_length=1)
 
 
+class LoomSessionRbacSpec(BaseModel):
+    """CoreWeave Managed Auth usernames accepted from Loom sessions."""
+
+    usernames: tuple[str, ...] = Field(min_length=1)
+
+
 class CoreweaveProvisioning(BaseModel):
     cluster: CksClusterSpec
     kueue: KueueProvisioningSpec
@@ -141,6 +153,7 @@ class CoreweaveProvisioning(BaseModel):
     federation_dns: FederationDnsSpec | None = None
     rbac: RbacSpec = RbacSpec()
     grafana_observer_rbac: GrafanaObserverRbacSpec | None = None
+    loom_session_rbac: LoomSessionRbacSpec | None = None
 
 
 class GcpAddressSpec(BaseModel):
@@ -214,12 +227,39 @@ class GcpRemoteRepositorySpec(BaseModel):
     )
 
 
+class GcpControllerIngressSpec(BaseModel):
+    """One Iris controller backend on the shared external HTTPS load balancer."""
+
+    cluster: str
+    token_proxy: bool = True
+    deny_public: bool = False
+
+
+class GcpFinelogIngressSpec(BaseModel):
+    """One IAP-free finelog backend admitted from known sender egress ranges."""
+
+    cluster: str
+    domain: str
+    sender_source_ranges: list[str] = Field(min_length=1, max_length=10)
+
+
+class GcpGclbSpec(BaseModel):
+    """Shared GCLB frontend plus its controller and finelog routes."""
+
+    frontend_name: str
+    controllers: list[GcpControllerIngressSpec] = Field(min_length=1)
+    finelogs: list[GcpFinelogIngressSpec] = Field(default_factory=list)
+    network: str = "default"
+    subnetwork: str = "default"
+
+
 class GcpProvisioning(BaseModel):
-    """GCP-arm provisioning: the project, reserved static IPs, and Artifact Registry mirrors."""
+    """GCP-arm provisioning for project-level and shared ingress resources."""
 
     project: str
     addresses: list[GcpAddressSpec] = Field(default_factory=list)
     registries: list[GcpRemoteRepositorySpec] = Field(default_factory=list)
+    gclb: GcpGclbSpec | None = None
 
 
 class ProvisioningConfig(BaseModel):
@@ -248,6 +288,12 @@ def load_iris_config(cluster: str) -> IrisClusterConfig:
     config (see IAC_CLUSTER_CONFIG_DIR).
     """
     return load_config(resolve_cluster_config(cluster, dirs=(IAC_CLUSTER_CONFIG_DIR,)))
+
+
+def load_iac_finelog_config(cluster: str) -> FinelogConfig:
+    """Load a finelog config from the reviewed in-tree config directory."""
+    path = resolve_cluster_config(cluster, dirs=(IAC_FINELOG_CONFIG_DIR,))
+    return load_finelog_config(str(path))
 
 
 def load_provisioning(cluster: str) -> ProvisioningConfig:

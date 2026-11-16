@@ -24,6 +24,7 @@ from levanter.data.text.trace_chat import (
     dataset_for_trace_chat_format,
 )
 from levanter.store.cache import SerialCacheWriter
+from levanter.testing.chat_templates import MULTI_TOOL_TEMPLATE
 from levanter.tokenizers import MarinTokenizer
 
 
@@ -69,29 +70,6 @@ TOOL_TEMPLATE = """{{ bos_token }}
     {%- set call = message['tool_calls'][0]['function'] -%}
 <|start_header_id|>assistant<|end_header_id|>
 {% generation %}{{ '{\"name\": \"' + call['name'] + '\", \"arguments\": ' }}{{ call['arguments'] | tojson }}{{ '}' }}<|eot_id|>{% endgeneration %}
-  {%- elif message['role'] == 'tool' -%}
-<|start_header_id|>tool<|end_header_id|>
-{{ message['content'] | tojson }}<|eot_id|>
-  {%- else -%}
-<|start_header_id|>{{ message['role'] }}<|end_header_id|>
-{{ message['content'] | trim }}<|eot_id|>
-  {%- endif -%}
-{%- endfor -%}
-{%- if add_generation_prompt -%}
-<|start_header_id|>assistant<|end_header_id|>
-{%- endif -%}
-"""
-
-MULTI_TOOL_TEMPLATE = """{{ bos_token }}
-{%- for message in messages -%}
-  {%- if message['role'] == 'assistant' -%}
-<|start_header_id|>assistant<|end_header_id|>
-{% generation %}{{ message['content'] | trim }}
-{%- for tool_call in message.get('tool_calls', []) -%}
-  {%- set call = tool_call['function'] -%}
-{{ '{"name": "' + call['name'] + '", "arguments": ' }}{{ call['arguments'] | tojson }}{{ '}' }}
-{%- endfor -%}
-<|eot_id|>{% endgeneration %}
   {%- elif message['role'] == 'tool' -%}
 <|start_header_id|>tool<|end_header_id|>
 {{ message['content'] | tojson }}<|eot_id|>
@@ -573,7 +551,7 @@ def test_trace_chat_processor_labels_multi_tool_and_interleaved_user_turns(token
     assert "The issue is in the eval callback test." in final_text
 
 
-def test_trace_chat_processor_splits_text_tool_calls(tokenizer: MarinTokenizer):
+def test_trace_chat_processor_labels_text_tool_calls(tokenizer: MarinTokenizer):
     processor = TraceChatProcessor(
         tokenizer,
         chat_template=MULTI_TOOL_TEMPLATE,

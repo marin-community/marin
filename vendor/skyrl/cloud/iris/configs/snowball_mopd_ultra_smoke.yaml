@@ -1,0 +1,175 @@
+# Snowball 67B-A2B multi-teacher on-policy distillation smoke on the Nemotron Ultra MOPD blend:
+# the Megatron smoke geometry (four PP2 x EP8 learner nodes, one EP8 rollout node) plus three
+# pinned EP8 teacher nodes, one per Snowball expert. Eight H100 nodes. Rows carry a hardcoded
+# top-level teacher_route column (math / swe / terminal, see
+# infra/rl_data/nemotron_ultra_mopd_subset.py) and the domain-weighted sampler fills every batch
+# with an exact third per route. Four optimizer steps at 2048-token generations; the gate is a
+# finite distillation loss on every route, teacher-scored tokens from all three teachers, a
+# positive raw gradient norm, and one checkpoint, not a benchmark score.
+#
+# Pass the student with --model-path (open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92
+# pinned to a commit) and the routed subset parquet with --train-data. The teachers are pinned
+# below; the launcher pre-stages them into the region-local Hugging Face cache before Ray starts.
+#
+# Only generators with in-process verifiers are routed: no judge key or sandbox is provisioned,
+# so the Nemotron Ultra environment runs with its defaults and no external services.
+entrypoint: standard
+
+context_budget:
+  request_window_tokens: 8192
+  max_new_tokens_per_turn: 2048
+  max_turns: 1
+
+environment:
+  env_class: nemotron_ultra
+
+trainer:
+  strategy: megatron
+  flash_attn: false
+  use_sample_packing: false
+  offload_optimizer_during_rollouts: true
+  gradient_checkpointing: true
+  algorithm:
+    # The distillation term replaces the reward-driven loss; the uniform estimator leaves
+    # the per-token teacher gap as the only advantage.
+    advantage_estimator: uniform
+    policy_loss_type: importance_sampling
+    use_kl_loss: false
+    use_entropy_loss: false
+    loss_reduction: token_mean
+    distillation:
+      objective: sampled_reverse_kl
+      routing_plan: opd
+      coefficient: 1.0
+      reward_mode: replace
+  epochs: 1
+  max_steps: 4
+  update_epochs_per_batch: 1
+  train_batch_size: 48
+  policy_mini_batch_size: 48
+  eval_batch_size: 64
+  micro_forward_batch_size_per_gpu: 1
+  micro_train_batch_size_per_gpu: 1
+  eval_before_train: false
+  eval_interval: -1
+  ckpt_interval: 4
+  resume_mode: none
+  logger: console
+  policy:
+    optimizer_config:
+      lr: 1.0e-6
+      max_grad_norm: 1.0
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 2
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+      optimizer_checkpoint_sharding_type: dp_reshardable
+  placement:
+    colocate_all: false
+    policy_num_nodes: 4
+    policy_num_gpus_per_node: 8
+
+generator:
+  backend: vllm
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASH_ATTN
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_data_parallel_size: 8
+  inference_engine_expert_parallel_size: 8
+  num_inference_engines: 1
+  n_samples_per_prompt: 4
+  gpu_memory_utilization: 0.75
+  enforce_eager: false
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  sampling_params:
+    temperature: 1.0
+    top_p: 1.0
+  engine_init_kwargs:
+    enable_auto_tool_choice: true
+    tool_call_parser: hermes
+
+# The vLLM fork serves GrugMoE only as tensor-parallel 1 with expert parallelism across
+# the data-parallel ranks, so every teacher takes the rollout engine's layout on its own node.
+teachers:
+  math:
+    source: local_inference
+    placement: pinned
+    backend: vllm
+    evidence: chosen_token
+    model:
+      path: open-athena/Snowball-67B-A2B-Math-RL-E6-Step20-Repaired
+      revision: f8c394b378247d213e9b2d4768f13a47c81a41b7
+    resources:
+      num_nodes: 1
+      gpus_per_node: 8
+      tensor_parallel_size: 1
+      data_parallel_size: 8
+      expert_parallel_size: 8
+      colocation_group: teacher_math
+      gpu_memory_utilization: 0.75
+  swe:
+    source: local_inference
+    placement: pinned
+    backend: vllm
+    evidence: chosen_token
+    model:
+      path: laion/snowball-67b-a2b-rl-r2egym-newstack-step24
+      revision: cb75292c0e98fd66a8c50b482717bd35b664bed9
+    resources:
+      num_nodes: 1
+      gpus_per_node: 8
+      tensor_parallel_size: 1
+      data_parallel_size: 8
+      expert_parallel_size: 8
+      colocation_group: teacher_swe
+      gpu_memory_utilization: 0.75
+  terminal:
+    source: local_inference
+    placement: pinned
+    backend: vllm
+    evidence: chosen_token
+    model:
+      path: laion/snowball-67b-a2b-sft-s3-nemotron-terminal-step1888
+      revision: 680bec3ade494b61ead6861fa24fc4071f8dc294
+    resources:
+      num_nodes: 1
+      gpus_per_node: 8
+      tensor_parallel_size: 1
+      data_parallel_size: 8
+      expert_parallel_size: 8
+      colocation_group: teacher_terminal
+      gpu_memory_utilization: 0.75
+
+teacher_routing:
+  opd:
+    revision: snowball-mopd-ultra-smoke-v1
+    routes:
+      math:
+        teacher: math
+        weight: 1.0
+      swe:
+        teacher: swe
+        weight: 1.0
+      terminal:
+        teacher: terminal
+        weight: 1.0
+
+data:
+  kind: parquet
+  train_data: []
+  val_data: []
+  sampling:
+    kind: domain-weighted
+    domain_weights:
+      math: 1.0
+      swe: 1.0
+      terminal: 1.0
+
+# Not HF_HUB_OFFLINE: Megatron Bridge resolves a Hub model id through refs/main, which the
+# warm-synced node cache does not carry, so the Megatron policy worker fails offline. The
+# launcher pre-stages the teacher from the region cache in either mode.
+extra_env:
+  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True

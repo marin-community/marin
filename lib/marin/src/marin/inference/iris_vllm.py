@@ -7,14 +7,16 @@ import contextlib
 import logging
 import os
 import threading
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
-from iris.client import iris_ctx
+from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.rpc.errors import is_retryable_error
 from rigging.network import interface_for_ipv4
@@ -30,7 +32,7 @@ _GLOO_SOCKET_IFNAME_ENV = "GLOO_SOCKET_IFNAME"
 
 
 class VllmCoordinatorActor:
-    """Leader-owned, latched lifecycle state for a native vLLM gang."""
+    """Leader-owned, latched lifecycle state for an Iris vLLM gang."""
 
     def __init__(self, vllm_primary_address: str):
         self._vllm_primary_address = vllm_primary_address
@@ -58,6 +60,24 @@ class VllmCoordinatorActor:
             return all(task_index in self._stopped_followers for task_index in task_indices)
 
 
+class IrisGangIdentity(Protocol):
+    @property
+    def coordinator_name(self) -> str: ...
+
+    @property
+    def task_index(self) -> int: ...
+
+    @property
+    def num_tasks(self) -> int: ...
+
+
+@dataclass(frozen=True)
+class IrisGangCoordinator:
+    coordinator_name: str
+    task_index: int
+    num_tasks: int
+
+
 @dataclass(frozen=True)
 class IrisVllmLaunch:
     """Native-vLLM arguments, environment, and Iris task identity."""
@@ -68,6 +88,8 @@ class IrisVllmLaunch:
     host_ip: str
     gloo_interface: str
     coordinator_name: str
+    tensor_parallel_size: int
+    data_parallel_size: int
 
     @property
     def is_leader(self) -> bool:
@@ -85,6 +107,7 @@ class IrisVllmLaunch:
 def iris_vllm_launch(
     *,
     pipeline_parallel_size: int,
+    tensor_parallel_size: int,
     data_parallel_size: int,
 ) -> Iterator[IrisVllmLaunch]:
     """Bootstrap a stage-striped native-vLLM task from Iris metadata."""
@@ -98,67 +121,73 @@ def iris_vllm_launch(
 
     endpoint_namespace = str(job_info.job_id).strip("/").replace("/", "-")
     coordinator_name = f"{endpoint_namespace}-vllm-coordinator"
-    ctx = iris_ctx()
-
-    with contextlib.ExitStack() as stack:
-        if job_info.task_index == 0:
-            master_addr = job_info.advertise_host
-            server = ActorServer(host="0.0.0.0", port=0)
-            server.register(coordinator_name, VllmCoordinatorActor(master_addr))
-            actor_port = server.serve_background()
-            actor_address = f"http://{job_info.advertise_host}:{actor_port}"
-            stack.callback(server.stop)
-            stack.enter_context(ctx.registry.registered(coordinator_name, actor_address))
-            logger.info("vLLM coordinator actor serving at %s", actor_address)
-        else:
-            client = _coordinator_client(coordinator_name)
-            master_addr: str | None = None
-
-            def coordinator_available() -> bool:
-                nonlocal master_addr
-                master_addr = client.vllm_primary_address()
-                return True
-
-            _wait_until(
-                coordinator_available,
-                error_message="Timed out waiting for the vLLM coordinator",
-            )
-            assert master_addr is not None
-
+    identity = IrisGangCoordinator(coordinator_name, job_info.task_index, job_info.num_tasks)
+    with iris_gang_coordinator(identity, job_info.advertise_host, job_info.advertise_host) as master_addr:
         yield _build_task_launch(
             job_info,
             pipeline_parallel_size=pipeline_parallel_size,
+            tensor_parallel_size=tensor_parallel_size,
             data_parallel_size=data_parallel_size,
             master_addr=master_addr,
             coordinator_name=coordinator_name,
         )
 
 
+@contextlib.contextmanager
+def iris_gang_coordinator(identity: IrisGangIdentity, advertise_host: str, primary_address: str) -> Iterator[str]:
+    """Register the leader's address or discover it from a follower."""
+    with contextlib.ExitStack() as stack:
+        if identity.task_index == 0:
+            server = ActorServer(host="0.0.0.0", port=0)
+            server.register(identity.coordinator_name, VllmCoordinatorActor(primary_address))
+            actor_port = server.serve_background()
+            actor_address = f"http://{advertise_host}:{actor_port}"
+            stack.callback(server.stop)
+            stack.enter_context(iris_ctx().registry.registered(identity.coordinator_name, actor_address))
+            logger.info("vLLM coordinator actor serving at %s", actor_address)
+        else:
+            client = _coordinator_client(identity.coordinator_name)
+            primary_address = ""
+
+            def coordinator_available() -> bool:
+                nonlocal primary_address
+                primary_address = client.vllm_primary_address()
+                return True
+
+            _wait_until(coordinator_available, error_message="Timed out waiting for the vLLM coordinator")
+        yield primary_address
+
+
 def wait_for_iris_vllm_shutdown(
-    launch: IrisVllmLaunch,
+    launch: IrisGangIdentity,
     check_alive: Callable[[], None],
+    *,
+    maximum_poll_seconds: float = 30.0,
 ) -> None:
     """Keep a follower alive until the leader requests final shutdown."""
-    if launch.is_leader:
+    if launch.task_index == 0:
         raise RuntimeError("The vLLM leader does not wait for follower shutdown")
     client = _coordinator_client(launch.coordinator_name)
 
-    def shutdown_requested() -> bool:
-        if client.shutdown_requested():
-            return True
-        check_alive()
-        return False
+    stopped = False
 
-    _wait_until(
-        shutdown_requested,
-        error_message="Timed out waiting for the vLLM leader to finish",
-    )
+    def coordinator_available() -> bool:
+        nonlocal stopped
+        check_alive()
+        stopped = client.shutdown_requested()
+        return True
+
+    polling = ExponentialBackoff(initial=_POLL_SECONDS, maximum=maximum_poll_seconds)
+    while not stopped:
+        _wait_until(coordinator_available, error_message="Timed out contacting the vLLM leader")
+        if not stopped:
+            time.sleep(polling.next_interval())
     logger.info("vLLM follower %d received shutdown", launch.task_index)
 
 
-def notify_iris_vllm_stopped(launch: IrisVllmLaunch) -> None:
+def notify_iris_vllm_stopped(launch: IrisGangIdentity) -> None:
     """Tell the leader that this follower has stopped."""
-    if launch.is_leader:
+    if launch.task_index == 0:
         raise RuntimeError("The vLLM leader does not send a follower stop acknowledgement")
     client = _coordinator_client(launch.coordinator_name)
 
@@ -173,9 +202,9 @@ def notify_iris_vllm_stopped(launch: IrisVllmLaunch) -> None:
 
 
 @contextlib.contextmanager
-def iris_vllm_followers(launch: IrisVllmLaunch) -> Iterator[None]:
+def iris_vllm_followers(launch: IrisGangIdentity) -> Iterator[None]:
     """Request follower shutdown when the leader's workload is finished."""
-    if not launch.is_leader:
+    if launch.task_index != 0:
         raise RuntimeError("Only the vLLM leader may coordinate followers")
     if launch.num_tasks == 1:
         yield
@@ -203,21 +232,20 @@ def _build_task_launch(
     job_info: JobInfo,
     *,
     pipeline_parallel_size: int,
+    tensor_parallel_size: int,
     data_parallel_size: int,
     master_addr: str,
     coordinator_name: str,
 ) -> IrisVllmLaunch:
     args = (
         "--tensor-parallel-size",
-        "1",
+        str(tensor_parallel_size),
         "--pipeline-parallel-size",
         str(pipeline_parallel_size),
         "--data-parallel-size",
         str(data_parallel_size),
         "--data-parallel-size-local",
         str(data_parallel_size),
-        "--data-parallel-start-rank",
-        "0",
         "--nnodes",
         str(pipeline_parallel_size),
         "--node-rank",
@@ -227,8 +255,10 @@ def _build_task_launch(
         "--master-port",
         str(_MASTER_PORT),
         "--device-ids",
-        ",".join(str(index) for index in range(data_parallel_size)),
+        ",".join(str(index) for index in range(tensor_parallel_size * data_parallel_size)),
     )
+    if data_parallel_size > 1:
+        args = (*args, "--data-parallel-start-rank", "0")
     if job_info.task_index != 0:
         args = (*args, "--headless")
     host_ip, gloo_interface = _node_network(job_info)
@@ -239,6 +269,8 @@ def _build_task_launch(
         host_ip=host_ip,
         gloo_interface=gloo_interface,
         coordinator_name=coordinator_name,
+        tensor_parallel_size=tensor_parallel_size,
+        data_parallel_size=data_parallel_size,
     )
 
 

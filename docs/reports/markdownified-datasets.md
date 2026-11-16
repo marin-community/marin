@@ -37,7 +37,8 @@ The Wikipedia preprocessing pipeline includes several heuristic filters:
 
 ### Ar5iv
 
-The Ar5iv dataset uses specialized filters for academic papers:
+The Ar5iv converter and its snapshots have been retired from this repository.
+The published datasets were produced with these specialized filters for academic papers:
 
 - **Abstract Transformation**: Converts abstract sections into proper headings for better structure.
 - **Metadata Removal**: Removes author information, title pages, and article metadata to reduce noise.
@@ -103,7 +104,6 @@ This enhancement maintains full backward compatibility with the existing Resilip
 
 We have several "snapshot tests" as quality control. You can see some of them in our GitHub repo:
 
-- [Ar5iv](https://github.com/marin-community/marin/blob/main/tests/snapshots/ar5iv/expected/arxiv_4.md)
 - [Stack Exchange](https://github.com/marin-community/marin/blob/main/tests/snapshots/stackexchange/expected/stackoverflow.md)
 - [Wikipedia](https://github.com/marin-community/marin/blob/main/tests/snapshots/wiki/expected/aquila.md)
 

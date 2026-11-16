@@ -3,6 +3,8 @@
 Investigation in support of dlwh's review on PR #5279
 (`lib/marin/src/marin/execution/executor.py:1278`, "doesn't OutputName depend on region?").
 
+Historical note: the Data Browser links discussed below were removed when the service was retired in [#8624](https://github.com/marin-community/marin/pull/8624).
+
 ## Design (C1 vs C2)
 
 **C1 — single dual/multi-region bucket.** Replace the `marin-{region}` convention
@@ -34,8 +36,9 @@ C1: rename buckets / configure replication; remove
 `_REGION_TO_MARIN_BUCKET_OVERRIDES` and `REGION_TO_DATA_BUCKET`
 (`filesystem.py:54,61`); rewrite `marin_temp_bucket` (`filesystem.py:191`);
 delete `CrossRegionGuardedFS` (`filesystem.py:632`) and `check_path_in_region`
-(`filesystem.py:272`). Migrate ~50 `gs://marin-us-central2/...` doc and
-data-browser links in `docs/reports/index.md` etc.
+(`filesystem.py:272`). The original estimate included ~50
+`gs://marin-us-central2/...` documentation links; Data Browser links in that
+count were later removed in #8624.
 
 C2: extend `MirrorFileSystem` with a "write-local, read-local-first,
 fall-through-to-mirror" mode; have `marin_prefix()` return `marin://` on
@@ -66,9 +69,10 @@ in `instantiate_config` (`executor.py:1239`) must not collapse `marin://`.
   `record_transfer` (`filesystem.py:605`) exists for exactly this reason.
   C2 needs every tensorstore call site to honor `marin://`. C1 inherits
   fsspec/tensorstore for free.
-- **External links.** `docs/reports/index.md` and data-browser URLs hard-code
-  `gs://marin-us-central2/...`. C1 breaks all of them; C2 leaves them alone
-  (logical only on workers; published artifacts stay fully-qualified).
+- **External links.** At the time of this investigation, `docs/reports/index.md`
+  and Data Browser URLs hard-coded `gs://marin-us-central2/...`. The Data Browser
+  links were removed in #8624. Remaining external links need reassessment
+  before a bucket rename; C2 leaves published artifact paths fully qualified.
 
 ## Verdict
 

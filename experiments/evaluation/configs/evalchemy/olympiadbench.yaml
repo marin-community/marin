@@ -1,8 +1,0 @@
-tasks: [OlympiadBench]
-task_options:
-  OlympiadBench:
-    num_fewshot: 0
-    task_alias: olympiadbench
-    generation: true
-max_tokens: 8192
-runtime_extras: [olympiadbench]

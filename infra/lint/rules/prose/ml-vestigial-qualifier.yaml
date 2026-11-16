@@ -1,0 +1,20 @@
+schema_version: 1
+code: ml-vestigial-qualifier
+lane: prose
+title: Qualifier with no surviving contrast
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** `reconcile_workers_via_reconcile`, `_v2`, `_new`,
+  `_legacy`, `_compat` all imply two variants when there is one. They
+  propagate (callers copy the name) and the contrast they referred to is
+  already gone.
+
+  **When allowed:** The qualifier still disambiguates because the contrasting
+  variant still exists *and is not flag-gated for removal* — file the
+  flag-gated case under `ml-flag-gated-parallel-path` instead.
+
+  **Bad example:**
+  ```python
+  def reconcile_workers_via_reconcile(...): ...   # stutter; just reconcile_workers.
+  attempt_id_compat: str                          # "compat" with what?
+  ```
