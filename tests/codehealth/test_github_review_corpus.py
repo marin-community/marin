@@ -572,7 +572,7 @@ def test_collect_corpus_fetches_commits_beyond_pull_request_connection_cap() -> 
     assert len(bundle.commits) == 251
     assert bundle.pull_request.commit_shas[-1] == "sha-250"
     assert result.usage.rest_requests == 6
-    assert result.usage.projected_rest_requests == 156
+    assert result.usage.projected_rest_requests == 159
 
 
 def test_collect_corpus_rejects_changed_file_cap_before_rest_context() -> None:

@@ -1202,13 +1202,17 @@ def _collection_plan(
         if cached_fingerprints[number] == current_fingerprints[pull["id"]]
     )
     hydrate_numbers = tuple(number for number in sorted(relevant) if number not in reusable)
-    compare_pages = sum(
+    compare_pages = [
         (int(relevant[number]["commits"]["totalCount"]) + REST_PAGE_SIZE - 1) // REST_PAGE_SIZE
         for number in hydrate_numbers
         if int(relevant[number]["commits"]["totalCount"]) > MAX_GITHUB_PR_COMMITS
-    )
+    ]
     context.client.projected_rest_requests = (
-        context.client.rest_requests + len(hydrate_numbers) + compare_pages + REST_RETRY_RESERVE
+        context.client.rest_requests
+        + len(hydrate_numbers)
+        + sum(compare_pages)
+        + REST_RETRY_RESERVE
+        + sum(sorted(compare_pages, reverse=True)[:REST_RETRY_RESERVE])
     )
     if context.client.projected_rest_requests > MAX_REST_REQUESTS:
         raise RuntimeError(
