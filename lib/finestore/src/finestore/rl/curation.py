@@ -33,6 +33,50 @@ class Verdict(StrEnum):
     UNKNOWN = "unknown"
 
 
+class Confidence(StrEnum):
+    """How sure the reviewer is about its quality verdict."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class ReferenceStatus(StrEnum):
+    """Whether the task's private reference agrees with its public contract."""
+
+    CONSISTENT = "consistent"
+    CONFLICT = "conflict"
+    UNKNOWN = "unknown"
+
+
+class Defect(StrEnum):
+    """A normalized reviewer finding about why a task's quality is not good."""
+
+    MISSING_CONTEXT = "missing_context"
+    AMBIGUITY = "ambiguity"
+    WRONG_REFERENCE = "wrong_reference"
+    ANSWER_LEAKAGE = "answer_leakage"
+    MALFORMED = "malformed"
+    RUBRIC_MISMATCH = "rubric_mismatch"
+
+
+class RepairProvenance(StrEnum):
+    """How a repair lane touched a task; None means the task predates the lane."""
+
+    ORIGINAL = "original"
+    REPLACED = "replaced"
+    ADDED = "added"
+
+
+class RepairAdvisory(BaseModel):
+    """An advisory drop signal from a candidate subset's filter; never an exclusion."""
+
+    signal: str
+    candidate_source_id: str
+    reason: str
+    receipt_uri: str | None = None
+
+
 class JudgmentStatus(StrEnum):
     REVIEWED = "reviewed"
     UNAVAILABLE = "unavailable"
@@ -972,6 +1016,16 @@ class AssessmentItem(CatalogRecord):
     has_task: bool
     omissions: list[str]
     exclusion_reason: str | None
+    # Typed review findings. None/empty on judgments recorded before the fields
+    # existed; nullable so older published snapshots keep validating.
+    confidence: Confidence | None = None
+    reference_status: ReferenceStatus | None = None
+    defects: list[Defect] = []
+    # Repair-lane provenance. None on tasks the lane never touched.
+    provenance: RepairProvenance | None = None
+    # Only meaningful when provenance is replaced: the sha256 of the replaced task.
+    replaced_task_sha256: str | None = None
+    repair_advisories: list[RepairAdvisory] = []
 
 
 class SnapshotSource(CatalogRecord):

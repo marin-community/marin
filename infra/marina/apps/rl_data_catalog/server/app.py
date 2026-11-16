@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from taskcompendium.source_fingerprints import DuplicateReview
 
+from .audit import register_audit_routes
 from .contamination import contamination
 from .count_evidence import SOURCE_COUNTS
 from .curriculum import register_curriculum_routes, source_coverage
@@ -187,6 +188,7 @@ def create_api(services: AppletServices) -> FastAPI:
     engine = services.engine()
     counts = {item.source_id: item for item in SourceCounts.model_validate_json(SOURCE_COUNTS).sources}
     register_curriculum_routes(api, engine)
+    register_audit_routes(api, engine)
 
     @api.get("/source-labels")
     def source_labels() -> dict[str, Any]:
@@ -392,7 +394,8 @@ def create_api(services: AppletServices) -> FastAPI:
                 for item in connection.execute(
                     text(
                         """
-                SELECT task_id, cohort, verdict, status, exclusion_reason
+                SELECT task_id, cohort, verdict, status, confidence, reference_status, defects,
+                    provenance, replaced_task_sha256, repair_advisories, exclusion_reason
                 FROM atlas_items WHERE load_id = :load_id AND pipeline_key = :pipeline_key
                 ORDER BY cohort, task_id
             """
@@ -417,7 +420,9 @@ def create_api(services: AppletServices) -> FastAPI:
                 connection.execute(
                     text(
                         """
-                SELECT i.task_id, i.cohort, i.verdict, i.status, i.explanation, i.evidence_ids,
+                SELECT i.task_id, i.cohort, i.verdict, i.status, i.confidence, i.reference_status,
+                    i.defects, i.provenance, i.replaced_task_sha256, i.repair_advisories,
+                    i.explanation, i.evidence_ids,
                     i.omissions, i.exclusion_reason, p.packet
                 FROM atlas_sources s JOIN atlas_current c USING (load_id)
                 JOIN atlas_items i ON i.load_id = s.load_id AND i.pipeline_key = s.assessment_key
@@ -439,7 +444,21 @@ def create_api(services: AppletServices) -> FastAPI:
             raise HTTPException(404, "Task is outside this assessment sample")
         return {
             "judgment": {
-                key: row[key] for key in ("task_id", "cohort", "verdict", "status", "explanation", "evidence_ids")
+                key: row[key]
+                for key in (
+                    "task_id",
+                    "cohort",
+                    "verdict",
+                    "status",
+                    "confidence",
+                    "reference_status",
+                    "defects",
+                    "provenance",
+                    "replaced_task_sha256",
+                    "repair_advisories",
+                    "explanation",
+                    "evidence_ids",
+                )
             },
             "packet": json.loads(row["packet"]),
             "omissions": row["omissions"],

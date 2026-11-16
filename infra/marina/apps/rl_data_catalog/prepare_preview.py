@@ -44,6 +44,7 @@ RELOCATED_SERVER_FILES = (
     "server/contamination.py",
     "server/difficulty.py",
     "server/filtration.py",
+    "server/audit.py",
     "server/source_counts.py",
 )
 

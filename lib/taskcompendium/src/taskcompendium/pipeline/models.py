@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from finestore.rl.curation import Confidence, Defect, ReferenceStatus
 from pydantic import BaseModel, ConfigDict, Field
 
 from taskcompendium.models import AssistantToolCalls, EnvironmentRequirements, Source, TaskSpec, TextMessage
@@ -233,27 +234,6 @@ class Quality(StrEnum):
     ISSUES = "some_issues"
     BAD = "bad"
     UNKNOWN = "unknown"
-
-
-class Confidence(StrEnum):
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-
-
-class ReferenceStatus(StrEnum):
-    CONSISTENT = "consistent"
-    CONFLICT = "conflict"
-    UNKNOWN = "unknown"
-
-
-class Defect(StrEnum):
-    MISSING_CONTEXT = "missing_context"
-    AMBIGUITY = "ambiguity"
-    WRONG_REFERENCE = "wrong_reference"
-    ANSWER_LEAKAGE = "answer_leakage"
-    MALFORMED = "malformed"
-    RUBRIC_MISMATCH = "rubric_mismatch"
 
 
 class ReviewVerdict(BaseModel):

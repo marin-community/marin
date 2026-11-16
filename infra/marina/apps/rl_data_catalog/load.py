@@ -67,7 +67,9 @@ TABLE_COLUMNS = {
     "populations": "pipeline_key TEXT, cohort TEXT, population BIGINT, sample_count BIGINT",
     "items": (
         "pipeline_key TEXT, task_id TEXT, cohort TEXT, status TEXT, verdict TEXT, explanation TEXT, "
-        "evidence_ids JSONB, packet_uri TEXT, has_task BOOLEAN, omissions JSONB, exclusion_reason TEXT"
+        "evidence_ids JSONB, packet_uri TEXT, has_task BOOLEAN, omissions JSONB, exclusion_reason TEXT, "
+        "confidence TEXT, reference_status TEXT, defects JSONB, "
+        "provenance TEXT, replaced_task_sha256 TEXT, repair_advisories JSONB"
     ),
     "packets": "pipeline_key TEXT, task_id TEXT, packet TEXT",
     "backend_surveys": "survey_id TEXT, survey JSONB",

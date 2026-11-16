@@ -13,6 +13,24 @@
 #reviews p { border-bottom: 1px solid var(--line); padding: 10px 0; margin: 0; font-size: max(var(--type-min), 14px); overflow-wrap: anywhere; }
 #selected { font-size: max(var(--type-min), 13px); }
 @media (max-width: 650px) { .assessment-card { padding: 16px; } }
+.review-filters { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin: 10px 0 4px; }
+.review-filter { display: flex; flex-direction: column; gap: 4px; font-size: max(var(--type-min), 12px); }
+.review-filter select { max-width: 220px; }
+.review-filter > span, .review-defects > span { color: var(--muted); font-size: max(var(--type-min), 11px); text-transform: uppercase; letter-spacing: 0.04em; }
+.review-defects { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.review-defect { display: inline-flex; gap: 5px; align-items: center; font-size: max(var(--type-min), 12px); }
+.defect-chip { font-size: max(var(--type-min), 11px); }
+.audit-draw { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin: 10px 0; }
+.audit-draw label { display: flex; flex-direction: column; gap: 4px; font-size: max(var(--type-min), 12px); }
+.audit-draw input, .audit-draw select { max-width: 240px; }
+.audit-judgment fieldset { border: 1px solid var(--line); border-radius: 5px; margin: 10px 0; padding: 10px; }
+.audit-judgment .audit-agree { display: inline-flex; gap: 8px; }
+.audit-judgment button.chip { cursor: pointer; }
+.audit-judgment textarea { width: 100%; min-height: 56px; margin-top: 8px; }
+.audit-status { margin-left: 10px; color: var(--muted); }
+.audit-agreement { margin: 10px 0; font-size: max(var(--type-min), 12px); }
+.audit-agreement th, .audit-agreement td { border-bottom: 1px solid var(--line); padding: 5px 10px 5px 0; text-align: left; }
+.audit-task > summary { cursor: pointer; }
 .evidence-labels { max-width: 100%; overflow-x: auto; display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
 .evidence-labels .chip { flex-shrink: 0; font-size: max(var(--type-min), 12px); padding: 6px 9px; }
 .card-intro { color: var(--muted); margin: -4px 0 6px; }

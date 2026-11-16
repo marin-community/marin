@@ -120,6 +120,29 @@ CREATE TABLE IF NOT EXISTS atlas_items (
     has_task BOOLEAN NOT NULL, omissions JSONB NOT NULL, exclusion_reason TEXT,
     PRIMARY KEY (load_id, pipeline_key, task_id)
 );
+ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS confidence TEXT;
+ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS reference_status TEXT;
+ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS defects JSONB;
+ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS provenance TEXT;
+ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS replaced_task_sha256 TEXT;
+ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS repair_advisories JSONB;
+CREATE TABLE IF NOT EXISTS atlas_audit_samples (
+    sample_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, pipeline_key TEXT NOT NULL,
+    load_id TEXT NOT NULL, strategy TEXT NOT NULL, seed TEXT NOT NULL,
+    sample_size INTEGER NOT NULL, strata JSONB NOT NULL,
+    created_by TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS atlas_audit_sample_tasks (
+    sample_id TEXT NOT NULL, task_id TEXT NOT NULL, verdict TEXT NOT NULL, defects JSONB NOT NULL,
+    PRIMARY KEY (sample_id, task_id),
+    FOREIGN KEY (sample_id) REFERENCES atlas_audit_samples (sample_id)
+);
+CREATE TABLE IF NOT EXISTS atlas_audit_judgments (
+    sample_id TEXT NOT NULL, task_id TEXT NOT NULL, user_id TEXT NOT NULL,
+    agree BOOLEAN NOT NULL, corrected_verdict TEXT, corrected_defects JSONB,
+    note TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (sample_id, task_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS atlas_packets (
     load_id TEXT NOT NULL, pipeline_key TEXT NOT NULL, task_id TEXT NOT NULL,
     packet TEXT NOT NULL,
@@ -148,6 +171,20 @@ SELECT p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count,
         'bad', COUNT(i.task_id) FILTER (WHERE i.verdict = 'bad'),
         'unknown', COUNT(i.task_id) FILTER (WHERE i.verdict = 'unknown')
     ) AS verdict_counts,
+    jsonb_build_object(
+        'missing_context', COUNT(i.task_id) FILTER (WHERE i.defects @> '["missing_context"]'::jsonb),
+        'ambiguity', COUNT(i.task_id) FILTER (WHERE i.defects @> '["ambiguity"]'::jsonb),
+        'wrong_reference', COUNT(i.task_id) FILTER (WHERE i.defects @> '["wrong_reference"]'::jsonb),
+        'answer_leakage', COUNT(i.task_id) FILTER (WHERE i.defects @> '["answer_leakage"]'::jsonb),
+        'malformed', COUNT(i.task_id) FILTER (WHERE i.defects @> '["malformed"]'::jsonb),
+        'rubric_mismatch', COUNT(i.task_id) FILTER (WHERE i.defects @> '["rubric_mismatch"]'::jsonb)
+    ) AS defect_counts,
+    jsonb_build_object(
+        'high', COUNT(i.task_id) FILTER (WHERE i.confidence = 'high'),
+        'medium', COUNT(i.task_id) FILTER (WHERE i.confidence = 'medium'),
+        'low', COUNT(i.task_id) FILTER (WHERE i.confidence = 'low'),
+        'unrecorded', COUNT(i.task_id) FILTER (WHERE i.confidence IS NULL)
+    ) AS confidence_counts,
     COUNT(i.task_id) AS item_count,
     COUNT(i.task_id) FILTER (WHERE i.status = 'reviewed' AND i.has_task AND i.verdict = 'good') AS good_count,
     COUNT(i.task_id) FILTER (
@@ -159,7 +196,7 @@ LEFT JOIN atlas_items i
 GROUP BY p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count, a.curation
 )
 SELECT load_id, pipeline_key, cohort, population, sample_count, reviewed,
-    missing_evidence, packets_with_omissions, verdict_counts,
+    missing_evidence, packets_with_omissions, verdict_counts, defect_counts, confidence_counts,
     CASE
         WHEN sample_count = 0 OR item_count <> sample_count OR conclusive_count = 0 THEN 'unknown'
         WHEN 2 * (conclusive_count - good_count) >= conclusive_count THEN 'bad'

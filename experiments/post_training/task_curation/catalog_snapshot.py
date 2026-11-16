@@ -26,6 +26,7 @@ from finestore.rl.curation import (
     AssessmentPopulation,
     AssessmentStatus,
     CatalogSnapshot,
+    Confidence,
     ControlCounts,
     ControlSummary,
     ConvertedExamples,
@@ -34,7 +35,11 @@ from finestore.rl.curation import (
     CurationSummary,
     CurrentCatalog,
     DaytonaMeasurement,
+    Defect,
     JudgmentStatus,
+    ReferenceStatus,
+    RepairAdvisory,
+    RepairProvenance,
     SnapshotSource,
     SourceQualityResult,
     Verdict,
@@ -168,6 +173,14 @@ def publish_assessment(store: DataStore, catalog: CurationCatalog, attempt: Asse
                 has_task="task" in evidence,
                 omissions=packet["omissions"],
                 exclusion_reason=packet["exclusion_reason"],
+                confidence=Confidence(grade.get("confidence")) if grade.get("confidence") else None,
+                reference_status=(
+                    ReferenceStatus(grade.get("reference_status")) if grade.get("reference_status") else None
+                ),
+                defects=[Defect(defect) for defect in grade.get("defects") or []],
+                provenance=RepairProvenance(grade["provenance"]) if grade.get("provenance") else None,
+                replaced_task_sha256=grade.get("replaced_task_sha256") or None,
+                repair_advisories=[RepairAdvisory.model_validate(row) for row in grade.get("repair_advisories") or []],
             )
         )
     populations = [AssessmentPopulation(pipeline_key=key, **row.model_dump()) for row in inputs.populations]

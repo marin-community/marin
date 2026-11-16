@@ -59,6 +59,7 @@ from marina.applets import (
     validate_query,
 )
 from marina.client import AppletQuery
+from rigging.server_auth import VerifiedIdentity, identity_scope
 from shellbox.machine import Backend
 from shellbox.requirements import Requirement, Support
 from shellbox.survey import CapabilityCell
@@ -371,6 +372,7 @@ def publish_sample(
     grading_environment: GradingEnvironmentEvidence | None = None,
     admitted_verdicts: tuple[str, str] = ("good", "unknown"),
     oversight: OversightLevel = OversightLevel.NONE,
+    review_types: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     declaration = SourceDeclaration(
         license_receipt=fixture_license(source_id, "fixture", "1"),
@@ -446,6 +448,7 @@ def publish_sample(
                     has_task=has_task,
                     omissions=[] if has_task else ["TaskSpec unavailable"],
                     exclusion_reason="Reference contradiction" if cohort == "excluded" else None,
+                    **(review_types or {}).get(task_id, {}),
                 )
             )
         curation_uri = store.write_object(f"{key}/curation.json", curation.model_dump_json().encode())
@@ -2291,3 +2294,146 @@ def test_sample_list_carries_filter_scores_while_detail_retains_alternatives(cat
         assert first["matches"][0]["candidates"] == [{"capability_id": "add", "similarity": 0.9}]
         detail = client.get("/curriculum/task", params={"source_id": "Marin:a", "task_id": "one"}).json()["task"]
         assert detail["matches"]["subjects"][0]["candidates"][1] == alternative
+
+
+def test_typed_review_fields_load_and_serve(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "typed")
+    types = {
+        "one": {
+            "confidence": "low",
+            "reference_status": "conflict",
+            "defects": ["wrong_reference"],
+            "provenance": "replaced",
+            "replaced_task_sha256": "a" * 64,
+            "repair_advisories": [
+                {"signal": "pass@8-filter", "candidate_source_id": "Marin:candidate", "reason": "No pass at 8"}
+            ],
+        },
+        "two": {"confidence": "high", "reference_status": "consistent", "defects": ["ambiguity", "malformed"]},
+        "three": {"confidence": "medium", "reference_status": "consistent", "defects": ["answer_leakage"]},
+    }
+    publish_sample(root, "typed", admitted_verdicts=("some_issues", "bad"), review_types=types)
+    load_surveyed_catalog(
+        CurationCatalog(root),
+        catalog_query,
+        catalog_backend_map(CurationCatalog(root)),
+        catalog_identity_map(CurationCatalog(root)),
+    )
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        report = client.get("/assessment", params={"source_id": "Marin:math"}).json()["report"]
+        samples = {row["task_id"]: row for row in report["evidence"]["samples"]}
+        assert samples["one"]["confidence"] == "low"
+        assert samples["one"]["reference_status"] == "conflict"
+        assert samples["one"]["defects"] == ["wrong_reference"]
+        assert samples["one"]["provenance"] == "replaced"
+        assert samples["one"]["replaced_task_sha256"] == "a" * 64
+        assert samples["one"]["repair_advisories"] == [
+            {
+                "signal": "pass@8-filter",
+                "candidate_source_id": "Marin:candidate",
+                "reason": "No pass at 8",
+                "receipt_uri": None,
+            }
+        ]
+        assert samples["two"]["provenance"] is None
+        assert samples["two"]["repair_advisories"] == []
+        admitted = report["assessment"]["admitted"]
+        assert admitted["defect_counts"]["ambiguity"] == 1
+        assert admitted["defect_counts"]["malformed"] == 1
+        assert admitted["confidence_counts"] == {"high": 1, "medium": 0, "low": 1, "unrecorded": 0}
+        evidence = client.get("/evidence", params={"source_id": "Marin:math", "task_id": "two"}).json()
+        assert evidence["judgment"]["defects"] == ["ambiguity", "malformed"]
+        assert evidence["judgment"]["confidence"] == "high"
+        replaced = client.get("/evidence", params={"source_id": "Marin:math", "task_id": "one"}).json()
+        assert replaced["judgment"]["provenance"] == "replaced"
+        assert replaced["judgment"]["replaced_task_sha256"] == "a" * 64
+    # A legacy snapshot without the columns keeps validating as unrecorded.
+    legacy = str(tmp_path / "legacy")
+    publish_sample(legacy, "legacy")
+    load_surveyed_catalog(
+        CurationCatalog(legacy),
+        catalog_query,
+        catalog_backend_map(CurationCatalog(legacy)),
+        catalog_identity_map(CurationCatalog(legacy)),
+    )
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        report = client.get("/assessment", params={"source_id": "Marin:math"}).json()["report"]
+        samples = {row["task_id"]: row for row in report["evidence"]["samples"]}
+        assert samples["one"]["confidence"] is None
+        assert samples["one"]["defects"] == []
+
+
+def test_manual_audit_sample_judgments_and_agreement(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "audit")
+    types = {
+        "one": {"confidence": "low", "reference_status": "conflict", "defects": ["wrong_reference"]},
+        "two": {"confidence": "high", "reference_status": "consistent", "defects": ["ambiguity"]},
+        "three": {"confidence": "medium", "reference_status": "consistent", "defects": []},
+    }
+    publish_sample(root, "audit", admitted_verdicts=("some_issues", "bad"), review_types=types)
+    load_surveyed_catalog(
+        CurationCatalog(root),
+        catalog_query,
+        catalog_backend_map(CurationCatalog(root)),
+        catalog_identity_map(CurationCatalog(root)),
+    )
+    services = cast(AppletServices, CatalogServices(catalog_database))
+    request = {"source_id": "Marin:math", "strategy": "stratified", "seed": "seed-1", "sample_size": 2}
+    with identity_scope(VerifiedIdentity(user_id="auditor@example", role="user")):
+        with TestClient(create_api(services)) as client:
+            first = client.post("/audit/samples", json=request).json()
+            again = client.post("/audit/samples", json=request).json()
+            assert first["sample_id"] == again["sample_id"]
+            assert again["existing"] is True
+            tasks = client.get(f"/audit/samples/{first['sample_id']}/tasks").json()
+            assert len(tasks["tasks"]) == 2
+            sample_id = first["sample_id"]
+            assert (
+                client.put(f"/audit/samples/{sample_id}/judgments", json={"task_id": "one", "agree": False}).status_code
+                == 422
+            )
+            saved = client.put(
+                f"/audit/samples/{sample_id}/judgments",
+                json={
+                    "task_id": "one",
+                    "agree": False,
+                    "corrected_verdict": "good",
+                    "corrected_defects": [],
+                    "note": "Reference is fine",
+                },
+            )
+            assert saved.status_code == 200
+            updated = client.put(
+                f"/audit/samples/{sample_id}/judgments",
+                json={
+                    "task_id": "one",
+                    "agree": False,
+                    "corrected_verdict": "some_issues",
+                    "corrected_defects": ["ambiguity"],
+                },
+            )
+            assert updated.status_code == 200
+            outside = client.put(
+                f"/audit/samples/{sample_id}/judgments",
+                json={
+                    "task_id": "absent",
+                    "agree": True,
+                },
+            )
+            assert outside.status_code == 404
+            agreement = client.get(f"/audit/samples/{sample_id}/agreement").json()
+            assert agreement["overall"]["judged"] == 1
+            assert agreement["per_defect"]["wrong_reference"]["judged"] == 1
+    # Another user's judgment is separate; the first user's is unchanged.
+    with identity_scope(VerifiedIdentity(user_id="second@example", role="user")):
+        with TestClient(create_api(services)) as client:
+            client.put(f"/audit/samples/{sample_id}/judgments", json={"task_id": "one", "agree": True})
+            tasks = client.get(f"/audit/samples/{sample_id}/tasks").json()
+            judgments = [row["judgment"] for row in tasks["tasks"] if row["task_id"] == "one"]
+            assert len(judgments) == 1
+            agreement = client.get(f"/audit/samples/{sample_id}/agreement").json()
+            assert agreement["overall"]["judged"] == 2
+            assert agreement["overall"]["agree"] == 1
+    with TestClient(create_api(services)) as client:
+        assert client.post("/audit/samples", json=request).status_code == 401
+        assert client.get(f"/audit/samples/{sample_id}/tasks").status_code == 401
