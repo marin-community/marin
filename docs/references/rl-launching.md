@@ -221,11 +221,13 @@ temporary-storage helper for checkpoints and trajectories so paths have a bounde
 not repeat a source bucket prefix.
 
 Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
-training driver first waits up to 30 seconds for remote node loggers, then
+training entrypoint first waits up to 30 seconds for remote node loggers, then
 finishes its own uploads using the same SDK deadline. These waits can take up to
 60 seconds, plus other cleanup. Upload timeouts produce warnings and preserve
-the workload's success or original exception. Some W&B records may remain
-unuploaded.
+the workload's success or original exception. W&B may show the run as Crashed
+or Failed after a primary upload timeout even when training succeeds. Some W&B
+records may remain unuploaded. Other cleanup can still exhaust the existing
+120-second teardown watchdog.
 
 SkyRL keeps the two most recent recovery checkpoints by default. For an RSI loop
 that needs only the latest recovery point, set
