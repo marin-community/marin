@@ -119,8 +119,6 @@ def iris_vllm_launch(
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("Iris vLLM launch must run inside an Iris job")
-    if pipeline_parallel_size > 1 and data_parallel_hosts > 1:
-        raise ValueError("a vLLM gang spans pipeline stages or data-parallel hosts, not both")
     task_count = pipeline_parallel_size * data_parallel_hosts
     if job_info.num_tasks != task_count:
         raise ValueError(

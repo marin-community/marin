@@ -57,12 +57,12 @@ def resolve_tokenizer_revision(
     return None
 
 
-def validate_pipeline_args(args: tuple[str, ...]) -> None:
+def validate_gang_args(args: tuple[str, ...]) -> None:
     """Reject flags whose values must agree with the Iris gang geometry."""
     for arg in args:
         option = arg.partition("=")[0]
         if option in VLLM_TOPOLOGY_OPTIONS:
-            raise ValueError(f"pipeline parallelism owns {option}; remove it from extra args")
+            raise ValueError(f"a multi-task vLLM gang owns {option}; remove it from extra args")
 
 
 @dataclass(frozen=True)
@@ -484,4 +484,4 @@ class RemoteInferenceConfig:
                 raise ValueError("a multi-task vLLM gang requires one instance and no broker")
             if self.model.tensor_parallel_size != geometry.tensor_parallel_size:
                 raise ValueError("model tensor_parallel_size must match serving geometry")
-            validate_pipeline_args(self.engine.extra_args)
+            validate_gang_args(self.engine.extra_args)

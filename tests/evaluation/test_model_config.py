@@ -449,7 +449,7 @@ def test_broker_deadlines_allow_the_configured_evaluation_request_timeout(instan
 @pytest.mark.parametrize("equals", [False, True])
 def test_pipeline_rejects_raw_topology_overrides(flag, equals):
     extra_args = (f"{flag}=2",) if equals else (flag, "2")
-    with pytest.raises(ValueError, match="pipeline parallelism owns"):
+    with pytest.raises(ValueError, match="multi-task vLLM gang owns"):
         ServeConfig(tensor_parallel_size=8, pipeline_parallel_size=2, vllm_extra_args=extra_args)
 
 
@@ -505,15 +505,22 @@ def test_mochi_catalog_lowers_one_server_across_four_gb200_hosts():
 
 
 @pytest.mark.parametrize(
-    "serve",
+    ("serve", "message"),
     [
-        {"tensor_parallel_size": 1, "data_parallel_size": 4, "data_parallel_hosts": 0},
-        {"tensor_parallel_size": 1, "pipeline_parallel_size": 2, "data_parallel_hosts": 2},
-        {"data_parallel_size": 4, "data_parallel_hosts": 4},
-        {"tensor_parallel_size": 1, "data_parallel_hosts": 4, "instances": 2},
-        {"tensor_parallel_size": 1, "data_parallel_hosts": 4, "vllm_extra_args": ("--data-parallel-size-local", "4")},
+        ({"tensor_parallel_size": 1, "data_parallel_hosts": 0}, "data_parallel_hosts must be"),
+        ({"tensor_parallel_size": 1, "pipeline_parallel_size": 2, "data_parallel_hosts": 2}, "not both"),
+        ({"data_parallel_size": 4, "data_parallel_hosts": 4}, "explicit tensor_parallel_size"),
+        ({"tensor_parallel_size": 1, "data_parallel_hosts": 4, "instances": 2}, "instances=1"),
+        (
+            {
+                "tensor_parallel_size": 1,
+                "data_parallel_hosts": 4,
+                "vllm_extra_args": ("--data-parallel-size-local", "4"),
+            },
+            "owns --data-parallel-size-local",
+        ),
     ],
 )
-def test_invalid_data_parallel_host_settings_fail_before_submission(serve):
-    with pytest.raises(ValueError):
+def test_invalid_data_parallel_host_settings_fail_before_submission(serve, message):
+    with pytest.raises(ValueError, match=message):
         ServeConfig(**serve)
