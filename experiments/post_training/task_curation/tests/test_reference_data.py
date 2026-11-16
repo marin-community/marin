@@ -222,6 +222,25 @@ def test_append_license_receipt_rejects_a_mismatched_key(tmp_path: Path, hub: di
         )
 
 
+def test_read_license_receipts_reads_a_staged_receipts_file(tmp_path: Path):
+    first = _receipt("fixture:source", "fixture/dataset", "a" * 40)
+    second = _receipt("fixture:other", "fixture/dataset", "b" * 40)
+    staged = tmp_path / "license-receipts.json"
+    staged.write_text(
+        json.dumps(
+            {
+                "fixture:source": first.model_dump(mode="json"),
+                "fixture:other": second.model_dump(mode="json"),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    receipts = license_binding.read_license_receipts(staged)
+    assert set(receipts) == {"fixture:source", "fixture:other"}
+    assert receipts["fixture:other"].revision == "b" * 40
+
+
 def test_read_license_receipts_still_reads_staging_directories(tmp_path: Path):
     directory = tmp_path / "receipts"
     directory.mkdir()

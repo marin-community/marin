@@ -13,9 +13,11 @@ from dataclasses import replace
 from pathlib import Path
 
 from finestore.rl.licenses import LICENSE_REGISTRY_ISSUE, LicenseReceipt
+from pydantic import ValidationError
 
 from experiments.post_training.task_curation.receipt_shards import read_receipt_shards, receipts_from_documents
 from experiments.post_training.task_curation.reference_data import (
+    DataReferenceIndex,
     commit_reference_documents,
     load_referenced_json,
 )
@@ -28,7 +30,12 @@ BANNED_SOURCES_ISSUE = LICENSE_REGISTRY_ISSUE
 
 
 def read_license_receipts(path: Path) -> dict[str, LicenseReceipt]:
-    """Reviewed receipts from a staging directory or the committed reference index."""
+    """Reviewed receipts from a staging directory, a staged receipts file, or the committed index.
+
+    ``license_check --receipts-output`` writes a single ``{source_id: receipt}`` file;
+    the reference index pins the private dataset revision; a directory holds
+    ``part-*.json`` receipt shards. All three resolve to the same validated map.
+    """
     if path.is_dir():
         receipts = read_receipt_shards(
             path,
@@ -37,7 +44,14 @@ def read_license_receipts(path: Path) -> dict[str, LicenseReceipt]:
             load_json=lambda shard: json.loads(shard.read_text()),
         )
     else:
-        receipts = receipts_from_documents(load_referenced_json(path), LicenseReceipt, "license receipt")
+        document = json.loads(path.read_text())
+        try:
+            DataReferenceIndex.model_validate(document)
+        except ValidationError:
+            # A single staged receipts document, as license_check --receipts-output writes.
+            receipts = receipts_from_documents({path.name: document}, LicenseReceipt, "license receipt")
+        else:
+            receipts = receipts_from_documents(load_referenced_json(path), LicenseReceipt, "license receipt")
     if any(key != receipt.source_id for key, receipt in receipts.items()):
         raise ValueError("License registry key differs from the receipt source identity")
     return receipts
