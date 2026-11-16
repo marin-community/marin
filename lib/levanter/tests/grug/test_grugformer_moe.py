@@ -1970,10 +1970,12 @@ def test_ragged_all_to_all_with_aligned_receiver_rows_matches_the_packed_layout(
     match the dense MLP."""
     monkeypatch.setattr(jax.lax, "ragged_all_to_all", _emulated_ragged_all_to_all)
     packed_selection = ep_ragged_all_to_all._select_expert_mlp
+    aligned_selections = []
 
     def aligned_selection(activation_fn, dtype):
         packed = packed_selection(activation_fn, dtype)
         assert type(packed) is ep_ragged_all_to_all._RaggedDotExpertMlp, packed
+        aligned_selections.append(packed)
         return _AlignedRaggedDotExpertMlp(activation_fn, routing_weight_gradient=packed.routing_weight_gradient)
 
     tokens, hidden, intermediate, num_experts, topk = 64, 8, 12, 16, 4
@@ -2040,6 +2042,7 @@ def test_ragged_all_to_all_with_aligned_receiver_rows_matches_the_packed_layout(
             monkeypatch.setattr(ep_ragged_all_to_all, "_select_expert_mlp", aligned_selection)
             aligned, aligned_dropped = value_and_grads(ragged, ep_cotangent, *ep_operands)
 
+    assert aligned_selections, "the aligned expert MLP never ran"
     # Drops depend on the logical capacity alone, never on the receiver layout.
     assert int(packed_dropped) == int(aligned_dropped)
     drops = capacity_factor < 1
