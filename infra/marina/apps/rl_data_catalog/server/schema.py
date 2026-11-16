@@ -196,7 +196,7 @@ LEFT JOIN atlas_items i
 GROUP BY p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count, a.curation
 )
 SELECT load_id, pipeline_key, cohort, population, sample_count, reviewed,
-    missing_evidence, packets_with_omissions, verdict_counts, defect_counts, confidence_counts,
+    missing_evidence, packets_with_omissions, verdict_counts,
     CASE
         WHEN sample_count = 0 OR item_count <> sample_count OR conclusive_count = 0 THEN 'unknown'
         WHEN 2 * (conclusive_count - good_count) >= conclusive_count THEN 'bad'
@@ -216,6 +216,10 @@ SELECT load_id, pipeline_key, cohort, population, sample_count, reviewed,
     conclusive_count - good_count AS issue_count,
     (conclusive_count - good_count)::double precision / NULLIF(conclusive_count, 0) AS issue_rate,
     reviewed - conclusive_count AS uncertain_count,
-    sample_count - reviewed AS unavailable_count
+    sample_count - reviewed AS unavailable_count,
+    -- Appended after the retained column prefix: Postgres refuses CREATE OR REPLACE VIEW
+    -- when an existing column changes name or position.
+    defect_counts,
+    confidence_counts
 FROM counts;
 """

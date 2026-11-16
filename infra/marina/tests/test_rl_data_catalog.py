@@ -99,6 +99,7 @@ from infra.marina.apps.rl_data_catalog.release_evidence import (
 )
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
+from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 from infra.marina.apps.rl_data_catalog.server.quality import result
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
@@ -1364,6 +1365,144 @@ def test_source_grade_uses_sample_fractions_and_zero_output(catalog_database, ve
     assert row["result_reviewed"] == sum(v not in {"unknown", "missing_task"} for v in verdicts)
     if verdicts == ["good"] * 99 + ["bad"]:
         assert row["good_fraction"] == 0.99
+
+
+# The cohort view a retained Atlas database already runs: audit counts were introduced in
+# 09d6d89d without touching the retained column prefix.
+RETAINED_COHORT_SUMMARY_VIEW = """
+CREATE OR REPLACE VIEW atlas_cohort_summary AS
+WITH counts AS (
+SELECT p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count,
+    COUNT(i.task_id) FILTER (WHERE i.status = 'reviewed') AS reviewed,
+    COUNT(i.task_id) FILTER (WHERE NOT i.has_task) AS missing_evidence,
+    COUNT(i.task_id) FILTER (WHERE jsonb_array_length(i.omissions) > 0) AS packets_with_omissions,
+    jsonb_build_object(
+        'good', COUNT(i.task_id) FILTER (WHERE i.verdict = 'good'),
+        'some_issues', COUNT(i.task_id) FILTER (WHERE i.verdict = 'some_issues'),
+        'bad', COUNT(i.task_id) FILTER (WHERE i.verdict = 'bad'),
+        'unknown', COUNT(i.task_id) FILTER (WHERE i.verdict = 'unknown')
+    ) AS verdict_counts,
+    COUNT(i.task_id) AS item_count,
+    COUNT(i.task_id) FILTER (WHERE i.status = 'reviewed' AND i.has_task AND i.verdict = 'good') AS good_count,
+    COUNT(i.task_id) FILTER (
+        WHERE i.status = 'reviewed' AND i.has_task AND i.verdict <> 'unknown'
+    ) AS conclusive_count
+FROM atlas_populations p JOIN atlas_assessments a USING (load_id, pipeline_key)
+LEFT JOIN atlas_items i
+    ON i.load_id = p.load_id AND i.pipeline_key = p.pipeline_key AND i.cohort = p.cohort
+GROUP BY p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count, a.curation
+)
+SELECT load_id, pipeline_key, cohort, population, sample_count, reviewed,
+    missing_evidence, packets_with_omissions, verdict_counts,
+    CASE
+        WHEN sample_count = 0 OR item_count <> sample_count OR conclusive_count = 0 THEN 'unknown'
+        WHEN 2 * (conclusive_count - good_count) >= conclusive_count THEN 'bad'
+        WHEN 10 * (conclusive_count - good_count) <= conclusive_count THEN 'good'
+        ELSE 'some_issues'
+    END AS grade,
+    good_count::double precision / NULLIF(conclusive_count, 0) AS good_fraction,
+    CASE
+        WHEN sample_count = 0 THEN 'No sample available'
+        WHEN item_count <> sample_count THEN 'Sample coverage is incomplete'
+        WHEN conclusive_count = 0 THEN 'No conclusive reviewed tasks'
+        WHEN 2 * (conclusive_count - good_count) >= conclusive_count THEN 'At least 50% of reviewed tasks have issues'
+        WHEN 10 * (conclusive_count - good_count) <= conclusive_count THEN 'At least 90% of reviewed tasks are clean'
+        ELSE 'More than 10% and fewer than 50% of reviewed tasks have issues'
+    END AS grade_reason,
+    conclusive_count AS result_reviewed,
+    conclusive_count - good_count AS issue_count,
+    (conclusive_count - good_count)::double precision / NULLIF(conclusive_count, 0) AS issue_rate,
+    reviewed - conclusive_count AS uncertain_count,
+    sample_count - reviewed AS unavailable_count
+FROM counts;
+"""
+
+
+def test_migrate_appends_audit_counts_to_the_retained_cohort_view(database_url: str):
+    """Upgrading a retained database keeps the cohort view's rows and retained column prefix.
+
+    Postgres rejects CREATE OR REPLACE VIEW when an existing column changes name or
+    position, so the audit count projections must append after the retained columns.
+    """
+    admin = create_engine(database_url)
+    schema = "catalog_test_" + uuid.uuid4().hex
+    with admin.begin() as connection:
+        connection.execute(text(f"CREATE SCHEMA {schema}"))
+    engine = create_engine(database_url)
+
+    @event.listens_for(engine, "connect")
+    def select_schema(connection, _record):
+        with connection.cursor() as cursor:
+            cursor.execute(f"SET search_path TO {schema}, public")
+
+    retained = [
+        statement.strip()
+        for statement in SCHEMA_SQL.split(";")
+        if statement.strip() and not statement.lstrip().startswith("CREATE OR REPLACE VIEW atlas_cohort_summary")
+    ]
+    try:
+        with engine.begin() as connection:
+            for statement in [*retained, RETAINED_COHORT_SUMMARY_VIEW]:
+                connection.execute(text(statement))
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO atlas_assessments VALUES
+                    ('load', 'pipeline', 'source', 'full', '{}'::jsonb, 'rubric',
+                     :curation, 'curation-uri', '[]'::jsonb)
+                    """
+                ),
+                {"curation": json.dumps({"status": "completed", "processed_rows": 100})},
+            )
+            connection.execute(text("INSERT INTO atlas_populations VALUES ('load', 'pipeline', 'admitted', 2, 2)"))
+            for index, verdict in enumerate(["good", "bad"]):
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO atlas_items VALUES
+                        ('load', 'pipeline', :id, 'admitted', 'reviewed', :verdict, 'finding',
+                         '[]'::jsonb, 'packet-uri', TRUE, '[]'::jsonb, NULL)
+                        """
+                    ),
+                    {"id": str(index), "verdict": verdict},
+                )
+            before = (
+                connection.execute(
+                    text("SELECT grade, good_fraction, issue_count, issue_rate, unavailable_count FROM atlas_cohort_summary")
+                )
+                .mappings()
+                .one()
+            )
+        with engine.begin() as connection:
+            migrate(connection)
+        with engine.begin() as connection:
+            columns = [
+                row["column_name"]
+                for row in connection.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'atlas_cohort_summary' ORDER BY ordinal_position"
+                    )
+                ).mappings()
+            ]
+            after = connection.execute(text("SELECT * FROM atlas_cohort_summary")).mappings().one()
+        assert columns[-2:] == ["defect_counts", "confidence_counts"]
+        for column, value in before.items():
+            assert after[column] == value, f"{column} changed across the upgrade"
+        assert after["defect_counts"] == {
+            "missing_context": 0,
+            "ambiguity": 0,
+            "wrong_reference": 0,
+            "answer_leakage": 0,
+            "malformed": 0,
+            "rubric_mismatch": 0,
+        }
+        assert after["confidence_counts"] == {"high": 0, "medium": 0, "low": 0, "unrecorded": 2}
+    finally:
+        engine.dispose()
+        with admin.begin() as connection:
+            connection.execute(text(f"DROP SCHEMA {schema} CASCADE"))
+        admin.dispose()
 
 
 def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_database, catalog_query, tmp_path):
