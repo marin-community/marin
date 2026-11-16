@@ -908,7 +908,7 @@ async def test_declarative_harbor_starts_and_deletes_without_a_snapshot_service(
             assert name == self.created.name
             return self
 
-        async def delete(self, sandbox):
+        async def delete(self, sandbox, *, wait=False):
             assert sandbox is self
             self.deleted = True
 
