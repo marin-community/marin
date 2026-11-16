@@ -23,6 +23,13 @@ from taskcompendium.models import (
 TEXT_BLOCKS = frozenset({"input_text", "output_text", "text"})
 TOOL_EVENT_KEYS = frozenset({"tool_calls", "function_call", "annotations"})
 TOOL_EVENT_TYPES = frozenset({"tool_use", "tool_result", "function_call", "web_search_call"})
+CONTROL_REPLY_STATUS = ReplyStatus(
+    origin="control",
+    finish_reason="control",
+    truncated=False,
+    provider_refusal=False,
+    tool_events=(),
+)
 
 
 def tool_event_paths(value: Any, path: str = "response") -> tuple[str, ...]:

@@ -5,7 +5,7 @@
 
 import asyncio
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Protocol
 
@@ -14,6 +14,7 @@ from verifyit.grade import positive_candidate
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import ExactSpec, MathSpec, McqSpec, NumericSpec, StructureClosureSpec
 
+from taskcompendium.chat import CONTROL_REPLY_STATUS
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
@@ -234,6 +235,8 @@ async def _control(
         attempt = GradingAttempt(
             ConversationTrace(events=(*task.context.events, FILE_SUBMISSION_MESSAGE)), dict(submission.files)
         )
+    if task.completion_protocol == "tool_free_single":
+        attempt = replace(attempt, reply_status=CONTROL_REPLY_STATUS)
     grade = (
         grade_task(task, attempt, judge_connection=judge_connection)
         if sandbox is None

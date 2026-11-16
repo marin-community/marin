@@ -12,7 +12,6 @@ import socket
 from collections import Counter
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock, Thread
@@ -20,6 +19,7 @@ from threading import Lock, Thread
 import httpx
 from harbor.environments.model_relay import _upstream_error
 from rolloutengine.chat import chat_template_messages
+from taskcompendium.request_budget import RequestBudget
 from transformers import AutoTokenizer
 
 from experiments.post_training.task_curation.difficulty_provider import (
@@ -31,13 +31,6 @@ from experiments.post_training.task_curation.difficulty_provider import (
 
 LOGGER = logging.getLogger(__name__)
 REQUEST_TIMEOUT = 600
-
-
-@dataclass(frozen=True)
-class RequestBudget:
-    context_tokens: int
-    input_tokens: int
-    output_tokens: int
 
 
 class ReceiptHTTPServer(ThreadingHTTPServer):

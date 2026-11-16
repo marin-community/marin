@@ -26,6 +26,18 @@ flowchart LR
     G --> R[Typed grade result]
 ```
 
+## Native tool-free completions
+
+A TaskSpec with `completion_protocol="tool_free_single"` requires its original system and user messages, one completion, and no actor environment or tools. Harbor's `task-spec-chat` agent serves this protocol directly. Generic shell and direct-chat harnesses reject it. Hidden verifier resources and original solutions stay outside the model request.
+
+Configure the Harbor agent with `budget_manifest`, `budget_manifest_sha256`, `backend_identity_sha256` and `tokenization_identity`. The manifest is a JSON object keyed by the lowercase hexadecimal SHA-256 of UTF-8 `system_content + "\n" + user_content`. Each value validates as [`PromptBudget`](src/taskcompendium/request_budget.py). Its exact fields are `prompt_sha256`, `model`, `endpoint`, `backend_identity_sha256`, `tokenization`, `endpoint_limit_source`, `limits` and `prompt_tokens`. `tokenization` contains the tokenizer name, immutable Hugging Face `revision`, `chat_template_sha256` and `template_arguments`. `limits` is the shared `RequestBudget` with `context_tokens`, `input_tokens` and `output_tokens`.
+
+Supply the expected backend identity SHA independently from the manifest, using the pinned serving receipt recorded by the launch. Supply the tokenizer identity from the same launch. The runtime compares these configured identities, the model name and endpoint to the manifest, loads the immutable tokenizer revision, verifies the template SHA, and recounts the unchanged request. These checks bind the request to supplied serving evidence; they do not independently qualify the server's weights or hardware.
+
+`endpoint_limit_source` identifies the evidence for the endpoint's native context and output limits. For this protocol, `input_tokens` must equal `context_tokens - 1`; no additional input cap filters the population. Request `max_tokens` is the smaller of `output_tokens` and the context remaining after the exact prompt count. The agent's configured output and total-token caps must permit that full capacity. Missing or mismatched evidence, and prompts leaving no output capacity, fail technically before inference. Reference-token estimates never replace native counts.
+
+Requests disable tools and web plugins explicitly. Sampling options cannot override the protocol or budget. `<agent logs_dir>/tool-free/` retains `budget.json`, `request.json`, `wire_request.json`, `raw_response.json`, `response_status.json` and `answer_status.json`. Returned tool calls are never parsed or executed: their text and tool-event evidence reach the source's original verifier. Endpoint token-count mismatches fail technically with the raw response retained. An original-oracle control executes the preserved source solution; an empty control submits no answer text. Both record `origin="control"` with explicit truncation, refusal and tool-event fields. Unknown provider status is never replaced by false flags.
+
 ## Evaluation corpora
 
 `taskcompendium.evaluation.spec` defines `EvaluationProtocol` (schema version 3),

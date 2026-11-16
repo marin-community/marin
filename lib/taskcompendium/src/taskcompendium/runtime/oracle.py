@@ -7,6 +7,7 @@ from pathlib import PurePosixPath
 
 from shellbox.machine import Command, ExitReason, Machine, Result
 
+from taskcompendium.chat import CONTROL_REPLY_STATUS
 from taskcompendium.models import (
     ConversationTrace,
     EnvironmentRequirements,
@@ -82,4 +83,7 @@ async def read_oracle_answer(
 def oracle_answer_attempt(task: TaskSpec, answer: bytes) -> GradingAttempt:
     """Deliver original answer bytes as final text under the shared UTF-8 policy."""
     reply = TextMessage(role="assistant", content=answer.decode(errors="replace"))
-    return GradingAttempt(ConversationTrace(events=(*task.context.events, reply)))
+    return GradingAttempt(
+        ConversationTrace(events=(*task.context.events, reply)),
+        reply_status=CONTROL_REPLY_STATUS if task.completion_protocol == "tool_free_single" else None,
+    )

@@ -197,6 +197,8 @@ class ShellHarness:
             raise ValueError(f"The output limit must be a positive number of bytes: {self.output_limit_bytes!r}")
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
+        if task.completion_protocol is not None:
+            raise ValueError("Shell harness cannot satisfy a source's single-completion protocol")
         shell_tool = resolve_shell_tool(task, self.shell_tool)
         turn_limit = limits.tool_turn_timeout
         if self.command_timeout is not None and turn_limit is not None and self.command_timeout >= turn_limit:

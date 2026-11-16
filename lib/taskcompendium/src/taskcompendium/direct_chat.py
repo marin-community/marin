@@ -27,6 +27,8 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
     ]
     if specification.interaction_tools:
         features.append("interaction_tools")
+    if specification.completion_protocol is not None:
+        features.append("completion_protocol")
     if specification.output_paths:
         features.append("output_paths")
     grader = specification.grader

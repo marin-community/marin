@@ -17,6 +17,7 @@ from rigging.filesystem.storage_path import StoragePath
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from transformers import PreTrainedTokenizerFast
+from taskcompendium.request_budget import RequestBudget
 
 from experiments.post_training.task_curation import difficulty_provider, difficulty_relay
 from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
@@ -46,7 +47,7 @@ def test_provider_capacity_bounds_concurrent_http_requests(tmp_path, monkeypatch
         with difficulty_relay.budget_relay(
             endpoint="https://provider.fixture/v1", model="fixture", api_key="fixture",
             tokenizer_model="fixture", tokenizer_revision="a"*40, parameters={},
-            budget=difficulty_relay.RequestBudget(65536,49152,16384),
+            budget=RequestBudget(65536,49152,16384),
             provider_limits=ProviderLimits(max_in_flight=1, attempts=1), receipts=tmp_path,
         ) as relay, ThreadPoolExecutor(max_workers=2) as pool, real_client() as client:
             one = pool.submit(client.post, relay+"/one/v1/chat/completions", json={"messages": []})
@@ -86,7 +87,7 @@ def test_provider_retries_rejections_with_preserved_waits(tmp_path, monkeypatch)
     with difficulty_relay.budget_relay(
         endpoint="https://provider.fixture/v1", model="fixture", api_key="fixture",
         tokenizer_model="fixture", tokenizer_revision="a"*40, parameters={},
-        budget=difficulty_relay.RequestBudget(65536,49152,16384),
+        budget=RequestBudget(65536,49152,16384),
         provider_limits=ProviderLimits(max_in_flight=1, attempts=3), receipts=tmp_path,
     ) as relay, real_client() as client:
         assert client.post(relay+"/task/v1/chat/completions", json={"messages": []}, timeout=10).status_code == 200
@@ -124,7 +125,7 @@ def test_relay_renders_tool_arguments_without_changing_upstream_wire_history(tmp
     with difficulty_relay.budget_relay(
         endpoint="https://model.fixture/v1", model="fixture", api_key="fixture",
         tokenizer_model="fixture", tokenizer_revision="a"*40, parameters={},
-        budget=difficulty_relay.RequestBudget(65536, 49152, 16384), receipts=tmp_path,
+        budget=RequestBudget(65536, 49152, 16384), receipts=tmp_path,
         provider_limits=ProviderLimits(max_in_flight=1, attempts=1),
     ) as relay:
         with real_client() as client:
@@ -176,7 +177,7 @@ def test_final_archive_waits_for_inflight_upstream_reply(tmp_path, monkeypatch):
             with preserved_model_traffic(local, output), difficulty_relay.budget_relay(
                 endpoint=f"http://127.0.0.1:{upstream.server_port}/v1", model="fixture", api_key="fixture",
                 tokenizer_model="fixture", tokenizer_revision="a" * 40, parameters={}, receipts=local / "model-requests",
-                budget=difficulty_relay.RequestBudget(context_tokens=65536, input_tokens=49152, output_tokens=16384),
+                budget=RequestBudget(context_tokens=65536, input_tokens=49152, output_tokens=16384),
                 provider_limits=ProviderLimits(max_in_flight=1, attempts=1),
             ) as relay:
                 urls.put(relay)

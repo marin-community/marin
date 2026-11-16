@@ -983,6 +983,7 @@ class TaskSpec(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     final_tools: tuple[FunctionDefinition, ...] = ()
+    completion_protocol: Literal["tool_free_single"] | None = Field(default=None, exclude_if=lambda value: value is None)
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     tool_bindings: dict[str, ShellToolBinding] = Field(default_factory=dict)
     output_paths: tuple[str, ...] = ()
@@ -1007,6 +1008,18 @@ class TaskSpec(BaseModel):
                 raise ValueError("Actor and verifier allocations must share the same phase deadlines")
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
+        if self.completion_protocol == "tool_free_single":
+            if self.final_tools or self.interaction_tools or self.tool_bindings:
+                raise ValueError("Tool-free completion cannot advertise or bind tools")
+            events = self.context.events
+            if len(events) != 2 or any(not isinstance(event, TextMessage) for event in events):
+                raise ValueError("Tool-free completion requires the source's system and user text")
+            if [event.role for event in events] != ["system", "user"]:
+                raise ValueError("Tool-free completion requires exactly one system and one user message")
+            if self.environment_requirements != EnvironmentRequirements():
+                raise ValueError("Tool-free completion cannot provide an actor capability")
+            if self.resources.worker or self.resources.all or self.output_paths:
+                raise ValueError("Tool-free completion cannot expose workspace resources or outputs")
         if not self.id:
             raise ValueError("A task id is required")
         if len({function.name for function in self.final_tools}) != len(self.final_tools):

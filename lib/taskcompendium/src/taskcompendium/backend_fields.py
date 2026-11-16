@@ -85,6 +85,7 @@ TASK_FIELDS = {
     "execution_requirements": tuple(sorted({need for needs in EXECUTION_FIELDS.values() for need in needs})),
     "verifier_execution_requirements": tuple(sorted({need for needs in EXECUTION_FIELDS.values() for need in needs})),
     "final_tools": (),
+    "completion_protocol": (),
     "interaction_tools": (),
     "tool_bindings": (Requirement.TOOL_PROVIDERS,),
     "output_paths": (Requirement.FILESYSTEM,),

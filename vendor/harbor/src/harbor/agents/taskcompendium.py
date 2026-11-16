@@ -4,12 +4,15 @@
 """Candidate and control agents for unchanged TaskSpec trials."""
 
 import json
+import hashlib
+import asyncio
 from abc import abstractmethod
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from openai import AsyncOpenAI
+from pydantic import TypeAdapter
 from rolloutengine.chat import ChatModel
 from rolloutengine.harness.shell import ShellHarness, task_prompt
 from rolloutengine.harness.repository_shell import RepositoryShellProvider
@@ -21,8 +24,9 @@ from rolloutengine.models import (
     TraceMode,
 )
 from rolloutengine.recorder import harness_rollout
+from rolloutengine.tool_free import ToolFreeChatModel
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Command, ExitReason, Machine
-from taskcompendium.chat import assistant_message, chat_conversation, chat_input
+from taskcompendium.chat import CONTROL_REPLY_STATUS, assistant_message, chat_conversation, chat_input
 from taskcompendium.harbor.oracle import read_oracle_command
 from taskcompendium.models import (
     AnswerType,
@@ -44,6 +48,8 @@ from taskcompendium.runtime.shell import upload_resources
 from taskcompendium.repository_shell import SHELL_ACTION_INTERFACE
 from taskcompendium.browsecomp import BROWSECOMP_ACTION_INTERFACE
 from taskcompendium.openresearcher import OPENRESEARCHER_ACTION_INTERFACE
+from taskcompendium.request_budget import PromptBudget, TokenizationIdentity, tool_free_prompt_sha256
+from transformers import AutoTokenizer
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
@@ -53,7 +59,10 @@ from harbor_config.model_name import split_provider_model_name
 
 
 def empty_attempt(task: TaskSpec) -> GradingAttempt:
-    return GradingAttempt(ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))))
+    return GradingAttempt(
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))),
+        reply_status=CONTROL_REPLY_STATUS if task.completion_protocol == "tool_free_single" else None,
+    )
 
 
 def original_prompt(task, shell_tool, provider_tools):
@@ -65,7 +74,10 @@ def control_attempt(task: TaskSpec, payload: list[dict]) -> GradingAttempt:
     if len(payload) != 1 or payload[0].get("role") != "assistant":
         raise ValueError("A TaskSpec control must provide exactly one assistant response")
     response = assistant_message(payload[0])
-    return GradingAttempt(ConversationTrace(events=(*task.context.events, response)))
+    return GradingAttempt(
+        ConversationTrace(events=(*task.context.events, response)),
+        reply_status=CONTROL_REPLY_STATUS if task.completion_protocol == "tool_free_single" else None,
+    )
 
 
 class TaskSpecAgent(BaseAgent):
@@ -98,7 +110,9 @@ class TaskSpecChatAgent(TaskSpecAgent):
         return "task-spec-chat"
 
     def __init__(
-        self, *args, api_base: str, max_turns: int, max_tokens: int, request_parameters: dict[str, Any], **kwargs
+        self, *args, api_base: str, max_turns: int, max_tokens: int, request_parameters: dict[str, Any],
+        budget_manifest: str | None = None, budget_manifest_sha256: str | None = None,
+        backend_identity_sha256: str | None = None, tokenization_identity: dict | None = None, **kwargs
     ):
         sampling = {"temperature", "top_p", "presence_penalty", "frequency_penalty", "reasoning_effort", "extra_body"}
         extra = request_parameters.get("extra_body", {})
@@ -111,6 +125,43 @@ class TaskSpecChatAgent(TaskSpecAgent):
         self.max_turns = max_turns
         self.max_tokens = max_tokens
         self.request_parameters = request_parameters
+        self.budget_manifest = budget_manifest
+        self.budget_manifest_sha256 = budget_manifest_sha256
+        self.backend_identity_sha256 = backend_identity_sha256
+        self.tokenization_identity = tokenization_identity
+
+    async def tool_free_attempt(self, task: TaskSpec, client: AsyncOpenAI, limits: RolloutLimits) -> GradingAttempt:
+        if self.mcp_servers:
+            raise ValueError("Tool-free completion prohibits MCP servers")
+        if not all((self.budget_manifest, self.budget_manifest_sha256, self.backend_identity_sha256, self.tokenization_identity)):
+            raise ValueError("Tool-free completion requires a SHA-bound native budget manifest and backend identity")
+        assert self.budget_manifest is not None and self.backend_identity_sha256 is not None
+        document = Path(self.budget_manifest).read_bytes()
+        if hashlib.sha256(document).hexdigest() != self.budget_manifest_sha256:
+            raise ValueError("Native budget manifest bytes differ from the configured SHA")
+        budgets = TypeAdapter(dict[str, PromptBudget]).validate_json(document)
+        messages = tuple(conversation_messages(task.context.events))
+        key = tool_free_prompt_sha256(messages)
+        if key not in budgets:
+            raise ValueError(f"No native per-prompt budget supplied for {key}")
+        identity = TokenizationIdentity.model_validate(self.tokenization_identity)
+        tokenizer = AutoTokenizer.from_pretrained(identity.tokenizer, revision=identity.revision)
+        assert self.model_alias is not None
+        model = ToolFreeChatModel(
+            client, split_provider_model_name(self.model_alias)[1], self.backend_identity_sha256,
+            identity, tokenizer, budgets[key], self.logs_dir / "tool-free",
+        )
+        capacity = budgets[key].limits.output_capacity(budgets[key].prompt_tokens)
+        if self.max_tokens < capacity:
+            raise ValueError("Configured output cap would truncate the source's native request budget")
+        if limits.max_total_tokens is not None and limits.max_total_tokens < budgets[key].prompt_tokens + capacity:
+            raise ValueError("Configured total-token cap cannot serve the source's native request budget")
+        self.model_input = chat_input(list(messages))
+        async with asyncio.timeout(limits.model_turn_timeout):
+            turn = await model(ModelRequest(messages, self.request_parameters))
+        return GradingAttempt(
+            chat_conversation([*messages, turn.message]), stop_reason=turn.stop_reason, reply_status=turn.reply_status,
+        )
 
     async def run_task(self, task: TaskSpec, machine: Machine | None, limits: RolloutLimits) -> GradingAttempt:
         self.attempt = empty_attempt(task)
@@ -121,6 +172,9 @@ class TaskSpecChatAgent(TaskSpecAgent):
         ) as client:
             if self.model_alias is None:
                 raise ValueError("TaskSpecChatAgent requires a model identity")
+            if task.completion_protocol == "tool_free_single":
+                self.attempt = await self.tool_free_attempt(task, client, limits)
+                return self.attempt
             model = ChatModel(
                 client, split_provider_model_name(self.model_alias)[1], self.max_tokens,
             )

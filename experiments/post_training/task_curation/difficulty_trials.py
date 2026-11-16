@@ -47,6 +47,7 @@ from rigging.filesystem.transfer import copy
 from rigging.secrets import require_secret
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
+from taskcompendium.request_budget import RequestBudget
 from verifyit.modes.grade_math import MATH_VERIFIER_DEADLINE
 
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
@@ -57,7 +58,7 @@ from experiments.post_training.task_curation.difficulty_recovery import (
     previous_campaign,
     recovered_source,
 )
-from experiments.post_training.task_curation.difficulty_relay import RequestBudget, budget_relay
+from experiments.post_training.task_curation.difficulty_relay import budget_relay
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 
 LOGGER = logging.getLogger(__name__)
