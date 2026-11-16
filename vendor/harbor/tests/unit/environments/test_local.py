@@ -13,7 +13,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-
 from harbor.environments import local, model_relay
 from harbor.environments.local import LocalEnvironment
 from harbor.host_capabilities import HostCapabilities
@@ -30,6 +29,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
 )
 from shellbox.task import ReadinessProbe, Task
+
 from tests.unit.environments.transport import ProcessMachine, available_port
 
 
@@ -205,6 +205,11 @@ def test_local_rejects_ignore_policy_before_allocating_a_sandbox(
 async def test_local_numeric_limits_do_not_bypass_required_containment(
     tmp_path, monkeypatch
 ):
+    # Keep resource admission independent of the host's namespace support.
+    monkeypatch.setattr(
+        "shellbox.backends.local.machine._working_bwrap",
+        lambda *_args: Path("/fixture/bwrap"),
+    )
     monkeypatch.setattr(
         "shellbox.backends.local.machine.delegated_cgroup_parent", lambda: None
     )

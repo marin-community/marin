@@ -5,6 +5,7 @@ import io as stdlib_io
 import json
 import math
 import os
+import pickle
 import re
 import shutil
 import threading
@@ -12,7 +13,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from jaxtyping import Float
-from pathlib import Path
 import ray
 from ray import ObjectRef
 import torch
@@ -338,6 +338,7 @@ class RayPPOTrainer:
     # Set at startup when generator.weight_sync_transport is expert_block.
     _expert_block_sync: ExpertBlockSync | None = None
     _policy_version_step: int | None = None
+    first_optimizer_step_time: float | None = None
 
     _training_metrics_enabled: bool = False
     _rollout_spans_enabled: bool = False
@@ -1302,6 +1303,8 @@ class RayPPOTrainer:
         training_input: TrainingInputBatch,
         duration_seconds: float,
     ) -> None:
+        if self.first_optimizer_step_time is None:
+            self.first_optimizer_step_time = time.monotonic()
         self.all_metrics.update(training_input.metadata["consumed_stop_metrics"])
         if self._training_metrics_enabled:
             record_consumed_work(consumed_work(training_input), step=self.global_step)
@@ -2803,9 +2806,11 @@ class RayPPOTrainer:
         """
         Dump data to pickle file
         """
-        data_save_dir = Path(self.cfg.trainer.export_path) / "dumped_data"
-        data_save_dir.mkdir(parents=True, exist_ok=True)
-        data.save(data_save_dir / f"{file_name}.pkl")
+        data_save_dir = join_resource_path(self.cfg.trainer.export_path, "dumped_data")
+        io.makedirs(data_save_dir, exist_ok=True)
+        path = join_resource_path(data_save_dir, f"{file_name}.pkl")
+        with io.open_file(path, "wb") as destination:
+            pickle.dump(data, destination)
 
     def pad_batch(self, training_input: TrainingInputBatch) -> TrainingInputBatch:
         """Pad the batch to be divisible by dp size"""

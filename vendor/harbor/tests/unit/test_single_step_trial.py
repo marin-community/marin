@@ -10,6 +10,8 @@ from harbor.agents.terminus_2.tmux_session import ModelInitiatedTmuxFailure
 from harbor.llms.base import ContextBudgetExceededError, ContextLengthExceededError
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.models.task.config import TaskConfig
+from harbor.models.trial.config import AgentConfig
+from harbor.host_capabilities import HostCapabilities
 from harbor.environments.base import ExecResult
 from harbor.trial.errors import AgentTimeoutError
 from harbor.trial.single_step import SingleStepTrial
@@ -28,6 +30,32 @@ def _single_step_trial(tmp_path: Path) -> SingleStepTrial:
     trial._stop_agent_environment = AsyncMock()
     trial.logger = MagicMock()
     return trial
+
+
+def test_task_agent_environment_reaches_agent_without_changing_verifier(tmp_path):
+    trial = _single_step_trial(tmp_path)
+    trial.task.config = TaskConfig.model_validate(
+        {
+            "agent": {"env": {"HOME": "/home/task-agent", "SETTING": "task"}},
+            "environment": {"env": {"HOME": "/root"}},
+            "verifier": {"env": {"HOME": "/root"}},
+        }
+    )
+    trial.config = SimpleNamespace(
+        agent=AgentConfig(name="pi", env={"SETTING": "run"}), trial_name="fixture", job_id=None
+    )
+    trial.paths.agent_dir = tmp_path / "agent"
+    trial._effective_skills_dir = None
+    trial.guest_environment = {}
+    trial.host_capabilities = HostCapabilities()
+
+    trial._init_agent()
+
+    assert trial.agent._get_env("HOME") == "/home/task-agent"
+    assert trial.agent._get_env("SETTING") == "run"
+    assert trial.task.config.environment.env == {"HOME": "/root"}
+    assert trial.task.config.verifier.env == {"HOME": "/root"}
+    assert trial.config.agent.env == {"SETTING": "run"}
 
 
 @pytest.mark.asyncio
