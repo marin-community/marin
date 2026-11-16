@@ -9,7 +9,7 @@
       "upstream_dataset": "Polaris-Dataset-53K",
       "upstream_url": null,
       "notes": "Original deterministic DeepScaleR reward eda12fe22dd83aca59ec46a67147240dc483f62b; LLM fallback disabled.",
-      "stage": "Intake queued",
+      "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
       "reasons": []
