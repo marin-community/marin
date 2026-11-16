@@ -77,7 +77,9 @@ def require_population_admission(declaration: SourceDeclaration) -> None:
 def require_content_result(
     declaration: SourceDeclaration, curation: CurationSummary | None, assessment_key: str | None
 ) -> None:
-    """Require a computed Result for SAMPLE/FULL snapshots before selecting them."""
+    """Require a computed Result for Available SAMPLE/FULL sources before selecting them."""
+    if declaration.status != "Available":
+        return
     if assessment_key is not None or declaration.quality_result is not None:
         return
     controls = curation.verification if curation is not None else None

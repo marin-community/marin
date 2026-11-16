@@ -353,10 +353,11 @@ The loader selects preview display policy only for UUID
 Result displays QUICK with “SAMPLE review in progress” in its details and Quality
 tooltip. The evidence-derived oversight level and its receipt remain unchanged by
 this display policy, and absent
-Results, issue rates and coverage remain unmeasured. Sources displayed as SAMPLE
-or FULL still require a computed Result. Catalog publication and production
-imports retain their strict Result gate; preview imports retain all admission
-and grading-census checks. Display policy is part of the load identity, so a
+Results, issue rates and coverage remain unmeasured. Available sources displayed
+as SAMPLE or FULL still require a computed Result. Catalog publication and production
+imports retain this Result gate. Preview imports may omit the Result while a
+source displays QUICK; all admission and grading-census checks remain enforced.
+Display policy is part of the load identity, so a
 preview import cannot make a later strict import skip validation.
 Matching computed aggregate and independent sample-panel counts display SAMPLE
 without changing execution oversight. The same pure projection runs during
@@ -540,8 +541,10 @@ The `No executable grader is declared` assessment reason blocks admission. Other
 boundary assessments remain visible without being relabeled as missing graders.
 Native Harbor packages must pass package validation during import and grading
 census. QUICK conversion can run before admission evidence exists. Publication,
-metadata refresh and Atlas loading reject SAMPLE/FULL entries without a computed
-content Result before changing the selected snapshot.
+metadata refresh and Atlas loading reject Available SAMPLE/FULL entries without a
+computed content Result before changing the selected snapshot. Excluded and Not
+selectable entries remain unavailable and preserve their recorded quality fields,
+including a missing Result.
 
 The offline `daytona_census` command measures registered converters' TaskSpec
 outputs before admission gates and records admission rejections separately.

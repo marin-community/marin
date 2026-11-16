@@ -611,3 +611,33 @@ def test_publication_and_refresh_reject_oversight_without_result_before_selectin
     with pytest.raises(ValueError, match="SAMPLE/FULL quality requires a computed Result"):
         refresh_catalog(refresh_root, "refresh", [unreviewed], retired_source_ids=frozenset())
     assert CurationCatalog(refresh_root).current().snapshot_id == "quick"
+
+
+@pytest.mark.parametrize("status", ["Excluded", "Not selectable"])
+@pytest.mark.parametrize("level", [OversightLevel.SAMPLE, OversightLevel.FULL])
+def test_publication_and_refresh_preserve_unavailable_oversight_without_result(tmp_path, status, level):
+    root = str(tmp_path / "catalog")
+    selected = number_source(tmp_path / "input", "selected")
+    metadata = number_source(tmp_path / "input", "unavailable")
+    metadata = replace(
+        metadata,
+        info=replace(
+            metadata.info,
+            tags=(*metadata.info.tags, "excluded") if status == "Excluded" else metadata.info.tags,
+            lexical_contamination=None,
+            oversight=OversightEvidence(level=level, verification="Historical review; result unavailable"),
+        ),
+    )
+    record_attempt(root, selected, "first", "2026-10-16T10:00:00Z", "selected-key")
+    publish_catalog(root, "first", [selected, metadata])
+    for snapshot_id in ("first", "refresh"):
+        if snapshot_id == "refresh":
+            refresh_catalog(root, snapshot_id, [selected, metadata], retired_source_ids=frozenset())
+        assert CurationCatalog(root).current().snapshot_id == snapshot_id
+        rows = selected_sources(root)
+        row = rows[metadata.info.id]
+        assert row.declaration.status == status
+        assert row.declaration.oversight == level
+        assert row.declaration.quality_result is None
+        assert row.assessment_key is None
+        assert rows[selected.info.id].assessment_key == "selected-key"

@@ -887,8 +887,10 @@ evidence fails validation. Native
 Harbor packages are checked for their executable verifier and environment rather than treating
 their `NoGrader` transport wrapper as an absent grader. A population with no executable grader
 is retired into the historical ledger; aliases, previous snapshots and artifacts remain available.
-Atlas also refuses a new load that would display SAMPLE or FULL without a computed Result.
-Executed grader controls alone do not supply a content-quality Result.
+Atlas also refuses a new load of an Available source that would display SAMPLE or FULL
+without a computed Result. Executed grader controls alone do not supply a content-quality
+Result. Excluded and Not selectable metadata remains unavailable and keeps its recorded
+quality fields, including a missing Result.
 
 `admission_inventory` scans current populations through their actor-census bindings and freezes
 seed-zero panels of at most 100 tasks. It records the stored-byte scan digest independently from
