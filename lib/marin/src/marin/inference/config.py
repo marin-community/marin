@@ -256,6 +256,7 @@ class ServedModelConfig:
     max_model_len: int | None = None
     tensor_parallel_size: int | None = None
     chat_template_content: str | None = None
+    eos_token_ids: tuple[int, ...] = ()
     object_store_load_mode: ObjectStoreLoadMode = ObjectStoreLoadMode.STREAM
 
     def __post_init__(self) -> None:

@@ -2,8 +2,10 @@
 # One server spans four GB200 hosts in one NVLink domain: TP1 with four data-parallel ranks per
 # host (DP16 overall) and expert parallelism. The serving flags are the baseline that passed the
 # correctness gates against the JAX reference for this export (marin-community/marin issue 11430),
-# plus the hermes tool-call parser that BFCL needs. The export ships no tokenizer or chat template;
-# both come from the tokenizer repository below.
+# plus the hermes tool-call parser that BFCL needs. The export ships no tokenizer, chat template or
+# generation config. The tokenizer repository below supplies the first two. Assistant turns end with
+# <|eot_id|> (128009), which the tokenizer does not mark as eos, so eos_token_ids names both stop
+# tokens, as the Snowball exports' generation configs do.
 name: mochi-sft-step400407
 location: s3://marin-us-east-02a/marin/exports/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1
 tokenizer: marin-community/marin-tokenizer-tools
@@ -24,6 +26,9 @@ serve:
   max_num_batched_tokens: 2048
   max_num_seqs: 32
   tool_call_parser: hermes
+  eos_token_ids:
+  - 128001
+  - 128009
   auto_overrides: false
   vllm_extra_args:
   - --enable-expert-parallel

@@ -4,11 +4,13 @@
 """vLLM local inference backend."""
 
 import contextlib
+import json
 import os
 import socket
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
@@ -81,6 +83,18 @@ def _chat_template_argument(content: str | None) -> Iterator[tuple[str, ...]]:
             os.unlink(path)
 
 
+@contextlib.contextmanager
+def _generation_config_argument(eos_token_ids: tuple[int, ...]) -> Iterator[tuple[str, ...]]:
+    """Point vLLM at a generation config that names the stop tokens a checkpoint does not ship."""
+    if not eos_token_ids:
+        yield ()
+        return
+    with tempfile.TemporaryDirectory(prefix="marin_serve_generation_") as directory:
+        path = Path(directory) / "generation_config.json"
+        path.write_text(json.dumps({"eos_token_id": list(eos_token_ids)}))
+        yield ("--generation-config", directory)
+
+
 def _resolved_chat_template(spec: ModelSpec) -> str | None:
     if spec.chat_template_content is not None:
         return spec.chat_template_content
@@ -135,13 +149,16 @@ class VllmBackend:
             subprocess_env,
             self.config.startup_timeout_seconds,
         )
-        with _chat_template_argument(chat_template_content) as chat_template_args:
+        with (
+            _chat_template_argument(chat_template_content) as chat_template_args,
+            _generation_config_argument(spec.eos_token_ids) as generation_config_args,
+        ):
             with VllmEnvironment(
                 model=model,
                 host=self.host,
                 port=resolved_port,
                 timeout_seconds=self.config.startup_timeout_seconds,
-                extra_args=self._serve_args(spec, chat_template_args, extra_args),
+                extra_args=self._serve_args(spec, (*chat_template_args, *generation_config_args), extra_args),
                 launcher=launcher,
                 compilation_cache_mode=self.config.compilation_cache,
                 extra_metric_families=self.config.extra_metric_families,

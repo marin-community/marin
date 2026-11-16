@@ -502,6 +502,7 @@ def test_mochi_catalog_lowers_one_server_across_four_gb200_hosts():
     assert "--data-parallel-size" not in extra_args
     assert extra_args[extra_args.index("--tool-call-parser") + 1] == "hermes"
     assert "--enable-auto-tool-choice" in extra_args
+    assert config.model.eos_token_ids == (128001, 128009)
 
 
 @pytest.mark.parametrize(

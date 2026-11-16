@@ -114,6 +114,7 @@ class ServeConfig:
     vllm_extra_args: tuple[str, ...] = ()
     speculative: SpeculativeServingConfig | None = None
     chat_template: str | None = None
+    eos_token_ids: tuple[int, ...] = ()
     auto_overrides: bool = True
 
     def __post_init__(self) -> None:
@@ -165,6 +166,11 @@ class ServeConfig:
                 raise ValueError("runai_streamer_concurrency must be positive")
             if self.backend is not ServeBackend.VLLM:
                 raise ValueError("runai_streamer_concurrency requires the vLLM backend")
+        if self.eos_token_ids:
+            if self.backend is not ServeBackend.VLLM:
+                raise ValueError("eos_token_ids requires the vLLM backend")
+            if has_vllm_option(self.vllm_extra_args, "--generation-config"):
+                raise ValueError("eos_token_ids owns --generation-config; remove it from vllm_extra_args")
 
     @property
     def task_count(self) -> int:
