@@ -95,7 +95,7 @@ def probe_serving_endpoint(
         prompt_tokens = len(
             tokenizer.apply_chat_template(
                 chat_template_messages(request["messages"]),
-                tools=request["tools"],
+                tools=request.get("tools"),
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=False,
