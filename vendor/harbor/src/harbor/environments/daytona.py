@@ -134,10 +134,11 @@ class DaytonaEnvironment(BaseEnvironment):
         self.provider_wait_policy = (
             ProviderWaitPolicy.JOB if trial_attempt_timeout_sec is not None else ProviderWaitPolicy.PHASE
         )
+        self.provisioning = DaytonaProvisioning(provisioning)
         factory_type = {
             DaytonaProvisioning.SNAPSHOT: DaytonaMachineFactory,
             DaytonaProvisioning.DECLARATIVE: DaytonaDeclarativeMachineFactory,
-        }[DaytonaProvisioning(provisioning)]
+        }[self.provisioning]
         self.factory = factory_type(
             client_factory,
             ttl_minutes=ttl_minutes,
@@ -200,6 +201,8 @@ class DaytonaEnvironment(BaseEnvironment):
 
     def snapshot_request(self) -> SnapshotRequest:
         """The snapshot that this task's sandbox starts from."""
+        if self.provisioning is DaytonaProvisioning.DECLARATIVE:
+            raise ValueError("Declarative provisioning creates no snapshot request")
         return snapshot_request_for_spec(self._machine_spec())
 
     async def start(
