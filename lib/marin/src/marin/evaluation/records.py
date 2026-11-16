@@ -180,6 +180,7 @@ class ModelServeConfig(BaseModel):
     tensor_parallel_size: int | None
     data_parallel_size: int | None
     pipeline_parallel_size: int = 1
+    data_parallel_hosts: int = 1
     instances: int = 1
     gpu_memory_utilization: float | None = None
     max_model_len: int | None
