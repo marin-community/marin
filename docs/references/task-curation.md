@@ -414,7 +414,7 @@ already defines, at the current pin:
 | `GRADER_MISSING` | Declare runnable graders for the affected tasks and re-bind the grading census. |
 | `LEXICAL_RECEIPT_MISSING` | Measure the lexical receipt at the current pin for the declared use (`lexical_measurements`). |
 | `LEXICAL_REMEDIATION_REQUIRED` | A remediation agent publishes the remediated private release and binds its decontamination receipt at the current pin; the row queues as Pending with stage `Lexical remediation queued` until that receipt exists. |
-| `OVERSIGHT_MISSING` | Run SAMPLE or FULL content review with recorded verification and bind the receipt. |
+| `OVERSIGHT_MISSING` | Bind current-pin oversight evidence: the QUICK conversion receipt, or a SAMPLE or FULL review receipt with recorded verification. |
 | `AGENTIC_TASK_FORMAT_MISSING` | Declare the accepted TaskCompendium or Harbor task format, or record the grandfathered registration. |
 | `SNAPSHOT_IDENTITY_MISSING` | Produce the production snapshot identity measurement at the current pin. |
 | `EXECUTION_REQUIREMENT_MISSING` | Produce the execution-requirement measurement. |
@@ -1054,8 +1054,9 @@ those measurements.
 
 An `RlDataSource` binds source information, a typed configuration and a registered
 conversion pipeline. A declaration without that pipeline is rejected. Every Atlas
-entry enters through QUICK, SAMPLE or FULL; QUICK means converted without review,
-and does not make a source selectable for training. Deprecated means trainable
+entry enters through QUICK, SAMPLE or FULL; QUICK means converted without review.
+QUICK oversight admits a source, but the Atlas default view and default training
+selections hide QUICK sources; select one explicitly to train on it. Deprecated means trainable
 but no longer supported or recommended: a deprecated-tagged source with any
 exclusion reason is Excluded instead. Removed pipeline-less
 entries are tracked in retired-inventory-only.json; their artifacts stay archived.
@@ -3329,7 +3330,7 @@ counts, admissions, control outcomes, phase evidence and output pointers.
 `phases` records wall times and Zephyr execution counters. Exact manifest,
 telemetry, identity and filter-count snapshots are named FineStore objects with
 SHA-256 digests. Failed sources remain visible; missing statistics are null.
-QUICK does not imply review, verification or admission.
+QUICK does not imply review or verification. A QUICK source is admitted but hidden from the Atlas default view.
 
 The typed `CurationCatalog` reader exposes source declarations, assessment
 attempts, selected assessments, cohort populations, items and archived packets.
@@ -3355,9 +3356,10 @@ alive under object-age lifecycle deletion.
 without qualifying execution oversight; `SAMPLE` records a documented end-to-end
 sample, including verifiers; `FULL` processes the complete population. The mode
 alone does not prove execution coverage or complete content QA: those require
-their own oversight and review evidence. Only `SAMPLE` and `FULL` admit tasks;
-a `QUICK` summary cannot record admitted counts (`CurationSummary` rejects it),
-and its corpus is not selectable for training.
+their own oversight and review evidence. `QUICK`, `SAMPLE` and `FULL` all admit
+tasks. The Atlas default view and default training selections hide `QUICK`
+sources; they appear when the view shows everything and on the status page, and
+they train only when selected explicitly.
 
 Oracle filtering covers the full population in both SAMPLE and FULL whenever
 solutions are supplied, and so do nop negative controls for workspace-graded
@@ -3377,7 +3379,8 @@ FULL policy, and `sample` otherwise; and anything else is conversion-only
 level is the same value the Atlas main table's Quality column shows. A declared
 level that contradicts the derived one fails ingestion with a clear message;
 an agreeing one may remain (bindings and test fixtures may still set it).
-`quick` and `none` mean the source is listed but not admitted: the level is
+`none` means the source is listed but not admitted (`OVERSIGHT_MISSING`);
+`quick` admits it with the default-view and default-selection hiding above. The level is
 the weakest review the admission rests on, so a cohort whose
 setup fidelity ran on every task but whose grader controls ran on a sample is
 `sample`, not `full`. `independent_qc` stays separate evidence about the upstream
