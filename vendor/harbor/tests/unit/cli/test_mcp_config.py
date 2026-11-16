@@ -6,6 +6,7 @@ from unittest.mock import patch
 from harbor.cli.main import app
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.job.config import JobConfig
+from harbor.models.task.config import AgentConfig as TaskAgentConfig
 from harbor.models.task.config import MCPServerConfig
 from harbor.models.trial.config import AgentConfig
 from harbor.trial.single_step import SingleStepTrial
@@ -117,6 +118,7 @@ def test_trial_init_agent_merges_mcp_servers_by_name(tmp_path):
     )
     trial.task = SimpleNamespace(
         config=SimpleNamespace(
+            agent=TaskAgentConfig(),
             environment=SimpleNamespace(
                 mcp_servers=[task_server],
                 skills_dir=None,

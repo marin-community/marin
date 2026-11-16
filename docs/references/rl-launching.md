@@ -241,19 +241,77 @@ to false as well. Without export, successful runs retain native recovery checkpo
 in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
 is null. Pipelines that serve the resulting model for downstream evaluation must request export.
 
+With `SkyRLSpec`, configuration rendering binds the `best_checkpoint` callback's
+`initial_model_uri` to the resolved model input before artifact fingerprinting.
+Standalone recipes must set this URI explicitly.
+
 The `best_checkpoint` callback accepts a `selection_metric` whose values must be
 finite normalized scores in [0, 1], with larger values preferred. Set
 `save_after_fraction` to delay trained-checkpoint selection until that fraction
-of the total steps has elapsed. Step-zero evaluation still records the initial
-model as a candidate without saving weights; if it remains best, load the
+of the total steps has elapsed. With the default one-observation window,
+step-zero evaluation records the initial model as a candidate without saving
+weights; if it remains best, load the
 `model_uri` recorded in `best_checkpoint.json`. Optional `preservation_max_drop`
 entries map metric names to allowed absolute drops from their step-zero values;
 all gates must pass before a candidate can replace the best checkpoint. The
-step-zero evaluation must meet the configured coverage and eligibility checks
-when preservation gates are set; otherwise the callback fails immediately. The
+candidate must attempt `expected_tasks`, score at least `minimum_scored_tasks`,
+and pass `eval/selection_eligible`. With preservation gates, an ineligible
+step-zero evaluation fails immediately. The
 baseline and selection policy are recorded in `best_checkpoint.json` and the
 baseline is restored on resume. Keep metric definitions and the selection policy
 unchanged on resume.
+
+For selection over several evaluations, set `ema_window` and
+`evaluation_interval` on `best_checkpoint`. A window of five with interval two
+combines `selection_metric` at the five scheduled optimizer steps ending at the
+current step. The newest observation has weight one; each older observation's
+weight is multiplied by `1 - 2 / (5 + 1)`. Divide the weighted sum by the sum of
+the weights. A missing observation leaves the window ineligible. Preservation
+gates still use the current evaluation. The callback records observation history
+and selection settings; changing the window or interval on resume fails.
+
+For asynchronous mixtures, `trainer.rollout_buffer.consumed_route_quotas` sets
+the number of prompt groups from each route in every consumed batch.
+`source_routes` maps each input's `data_source` to a route. Quotas require
+`batch_policy: full_batch` and must sum to the training batch size in prompt
+groups. Rejected groups are replaced within their route. Generation slots
+rotate between routes so one repeatedly failing route cannot occupy every slot.
+With `rollout_spans`, `rollout_group_disposition` records each group's UID,
+source and buffer wait for consumed and rejected groups. Native task workers
+emit `task_group_completed` with the source, UID, duration and projected failure
+and masking counts. Each rollout actor starts its own telemetry exporter and
+drains queued events on shutdown, including when runner cleanup fails.
+Use these events to inspect source-specific failures, masks and delays.
+Constant-reward RLOO groups are zeroed in the learner rather than removed at
+buffer admission.
+
+`trainer.dump_data_batch: true` writes native `TrainingInputBatch` pickle files
+under `<export_root>/dumped_data/global_step_<step>_training_input.pkl`, for
+local and cloud export roots. These contain the post-TIS, post-advantage tensors.
+The trainer removes group UIDs and raw rewards before dumping, so these files
+alone cannot identify source-specific rewards or advantages.
+
+Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
+driver also bounds its wait for remote tracker calls. A slow upload reports a
+warning instead of holding training cleanup until the process watchdog fires.
+Native checkpoint and mirrored training/evaluation results remain the workload
+record; an upload timeout does not prove that W&B received every record.
+
+Rollout workers run on the training driver's Ray node. Their combined CPU
+reservation (`num_workers * cpus_per_worker`) must fit that node. The driver
+checks this before it initializes model actors; free CPUs on other nodes cannot
+satisfy the pinned pool. Leave additional CPU capacity for the driver and model
+actors. `start_interval_seconds: 0` starts the workers together after model
+initialization; a positive value spaces their starts and tokenizer reads.
+
+The `wall_time_budget` callback stops after a completed update when `seconds`
+have elapsed since this process's first optimizer completion. Startup is
+excluded; subsequent evaluation and checkpoint work counts toward the budget.
+Set `groups_per_step` to the prompt-group batch size. The callback writes
+`training-budget.json` under the export root. Its `drain_margin` records the
+planned allowance in seconds for finalization; it does not enforce a deadline.
+Normal trainer finalization drains work after the stop. A fresh
+process starts a fresh clock, including when it restores a checkpoint.
 
 The temporary checkpoint root is derived from the RL artifact name and version.
 After runtime changes, use a fresh RL artifact version. Reusing the old

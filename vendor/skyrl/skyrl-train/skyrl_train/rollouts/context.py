@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import dataclasses
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, TypeVar
@@ -145,12 +145,14 @@ class TrainingContext:
         payloads: PayloadStore,
         *,
         rollout_spans: bool,
+        sources_by_uid: Mapping[str, str | None] | None = None,
     ):
         self.loader = loader
         self.config = config
         self._request_spec = request_spec
         self._workers = workers
         self._rollout_spans = rollout_spans
+        self._sources_by_uid = dict(sources_by_uid or {})
         self.mode = TrainingType.SYNC if config.max_staleness_steps == 0 else TrainingType.ASYNC
         self._policy_step = 0
         self._buffer = buffer
@@ -186,7 +188,24 @@ class TrainingContext:
             batch_policy=BatchPolicy(config.trainer.rollout_buffer.batch_policy),
             dynamic_sampling=selection.sampling_type,
             max_candidate_groups=max_sample_batches * batch_size if max_sample_batches > 0 else None,
+            consumed_route_quotas=dict(config.trainer.rollout_buffer.consumed_route_quotas),
         )
+        routes = {}
+        if buffer_config.consumed_route_quotas:
+            if not isinstance(dataset, PromptDataset):
+                raise ValueError("Consumed route quotas require explicit source provenance in PromptDataset")
+            source_routes = dict(config.trainer.rollout_buffer.source_routes)
+            sources = dataset.dataframe["data_source"]
+            unknown = set(sources) - set(source_routes)
+            if unknown:
+                raise ValueError(f"Missing consumed-route classification for sources: {sorted(unknown)}")
+            routes = {dataset.uid(index): source_routes[source] for index, source in enumerate(sources)}
+            counts = collections.Counter(routes.values())
+            if set(counts) != set(buffer_config.consumed_route_quotas):
+                raise ValueError("Consumed route pools differ from configured quotas")
+            for name, quota in buffer_config.consumed_route_quotas.items():
+                if counts[name] < quota:
+                    raise ValueError(f"Consumed route {name} cannot fill a unique batch")
         plan = compile_distillation_plan_from_config(config)
         admission = GroupAdmissionPolicy(
             GroupAdvantageInvariant.from_config(algorithm.resolved_group_advantage),
@@ -202,12 +221,18 @@ class TrainingContext:
             ),
         )
         object_store_root = config.trainer.rollout_buffer.object_store_root
+        sources_by_uid = (
+            {dataset.uid(index): source for index, source in enumerate(dataset.dataframe["data_source"])}
+            if isinstance(dataset, PromptDataset) and "data_source" in dataset.dataframe.column_names
+            else {}
+        )
         return cls(
             PromptLoader(
                 dataset,
                 prompt_order_from_config(config, dataset),
                 batch_size=batch_size,
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
+                routes=routes,
             ),
             buffer_config,
             start_rollout_buffer(buffer_config),
@@ -216,6 +241,7 @@ class TrainingContext:
             workers,
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
+            sources_by_uid=sources_by_uid,
         )
 
     def start(self) -> None:
@@ -318,6 +344,8 @@ class TrainingContext:
                         tokens=outcome.tokens,
                         step=self._policy_step,
                         dwell_seconds=outcome.dwell_seconds,
+                        uid=outcome.uid,
+                        source=self._sources_by_uid.get(outcome.uid),
                     )
             record_rollout_buffer(admission.ready_count, self.config.max_untrained_groups)
             if admission.admitted:
@@ -390,7 +418,7 @@ class TrainingContext:
                     lease = await self._buffer.acquire_lease.remote()
                 with self._wait("prompt"):
                     async with self._uids_released:
-                        prompt = await self._uids_released.wait_for(lambda: self.loader.next_prompt(self._live_uids))
+                        prompt = await self._uids_released.wait_for(lambda: self.loader.next_prompt(self._live_uids, lease.route))
                         self._live_uids[prompt["uid"]] += 1
                 # A lease or prompt wait may span an evaluation boundary. Keep the
                 # single acquired lease, but do not submit its generation yet.
