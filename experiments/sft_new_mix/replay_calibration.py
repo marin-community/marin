@@ -14,7 +14,7 @@ from levanter.store.jagged_array import JaggedArrayStore
 from rigging.filesystem.storage_path import prefix_join
 from tokenizers import Tokenizer
 
-from experiments.sft_new_mix.exp3_build import configure_storage
+from experiments.sft_new_mix.exp3_runtime import configure_storage
 
 HEAD_TOKENS = 4096
 TAIL_TOKENS = 2048

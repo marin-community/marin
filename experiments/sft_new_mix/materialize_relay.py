@@ -30,8 +30,8 @@ from transformers.utils.chat_template_utils import render_jinja_template
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from experiments.sft_new_mix.exp3_build import build_config, configure_storage, count_stage, tokenizer_for
 from experiments.sft_new_mix.exp3_filters import MAX_TOKENS, Document, Stage, apply_stage
+from experiments.sft_new_mix.exp3_runtime import build_config, configure_storage, count_stage, tokenizer_for
 from experiments.sft_new_mix.loss_modes import LossMode, prediction_weights
 from experiments.sft_new_mix.relay_teacher import render_teacher_transcript
 

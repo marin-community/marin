@@ -12,8 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 from levanter.store.cache import CACHE_LAYOUT_SHARDED, CacheCatalog, CacheCatalogEntry, CacheLedger, CacheMetadata
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.sft_new_mix.exp3_build import configure_storage
 from experiments.sft_new_mix.exp3_filters import MAX_TOKENS
+from experiments.sft_new_mix.exp3_runtime import configure_storage
 
 
 def component_name(source: str, loss_mode: str) -> str:

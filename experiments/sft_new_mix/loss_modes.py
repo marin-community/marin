@@ -3,7 +3,6 @@
 
 """Explicit source loss metadata and prediction-indexed cache weights."""
 
-from dataclasses import dataclass
 from enum import StrEnum
 
 import numpy as np
@@ -12,15 +11,6 @@ import numpy as np
 class LossMode(StrEnum):
     CHAT_ASSISTANT_ONLY = "chat_assistant_only"
     FULL_TOKEN = "full_token"
-
-
-@dataclass(frozen=True)
-class SourceLoss:
-    loss_mode: LossMode
-    teacher_only: bool
-    source_revision: str
-    loss_weights_key: str = "loss_weights"
-    loss_weights_indexing: str = "prediction"
 
 
 def prediction_weights(

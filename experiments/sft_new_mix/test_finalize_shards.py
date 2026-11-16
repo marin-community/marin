@@ -12,10 +12,121 @@ from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 
 from experiments.sft_new_mix.apply_atlas import bind_disposition, propagate_lexical_duplicates
 from experiments.sft_new_mix.exp3_filters import BOS, END_HEADER, EOS, EOT, HEADER, Stage
+from experiments.sft_new_mix.exp3_runtime import implementation_identity
 from experiments.sft_new_mix.final_receipts import collect_final_inventory
-from experiments.sft_new_mix.finalize_shards import DropStage, implementation_identity, transform_shard
+from experiments.sft_new_mix.finalize_shards import FINALIZE_IMPLEMENTATION_FILES, DropStage, transform_shard
 from experiments.sft_new_mix.job_manifests import read_job_manifest, stage_job_manifest
 from experiments.sft_new_mix.loss_modes import LossMode, prediction_weights
+
+
+def test_dropped_replacements_are_not_counted_as_selected(tmp_path):
+    vocabulary = {character: index for index, character in enumerate(sorted(pre_tokenizers.ByteLevel.alphabet()))}
+    tokenizer = Tokenizer(models.BPE(vocab=vocabulary, merges=[]))
+    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tokenizer.decoder = decoders.ByteLevel()
+    tokenizer.add_special_tokens([BOS, EOS, HEADER, END_HEADER, EOT])
+    tokenizer_path = tmp_path / "tokenizer.json"
+    tokenizer.save(str(tokenizer_path))
+    source = "nemotron_sft_v3/math_v4/train"
+
+    def tokens(name, arguments):
+        text = (
+            BOS
+            + HEADER
+            + "user"
+            + END_HEADER
+            + "\nSolve."
+            + EOT
+            + HEADER
+            + "assistant"
+            + END_HEADER
+            + "\n<tool_call>"
+            + json.dumps({"name": name, "arguments": arguments})
+            + "</tool_call>"
+            + EOT
+            + EOS
+        )
+        return np.asarray(tokenizer.encode(text, add_special_tokens=False).ids, dtype=np.int32)
+
+    prefix = tuple(tokenizer.encode(HEADER + "assistant" + END_HEADER + "\n", add_special_tokens=False).ids)
+
+    def weights(ids):
+        return prediction_weights(
+            ids,
+            loss_mode=LossMode.CHAT_ASSISTANT_ONLY,
+            message_start_id=tokenizer.token_to_id(HEADER),
+            assistant_prefix=prefix,
+            trained_assistant_turns=None,
+        )
+
+    original = [tokens("bash", {"command": "pwd"}), tokens("bash", {"command": "pwd"})]
+    # The replacement calls an unvetted tool, so the re-filter drops it.
+    rejected = tokens("web_search", {"query": "answer"})
+    base_path = str(tmp_path / "base")
+    exemplar = {"input_ids": np.empty(0, dtype=np.int32), "loss_weights": np.empty(0, dtype=np.float32)}
+    with SerialCacheWriter(base_path, exemplar) as writer:
+        writer.write_batch([{"input_ids": ids, "loss_weights": weights(ids)} for ids in original])
+    decisions = tmp_path / "base-decisions.jsonl"
+    decisions.write_text("".join(json.dumps({"row": i, "stage": "retained", "output_row": i}) + "\n" for i in range(2)))
+    payload = tmp_path / "replacement.i32"
+    payload.write_bytes(rejected.astype("<i4").tobytes())
+    original_sha = hashlib.sha256(original[1].astype("<i4").tobytes()).hexdigest()
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "enabled": [Stage.REAL_TOOLS],
+                "think_limits": {},
+                "tools_by_source": {source: ["bash"]},
+                "give_up_sources": [],
+            }
+        )
+    )
+    job = {
+        "source": source,
+        "loss_mode": "chat_assistant_only",
+        "teacher_only": False,
+        "passed": False,
+        "output_prefix": str(tmp_path / "final"),
+        "implementation_sha256": implementation_identity(FINALIZE_IMPLEMENTATION_FILES),
+        "tokenizer_uri": str(tokenizer_path),
+        "tokenizer_sha256": hashlib.sha256(tokenizer_path.read_bytes()).hexdigest(),
+        "config_uri": str(config_path),
+        "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+        "overlay_enabled": True,
+        "real_tools_enabled": True,
+        "drop_rows": {},
+        "enabled_drop_stages": [],
+        "base_shard": {
+            "cache_uri": base_path,
+            "rows": 2,
+            "tokens": sum(map(len, original)),
+            "original_input_path": "pinned-original",
+            "decisions_uri": str(decisions),
+        },
+        "overlays": [
+            {
+                "source": source,
+                "source_shard": "pinned-original",
+                "source_row": 1,
+                "status": "verified",
+                "tool_calls_modified": True,
+                "diff": {"modified": True},
+                "verified_original_sha256": original_sha,
+                "input_ids_sha256": original_sha,
+                "payload_uri": str(payload),
+                "export_manifest": {"files": {"input_ids.i32": hashlib.sha256(payload.read_bytes()).hexdigest()}},
+            }
+        ],
+    }
+    result = transform_shard(read_job_manifest(stage_job_manifest(job)))
+    with open(result["receipt_uri"]) as stream:
+        receipt = json.load(stream)
+    assert receipt["output_rows"] == 1
+    assert receipt["verified_modified_rows_selected"] == 0
+    cache = TreeCache.load(receipt["output_path"], exemplar)
+    actual = asyncio.run(cache.get_batch([0]))
+    np.testing.assert_array_equal(actual[0]["input_ids"], original[0])
 
 
 def test_modified_trace_replaces_one_row_and_actual_calls_control_the_gate(tmp_path):
@@ -97,7 +208,7 @@ def test_modified_trace_replaces_one_row_and_actual_calls_control_the_gate(tmp_p
         "teacher_only": False,
         "passed": False,
         "output_prefix": str(tmp_path / "final"),
-        "implementation_sha256": implementation_identity(),
+        "implementation_sha256": implementation_identity(FINALIZE_IMPLEMENTATION_FILES),
         "tokenizer_uri": str(tokenizer_path),
         "tokenizer_sha256": hashlib.sha256(tokenizer_path.read_bytes()).hexdigest(),
         "config_uri": str(config_path),

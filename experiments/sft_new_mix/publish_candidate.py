@@ -12,7 +12,7 @@ import json
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.sft_new_mix.candidate_receipts import catalog_from_inventory
-from experiments.sft_new_mix.exp3_build import configure_storage
+from experiments.sft_new_mix.exp3_runtime import configure_storage
 from experiments.sft_new_mix.mixture_weights import candidate_weights
 from experiments.sft_new_mix.prepare_overlay_gates import pinned_json
 
@@ -61,6 +61,15 @@ def source_selection_rows(inventory: dict) -> list[dict]:
     return rows
 
 
+def write_pinned(root: StoragePath, name: str, content: bytes) -> dict:
+    """Refuse to change published bytes and return the written pin."""
+    path = root / name
+    if path.exists() and path.read_bytes() != content:
+        raise ValueError("Published candidate bytes changed; use a new release version")
+    path.write_bytes(content)
+    return {"uri": str(path), "sha256": hashlib.sha256(content).hexdigest()}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recipe", required=True)
@@ -102,7 +111,6 @@ def main() -> None:
                 "split": "train",
                 "format": {"type": "prebuilt", "input_ids_key": "input_ids", "loss_weights_key": "loss_weights"},
                 "pack": recipe["packing_cap"],
-                "packing_lookahead": recipe["lookahead"],
             }
             for name in sorted(weights.weights)
         },
@@ -156,25 +164,7 @@ def main() -> None:
             ).encode()
         ),
     }
-    pins = {}
-    for name, content in payloads.items():
-        path = root / name
-        if path.exists() and path.read_bytes() != content:
-            raise ValueError("Published candidate bytes changed; use a new release version")
-        path.write_bytes(content)
-        pins[name] = {"uri": str(path), "sha256": hashlib.sha256(content).hexdigest()}
-    manifest = {
-        "training_ready": False,
-        "readiness": "Data artifacts frozen; native consumer resolve and padding receipt required",
-        "publication_recipe": {"uri": args.recipe, "sha256": args.recipe_sha256},
-        "inventory": recipe["inventory"],
-        "artifacts": pins,
-        "geometry": {
-            key: recipe[key]
-            for key in ("updates", "global_batch", "sequence_length", "seed", "packing_cap", "lookahead")
-        },
-    }
-    (root / "manifest.json").write_text(json.dumps(manifest, sort_keys=True))
+    pins = {name: write_pinned(root, name, content) for name, content in payloads.items()}
     measurement = {
         "data_uri": pins["data.json"]["uri"],
         "data_sha256": pins["data.json"]["sha256"],
@@ -202,7 +192,22 @@ def main() -> None:
             if weights.weights.get(source["component"], 0) > 0
         },
     }
-    (root / "native-measurement-job.json").write_text(json.dumps(measurement, sort_keys=True))
+    pins["native-measurement-job.json"] = write_pinned(
+        root, "native-measurement-job.json", json.dumps(measurement, sort_keys=True).encode()
+    )
+    manifest = {
+        "training_ready": False,
+        "readiness": "Data artifacts frozen; native consumer resolve and padding receipt required",
+        "publication_recipe": {"uri": args.recipe, "sha256": args.recipe_sha256},
+        "inventory": recipe["inventory"],
+        "artifacts": pins,
+        "geometry": {
+            key: recipe[key]
+            for key in ("updates", "global_batch", "sequence_length", "seed", "packing_cap", "lookahead")
+        },
+    }
+    # The manifest cannot pin itself; the same write guard freezes its bytes.
+    write_pinned(root, "manifest.json", json.dumps(manifest, sort_keys=True).encode())
 
 
 if __name__ == "__main__":

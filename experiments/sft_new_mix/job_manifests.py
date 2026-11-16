@@ -8,6 +8,8 @@ import json
 
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.sft_new_mix.exp3_runtime import read_pinned
+
 
 def stage_job_manifest(job: dict) -> dict:
     content = json.dumps(job, sort_keys=True).encode()
@@ -18,7 +20,4 @@ def stage_job_manifest(job: dict) -> dict:
 
 
 def read_job_manifest(reference: dict) -> dict:
-    content = StoragePath(reference["job_uri"]).read_bytes()
-    if hashlib.sha256(content).hexdigest() != reference["job_sha256"]:
-        raise ValueError("Job manifest digest changed")
-    return json.loads(content)
+    return json.loads(read_pinned(reference["job_uri"], reference["job_sha256"]))

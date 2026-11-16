@@ -16,7 +16,7 @@ import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from huggingface_hub import hf_hub_download
 from levanter.store.cache import write_levanter_cache
-from marin.datakit.chat_normalize import _normalize_chat_record
+from marin.datakit.chat_normalize import normalize_chat_record
 from marin.datakit.chat_render import render_chat_record
 from marin.datakit.download.agenttrove import result_to_tag, row_to_chat_doc
 from marin.datakit.download.rollout_transforms import TRAJECTORY_SOLVED_TAG
@@ -24,7 +24,13 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from experiments.sft_new_mix.exp3_build import configure_storage, implementation_identity, process_shard, tokenizer_for
+from experiments.sft_new_mix.exp3_build import process_shard
+from experiments.sft_new_mix.exp3_runtime import (
+    BUILD_IMPLEMENTATION_FILES,
+    configure_storage,
+    implementation_identity,
+    tokenizer_for,
+)
 
 
 def materialize_file(job: dict) -> dict:
@@ -66,7 +72,7 @@ def materialize_file(job: dict) -> dict:
                     if len(converted) != 1:
                         raise ValueError("AgentTrove adapter emitted multiple documents for one source row")
                     try:
-                        normalized = _normalize_chat_record(converted[0], "messages", "id")
+                        normalized = normalize_chat_record(converted[0], "messages", "id")
                     except ValueError:
                         counts["existing_chat_normalizer_rejected"] += 1
                         continue
@@ -124,7 +130,7 @@ def materialize_file(job: dict) -> dict:
             "passed": True,
             "pass_receipt_sha256": hashlib.sha256(selection_bytes).hexdigest(),
             "output_prefix": str(StoragePath(job["output_prefix"]) / "candidate"),
-            "implementation_sha256": implementation_identity(),
+            "implementation_sha256": implementation_identity(BUILD_IMPLEMENTATION_FILES),
             **{key: job[key] for key in ("config_uri", "config_sha256", "tokenizer_uri", "tokenizer_sha256")},
         }
         built = process_shard(build_job)

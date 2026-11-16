@@ -12,8 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.sft_new_mix.candidate_receipts import component_name
-from experiments.sft_new_mix.exp3_build import configure_storage
 from experiments.sft_new_mix.exp3_filters import MAX_TOKENS
+from experiments.sft_new_mix.exp3_runtime import configure_storage
 
 
 def read_final_receipt(job: dict) -> dict:

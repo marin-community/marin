@@ -82,7 +82,7 @@ def main() -> None:
         "heldout": metrics(validation, cutoff),
         "all_labeled_descriptive_only": metrics(rows, cutoff),
         "labels": len(rows),
-        "abstentions_or_invalid": 400 - len(rows),
+        "abstentions_or_invalid": len(receipt_hashes) - len(rows),
         "categories": dict(Counter(label["category"] for label in labels.values())),
         "blinded_crosscheck": {"documents": len(independent), "initial_binary_disagreements": disagreements},
         "adjudicated_ids": [row["sample_id"] for row in adjudications],

@@ -99,7 +99,15 @@ def candidate_weights(
     if inventory["complete"] is not True or abs(fsum(family_shares.values()) - 1) > WEIGHT_TOLERANCE:
         raise ValueError("Weights require a complete population and family shares summing to one")
     control = schedule_average(control_schedule, updates)
-    replay_inputs = {job["input_path"]: job for job in scripted_plan["jobs"] if job["loss_mode"] == "full_token"}
+    replay_tokens: dict[str, int] = defaultdict(int)
+    replay_source: dict[str, str] = {}
+    for job in scripted_plan["jobs"]:
+        if job["loss_mode"] != "full_token":
+            continue
+        # ranged_remainder splits unfinished caches into children that share the
+        # parent input path; the replay basis needs the whole cache's tokens.
+        replay_tokens[job["input_path"]] += job["expected_tokens"]
+        replay_source[job["input_path"]] = job["source"]
     retained = {source["source"]: source["counts"]["output_tokens"] for source in inventory["sources"]}
     replay_basis = Counter()
     multiplicities = {}
@@ -109,10 +117,10 @@ def candidate_weights(
         if component["type"] != "concat":
             raise ValueError("Frozen replay topology must explicitly declare its concatenated children")
         repeated = Counter(child["cache_dir"] for child in component["children"].values())
-        denominator = sum(repeats * replay_inputs[path]["expected_tokens"] for path, repeats in repeated.items())
+        denominator = sum(repeats * replay_tokens[path] for path, repeats in repeated.items())
         multiplicities[name] = dict(repeated)
         for path, repeats in repeated.items():
-            source = replay_inputs[path]["source"]
+            source = replay_source[path]
             replay_basis[source] += control[name] * repeats * retained[source] / denominator
     grouped = defaultdict(dict)
     families = {}

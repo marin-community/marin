@@ -43,9 +43,11 @@ source loss modes and per-transform retention receipts. `exp3_plan` and
 `exp3_build` prepare source ranges; `finalize_shards` applies admitted tool
 replacements and Atlas dispositions. `assemble_candidate` combines complete
 cohorts, and `publish_candidate` publishes a catalog, supervision sidecar,
-natural mixture schedule and native-consumer measurement job. Publication stays
-unqualified until the separate native consumer and release checker succeed.
-These modules do not submit GPU training.
+natural mixture schedule and a measurement-job spec for an external consumer.
+The spec is frozen data, not an executable: no repository code implements or
+runs the consumer yet. Publication stays unqualified until that external
+consumer and a release checker succeed. These modules do not submit GPU
+training.
 
 ### Exact OpenCode question repair
 
@@ -63,7 +65,14 @@ uv run python -m experiments.sft_new_mix.opencode_questions \
 ```
 
 The recipe selects `mode=index`, `bridge` or `repair`, an output prefix,
-worker count and jobs, plus hashes of the implementation files. Index jobs
+worker count and jobs, plus hashes of the implementation files. The
+implementation hashes must cover the raw-row adapter chain —
+`chat_normalize.py`, `chat_render.py` and `nemotron_sft_v3.py` — and the stage
+refuses to run without them: if those files change between the index build and
+the frozen caches, every bridge row would silently become unjoined and the
+repair would no-op. Bridge recipes must also declare `min_joined_fraction`;
+the bridge fails when joined rows fall below that bound instead of quietly
+succeeding with no changes. Index jobs
 render each raw row through the frozen adapter and record its UUID, normalized
 ID, original question and complete native-content SHA. Bridge jobs cover every
 original cache row in contiguous ranges and bind it to the same partition's
@@ -74,8 +83,10 @@ questions and unmatched fingerprints are counted as unjoined.
 Repair jobs follow the scripted and actual-tool-gate row ledgers back to that
 original bridge. Set `repair_enabled` explicitly on every job. Only a user
 message equal to the quoted original question plus zero to three trailing
-`<note>` blocks loses its wrapper and question-quote escaping, following
-[PR #11193](https://github.com/marin-community/marin/pull/11193). Note bytes,
+`<note>` blocks loses its wrapper and question-quote escaping — the
+`<note>`-restricted repair rule proposed in
+[PR #11193](https://github.com/marin-community/marin/pull/11193), kept local to
+this pipeline until that PR exports a shared rule. Note bytes,
 unrelated quoted subagent prompts and non-user messages remain unchanged.
 Unjoined rows retain their original tokens and masks. Changed rows receive
 fresh prediction-indexed assistant masks and must preserve the exact assistant

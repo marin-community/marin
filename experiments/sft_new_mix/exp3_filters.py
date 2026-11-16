@@ -58,7 +58,6 @@ class Stage(StrEnum):
     SYSTEM_TURNS = "merge_system_turns"
     WARNINGS = "contradictory_parse_warnings"
     THINK_MODE = "spanless_think_mode"
-    OPENCODE_QUOTES = "opencode_user_quotes"
     GENERATOR_LINES = "generator_lines"
     MINI_JSON = "mini_swe_double_encoded_json"
     REPLAY_HEURISTICS = "replay_heuristics"
@@ -80,7 +79,6 @@ class Document:
     text: str
     # Only source-adapter outcomes or checked receipts may set this flag.
     passed: bool = False
-    raw_question: str | None = None
 
     @cached_property
     def messages(self) -> list[Turn]:
@@ -385,18 +383,6 @@ def apply_stage(document: Document, stage: Stage, config: FilterConfig, token_co
                 for turn in messages
             ]
             return Decision(with_turns(document, messages, cleaned))
-    if stage == Stage.OPENCODE_QUOTES and "opencode" in source:
-        if document.raw_question is None:
-            return Decision(document)
-        cleaned = [
-            (
-                replace(turn, content=unquote_opencode_prompt(turn.content, document.raw_question))
-                if turn.role == "user"
-                else turn
-            )
-            for turn in messages
-        ]
-        return Decision(with_turns(document, messages, cleaned))
     if stage == Stage.GENERATOR_LINES and "opencode" in source:
         cleaned = [
             (

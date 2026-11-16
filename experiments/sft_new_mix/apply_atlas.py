@@ -10,7 +10,7 @@ import json
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.sft_new_mix.exp3_build import configure_storage
+from experiments.sft_new_mix.exp3_runtime import configure_storage
 from experiments.sft_new_mix.final_receipts import collect_final_inventory
 from experiments.sft_new_mix.finalize_shards import DropStage, execute_plan, implementation_identity
 from experiments.sft_new_mix.prepare_overlay_gates import pinned_json
