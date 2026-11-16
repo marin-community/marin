@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "4c472f149584bde7d9baebd4f5535c95a60ce378",
+  "revision": "73d0a197ebbbe9870ce7b6f7e40b1e9e55dec15d",
   "path": "experiments/post_training/task_curation/datasets/lexical_measurement_receipts/part-003.json",
-  "sha256": "bb3240c57f0e2dcf638bd7f4d053b2938ed66ea0bb5b21dd0467f94e5a25061b"
+  "sha256": "bbb481a49f5f6a78bad1b44e3b0c29021b47315e978e86761ef76d49aa62231d"
 }

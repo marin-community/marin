@@ -2496,6 +2496,14 @@ uv run --project vendor/harbor --frozen --extra runtime --group test python -m p
   -m 'runtime and not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not windows_containers'
 ~~~
 
+Native Harbor wrappers (`NoGrader` with the `harbor` tag) use
+`taskcompendium.harbor.native_package.write_native_task(task, tasks_dir / task.id)`
+to materialize their original files before `map`. This preserves bytes, modes,
+timestamps and absent phase deadlines. `task_spec_harbor.prepare` instead exports
+executable converted TaskSpecs and rejects native wrappers. Normalized population
+rows contain `id`, `task_spec` and `runtime`; `map` derives their TaskSpec hashes.
+Private publication rows additionally carry `task_sha256` for byte readback.
+
 ~~~bash
 uv run python -m experiments.post_training.task_curation.oracle_filter map \
   --cohort /path/to/converted/tasks.parquet \
