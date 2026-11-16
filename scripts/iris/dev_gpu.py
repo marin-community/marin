@@ -80,7 +80,7 @@ FAILED_JOB_STATES = TERMINAL_JOB_STATES - {JobState.SUCCEEDED}
 
 @dataclass(frozen=True)
 class PodRef:
-    """The k8s pod backing a dev GPU session."""
+    """The k8s pod backing a dev session."""
 
     namespace: str
     pod_name: str
@@ -129,11 +129,7 @@ class DevGpuState:
 
 
 def require_coreweave_platform(config: IrisClusterConfig) -> CoreweaveTarget:
-    """Resolve the kubectl target for a CoreWeave cluster, or fail fast.
-
-    Inverts dev_tpu.py's GCP gate: this tool only works against
-    CoreWeave/Kubernetes-backed clusters.
-    """
+    """Resolve the kubectl target for a CoreWeave cluster, or fail fast."""
     if config.platform.platform_kind() != "coreweave":
         raise click.ClickException(
             "dev_gpu requires a CoreWeave/Kubernetes-backed cluster. For GCP TPU clusters use scripts/iris/dev_tpu.py."
