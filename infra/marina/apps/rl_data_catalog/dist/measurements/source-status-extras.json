@@ -111,20 +111,6 @@
       "dataset_id": null,
       "dataset_revision": null,
       "reasons": []
-    },
-    {
-      "id": "OpenResearcher:OpenResearcher-Dataset",
-      "name": "openresearcher-train",
-      "display_name": "OpenResearcher TRAIN",
-      "status": "Pending",
-      "origin": "OpenResearcher",
-      "upstream_dataset": "OpenResearcher-Dataset",
-      "upstream_url": null,
-      "notes": "",
-      "stage": "Measurements pending",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": []
     }
   ],
   "stages": {
