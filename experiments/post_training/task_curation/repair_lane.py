@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pyarrow.parquet as pq
+from marin.inference import iris as iris_inference
 from marin.inference.openai_chat import OpenAIChatClient
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -305,8 +306,6 @@ def review_pairs(
     pairs: list[ComparativePair], reviewer_version: ReviewerVersion
 ) -> tuple[ComparativeBatchResult, ReviewEvidence]:
     """Serve the pinned FULL-QC judge and comparatively review every pair."""
-    from marin.inference import iris as iris_inference
-
     # Extend the placement wait in this process only; see REPAIR_PLACEMENT_WAIT_SECONDS.
     iris_inference._ENDPOINT_PLACEMENT_TIMEOUT_SECONDS = REPAIR_PLACEMENT_WAIT_SECONDS
     spec = local_reviewer(reviewer_version)
