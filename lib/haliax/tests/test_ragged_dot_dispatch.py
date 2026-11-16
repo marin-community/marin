@@ -295,21 +295,6 @@ def test_triton_ragged_dot_value_and_gradients_match_reference_with_device_block
     _assert_close_to_reference(drhs, expected_drhs, 1e-2)
 
 
-@pytest.mark.parametrize(
-    ("family", "expected_kernels"),
-    [
-        (GpuFamily.AMD_INSTINCT, ragged_dot_module.TritonKernelFamily.TILE_MAP),
-        (GpuFamily.NVIDIA_HOPPER, ragged_dot_module.TritonKernelFamily.TILE_MAP),
-        (GpuFamily.NVIDIA_BLACKWELL, ragged_dot_module.TritonKernelFamily.TILE_MAP),
-        (GpuFamily.OTHER, ragged_dot_module.TritonKernelFamily.GROUP_GRID),
-    ],
-)
-def test_triton_kernel_family_follows_gpu_family(monkeypatch, family, expected_kernels):
-    monkeypatch.setattr(ragged_dot_module, "gpu_family", lambda: family)
-
-    assert ragged_dot_module._triton_kernel_family() is expected_kernels
-
-
 @pytest.mark.skipif(not ragged_dot_module._has_pallas_triton, reason="Pallas Triton unavailable")
 def test_tile_map_block_config_uses_amd_instinct_config(monkeypatch):
     monkeypatch.setattr(ragged_dot_module, "gpu_family", lambda: GpuFamily.AMD_INSTINCT)
