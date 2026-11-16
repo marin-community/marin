@@ -33,7 +33,7 @@ JSON still fail the artifact.
 
 ## Ground the complete question population
 
-The `ground` entrypoint binds the source and index receipts, their SHA values,
+The `ground` entrypoint binds the question and index receipts, their SHA values,
 the retrieval runtime's package freeze, and a pinned Qwen3 judge deployment.
 The matcher contract in `grounding_contract.py` records the prompts, output
 schemas, generation settings and retention rule. Execution failures fail the
@@ -63,8 +63,10 @@ hop. A separate request to the same pinned judge receives the question and
 evidence quotations, excluding the gold answer and the gold-derived requirement
 claims. Its
 answer must match the gold answer under the MIT BrowseComp answer-equivalence
-prompt and parser reused by the task grader. A separate audit checks all original clues, evidence links,
-answer support and ambiguity. The private receipt retains retrieval results,
+prompt and parser reused by the task grader. A final request to the same pinned
+judge audits all original clues, evidence links, answer support and ambiguity.
+A question is retained only when grounding, independent answering and audit
+checks pass. The private receipt retains retrieval results,
 judge requests/responses and every keep/drop decision.
 
 The grounding judge uses temperature 0.7 with its model revision, serving
@@ -76,10 +78,16 @@ reviewer contract from the shared
 ## Continue through admission
 
 [`recipe.sources()`](recipe.py) declares the frozen preparation inputs in the
-pending source inventory. Constructing this declaration performs no regional
+configured source inventory. Constructing this declaration performs no regional
 reads. `curate` checks the dataset and corpus license receipts before creating
 the QUICK artifact graph; `prepare` rechecks both before reading question data.
-Pending registration leaves the source unavailable for Atlas training selection.
+The `OpenResearcher:OpenResearcher-Dataset` entry in the
+[retained-release registry](../retained_release_receipts/) selects the private
+TaskCompendium pin and binds its final census and static retention. The
+[license](../license_receipts/) and [SAMPLE](../sample_qc_receipts/) registries
+bind that pin's permissions and content result.
+The [source procedure](../../../../../docs/references/task-curation.md#source-procedure)
+defines admission and default-view eligibility.
 
 The versioned `openresearcher-bm25:v1` provider exposes `search` and
 `get_document`. Search returns five hits with 512-token snippets. Its state
@@ -96,9 +104,12 @@ for a normal document and pinned corpus document `7385` (18,388,915 UTF-8 bytes)
 Check the complete returned text against the corpus. The grounding JSON-line
 replay described above tests a separate transport path.
 
-`prepare` creates the source's QUICK artifact after grounding and physical image
-QA. Its [`PreparationConfig`](prepare.py) binds the stage, question, grounding and benchmark
-hash receipts by SHA, the retrieval state, two immutable image digests and a
+Before `prepare`, record actor-image QA in the intake report. Its evidence must
+bind the actor image digest, the complete index-file manifest and the two
+production-provider probes above. `prepare` creates the source's QUICK artifact
+after grounding and this QA. Its [`PreparationConfig`](prepare.py) binds the stage,
+question, grounding and benchmark hash receipts by SHA, the retrieval state,
+immutable actor and grader image digests and a
 fresh local work directory. It rechecks both dataset licenses before reading
 questions. Every original question must have exactly one completed grounding
 decision; retained question and answer bytes must match their original rows.
@@ -112,7 +123,7 @@ Construct `state` with [`OpenResearcherState`](../../../../../lib/taskcompendium
 using the verified index manifest SHA and the implementation/tokenizer revisions
 in [`runtime.py`](runtime.py). The fixed corpus revision, top-five search,
 512-token snippets and `get_document` setting must match the physically tested
-image's `/opt/openresearcher/state.json`.
+actor image's `/opt/openresearcher/state.json`.
 
 ```bash
 uv run python -m experiments.post_training.task_curation.datasets.openresearcher.prepare \
@@ -126,7 +137,7 @@ The artifact contains native TaskCompendium task directories, `tasks.parquet`
 and standard `normalize/*.parquet` rows. Actor prompts contain the question;
 private verifier resources retain the gold answer, original source-row references
 and the MIT answer-equivalence grader. Task IDs depend only on the public
-question. QUICK marks the population unreviewed and unadmitted.
+question. This preparation output records no content oversight or admission.
 
 Follow the [source procedure](../../../../../docs/references/task-curation.md#source-procedure)
 for census, exact deduplication, the full shared lexical scan and evaluation

@@ -97,7 +97,6 @@ PENDING_MEASUREMENT_SOURCES = (
     *prime_swe.sources(),
     *prime_multiswe.sources(),
     *rst.sources(),
-    *openresearcher.sources(),
 )
 
 
@@ -137,6 +136,7 @@ def configured_sources() -> list[RlDataSource]:
         *nemotron_ultra.sources(),
         *(source for source in cascade.sources() if source.info.subset in CASCADE_RETAINED_SUBSETS),
         *ifbench.sources(),
+        *openresearcher.sources(),
         *structure_closure.sources(),
         *thoughtcrime.sources(),
         *campaign_releases.sources(),
