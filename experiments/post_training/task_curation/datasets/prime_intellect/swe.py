@@ -8,10 +8,14 @@ import hashlib
 import json
 import shlex
 from dataclasses import replace
+from functools import cache
 from pathlib import Path
 
 import tomlkit
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_defect
+from taskcompendium.harbor.shared_source import SCALE_SWE_PROFILE, SWE_LEGO_PROFILE, harden_shared_source
+from taskcompendium.integrity import SharedDependencyState
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
@@ -28,13 +32,55 @@ from experiments.post_training.task_curation.pipeline import CurationRecipe, HfS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 HERE = Path(__file__).parent
-VERSION = "2026.11.15.3"
+VERSION = "2026.11.16.1"
+IMAGE_BINDINGS_INPUT = "images"
+IMAGE_BINDINGS_FILENAME = "image-bindings.json"
+IMAGE_BINDINGS = {
+    "Scale-SWE-Verified": HfSource(
+        "open-athena/atlas-scale-swe-image-bindings-20261116-v1",
+        "4d0988448d89cf1e7554d3ac30b39f3e77bd9814",
+        (IMAGE_BINDINGS_FILENAME,),
+        SourceFormat.JSON,
+    ),
+    "SWE-Lego-Real-Data-Verified": HfSource(
+        "open-athena/atlas-swe-lego-image-bindings-20261116-v1",
+        "ca76a2999f69edbea24f80b50a6db7ac342ff108",
+        (IMAGE_BINDINGS_FILENAME,),
+        SourceFormat.JSON,
+    ),
+}
 TASKSET_REVISION = "b41d8759070715dc102000e06fba0d73ebce9955"
 RUBRIC = """Compare the public issue with the original hidden tests and golden patch. Check whether the
 issue supplies the required behavior and the tests measure it without demanding unrelated changes.
 The per-task repository image is part of the contract. Do not mistake a missing local checkout or
 unexecuted Docker image for an underspecified issue. Do not expose private tests or the golden patch.
 """
+
+
+@cache
+def image_bindings(path: StoragePath, dataset: str, revision: str) -> dict[tuple[str, str], str]:
+    """Read the recipe's immutable complete image map once per converter process."""
+    manifest = json.loads(path.read_text())
+    if (manifest["dataset_id"], manifest["revision"]) != (dataset, revision) or manifest["failures"]:
+        raise ValueError("Image bindings do not cover this exact source pin")
+    bindings = {}
+    for record in manifest["resolved"]:
+        pinned = record["pinned_reference"]
+        if "@sha256:" not in pinned:
+            raise ValueError("Image binding is not digest-pinned")
+        for row in record["source_rows"]:
+            key = (record["original_reference"], row["instance_id"])
+            if key in bindings:
+                raise ValueError(f"Duplicate source image binding: {key}")
+            bindings[key] = pinned
+    if len(bindings) != manifest["source_tasks"]:
+        raise ValueError("Image bindings omit original source tasks")
+    return bindings
+
+
+def pinned_image(row: RawRow, context: ConversionContext, reference: str) -> str:
+    path = context.inputs[IMAGE_BINDINGS_INPUT] / IMAGE_BINDINGS_FILENAME
+    return image_bindings(path, row.source.dataset, row.source.revision)[(reference, row.data["instance_id"])]
 
 
 def native_package(
@@ -79,6 +125,8 @@ def native_package(
     }
     if grader == "scale_grade.py":
         files["tests/scale_score.py"] = (HERE / "scale_score.py").read_bytes()
+    profile = SCALE_SWE_PROFILE if grader == "scale_grade.py" else SWE_LEGO_PROFILE
+    contract = harden_shared_source(files, profile=profile, dependency_state=SharedDependencyState.AGENT_MUTABLE)
     decoded = {
         "files": {name: base64.b64encode(content).decode() for name, content in files.items()},
         "file_metadata": {name: {"mode": "0755" if name.endswith(".sh") else "0644", "mtime_ns": 0} for name in files},
@@ -88,7 +136,12 @@ def native_package(
     task = native_task(replace(row, data=decoded), context)
     if isinstance(task, ImportRejection):
         return task
-    return task.model_copy(update={"labels": {**task.labels, "prime_taskset_revision": TASKSET_REVISION}})
+    return task.model_copy(
+        update={
+            "integrity_contract": contract,
+            "labels": {**task.labels, "prime_taskset_revision": TASKSET_REVISION, "prime_pinned_image": image},
+        }
+    )
 
 
 def convert_scale(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -96,7 +149,7 @@ def convert_scale(row: RawRow, context: ConversionContext) -> TaskSpec | ImportR
     return native_package(
         row,
         context,
-        image=data["image_url"],
+        image=pinned_image(row, context, data["image_url"]),
         workdir=data["workdir"],
         setup="cd " + shlex.quote(data["workdir"]) + " && " + data["pre_commands"].strip().removesuffix("\\n"),
         config={
@@ -121,7 +174,7 @@ def convert_lego(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRe
     return native_package(
         row,
         context,
-        image=data["image_name"],
+        image=pinned_image(row, context, data["image_name"]),
         workdir="/testbed",
         setup=LINK_VENV + "; " + INSTALL_RG,
         config={
@@ -168,7 +221,8 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("license:cc-by-4.0",) if dataset == "Scale-SWE-Verified" else ("license:apache-2.0",),
                 task_format=TaskFormat.HARBOR,
                 notes=(
-                    f"Original source image and scoring contract; taskset code {TASKSET_REVISION}. "
+                    f"Digest-pinned source image and original scoring contract; taskset code {TASKSET_REVISION}. "
+                    "Versioned shared-source protection with agent-mutable dependencies. "
                     "Pending qualification."
                 ),
             ),
@@ -181,6 +235,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     tuple(f"data/{split}-{i:05d}-of-{parts:05d}.parquet" for i in range(parts)),
                     SourceFormat.PARQUET,
                 ),
+                inputs={IMAGE_BINDINGS_INPUT: IMAGE_BINDINGS[dataset]},
                 convert=convert,
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,

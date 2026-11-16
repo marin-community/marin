@@ -16,15 +16,16 @@ named teacher licenses. QUICK conversion supplies no admission. Follow
 decontamination, full-population oracle and no-op trials, SAMPLE and final-pin
 qualification.
 
-Each row becomes a native Harbor package. Its Dockerfile uses the original
-image with the source work directory; public setup runs before the actor.
+Each row becomes a native Harbor package. Version `2026.11.16.1` binds the
+complete immutable image map through a private pinned auxiliary dataset and
+uses the landed `shared-source` protection. Its Dockerfile uses the original
+image by digest with the source work directory; public setup runs before the actor.
 The golden patch stays under `solution/`, and test material is supplied only
 at verification. Source-declared 4 CPU, 4 GiB memory and 10 GiB disk limits
-are retained. For missing phase deadlines, stage a versioned package with a
-five-minute agent timeout and a one-minute verifier timeout, then run the
-[full-population oracle filter](../../../../../docs/references/task-curation.md#full-population-oracle-filter).
-Its calibration receipt records each attempt and the final per-task deadlines;
-retain the source's explicit CPU, memory and disk limits.
+are retained. Absent source phase deadlines remain absent in the package. The
+[full-population oracle filter](../../../../../docs/references/task-curation.md#full-population-oracle-filter)
+records execution calibration and final per-task deadlines separately; retain
+the source's explicit CPU, memory and disk limits.
 
 Scoring preserves the source implementation pinned at
 `PrimeIntellect-ai/research-environments@b41d8759070715dc102000e06fba0d73ebce9955`:
@@ -32,8 +33,9 @@ Scoring preserves the source implementation pinned at
 - `scale_score.py` retains the Scale-SWE JUnit scorer, with context-managed
   UTF-8 file reads.
 - `native_scripts.py` contains the source setup, restoration and evaluation
-  functions. The packaged `tests/native_scripts.py` postpones annotation
-  evaluation because it executes with Python inside the original source image.
+  functions. Annotation strings keep the packaged guest code importable by
+  source images with Python 3.6. The grade entry points use equivalent
+  `subprocess.run` options available in those interpreters.
 - `parse_pytest_outcomes` is from
   `PrimeIntellect-ai/verifiers@672d020c4dcabf5127a76f51aeb4adaf5b89d3fc`.
 - The grade entry points adapt source runtime calls to the native verifier

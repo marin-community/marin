@@ -35,7 +35,7 @@ def normalize(value: str) -> str:
     return ".".join(parts).replace("/", ".").strip(".")
 
 
-def all_passed(xml_content: str, expected: list[str]) -> bool:
+def all_passed(xml_content: str, expected: "list[str]") -> bool:
     try:
         root = ET.fromstring(xml_content)
     except ET.ParseError:

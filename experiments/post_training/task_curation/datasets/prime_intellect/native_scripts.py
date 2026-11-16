@@ -4,8 +4,7 @@
 # Copyright Prime Intellect. Licensed under Apache-2.0.
 # Extracted without behavioral edits from research-environments b41d8759070715dc102000e06fba0d73ebce9955
 # and verifiers 672d020c4dcabf5127a76f51aeb4adaf5b89d3fc.
-
-from __future__ import annotations
+# Annotation strings keep this guest module importable by the source images' Python 3.6.
 
 import json
 import re
@@ -58,7 +57,7 @@ done
 """
 
 
-def _ids(raw: str | list[str] | None) -> list[str]:
+def _ids(raw: "str | list[str] | None") -> "list[str]":
     """F2P/P2P ids arrive as a list or a JSON-encoded string; normalize to list[str]."""
     if not raw:
         return []
@@ -147,7 +146,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 PYTEST_OUTCOMES = ("PASSED", "FAILED", "ERROR", "SKIPPED", "XFAIL", "XPASS")
 
 
-def parse_pytest_outcomes(output: str | None) -> dict[str, str]:
+def parse_pytest_outcomes(output: "str | None") -> "dict[str, str]":
     outcomes: dict[str, str] = {}
     for raw_line in ANSI_RE.sub("", output or "").splitlines():
         parts = raw_line.strip().split(maxsplit=1)

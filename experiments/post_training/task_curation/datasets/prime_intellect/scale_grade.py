@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Keep subprocess options supported by the source images' Python 3.6.
+# ruff: noqa: UP021, UP022
+
 """Run Scale-SWE's original test restoration and scorer in its source image."""
 
 import json
@@ -34,7 +37,13 @@ def main() -> None:
         Path("test_fail_to_pass.py").write_text(config["f2p_script"], encoding="utf-8")
     ids = Path("/tmp/scaleswe_test_ids.json")
     ids.write_text(json.dumps(config["test_ids"]))
-    result = subprocess.run(["python", "/tests/scale_score.py", str(ids)], env=env, capture_output=True, text=True)
+    result = subprocess.run(
+        ["python", "/tests/scale_score.py", str(ids)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+    )
     print(result.stdout)
     matches = re.findall(r"<score>([0-9.]+)</score>", result.stdout)
     score = float(matches[-1]) if matches else 0.0

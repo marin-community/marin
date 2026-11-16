@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Keep subprocess options supported by the source images' Python 3.6.
+# ruff: noqa: UP021, UP022
+
 """Preserve SWE-Lego's source patch restoration and pytest-summary grading."""
 
 import json
@@ -35,7 +38,11 @@ def main() -> None:
             reward.write_text("0.0")
             return
     result = subprocess.run(
-        ["bash", "-c", build_eval_script(config["test_cmd"])], env=env, capture_output=True, text=True
+        ["bash", "-c", build_eval_script(config["test_cmd"])],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
     )
     print(result.stdout)
     outcomes = parse_pytest_outcomes(result.stdout)
