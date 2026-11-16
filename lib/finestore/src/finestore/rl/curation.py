@@ -169,6 +169,7 @@ class SourceOrigin(StrEnum):
     OPENAI = "OpenAI"
     OPENATHENA = "OpenAthena"
     OPENRESEARCHER = "OpenResearcher"
+    POLARIS_PROJECT = "POLARIS-Project"
     PRIME_RL = "PRIME-RL"
     PRIME_INTELLECT = "PrimeIntellect"
     PROJECT_NUMINA = "project-numina"

@@ -43,6 +43,7 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra import comp
 from experiments.post_training.task_curation.datasets.openresearcher import recipe as openresearcher
 from experiments.post_training.task_curation.datasets.oracle_admitted_releases import oracle_admitted_release_receipts
 from experiments.post_training.task_curation.datasets.oracle_releases import oracle_release_receipts
+from experiments.post_training.task_curation.datasets.polaris import tasks as polaris
 from experiments.post_training.task_curation.datasets.prime_intellect import swe as prime_swe
 from experiments.post_training.task_curation.datasets.prime_intellect.multiswe import convert as prime_multiswe
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
@@ -91,6 +92,7 @@ CASCADE_RETAINED_SUBSETS = ("multi-domain-RL", "MOPD")
 
 # Awaiting the intake measurements listed in docs/references/task-curation.md#pending-source-intake.
 PENDING_MEASUREMENT_SOURCES = (
+    *polaris.sources(),
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
     *lean_proofs.sources(),
     *lean_numina.sources(),
