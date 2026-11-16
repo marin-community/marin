@@ -101,3 +101,14 @@ def test_backend_support_blocker_lists_every_backend_deterministically():
         source_map({"iris": FitSupport.UNSUPPORTED, "local": FitSupport.UNSUPPORTED}), "Available"
     )
     assert blocker == ("no surveyed backend can run the source: iris=unsupported, local=unsupported")
+
+
+def test_role_absent_everywhere_needs_no_backend_and_keeps_its_labels():
+    """A source that declares no machine role on any backend is not blocked."""
+    assert (
+        backend_support_blocker(
+            source_map({name: FitSupport.ROLE_ABSENT for name in ("daytona", "gvisor", "iris", "local", "qemu")}),
+            "Available",
+        )
+        is None
+    )

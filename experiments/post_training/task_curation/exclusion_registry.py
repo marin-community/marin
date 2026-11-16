@@ -240,6 +240,50 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             ),
         ),
     ),
+    "TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3": (
+        ExclusionClaim(
+            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
+            evidence=_note(
+                "BackendSurvey (v21 preview catalog): every surveyed backend reports unsupported "
+                "with per-task validation errors 'agent: Unresolved Docker build context must be "
+                "built and pinned before execution'; DifficultyGap.TOOL_PROVIDER_REQUIRED "
+                "(2026-11-16 exclude ruling)."
+            ),
+        ),
+    ),
+    "TaskTrove:laion__codeelo-v2": (
+        ExclusionClaim(
+            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
+            evidence=_note(
+                "BackendSurvey (v21 preview catalog): every surveyed backend reports unsupported "
+                "with per-task validation errors 'agent: Unresolved Docker build context must be "
+                "built and pinned before execution'; DifficultyGap.TOOL_PROVIDER_REQUIRED "
+                "(2026-11-16 exclude ruling)."
+            ),
+        ),
+    ),
+    "TaskTrove:laion__magicoder-v4": (
+        ExclusionClaim(
+            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
+            evidence=_note(
+                "BackendSurvey (v21 preview catalog): every surveyed backend reports unsupported "
+                "with per-task validation errors 'agent: Unresolved Docker build context must be "
+                "built and pinned before execution'; DifficultyGap.TOOL_PROVIDER_REQUIRED "
+                "(2026-11-16 exclude ruling)."
+            ),
+        ),
+    ),
+    "TaskTrove:laion__nemotron-gym-instruction-following-freeform-v2": (
+        ExclusionClaim(
+            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
+            evidence=_note(
+                "BackendSurvey (v21 preview catalog): every surveyed backend reports unsupported "
+                "with per-task validation errors 'agent: Unresolved Docker build context must be "
+                "built and pinned before execution'; DifficultyGap.TOOL_PROVIDER_REQUIRED "
+                "(2026-11-16 exclude ruling)."
+            ),
+        ),
+    ),
 }
 
 NEEDS_RULING_SOURCES: frozenset[str] = frozenset(

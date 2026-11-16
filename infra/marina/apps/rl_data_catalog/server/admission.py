@@ -53,12 +53,18 @@ def backend_support_blocker(capabilities: BackendSourceMap, status: str | None) 
 
     ``None`` for every non-Available status: exclusion and hold statuses never
     need a runnable backend, and a survey row measured before this check may
-    keep its historical verdict.
+    keep its historical verdict. ``role_absent`` marks a population that
+    declares no environment for a role at all, so a source whose every backend
+    cell is ``role_absent`` needs no backend: that applicability outcome keeps
+    its N/A label instead of becoming a failure. ``not_applicable`` and
+    ``unsupported`` are real verdicts on declared roles and still block.
     """
     if status != "Available":
         return None
     verdicts = {name: fit.support.value for name, fit in capabilities.backends.items()}
     if any(support in RUNNABLE_FIT for support in verdicts.values()):
+        return None
+    if all(support == FitSupport.ROLE_ABSENT for support in verdicts.values()):
         return None
     return "no surveyed backend can run the source: " + ", ".join(
         f"{name}={support}" for name, support in sorted(verdicts.items())
