@@ -95,10 +95,13 @@ def test_aggregate_watchdog_text_retries_twice_with_fresh_identities_and_charges
 
 def test_budget_guard_records_spend_and_cancels_only_the_active_child(tmp_path, monkeypatch):
     controller = bind_controller(monkeypatch, [(job_pb2.JOB_STATE_RUNNING, "")])
-    with pytest.raises(RuntimeError, match=r"observed=0\.266667, ceiling=0\.300000"):
+    with pytest.raises(RuntimeError):
         run_guarded_stage(request(), StageGuard(0.3, 10, 2), str(tmp_path))
     assert controller.cancelled == ["/benfeuer/exp3-smoke/sft"]
-    assert json.loads((tmp_path / "attempt-0.json").read_text())["result"] == "budget_exhausted"
+    receipt = json.loads((tmp_path / "attempt-0.json").read_text())
+    assert receipt["result"] == "budget_exhausted"
+    assert receipt["h100_hours"] == pytest.approx(16 / 60)
+    assert receipt["h100_hour_limit"] == pytest.approx(0.3)
     assert len(controller.requests) == 1
 
 
