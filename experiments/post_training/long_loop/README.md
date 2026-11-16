@@ -527,3 +527,39 @@ The existing staging path materializes the same checkpoint once per node before
 Ray startup and vLLM loads local safetensors. Reserve enough node-local disk for
 the full checkpoint; the policy's source URI and identity remain in the consumed
 config. This changes weight loading only; compilation and CUDA graphs stay enabled.
+
+## Exp3 production preparation
+
+`exp3_production` consumes one final data-release URI and overlays its pinned
+catalog, supervision metadata and natural weights on the frozen Exp1 RL recipe.
+It fixes SFT at 256 H100 (EP8/CP32), batch 256, context 262144, maximum 746 updates and
+a 20-hour execution deadline. The trainer reserves time for the final native/HF
+checkpoint and records the actual completed count. Source must be clean and
+pinned to the submitted commit.
+
+Before requesting approval, run the graph preflight with no `--run`:
+
+```bash
+uv run python -m experiments.post_training.long_loop.exp3_production \
+  --data-release "$DATA_RELEASE_URI" \
+  --source-revision "$RUNTIME_COMMIT" \
+  --version "$ARTIFACT_VERSION" \
+  --validation-output /tmp/exp3-production-preflight \
+  --max-concurrent 1
+```
+
+A CPU-only release (`training_ready:false`) can validate configuration wiring;
+it is rejected if submission is requested. Final readiness requires the release
+publisher's catalog, weights, retention tables, native consumer receipt and
+Atlas evidence. The release never substitutes for user approval of the recipe,
+catalog and retention table. All referenced metadata bytes are checked against
+SHA256 pins; cached token bodies and model weights are not downloaded by this
+local preflight. The resolved plan and concrete graph validation receipts are
+written to `--validation-output`.
+
+`--through sft` limits preflight to the SFT stage when a downstream control
+remains unresolved. Full-loop admission still enforces the RL learning-clock,
+drain and outer-job deadline relationship. A successful SFT-only dry run does
+not certify downstream admission. After approval, the same frozen command with
+`--run` submits through Iris; keep the runtime commit and artifact version
+unchanged between approval and submission.
