@@ -1,4 +1,253 @@
 {
+  "TaskTrove:DCAgent__mix_h4_binary_easy": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/task-trove-dcagent-mix-h4-binary-easy-cfefcc4b-taskcompendium-20261112",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:36.986048+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Upstream: open-thoughts/TaskTrove at 02923004846e4e73862c20962f823a6d05100e7a. https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a9d9f04cf9f3bf3e49c0a2f97cf4abbece14744305ec6d84dd5fe439d67e220a",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-mix-h4-binary-easy-cfefcc4b-taskcompendium-20261112/resolve/df8e9522875c7adc974cc28f54fc06848f1fd5c7/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "df8e9522875c7adc974cc28f54fc06848f1fd5c7",
+    "source_id": "TaskTrove:DCAgent__mix_h4_binary_easy",
+    "wrapper_chain": []
+  },
+  "TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verif-48c10bb7-retained-20261113-v1",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:36.986048+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Upstream: open-thoughts/TaskTrove at 02923004846e4e73862c20962f823a6d05100e7a. https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "7748ef0312f1462d143d33ed707ce8a44dd5d3f057d9c3aa4883d9d1c85961e1",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verified-v3-fe3a228d-taskcompendium-20261112/resolve/c2dbc82c8e7e57c0966fba7a63a6e13e36305b79/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "2486c147b956b84ff85576cd4a6f717d80f1aa67",
+    "source_id": "TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3",
+    "wrapper_chain": [
+      {
+        "dataset_id": "open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verified-v3-fe3a228d-taskcompendium-20261112",
+        "declaration": {
+          "kind": "wrapper_source",
+          "license_ids": [],
+          "quoted_lines": [
+            "L9: Source pin: `open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verified-v3-fe3a228d-taskcompendium-20261112@c2dbc82c8e7e57c0966fba7a63a6e13e36305b79`. Converter: `2026.11.12.1@5f0dd963e21577e8cf10fd48f847dd04be1b7aab99c5bd9fe2097f9e3765f79e`."
+          ],
+          "restrictive_terms": false,
+          "sha256": "c58de50379ece3f047ab1e4a5f713cddbcb743f2de5316b3c93ae17f073a2b9e",
+          "unidentified_third_party_terms": false,
+          "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verif-48c10bb7-retained-20261113-v1/resolve/2486c147b956b84ff85576cd4a6f717d80f1aa67/README.md"
+        },
+        "revision": "c2dbc82c8e7e57c0966fba7a63a6e13e36305b79",
+        "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verified-v3-fe3a228d-taskcompendium-20261112/tree/c2dbc82c8e7e57c0966fba7a63a6e13e36305b79"
+      }
+    ]
+  },
+  "TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/task-trove-dcagent-swe-rebench-v2-patched-oracle-v2-119bbfc4-retained-20261114-oracle-v1",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:36.986048+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "JSON /source_plan_before_oracle_filter/plan/source_dataset_id: open-thoughts/TaskTrove",
+          "JSON /source_plan_before_oracle_filter/plan/source_revision: 02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "9b3cb0afb814476d595a4557eaef471738c149f8b8cecc458d5cfce3909ca7ad",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-swe-rebench-v2-patched-oracle-v2-119bbfc4-retained-20261114-oracle-v1/resolve/7af7a32e84223b8a5e638e6c2caea3b10ef7d24f/manifest.json"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "7af7a32e84223b8a5e638e6c2caea3b10ef7d24f",
+    "source_id": "TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2",
+    "wrapper_chain": []
+  },
   "TaskTrove:R2E-Gym__R2E-Gym-V1": {
     "bundled_third_party": true,
     "dataset_id": "open-athena/task-trove-r2e-gym-r2e-gym-v1-fda7e545-retained-20261114-oracle-v1",
@@ -4935,192 +5184,6 @@
     "resolver_version": "atlas-license-v2",
     "revision": "ffd2a82011192c8ae2896ea37065ae3e1eb04987",
     "source_id": "TaskTrove:laion__nemotron-gym-qa-abstention-v4",
-    "wrapper_chain": []
-  },
-  "TaskTrove:laion__nemotron-gym-reasoning-gym-v2": {
-    "bundled_third_party": true,
-    "dataset_id": "open-thoughts/TaskTrove",
-    "decisions": [],
-    "evidence": [
-      {
-        "kind": "dataset_card",
-        "license_ids": [
-          "apache-2.0"
-        ],
-        "quoted_lines": [
-          "L4: license: apache-2.0",
-          "L1: ---",
-          "L2: language:",
-          "L3: - en",
-          "L5: task_categories:",
-          "L6: - text-generation",
-          "L7: size_categories:",
-          "L8: - 1M<n<10M",
-          "L9: tags:",
-          "L10: - agent",
-          "L11: - code",
-          "L12: - agentic-tasks"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_license",
-        "license_ids": [
-          "missing"
-        ],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_notice",
-        "license_ids": [],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      }
-    ],
-    "model_generated_outputs": true,
-    "resolved_at": "2026-11-15T20:37:36.681158+00:00",
-    "resolved_source": null,
-    "resolver_version": "atlas-license-v2",
-    "revision": "02923004846e4e73862c20962f823a6d05100e7a",
-    "source_id": "TaskTrove:laion__nemotron-gym-reasoning-gym-v2",
-    "wrapper_chain": []
-  },
-  "TaskTrove:laion__nemotron-gym-safety-v3": {
-    "bundled_third_party": true,
-    "dataset_id": "open-thoughts/TaskTrove",
-    "decisions": [],
-    "evidence": [
-      {
-        "kind": "dataset_card",
-        "license_ids": [
-          "apache-2.0"
-        ],
-        "quoted_lines": [
-          "L4: license: apache-2.0",
-          "L1: ---",
-          "L2: language:",
-          "L3: - en",
-          "L5: task_categories:",
-          "L6: - text-generation",
-          "L7: size_categories:",
-          "L8: - 1M<n<10M",
-          "L9: tags:",
-          "L10: - agent",
-          "L11: - code",
-          "L12: - agentic-tasks"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_license",
-        "license_ids": [
-          "missing"
-        ],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_notice",
-        "license_ids": [],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      }
-    ],
-    "model_generated_outputs": true,
-    "resolved_at": "2026-11-15T20:37:36.681158+00:00",
-    "resolved_source": null,
-    "resolver_version": "atlas-license-v2",
-    "revision": "02923004846e4e73862c20962f823a6d05100e7a",
-    "source_id": "TaskTrove:laion__nemotron-gym-safety-v3",
-    "wrapper_chain": []
-  },
-  "TaskTrove:laion__nemotron-gym-science-so-openq-v3": {
-    "bundled_third_party": true,
-    "dataset_id": "open-thoughts/TaskTrove",
-    "decisions": [],
-    "evidence": [
-      {
-        "kind": "dataset_card",
-        "license_ids": [
-          "apache-2.0"
-        ],
-        "quoted_lines": [
-          "L4: license: apache-2.0",
-          "L1: ---",
-          "L2: language:",
-          "L3: - en",
-          "L5: task_categories:",
-          "L6: - text-generation",
-          "L7: size_categories:",
-          "L8: - 1M<n<10M",
-          "L9: tags:",
-          "L10: - agent",
-          "L11: - code",
-          "L12: - agentic-tasks"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_license",
-        "license_ids": [
-          "missing"
-        ],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_notice",
-        "license_ids": [],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      }
-    ],
-    "model_generated_outputs": true,
-    "resolved_at": "2026-11-15T20:37:36.681158+00:00",
-    "resolved_source": null,
-    "resolver_version": "atlas-license-v2",
-    "revision": "02923004846e4e73862c20962f823a6d05100e7a",
-    "source_id": "TaskTrove:laion__nemotron-gym-science-so-openq-v3",
     "wrapper_chain": []
   }
 }

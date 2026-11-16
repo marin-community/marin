@@ -12,7 +12,7 @@ from requests import HTTPError
 
 from experiments.post_training.task_curation import license_check, license_resolution
 from experiments.post_training.task_curation.license_resolution import LicenseTarget, license_evidence
-from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license, openmdw_license_text
 from infra.marina.apps.rl_data_catalog.server import licensing
 
 PINNED_CASES = json.loads(Path(__file__).with_name("fixtures").joinpath("license_checks.json").read_text())
@@ -35,6 +35,21 @@ def test_pinned_primary_license_excerpts(case):
     else:
         with pytest.raises(ValueError, match="blocks ingest and admission"):
             require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+
+
+def test_openmdw_license_text_and_card_id_are_recognized():
+    license_text = openmdw_license_text()
+    assert license_evidence("https://example.test/LICENSE", license_text, "license_file").license_ids == ["openmdw-1.1"]
+    card = license_evidence(
+        "https://example.test/README.md", b"---\nlicense: openmdw-1.1\n---\n# Dataset\n", "dataset_card"
+    )
+    assert card.license_ids == ["openmdw-1.1"]
+    receipt = fixture_license("fixture", "fixture/data", "b" * 40)
+    evidence = [
+        card,
+        license_evidence("https://example.test/LICENSE", license_text, "license_file"),
+    ]
+    assert check_license(receipt.model_copy(update={"evidence": evidence})).verdict is LicenseCheckVerdict.PASS
 
 
 def test_readme_scope_does_not_make_descriptions_or_yaml_a_conflicting_license():

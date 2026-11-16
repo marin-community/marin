@@ -1766,6 +1766,117 @@
     "source_id": "Gretel:gretel_text_to_sql",
     "wrapper_chain": []
   },
+  "Marin:thoughtcrime": {
+    "bundled_third_party": false,
+    "dataset_id": "open-athena/Marin-Thoughtcrime",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/Marin-Thoughtcrime",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/Marin-Thoughtcrime/tree/5ebd362eec2a6beab7898ea7a717a32a55d164bd",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6915818238"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6915818238",
+        "kind": "exception",
+        "rationale": "The user classified these Marin/OpenAthena sources as our own data carrying OpenMDW-1.1 (verbatim: \"thoughtcrime and the openathena structure sources should be OpenMDW license because they are our data.\"). The dataset card declares license: openmdw-1.1 and the official OpenMDW 1.1 text is preserved as the root LICENSE file (OpenMDW/OpenMDW @ b26b32b3), with every task/payload file byte-identical to the configured pin. The raw checker evidence verdict at this pin is PASS P1. An exception does not transfer to a new revision.",
+        "revision": "5ebd362eec2a6beab7898ea7a717a32a55d164bd",
+        "scope": [
+          "eval"
+        ],
+        "source_id": "Marin:thoughtcrime",
+        "when": "2026-11-16T06:37:25-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "license_file",
+        "license_ids": [
+          "openmdw-1.1"
+        ],
+        "quoted_lines": [
+          "L1: OpenMDW License Agreement, version 1.1 (OpenMDW-1.1)",
+          "L3: By exercising rights granted to you under this agreement, you accept and agree",
+          "L4: to its terms.",
+          "L6: As used in this agreement, \"Model Materials\" means the materials provided to",
+          "L7: you under this agreement, consisting of: (1) one or more machine learning",
+          "L8: models (including architecture and parameters); and (2) all related artifacts",
+          "L9: (including associated data, documentation and software) that are provided to",
+          "L10: you hereunder.",
+          "L12: Subject to your compliance with this agreement, permission is hereby granted,",
+          "L13: free of charge, to deal in the Model Materials without restriction, including",
+          "L14: under all copyright, patent, database, and trade secret rights included or",
+          "L15: embodied therein."
+        ],
+        "restrictive_terms": false,
+        "sha256": "2ab44b68365473c112f5092211a38f231cb23e50de68b75a13369adbd76a74df",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/Marin-Thoughtcrime/resolve/5ebd362eec2a6beab7898ea7a717a32a55d164bd/LICENSE"
+      },
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "openmdw-1.1"
+        ],
+        "quoted_lines": [
+          "L2: license: openmdw-1.1",
+          "L1: ---",
+          "L3: pretty_name: Marin Thoughtcrime",
+          "L4: language:",
+          "L5: - en",
+          "L6: task_categories:",
+          "L7: - text-generation",
+          "L8: tags:",
+          "L9: - reasoning",
+          "L10: - tool-use",
+          "L11: - evaluation",
+          "L12: - agents"
+        ],
+        "restrictive_terms": false,
+        "sha256": "f9df8e7689bcae9b571e6de08d6cd09421eefd6b7fdc05f1a2d9cae2d496bb05",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/Marin-Thoughtcrime/resolve/5ebd362eec2a6beab7898ea7a717a32a55d164bd/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "Apache-2.0"
+        ],
+        "quoted_lines": [
+          "L61: ## Licence and attribution",
+          "L63: The dataset is released under Apache-2.0. It contains material from:",
+          "L65: - **BixBench** (Future-House, Apache-2.0): questions, plus excerpts of the capsule data that agents printed in tool outputs. The bixbench prompts use the corrected task files in `penfever/harbor-datasets`.",
+          "L66: - **Berkeley Function Calling Leaderboard** (Gorilla, Apache-2.0): prompts and tool schemas, using the task files in `laude-institute/harbor-datasets`.",
+          "L67: - **pi** (Mario Zechner, MIT): the agent's system prompt and tool definitions.",
+          "L68: - **Harbor** (Laude Institute, Apache-2.0): the task adapters.",
+          "L70: Model replies come from Marin, Grug and Snowball checkpoints."
+        ],
+        "restrictive_terms": false,
+        "sha256": "f9df8e7689bcae9b571e6de08d6cd09421eefd6b7fdc05f1a2d9cae2d496bb05",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/Marin-Thoughtcrime/resolve/5ebd362eec2a6beab7898ea7a717a32a55d164bd/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "f9df8e7689bcae9b571e6de08d6cd09421eefd6b7fdc05f1a2d9cae2d496bb05",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/Marin-Thoughtcrime/resolve/5ebd362eec2a6beab7898ea7a717a32a55d164bd/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-16T11:58:18.507874+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "5ebd362eec2a6beab7898ea7a717a32a55d164bd",
+    "source_id": "Marin:thoughtcrime",
+    "wrapper_chain": []
+  },
   "Nemotron:Nemotron-Cascade-2-RL-data/IF-RL": {
     "bundled_third_party": false,
     "dataset_id": "nvidia/Nemotron-Cascade-2-RL-data",
@@ -4231,84 +4342,6 @@
     "resolver_version": "atlas-license-v2",
     "revision": "5d7382c202ebbbfde021ab8cb1d651e41f6a0a69",
     "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot",
-    "wrapper_chain": []
-  },
-  "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": {
-    "bundled_third_party": false,
-    "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261113-v1",
-    "decisions": [],
-    "evidence": [
-      {
-        "kind": "dataset_card",
-        "license_ids": [
-          "cc-by-4.0"
-        ],
-        "quoted_lines": [
-          "L4: license: cc-by-4.0",
-          "L1: ---",
-          "L2: language:",
-          "L3: - en",
-          "L5: task_categories:",
-          "L6: - text-generation",
-          "L7: - reinforcement-learning",
-          "L8: configs:",
-          "L9: - config_name: rlvr1",
-          "L10:   data_files:",
-          "L11:   - split: train",
-          "L12:     path: rlvr1.jsonl"
-        ],
-        "restrictive_terms": false,
-        "sha256": "2b9bb8c4c104444d7f7940a6535d63a3833c8261fda4d86130b6a16b550ec72e",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/resolve/482392c14c6418e26804ea2e5d10359df9877df4/README.md"
-      },
-      {
-        "kind": "readme_license",
-        "license_ids": [
-          "cc-by-sa-4.0"
-        ],
-        "quoted_lines": [
-          "L73: ## License/Terms of Use:",
-          "L74: This dataset is licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/deed.en), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.en), [ODC-BY 1.0](https://opendatacommons.org/licenses/by/1-0/), [MIT](https://opensource.org/license/mit), and [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0)."
-        ],
-        "restrictive_terms": false,
-        "sha256": "2b9bb8c4c104444d7f7940a6535d63a3833c8261fda4d86130b6a16b550ec72e",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/resolve/482392c14c6418e26804ea2e5d10359df9877df4/README.md"
-      },
-      {
-        "kind": "readme_notice",
-        "license_ids": [],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "2b9bb8c4c104444d7f7940a6535d63a3833c8261fda4d86130b6a16b550ec72e",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/resolve/482392c14c6418e26804ea2e5d10359df9877df4/README.md"
-      }
-    ],
-    "model_generated_outputs": true,
-    "resolved_at": "2026-11-15T20:37:39.909037+00:00",
-    "resolved_source": {
-      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
-      "declaration": {
-        "kind": "wrapper_source",
-        "license_ids": [],
-        "quoted_lines": [
-          "L9: Source pin: `nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4`. Converter: `3@1509fc8638f6be3840b5c82b53348f93152a9c31`."
-        ],
-        "restrictive_terms": false,
-        "sha256": "782ab12deff3ea420de556789042207fca2bc2c3049a1a704246274af159b9b8",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261113-v1/resolve/67aedfe8fbf07c229c650fad4231d710fd533264/README.md"
-      },
-      "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
-      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4"
-    },
-    "resolver_version": "atlas-license-v2",
-    "revision": "67aedfe8fbf07c229c650fad4231d710fd533264",
-    "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
     "wrapper_chain": []
   }
 }

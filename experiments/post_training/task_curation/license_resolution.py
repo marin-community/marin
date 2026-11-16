@@ -128,6 +128,8 @@ def _license_ids(text: str, kind: str) -> list[str]:
         return [f"cc-by{suffix}-{cc['version']}"]
     if re.search(r"\bodc[- ]by\b|open data commons attribution licen[cs]e", lowered):
         return ["odc-by"]
+    if match := re.search(r"OpenMDW License Agreement,\s*version\s*([0-9]+\.[0-9]+)\s*\(OpenMDW-([0-9]+\.[0-9]+)\)", text):
+        return [f"openmdw-{match.group(2)}"]
     if re.search(r"\bcc0(?:[- ]1\.0)?\b", lowered) or "creativecommons.org/publicdomain/zero/1.0" in lowered:
         return ["CC0-1.0"]
     if "apache license" in lowered and "version 2.0" in lowered:

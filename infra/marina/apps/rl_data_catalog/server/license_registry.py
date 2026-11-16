@@ -4,7 +4,7 @@
 """Versioned user decisions; Python packaging preserves this registry in hosted backends."""
 
 LICENSE_BANS = r"""{
-  "version": "2026.11.16.2",
+  "version": "2026.11.16.3",
   "bans": [
     {
       "source_id": "ASDiv:asdiv",
@@ -295,22 +295,6 @@ LICENSE_BANS = r"""{
       "issue_url": "https://github.com/marin-community/marin/issues/11497"
     },
     {
-      "source_id": "Marin:thoughtcrime",
-      "upstream_id": "unverified-origin:77d991d82b67",
-      "upstream_revision": "231751144c48b5553d5b921054b196e5e2d073f9",
-      "classification": "missing",
-      "license_ids": [
-        "missing"
-      ],
-      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
-      "evidence_urls": [
-        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
-      ],
-      "decided_at": "2026-11-15T17:27:51.574658+00:00",
-      "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497"
-    },
-    {
       "source_id": "Open-R1:verifiable_code",
       "upstream_id": "open-r1/verifiable-coding-problems-python",
       "upstream_revision": "b761a24a95fa03289a231d2d31c183636ffb9833",
@@ -323,38 +307,6 @@ LICENSE_BANS = r"""{
         "https://huggingface.co/datasets/open-r1/verifiable-coding-problems-python/resolve/b761a24a95fa03289a231d2d31c183636ffb9833/README.md"
       ],
       "decided_at": "2026-11-15T17:27:51.574608+00:00",
-      "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497"
-    },
-    {
-      "source_id": "OpenAthena:structure-closure",
-      "upstream_id": "unverified-origin:d9e5f81ad5b0",
-      "upstream_revision": "194f25bd9b10eea55a3a8dd2f17229c89af21b7d",
-      "classification": "unknown",
-      "license_ids": [
-        "other"
-      ],
-      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
-      "evidence_urls": [
-        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
-      ],
-      "decided_at": "2026-11-15T17:27:51.574652+00:00",
-      "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497"
-    },
-    {
-      "source_id": "OpenAthena:structure-closure/validation",
-      "upstream_id": "unverified-origin:abaae0c5c68e",
-      "upstream_revision": "186e83734e9b655236007203e4aaab45d2b93d83",
-      "classification": "unknown",
-      "license_ids": [
-        "other"
-      ],
-      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
-      "evidence_urls": [
-        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
-      ],
-      "decided_at": "2026-11-15T17:27:51.574655+00:00",
       "decision_by": "user via coordinator",
       "issue_url": "https://github.com/marin-community/marin/issues/11497"
     },

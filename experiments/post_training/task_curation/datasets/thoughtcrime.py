@@ -19,7 +19,7 @@ from experiments.post_training.task_curation.pipeline import CurationRecipe, HfS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 REPOSITORY = "open-athena/Marin-Thoughtcrime"
-REVISION = "231751144c48b5553d5b921054b196e5e2d073f9"
+REVISION = "5ebd362eec2a6beab7898ea7a717a32a55d164bd"
 ROWS_FILE = "rows.parquet"
 SOURCE_ID = "Marin:thoughtcrime"
 FAMILY = "reasoning_markup"

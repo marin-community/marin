@@ -1,4 +1,82 @@
 {
+  "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": {
+    "bundled_third_party": false,
+    "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261113-v1",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "cc-by-4.0"
+        ],
+        "quoted_lines": [
+          "L4: license: cc-by-4.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: - reinforcement-learning",
+          "L8: configs:",
+          "L9: - config_name: rlvr1",
+          "L10:   data_files:",
+          "L11:   - split: train",
+          "L12:     path: rlvr1.jsonl"
+        ],
+        "restrictive_terms": false,
+        "sha256": "2b9bb8c4c104444d7f7940a6535d63a3833c8261fda4d86130b6a16b550ec72e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/resolve/482392c14c6418e26804ea2e5d10359df9877df4/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "cc-by-sa-4.0"
+        ],
+        "quoted_lines": [
+          "L73: ## License/Terms of Use:",
+          "L74: This dataset is licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/deed.en), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.en), [ODC-BY 1.0](https://opendatacommons.org/licenses/by/1-0/), [MIT](https://opensource.org/license/mit), and [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0)."
+        ],
+        "restrictive_terms": false,
+        "sha256": "2b9bb8c4c104444d7f7940a6535d63a3833c8261fda4d86130b6a16b550ec72e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/resolve/482392c14c6418e26804ea2e5d10359df9877df4/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "2b9bb8c4c104444d7f7940a6535d63a3833c8261fda4d86130b6a16b550ec72e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/resolve/482392c14c6418e26804ea2e5d10359df9877df4/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:39.909037+00:00",
+    "resolved_source": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Source pin: `nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4`. Converter: `3@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "782ab12deff3ea420de556789042207fca2bc2c3049a1a704246274af159b9b8",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261113-v1/resolve/67aedfe8fbf07c229c650fad4231d710fd533264/README.md"
+      },
+      "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "67aedfe8fbf07c229c650fad4231d710fd533264",
+    "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
+    "wrapper_chain": []
+  },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k": {
     "bundled_third_party": false,
     "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-mult-ffee8901-retained-20261113-v1",
@@ -2685,6 +2763,222 @@
     "source_id": "OpenAI:gsm8k",
     "wrapper_chain": []
   },
+  "OpenAthena:structure-closure": {
+    "bundled_third_party": false,
+    "dataset_id": "open-athena/snowballv01-structure-closure-d9e5f81a-retained-20261113-v1",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/snowballv01-structure-closure-d9e5f81a-retained-20261113-v1",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/snowballv01-structure-closure-d9e5f81a-retained-20261113-v1/tree/0062f4f286d4e4f1568436f5e9c7749fcdd8fa69",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6915818238"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6915818238",
+        "kind": "exception",
+        "rationale": "The user classified these Marin/OpenAthena sources as our own data carrying OpenMDW-1.1 (verbatim: \"thoughtcrime and the openathena structure sources should be OpenMDW license because they are our data.\"). The dataset card declares license: openmdw-1.1 and the official OpenMDW 1.1 text is preserved as the root LICENSE file (OpenMDW/OpenMDW @ b26b32b3), with every task/payload file byte-identical to the configured pin. The raw checker escalates E2 at its one recorded hop, whose pinned Snowball-Smartie-RL-Data card conservatively declares mixed upstream terms (\"no single replacement license ... asserted\"); the user's OpenMDW ruling for the closure releases authorizes this pin. An exception does not transfer to a new revision.",
+        "revision": "0062f4f286d4e4f1568436f5e9c7749fcdd8fa69",
+        "scope": [
+          "train"
+        ],
+        "source_id": "OpenAthena:structure-closure",
+        "when": "2026-11-16T06:37:25-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "other"
+        ],
+        "quoted_lines": [
+          "L2: license: other",
+          "L3: license_name: mixed-upstream-terms",
+          "L4: license_link: https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data#license-and-attribution",
+          "L1: ---",
+          "L5: task_categories:",
+          "L6: - reinforcement-learning",
+          "L7: configs:",
+          "L8: - config_name: default",
+          "L9:   data_files:",
+          "L10:   - split: train",
+          "L11:     path: train.parquet",
+          "L12:   - split: validation"
+        ],
+        "restrictive_terms": false,
+        "sha256": "fd188f95c975d3d09c233d9b03b030d36134a9f4fbbc56eb2c51ba4dda48bf85",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data/resolve/cb728a7636caad3fc6fa6b6ba85a49194d9d69a3/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "cc-by-sa-4.0"
+        ],
+        "quoted_lines": [
+          "L95: ## License and attribution",
+          "L99: NVIDIA's pinned card lists CC BY-SA 4.0, CC BY 4.0, ODC-BY 1.0, MIT and Apache 2.0 terms",
+          "L109: preserved. No single replacement license or additional redistribution grant is asserted",
+          "L97: The NVIDIA tasks are converted from",
+          "L98: [NVIDIA Nemotron-RL-Ultra-Training-Blends, revision 482392c14c6418e26804ea2e5d10359df9877df4](https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4).",
+          "L100: for its components. The unmodified pinned card is included as `UPSTREAM_NVIDIA_README.md`.",
+          "L101: This release selects four domains and converts them into executable task specifications;",
+          "L102: upstream row identities are retained in `task.source`.",
+          "L104: Structural cases were assembled by the Marin structural-closure campaign, with synthetic",
+          "L105: cases and BFCL-rollout-derived content. Marin-authored builder and grader code carries its",
+          "L106: Apache-2.0 notices; the",
+          "L107: [tool-prompt builder](https://github.com/marin-community/marin/blob/f45f04b293128bd8a5b1567e03bef59c7f59e1d0/experiments/post_training/structure_closure/token_data.py)",
+          "L108: defines the synthetic tool. Original task provenance and embedded source notices are"
+        ],
+        "restrictive_terms": false,
+        "sha256": "fd188f95c975d3d09c233d9b03b030d36134a9f4fbbc56eb2c51ba4dda48bf85",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data/resolve/cb728a7636caad3fc6fa6b6ba85a49194d9d69a3/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "fd188f95c975d3d09c233d9b03b030d36134a9f4fbbc56eb2c51ba4dda48bf85",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data/resolve/cb728a7636caad3fc6fa6b6ba85a49194d9d69a3/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-16T11:58:19.197940+00:00",
+    "resolved_source": {
+      "dataset_id": "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L10: Source pin: `open-athena/Snowball-Smartie-RL-2026.10.15.32-Data@cb728a7636caad3fc6fa6b6ba85a49194d9d69a3`. Converter: `2@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "2894db23d17d40e81b1771eba251bcc5a58ac7ede04e79c907eeffdd3b1dead2",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/snowballv01-structure-closure-d9e5f81a-retained-20261113-v1/resolve/0062f4f286d4e4f1568436f5e9c7749fcdd8fa69/README.md"
+      },
+      "revision": "cb728a7636caad3fc6fa6b6ba85a49194d9d69a3",
+      "url": "https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data/tree/cb728a7636caad3fc6fa6b6ba85a49194d9d69a3"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "0062f4f286d4e4f1568436f5e9c7749fcdd8fa69",
+    "source_id": "OpenAthena:structure-closure",
+    "wrapper_chain": []
+  },
+  "OpenAthena:structure-closure/validation": {
+    "bundled_third_party": false,
+    "dataset_id": "open-athena/snowballv01-structure-closure-validation-abaae0c5-retained-20261113-v1",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/snowballv01-structure-closure-validation-abaae0c5-retained-20261113-v1",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/snowballv01-structure-closure-validation-abaae0c5-retained-20261113-v1/tree/787917a504e14d59e2c4532ae7da083f6868c529",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6915818238"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6915818238",
+        "kind": "exception",
+        "rationale": "The user classified these Marin/OpenAthena sources as our own data carrying OpenMDW-1.1 (verbatim: \"thoughtcrime and the openathena structure sources should be OpenMDW license because they are our data.\"). The dataset card declares license: openmdw-1.1 and the official OpenMDW 1.1 text is preserved as the root LICENSE file (OpenMDW/OpenMDW @ b26b32b3), with every task/payload file byte-identical to the configured pin. The raw checker escalates E2 at its one recorded hop, whose pinned Snowball-Smartie-RL-Data card conservatively declares mixed upstream terms (\"no single replacement license ... asserted\"); the user's OpenMDW ruling for the closure releases authorizes this pin. An exception does not transfer to a new revision.",
+        "revision": "787917a504e14d59e2c4532ae7da083f6868c529",
+        "scope": [
+          "eval"
+        ],
+        "source_id": "OpenAthena:structure-closure/validation",
+        "when": "2026-11-16T06:37:25-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "other"
+        ],
+        "quoted_lines": [
+          "L2: license: other",
+          "L3: license_name: mixed-upstream-terms",
+          "L4: license_link: https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data#license-and-attribution",
+          "L1: ---",
+          "L5: task_categories:",
+          "L6: - reinforcement-learning",
+          "L7: configs:",
+          "L8: - config_name: default",
+          "L9:   data_files:",
+          "L10:   - split: train",
+          "L11:     path: train.parquet",
+          "L12:   - split: validation"
+        ],
+        "restrictive_terms": false,
+        "sha256": "fd188f95c975d3d09c233d9b03b030d36134a9f4fbbc56eb2c51ba4dda48bf85",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data/resolve/cb728a7636caad3fc6fa6b6ba85a49194d9d69a3/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "cc-by-sa-4.0"
+        ],
+        "quoted_lines": [
+          "L95: ## License and attribution",
+          "L99: NVIDIA's pinned card lists CC BY-SA 4.0, CC BY 4.0, ODC-BY 1.0, MIT and Apache 2.0 terms",
+          "L109: preserved. No single replacement license or additional redistribution grant is asserted",
+          "L97: The NVIDIA tasks are converted from",
+          "L98: [NVIDIA Nemotron-RL-Ultra-Training-Blends, revision 482392c14c6418e26804ea2e5d10359df9877df4](https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4).",
+          "L100: for its components. The unmodified pinned card is included as `UPSTREAM_NVIDIA_README.md`.",
+          "L101: This release selects four domains and converts them into executable task specifications;",
+          "L102: upstream row identities are retained in `task.source`.",
+          "L104: Structural cases were assembled by the Marin structural-closure campaign, with synthetic",
+          "L105: cases and BFCL-rollout-derived content. Marin-authored builder and grader code carries its",
+          "L106: Apache-2.0 notices; the",
+          "L107: [tool-prompt builder](https://github.com/marin-community/marin/blob/f45f04b293128bd8a5b1567e03bef59c7f59e1d0/experiments/post_training/structure_closure/token_data.py)",
+          "L108: defines the synthetic tool. Original task provenance and embedded source notices are"
+        ],
+        "restrictive_terms": false,
+        "sha256": "fd188f95c975d3d09c233d9b03b030d36134a9f4fbbc56eb2c51ba4dda48bf85",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data/resolve/cb728a7636caad3fc6fa6b6ba85a49194d9d69a3/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "fd188f95c975d3d09c233d9b03b030d36134a9f4fbbc56eb2c51ba4dda48bf85",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data/resolve/cb728a7636caad3fc6fa6b6ba85a49194d9d69a3/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-16T11:58:19.197940+00:00",
+    "resolved_source": {
+      "dataset_id": "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L10: Source pin: `open-athena/Snowball-Smartie-RL-2026.10.15.32-Data@cb728a7636caad3fc6fa6b6ba85a49194d9d69a3`. Converter: `2@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "906903ac9007b6988b321bc2df59064eff5e80c1e696e7aa69c1cbd6266b0e00",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/snowballv01-structure-closure-validation-abaae0c5-retained-20261113-v1/resolve/787917a504e14d59e2c4532ae7da083f6868c529/README.md"
+      },
+      "revision": "cb728a7636caad3fc6fa6b6ba85a49194d9d69a3",
+      "url": "https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data/tree/cb728a7636caad3fc6fa6b6ba85a49194d9d69a3"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "787917a504e14d59e2c4532ae7da083f6868c529",
+    "source_id": "OpenAthena:structure-closure/validation",
+    "wrapper_chain": []
+  },
   "OpenResearcher:OpenResearcher-Corpus": {
     "bundled_third_party": false,
     "dataset_id": "OpenResearcher/OpenResearcher-Corpus",
@@ -4250,255 +4544,6 @@
     "resolver_version": "atlas-license-v2",
     "revision": "85ec560970adec8b9e1d409e6a63206422736834",
     "source_id": "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier",
-    "wrapper_chain": []
-  },
-  "TaskTrove:DCAgent__mix_h4_binary_easy": {
-    "bundled_third_party": true,
-    "dataset_id": "open-athena/task-trove-dcagent-mix-h4-binary-easy-cfefcc4b-taskcompendium-20261112",
-    "decisions": [],
-    "evidence": [
-      {
-        "kind": "dataset_card",
-        "license_ids": [
-          "apache-2.0"
-        ],
-        "quoted_lines": [
-          "L4: license: apache-2.0",
-          "L1: ---",
-          "L2: language:",
-          "L3: - en",
-          "L5: task_categories:",
-          "L6: - text-generation",
-          "L7: size_categories:",
-          "L8: - 1M<n<10M",
-          "L9: tags:",
-          "L10: - agent",
-          "L11: - code",
-          "L12: - agentic-tasks"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_license",
-        "license_ids": [
-          "missing"
-        ],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_notice",
-        "license_ids": [],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      }
-    ],
-    "model_generated_outputs": true,
-    "resolved_at": "2026-11-15T20:37:36.986048+00:00",
-    "resolved_source": {
-      "dataset_id": "open-thoughts/TaskTrove",
-      "declaration": {
-        "kind": "wrapper_source",
-        "license_ids": [],
-        "quoted_lines": [
-          "L9: Upstream: open-thoughts/TaskTrove at 02923004846e4e73862c20962f823a6d05100e7a. https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a9d9f04cf9f3bf3e49c0a2f97cf4abbece14744305ec6d84dd5fe439d67e220a",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-mix-h4-binary-easy-cfefcc4b-taskcompendium-20261112/resolve/df8e9522875c7adc974cc28f54fc06848f1fd5c7/README.md"
-      },
-      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
-      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
-    },
-    "resolver_version": "atlas-license-v2",
-    "revision": "df8e9522875c7adc974cc28f54fc06848f1fd5c7",
-    "source_id": "TaskTrove:DCAgent__mix_h4_binary_easy",
-    "wrapper_chain": []
-  },
-  "TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3": {
-    "bundled_third_party": true,
-    "dataset_id": "open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verif-48c10bb7-retained-20261113-v1",
-    "decisions": [],
-    "evidence": [
-      {
-        "kind": "dataset_card",
-        "license_ids": [
-          "apache-2.0"
-        ],
-        "quoted_lines": [
-          "L4: license: apache-2.0",
-          "L1: ---",
-          "L2: language:",
-          "L3: - en",
-          "L5: task_categories:",
-          "L6: - text-generation",
-          "L7: size_categories:",
-          "L8: - 1M<n<10M",
-          "L9: tags:",
-          "L10: - agent",
-          "L11: - code",
-          "L12: - agentic-tasks"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_license",
-        "license_ids": [
-          "missing"
-        ],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_notice",
-        "license_ids": [],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      }
-    ],
-    "model_generated_outputs": true,
-    "resolved_at": "2026-11-15T20:37:36.986048+00:00",
-    "resolved_source": {
-      "dataset_id": "open-thoughts/TaskTrove",
-      "declaration": {
-        "kind": "wrapper_source",
-        "license_ids": [],
-        "quoted_lines": [
-          "L9: Upstream: open-thoughts/TaskTrove at 02923004846e4e73862c20962f823a6d05100e7a. https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
-        ],
-        "restrictive_terms": false,
-        "sha256": "7748ef0312f1462d143d33ed707ce8a44dd5d3f057d9c3aa4883d9d1c85961e1",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verified-v3-fe3a228d-taskcompendium-20261112/resolve/c2dbc82c8e7e57c0966fba7a63a6e13e36305b79/README.md"
-      },
-      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
-      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
-    },
-    "resolver_version": "atlas-license-v2",
-    "revision": "2486c147b956b84ff85576cd4a6f717d80f1aa67",
-    "source_id": "TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3",
-    "wrapper_chain": [
-      {
-        "dataset_id": "open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verified-v3-fe3a228d-taskcompendium-20261112",
-        "declaration": {
-          "kind": "wrapper_source",
-          "license_ids": [],
-          "quoted_lines": [
-            "L9: Source pin: `open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verified-v3-fe3a228d-taskcompendium-20261112@c2dbc82c8e7e57c0966fba7a63a6e13e36305b79`. Converter: `2026.11.12.1@5f0dd963e21577e8cf10fd48f847dd04be1b7aab99c5bd9fe2097f9e3765f79e`."
-          ],
-          "restrictive_terms": false,
-          "sha256": "c58de50379ece3f047ab1e4a5f713cddbcb743f2de5316b3c93ae17f073a2b9e",
-          "unidentified_third_party_terms": false,
-          "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verif-48c10bb7-retained-20261113-v1/resolve/2486c147b956b84ff85576cd4a6f717d80f1aa67/README.md"
-        },
-        "revision": "c2dbc82c8e7e57c0966fba7a63a6e13e36305b79",
-        "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verified-v3-fe3a228d-taskcompendium-20261112/tree/c2dbc82c8e7e57c0966fba7a63a6e13e36305b79"
-      }
-    ]
-  },
-  "TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2": {
-    "bundled_third_party": true,
-    "dataset_id": "open-athena/task-trove-dcagent-swe-rebench-v2-patched-oracle-v2-119bbfc4-retained-20261114-oracle-v1",
-    "decisions": [],
-    "evidence": [
-      {
-        "kind": "dataset_card",
-        "license_ids": [
-          "apache-2.0"
-        ],
-        "quoted_lines": [
-          "L4: license: apache-2.0",
-          "L1: ---",
-          "L2: language:",
-          "L3: - en",
-          "L5: task_categories:",
-          "L6: - text-generation",
-          "L7: size_categories:",
-          "L8: - 1M<n<10M",
-          "L9: tags:",
-          "L10: - agent",
-          "L11: - code",
-          "L12: - agentic-tasks"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_license",
-        "license_ids": [
-          "missing"
-        ],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_notice",
-        "license_ids": [],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      }
-    ],
-    "model_generated_outputs": true,
-    "resolved_at": "2026-11-15T20:37:36.986048+00:00",
-    "resolved_source": {
-      "dataset_id": "open-thoughts/TaskTrove",
-      "declaration": {
-        "kind": "wrapper_source",
-        "license_ids": [],
-        "quoted_lines": [
-          "JSON /source_plan_before_oracle_filter/plan/source_dataset_id: open-thoughts/TaskTrove",
-          "JSON /source_plan_before_oracle_filter/plan/source_revision: 02923004846e4e73862c20962f823a6d05100e7a"
-        ],
-        "restrictive_terms": false,
-        "sha256": "9b3cb0afb814476d595a4557eaef471738c149f8b8cecc458d5cfce3909ca7ad",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-swe-rebench-v2-patched-oracle-v2-119bbfc4-retained-20261114-oracle-v1/resolve/7af7a32e84223b8a5e638e6c2caea3b10ef7d24f/manifest.json"
-      },
-      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
-      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
-    },
-    "resolver_version": "atlas-license-v2",
-    "revision": "7af7a32e84223b8a5e638e6c2caea3b10ef7d24f",
-    "source_id": "TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2",
     "wrapper_chain": []
   }
 }
