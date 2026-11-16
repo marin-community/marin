@@ -976,6 +976,7 @@ def test_egress_policy_selects_the_docker_network(
     assert mock_runtime.create_container.call_args[0][0].network_mode == network_mode
 
 
+@pytest.mark.requires_linux_loopback
 def test_allowlist_task_resolves_through_its_own_dns_filter_until_it_finishes(mock_bundle_store, mock_runtime, tmp_path):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.bind(("127.0.0.1", 0))
