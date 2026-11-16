@@ -17,7 +17,10 @@ _SPEC = importlib.util.spec_from_file_location(
 assert _SPEC is not None and _SPEC.loader is not None
 precommit = importlib.util.module_from_spec(_SPEC)
 sys.modules["precommit_under_test"] = precommit
-_SPEC.loader.exec_module(precommit)
+# Keep infra/ namespaces from shadowing optional packages in other tests.
+with pytest.MonkeyPatch.context() as import_patch:
+    import_patch.setattr(sys, "path", list(sys.path))
+    _SPEC.loader.exec_module(precommit)
 
 
 def _git(*arguments: str, cwd: Path) -> str:
