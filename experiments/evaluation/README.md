@@ -131,8 +131,9 @@ Agent arguments in the Harbor file override the model's agent arguments. Marin s
 endpoint, served model name, output path, local dataset path, and explicit
 `--limit`. Those values cannot be overridden in the Harbor file.
 
-Daytona runs first use `DAYTONA_API_KEY` from the launch environment, then the
-`DAYTONA_EVAL_API_KEY` secret in the `hai-gcp-models` GCP project.
+Daytona runs use the Daytona eval org only: `DAYTONA_EVAL_API_KEY` from the launch
+environment, then the `DAYTONA_EVAL_API_KEY` secret in the `hai-gcp-models` GCP project.
+An exported `DAYTONA_API_KEY`, such as an RL or data org key, is ignored.
 
 ## Results
 

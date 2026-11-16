@@ -278,8 +278,9 @@ require registry verification.
 
 ## Credentials
 
-Daytona catalog entries use `DAYTONA_API_KEY` from the launch environment, then fall
-back to the approved Google Secret Manager version. The launcher resolves declared secret
+Daytona catalog entries use the Daytona eval org: `DAYTONA_EVAL_API_KEY` from the launch
+environment, then the approved Google Secret Manager version. The launcher ignores an
+exported `DAYTONA_API_KEY`. The launcher resolves declared secret
 references before submission. The Harbor subprocess receives backend credentials, HF access
 and storage credentials for result uploads.
 
