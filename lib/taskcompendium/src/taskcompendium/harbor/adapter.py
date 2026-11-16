@@ -13,6 +13,7 @@ import tomlkit
 from taskcompendium.browsecomp import BROWSECOMP_ACTION_INTERFACE, browsecomp_state, browsecomp_tools
 from taskcompendium.grading_environment import GradingEnvironmentMode, assess_grading_environment
 from taskcompendium.harbor.execution import native_execution_limits
+from taskcompendium.integrity import RootDeliveryContract
 from taskcompendium.models import (
     AnswerType,
     EnvironmentRequirements,
@@ -94,7 +95,14 @@ def unsupported_harbor_contract(task: TaskSpec) -> str | None:
             or any(tool.name == SHELL_TOOL.name for tool in task.final_tools)
         ):
             return "task_spec_provider_contract_invalid"
-    if task.integrity_contract is not None or assess_grading_environment(task).required == GradingEnvironmentMode.SHARED:
+    # A root-delivery contract is the supported shared-executor opt-in: grading
+    # runs trusted root collect commands on the agent machine (quiesce, then
+    # deliver the private verifier files and run the source's verifier verbatim)
+    # and copies the reward to the grading machine.
+    shared_required = assess_grading_environment(task).required == GradingEnvironmentMode.SHARED
+    if task.integrity_contract is not None and not isinstance(task.integrity_contract, RootDeliveryContract):
+        return "task_spec_shared_executor_required"
+    if task.integrity_contract is None and shared_required:
         return "task_spec_shared_executor_required"
     environments = [task.environment_requirements]
     if task.grader.environment is not None:
