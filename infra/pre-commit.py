@@ -176,28 +176,9 @@ def matches_pattern(file_path: pathlib.Path, patterns: list[str]) -> bool:
     return False
 
 
-def should_exclude(file_path: pathlib.Path) -> bool:
-    return matches_pattern(file_path, EXCLUDE_PATTERNS)
-
-
 def get_matching_files(
     patterns: list[str], all_files_list: list[pathlib.Path], exclude_patterns: list[str]
 ) -> list[pathlib.Path]:
-    matched = []
-    for file_path in all_files_list:
-        if should_exclude(file_path):
-            continue
-        if matches_pattern(file_path, exclude_patterns):
-            continue
-        if matches_pattern(file_path, patterns):
-            matched.append(file_path)
-    return matched
-
-
-def get_data_guard_files(
-    patterns: list[str], all_files_list: list[pathlib.Path], exclude_patterns: list[str]
-) -> list[pathlib.Path]:
-    """Like get_matching_files, but the global excludes do not hide files from this check."""
     matched = []
     for file_path in all_files_list:
         if matches_pattern(file_path, exclude_patterns):
@@ -359,10 +340,8 @@ def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Large files", 0)
 
 
-# Committed datasets balloon the checkout and the diff; the guard below keeps them out in
-# favor of references to private open-athena Hugging Face datasets. Sharding a dataset
-# across files or compressing it no longer evades the limit: every data file counts
-# against its own 100 KB, and a directory's committed data counts against 250 KB.
+# Committed data files have a 100 KB limit. Data directly inside one directory
+# has a 250 KB limit. Compressed files count toward both limits.
 LARGE_DATA_FILE_LIMIT = 100 * 1024
 LARGE_DATA_DIRECTORY_LIMIT = 250 * 1024
 DATA_FILE_SUFFIXES = frozenset(
@@ -403,6 +382,19 @@ def _merge_base_ref() -> str:
         check=True,
     )
     return result.stdout.strip()
+
+
+def _require_origin_main() -> None:
+    """The shrink-only comparison targets origin/main's tip, not a merge base."""
+    result = subprocess.run(
+        ["git", "cat-file", "-e", "origin/main^{commit}"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("The large-data guard compares against origin/main; fetch it with 'git fetch origin main'")
 
 
 def _git_blob_size(base_ref: str, path: str) -> int | None:
@@ -456,7 +448,6 @@ def check_large_data(files: list[pathlib.Path], fix: bool) -> int:
         size = file_path.stat().st_size
         recorded = allowlist.get(relative)
         if recorded is not None:
-            # Allowlisted paths are grandfathered at their recorded size and may only shrink.
             if size > recorded:
                 failures.append(
                     f"  - {relative} grew to {size / 1024:.1f} KB (allowlisted at {recorded / 1024:.1f} KB;"
@@ -479,9 +470,9 @@ def check_large_data(files: list[pathlib.Path], fix: bool) -> int:
     # origin/main already has, so a fresh dump cannot be allowlisted in the same
     # change that adds it. Before the first merge (adoption) the entries stand as-is.
     if LARGE_DATA_ALLOWLIST_PATH in files:
-        base_ref = _merge_base_ref()
+        _require_origin_main()
         result = subprocess.run(
-            ["git", "cat-file", "-p", f"{base_ref}:{LARGE_DATA_ALLOWLIST_PATH.relative_to(ROOT_DIR).as_posix()}"],
+            ["git", "cat-file", "-p", f"origin/main:{LARGE_DATA_ALLOWLIST_PATH.relative_to(ROOT_DIR).as_posix()}"],
             cwd=ROOT_DIR,
             capture_output=True,
             text=True,
@@ -492,16 +483,18 @@ def check_large_data(files: list[pathlib.Path], fix: bool) -> int:
             for path, size in allowlist.items():
                 base_size = base_document.get(path)
                 if base_size is None:
-                    if _git_blob_size(base_ref, path) is None:
+                    if _git_blob_size("origin/main", path) is None:
                         failures.append(
                             f"  - allowlist entry {path} names data that does not exist on origin/main;"
                             " commit the reference instead"
                         )
-                elif size > int(base_size):
+                elif size != int(base_size):
                     failures.append(
-                        f"  - allowlist entry {path} grew from {int(base_size) / 1024:.1f} KB to {size / 1024:.1f} KB"
+                        f"  - allowlist entry {path} records {size / 1024:.1f} KB but origin/main holds"
+                        f" {int(base_size) / 1024:.1f} KB; set the entry to the committed size"
                         " (the allowlist only shrinks)"
                     )
+        # An allowlist absent from origin/main is the first landing; its entries stand as-is.
 
     if failures:
         buf.write(f"{len(failures)} large-data violations; " + LARGE_DATA_MESSAGE + "\n")
@@ -1004,10 +997,7 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
 class PrecommitConfig:
     patterns: list[str]
     checks: list[Callable[[list[pathlib.Path], bool], int]]
-    exclude_patterns: list[str] = field(default_factory=list)
-    # Check the globally excluded tree too (vendored code, generated assets, binary
-    # media): only the data guard needs files those patterns hide from other checks.
-    include_globally_excluded: bool = False
+    exclude_patterns: list[str] = field(default_factory=EXCLUDE_PATTERNS.copy)
 
 
 PRECOMMIT_CONFIGS = [
@@ -1037,7 +1027,7 @@ PRECOMMIT_CONFIGS = [
     ),
     PrecommitConfig(
         patterns=["**/*.py"],
-        exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/marin/**", "lib/**/vendor/**"],
+        exclude_patterns=[*EXCLUDE_PATTERNS, "lib/levanter/**", "lib/haliax/**", "lib/marin/**", "lib/**/vendor/**"],
         checks=[
             check_ruff,
             check_black,
@@ -1077,7 +1067,6 @@ PRECOMMIT_CONFIGS = [
         # evasion vectors), but not upstream code, pinned snapshots or binary media.
         patterns=["**/*"],
         checks=[check_large_data],
-        include_globally_excluded=True,
         exclude_patterns=[
             "vendor/**",
             "tests/snapshots/**",
@@ -1245,8 +1234,7 @@ def main(
     only_set = set(f"check_{o}" for o in only)
 
     for config in PRECOMMIT_CONFIGS:
-        select = get_data_guard_files if config.include_globally_excluded else get_matching_files
-        matched_files = select(config.patterns, all_files_list, config.exclude_patterns)
+        matched_files = get_matching_files(config.patterns, all_files_list, config.exclude_patterns)
         matched_files = [f for f in matched_files if f.exists()]
         if not matched_files:
             continue

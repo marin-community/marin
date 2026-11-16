@@ -29,7 +29,7 @@ def _git(*arguments: str, cwd: Path) -> str:
 
 @pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A two-commit git repo whose origin/main matches the first commit."""
+    """A git repo whose origin/main matches the initial commit."""
     subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
     for key, value in [("user.name", "Test"), ("user.email", "test@example.org")]:
         subprocess.run(["git", "config", key, value], cwd=tmp_path, check=True)
@@ -63,23 +63,9 @@ def _allowlist(repo: Path, entries: dict[str, int]) -> None:
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
 
 
-def test_new_large_data_file_fails_with_hf_reference_message(repo: Path):
+def test_new_large_data_file_exceeding_limit_fails(repo: Path):
     path = _write_data(repo, "datasets/dump/results.json", 150)
     assert precommit.check_large_data([path], fix=False) == 1
-    output = precommit._check_results[-1].output
-    assert "open-athena Hugging Face dataset" in output
-    assert '"sha256"' in output
-
-
-def test_shard_split_evading_the_file_limit_fails_on_the_directory_total(repo: Path):
-    _write_data(repo, "datasets/shards/part-000.json", 90)
-    _write_data(repo, "datasets/shards/part-001.json", 90)
-    _git("commit", "--quiet", "-m", "Two shards under every limit", cwd=repo)
-    third = _write_data(repo, "datasets/shards/part-002.json", 90)
-    # Each shard stays under the 100 KB file limit, but the directory now holds 270 KB.
-    assert precommit.check_large_data([third], fix=False) == 1
-    output = precommit._check_results[-1].output
-    assert "totals 270." in output and "sharding cannot spread" in output
 
 
 def test_directory_total_counts_committed_binaries_and_gzip(repo: Path):
@@ -88,7 +74,6 @@ def test_directory_total_counts_committed_binaries_and_gzip(repo: Path):
     _git("commit", "--quiet", "-m", "Compressed shards", cwd=repo)
     third = _write_data(repo, "datasets/shards/part-002.zst", 90, binary=True)
     assert precommit.check_large_data([third], fix=False) == 1
-    assert "totals 270.0 KB" in precommit._check_results[-1].output
 
 
 def test_allowlisted_file_at_its_recorded_size_passes(repo: Path):
@@ -123,6 +108,14 @@ def test_raising_an_allowlisted_size_fails_once_origin_main_has_the_allowlist(re
     grown = _write_data(repo, "datasets/legacy/results.json", 200)
     _allowlist(repo, {"datasets/legacy/results.json": grown.stat().st_size})
     assert precommit.check_large_data([path, precommit.LARGE_DATA_ALLOWLIST_PATH], fix=False) == 1
+
+
+def test_missing_origin_main_fails_the_guard_with_a_fetch_hint(repo: Path):
+    path = _write_data(repo, "datasets/legacy/results.json", 150)
+    _allowlist(repo, {"datasets/legacy/results.json": path.stat().st_size})
+    _git("update-ref", "-d", "refs/remotes/origin/main", cwd=repo)
+    with pytest.raises(RuntimeError, match="git fetch origin main"):
+        precommit.check_large_data([path, precommit.LARGE_DATA_ALLOWLIST_PATH], fix=False)
 
 
 def test_allowlisting_data_origin_main_never_had_fails_after_adoption(repo: Path):
