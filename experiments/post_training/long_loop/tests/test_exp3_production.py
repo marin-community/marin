@@ -4,19 +4,24 @@
 import hashlib
 import json
 from dataclasses import asdict
-from datetime import timedelta
+from datetime import datetime, timedelta
+from pathlib import Path
 
 import draccus
 import jax.numpy as jnp
 import pytest
 from fray.types import ResourceConfig
 from iris.rpc.proto_display import priority_band_value
+from levanter.checkpoint import Checkpointer, load_checkpoint, load_checkpoint_metadata
 from levanter.main.train_lm import TrainLmConfig
+from levanter.trainer import TrainerConfig
 from marin.execution.lazy import StepContext
 
 from experiments.post_training.long_loop import exp3_production
 from experiments.post_training.long_loop.exp3_production import GEOMETRY, production_sft_recipe, read_data_release
 from experiments.post_training.long_loop.exp3_recipe import exp3_sft_spec
+from experiments.post_training.long_loop.run_spec import resolve_spec
+from experiments.post_training.long_loop.shared_sft import select_shared_sft, shared_sft_spec
 from experiments.post_training.long_loop.tests.test_initializer_stage import prepared_sources as prepared_sources
 from experiments.post_training.long_loop.tests.test_initializer_stage import staged_initializer as staged_initializer
 from experiments.sft.launcher import levanter_train_request, sft_step
@@ -68,14 +73,21 @@ def test_preview_metadata_can_be_resolved_but_not_admitted_and_member_changes_ar
         read_data_release(str(preview_release), require_ready=False)
 
 
-def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(preview_release, monkeypatch):
+@pytest.fixture
+def production_recipe(preview_release, monkeypatch):
     root = preview_release.parent
     initializer = json.loads((root / "initializer.json").read_text())
     monkeypatch.setattr(exp3_production, "REFERENCE_INPUTS", str(root))
     monkeypatch.setattr(exp3_production, "INITIALIZER_RECEIPT", initializer["initializer_receipt"])
     monkeypatch.setattr(exp3_production, "INITIALIZER_SHA256", initializer["initializer_receipt_sha256"])
     release = read_data_release(str(preview_release), require_ready=False)
-    recipe = production_sft_recipe(release)
+    return production_sft_recipe(release)
+
+
+def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(preview_release, production_recipe):
+    root = preview_release.parent
+    release = read_data_release(str(preview_release), require_ready=False)
+    recipe = production_recipe
     spec = exp3_sft_spec("exp3-production-test", "2026.11.16.48", recipe)
     resources = draccus.decode(ResourceConfig, recipe["resources"])
     step = sft_step(spec, resources)
@@ -97,3 +109,55 @@ def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
     assert config.trainer.seed == config.data_seed == 0
     assert draccus.encode(config.data)["train_weights"] == release.data["train_weights"]
     assert config.hf_save_steps > 746
+
+
+@pytest.mark.parametrize("final_step", [4, 5])
+@pytest.mark.parametrize("profile", ["snowball_exp3", "snowball_h100"])
+def test_production_checkpoints_obey_two_hours_and_select_the_forced_final_state(
+    tmp_path, production_recipe, final_step, profile
+):
+    if profile == "snowball_exp3":
+        policy = draccus.decode(TrainerConfig, production_recipe["trainer"]).checkpointer
+    else:
+        resolved = resolve_spec(Path(__file__).parents[1] / "specs/round1.yaml", smoke=False)
+        policy = shared_sft_spec("future-sft", "fixture", resolved["sft"]).checkpointer
+    now = datetime(2026, 1, 1)
+    permanent, temporary = tmp_path / "checkpoints", tmp_path / "resume"
+    checkpointer = Checkpointer(
+        permanent,
+        policy.save_interval,
+        [],
+        temporary_base_path=temporary,
+        keep_last_temporary_checkpoints=policy.keep_last_temporary_checkpoints,
+        dt_now_injection=lambda: now,
+    )
+    checkpointer.on_step(tree={"model": jnp.asarray(0.0)}, step=0)
+    now += timedelta(hours=2, seconds=-1)
+    checkpointer.on_step(tree={"model": jnp.asarray(1.0)}, step=1)
+    checkpointer.wait_until_finished()
+    assert not list(tmp_path.rglob("metadata.json"))
+
+    now += timedelta(seconds=1)
+    checkpointer.on_step(tree={"model": jnp.asarray(2.0)}, step=2)
+    checkpointer.wait_until_finished()
+    assert load_checkpoint_metadata(temporary / "step-2")["is_temporary"]
+
+    now += timedelta(hours=2, seconds=-1)
+    checkpointer.on_step(tree={"model": jnp.asarray(3.0)}, step=3)
+    checkpointer.wait_until_finished()
+    assert not (temporary / "step-3/metadata.json").exists()
+    now += timedelta(seconds=1)
+    checkpointer.on_step(tree={"model": jnp.asarray(4.0)}, step=4)
+    checkpointer.wait_until_finished()
+    assert load_checkpoint_metadata(temporary / "step-4")["step"] == 4
+
+    now += timedelta(minutes=1)
+    final_state = {"model": jnp.asarray(float(final_step))}
+    checkpointer.save_final_checkpoint(tree=final_state, step=final_step)
+    checkpointer.wait_until_finished()
+    select_shared_sft(output=str(tmp_path), completed_updates=final_step + 1)
+    selected = json.loads((tmp_path / "selected.json").read_text())
+    assert selected["checkpoint"] == str(permanent / f"step-{final_step}")
+    restored = load_checkpoint({"model": jnp.asarray(0.0)}, selected["checkpoint"])
+    assert restored["model"].item() == final_step
+    assert load_checkpoint_metadata(selected["checkpoint"])["is_temporary"] is False

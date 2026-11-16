@@ -3,7 +3,10 @@
 
 """Controlled execution envelope for comparable long-loop experiments."""
 
+from datetime import timedelta
+
 DEFAULT_TASK_TIMEOUT_SECONDS = 3 * 24 * 60 * 60
+SFT_CHECKPOINT_INTERVAL = timedelta(hours=2)
 
 # Final evaluation is deliberately outside the 36-hour training/finalization envelope.
 STAGE_TIMEOUT_SECONDS = {

@@ -537,6 +537,16 @@ a 20-hour execution deadline. The trainer reserves time for the final native/HF
 checkpoint and records the actual completed count. Source must be clean and
 pinned to the submitted commit.
 
+Future production recipes save rolling native SFT checkpoints every two hours,
+retaining three resume checkpoints. Finalization forces a permanent checkpoint
+even when the last periodic save was recent. The trainer drains the write and
+reads its committed metadata before publishing the training completion receipt.
+SFT selection verifies that receipt and checkpoint again; the HF handoff and RL
+consume the selected final update. Graceful time-limit and maximum-update stops
+use this path. Exhausting the dataset also preserves the last completed update,
+but fails controlled-run admission. This policy does not alter already submitted
+jobs: Exp3 artifact `2026.11.16.51` retains its pinned 30-minute interval.
+
 Before requesting approval, run the graph preflight with no `--run`:
 
 ```bash

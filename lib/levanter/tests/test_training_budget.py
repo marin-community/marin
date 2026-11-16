@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from datetime import timedelta
 from itertools import repeat
 
@@ -13,7 +14,7 @@ import optax
 import pytest
 
 import levanter.training_budget as training_budget
-from levanter.checkpoint import CheckpointerConfig, load_checkpoint
+from levanter.checkpoint import CheckpointRetention, CheckpointerConfig, load_checkpoint
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import TrainerState
@@ -27,7 +28,11 @@ from levanter.utils.mesh import MeshConfig
 
 @pytest.mark.parametrize(
     "maximum_updates,advance,expected_reason",
-    [(746, 40, TrainingStopReason.TIME_BOUND), (2, 10, TrainingStopReason.MAXIMUM_UPDATES)],
+    [
+        (746, 40, TrainingStopReason.TIME_BOUND),
+        (2, 10, TrainingStopReason.MAXIMUM_UPDATES),
+        (746, 10, TrainingStopReason.DATA_EXHAUSTED),
+    ],
 )
 def test_deadline_finalizes_and_restores_the_last_complete_update(
     tmp_path, monkeypatch, maximum_updates, advance, expected_reason
@@ -50,7 +55,11 @@ def test_deadline_finalizes_and_restores_the_last_complete_update(
         log_jaxprs=False,
         log_xla_hlo=False,
         checkpointer=CheckpointerConfig(
-            base_path=str(checkpoint_root), append_run_id_to_base_path=False, save_interval=None, keep=None
+            base_path=str(checkpoint_root),
+            temporary_base_path=str(tmp_path / "resume"),
+            append_run_id_to_base_path=False,
+            save_interval=timedelta(hours=2),
+            keep=None,
         ),
         training_budget=policy,
     )
@@ -62,17 +71,31 @@ def test_deadline_finalizes_and_restores_the_last_complete_update(
 
     def advance_clock(info):
         clock[0] = int(info.state.step) * advance
+        if int(info.state.step) == 1:
+            trainer.request_checkpoint(CheckpointRetention.TEMPORARY)
 
     with Trainer(config, optimizer, loss) as trainer:
         trainer.add_hook(advance_clock, every=1)
         state = TrainerState.init(optimizer, jnp.asarray(1.0), key=jax.random.PRNGKey(0), mp=config.mp)
-        trainer.train(state, repeat(batch))
-    receipt = read_training_completion(
-        telemetry_root=str(telemetry_root),
-        checkpoint_root=str(checkpoint_root),
-        maximum_updates=maximum_updates,
-        budget=policy,
-    )
+        batches = [batch, batch] if expected_reason == TrainingStopReason.DATA_EXHAUSTED else repeat(batch)
+        trainer.train(state, batches)
+        assert not (telemetry_root / "completion.json").exists()
+    if expected_reason == TrainingStopReason.DATA_EXHAUSTED:
+        receipt = json.loads((telemetry_root / "completion.json").read_text())
+        with pytest.raises(ValueError, match="exhausted its data"):
+            read_training_completion(
+                telemetry_root=str(telemetry_root),
+                checkpoint_root=str(checkpoint_root),
+                maximum_updates=maximum_updates,
+                budget=policy,
+            )
+    else:
+        receipt = read_training_completion(
+            telemetry_root=str(telemetry_root),
+            checkpoint_root=str(checkpoint_root),
+            maximum_updates=maximum_updates,
+            budget=policy,
+        )
     assert receipt["completed_updates"] == 2
     assert receipt["stop_reason"] == expected_reason
     restored = load_checkpoint({"model": jnp.asarray(0.0)}, receipt["checkpoint"])

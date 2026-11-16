@@ -19,6 +19,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from experiments.post_training.long_loop.execution_policy import SFT_CHECKPOINT_INTERVAL
 from experiments.post_training.long_loop.exp3_recipe import exp3_sft_spec
 from experiments.post_training.long_loop.sft import fresh_sft_config, read_json, sft_run
 from experiments.post_training.long_loop.stage_guard import StageGuard, run_guarded_stage
@@ -125,6 +126,7 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         batch_size=recipe["batch_size"],
         per_device_parallelism=recipe["per_device_parallelism"],
         mesh=mesh,
+        checkpointer=replace(SNOWBALL_SFT.checkpointer, save_interval=SFT_CHECKPOINT_INTERVAL),
         pack=bool(recipe["pack"]),
         wandb_project=recipe["wandb_project"],
         wandb_entity=recipe["wandb_entity"],

@@ -36,6 +36,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.__main__ import validate_graph
+from experiments.post_training.long_loop.execution_policy import SFT_CHECKPOINT_INTERVAL
 from experiments.post_training.long_loop.exp3_recipe import TOKEN_IDS, verified_initializer_model
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.run_spec import resolve_spec
@@ -194,7 +195,7 @@ def production_sft_recipe(release: DataRelease) -> dict:
         log_xla_hlo=False,
         watch=WatchConfig(watch_targets=["params", "updates", "grads"], interval=1, include_per_parameter_norms=False),
         checkpointer=CheckpointerConfig(
-            save_interval=timedelta(minutes=30),
+            save_interval=SFT_CHECKPOINT_INTERVAL,
             keep=None,
             keep_last_temporary_checkpoints=3,
         ),
