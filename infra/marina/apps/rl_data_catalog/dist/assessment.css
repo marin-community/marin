@@ -23,6 +23,14 @@
 .audit-draw { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin: 10px 0; }
 .audit-draw label { display: flex; flex-direction: column; gap: 4px; font-size: max(var(--type-min), 12px); }
 .audit-draw input, .audit-draw select { max-width: 240px; }
+/* Submit buttons must carry house colors: the UA default in dark scheme measures 5.3:1. */
+.audit-draw button[type="submit"], .audit-judgment button[type="submit"] {
+  background: var(--soft);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 6px 14px;
+}
 .audit-judgment fieldset { border: 1px solid var(--line); border-radius: 5px; margin: 10px 0; padding: 10px; }
 .audit-judgment .audit-agree { display: inline-flex; gap: 8px; }
 .audit-judgment button.chip { cursor: pointer; }
