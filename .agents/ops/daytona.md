@@ -244,6 +244,10 @@ snapshot change, run the campaign's end-to-end smoke before scaling collection.
 
 ## Sandbox lifecycle and idle cleanup
 
+Shellbox waits for provider destruction before sandbox cleanup returns. The pinned
+SDK's `delete(wait=True)` is required; its default only acknowledges the deletion
+request. Preserve cleanup failures as infrastructure evidence.
+
 Hard termination can orphan in-flight sandboxes. Reap only sandboxes proven idle
 and covered by cleanup authority. Correlate provider IDs/labels with the owning
 trial and job; a quiet agent can still be waiting for model inference or tool

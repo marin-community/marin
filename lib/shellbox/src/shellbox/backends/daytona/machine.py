@@ -137,7 +137,7 @@ async def _delete_named_sandbox(
             sandbox = await client.get(name)
         except DaytonaNotFoundError:
             return
-        await client.delete(sandbox)
+        await client.delete(sandbox, wait=True)
 
     async with wait_policy.timeout(INTERRUPT_TIMEOUT):
         await wait_policy.request("sandbox.delete", delete, request_timeout=PROVIDER_REQUEST_TIMEOUT)

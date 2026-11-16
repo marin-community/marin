@@ -481,7 +481,7 @@ class LocalDaytona:
             raise DaytonaNotFoundError("Sandbox does not exist", status_code=404)
         return self.sandbox
 
-    async def delete(self, sandbox):
+    async def delete(self, sandbox, *, wait=False):
         assert sandbox is self.sandbox
         await sandbox.process.close()
         self.deleted = True
@@ -493,12 +493,44 @@ class LocalDaytona:
         self.closed = True
 
 
+def test_daytona_close_waits_until_provider_destruction():
+    async def scenario():
+        delete_requested = asyncio.Event()
+        destruction_allowed = asyncio.Event()
+
+        class DelayedDeletion(LocalDaytona):
+            async def delete(self, sandbox, *, wait=False):
+                delete_requested.set()
+                if wait:
+                    await destruction_allowed.wait()
+                    await super().delete(sandbox, wait=wait)
+
+        class ControlProcess(LocalProcess):
+            async def exec(self, *args, **kwargs):
+                return SimpleNamespace(exit_code=0, result="/usr/bin/setsid")
+
+        client = DelayedDeletion()
+        client.sandbox.process = ControlProcess()
+        machine = await DaytonaMachineFactory(lambda: client).create(MachineSpec(RegistryImage("fixture")))
+        closing = asyncio.create_task(machine.close())
+        try:
+            await delete_requested.wait()
+            assert not closing.done()
+            assert not client.deleted
+        finally:
+            destruction_allowed.set()
+            await closing
+        assert client.deleted and client.closed
+
+    asyncio.run(scenario())
+
+
 class FailedDeletion(LocalDaytona):
     def __init__(self, failure):
         super().__init__()
         self.failure = failure
 
-    async def delete(self, sandbox):
+    async def delete(self, sandbox, *, wait=False):
         await sandbox.process.close()
         raise self.failure
 
@@ -553,7 +585,7 @@ def test_daytona_factory_disables_idle_stop_without_removing_ttl():
                         "gpu": 0,
                         "memory": 1,
                         "disk": 1,
-                        "state": "started",
+                        "state": "destroyed" if deleted else "started",
                         "toolboxProxyUrl": str(server.make_url("/toolbox")),
                     }
                 )
@@ -1818,11 +1850,11 @@ def test_daytona_job_wait_recovers_controls_without_replaying_source(tmp_path, m
                 return await super().download_file(source)
 
         class Client(LocalDaytona):
-            async def delete(self, sandbox):
+            async def delete(self, sandbox, *, wait=False):
                 if failure == "sandbox_cleanup" and failure not in failed:
                     failed.add(failure)
                     raise DaytonaError("Transient delete failure", status_code=503)
-                await super().delete(sandbox)
+                await super().delete(sandbox, wait=wait)
 
         client = Client()
         client.sandbox.process, client.sandbox.fs = Process(), Files()
@@ -1876,7 +1908,7 @@ def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(tmp_pa
         monkeypatch.setattr("shellbox.backends.daytona.provider.sleep", backoff)
 
         class Client(LocalDaytona):
-            async def delete(self, sandbox):
+            async def delete(self, sandbox, *, wait=False):
                 entered.set()
                 if failure == "transient" and not release.is_set():
                     raise DaytonaError("Provider deletion unavailable", status_code=503)
@@ -1888,7 +1920,7 @@ def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(tmp_pa
                         interrupted.set()
                 if failure == "concurrent_close" and not finish.is_set():
                     raise DaytonaError("Provider deletion unavailable", status_code=503)
-                await super().delete(sandbox)
+                await super().delete(sandbox, wait=wait)
 
             async def __aexit__(self, *args):
                 await super().__aexit__(*args)
@@ -1952,7 +1984,7 @@ def test_daytona_job_wait_preserves_external_cancellation_when_acquisition_clean
                 await asyncio.Future()
 
         class Client(LocalDaytona):
-            async def delete(self, sandbox):
+            async def delete(self, sandbox, *, wait=False):
                 raise DaytonaError("Provider cleanup unavailable", status_code=503)
 
         client = Client()
