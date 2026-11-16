@@ -5,7 +5,7 @@
   "experiments/datakit/hero_data_fusion_score_paths.json": 34469,
   "experiments/datakit/hero_data_paths.json": 388339,
   "experiments/post_training/task_curation/retired-inventory-only.json": 276,
-  "experiments/post_training/task_curation/source_duplicate_acknowledgements.json": 491852,
+  "experiments/post_training/task_curation/source_duplicate_acknowledgements.json": 295093,
   "experiments/post_training/task_curation/source_fingerprint_index.json": 278,
   "experiments/post_training/task_curation/source_population_locators.json": 280,
   "experiments/post_training/task_curation/source_population_locators_archived326.json": 292,
