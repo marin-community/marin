@@ -22,7 +22,12 @@ from taskcompendium.harbor.negative_control import (
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
-from taskcompendium.pipeline.oracle_filter import NativeVerifierGrade, OracleNegativeControlReceipt, OracleTrialReceipt
+from taskcompendium.pipeline.oracle_filter import (
+    NativeVerifierGrade,
+    NegativeControlInfrastructureApproval,
+    OracleNegativeControlReceipt,
+    OracleTrialReceipt,
+)
 
 from experiments.post_training.task_curation.archive_evidence import verified_archive_members
 from experiments.post_training.task_curation.harbor_inspection import harbor_inspection
@@ -155,6 +160,7 @@ def negative_control_from_archive(
     execution_requirements: ExecutionRequirements,
     redrive_parent: OracleNegativeControlReceipt | None = None,
     redrive_decision: ContentEvidenceReference | None = None,
+    redrive_infrastructure: NegativeControlInfrastructureApproval | None = None,
 ) -> OracleNegativeControlReceipt:
     """Bind an archived setup/nop/result tuple without changing its source result."""
     root = PurePosixPath(control_member).parent
@@ -292,6 +298,7 @@ def negative_control_from_archive(
         ),
         redrive_parent=redrive_parent,
         redrive_decision=redrive_decision,
+        redrive_infrastructure=redrive_infrastructure,
     )
     if receipt.accepted_source_error:
         receipt = receipt.model_copy(update={"annotation": "negative_control_verifier_error"})
@@ -317,6 +324,10 @@ def require_negative_control(receipt: OracleNegativeControlReceipt) -> None:
         decision = StoragePath(receipt.redrive_decision.uri).read_bytes()
         if hashlib.sha256(decision).hexdigest() != receipt.redrive_decision.sha256:
             raise ValueError("Negative-control re-drive decision bytes changed")
+        if receipt.redrive_infrastructure is not None:
+            diagnosis = receipt.redrive_infrastructure.diagnosis
+            if hashlib.sha256(StoragePath(diagnosis.uri).read_bytes()).hexdigest() != diagnosis.sha256:
+                raise ValueError("Negative-control infrastructure diagnosis bytes changed")
     prefix = f"{receipt.archive.uri}#"
     if not receipt.control.uri.startswith(prefix):
         raise ValueError("Negative-control reference differs from its immutable archive")
@@ -328,6 +339,7 @@ def require_negative_control(receipt: OracleNegativeControlReceipt) -> None:
         execution_requirements=receipt.trial.execution_requirements,
         redrive_parent=receipt.redrive_parent,
         redrive_decision=receipt.redrive_decision,
+        redrive_infrastructure=receipt.redrive_infrastructure,
     )
     if observed != receipt:
         raise ValueError("Negative-control receipt differs from its retained physical evidence")

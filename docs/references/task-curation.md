@@ -4091,6 +4091,21 @@ configuration and role allocations must match. A reproduced signal becomes a
 source-error annotation. An unresolved re-drive stays pending. No original
 oracle command is repeated.
 
+An infrastructure failure after successful public preparation has a separate,
+explicit re-drive route. Supply `redrive_infrastructure` as a
+`NegativeControlInfrastructureApproval`, containing the per-parent
+`InfrastructureRetryApproval` and an immutable `diagnosis` reference. The
+approval must identify that physical parent's Result SHA, classify it as
+`our_infrastructure`, and use the same decision URI as `redrive_decision`.
+Its failure signature is the exact exception type followed by `: ` and the
+parent verdict's `detail.error`. The original oracle must already pass.
+The collector verifies both archives and the diagnosis and decision bytes.
+Source/runtime/package, public preparation, agent configuration, backend and
+both role allocations must remain unchanged. This permits one NoP-only retry;
+it does not replay the original oracle. A repeated infrastructure failure stays
+`negative_control_pending` and is never converted into a source-error annotation.
+Keep later worker duplicates as provenance instead of selecting a better result.
+
 Native named rewards require an explicit `NativeOracleSuccessPolicy` bound to
 the source TaskSpec, native checksum, runtime and input cohort, with immutable
 consumer, source-census and decision evidence. Both oracle and nop grades use

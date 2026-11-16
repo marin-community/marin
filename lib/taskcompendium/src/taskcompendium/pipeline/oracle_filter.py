@@ -584,6 +584,15 @@ class InfrastructureRetryApproval(BaseModel):
     decision_ref: str = Field(min_length=1)
 
 
+class NegativeControlInfrastructureApproval(BaseModel):
+    """Bind a diagnosed infrastructure failure to its approved physical NoP parent."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    approval: InfrastructureRetryApproval
+    diagnosis: ContentEvidenceReference
+
+
 LOCAL_EXECUTION_HOST_FIELDS = frozenset({"cgroup_parent", "disk_root", "image_cache", "registry_authfile"})
 
 
@@ -1010,6 +1019,9 @@ class OracleNegativeControlReceipt(BaseModel):
     annotation: Literal["negative_control_verifier_error", "negative_control_verifier_timeout"] | None = None
     redrive_parent: "OracleNegativeControlReceipt | None" = Field(default=None, exclude_if=lambda value: value is None)
     redrive_decision: ContentEvidenceReference | None = Field(default=None, exclude_if=lambda value: value is None)
+    redrive_infrastructure: NegativeControlInfrastructureApproval | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_physical_control(self):
@@ -1043,13 +1055,41 @@ class OracleNegativeControlReceipt(BaseModel):
         parent = self.redrive_parent
         if (parent is None) != (self.redrive_decision is None):
             raise ValueError("Negative-control re-drive requires its physical parent and approved decision")
+        infrastructure = self.redrive_infrastructure
+        if infrastructure is not None and parent is None:
+            raise ValueError("Infrastructure NoP re-drive requires its physical parent")
         if parent is not None:
-            if (
-                parent.redrive_parent is not None
-                or (parent.signal_exit_code is None and not parent.source_producer_interrupted)
-                or parent.annotation is not None
-            ):
-                raise ValueError("Only one approved re-drive of an inconclusive native signal is permitted")
+            assert self.redrive_decision is not None
+            if parent.redrive_parent is not None or parent.annotation is not None:
+                raise ValueError("Only one approved re-drive of an inconclusive control is permitted")
+            if infrastructure is None:
+                if parent.signal_exit_code is None and not parent.source_producer_interrupted:
+                    raise ValueError("Only one approved re-drive of an inconclusive native signal is permitted")
+            else:
+                approval = infrastructure.approval
+                exception = parent.trial.result.get("exception_info") or {}
+                error = (parent.trial.verdict or {}).get("detail", {}).get("error")
+                signature = f"{exception.get('exception_type')}: {error}"
+                if (
+                    not parent.completed_public_setup
+                    or parent.conclusive
+                    or parent.trial.graded
+                    or parent.trial.failure_signal is not FailureSignal.INFRASTRUCTURE
+                    or (parent.trial.verdict or {}).get("status") != "infra_error"
+                    or parent.accepted_source_error
+                    or parent.accepted_source_deadline
+                    or parent.trial.prior_phase_failure is not None
+                    or approval.parent_result_sha256 != parent.trial.result_sha256
+                    or approval.failure_signature != signature
+                    or approval.decision_ref != self.redrive_decision.uri
+                ):
+                    raise ValueError("Infrastructure NoP re-drive differs from its approved unscored parent")
+                if (
+                    result["config"]["environment"] != parent.trial.result["config"]["environment"]
+                    or result["config"]["verifier"] != parent.trial.result["config"]["verifier"]
+                    or self.trial.verifier_execution_requirements != parent.trial.verifier_execution_requirements
+                ):
+                    raise ValueError("Infrastructure NoP re-drive changed its backend or verifier allocation")
             anchors = (
                 "source_task_sha256",
                 "source_task_checksum",
@@ -1153,6 +1193,8 @@ class OracleNegativeControlReceipt(BaseModel):
 
     @property
     def accepted_source_error(self) -> bool:
+        if self.redrive_infrastructure is not None:
+            return False
         error = (self.trial.verdict or {}).get("detail", {}).get("error", "")
         signatures = (
             (
@@ -1265,6 +1307,8 @@ class OracleTaskReceipt(BaseModel):
         ):
             raise ValueError("Negative control differs from the source or consumed task contract")
         source = self.calibration.attempts[-1]
+        if control.redrive_infrastructure is not None and not self.original_oracle_passed:
+            raise ValueError("Infrastructure NoP re-drive requires its unchanged passing original oracle")
         if control.trial.verifier_execution_requirements != self.verifier_execution_requirements:
             raise ValueError("Negative control differs from the original verifier allocation")
         if control.conclusive and source.graded and (source.verdict is None) != (control.trial.verdict is None):
