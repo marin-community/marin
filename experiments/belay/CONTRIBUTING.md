@@ -30,7 +30,7 @@ Every experiment is compared to the official recipe unless its Track says otherw
    | Track | Use it for |
    |---|---|
    | `speedrun` (default) | First test: a short run of the recipe at the smallest size. Is it compatible, is there signal? |
-   | `vanilla-<rung>` / `moe-<rung>` | Radical ideas: look for signs of life against a plain dense model or a basic MoE first. |
+   | `vanilla-<rung>` / `moe-<rung>` | Radical ideas: look for signs of life against a plain dense model or a basic MoE first. The rung is the model width, `d512`, `d768`, `d1024` or `d1280` (e.g. `moe-d768`). |
    | `hero-mfu` | Ideas that change speed or memory: step time at hero scale. Run by a maintainer. |
    | `ladder` | After a promising speedrun: every recipe rung, to see whether the gain holds with scale. |
    | `custom` | A study answered by analysis, with no win/loss verdict. |
