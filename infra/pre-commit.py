@@ -828,15 +828,18 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Pyrefly type checker", result.returncode, output)
 
 
-# Vendored projects with their own uv.lock. Each installs Marin libraries from local
-# paths, so a dependency change in one of those libraries makes its lock stale.
-VENDORED_LOCK_PROJECTS = ("vendor/harbor", "vendor/skyrl")
+# Vendored projects with their own uv.lock. They can install Marin libraries from local
+# paths, so a dependency change in one of those libraries makes their lock stale.
+VENDORED_LOCK_PROJECTS = tuple(
+    sorted(str(lock.parent.relative_to(ROOT_DIR)) for lock in ROOT_DIR.glob("vendor/*/uv.lock"))
+)
 
 
 def _vendored_lock_inputs(project: str) -> set[str]:
     """Repo-relative pyproject.toml files whose dependencies ``project``'s uv.lock records."""
     project_dir = ROOT_DIR / project
-    sources = tomllib.loads((project_dir / "pyproject.toml").read_text())["tool"]["uv"]["sources"]
+    pyproject = tomllib.loads((project_dir / "pyproject.toml").read_text())
+    sources = pyproject.get("tool", {}).get("uv", {}).get("sources", {})
     local = [project_dir / source["path"] for source in sources.values() if "path" in source]
     return {str(path.resolve().relative_to(ROOT_DIR) / "pyproject.toml") for path in [project_dir, *local]}
 
