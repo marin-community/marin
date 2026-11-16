@@ -93,7 +93,7 @@
       "upstream_dataset": "PrimeIntellect/Multi-SWE-RL-Verified",
       "upstream_url": null,
       "notes": "Original source images and captured /home grading archives are pinned. Original root actor and host-side multi-swe-bench1.1.2 report checks retained. Pending current-pin execution qualification and admission.",
-      "stage": "Intake queued",
+      "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
       "reasons": []
