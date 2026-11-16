@@ -111,7 +111,7 @@ def _as_batch_last(t: jax.Array) -> jax.Array:
     return t.reshape(1, *t.shape)
 
 
-def _unit_vector(n: int) -> jax.Array:
+def _ones(n: int) -> jax.Array:
     return jnp.ones((n,), jnp.float32)
 
 
@@ -217,7 +217,7 @@ def mxfp8_fused_gemm(a_q, a_sf, b_q, b_sf, offs, *, b_major: WeightMajor):
         a_sf.reshape(-1),
         b_sf.reshape(-1),
         offs.astype(jnp.int32),
-        _unit_vector(experts),
+        _ones(experts),
         jnp.ones((m, 1, 1), jnp.float32),
     )
     return out[0]
@@ -254,8 +254,8 @@ def mxfp8_fused_wgrad(x_q, x_sf, g_q, g_sf, offs):
     """Grouped weight gradient ``dw[e] = x[rows_e]^T @ g[rows_e]`` -> (E, K, N) bf16.
 
     Args:
-        x_q: (T, K) float8_e4m3fn in natural token-major storage, quantized along tokens (a
-            ``*_col`` output of the fused kernels or of a dual-orientation quantizer).
+        x_q: (T, K) float8_e4m3fn in natural token-major storage, quantized along tokens, as
+            `dual_quantize_padded` writes its token copy.
         x_sf: (round_up(K, 128), padded_token_columns) column-orientation scales of ``x_q``.
         g_q: (T, N) float8_e4m3fn in natural storage, quantized along tokens.
         g_sf: (round_up(N, 128), padded_token_columns) column-orientation scales of ``g_q``.

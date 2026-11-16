@@ -48,11 +48,8 @@ _SMALL_PROBLEMS = [
 ]
 # One expert chunk of the EP hero run on one GPU: H = I = 3072, 3 experts, 302,336 rows.
 _HERO_PROBLEM = _Problem(hidden=3072, intermediate=3072, group_sizes=(140_000, 100_000, 62_000))
-_PROBLEMS = [
-    *(pytest.param(problem, id=f"h{problem.hidden}-i{problem.intermediate}") for problem in _SMALL_PROBLEMS),
-    pytest.param(_HERO_PROBLEM, id="hero-chunk", marks=pytest.mark.slow),
-]
 _SMALL = [pytest.param(problem, id=f"h{problem.hidden}-i{problem.intermediate}") for problem in _SMALL_PROBLEMS]
+_PROBLEMS = [*_SMALL, pytest.param(_HERO_PROBLEM, id="hero-chunk", marks=pytest.mark.slow)]
 
 
 def _require_sm100():
