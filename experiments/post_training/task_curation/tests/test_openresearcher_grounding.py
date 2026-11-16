@@ -12,8 +12,22 @@ from tokenizers.pre_tokenizers import Whitespace
 from transformers import PreTrainedTokenizerFast
 from verifyit.modes.grade_judge import JudgeConnection
 
-from experiments.post_training.task_curation.datasets.openresearcher.grounding import GroundingJudge, screen_question
+from experiments.post_training.task_curation.datasets.openresearcher.grounding import (
+    GroundingCompletionIncomplete,
+    GroundingJudge,
+    screen_population,
+    screen_question,
+)
+from experiments.post_training.task_curation.datasets.openresearcher.grounding_contract import GroundedRequirement
 from experiments.post_training.task_curation.tests.review_server import JudgeReply
+
+
+def grounding_tokenizer():
+    backend = Tokenizer(WordLevel({"[UNK]": 0}, unk_token="[UNK]"))
+    backend.pre_tokenizer = Whitespace()
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
+    tokenizer.chat_template = "{% for m in messages %}{{m['role']}}: {{m['content']}}{% endfor %}"
+    return tokenizer
 
 
 @pytest.mark.asyncio
@@ -49,10 +63,7 @@ async def test_grounding_verifies_corpus_evidence_before_independent_answer(revi
             )
         ),
     ]
-    backend = Tokenizer(WordLevel({"[UNK]": 0}, unk_token="[UNK]"))
-    backend.pre_tokenizer = Whitespace()
-    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
-    tokenizer.chat_template = "{% for m in messages %}{{m['role']}}: {{m['content']}}{% endfor %}"
+    tokenizer = grounding_tokenizer()
 
     async def retrieve(queries):
         return {"d1": text}
@@ -76,3 +87,55 @@ async def test_grounding_verifies_corpus_evidence_before_independent_answer(revi
         assert result["answer_match"]["correct"]
         observation = json.loads((tmp_path / "observations/audit-0.json").read_text())
         assert observation["response"]["model"] == "fixture"
+
+
+@pytest.mark.asyncio
+async def test_truncated_grounding_retries_with_the_same_sealed_budget(review_server, tmp_path):
+    verdict = {"supported": False, "reason": "No evidence.", "evidence": []}
+    review_server.judge_replies = [
+        JudgeReply(json.dumps({**verdict, "supported": True}), finish_reason="length"),
+        JudgeReply(json.dumps(verdict)),
+    ]
+    async with httpx.AsyncClient() as client:
+        judge = GroundingJudge(
+            JudgeConnection(f"http://127.0.0.1:{review_server.server_port}/v1", "fixture", default_model="fixture"),
+            client,
+            grounding_tokenizer(),
+            StoragePath(str(tmp_path)),
+        )
+        result = await judge.structured("ground-h1", "Audit the evidence.", GroundedRequirement)
+    assert result.model_dump(mode="json") == verdict
+    assert len(review_server.requests) == 2
+    assert review_server.requests[0] == review_server.requests[1]
+    assert review_server.requests[0]["max_tokens"] == 4096
+    assert review_server.requests[0]["temperature"] == 0.7
+    first = json.loads((tmp_path / "ground-h1-0.json").read_text())
+    second = json.loads((tmp_path / "ground-h1-1.json").read_text())
+    assert first["response"]["choices"][0]["finish_reason"] == "length"
+    assert second["response"]["choices"][0]["finish_reason"] == "stop"
+
+
+@pytest.mark.asyncio
+async def test_exhausted_grounding_truncations_remain_execution_failures(review_server, tmp_path):
+    review_server.judge_replies = [JudgeReply("{", finish_reason="length") for _ in range(3)]
+
+    async def retrieve(queries):
+        raise AssertionError("Incomplete decomposition must not reach retrieval")
+
+    with pytest.raises(ExceptionGroup) as failure:
+        await screen_population(
+            [{"id": "fixture", "question": "Who founded Cedar Press?", "answer": "Nina Calder"}],
+            JudgeConnection(f"http://127.0.0.1:{review_server.server_port}/v1", "fixture", default_model="fixture"),
+            grounding_tokenizer(),
+            retrieve,
+            StoragePath(str(tmp_path)),
+            1,
+        )
+    assert isinstance(failure.value.exceptions[0], GroundingCompletionIncomplete)
+    assert len(review_server.requests) == 3
+    decision = json.loads((tmp_path / "decisions/fixture.json").read_text())
+    assert decision["status"] == "execution_failure"
+    assert "keep" not in decision
+    for attempt in range(3):
+        observation = json.loads((tmp_path / f"observations/fixture/decompose-{attempt}.json").read_text())
+        assert observation["response"]["choices"][0]["finish_reason"] == "length"

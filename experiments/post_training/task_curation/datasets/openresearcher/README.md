@@ -34,6 +34,11 @@ schemas, generation settings and retention rule. Execution failures fail the
 artifact; unsupported content and evidence-budget limits receive explicit
 drop decisions.
 
+Each structured judge request permits at most three attempts for responses that
+reach the 4,096-token output limit or fail schema validation. Retries use the same
+request and generation settings and preserve every response. Exhaustion fails
+the artifact.
+
 For each question, the screen enumerates required clues and reasoning hops,
 searches the approved index, and checks literal document quotations for every
 hop. A separate request to the same pinned judge receives the question and

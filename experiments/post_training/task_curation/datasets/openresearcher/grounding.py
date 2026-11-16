@@ -50,6 +50,10 @@ class GroundingBudgetExceeded(ValueError):
     """A complete evidence packet cannot fit the sealed screen's context budget."""
 
 
+class GroundingCompletionIncomplete(ValueError):
+    """The model exhausted its output budget before completing a response."""
+
+
 @dataclass(frozen=True)
 class GroundingJudge:
     connection: JudgeConnection
@@ -87,17 +91,19 @@ class GroundingJudge:
         if result["model"] != self.connection.default_model:
             raise ValueError("Grounding response model differs from the explicitly pinned backend")
         choice = result["choices"][0]
+        if choice["finish_reason"] == "length":
+            raise GroundingCompletionIncomplete("Grounding completion did not finish: length")
         if choice["finish_reason"] != "stop":
             raise ValueError(f"Grounding completion did not finish: {choice['finish_reason']}")
         return choice["message"]["content"]
 
     async def structured(self, name: str, prompt: str, schema: type[Model]) -> Model:
         for attempt in range(PARSE_ATTEMPTS):
-            text = await self.complete(f"{name}-{attempt}", prompt, structured=True)
             try:
+                text = await self.complete(f"{name}-{attempt}", prompt, structured=True)
                 return schema.model_validate_json(text)
-            except ValidationError as error:
-                (self.observations / f"{name}-{attempt}-parse-error.txt").write_text(str(error))
+            except (ValidationError, GroundingCompletionIncomplete) as error:
+                (self.observations / f"{name}-{attempt}-error.txt").write_text(str(error))
                 if attempt + 1 == PARSE_ATTEMPTS:
                     raise
         raise AssertionError("A positive parse-attempt budget must produce a result or an exception")
