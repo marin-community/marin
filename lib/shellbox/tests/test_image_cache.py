@@ -44,6 +44,13 @@ def converted_registry_image(layered_oci_image, monkeypatch):
     blobs = image.layout / "blobs/sha256"
     manifest = json.loads((blobs / image.manifest_digest.removeprefix("sha256:")).read_bytes())
     manifest["mediaType"] = "application/vnd.oci.image.manifest.v1+json"
+    prepared_configuration = json.loads((blobs / manifest["config"]["digest"].removeprefix("sha256:")).read_bytes())
+    for legacy in ("container_config", "comment"):
+        prepared_configuration.pop(legacy, None)
+    converted_config = json.dumps(prepared_configuration, sort_keys=True, separators=(",", ":")).encode()
+    converted_digest = f"sha256:{hashlib.sha256(converted_config).hexdigest()}"
+    (blobs / converted_digest.removeprefix("sha256:")).write_bytes(converted_config)
+    manifest["config"].update(digest=converted_digest, size=len(converted_config))
     for layer in manifest["layers"]:
         compressed = gzip.compress((blobs / layer["digest"].removeprefix("sha256:")).read_bytes(), mtime=0)
         digest = hashlib.sha256(compressed).hexdigest()
@@ -286,7 +293,14 @@ def test_docker_build_metadata_is_restored_before_verified_offline_reuse(
 ):
     fixture = converted_registry_image
     configuration = json.loads(fixture.source_configuration)
-    configuration.update(container="original-builder", docker_version="26.1.3")
+    # Modern skopeo OCI conversion also drops these legacy fields; the restore
+    # must tolerate their absence on the prepared side.
+    configuration.update(
+        container="original-builder",
+        docker_version="26.1.3",
+        container_config={"Image": f"sha256:{'b' * 64}"},
+        comment="built-by-docker",
+    )
     configuration["config"]["Image"] = f"sha256:{'a' * 64}"
     original_config = json.dumps(configuration, indent=2).encode()
     manifest = json.loads(fixture.manifests[fixture.source.reference.rsplit("@", 1)[1]])

@@ -21,7 +21,9 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 OCI_TAG = "image"
-DOCKER_BUILD_METADATA = frozenset({"container", "docker_version"})
+# Fields the registry keeps that skopeo's OCI conversion has dropped across
+# versions: build-provenance keys that never affect runtime behavior.
+DOCKER_BUILD_METADATA = frozenset({"container", "docker_version", "container_config", "comment"})
 SHA256_PATTERN = r"sha256:[0-9a-f]{64}"
 Sha256Digest = Annotated[str, Field(pattern=f"^{SHA256_PATTERN}$")]
 
