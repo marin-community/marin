@@ -9,82 +9,22 @@ report can say how many epochs each ladder rung would read at the requested shar
 """
 
 import dataclasses
-import fnmatch
 import json
 import math
 from collections.abc import Iterable, Mapping
-from enum import StrEnum
 from typing import Any
 
 import pyarrow.parquet as pq
 import requests
 from datasets import load_dataset, load_dataset_builder
+from finestore.rl.licenses import LicenseVerdict, license_verdict
 from huggingface_hub import HfApi, HfFileSystem, get_token
 from levanter.tokenizers import MarinTokenizer
-
-# Licenses a candidate may have: every rating of the Blue Oak Council's list of permissive licenses
-# (https://blueoakcouncil.org/list.json, version 16), by SPDX id, and OpenMDW, a permissive license for models and
-# data. A lowercased SPDX id is the Hugging Face card id. The list holds software licenses only, so the data licenses
-# that only ask for attribution, or for derivatives under the same terms, are in DATA_LICENSES.
-BLUE_OAK_LICENSES_BY_RATING = {
-    "Model": "BlueOak-1.0.0",
-    "Gold": "BSD-2-Clause-Patent",
-    "Silver": (
-        "ADSL Apache-2.0 APAFML BSD-1-Clause BSD-2-Clause BSD-2-Clause-FreeBSD BSD-2-Clause-NetBSD "
-        "BSD-2-Clause-Views BSL-1.0 DSDP ECL-1.0 ECL-2.0 hdparm ImageMagick Intel-ACPI ISC Linux-OpenIB MIT "
-        "MIT-Modern-Variant MIT-testregex MIT-Wu MS-PL MulanPSL-1.0 Mup PostgreSQL SHL-0.5 Spencer-99 UPL-1.0 "
-        "Xerox Xfig"
-    ),
-    "Bronze": (
-        "0BSD AFL-1.1 AFL-1.2 AFL-2.0 AFL-2.1 AFL-3.0 AMDPLPA AML AMPAS ANTLR-PD ANTLR-PD-fallback Apache-1.0 "
-        "Apache-1.1 Artistic-2.0 Bahyph Barr bcrypt-Solar-Designer BSD-3-Clause BSD-3-Clause-Attribution "
-        "BSD-3-Clause-Clear BSD-3-Clause-HP BSD-3-Clause-LBNL BSD-3-Clause-Modification "
-        "BSD-3-Clause-No-Nuclear-License-2014 BSD-3-Clause-No-Nuclear-Warranty BSD-3-Clause-Open-MPI "
-        "BSD-3-Clause-Sun BSD-4-Clause BSD-4-Clause-Shortened BSD-4-Clause-UC BSD-Source-Code bzip2-1.0.5 "
-        "bzip2-1.0.6 CC0-1.0 CFITSIO Clips CNRI-Jython CNRI-Python CNRI-Python-GPL-Compatible Cube curl eGenix "
-        "Entessa FTL fwlw HPND-Fenneberg-Livingston HPND-sell-regexpr HTMLTIDY IBM-pibs ICU Info-ZIP Intel "
-        "JasPer-2.0 Libpng libpng-2.0 libtiff LPPL-1.3c LZMA-SDK-9.22 MIT-0 MIT-advertising MIT-CMU MIT-enna "
-        "MIT-feh MIT-open-group MITNFA MTLL MulanPSL-2.0 Multics Naumen NCSA Net-SNMP NetCDF NICTA-1.0 "
-        "NIST-Software NTP OGL-Canada-2.0 OLDAP-2.0 OLDAP-2.0.1 OLDAP-2.1 OLDAP-2.2 OLDAP-2.2.1 OLDAP-2.2.2 "
-        "OLDAP-2.3 OLDAP-2.4 OLDAP-2.5 OLDAP-2.6 OLDAP-2.7 OLDAP-2.8 OML OpenSSL PHP-3.0 PHP-3.01 Plexus PSF-2.0 "
-        "Python-2.0 Ruby Saxpath SGI-B-2.0 SMLNJ SunPro SWL Symlinks TCL TCP-wrappers UCAR Unicode-3.0 "
-        "Unicode-DFS-2015 Unicode-DFS-2016 UnixCrypt Unlicense VSL-1.0 W3C X11 XFree86-1.1 xlock Xnet xpp Zlib "
-        "zlib-acknowledgement ZPL-2.0 ZPL-2.1"
-    ),
-    "Lead": (
-        "AAL Adobe-2006 Afmparse Artistic-1.0 Artistic-1.0-cl8 Artistic-1.0-Perl Beerware blessing Borceux "
-        "BSD-2-Clause-Darwin CECILL-B check-cvs ClArtistic Condor-1.1 Crossword CrystalStacker diffmark DOC "
-        "EFL-1.0 EFL-2.0 Fair FSFAP FSFUL FSFULLR Giftware GLWTPL HPND HPND-export-US IJG IJG-short Jam Kazlib "
-        "Leptonica LPL-1.0 LPL-1.02 McPhee-slideshow MirOS mpich2 NAIST-2003 NASA-1.3 NBPL-1.0 Newsletr NLPL NRL "
-        "NTP-0 OFFIS OGTSL OLDAP-1.1 OLDAP-1.2 OLDAP-1.3 OLDAP-1.4 psutils python-ldap Qhull Rdisc RSA-MD "
-        "snprintf Spencer-86 Spencer-94 SSH-short TU-Berlin-1.0 TU-Berlin-2.0 Vim W3C-19980720 W3C-20150513 "
-        "Wsuipa WTFPL xinetd XSkat Zed Zend-2.0 ZPL-1.1"
-    ),
-}
-# Hugging Face card ids of CC BY, CC BY-SA (every version) and ODC-By.
-DATA_LICENSES = frozenset(
-    {f"cc-by{sa}-{v}" for sa in ("", "-sa") for v in ("1.0", "2.0", "2.5", "3.0", "4.0")} | {"odc-by"}
-)
-ALLOWED_LICENSES = DATA_LICENSES | frozenset(
-    spdx_id.lower() for spdx_ids in BLUE_OAK_LICENSES_BY_RATING.values() for spdx_id in spdx_ids.split()
-)
-# OpenMDW's card ids: openmdw-1.0, openmdw-1.1.
-OPENMDW_LICENSE_PATTERN = "openmdw-[0-9].[0-9]"
-# Card ids that name a license a person must read: custom terms, or no stated terms.
-REVIEW_LICENSES = frozenset({"other", "unknown"})
-# Card id fragments that forbid a use Marin needs: non-commercial or no derivatives.
-REJECTED_LICENSE_FRAGMENTS = ("-nc", "-nd", "noncommercial")
 
 DATASETS_SERVER_SIZE_URL = "https://datasets-server.huggingface.co/size"
 SAMPLE_ROWS = 2000
 # The check refuses a share that would read the new data more times than this at the largest rung that runs.
 MAX_EPOCHS = 4.0
-
-
-class LicenseVerdict(StrEnum):
-    ALLOWED = "allowed"
-    NEEDS_REVIEW = "needs_review"
-    REJECTED = "rejected"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -142,27 +82,6 @@ class IntakeReport:
 
     def to_json(self) -> str:
         return json.dumps({**dataclasses.asdict(self), "passed": self.passed}, indent=2)
-
-
-def license_verdict(licenses: tuple[str, ...]) -> LicenseVerdict:
-    """Classify a dataset card's license ids; every id must be allowed for the dataset to be allowed."""
-    if not licenses:
-        return LicenseVerdict.NEEDS_REVIEW
-    verdicts = {_one_license_verdict(card_id.strip().lower()) for card_id in licenses}
-    for verdict in (LicenseVerdict.REJECTED, LicenseVerdict.NEEDS_REVIEW):
-        if verdict in verdicts:
-            return verdict
-    return LicenseVerdict.ALLOWED
-
-
-def _one_license_verdict(card_id: str) -> LicenseVerdict:
-    if any(fragment in card_id for fragment in REJECTED_LICENSE_FRAGMENTS):
-        return LicenseVerdict.REJECTED
-    if card_id in REVIEW_LICENSES:
-        return LicenseVerdict.NEEDS_REVIEW
-    if card_id in ALLOWED_LICENSES or fnmatch.fnmatchcase(card_id, OPENMDW_LICENSE_PATTERN):
-        return LicenseVerdict.ALLOWED
-    return LicenseVerdict.NEEDS_REVIEW
 
 
 def rung_needs(estimated_tokens: int, share: float, rung_tokens: dict[str, int]) -> tuple[RungNeed, ...]:

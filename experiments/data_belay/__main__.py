@@ -12,6 +12,7 @@ import statistics
 import sys
 
 import click
+from finestore.rl.licenses import LicenseVerdict
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.config import load_config
 from levanter.tokenizers import load_tokenizer
@@ -20,7 +21,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.data_belay.datakit import MIN_TOP_RUNG, datakit_intake
-from experiments.data_belay.intake import MAX_EPOCHS, DatasetRequest, IntakeReport, LicenseVerdict, run_intake
+from experiments.data_belay.intake import MAX_EPOCHS, DatasetRequest, IntakeReport, run_intake
 from experiments.data_belay.judge import RungResult, harm_limits, judge, ladder_step
 from experiments.data_belay.prepare import (
     CACHE_PATH,

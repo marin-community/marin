@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from finestore.rl.licenses import LicenseVerdict, license_verdict
 
-from experiments.data_belay.intake import LicenseVerdict, license_verdict
 from experiments.data_belay.prepare import cache_epochs
 
 
