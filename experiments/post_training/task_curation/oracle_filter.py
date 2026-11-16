@@ -56,6 +56,7 @@ from taskcompendium.pipeline.oracle_filter import (
     OracleNegativeControlReceipt,
     OracleTaskReceipt,
     OracleTrialReceipt,
+    PostGradeTeardownEvidence,
     PriorPhaseFailureReceipt,
     ResourceCalibrationReceipt,
     SourcePytestEnvironment,
@@ -92,6 +93,10 @@ from experiments.post_training.task_curation.legacy_role_qualification import (
 )
 from experiments.post_training.task_curation.local_host_admission import LocalHostAdmission, LocalHostAdmissionConfig
 from experiments.post_training.task_curation.negative_controls import require_negative_control
+from experiments.post_training.task_curation.post_grade_teardowns import (
+    bind_post_grade_teardowns,
+    require_post_grade_teardown,
+)
 from experiments.post_training.task_curation.prior_phase_failures import (
     bind_prior_phase_failures,
     require_prior_phase_failure,
@@ -115,6 +120,7 @@ BACKEND_CODE_FILES = {
     "experiments/post_training/task_curation/oracle_filter.py",
     "experiments/post_training/task_curation/local_host_admission.py",
     "experiments/post_training/task_curation/prior_phase_failures.py",
+    "experiments/post_training/task_curation/post_grade_teardowns.py",
     "experiments/post_training/task_curation/archive_evidence.py",
     "experiments/post_training/task_curation/negative_controls.py",
     "experiments/post_training/task_curation/harbor_inspection.py",
@@ -650,8 +656,10 @@ def filter_cohort(
                     key = (attempt.result["task_name"], attempt.result["task_checksum"])
                     if attempt.prior_phase_failure is not None:
                         require_prior_phase_failure(attempt.prior_phase_failure, attempt.result)
+                    if attempt.post_grade_teardown is not None:
+                        require_post_grade_teardown(attempt.post_grade_teardown, attempt)
                     collected_attempt = attempt.model_copy(
-                        update={"infrastructure_retry": None, "prior_phase_failure": None}
+                        update={"infrastructure_retry": None, "prior_phase_failure": None, "post_grade_teardown": None}
                     )
                     if collected_attempt not in trials.get(key, []):
                         raise ValueError(f"Calibration trial missing from production jobs: {task.id}")
@@ -1563,6 +1571,10 @@ def main() -> None:
     bind.add_argument("--task-map", type=Path, required=True)
     bind.add_argument("--evidence", type=Path, required=True, help="JSON list of PriorPhaseFailureReceipt objects")
     bind.add_argument("--output", type=Path, required=True)
+    completed = commands.add_parser("bind-post-grade-teardowns")
+    completed.add_argument("--task-map", type=Path, required=True)
+    completed.add_argument("--evidence", type=Path, required=True, help="JSON list of PostGradeTeardownEvidence objects")
+    completed.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     host_admission = None
     if args.command in {"calibrate", "retry"}:
@@ -1582,6 +1594,13 @@ def main() -> None:
         if len(failures) != len(evidence):
             raise ValueError("Duplicate phase-failure evidence for the same production Trial")
         bind_prior_phase_failures(args.task_map, failures, args.output)
+        return
+    if args.command == "bind-post-grade-teardowns":
+        proofs = [PostGradeTeardownEvidence.model_validate(item) for item in json.loads(args.evidence.read_text())]
+        by_result = {item.result_sha256: item for item in proofs}
+        if len(by_result) != len(proofs):
+            raise ValueError("Duplicate recorded-grade evidence for the same production Trial")
+        bind_post_grade_teardowns(args.task_map, by_result, args.output)
         return
     if args.command == "backend-fix":
         write_backend_fix(args.revision, args.output)

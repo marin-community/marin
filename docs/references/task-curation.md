@@ -2570,6 +2570,17 @@ Absent evidence is omitted from serialization so historical retry hashes remain
 unchanged. A persisted `lifecycle-result.json` is collected only when that Trial
 has no selected `result.json`.
 
+An approved oracle grade can also survive a subsequent environment-stop failure.
+Bind a JSON list of `PostGradeTeardownEvidence` with
+`oracle_filter bind-post-grade-teardowns --task-map original-map.json
+--evidence recorded-grades.json --output bound-map.json`. This scoped collector
+rule requires the original archive's Result, config, scored verdict, reward file,
+zero oracle exit, ordered completed actor/verifier phases and cleanup exception,
+plus the exact four-oracle decision manifest. It preserves the recorded reward,
+including source failures, without replaying the oracle or changing raw Results.
+The teardown exception remains provenance. Other lifecycle failures retain their
+existing classification.
+
 Calibration and approved retry trials set `trial_attempt_timeout_sec` to 72 hours.
 This explicit wall-clock bound selects Daytona's JOB provider-wait policy;
 standalone Harbor trials without it keep PHASE behavior. Safe provider retries

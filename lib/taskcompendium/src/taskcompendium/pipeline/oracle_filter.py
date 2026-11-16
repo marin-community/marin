@@ -105,6 +105,21 @@ class PriorPhaseFailureReceipt(BaseModel):
     archive_root: str
 
 
+class PostGradeTeardownEvidence(BaseModel):
+    """Archived oracle grading completed before its environment teardown failed."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: Literal["oracle_verdict_before_environment_stop"] = "oracle_verdict_before_environment_stop"
+    result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    archive: ContentEvidenceReference
+    result_artifact: ContentEvidenceReference
+    verdict_artifact: ContentEvidenceReference
+    reward_artifact: ContentEvidenceReference
+    oracle_exit_artifact: ContentEvidenceReference
+    teardown_exception_artifact: ContentEvidenceReference
+    decision: ContentEvidenceReference
+
+
 class NativeOracleSuccessPolicy(BaseModel):
     """Source-approved interpretation of unchanged production native reward maps."""
 
@@ -204,6 +219,7 @@ class OracleTrialReceipt(BaseModel):
     network_policy: TaskNetworkPolicyReceipt | None = None
     native_grade: NativeVerifierGrade | None = None
     prior_phase_failure: PriorPhaseFailureReceipt | None = Field(default=None, exclude_if=lambda value: value is None)
+    post_grade_teardown: PostGradeTeardownEvidence | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_result_hash(self):
@@ -221,6 +237,31 @@ class OracleTrialReceipt(BaseModel):
             or self.result.get("config", {}).get("agent", {}).get("name") != "oracle"
         ):
             raise ValueError("Earlier source phase evidence requires an original oracle Trial")
+        completed = self.post_grade_teardown
+        if completed is not None:
+            verdict = self.verdict or {}
+            reward = verdict.get("reward")
+            exception = self.result.get("exception_info") or {}
+            if (
+                completed.result_sha256 != self.result_sha256
+                or self.prior_phase_failure is not None
+                or (self.result.get("agent_info") or {}).get("name") != "oracle"
+                or self.result.get("config", {}).get("agent", {}).get("name") != "oracle"
+                or self.oracle_exit_code != 0
+                or self.native_grade is not None
+                or (
+                    (self.result.get("verifier_result") or {}).get("rewards") is not None
+                    and (self.result["verifier_result"]["rewards"] or {}).get("reward") != reward
+                )
+                or exception.get("exception_type") != "EnvironmentStopError"
+                or exception.get("exception_message") != "Environment teardown failed"
+                or verdict.get("status") != "scored"
+                or verdict.get("detail", {}).get("exit_code") != 0
+                or not isinstance(reward, (int, float))
+                or isinstance(reward, bool)
+                or not math.isfinite(reward)
+            ):
+                raise ValueError("Recorded oracle grade does not precede the reported teardown failure")
         config = self.result.get("config", {})
         verifier_allocation = self.verifier_execution_requirements
         configured_verifier = config.get("task", {}).get("verifier_execution_requirements")
@@ -256,6 +297,8 @@ class OracleTrialReceipt(BaseModel):
 
     @property
     def failure_signal(self) -> FailureSignal:
+        if self.post_grade_teardown is not None:
+            return FailureSignal.NON_RESOURCE
         if self.prior_phase_failure is not None:
             return (
                 FailureSignal.AGENT_TIMEOUT
@@ -292,7 +335,7 @@ class OracleTrialReceipt(BaseModel):
                 and isinstance(reward, (int, float))
                 and not isinstance(reward, bool)
                 and math.isfinite(reward)
-                and actual.get("reward") == reward
+                and (actual.get("reward") == reward or self.post_grade_teardown is not None)
             )
         native = self.native_grade
         return (
@@ -311,20 +354,25 @@ class OracleTrialReceipt(BaseModel):
             (result.get("agent_info") or {}).get("name") == "oracle"
             and result.get("config", {}).get("agent", {}).get("name") == "oracle"
             and result.get("config", {}).get("environment", {}).get("type") in {"local", "daytona"}
-            and result.get("exception_info") is None
+            and (result.get("exception_info") is None or self.post_grade_teardown is not None)
             and self.prior_phase_failure is None
             and result.get("finished_at") is not None
-            and result.get("completion") is not None
+            and (result.get("completion") is not None or self.post_grade_teardown is not None)
             and self.oracle_exit_code is not None
             and self.graded
         )
 
     def passed(self, task_checksum: str) -> bool:
+        reward = (
+            (self.verdict or {}).get("reward")
+            if self.post_grade_teardown is not None
+            else ((self.result.get("verifier_result") or {}).get("rewards") or {}).get("reward")
+        )
         return (
             self.scored
             and self.result.get("task_checksum") == task_checksum
             and self.oracle_exit_code == 0
-            and ((self.result.get("verifier_result") or {}).get("rewards") or {}).get("reward") == 1
+            and reward == 1
         )
 
 
