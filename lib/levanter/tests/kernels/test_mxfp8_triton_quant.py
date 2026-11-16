@@ -25,10 +25,13 @@ from levanter.grug._moe.ep_common import _aligned_receiver_rows, _receiver_group
 from levanter.grug._moe.mxfp8.layout import GROUP_PAD, aligned_dispatch_layout, wgrad_block_perm
 from levanter.grug._moe.mxfp8.quantize import dual_quantize_activation
 from levanter.grug._moe.mxfp8.triton_quant import dual_quantize_padded
+from levanter.testing.devices import nvidia_compute_capability
 
 _OUTPUTS = ("q_rows", "sfa", "q_tokens", "sf_wgrad")
 _BLOCK = 32
 _BF16_MAX = 3.3895313892515355e38
+# The first CUDA compute capability whose GPUs store FP8.
+_FP8_COMPUTE_CAPABILITY = 8.9
 # The receiver capacity and hidden size of one expert chunk of the 535B EP run on one GPU, with 3
 # local experts: the largest buffer the quantizer is used on.
 _LARGE_CAPACITY = 302_336
@@ -36,11 +39,12 @@ _LARGE_HIDDEN = 3072
 
 
 def _requires_gpu():
-    if jax.default_backend() != "gpu":
-        pytest.skip("requires the JAX GPU backend")
+    capability = nvidia_compute_capability()
+    if capability is None:
+        pytest.skip("requires an NVIDIA GPU")
     pytest.importorskip("triton")
     pytest.importorskip("jax_triton")
-    if float(jax.devices("gpu")[0].compute_capability) < 8.9:
+    if capability < _FP8_COMPUTE_CAPABILITY:
         pytest.skip("the Triton quantizer stores fp8e4nv, which needs compute capability 8.9 or newer")
 
 

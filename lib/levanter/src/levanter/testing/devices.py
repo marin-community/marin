@@ -47,3 +47,17 @@ def use_test_devices(device_count: int) -> Iterator[list[jax.Device]]:
 
     with use_cpu_devices(device_count):
         yield jax.local_devices()
+
+
+def nvidia_compute_capability() -> float | None:
+    """The CUDA compute capability of the first GPU, or None when it is not an NVIDIA GPU.
+
+    AMD GPUs also run under the ``gpu`` backend, and report a gfx architecture name such as
+    ``gfx942`` where NVIDIA devices report a CUDA major.minor version.
+    """
+    if jax.default_backend() != "gpu":
+        return None
+    device = jax.devices("gpu")[0]
+    if "nvidia" not in device.device_kind.lower():
+        return None
+    return float(device.compute_capability)
