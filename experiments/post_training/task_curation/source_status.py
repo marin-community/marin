@@ -28,7 +28,7 @@ from experiments.post_training.task_curation.datasets.retained_releases import r
 from experiments.post_training.task_curation.datasets.sample_qc_results import sample_qc_receipts
 from experiments.post_training.task_curation.metadata_exclusions import metadata_exclusions
 from experiments.post_training.task_curation.registry import read_registry_json
-from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES
+from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES, all_sources
 from experiments.post_training.task_curation.within_source_binding import read_dedup_receipts
 
 
@@ -108,6 +108,31 @@ def pending_rows() -> list[dict[str, Any]]:
     ]
 
 
+def remediation_rows() -> list[dict[str, Any]]:
+    """Rows for configured sources queued for lexical remediation work.
+
+    These rows keep every claim visible on the status page while their status
+    is Pending: the remediation agent produces the clean or remediated
+    private-release receipt, and the source returns to Available.
+    """
+    return [
+        StatusRow(
+            id=source.info.id,
+            name=source.name,
+            display_name=source.declaration.display_name,
+            status=SourceStatus.PENDING.value,
+            origin=source.info.origin.value,
+            upstream_dataset=source.info.upstream_dataset,
+            upstream_url=source.info.upstream_url,
+            notes=source.info.notes,
+            stage=PendingStage.LEXICAL_REMEDIATION_QUEUED.value,
+            reasons=[claim.model_dump(mode="json") for claim in source.declaration.exclusion_claims],
+        ).payload()
+        for source in all_sources().values()
+        if source.status is SourceStatus.PENDING
+    ]
+
+
 def metadata_rows() -> list[dict[str, Any]]:
     """Declaration-only Excluded rows for known-but-rejected upstreams."""
     return [
@@ -136,7 +161,7 @@ def reason_explanations() -> dict[str, dict[str, str]]:
 def status_extras() -> dict[str, Any]:
     """The full static extras artifact for the status page."""
     return {
-        "pending": pending_rows(),
+        "pending": [*pending_rows(), *remediation_rows()],
         "metadata_exclusions": metadata_rows(),
         "reason_explanations": reason_explanations(),
     }

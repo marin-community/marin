@@ -204,6 +204,39 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             ),
         ),
     ),
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": (
+        ExclusionClaim(
+            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
+            evidence=_note(
+                "Served BackendSurvey rows for the selected catalog report every surveyed backend "
+                "unsupported for this source's converted-spec census (difficulty gap "
+                "TOOL_PROVIDER_REQUIRED); the load-time backend admission gate refuses selection. "
+                "User ruling 2026-11-16: exclude."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": (
+        ExclusionClaim(
+            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
+            evidence=_note(
+                "Served BackendSurvey rows for the selected catalog report every surveyed backend "
+                "unsupported for this source's converted-spec census (difficulty gap "
+                "TOOL_PROVIDER_REQUIRED); the load-time backend admission gate refuses selection. "
+                "User ruling 2026-11-16: exclude."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir": (
+        ExclusionClaim(
+            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
+            evidence=_note(
+                "Served BackendSurvey rows for the selected catalog report every surveyed backend "
+                "unsupported for this source's converted-spec census (difficulty gap "
+                "TOOL_PROVIDER_REQUIRED); the load-time backend admission gate refuses selection. "
+                "User ruling 2026-11-16: exclude."
+            ),
+        ),
+    ),
 }
 
 NEEDS_RULING_SOURCES: frozenset[str] = frozenset(

@@ -123,4 +123,4 @@ def test_crosscode_eval_keeps_its_private_population_and_measures_lexical_overla
     assert measured.receipt.dropped_tasks == 0
     assert measured.receipt.release is None
     assert source.info.within_source_dedup.unique_count == source.info.count
-    assert source.declaration.status == "Not selectable"
+    assert source.declaration.status == "Excluded"

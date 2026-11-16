@@ -634,7 +634,7 @@ def test_publication_and_refresh_preserve_unavailable_oversight_without_result(t
         assert CurationCatalog(root).current().snapshot_id == snapshot_id
         rows = selected_sources(root)
         row = rows[metadata.info.id]
-        assert row.declaration.status == "Excluded"
+        assert row.declaration.status == "Pending"
         assert row.declaration.oversight == level
         assert row.declaration.quality_result is None
         assert row.assessment_key is None

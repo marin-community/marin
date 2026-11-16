@@ -340,14 +340,20 @@ Every source carries exactly one `SourceStatus`: `Pending`, `Available`,
 page, this reference and the guide all render from.
 
 - **Pending** covers every source queued in `sources.PENDING_MEASUREMENT_SOURCES`
-  that is not configured for the catalog yet. Each Pending row records its
-  current intake stage: `Intake queued`, `Measurements pending` or
-  `Admission pending`, derived from which measurement receipts exist.
+  that is not configured for the catalog yet, and every configured source
+  whose only exclusion claim is a missing lexical remediation receipt. Each
+  Pending row records its current intake stage: `Intake queued`,
+  `Measurements pending`, `Admission pending` or
+  `Lexical remediation queued`. A remediation agent produces the missing
+  receipt; the row is not Excluded and its claims stay visible on the status
+  page.
 - **Available** sources pass every admission check at their current pin.
 - **Excluded** folds the former `Not selectable` state and every policy
   exclusion into one category. An Excluded source always carries at least one
   `ExclusionReason` with typed `ExclusionEvidence`; exclusion without a claim is
-  a construction error, never a display state.
+  a construction error, never a display state. A source with a lexical
+  remediation claim and any other exclusion reason stays Excluded — only rows
+  whose exclusion is remediation work alone queue as Pending.
 - **Deprecated** means trainable but no longer supported or recommended.
   Selection may use a Deprecated source when explicitly asked, never by
   default. A Deprecated row must carry no exclusion reason; a deprecated-tagged
@@ -407,7 +413,7 @@ already defines, at the current pin:
 | `GRADING_CENSUS_INCOMPLETE`, `GRADING_CENSUS_COUNTS_INCOMPLETE` | Complete the grading census over the retained population; bind the census receipt (`grading_census_receipts`). |
 | `GRADER_MISSING` | Declare runnable graders for the affected tasks and re-bind the grading census. |
 | `LEXICAL_RECEIPT_MISSING` | Measure the lexical receipt at the current pin for the declared use (`lexical_measurements`). |
-| `LEXICAL_REMEDIATION_REQUIRED` | Publish the remediated private release and bind its decontamination receipt at the current pin. |
+| `LEXICAL_REMEDIATION_REQUIRED` | A remediation agent publishes the remediated private release and binds its decontamination receipt at the current pin; the row queues as Pending with stage `Lexical remediation queued` until that receipt exists. |
 | `OVERSIGHT_MISSING` | Run SAMPLE or FULL content review with recorded verification and bind the receipt. |
 | `AGENTIC_TASK_FORMAT_MISSING` | Declare the accepted TaskCompendium or Harbor task format, or record the grandfathered registration. |
 | `SNAPSHOT_IDENTITY_MISSING` | Produce the production snapshot identity measurement at the current pin. |

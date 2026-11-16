@@ -41,6 +41,10 @@ class PendingStage(StrEnum):
     """All catalog measurement receipts exist; the source awaits configuration
     and admission into the catalog."""
 
+    LEXICAL_REMEDIATION_QUEUED = "Lexical remediation queued"
+    """The source waits for a remediation agent to produce the clean or
+    remediated private-release receipt its training use requires."""
+
 
 class ExclusionEvidenceKind(StrEnum):
     """What kind of artifact backs an exclusion claim."""

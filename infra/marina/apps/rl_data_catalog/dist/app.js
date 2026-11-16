@@ -30,10 +30,13 @@ function value(row, key) {
 }
 function excludedStatus(row) { return row.status === 'Excluded' || row.status === 'Not selectable'; }
 function statusOf(row) { return excludedStatus(row) ? 'Excluded' : row.status || 'Available'; }
-function shownByDefault(row) { return row.quality !== 'QUICK' && row.result !== 'BAD' && !excludedStatus(row); }
+function shownByDefault(row) {
+  return row.quality !== 'QUICK' && row.result !== 'BAD' && !excludedStatus(row) && statusOf(row) !== 'Pending';
+}
 function eligible(row) {
-  // Excluded rows stay out of the default view and come back with one Status-filter click.
+  // Excluded and Pending rows stay out of the default view; one Status-filter click brings each back.
   if ($('status').value === 'Excluded') return excludedStatus(row);
+  if ($('status').value === 'Pending') return statusOf(row) === 'Pending';
   return $('show-all').checked || shownByDefault(row);
 }
 function matchesFilters(row) {
@@ -142,12 +145,14 @@ function render() {
   AtlasColumns.attach(document.querySelector('.source-table'), columns);
   const hidden = state.sources.filter(row => !eligible(row));
   const hiddenExcluded = hidden.filter(row => excludedStatus(row));
-  const hiddenQuality = hidden.filter(row => !excludedStatus(row));
+  const hiddenPending = hidden.filter(row => !excludedStatus(row) && statusOf(row) === 'Pending');
+  const hiddenQuality = hidden.filter(row => !excludedStatus(row) && statusOf(row) !== 'Pending');
   const folded = rows.length - displayed.length;
   $('visible-count').textContent = `${number.format(displayed.length)} displayed sources` +
     (folded ? ` · ${number.format(folded)} duplicate/subset members folded` : '') +
     (hiddenQuality.length ? ` · ${number.format(hiddenQuality.length)} QUICK or BAD hidden` : '') +
-    (hiddenExcluded.length ? ` · ${number.format(hiddenExcluded.length)} excluded sources hidden` : '');
+    (hiddenExcluded.length ? ` · ${number.format(hiddenExcluded.length)} excluded sources hidden` : '') +
+    (hiddenPending.length ? ` · ${number.format(hiddenPending.length)} pending sources hidden` : '');
 }
 function sourceRow(row, others, canonical) {
     const tr = node('tr', undefined, canonical ? 'duplicate-member' : ''); tr.dataset.sourceId = row.id;
@@ -270,11 +275,13 @@ function metrics(displayed, rows) {
   $('metric-date').textContent = day(state.syncedAt);
   const hidden = state.sources.filter(row => !eligible(row));
   const hiddenExcluded = hidden.filter(row => excludedStatus(row));
-  const hiddenQuality = hidden.filter(row => !excludedStatus(row));
+  const hiddenPending = hidden.filter(row => !excludedStatus(row) && statusOf(row) === 'Pending');
+  const hiddenQuality = hidden.filter(row => !excludedStatus(row) && statusOf(row) !== 'Pending');
   const filtered = state.sources.filter(row => !hidden.includes(row) && !matchesFilters(row));
   const folded = rows.filter(row => !displayed.includes(row));
   const reasons = [
     [hiddenExcluded, 'hidden (excluded status)'],
+    [hiddenPending, 'hidden (pending status)'],
     [hiddenQuality, 'hidden (QUICK/BAD)'],
     [filtered, 'filtered'],
     [folded, 'folded (duplicates/subsets)'],

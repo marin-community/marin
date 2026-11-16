@@ -125,6 +125,2331 @@
       "dataset_id": null,
       "dataset_revision": null,
       "reasons": []
+    },
+    {
+      "id": "OpenAI:gsm8k",
+      "name": "gsm8k",
+      "display_name": "gsm8k",
+      "status": "Pending",
+      "origin": "OpenAI",
+      "upstream_dataset": "gsm8k",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "ChilleD:svamp",
+      "name": "svamp",
+      "display_name": "svamp",
+      "status": "Pending",
+      "origin": "ChilleD",
+      "upstream_dataset": "svamp",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "CodeParrot:apps",
+      "name": "apps",
+      "display_name": "apps",
+      "status": "Pending",
+      "origin": "CodeParrot",
+      "upstream_dataset": "apps",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Gretel:gretel_text_to_sql",
+      "name": "gretel_text_to_sql",
+      "display_name": "gretel_text_to_sql",
+      "status": "Pending",
+      "origin": "Gretel",
+      "upstream_dataset": "gretel_text_to_sql",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:openscience",
+      "name": "openscience",
+      "display_name": "openscience",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "openscience",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:DCAgent__exp_rpt_curriculum-easy",
+      "name": "tasktrove-curriculum_easy",
+      "display_name": "DCAgent__exp_rpt_curriculum-easy",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "DCAgent__exp_rpt_curriculum-easy",
+      "upstream_url": null,
+      "notes": "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions failed every task. Kept with the kata tag.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:DCAgent__exp_rpt_curriculum-medium-v2",
+      "name": "tasktrove-curriculum_medium",
+      "display_name": "DCAgent__exp_rpt_curriculum-medium-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "DCAgent__exp_rpt_curriculum-medium-v2",
+      "upstream_url": null,
+      "notes": "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions failed every task. Kept with the kata tag.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:DCAgent__exp_rpt_e2egit-v2",
+      "name": "tasktrove-e2egit",
+      "display_name": "DCAgent__exp_rpt_e2egit-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "DCAgent__exp_rpt_e2egit-v2",
+      "upstream_url": null,
+      "notes": "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled tasks; exact instruction dedup handles overlap with the large cut.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:DCAgent__exp_rpt_e2egit-large",
+      "name": "tasktrove-e2egit_large",
+      "display_name": "DCAgent__exp_rpt_e2egit-large",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "DCAgent__exp_rpt_e2egit-large",
+      "upstream_url": null,
+      "notes": "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled tasks; exact instruction dedup handles repeated katas.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:DCAgent__exp_rpt_multifile-v3",
+      "name": "tasktrove-multifile",
+      "display_name": "DCAgent__exp_rpt_multifile-v3",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "DCAgent__exp_rpt_multifile-v3",
+      "upstream_url": null,
+      "notes": "Self-contained multi-file pytest tasks. In a 10-task sample, empty and trivial submissions failed every task. Kept with the kata tag.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:DCAgent__exp_rpt_stack-pytest-v2",
+      "name": "tasktrove-stack_pytest",
+      "display_name": "DCAgent__exp_rpt_stack-pytest-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "DCAgent__exp_rpt_stack-pytest-v2",
+      "upstream_url": null,
+      "notes": "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions failed every task. Kept with the kata tag.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
+      "name": "tasktrove-codereview",
+      "display_name": "laion__stackexchange-codereview-sandboxes-verified-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__stackexchange-codereview-sandboxes-verified-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Judge-only code review with a four-criterion rubric and no reference; the rubric ships under tests/, which the agent never sees. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-safety-v3",
+      "name": "tasktrove-safety",
+      "display_name": "laion__nemotron-gym-safety-v3",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-safety-v3",
+      "upstream_url": null,
+      "notes": "Judge-only against a two-line safety principle, no reference. Kept as rubric-only (tag no-reference): the principle is specific to each prompt (refuse the harmful ones, help with the benign ones). QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; 44,127 exact duplicates collapse under the pipeline dedup key (44,939 published); MEDIUM judge e2e on the seeded sample through the production grading path, agreement 59/60 across the MEDIUM pair (one conservative 0.5 disagreement on this source).",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
+      "name": "tasktrove-stack_overflow",
+      "display_name": "laion__stackexchange-overflow-sandboxes-verified-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__stackexchange-overflow-sandboxes-verified-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2",
+      "name": "tasktrove-superuser",
+      "display_name": "laion__stackexchange-superuser-sandboxes-verified-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__stackexchange-superuser-sandboxes-verified-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Judge-only Super User answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2",
+      "name": "tasktrove-unix",
+      "display_name": "laion__stackexchange-unix-sandboxes-verified-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__stackexchange-unix-sandboxes-verified-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__wizardlm-orca-v4",
+      "name": "tasktrove-wizard_orca",
+      "display_name": "laion__wizardlm-orca-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__wizardlm-orca-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4",
+      "name": "knowledge-openqa",
+      "display_name": "laion__nemotron-gym-knowledge-openqa-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-knowledge-openqa-v4",
+      "upstream_url": null,
+      "notes": "Exact gate then reference-based judge. Reference answers are real; needs the judge in the new grader. QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; 43 exact duplicates collapse under the pipeline dedup key (122,314 published); MEDIUM judge e2e 30/30 on the seeded sample through the production grading path.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-science-so-openq-v3",
+      "name": "science-openqa",
+      "display_name": "laion__nemotron-gym-science-so-openq-v3",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-science-so-openq-v3",
+      "upstream_url": null,
+      "notes": "Reference answer plus judge. Move the reference out of the criterion text into a data field at conversion. QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies (no dedup collisions); HEAVY judge e2e 30/30 on the seeded sample through the GLM relay.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-instruction-following-structured-v3",
+      "name": "tasktrove-structured",
+      "display_name": "laion__nemotron-gym-instruction-following-structured-v3",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-instruction-following-structured-v3",
+      "upstream_url": null,
+      "notes": "Any schema-valid instance is accepted, and jsonschema does the grading.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4",
+      "name": "tasktrove-multichallenge",
+      "display_name": "laion__nemotron-gym-multichallenge-advanced-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-multichallenge-advanced-v4",
+      "upstream_url": null,
+      "notes": "Multi-turn with four factual or formatting criteria per task. The converter preserves the source's explicit positive or negated pass condition.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-arc-agi-python-inductive-v2",
+      "name": "tasktrove-arc_inductive",
+      "display_name": "laion__nemotron-gym-arc-agi-python-inductive-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-arc-agi-python-inductive-v2",
+      "upstream_url": null,
+      "notes": "Agent writes a transform, graded on held-out grids. One of the best sources here.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-arc-agi-transductive-v3",
+      "name": "tasktrove-arc_transductive",
+      "display_name": "laion__nemotron-gym-arc-agi-transductive-v3",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-arc-agi-transductive-v3",
+      "upstream_url": null,
+      "notes": "Direct grid answer against gold. Subsample; the inductive variant is stronger.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Reasoning Gym:reasoning_gym",
+      "name": "reasoning_gym_generated",
+      "display_name": "reasoning_gym",
+      "status": "Pending",
+      "origin": "Reasoning Gym",
+      "upstream_dataset": "reasoning_gym",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-reasoning-gym-v2",
+      "name": "tasktrove-reasoning-gym",
+      "display_name": "laion__nemotron-gym-reasoning-gym-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-reasoning-gym-v2",
+      "upstream_url": null,
+      "notes": "reasoning_gym library scoring is sound; remove the substring fallback at conversion.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_calendar_v2",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_calendar_v2",
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_sft_step3200_calendar_v2",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_comp_coding",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_comp_coding",
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_sft_step3200_comp_coding",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_instruction_following",
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_sft_step3200_instruction_following",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_nvarc_inductive",
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_sft_step3200_nvarc_inductive",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_nvarc_transductive",
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_sft_step3200_nvarc_transductive",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_reasoning_gym",
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_sft_step3200_reasoning_gym",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa_cot_rima_new",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_stem_mcqa_cot_rima_new",
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_sft_step3200_stem_mcqa_cot_rima_new",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_structured_outputs_v2",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_structured_outputs_v2",
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_sft_step3200_structured_outputs_v2",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_citation_format_v2",
+      "name": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_citation_format_v2",
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_v3_agentic_rl_step73_citation_format_v2",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_freeform_text_v2",
+      "name": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_freeform_text_v2",
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_v3_agentic_rl_step73_freeform_text_v2",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_calendar_v2",
+      "display_name": "nemotron_ultra_rlvr1 \u00b7 ultra_sft_step3200_calendar_v2",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr1",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_comp_coding",
+      "display_name": "nemotron_ultra_rlvr1 \u00b7 ultra_sft_step3200_comp_coding",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr1",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_instruction_following",
+      "display_name": "nemotron_ultra_rlvr1 \u00b7 ultra_sft_step3200_instruction_following",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr1",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_nvarc_inductive",
+      "display_name": "nemotron_ultra_rlvr1 \u00b7 ultra_sft_step3200_nvarc_inductive",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr1",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_nvarc_transductive",
+      "display_name": "nemotron_ultra_rlvr1 \u00b7 ultra_sft_step3200_nvarc_transductive",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr1",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_reasoning_gym",
+      "display_name": "nemotron_ultra_rlvr1 \u00b7 ultra_sft_step3200_reasoning_gym",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr1",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa_cot_rima_new",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_stem_mcqa_cot_rima_new",
+      "display_name": "nemotron_ultra_rlvr1 \u00b7 ultra_sft_step3200_stem_mcqa_cot_rima_new",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr1",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_structured_outputs_v2",
+      "display_name": "nemotron_ultra_rlvr1 \u00b7 ultra_sft_step3200_structured_outputs_v2",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr1",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_calendar_v2",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_calendar_v2",
+      "display_name": "nemotron_ultra_rlvr2 \u00b7 ultra_sft_step3200_calendar_v2",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_comp_coding",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_comp_coding",
+      "display_name": "nemotron_ultra_rlvr2 \u00b7 ultra_sft_step3200_comp_coding",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_instruction_following",
+      "display_name": "nemotron_ultra_rlvr2 \u00b7 ultra_sft_step3200_instruction_following",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_inductive",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_nvarc_inductive",
+      "display_name": "nemotron_ultra_rlvr2 \u00b7 ultra_sft_step3200_nvarc_inductive",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_nvarc_transductive",
+      "display_name": "nemotron_ultra_rlvr2 \u00b7 ultra_sft_step3200_nvarc_transductive",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_reasoning_gym",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_reasoning_gym",
+      "display_name": "nemotron_ultra_rlvr2 \u00b7 ultra_sft_step3200_reasoning_gym",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa_cot_rima_new",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_stem_mcqa_cot_rima_new",
+      "display_name": "nemotron_ultra_rlvr2 \u00b7 ultra_sft_step3200_stem_mcqa_cot_rima_new",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v2",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_structured_outputs_v2",
+      "display_name": "nemotron_ultra_rlvr2 \u00b7 ultra_sft_step3200_structured_outputs_v2",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds2_freeform",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_ds2_freeform",
+      "display_name": "nemotron_ultra_rlvr2 \u00b7 ultra_sft_step3200_ds2_freeform",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds3_citation",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_ds3_citation",
+      "display_name": "nemotron_ultra_rlvr2 \u00b7 ultra_sft_step3200_ds3_citation",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:swesmith-verifier-repaired-v5",
+      "name": "swesmith-verifier-repaired-v5",
+      "display_name": "swesmith-verifier-repaired-v5",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "swesmith-verifier-repaired-v5",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "7,016 controlled SWE-smith tasks: 5,628 admitted v4 packages preserved byte-for-byte and 1,388 newly admitted repairs. 1,029 of 8,045 candidates remain excluded with per-task reasons and receipts. Native Harbor packages retain their declared environment, bootstrap and hidden verifier; import validates the complete cohort without rewriting packages or rerunning controls. Oversight is full and oracle validation is executed. Preserved upstream recipes include floating image tags and dependency resolution; control receipts identify the tested builds. The repair-campaign repository is private. Controls do not measure model-solving accuracy.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:tasktrove-safety-qa",
+      "name": "safety-qa",
+      "display_name": "safety",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-safety-qa",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Judge-only against a per-prompt two-line safety principle. No endpoint is hard-coded in any task spec; the MEDIUM JUDGE_TIERS definition pins model and completion settings. Private release; conversation-only tasks import canonical task specs. The pinned cohort revision was downloaded back and every task hash re-validated.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:tasktrove-knowledge-openqa-qa",
+      "name": "knowledge-openqa-qa",
+      "display_name": "knowledge-openqa",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-knowledge-openqa-qa",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Exact gate then reference-based judge. No endpoint is hard-coded in any task spec; the MEDIUM JUDGE_TIERS definition pins model and completion settings. Private release; conversation-only tasks import canonical task specs. The pinned cohort revision was downloaded back and every task hash re-validated.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:tasktrove-science-openqa-qa",
+      "name": "science-openqa-qa",
+      "display_name": "science-openqa",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-science-openqa-qa",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Reference answer plus scientific-equivalence judge. The tier is chosen for the source (the archive demonstrably contains operator-algebra equivalence items a MEDIUM judge would mis-grade). No endpoint is hard-coded in any task spec; the HEAVY JUDGE_TIERS definition pins model and completion settings. Private release; conversation-only tasks import canonical task specs. The pinned cohort revision was downloaded back and every task hash re-validated.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:DCAgent__exp_rle_adversarial-v6",
+      "name": "DCAgent__exp_rle_adversarial-v6",
+      "display_name": "DCAgent/exp_rle_adversarial-v6",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "DCAgent__exp_rle_adversarial-v6",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "The legacy pytest grader performs source-specific Django discovery and loads extra plugins. Ten sampled empty and trivial submissions failed, but the source has no oracle and needs a custom environment adapter. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:DCAgent__exp_rpt_nemotron-cpp",
+      "name": "DCAgent__exp_rpt_nemotron-cpp",
+      "display_name": "DCAgent/exp_rpt_nemotron-cpp",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "DCAgent__exp_rpt_nemotron-cpp",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "GoogleTest tasks without shipped oracles. Sampled empty and trivial submissions failed, but some tests contain the reference implementation and others require an uninstalled doctest dependency. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier",
+      "name": "DCAgent__inferredbugs-sandboxes-verifier",
+      "display_name": "DCAgent/inferredbugs-sandboxes-verifier",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "DCAgent__inferredbugs-sandboxes-verifier",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Never compiles or runs; regex on the rewritten method body with guards that accept either polarity. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:DCAgent__mix_h4_binary_easy",
+      "name": "DCAgent__mix_h4_binary_easy",
+      "display_name": "DCAgent/mix_h4_binary_easy",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "DCAgent__mix_h4_binary_easy",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Mixed verifier shapes: eight of 10 sampled empty and trivial checks timed out, and the crosscodeeval slice only checks that an import succeeds. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__exp_rpt_bugsinpy-v4",
+      "name": "laion__exp_rpt_bugsinpy-v4",
+      "display_name": "laion/exp_rpt_bugsinpy-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__exp_rpt_bugsinpy-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "LLM-synthesized tests against a single-file stub, with assert True placeholders. Rewrite against the real BugsInPy project suites. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__exp_rpt_ghactions-v3",
+      "name": "laion__exp_rpt_ghactions-v3",
+      "display_name": "laion/exp_rpt_ghactions-v3",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__exp_rpt_ghactions-v3",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Instruction lists every job and step verbatim; workflow is never executed. Transcription. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__exp_rpt_nemotron-junit-v6",
+      "name": "laion__exp_rpt_nemotron-junit-v6",
+      "display_name": "laion/exp_rpt_nemotron-junit-v6",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__exp_rpt_nemotron-junit-v6",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "20% of sampled tasks contain unconditional fail() stubs the verifier restores. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__exp_rpt_scaffold-v3",
+      "name": "laion__exp_rpt_scaffold-v3",
+      "display_name": "laion/exp_rpt_scaffold-v3",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__exp_rpt_scaffold-v3",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "LLM-synthesized stub-filling toys (TypeScript formatter shim, Flask hello page). Kata-grade. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__exp_rpt_stack-cpp-v4",
+      "name": "laion__exp_rpt_stack-cpp-v4",
+      "display_name": "laion/exp_rpt_stack-cpp-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__exp_rpt_stack-cpp-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Tests are lifted from real repositories with the repository stripped: sampled tasks include headers and data files that do not exist in the image, and one pastes the reference Solution class inside the test. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7",
+      "name": "laion__exp_rpt_stack-dockerfile-gpt5mini-v7",
+      "display_name": "laion/exp_rpt_stack-dockerfile-gpt5mini-v7",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__exp_rpt_stack-dockerfile-gpt5mini-v7",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "587 rows of gpt-5-mini-written per-task test scripts whose instructions describe containers that do not exist. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__exp_rpt_stack-go-v5",
+      "name": "laion__exp_rpt_stack-go-v5",
+      "display_name": "laion/exp_rpt_stack-go-v5",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__exp_rpt_stack-go-v5",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Tests import packages from the original repository (bridgr/internal/..., gosnowflake internals) that are not in the task, so most tasks are unsolvable as specified. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__exp_rpt_stack-jest-v5",
+      "name": "laion__exp_rpt_stack-jest-v5",
+      "display_name": "laion/exp_rpt_stack-jest-v5",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__exp_rpt_stack-jest-v5",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Spy-call contracts against a 90-package global npm image; 424 rows. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__exp_rpt_stack-junit-v6",
+      "name": "laion__exp_rpt_stack-junit-v6",
+      "display_name": "laion/exp_rpt_stack-junit-v6",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__exp_rpt_stack-junit-v6",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "JUnit grading is real but every instruction cites a test path that does not exist and scan-class-path counts any test class. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__exp_rpt_stack-php-large-v9",
+      "name": "laion__exp_rpt_stack-php-large-v9",
+      "display_name": "laion/exp_rpt_stack-php-large-v9",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__exp_rpt_stack-php-large-v9",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Fail-open exit paths, regex class discovery, 462 rows. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__exp_rpt_stack-pytest-large-v3",
+      "name": "laion__exp_rpt_stack-pytest-large-v3",
+      "display_name": "laion/exp_rpt_stack-pytest-large-v3",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__exp_rpt_stack-pytest-large-v3",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Stripped-repository pytest tasks without shipped oracles. Two of 10 sampled empty and trivial checks timed out, and sampled tests include truthiness-only assertions that weak stubs can satisfy. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__exp_rpt_stack-rspec-v4",
+      "name": "laion__exp_rpt_stack-rspec-v4",
+      "display_name": "laion/exp_rpt_stack-rspec-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__exp_rpt_stack-rspec-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Real Ruby test files but gems are never installed and some tasks are unsolvable offline. Bake gems and drop tasks that fail the oracle gate. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__mix_h10_reward_proportional-v2",
+      "name": "laion__mix_h10_reward_proportional-v2",
+      "display_name": "laion/mix_h10_reward_proportional-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__mix_h10_reward_proportional-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Four of 10 sampled trivial submissions received full credit because the codereval slice tests a local mock rather than the solution. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__mix_h11_single_skill_only-v2",
+      "name": "laion__mix_h11_single_skill_only-v2",
+      "display_name": "laion/mix_h11_single_skill_only-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__mix_h11_single_skill_only-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Mixed verifier shapes: eight of 10 sampled empty and trivial checks timed out; the source also contains content-free crosscodeeval slices and syntactically invalid tests. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__mix_h8_original_tests-v2",
+      "name": "laion__mix_h8_original_tests-v2",
+      "display_name": "laion/mix_h8_original_tests-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__mix_h8_original_tests-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "All 10 sampled empty and trivial checks timed out, and prior inspection found import-only test files in three of 10 tasks. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-agentic-function-calling-pivot-v3",
+      "name": "laion__nemotron-gym-agentic-function-calling-pivot-v3",
+      "display_name": "laion/nemotron-gym-agentic-function-calling-pivot-v3",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-agentic-function-calling-pivot-v3",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Predict-the-next-call from a frozen transcript with exact key-set match. The only tool-call data here; rewrite into executable mock-tool envs built from the transcripts. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3",
+      "name": "laion__nemotron-gym-agentic-indirect-prompt-injection-v3",
+      "display_name": "laion/nemotron-gym-agentic-indirect-prompt-injection-v3",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-agentic-indirect-prompt-injection-v3",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Five of five reviewed rows use the same negative-only checker, which rewards a generic reply or unrelated action without validating the required safe continuation. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-agentic-swe-pivot-v4",
+      "name": "laion__nemotron-gym-agentic-swe-pivot-v4",
+      "display_name": "laion/nemotron-gym-agentic-swe-pivot-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-agentic-swe-pivot-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "No repo in the container; a 9B judge rates one predicted next action. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-cfbench-v4",
+      "name": "laion__nemotron-gym-cfbench-v4",
+      "display_name": "laion/nemotron-gym-cfbench-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-cfbench-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Deterministic gate before the judge uses 31 constraint ids outside the IFEval registry (tables, heading depth, numbered lists, unique words, ...); only 328 of 1,478 tasks are gate-able today. Port the gate checks before converting. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-identity-following-v4",
+      "name": "laion__nemotron-gym-identity-following-v4",
+      "display_name": "laion/nemotron-gym-identity-following-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-identity-following-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Persona is NVIDIA's; judge-only. Rewrite with our identity and deterministic name/language checks, or skip. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-instruction-following-adversarial-v5",
+      "name": "laion__nemotron-gym-instruction-following-adversarial-v5",
+      "display_name": "laion/nemotron-gym-instruction-following-adversarial-v5",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-instruction-following-adversarial-v5",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Asks an LLM judge to count exactly five spelling errors. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-instruction-following-citation-v2",
+      "name": "laion__nemotron-gym-instruction-following-citation-v2",
+      "display_name": "laion/nemotron-gym-instruction-following-citation-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-instruction-following-citation-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Grades presence of literal marker substrings; never checks the cited content. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-instruction-following-multiturnchat-v4",
+      "name": "laion__nemotron-gym-instruction-following-multiturnchat-v4",
+      "display_name": "laion/nemotron-gym-instruction-following-multiturnchat-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-instruction-following-multiturnchat-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Required literal format contradicts the demonstrated turns; judge-only. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-inverse-ifeval-v4",
+      "name": "laion__nemotron-gym-inverse-ifeval-v4",
+      "display_name": "laion/nemotron-gym-inverse-ifeval-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-inverse-ifeval-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Gate matches against a deliberately broken synthetic reference; then judge. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-knowledge-web-search-mcqa-v2",
+      "name": "laion__nemotron-gym-knowledge-web-search-mcqa-v2",
+      "display_name": "laion/nemotron-gym-knowledge-web-search-mcqa-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-knowledge-web-search-mcqa-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Promises web search but ships no tool. Worth rewriting as a real search-tool env; otherwise it is a 3k duplicate of mcqa. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-litmus-bench-v2",
+      "name": "laion__nemotron-gym-litmus-bench-v2",
+      "display_name": "laion/nemotron-gym-litmus-bench-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-litmus-bench-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Instruction asks for ((answer)), verifier greps boxed or last number; SMILES tasks with no RDKit. Fix format contract and install cheminformatics. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-math-advanced-calculations-v4",
+      "name": "laion__nemotron-gym-math-advanced-calculations-v4",
+      "display_name": "laion/nemotron-gym-math-advanced-calculations-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-math-advanced-calculations-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Instruction refers to tools that do not exist and only the last number is graded. Ground-truth expression tree is present, so rewrite with a calculator tool and grade every subexpression. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-multichallenge-vanilla-v3",
+      "name": "laion__nemotron-gym-multichallenge-vanilla-v3",
+      "display_name": "laion/nemotron-gym-multichallenge-vanilla-v3",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-multichallenge-vanilla-v3",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Single subjective criterion with 'Expected answer: YES' embedded in the judge prompt. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-qa-abstention-v4",
+      "name": "laion__nemotron-gym-qa-abstention-v4",
+      "display_name": "laion/nemotron-gym-qa-abstention-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-qa-abstention-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Abstention is never rewarded so the framing is dead, reference leaks into judge text, and it duplicates openqa. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-sysbench-v4",
+      "name": "laion__nemotron-gym-sysbench-v4",
+      "display_name": "laion/nemotron-gym-sysbench-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-sysbench-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Deterministic gate before the judge uses 31 constraint ids outside the IFEval registry (tables, heading depth, numbered lists, unique words, ...); only 328 of 1,478 tasks are gate-able today. Port the gate checks before converting. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general",
+      "name": "XiaomiMiMo__MiMo-V2.6-RL-oss__general",
+      "display_name": "XiaomiMiMo/MiMo-V2.6-RL-oss__general",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "XiaomiMiMo__MiMo-V2.6-RL-oss__general",
+      "upstream_url": "https://huggingface.co/datasets/open-athena/task-trove/tree/ec049a4fb541ffbe5bbccb803e826563f5718dbf",
+      "notes": "All 989 canonical general rows; 925 private MCP environments and 64 native-registry-unavailable terminal tasks. Quality review pending at this release. The audit matches every task archive and immutable asset reference to the original inputs and pinned packages, covering all 989 tasks. Both no-delivery controls on one canonical MCP task measured zero without errors; a benign GLM-5.3 Low endpoint check passed separately. Nonempty task deliveries and independent quality review are pending. The pinned native registry cannot execute the 64 terminal_bench rows; all are retained with that limitation. See [pinned runtime provenance](provenance/XiaomiMiMo__MiMo-V2.6-RL-oss__general/source.json) for runtime revisions and file hashes. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music",
+      "name": "XiaomiMiMo__MiMo-V2.6-RL-oss__music",
+      "display_name": "XiaomiMiMo/MiMo-V2.6-RL-oss__music",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "XiaomiMiMo__MiMo-V2.6-RL-oss__music",
+      "upstream_url": "https://huggingface.co/datasets/open-athena/task-trove/tree/ec049a4fb541ffbe5bbccb803e826563f5718dbf",
+      "notes": "Canonical prompts with the complete native ABC-to-MIDI continuous scorer; no shipped solutions. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     }
   ],
   "metadata_exclusions": [

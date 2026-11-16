@@ -75,6 +75,13 @@ POPULATION_BLOCKER_REASONS: dict[str, ExclusionReason] = {
     "admitted source has tasks without runnable graders": ExclusionReason.GRADER_MISSING,
 }
 
+POPULATION_BLOCKER_PREFIX_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
+    (
+        "declared environment artifacts exist in no storage region: ",
+        ExclusionReason.ENVIRONMENT_ARTIFACT_MISSING,
+    ),
+)
+
 _LEXICAL_EVAL_MESSAGE = "Evaluation requires a measured lexical receipt for the current dataset pin"
 _DECON_MEASUREMENT_MISSING = "Decontamination measurement and private-release admission receipt are missing"
 _DECON_BLOCKED_PREFIX = "Decontamination admission blocked: "
@@ -84,6 +91,9 @@ def population_blocker_reason(blocker: str) -> ExclusionReason:
     """Map a population admission blocker string to its exclusion reason."""
     if reason := POPULATION_BLOCKER_REASONS.get(blocker):
         return reason
+    for prefix, reason in POPULATION_BLOCKER_PREFIX_REASONS:
+        if blocker.startswith(prefix):
+            return reason
     raise ValueError(f"Unmapped population admission blocker: {blocker}")
 
 
@@ -421,10 +431,10 @@ class RlDataSource[ConfigT: CatalogConfig]:
                 blockers.append("actor census does not cover the current retained release")
         if not inherited_legacy_admission and (
             info.oversight is None
-            or info.oversight.level not in {OversightLevel.SAMPLE, OversightLevel.FULL}
+            or info.oversight.level is OversightLevel.NONE
             or not info.oversight.verification.strip()
         ):
-            blockers.append("evidence-derived SAMPLE or FULL oversight is missing")
+            blockers.append("evidence-derived oversight with verification is missing")
         if "agentic" not in info.tags:
             return tuple(blockers)
         if info.task_format is None or (
@@ -550,7 +560,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
                 )
         if not inherited_legacy_admission and (
             info.oversight is None
-            or info.oversight.level not in {OversightLevel.SAMPLE, OversightLevel.FULL}
+            or info.oversight.level is OversightLevel.NONE
             or not info.oversight.verification.strip()
         ):
             claims.append(
@@ -558,8 +568,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
                     reason=ExclusionReason.OVERSIGHT_MISSING,
                     evidence=ExclusionEvidence(
                         kind=ExclusionEvidenceKind.MISSING_ARTIFACT,
-                        message="evidence-derived SAMPLE or FULL oversight is missing",
-                        expected="SAMPLE or FULL oversight with recorded verification",
+                        message="evidence-derived oversight with verification is missing",
+                        expected="derived oversight with recorded verification (QUICK or stronger)",
                     ),
                 )
             )
@@ -614,7 +624,11 @@ class RlDataSource[ConfigT: CatalogConfig]:
         Not selectable folds into Excluded. A deprecated tag yields Deprecated
         only when no exclusion reason applies; a Deprecated source must be
         trainable. An ``excluded`` tag without any claim is a registry bug and
-        fails loudly.
+        fails loudly. A source whose only exclusion claim is the missing
+        lexical remediation receipt queues as Pending with the remediation
+        stage when a remediation agent can produce it: no user-ruling claim
+        applies and the population is nonempty. Ruled exclusions and
+        zero-task sources stay Excluded.
         """
         claims = self.exclusion_claims
         if "excluded" in self.info.tags and not claims:
@@ -623,6 +637,14 @@ class RlDataSource[ConfigT: CatalogConfig]:
                 "record its reason in exclusion_registry"
             )
         if claims or "excluded" in self.info.tags:
+            reasons = {claim.reason for claim in claims}
+            if (
+                "excluded" not in self.info.tags
+                and not manual_exclusion_claims(self.info.id)
+                and reasons == {ExclusionReason.LEXICAL_REMEDIATION_REQUIRED}
+                and (self.info.within_source_dedup.unique_count or 0) > 0
+            ):
+                return SourceStatus.PENDING
             return SourceStatus.EXCLUDED
         if "deprecated" in self.info.tags:
             return SourceStatus.DEPRECATED

@@ -29,20 +29,20 @@
       <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search names, datasets, or tags…" aria-label="Search sources"></label>
     </div>
     <form id="filters" class="filters" role="search">
-      <label>Status<select id="status"><option value="all">All statuses</option><option value="Available">Available</option><option value="Deprecated">Deprecated</option><option value="Excluded">Excluded</option></select></label>
+      <label>Status<select id="status"><option value="all">All statuses</option><option value="Available">Available</option><option value="Pending">Pending</option><option value="Deprecated">Deprecated</option><option value="Excluded">Excluded</option></select></label>
       <label>Use<select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option><option value="unknown">Unknown</option></select></label>
       <label>Quality<select id="quality"><option value="all">All quality</option><option value="FULL">FULL</option><option value="SAMPLE">SAMPLE</option><option value="QUICK">QUICK</option></select></label>
       <label>Result<select id="result"><option value="all">All results</option><option value="GOOD">Good</option><option value="SOME_ISSUES">Some issues</option><option value="BAD">Bad</option><option value="UNKNOWN">Unknown</option><option value="none">Not assessed</option></select></label>
       <label>Grader<select id="grader"><option value="all">All Graders</option><option value="llm-judge">LLM judge</option><option value="exact-match">Exact match</option><option value="math-verify">Math verify</option><option value="unit-tests">Unit tests</option><option value="script">Script</option><option value="reward-model">Reward model</option><option value="none">None</option><option value="mixed">Mixed</option><option value="pending">Pending</option></select></label>
       <label>Difficulty model<select id="difficulty-model"><option value="all">All Difficulty</option><option value="small">Small</option><option value="large">Large</option><option value="hosted">Hosted</option><option value="snowball">Snowball v0.1</option></select></label>
-      <label class="checkbox"><input id="show-all" type="checkbox"> Show QUICK-quality, BAD-result and Excluded sources</label>
+      <label class="checkbox"><input id="show-all" type="checkbox"> Show QUICK-quality, BAD-result, Pending and Excluded sources</label>
       <button id="clear-filters" class="text-button" type="button">Reset</button>
       <button id="show-everything" class="text-button" type="button">Show everything</button>
       <button id="reset-column-widths" class="text-button" type="button">Reset column widths</button>
     </form>
     <div class="table-scroller" tabindex="0" aria-label="Sources">
       <table id="source-table" class="source-table"><caption class="sr-only">Sources with examples, use, quality, result, issue rate, contamination, overlapping tasks, backend fit and Daytona safety evidence, grading environment, curriculum area, last update, evidence and model difficulty</caption><thead><tr id="headers"></tr></thead><tbody id="rows"></tbody></table>
-      <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search, reset the filters, or show QUICK and BAD sources.</p></div>
+      <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search, reset the filters, or show the hidden QUICK, BAD, Pending and Excluded sources.</p></div>
     </div>
     <footer class="table-footer"><span id="visible-count"></span><span>Select a column title to sort · Open Evidence for everything behind a label</span></footer>
   </section>

@@ -6,6 +6,8 @@
 
 from pathlib import Path
 
+from finestore.rl.curation import OversightLevel
+
 from experiments.post_training.task_curation.census_binding import bind_actor_census
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
@@ -239,11 +241,19 @@ def require_accepted_task_format(source: RlDataSource) -> None:
 
 
 def runnable_sources() -> dict[str, RlDataSource]:
-    """Available sources with dataset-owned execution, keyed by invocation name."""
+    """Available sources with dataset-owned execution, keyed by invocation name.
+
+    Sources whose evidence-derived oversight is QUICK stay out of the default
+    selection: QUICK QC admits them to the Atlas but not to default training.
+    Explicitly requested selections reach them through the driver's registered
+    catalog, like Deprecated sources.
+    """
     sources = [
         source
         for source in all_sources().values()
-        if not source.admission_blockers and source.declaration.status == "Available"
+        if not source.admission_blockers
+        and source.declaration.status == "Available"
+        and (source.info.oversight is None or source.info.oversight.level is not OversightLevel.QUICK)
     ]
     for source in sources:
         require_accepted_task_format(source)

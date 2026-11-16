@@ -18,7 +18,11 @@ from finestore.rl.status_taxonomy import (
 )
 
 from experiments.post_training.task_curation import source_status
-from experiments.post_training.task_curation.exclusion_registry import MANUAL_EXCLUSION_CLAIMS, NEEDS_RULING_SOURCES
+from experiments.post_training.task_curation.exclusion_registry import (
+    MANUAL_EXCLUSION_CLAIMS,
+    NEEDS_RULING_SOURCES,
+    manual_exclusion_claims,
+)
 from experiments.post_training.task_curation.metadata_exclusions import metadata_exclusions
 from experiments.post_training.task_curation.source import (
     POPULATION_BLOCKER_REASONS,
@@ -54,7 +58,7 @@ BLOCKER_REASON_RULES = (
     ("Decontamination", ExclusionReason.LEXICAL_REMEDIATION_REQUIRED),
     ("Atlas ", ExclusionReason.LEXICAL_REMEDIATION_REQUIRED),
     ("actor census evidence is missing", ExclusionReason.ACTOR_CENSUS_MISSING),
-    ("evidence-derived SAMPLE or FULL oversight is missing", ExclusionReason.OVERSIGHT_MISSING),
+    ("evidence-derived oversight with verification is missing", ExclusionReason.OVERSIGHT_MISSING),
     ("accepted agentic task format is missing", ExclusionReason.AGENTIC_TASK_FORMAT_MISSING),
     ("production snapshot identity measurement is missing", ExclusionReason.SNAPSHOT_IDENTITY_MISSING),
     ("execution requirement measurement is missing", ExclusionReason.EXECUTION_REQUIREMENT_MISSING),
@@ -84,8 +88,14 @@ LEXICAL_MESSAGES = {
 
 
 @pytest.mark.data_integration
-def test_selection_semantics_do_not_change():
-    """The refactor folds Not selectable into Excluded; Available stays exactly the same set."""
+def test_selection_semantics_match_the_ruled_baseline():
+    """Available equals the pre-taxonomy string logic minus the user-ruled exclusions.
+
+    The taxonomy folded Not selectable into Excluded and moved lexical-only
+    remediation rows to Pending without changing selection. The ruled
+    exclusions (manual registry claims, e.g. the 2026-11-16 NO_SUPPORTED_BACKEND
+    ruling for the Nemotron math_tir sources) are the only deliberate delta.
+    """
     before = {}
     after = {}
     for source in all_sources().values():
@@ -102,9 +112,10 @@ def test_selection_semantics_do_not_change():
             )
         )
         after[info.id] = source.status.value
-    assert {key for key, value in before.items() if value == "Available"} == {
-        key for key, value in after.items() if value == "Available"
-    }
+    ruled = {info_id for info_id in before if manual_exclusion_claims(info_id)}
+    assert {key for key, value in after.items() if value == "Available"} == {
+        key for key, value in before.items() if value == "Available"
+    } - ruled
     assert set(before.values()) <= {"Available", "Deprecated", "Excluded", "Not selectable"}
     assert set(after.values()) <= {status.value for status in SourceStatus}
 
@@ -153,6 +164,18 @@ def test_pending_rows_cover_the_intake_queue():
     for row in rows:
         assert row["status"] == SourceStatus.PENDING
         assert row["stage"] in {stage.value for stage in source_status.PendingStage}
+
+
+@pytest.mark.data_integration
+def test_remediation_rows_are_configured_pending_sources():
+    remediation = {row["id"]: row for row in source_status.remediation_rows()}
+    intake = {source.info.id for source in PENDING_MEASUREMENT_SOURCES}
+    configured = {source.info.id for source in all_sources().values()}
+    assert set(remediation) <= configured - intake
+    for row in remediation.values():
+        assert row["status"] == SourceStatus.PENDING
+        assert row["stage"] == source_status.PendingStage.LEXICAL_REMEDIATION_QUEUED.value
+        assert row["reasons"], f"Remediation row without its claim: {row['id']}"
 
 
 def test_admission_blocker_strings_stay_mapped():
@@ -257,7 +280,7 @@ def test_pending_stage_derivation():
     assert source_status.pending_stage("c", receipts) is source_status.PendingStage.INTAKE_QUEUED
 
 
-def test_status_enum_semantics(tmp_path):
+def test_status_enum_semantics(tmp_path, monkeypatch):
     from experiments.post_training.task_curation.tests.admission_fixtures import (  # noqa: PLC0415
         with_admission_census,
     )
@@ -283,3 +306,20 @@ def test_status_enum_semantics(tmp_path):
     tagged = replace(source, info=replace(source.info, tags=(*source.info.tags, "excluded")))
     with pytest.raises(ValueError, match="without a typed exclusion claim"):
         _ = tagged.status
+    lexical = replace(source, info=replace(source.info, lexical_contamination=None))
+    assert lexical.status is SourceStatus.PENDING  # remediation work queues the row, not excludes it
+    quick = replace(
+        source,
+        info=replace(
+            source.info,
+            oversight=OversightEvidence(
+                level=OversightLevel.QUICK, campaign="fixture", verification="Fixture conversion executed."
+            ),
+        ),
+    )
+    assert quick.status is SourceStatus.AVAILABLE  # user ruling: QUICK QC admits to the Atlas
+    import experiments.post_training.task_curation.sources as source_catalog  # noqa: PLC0415
+    from experiments.post_training.task_curation.sources import runnable_sources  # noqa: PLC0415
+
+    monkeypatch.setattr(source_catalog, "all_sources", lambda: {quick.info.id: quick})
+    assert quick.name not in runnable_sources()  # QUICK stays out of the default training selection
