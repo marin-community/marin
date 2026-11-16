@@ -12,7 +12,7 @@ Tracked tasks the candidate leaves out become advisory drop flags.
 
 import logging
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from taskcompendium.pipeline.repair import (
     CandidateDropAdvisory,
@@ -39,6 +39,8 @@ class MatchOutcome:
     receipts: list[MatchReceipt]
     advisories: list[CandidateDropAdvisory]
     census: MatchCensus
+    reverse_best: dict[str, float] = field(default_factory=dict)
+    """Tracked task ID to its strongest candidate similarity; report evidence."""
 
 
 def _content_key(row: TaskContent) -> tuple:
@@ -145,7 +147,7 @@ def match_candidates(
     if duplicate_count:
         logger.info("Collapsed %d content-identical candidate rows", duplicate_count)
     logger.info("Match census: %s", census.model_dump_json())
-    return MatchOutcome(receipts=receipts, advisories=advisories, census=census)
+    return MatchOutcome(receipts=receipts, advisories=advisories, census=census, reverse_best=reverse_best)
 
 
 def _replace_class(receipt: MatchReceipt, match_class: RepairMatchClass, reason: str) -> MatchReceipt:

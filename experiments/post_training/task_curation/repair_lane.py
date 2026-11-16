@@ -97,6 +97,7 @@ class DryRunReport(BaseModel):
     census: dict[str, Any]
     advisories: int
     comparative: dict[str, Any] = Field(default_factory=dict)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
     usage: dict[str, int] = Field(default_factory=dict)
     review_wall_seconds: float | None = None
     gpu_hours: float | None = None
@@ -216,6 +217,35 @@ def comparative_summary(result: ComparativeBatchResult) -> dict[str, Any]:
     }
 
 
+def match_diagnostics(
+    outcome: MatchOutcome, tracked: PopulationIndex, candidates: PopulationIndex, *, sample_characters: int = 400
+) -> dict[str, Any]:
+    """Sample evidence for a match report: strongest matches and instruction previews.
+
+    A zero-overlap census is not interpretable without the texts behind it; the report
+    carries the strongest forward matches, the strongest tracked-side similarities and a
+    few normalized instruction previews from both populations.
+    """
+    forward = sorted(outcome.receipts, key=lambda receipt: receipt.similarity, reverse=True)[:10]
+    reverse_top = sorted(outcome.reverse_best.items(), key=lambda item: item[1], reverse=True)[:10]
+    previews = {
+        label: [row.text[:sample_characters] for row in index.raw_rows[:3]]
+        for label, index in (("tracked", tracked), ("candidate", candidates))
+    }
+    return {
+        "forward_top": [
+            {
+                "candidate": receipt.candidate_task_id,
+                "tracked": receipt.tracked_task_id,
+                "similarity": receipt.similarity,
+            }
+            for receipt in forward
+        ],
+        "reverse_top": [{"tracked": task_id, "similarity": similarity} for task_id, similarity in reverse_top],
+        "instruction_previews": previews,
+    }
+
+
 def dry_run(
     *,
     tracked_source_id: str,
@@ -232,9 +262,11 @@ def dry_run(
         folders=folders, repo=repo, revision=candidate_revision, candidate_source_id=candidate_source_id
     )
     tracked_tasks = load_tracked_tasks(tracked_uris)
+    tracked = tracked_index(tracked_tasks, tracked_uris)
+    candidates_rows = candidate_index(candidates)
     outcome = match_candidates(
-        tracked_index(tracked_tasks, tracked_uris),
-        candidate_index(candidates),
+        tracked,
+        candidates_rows,
         tracked_source_id=tracked_source_id,
         candidate_source_id=candidate_source_id,
     )
@@ -248,6 +280,7 @@ def dry_run(
     workload = matched_pairs(
         outcome, tracked_tasks=tracked_tasks, candidate_tasks=[candidate.task for candidate in candidates.tasks]
     )
+    report = report.model_copy(update={"diagnostics": match_diagnostics(outcome, tracked, candidates_rows)})
     if not run or not workload.pairs:
         logger.info("Dry run without review: %d repaired pairs pending", len(workload.pairs))
         return report
