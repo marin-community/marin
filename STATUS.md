@@ -35,8 +35,16 @@ CalibForge-style semantic TB variants exist. Recommended folders: BugsInPy 471, 
 - **NL2Bash 1,042 vs TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2 (prepared population): premise confirmed.** 1,034/1,042 candidates are the same "Terminal Automation Request" template family (best similarities 0.69–0.72), 8 new, 260 tracked absent. All 1,034 land CONFLICTING because FWeindel's repaired instructions dropped the tracked "## Environment Setup" preamble (~30% of text) — cross-conversion boilerplate, below the 0.9 repaired threshold by a hair. Policy question sent to the coordinator: (a) add a lane normalization that strips shared template setup sections before LSH (expected: most pairs → REPAIRED → FULL comparative review ≈1,034 pairs ≈ 25–40M tokens ≈ 4–8 GPU-h on 4xGB200), (b) keep 0.9/0.5 and accept ~1,034 manual conflict rulings (infeasible), or (c) rule the 0.5–0.9 same-template band as matched-repaired directly (user ruling).
 - Report artifacts: s3://marin-us-east-02a/marin/rl-data/atlas/repair-candidates/20261116/{bugsinpy,nl2bash}-dry-run.json (bugsinpy report is pre-suppression-guard; census unchanged, advisories field stale — rerun value noted here).
 
+## Phase 2 progress (2026-11-16 ~16:20 EST)
+
+- **LANDED**: 9c40911e70 (lane build), 4f674d012a (docs), 81ea7a3d85 (approved setup-section normalization + pair sampling diagnostics), specs content-join pending push.
+- **Approved policy (a) implemented**: `strip_template_sections` removes leading shared template setup sections (## Environment Setup / ## Setup headers through their terminator rule) from BOTH sides before LSH; identity hashes untouched so exact joins still classify on real content; 7 tests incl. a preamble-pair alignment test. 34 tests green.
+- **NL2Bash rerun (nl2bash-dry-run-v3.json)**: strip lifted best similarities 0.69→0.79 and matched all 1,042 candidates (0 new; advisories 260→23), but ALL 1,042 remain CONFLICTING — the pair sample shows near-identical bodies differing in requirement wording (real repair edits: "input files already in /workspace" vs "Do not delete any helper files; the verifier inspects them" + "pre-seeded fixtures"). Math note: stripping SHARED boilerplate lowers true-pair jaccard (it was inflating), so 0.9 stays out of reach for paraphrase-level repairs. Proposal sent to coordinator: mutual-best ≥ 0.5 → repaired (unique best neighbor both directions), conflicting otherwise.
+- **PyMethods2Test (pymethods-dry-run.json, CPU)**: 4,770 REPAIRED / 181 conflicting / 39 new / 0 dropped advisories vs 4,951 tracked (all matched). Specs content-join added (`--tracked-specs`) so prepared pins review against their own conversion (lexical specs parquet, full TaskSpecs).
+- **GPU comparative review RUNNING** (job /benfeuer/atlas-repair-pymethods-review, batch priority): 4,770 pairs through the pinned GLM-5.3 V3 judge; serving child prepare-model-9657af30. Report will carry outcomes, defect counts, exact tokens and GPU-h.
+
 ## Next
 
-- LANDED 9c40911e70 (lane build) and 4f674d012a (docs + STATUS) on atlas-env-audit.
-- Awaiting coordinator/user ruling on the NL2Bash normalization policy; then the GPU comparative pass for whichever folder the user picks.
-- Production merge/publish (new PRIVATE version + provenance) after a folder passes review + oracle/NoP.
+- Poll the pymethods review in short steps; report outcomes + GPU-h/tokens to coordinator.
+- NL2Bash: await ruling on mutual-best ≥ 0.5; then rerun match + GPU pass.
+- Oracle/NoP for winners after review outcomes.
