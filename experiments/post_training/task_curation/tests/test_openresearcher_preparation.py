@@ -179,6 +179,24 @@ def test_retained_population_excludes_benchmarks_and_rejects_rewritten_gold(tmp_
     )
     with pytest.raises(ValueError, match="Grounding drop counts differ"):
         retained_questions(replace(config, grounding_receipt_sha256=changed_counts_sha))
+    original_decisions = (tmp_path / "decisions.parquet").read_bytes()
+    technical_decisions = pq.read_table(tmp_path / "decisions.parquet").to_pylist()
+    decision = json.loads(technical_decisions[-1]["decision_json"])
+    decision.update(status="technical_exclusion", reason="grounding_incomplete_exhausted")
+    technical_decisions[-1]["decision_json"] = json.dumps(decision)
+    technical_sha = parquet("decisions.parquet", technical_decisions)
+    _, technical_ground_sha = seal(
+        "grounding.json",
+        grounded.model_copy(
+            update={
+                "decisions_parquet_sha256": technical_sha,
+                "drop_reason_counts": {"grounding_incomplete_exhausted": 1},
+            }
+        ).model_dump(mode="json"),
+    )
+    with pytest.raises(ValueError, match="exclusions exceed one percent"):
+        retained_questions(replace(config, grounding_receipt_sha256=technical_ground_sha))
+    (tmp_path / "decisions.parquet").write_bytes(original_decisions)
     # Even a freshly sealed parquet cannot change the source question's private answer.
     changed = [{**rows[0], "answer": "unreleased substitute"}, rows[1]]
     changed_sha = parquet("kept.parquet", changed)

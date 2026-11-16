@@ -208,7 +208,9 @@ def ground_questions(config: GroundingConfig) -> GroundedQuestions:
         }
         (output / "backend-identity.json").write_text(json.dumps(identity, indent=2))
         decisions = asyncio.run(grounded_rows(config, rows, connection, tokenizer, output))
-    if len(decisions) != len(rows) or any(decision["status"] != "screened" for decision in decisions):
+    if len(decisions) != len(rows) or any(
+        decision["status"] not in {"screened", "technical_exclusion"} for decision in decisions
+    ):
         raise ValueError("Grounding did not finish the complete frozen population")
     by_id = {row["id"]: row for row in rows}
     kept = [by_id[decision["id"]] for decision in decisions if decision["keep"]]

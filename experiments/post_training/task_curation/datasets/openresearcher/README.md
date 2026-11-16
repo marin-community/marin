@@ -36,11 +36,17 @@ drop decisions.
 
 Each structured judge request permits at most three attempts for responses that
 reach the 4,096-token output limit or fail schema validation. Retries use the same
-request and generation settings and preserve every response. Exhaustion fails
-the artifact.
+request and generation settings and preserve every response and its token usage.
+When the last attempt is truncated, the question receives a `technical_exclusion`
+decision with `keep=false` and reason `grounding_incomplete_exhausted`. These
+exclusions may cover at most 1% of the complete question population (61 of 6,102);
+exceeding that limit fails the artifact. Conversion independently checks the
+same limit and rejects any technical exclusion marked for retention. Exhausted
+malformed responses and transport or backend failures still fail the artifact.
+Only `grounding_incomplete_exhausted` drops count toward this cap.
 
 A complete JSON requirements array longer than eight receives an explicit budget
-drop before nested query validation. Malformed responses within that budget keep
+drop before nested query validation. Other malformed structured responses keep
 the same three-attempt retry and failure behavior. The final receipt reports
 `drop_reason_counts`; conversion checks these counts against the sealed
 question-level decisions.

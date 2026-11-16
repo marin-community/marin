@@ -14,10 +14,10 @@ from transformers import PreTrainedTokenizerFast
 from verifyit.modes.grade_judge import JudgeConnection
 
 from experiments.post_training.task_curation.datasets.openresearcher.grounding import (
-    GroundingCompletionIncomplete,
     GroundingJudge,
     screen_population,
     screen_question,
+    validate_technical_exclusions,
 )
 from experiments.post_training.task_curation.datasets.openresearcher.grounding_contract import GroundedRequirement
 from experiments.post_training.task_curation.tests.review_server import JudgeReply
@@ -117,29 +117,65 @@ async def test_truncated_grounding_retries_with_the_same_sealed_budget(review_se
 
 
 @pytest.mark.asyncio
-async def test_exhausted_grounding_truncations_remain_execution_failures(review_server, tmp_path):
-    review_server.judge_replies = [JudgeReply("{", finish_reason="length") for _ in range(3)]
+@pytest.mark.parametrize("incomplete_questions", [1, 2])
+async def test_exhausted_grounding_truncations_drop_questions_with_a_population_cap(
+    review_server, tmp_path, incomplete_questions
+):
+    rows = [{"id": str(index), "question": "Who founded Cedar Press?", "answer": "Nina Calder"} for index in range(100)]
+    review_server.judge_replies = [JudgeReply("{", finish_reason="length") for _ in range(3 * incomplete_questions)] + [
+        JudgeReply(json.dumps({"decomposable": False, "requirements": []})) for _ in rows[incomplete_questions:]
+    ]
 
     async def retrieve(queries):
         raise AssertionError("Incomplete decomposition must not reach retrieval")
 
-    with pytest.raises(ExceptionGroup) as failure:
-        await screen_population(
-            [{"id": "fixture", "question": "Who founded Cedar Press?", "answer": "Nina Calder"}],
-            JudgeConnection(f"http://127.0.0.1:{review_server.server_port}/v1", "fixture", default_model="fixture"),
-            grounding_tokenizer(),
-            retrieve,
-            StoragePath(str(tmp_path)),
-            1,
+    args = (
+        rows,
+        JudgeConnection(f"http://127.0.0.1:{review_server.server_port}/v1", "fixture", default_model="fixture"),
+        grounding_tokenizer(),
+        retrieve,
+        StoragePath(str(tmp_path)),
+        1,
+    )
+    if incomplete_questions == 1:
+        decisions = await screen_population(*args)
+        assert len(decisions) == 100
+        assert sum(d["reason"] == "grounding_incomplete_exhausted" for d in decisions) == 1
+    else:
+        with pytest.raises(ValueError, match="exclusions exceed one percent"):
+            await screen_population(*args)
+    for index in range(incomplete_questions):
+        decision = json.loads((tmp_path / f"decisions/{index}.json").read_text())
+        assert decision["status"] == "technical_exclusion"
+        assert decision["keep"] is False
+        assert decision["reason"] == "grounding_incomplete_exhausted"
+        requests = []
+        for uri in decision["observations"]:
+            observation = json.loads(StoragePath(uri).read_text())
+            assert observation["response"]["choices"][0]["finish_reason"] == "length"
+            assert observation["response"]["usage"]["total_tokens"] == 16
+            requests.append(observation["request"])
+        assert len(requests) == 3
+        assert requests[0] == requests[1] == requests[2]
+
+
+def test_grounding_exclusion_cap_uses_the_complete_population_and_forbids_retention():
+    decisions = [
+        (
+            {"status": "technical_exclusion", "reason": "grounding_incomplete_exhausted", "keep": False}
+            if index < 61
+            else {"status": "screened", "reason": "pass", "keep": True}
         )
-    assert isinstance(failure.value.exceptions[0], GroundingCompletionIncomplete)
-    assert len(review_server.requests) == 3
-    decision = json.loads((tmp_path / "decisions/fixture.json").read_text())
-    assert decision["status"] == "execution_failure"
-    assert "keep" not in decision
-    for attempt in range(3):
-        observation = json.loads((tmp_path / f"observations/fixture/decompose-{attempt}.json").read_text())
-        assert observation["response"]["choices"][0]["finish_reason"] == "length"
+        for index in range(6102)
+    ]
+    validate_technical_exclusions(decisions)
+    decisions[0]["keep"] = True
+    with pytest.raises(ValueError, match="explicit technical exclusion"):
+        validate_technical_exclusions(decisions)
+    decisions[0]["keep"] = False
+    decisions[61] = dict(decisions[0])
+    with pytest.raises(ValueError, match="exclusions exceed one percent"):
+        validate_technical_exclusions(decisions)
 
 
 @pytest.mark.asyncio

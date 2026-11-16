@@ -62,6 +62,30 @@ class GroundingCompletionIncomplete(ValueError):
     """The model exhausted its output budget before completing a response."""
 
 
+class GroundingIncompleteExhausted(ValueError):
+    """A structured request exhausted its attempts with an incomplete response."""
+
+    reason: ClassVar[str] = "grounding_incomplete_exhausted"
+
+    def __init__(self, request_name: str):
+        self.request_name = request_name
+        super().__init__(f"{request_name}: incomplete response after {PARSE_ATTEMPTS} attempts")
+
+
+def validate_technical_exclusions(decisions: list[dict]) -> None:
+    """Require explicit drop decisions and cap incomplete exhaustion at one percent."""
+    exclusions = []
+    for decision in decisions:
+        technical = decision["status"] == "technical_exclusion"
+        incomplete = decision["reason"] == GroundingIncompleteExhausted.reason
+        if technical != incomplete or (technical and decision["keep"] is not False):
+            raise ValueError("Incomplete grounding must be an explicit technical exclusion")
+        if technical:
+            exclusions.append(decision)
+    if len(exclusions) * 100 > len(decisions):
+        raise ValueError(f"Incomplete grounding exclusions exceed one percent: {len(exclusions)}/{len(decisions)}")
+
+
 @dataclass(frozen=True)
 class GroundingJudge:
     connection: JudgeConnection
@@ -126,6 +150,8 @@ class GroundingJudge:
             except (ValidationError, json.JSONDecodeError, GroundingCompletionIncomplete) as error:
                 (self.observations / f"{name}-{attempt}-error.txt").write_text(str(error))
                 if attempt + 1 == PARSE_ATTEMPTS:
+                    if isinstance(error, GroundingCompletionIncomplete):
+                        raise GroundingIncompleteExhausted(name) from error
                     raise
         raise AssertionError("A positive parse-attempt budget must produce a result or an exception")
 
@@ -224,6 +250,19 @@ async def screen_population(
                 judge = GroundingJudge(connection, client, tokenizer, output / "observations" / row["id"])
                 try:
                     result = await screen_question(row, judge, retrieve)
+                except GroundingIncompleteExhausted as error:
+                    result = {
+                        "id": row["id"],
+                        "contract_sha256": CONTRACT_SHA256,
+                        "keep": False,
+                        "status": "technical_exclusion",
+                        "reason": error.reason,
+                        "detail": str(error),
+                        "observations": [
+                            str(judge.observations / f"{error.request_name}-{attempt}.json")
+                            for attempt in range(PARSE_ATTEMPTS)
+                        ],
+                    }
                 except GroundingBudgetExceeded as error:
                     result = {
                         "id": row["id"],
@@ -243,4 +282,6 @@ async def screen_population(
 
         async with asyncio.TaskGroup() as group:
             tasks = [group.create_task(one(row)) for row in rows]
-        return [task.result() for task in tasks]
+        decisions = [task.result() for task in tasks]
+        validate_technical_exclusions(decisions)
+        return decisions

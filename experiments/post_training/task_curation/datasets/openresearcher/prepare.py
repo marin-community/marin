@@ -39,6 +39,7 @@ from experiments.post_training.task_curation.datasets.openresearcher.assets impo
     RegionalInputs,
     pinned_document,
 )
+from experiments.post_training.task_curation.datasets.openresearcher.grounding import validate_technical_exclusions
 from experiments.post_training.task_curation.datasets.openresearcher.grounding_contract import CONTRACT_SHA256
 from experiments.post_training.task_curation.datasets.openresearcher.grounding_pipeline import (
     MODEL_REVISION,
@@ -161,7 +162,9 @@ def retained_questions(config: PreparationConfig) -> RetainedQuestions:
         or len(decisions_by_id) != len(decisions)
         or set(decisions_by_id) != set(originals)
         or any(
-            d["id"] != key or d["status"] != "screened" or d["contract_sha256"] != CONTRACT_SHA256
+            d["id"] != key
+            or d["status"] not in {"screened", "technical_exclusion"}
+            or d["contract_sha256"] != CONTRACT_SHA256
             for key, d in decisions_by_id.items()
         )
     ):
@@ -171,6 +174,7 @@ def retained_questions(config: PreparationConfig) -> RetainedQuestions:
         Counter(decision["reason"] for decision in decisions_by_id.values() if not decision["keep"])
     ):
         raise ValueError("Grounding drop counts differ from the sealed question decisions")
+    validate_technical_exclusions(list(decisions_by_id.values()))
     if (
         len(kept) != grounded.kept_questions
         or len({row["id"] for row in kept}) != len(kept)
