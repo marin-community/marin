@@ -4,8 +4,8 @@ import json
 import os
 import shlex
 import shutil
+import stat
 import subprocess
-import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
@@ -48,13 +48,9 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
     node = shutil.which("node")
     bash = shutil.which("bash")
     tee = shutil.which("tee")
-    rm = shutil.which("rm")
     assert node is not None
     assert bash is not None
     assert tee is not None
-    assert rm is not None
-    # Model provider ownership at the filesystem boundary; run the agent's
-    # shell, Node setup, output validator and EXIT trap unchanged.
     shared_tmp = temp_dir / "tmp"
     shared_tmp.mkdir(exist_ok=True)
     shared_tmp.chmod(0o1777)
@@ -68,15 +64,6 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
             'mkdir -p "$HOME/pi-artifacts"\n'
             f'exec {shlex.quote(tee)} "$HOME/pi-artifacts/$(basename "$1")"\n'
         ),
-        fake_bin / "rm": f"""#!{sys.executable}
-import os, pathlib, stat, sys
-uploads = {(str(endpoint_path), str(extension_path))!r}
-for name in sys.argv[1:]:
-    path = pathlib.Path(name)
-    if name in uploads and path.exists() and path.parent.stat().st_mode & stat.S_ISVTX:
-        sys.exit("Cannot remove provider-owned upload from a sticky directory")
-os.execv({rm!r}, ["rm", *sys.argv[1:]])
-""",
     }
     for path, contents in scripts.items():
         path.write_text(contents)
@@ -820,8 +807,10 @@ fetch(`${provider.baseUrl}/chat/completions`, {
         {"type": "text", "text": "roundtrip complete"}
     ]
     assert event["message"]["stopReason"] == "stop"
-    assert not shell.endpoint_path.exists()
-    assert not shell.extension_path.exists()
+    # A sticky parent prevents the agent from unlinking root-owned uploads.
+    for path in (shell.endpoint_path, shell.extension_path):
+        assert not path.parent.stat().st_mode & stat.S_ISVTX
+        assert not path.exists()
     assert not (temp_dir / ".pi/agent/models.json").exists()
 
     shutil.copyfile(output_path, temp_dir / "pi.txt")
