@@ -449,9 +449,10 @@ class _ExpertRouting(NamedTuple):
 class _ExpertLayout:
     """Static shapes of the chunked expert pipeline on one shard.
 
-    ``chunk_capacity`` bounds the rows one chunk accepts, the logical capacity that clipping and
-    drops count against. Each chunk's receiver buffer has ``receiver_rows`` rows: that capacity
-    plus room for every expert's rows to start on the expert MLP's ``receiver_alignment``.
+    ``chunk_capacity`` is the static bound on the rows one chunk accepts. Clipping and drops count
+    against the traced logical chunk capacity, which never exceeds it. Each chunk's receiver buffer
+    has ``receiver_rows`` rows: that bound plus room for every expert's rows to start on the expert
+    MLP's ``receiver_alignment``.
     """
 
     tokens_per_shard: int
