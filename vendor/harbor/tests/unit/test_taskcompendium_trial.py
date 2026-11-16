@@ -93,14 +93,14 @@ REPOSITORY_INTERFACE = "shell:v1"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("agent,expected", [("nop", 0.0), ("oracle", 1.0)])
+@pytest.mark.parametrize("agent,expected", [("nop", 0.0), ("oracle", 1.0), ("task-spec-chat", 1.0)])
 @pytest.mark.parametrize("delivery", ["rst", "multiswe"])
 async def test_declarative_task_spec_grades_original_actor_state_and_closes_contexts(tmp_path, monkeypatch, agent, expected, delivery):
     build = DockerBuildContext(files=(
         inline_resource("Dockerfile", b"FROM ubuntu:24.04\nWORKDIR /app\nCOPY initial value\n"),
         inline_resource("initial", b"base"),
     ))
-    environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS,
+    environment = EnvironmentRequirements(capabilities=("shell",), command_semantics=CommandSemantics.LINUX_PROCESS,
                                           docker_build=build, working_directory="/app")
     source_check = 'if [ "$(cat value)" = gold ]; then printf 1; else printf 0; fi > collected.txt'
     task = TaskSpec(
@@ -135,9 +135,36 @@ async def test_declarative_task_spec_grades_original_actor_state_and_closes_cont
 
     monkeypatch.setattr(machines, "create", create)
     monkeypatch.setattr(adapter, "DaytonaDeclarativeMachineFactory", lambda client, **kwargs: machines)
+    requests = []
+    if agent == "task-spec-chat":
+        def response(request):
+            body = json.loads(request.content)
+            requests.append(body)
+            message = {"role": "assistant", "content": "Done."}
+            finish = "stop"
+            if len(requests) == 1 and body.get("tools"):
+                message = {"role": "assistant", "content": None, "tool_calls": [{
+                    "id": "workspace-shell", "type": "function", "function": {
+                        "name": body["tools"][0]["function"]["name"],
+                        "arguments": json.dumps({"command": "cp gold value"}),
+                    },
+                }]}
+                finish = "tool_calls"
+            return httpx.Response(200, json={
+                "id": f"reply-{len(requests)}", "object": "chat.completion", "created": 0, "model": "candidate",
+                "choices": [{"index": 0, "finish_reason": finish, "message": message}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            })
+        real_client = agents.AsyncOpenAI
+        monkeypatch.setattr(agents, "AsyncOpenAI", lambda **kwargs: real_client(
+            **kwargs, http_client=httpx.AsyncClient(transport=httpx.MockTransport(response)),
+        ))
     trial = await Trial.create(TrialConfig(
         task=TaskConfig(path=directory), trial_name=agent, trials_dir=tmp_path / "trials",
-        agent=AgentConfig(name=agent), environment=EnvironmentConfig(type="daytona", kwargs={"provisioning": "declarative"}),
+        agent=AgentConfig(name=agent, model_name="openai/candidate" if agent == "task-spec-chat" else None,
+                          kwargs={"api_base":"https://candidate.fixture/v1", "max_turns":2, "max_tokens":128,
+                                  "request_parameters":{"temperature":0.7}} if agent == "task-spec-chat" else {}),
+        environment=EnvironmentConfig(type="daytona", kwargs={"provisioning": "declarative"}),
     ), host_capabilities=HostCapabilities(daytona=DaytonaConnection("fixture-key", "https://offline.invalid", "us")))
     result = await trial.run()
     assert result.exception_info is None, result.exception_info

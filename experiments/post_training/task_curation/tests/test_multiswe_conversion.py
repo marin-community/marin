@@ -11,11 +11,13 @@ import tomllib
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from rolloutengine.harness.shell import DEFAULT_SHELL_TOOL, task_prompt
 from taskcompendium.harbor.adapter import declared_execution_limits
 from taskcompendium.harbor.negative_control import public_task_preparation
 from taskcompendium.models import DockerBuildExecution, Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.runtime.shell import resolve_shell_tool
 
 from experiments.post_training.task_curation.datasets.prime_intellect.capture_models import ImageBinding
 from experiments.post_training.task_curation.datasets.prime_intellect.multiswe.convert import (
@@ -67,6 +69,9 @@ def test_multiswe_frozen_row_exports_with_private_parser_and_original_actor_limi
     )
     task = task_from_capture(row, capture)
     assert isinstance(task, TaskSpec)
+    prompt = task_prompt(task, resolve_shell_tool(task, DEFAULT_SHELL_TOOL), ())
+    assert len(prompt.options["tools"]) == 1
+    assert prompt.options["tools"][0]["function"]["parameters"]["required"] == ["command"]
     cohort = tmp_path / "cohort.parquet"
     pq.write_table(pa.Table.from_pylist([{"id": task.id, "task_spec": task.model_dump_json(), "runtime": "{}"}]), cohort)
     output = tmp_path / "export"

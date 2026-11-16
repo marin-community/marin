@@ -29,7 +29,7 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 DATASET = "laion/rts-1k-rootless-apptainer"
 REVISION = "6dbb24eedc0d7ffe5431e1b052b0de8e19eaf6fe"
-VERSION = "2026.11.16.2"
+VERSION = "2026.11.16.3"
 VERIFIER_NAMES = frozenset({"test.sh", "test.sh.uvx_bak", "test_state.py"})
 VERIFIER_OUTPUT_PATH = "/logs/verifier/test-output.txt"
 VERIFIER_EXIT_PATH = "/logs/verifier/exit-code.txt"
@@ -72,6 +72,9 @@ def convert_rst(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRej
     assert any(resource.path == ARCHIVED_SOURCE_CONFIG for resource in archived)
     return task.model_copy(
         update={
+            "environment_requirements": task.environment_requirements.model_copy(
+                update={"capabilities": tuple(dict.fromkeys((*task.environment_requirements.capabilities, "shell")))}
+            ),
             "grader": ScriptGrader(
                 argv=("cp", COPIED_REWARD_PATH, REWARD_PATH),
                 cwd="/",

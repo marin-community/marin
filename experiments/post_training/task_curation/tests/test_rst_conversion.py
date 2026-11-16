@@ -11,12 +11,14 @@ import tomllib
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from rolloutengine.harness.shell import DEFAULT_SHELL_TOOL, task_prompt
 from taskcompendium.harbor.adapter import declared_execution_limits, source_task_configurations
 from taskcompendium.models import DockerBuildExecution, Source, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.runtime.shell import resolve_shell_tool
 
 from experiments.post_training.task_curation.calibration_projection import calibrated_task_spec
 from experiments.post_training.task_curation.datasets.rst import DATASET, REVISION, VERSION, convert_rst
@@ -56,6 +58,9 @@ def test_rst_source_configuration_and_verifier_survive_calibrated_export(tmp_pat
         ConversionContext(inputs={}, grader_environment=None),
     )
     assert isinstance(task, TaskSpec)
+    prompt = task_prompt(task, resolve_shell_tool(task, DEFAULT_SHELL_TOOL), ())
+    assert len(prompt.options["tools"]) == 1
+    assert prompt.options["tools"][0]["function"]["parameters"]["required"] == ["command"]
     assert task.context.events[0].content == files["instruction.md"].decode()
     assert task.environment_requirements.docker_build.files[0].path == "Dockerfile"
     assert resource_bytes(task.environment_requirements.docker_build.files[0]) == files["environment/Dockerfile"]

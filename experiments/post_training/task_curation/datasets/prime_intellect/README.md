@@ -89,7 +89,7 @@ partial archives stay preserved; a failure prevents a complete-source result.
 `capture-result.json` references the complete `captures.json` manifest and its
 hash. Preserve both with the intake evidence. The private auxiliary input is frozen at
 `open-athena/atlas-multiswe-grading-artifacts-20261115-v1@acc1f291ad6ad293c095bd8cde868ab2715717a2`.
-The TaskSpec converter binds this input under version2026.11.16.1; current execution qualification remains pending.
+The TaskSpec converter binds this input under version2026.11.16.2; current execution qualification remains pending.
 
 Docker Hub resolution must be single-threaded and honor `Retry-After`, with
 exponential backoff capped at ten minutes. Anonymous registry `HEAD` version
@@ -127,7 +127,7 @@ install Python in it. Parser probes supply no execution qualification; complete
 oracle, NoP, final-pin SAMPLE and admission receipts are still required.
 
 
-The Multi-SWE converter is `multiswe/convert.py`, version2026.11.16.1. It binds
+The Multi-SWE converter is `multiswe/convert.py`, version2026.11.16.2. It binds
 all2,232 rows to the2,231 captured original image digests, preserves source
 4CPU/4GiB/10GiB actor limits, and keeps the original setup, prompt and golden
 patch. Source-private /home files are removed during public preparation and
@@ -140,3 +140,9 @@ recipe declares a64MiB decoded-resource budget. Archive delivery uses bounded
 commands rather than excluding large patches. Undeclared source deadlines remain
 absent in the grader and are recorded separately from calibration attempt budgets.
 Conversion, census and static export do not establish execution qualification.
+
+
+The executable TaskSpec declares the original shell capability explicitly, so the
+candidate model receives the maintained harness's shell tool. Native Harbor wrappers
+supply that tool through Harbor; the converted ScriptGrader path must declare it.
+Oracle and NoP alone do not test the candidate's tool interface.

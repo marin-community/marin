@@ -60,7 +60,7 @@ HERE = Path(__file__).parent
 DATASET = "PrimeIntellect/Multi-SWE-RL-Verified"
 REVISION = "64b3ebf62750b1373e26106cfc658a1861809d0f"
 TASKSET_REVISION = "b41d8759070715dc102000e06fba0d73ebce9955"
-VERSION = "2026.11.16.1"
+VERSION = "2026.11.16.2"
 CAPTURE_INPUT = "grading_artifacts"
 CAPTURES_SHA256 = "89d79cfefaf4ac785e1f0d4c48ce21d3a45a391fb14ddb78741f00b951b44bf0"
 RESOURCE_BUDGET_BYTES = 64 * 1024 * 1024
@@ -147,6 +147,7 @@ def task_from_capture(row: RawRow, capture: CapturedImage) -> TaskSpec | ImportR
         "bash -c " + shlex.quote(REMOVE_GRADING_ARTIFACTS),
     )
     actor = EnvironmentRequirements(
+        capabilities=("shell",),
         command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_image=capture.binding.pinned_reference,
         working_directory=workdir,
