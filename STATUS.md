@@ -23,15 +23,20 @@ CalibForge-style semantic TB variants exist. Recommended folders: BugsInPy 471, 
 7. Docs: task-curation.md "Repair candidates"; guide.html text to coordinator.
 8. Provenance column shape agreed directly with qc-audit (ses_e1be7f0bbffeCpBu5OYd0WKMkb).
 
-## Phase 2 progress (2026-11-16 ~13:45 EST)
+## Phase 2 progress (2026-11-16 ~14:15 EST)
 
-- **Build green.** New code: `lib/taskcompendium/src/taskcompendium/pipeline/repair.py` (MatchReceipt repair-match-v1, ComparativeVerdict BETTER/TIE/WORSE/INCOMPARABLE + defects fixed/introduced, ComparativeRepairReceipt, CandidateDropAdvisory, RepairProvenance, `repair_decision` replace rule); `repair_match.py` (content-only cascade: exact identity join -> equivalent join -> LSH NN; multi-claim conflicts; dropped advisories); `repair_review.py` (atlas-repair-comparative v1 rubric, original+candidate payload, ComparativePairReviewer with retries + token usage); `repair_candidates.py` (FWeindel folder loader + preview lowering, explicitly not an admission converter); `repair_lane.py` (dry-run CLI: registry resolution, match, review with pinned GLM-5.3 V3 judge, DryRunReport with GPU-h/tokens).
-- Tests: `tests/test_repair_lane.py` — 26 behavior tests passing (identical/equivalent/neighbor/multi-claim-conflict/new/dropped cascade; threshold band pinned; replace-rule gates; comparative reviewer with local judge stub incl. retries/usage/identity checks; matched-pair workload). pre-commit + ruff clean.
-- Provenance agreed with qc-audit: they landed RepairProvenance + RepairAdvisory in finestore, AssessmentItem fields, loader columns, /assessment + /evidence payloads. My lane constructs AssessmentItems with those fields when publishing; ping them before touching server/app.py, server/schema.py or lib/finestore.
-- Dry run needs in-region execution (S3 credentials are region-only): the `repair_lane.py` dry-run CLI is ready to launch on Iris at batch priority.
+- **LANDED on atlas-env-audit as 9c40911e70** (atlas-push; tests + lint green on rebased head; advisory review findings addressed in a follow-up commit).
+- Build: repair-match-v1 records + replace rule (lib/taskcompendium/pipeline/repair.py), match cascade (repair_match.py), comparative reviewer (repair_review.py, atlas-repair-comparative v1), FWeindel candidate loader with preview lowering (repair_candidates.py), dry-run CLI (repair_lane.py) with registry resolution + diagnostics. 27 behavior tests passing.
+- Provenance agreed with qc-audit: finestore RepairProvenance/RepairAdvisory + AssessmentItem fields + loader columns landed by them; my publish path constructs AssessmentItems with those fields.
+
+## Dry-run findings (in-region cw-us-east-02a, batch priority, CPU match only; 0 GPU spent)
+
+- **BugsInPy 471 vs TaskTrove:laion__exp_rpt_bugsinpy-v4 (479 tracked): 0 overlap.** Best similarity ~0.018 both directions. Previews show the tracked source is laion's rewritten single-file katas ("fix the bug in /app/solution.py" from the sanic/pandas/black repos); FWeindel tasks are the original repo-level BugsInPy issues ("Work in the black project…# Issue…"). Same upstream corpus, entirely different derivations — NOT a cleaned subset. Recommendation: treat FWeindel BugsInPy as a NEW source through normal admission (its duplicate review vs the tracked source then records the upstream relationship), not the repair lane. 479 drop advisories suppressed by the new no-overlap guard.
+- **NL2Bash 1,042 vs TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2 (prepared population): premise confirmed.** 1,034/1,042 candidates are the same "Terminal Automation Request" template family (best similarities 0.69–0.72), 8 new, 260 tracked absent. All 1,034 land CONFLICTING because FWeindel's repaired instructions dropped the tracked "## Environment Setup" preamble (~30% of text) — cross-conversion boilerplate, below the 0.9 repaired threshold by a hair. Policy question sent to the coordinator: (a) add a lane normalization that strips shared template setup sections before LSH (expected: most pairs → REPAIRED → FULL comparative review ≈1,034 pairs ≈ 25–40M tokens ≈ 4–8 GPU-h on 4xGB200), (b) keep 0.9/0.5 and accept ~1,034 manual conflict rulings (infeasible), or (c) rule the 0.5–0.9 same-template band as matched-repaired directly (user ruling).
+- Report artifacts: s3://marin-us-east-02a/marin/rl-data/atlas/repair-candidates/20261116/{bugsinpy,nl2bash}-dry-run.json (bugsinpy report is pre-suppression-guard; census unchanged, advisories field stale — rerun value noted here).
 
 ## Next
 
-- Launch BugsInPy 471 dry run on Iris (match + comparative review) at batch priority.
-- Docs: task-curation.md "Repair candidates" stage + guide.html text to coordinator.
-- Land via atlas-push; ping coordinator when worker-ready.
+- Awaiting coordinator/user ruling on the NL2Bash normalization policy; then the GPU comparative pass for whichever folder the user picks.
+- Docs: task-curation.md "Repair candidates" stage + guide.html text to coordinator (pending policy outcome).
+- Production merge/publish (new PRIVATE version + provenance) after a folder passes review + oracle/NoP.
