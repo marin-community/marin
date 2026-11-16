@@ -10,11 +10,12 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from rolloutengine.harness.browsecomp import OpenResearcherProvider
-from rolloutengine.harness.shell import ToolContext
 from shellbox.machine import Command, ExitReason, Result
 from taskcompendium.models import ProviderRequirement
 from taskcompendium.openresearcher import OPENRESEARCHER_ACTION_INTERFACE, OpenResearcherState
+
+from rolloutengine.harness.browsecomp import OpenResearcherProvider
+from rolloutengine.harness.shell import ToolContext
 
 
 class CapturedProcessMachine:
