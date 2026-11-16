@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 import safetensors
 import transformers
+from huggingface_hub.utils import LocalEntryNotFoundError
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict
@@ -163,6 +164,69 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
         assert not (tmp_path / SAFE_TENSORS_INDEX_NAME).exists()
     if attributes is not None:
         assert not (tmp_path / "weights.blob").exists()
+
+
+@pytest.mark.parametrize("save_tokenizer", [True, False])
+@pytest.mark.parametrize("reference_kind", ["local", "memory", "hub", "missing"])
+@pytest.mark.parametrize("override", [None, {"eos_token_id": [3, 5]}])
+def test_export_preserves_reference_generation_config(
+    tmp_path, local_gpt2_tokenizer_path, monkeypatch, reference_kind, override, save_tokenizer
+):
+    config = Gpt2Config(
+        hidden_dim=16, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    original = {"eos_token_id": [1, 2], "temperature": 0.7, "do_sample": True}
+    reference = StoragePath(str(tmp_path / "reference"))
+    if reference_kind == "memory":
+        reference = StoragePath("memory://generation-reference") / uuid.uuid4().hex
+    if reference_kind != "missing":
+        (reference / "generation_config.json").write_bytes(json.dumps(original).encode())
+    else:
+        Path(str(reference)).mkdir()
+    converter = replace(config.hf_checkpoint_converter(), reference_checkpoint=RepoRef(str(reference)))
+    if reference_kind == "hub":
+
+        def download(*, repo_id, filename, revision):
+            assert (repo_id, filename, revision) == ("test/reference", "generation_config.json", "pinned-revision")
+            return str(reference / filename)
+
+        monkeypatch.setattr(hf_checkpoints, "hf_hub_download", download)
+        converter = replace(converter, reference_checkpoint=RepoRef("test/reference", "pinned-revision"))
+    output = tmp_path / "output"
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(23))
+        converter.save_pretrained(
+            model, str(output), save_reference_code=False, generation_config=override, save_tokenizer=save_tokenizer
+        )
+    saved = json.loads((output / "generation_config.json").read_text())
+    preserved = override if override is not None else (None if reference_kind == "missing" else original)
+    if preserved is not None:
+        for key, value in preserved.items():
+            if key == "eos_token_id":
+                expected_ids = {value} if isinstance(value, int) else set(value)
+                assert set(saved[key]).issuperset(expected_ids)
+            else:
+                assert saved[key] == value
+    assert saved["do_sample"] is True
+
+
+def test_export_propagates_unavailable_hub_generation_config(tmp_path, local_gpt2_tokenizer_path, monkeypatch):
+    config = Gpt2Config(
+        hidden_dim=16, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    converter = replace(
+        config.hf_checkpoint_converter(), reference_checkpoint=RepoRef("test/reference", "pinned-revision")
+    )
+
+    def unavailable_download(*, repo_id, filename, revision):
+        assert (repo_id, filename, revision) == ("test/reference", "generation_config.json", "pinned-revision")
+        raise LocalEntryNotFoundError("Hub unavailable and generation config is not cached")
+
+    monkeypatch.setattr(hf_checkpoints, "hf_hub_download", unavailable_download)
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(23))
+        with pytest.raises(LocalEntryNotFoundError):
+            converter.save_pretrained(model, str(tmp_path / "output"), save_reference_code=False)
 
 
 def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch, tmp_path):
@@ -593,7 +657,11 @@ def test_save_pretrained_writes_complete_generation_config(local_gpt2_tokenizer_
     gpt2_config = Gpt2Config(
         num_layers=1, num_heads=1, hidden_dim=8, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
     )
-    converter = gpt2_config.hf_checkpoint_converter().replaced(tokenizer=llama3_style_chat_tokenizer())
+    converter = replace(
+        gpt2_config.hf_checkpoint_converter(),
+        tokenizer=llama3_style_chat_tokenizer(),
+        reference_checkpoint=None,
+    )
 
     with use_test_mesh():
         model = Gpt2LMHeadModel.init(converter.Vocab, gpt2_config, key=PRNGKey(0))

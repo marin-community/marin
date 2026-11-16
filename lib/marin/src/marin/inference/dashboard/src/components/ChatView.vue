@@ -4,6 +4,7 @@ import {
   fetchToolDefinitions,
   invokeShell,
   invokeTool,
+  invokeWebSearch,
   isAbortError,
   requestCompletion,
 } from '../lib/api'
@@ -20,6 +21,7 @@ import {
   parseWorkspaceFiles,
 } from '../lib/shell_workspace'
 import { splitThinking } from '../lib/thinking'
+import { WEB_SEARCH_TOOL_DEFINITION, WEB_SEARCH_TOOL_NAME } from '../lib/web_search'
 import { requestDebugData, vllmDebugStreamOptions } from '../lib/vllm_debug'
 import type { VllmRequestDebug } from '../lib/vllm_debug'
 import {
@@ -50,6 +52,7 @@ const props = defineProps<{
   streaming: boolean
   baseUrl?: string
   composerMode?: 'embedded' | 'external'
+  webSearchAvailable?: boolean
 }>()
 
 const emit = defineEmits<{ persist: [] }>()
@@ -173,6 +176,12 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
       }
       tools.push(BASH_TOOL_DEFINITION)
     }
+    if (conversation.webSearch && props.webSearchAvailable) {
+      if (tools.some((tool) => tool.function.name === WEB_SEARCH_TOOL_NAME)) {
+        throw new Error(`Python tool name ${JSON.stringify(WEB_SEARCH_TOOL_NAME)} is reserved for web search`)
+      }
+      tools.push(WEB_SEARCH_TOOL_DEFINITION)
+    }
     const templateFields = chatTemplateRequestFields(
       conversation.thinkingMode,
       conversation.customInstructions,
@@ -240,6 +249,9 @@ async function executeToolCall(
       const shellResult = await invokeShell(workspaceFiles, workspace.commits, workspace.history, command, signal, props.baseUrl)
       result = shellResult
       if (shellResult.stop_reason === null) workspace.history.push(command)
+    } else if (call.name === WEB_SEARCH_TOOL_NAME) {
+      if (!conversation.webSearch || !props.webSearchAvailable) throw new Error('Web search is not enabled')
+      result = await invokeWebSearch(call.arguments, signal, props.baseUrl)
     } else {
       result = await invokeTool(call.name, pythonTools, call.arguments, signal, props.baseUrl)
     }
@@ -421,6 +433,21 @@ async function complete(
                 enabled
               </span>
             </button>
+            <label
+              v-if="webSearchAvailable"
+              class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
+              :class="{ 'text-accent': conversation.webSearch }"
+              title="Give the model a web_search tool backed by Parallel search"
+            >
+              <input
+                v-model="conversation.webSearch"
+                type="checkbox"
+                class="accent-accent"
+                :disabled="busy"
+                @change="persistConversation(conversation)"
+              />
+              Web search
+            </label>
           </div>
           <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
             <label class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted" title="Record and show vLLM timings on each reply">

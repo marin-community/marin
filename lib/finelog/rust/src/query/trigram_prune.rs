@@ -8,10 +8,9 @@
 //! applied first, so the controller `key =` band prune still happens — the
 //! trigram prune only removes *more* row groups, never fewer.
 //!
-//! Safety: we prune only on a substring predicate that appears as a **top-level
-//! conjunct** — `contains(col, <literal>)`, `col LIKE '%<literal>%'`, or
-//! `regexp_matches(col, <literal-pattern>)`. A predicate under an `OR` could drop
-//! rows that match the other branch, so those are ignored. The pushdown stays
+//! Safety: substring conjuncts and same-column disjunctions preserve their
+//! boolean structure. A disjunction with an unsupported branch is left
+//! unpruned, so rows satisfying that branch cannot disappear. The pushdown stays
 //! `Inexact`, so DataFusion keeps a `FilterExec` that re-checks the predicate
 //! exactly — a kept row group that doesn't actually match (Bloom false positive,
 //! or trigrams split across rows) is filtered there, not returned.
@@ -57,7 +56,7 @@ pub struct StringRange {
 /// keep the segment, so this remains a fail-open optimization.
 pub fn plan_segments(
     segment_paths: &[String],
-    needles: &HashMap<String, Vec<String>>,
+    needles: &HashMap<String, SubstringPredicate>,
     key_ranges: &HashMap<String, StringRange>,
     indices: &IndexRegistry,
     artifacts: &SegmentArtifacts,
@@ -81,9 +80,16 @@ pub fn plan_segments(
             let Some(segment) = indices.open_summary(segment_artifacts) else {
                 return true;
             };
+            let key_column = segment.header.sections.iter().find_map(|section| {
+                crate::indices::parse_trigram_coverage(&section.coverage)
+                    .filter(|coverage| !coverage.key_column.is_empty())
+                    .map(|coverage| coverage.key_column)
+            });
+            let mut segment_columns = columns.clone();
+            segment_columns.sort_by_key(|(column, _)| key_column.as_deref() != Some(*column));
             let mut combined: Option<Vec<bool>> = None;
             let mut span_rows = None;
-            for (column, needle_sets) in &columns {
+            for (column, needle_sets) in &segment_columns {
                 let Some((coverage, index)) = indices.summary_trigram(&segment, column) else {
                     continue;
                 };
@@ -104,10 +110,11 @@ pub fn plan_segments(
                 }
                 span_rows = Some(coverage.span_rows);
                 let mask = combined.get_or_insert_with(|| vec![true; coverage.span_count as usize]);
-                for trigrams in needle_sets {
-                    for (keep, matches) in mask.iter_mut().zip(index.keep_mask_for(trigrams)) {
-                        *keep &= matches;
-                    }
+                for (keep, matches) in mask
+                    .iter_mut()
+                    .zip(needle_sets.keep_mask(&index, coverage.span_count as usize))
+                {
+                    *keep &= matches;
                 }
                 if mask.iter().all(|keep| !keep) {
                     pruned += 1;
@@ -154,16 +161,20 @@ struct SpanMask {
 pub fn apply_pruning(
     plan: Arc<dyn ExecutionPlan>,
     pruning: &SegmentPruning,
+    indices: &IndexRegistry,
 ) -> Arc<dyn ExecutionPlan> {
-    rewrite_file_groups(plan, &access_plans(pruning))
+    rewrite_file_groups(plan, &access_plans(pruning, indices))
 }
 
-fn access_plans(pruning: &SegmentPruning) -> HashMap<String, ParquetAccessPlan> {
+fn access_plans(
+    pruning: &SegmentPruning,
+    indices: &IndexRegistry,
+) -> HashMap<String, ParquetAccessPlan> {
     pruning
         .masks
         .iter()
         .filter_map(|(path, mask)| {
-            let rows = crate::store::segment::segment_row_group_rows(Path::new(path))?;
+            let (_, rows) = indices.source_layout(Path::new(path))?;
             let access = span_access_plan(&mask.keep, mask.span_rows, &rows)?;
             let basename = Path::new(path).file_name()?.to_str()?.to_string();
             Some((basename, access))
@@ -171,25 +182,60 @@ fn access_plans(pruning: &SegmentPruning) -> HashMap<String, ParquetAccessPlan> 
         .collect()
 }
 
-fn ordered_trigram_needles<'a>(
-    needles: &'a HashMap<String, Vec<String>>,
+pub(crate) fn ordered_trigram_needles<'a>(
+    needles: &'a HashMap<String, SubstringPredicate>,
     key_ranges: &HashMap<String, StringRange>,
-) -> Vec<(&'a str, Vec<Vec<[u8; 3]>>)> {
+) -> Vec<(&'a str, &'a SubstringPredicate)> {
     let mut columns: Vec<_> = needles
         .iter()
-        .filter_map(|(column, values)| {
-            let trigrams: Vec<_> = values
-                .iter()
-                .filter_map(|value| needle_trigrams(value))
-                .collect();
-            (!trigrams.is_empty()).then_some((column.as_str(), trigrams))
-        })
+        .map(|(column, predicate)| (column.as_str(), predicate))
         .collect();
-    // A range-constrained column is usually the segment's sort key. Its small
-    // trigram section can rule out the whole segment before a wide data section
-    // is read, even when catalog min/max bounds overlap the requested range.
     columns.sort_by_key(|(column, _)| (!key_ranges.contains_key(*column), *column));
     columns
+}
+
+/// Required substrings, preserving conjunction and disjunction on one column.
+#[derive(Debug, Clone)]
+pub enum SubstringPredicate {
+    Contains(Vec<String>),
+    And(Vec<Self>),
+    Or(Vec<Self>),
+}
+
+impl SubstringPredicate {
+    pub(crate) fn keep_mask(
+        &self,
+        index: &crate::indices::trigram::ColumnIndex,
+        spans: usize,
+    ) -> Vec<bool> {
+        match self {
+            Self::Contains(needles) => {
+                let mut keep = vec![true; spans];
+                for needle in needles {
+                    if let Some(trigrams) = needle_trigrams(needle) {
+                        for (keep, matches) in keep.iter_mut().zip(index.keep_mask_for(&trigrams)) {
+                            *keep &= matches;
+                        }
+                    }
+                }
+                keep
+            }
+            Self::And(branches) | Self::Or(branches) => {
+                let conjunction = matches!(self, Self::And(_));
+                let mut keep = vec![conjunction; spans];
+                for branch in branches {
+                    for (keep, matches) in keep.iter_mut().zip(branch.keep_mask(index, spans)) {
+                        if conjunction {
+                            *keep &= matches;
+                        } else {
+                            *keep |= matches;
+                        }
+                    }
+                }
+                keep
+            }
+        }
+    }
 }
 
 /// Inclusive per-column key ranges implied by a query's top-level conjuncts.
@@ -284,9 +330,10 @@ fn apply_bound(range: &mut StringRange, op: Operator, value: Vec<u8>) {
 /// The needles [`substring_needles_by_column`] would apply to `column`.
 #[cfg(test)]
 fn substring_needles(filters: &[Expr], column: &str) -> Vec<String> {
-    substring_needles_by_column(filters)
-        .remove(column)
-        .unwrap_or_default()
+    match substring_needles_by_column(filters).remove(column) {
+        Some(SubstringPredicate::Contains(needles)) => needles,
+        _ => Vec::new(),
+    }
 }
 
 /// Substring needles grouped by the column each constrains, from every top-level
@@ -294,29 +341,74 @@ fn substring_needles(filters: &[Expr], column: &str) -> Vec<String> {
 /// conjunct, keeping the literals long enough to decompose into at least one
 /// trigram (`>= MIN_TRIGRAM_LEN`).
 ///
-/// A column's needles are required together, so dropping a too-short one only
-/// loosens the constraint.
+/// Same-column AND/OR structure is preserved. An unsupported alternative
+/// declines the whole disjunction, retaining rows that satisfy that branch.
 ///
 /// Pure expr inspection (no I/O) — the provider calls this on the hot path to
 /// decide (cheaply) whether the substring prune applies at all before touching
 /// any bundle. A column the query constrains but a given segment's bundle does
 /// not index is simply ignored when that segment is pruned.
-pub fn substring_needles_by_column(filters: &[Expr]) -> HashMap<String, Vec<String>> {
-    let mut out: HashMap<String, Vec<String>> = HashMap::new();
-    for f in filters {
-        let Some((column, needles)) = substring_column_needles(f) else {
-            continue;
-        };
-        let usable: Vec<String> = needles
-            .into_iter()
-            .filter(|n| n.len() >= MIN_TRIGRAM_LEN)
-            .collect();
-        if usable.is_empty() {
-            continue;
-        }
-        out.entry(column).or_default().extend(usable);
+pub fn substring_needles_by_column(filters: &[Expr]) -> HashMap<String, SubstringPredicate> {
+    let mut out = HashMap::new();
+    for filter in filters {
+        collect_substrings(filter, &mut out);
     }
     out
+}
+
+fn collect_substrings(expr: &Expr, out: &mut HashMap<String, SubstringPredicate>) {
+    if let Expr::BinaryExpr(binary) = expr {
+        if binary.op == Operator::And {
+            collect_substrings(&binary.left, out);
+            collect_substrings(&binary.right, out);
+            return;
+        }
+    }
+    if let Some((column, predicate)) = substring_predicate(expr) {
+        if let Some(previous) = out.remove(&column) {
+            out.insert(column, SubstringPredicate::And(vec![previous, predicate]));
+        } else {
+            out.insert(column, predicate);
+        }
+    }
+}
+
+fn substring_predicate(expr: &Expr) -> Option<(String, SubstringPredicate)> {
+    if let Expr::BinaryExpr(binary) = expr {
+        if binary.op == Operator::Eq {
+            let (column, _, value) = col_literal_comparison(binary)?;
+            let value = String::from_utf8(value).ok()?;
+            if value.len() < MIN_TRIGRAM_LEN {
+                return None;
+            }
+            return Some((column, SubstringPredicate::Contains(vec![value])));
+        }
+        if matches!(binary.op, Operator::And | Operator::Or) {
+            let (left_column, left) = substring_predicate(&binary.left)?;
+            let (right_column, right) = substring_predicate(&binary.right)?;
+            if left_column != right_column {
+                return None;
+            }
+            let branches = vec![left, right];
+            return Some((
+                left_column,
+                if binary.op == Operator::And {
+                    SubstringPredicate::And(branches)
+                } else {
+                    SubstringPredicate::Or(branches)
+                },
+            ));
+        }
+    }
+    let (column, needles) = substring_column_needles(expr)?;
+    let needles: Vec<_> = needles
+        .into_iter()
+        .filter(|needle| needle.len() >= MIN_TRIGRAM_LEN)
+        .collect();
+    if needles.is_empty() {
+        return None;
+    }
+    Some((column, SubstringPredicate::Contains(needles)))
 }
 
 /// `Some((column, needles))` if `expr` constrains some column to contain literal
@@ -458,18 +550,15 @@ fn utf8_literal(expr: &Expr) -> Option<String> {
 #[cfg(test)]
 fn build_access_plans(
     segment_paths: &[String],
-    needles: &HashMap<String, Vec<String>>,
+    needles: &HashMap<String, SubstringPredicate>,
     key_ranges: &HashMap<String, StringRange>,
     indices: &IndexRegistry,
     artifacts: &SegmentArtifacts,
 ) -> HashMap<String, ParquetAccessPlan> {
-    access_plans(&plan_segments(
-        segment_paths,
-        needles,
-        key_ranges,
+    access_plans(
+        &plan_segments(segment_paths, needles, key_ranges, indices, artifacts),
         indices,
-        artifacts,
-    ))
+    )
 }
 
 /// Turn a per-span keep mask into a row-group access plan.
@@ -479,7 +568,7 @@ fn build_access_plans(
 /// the case that makes the decoupling worthwhile — partly covered, where it
 /// carries a row selection instead. `None` when the spans do not account for
 /// exactly the segment's rows, which means the section is stale.
-fn span_access_plan(
+pub(crate) fn span_access_plan(
     keep: &[bool],
     span_rows: usize,
     row_group_rows: &[usize],
@@ -606,8 +695,7 @@ mod tests {
 
     #[test]
     fn contains_under_or_is_not_extracted() {
-        // A contains() buried in an OR is unsafe to prune on; only top-level
-        // conjuncts (the elements of `filters`) are inspected.
+        // This OR has an unconstrained branch, so its substring alone is unsafe.
         let buried = contains_expr("data", "x").or(col("seq").gt(lit(1_i64)));
         assert!(substring_needles(&[buried], "data").is_empty());
     }
@@ -825,7 +913,7 @@ mod tests {
         let paths = vec![path];
         let needles = HashMap::from([(
             "data".to_string(),
-            vec!["Bootstrap completed for TPU".to_string()],
+            SubstringPredicate::Contains(vec!["Bootstrap completed for TPU".to_string()]),
         )]);
         let indices = crate::indices::test_index_registry();
         let artifacts = crate::indices::sidecar_artifacts(&paths);
@@ -891,8 +979,14 @@ mod tests {
         file.write_all_at(&[0xff], offset).unwrap();
 
         let needles = HashMap::from([
-            ("key".to_string(), vec!["/middle".to_string()]),
-            ("data".to_string(), vec!["Model".to_string()]),
+            (
+                "key".to_string(),
+                SubstringPredicate::Contains(vec!["/middle".to_string()]),
+            ),
+            (
+                "data".to_string(),
+                SubstringPredicate::Contains(vec!["Model".to_string()]),
+            ),
         ]);
         let ranges = HashMap::from([(
             "key".to_string(),
@@ -943,7 +1037,7 @@ mod tests {
         let paths = vec![path];
         let needles = HashMap::from([(
             "data".to_string(),
-            vec!["Bootstrap completed for TPU".to_string()],
+            SubstringPredicate::Contains(vec!["Bootstrap completed for TPU".to_string()]),
         )]);
         let indices = crate::indices::test_index_registry();
 

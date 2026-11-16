@@ -117,6 +117,11 @@ Only `marin-us-east-02a` denies every principal the `s3:DeleteObject` and
 temporary checkpoint staging paths remain deletable. Before a policy update, audit each bucket's
 live access policy; Pulumi replaces the complete bucket policy.
 
+Every CoreWeave bucket policy also denies the Marin Belay user (`BELAY_USER_ID`) any action
+outside its grants: writes outside its run prefixes, reads outside its data, and listing buckets
+it does not use. The `marin-belay` organization access policy grants that access, but other
+organization grants also reach the user, so the explicit bucket-policy denies are what bound it.
+
 `marin-rno2a` is the RNO2A regional data bucket. It uses the same organization access policy,
 multipart cleanup, and `tmp/ttl=Nd/` lifecycle rules as the other regional buckets. RNO2A task
 configuration does not select it: tasks write durable outputs under `s3://marin-us-east-08a/marin`

@@ -17,8 +17,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::sync::RwLock;
-
 use crate::errors::StatsError;
 use crate::indices::SegmentIndexConfig;
 use crate::query::file_scan::open_cached_parquet;
@@ -47,7 +45,6 @@ pub struct ObjectCompaction<'a> {
     pub catalog: &'a Catalog,
     pub controller: &'a TableController,
     pub segments: &'a SegmentView,
-    pub query_visibility: &'a Arc<RwLock<()>>,
     /// The process-wide leveled tuning, before the table's own object-size
     /// target is applied.
     pub config: &'a CompactionConfig,
@@ -62,6 +59,16 @@ struct LeasedCompaction<'context, 'resources> {
     table_spec_version: u64,
     migration_backfill: bool,
 }
+
+/// Most L0 objects one compaction job merges.
+///
+/// Each job pays a fixed upload, index build, and catalog commit. On the marin
+/// hub a 32-input job took about 17 s under CPU contention, which drained fewer
+/// L0s than busy tables flushed. 512 of the hub's ~135 KB flushes is about
+/// 70 MB, under the executor's Arrow budget, which merges only the prefix that
+/// fits. A larger cap lengthens a job, and a job in flight holds one of the
+/// shared maintenance slots until it finishes.
+pub(crate) const OBJECT_MAX_L0_INPUTS: usize = 512;
 
 struct MergeResult {
     swap: PlannedSwap,
@@ -139,6 +146,7 @@ pub async fn compact_once(
     }
     let config = CompactionConfig {
         level_targets: vec![compaction.target_object_bytes; compaction.config.level_targets.len()],
+        max_l0_inputs: OBJECT_MAX_L0_INPUTS,
         ..compaction.config.clone()
     };
     let Some((migration_backfill, job)) = rows_by_class.into_iter().find_map(|(backfill, rows)| {
@@ -197,10 +205,14 @@ async fn run(
         .collect();
     let job_for_run = job.clone();
     let staging_dir = staging.path().to_path_buf();
-    let objects = Arc::clone(compaction.controller.object_store().ok_or_else(|| {
+    let objects = compaction.controller.object_store().ok_or_else(|| {
         StatsError::Internal("object compaction has no backing store".to_string())
-    })?);
-    let visibility = Arc::clone(compaction.query_visibility);
+    })?;
+    // Input reads use the maintenance limiter so a merge does not wait behind
+    // query reads of the same cache.
+    let objects = objects
+        .maintenance_reads()
+        .unwrap_or_else(|| Arc::clone(objects));
     let runtime = tokio::runtime::Handle::current();
     // Same dedicated merge thread as a migration rewrite, mildly deprioritized:
     // an ordinary compaction merge at blocking-pool priority competes with
@@ -236,8 +248,7 @@ async fn run(
                     StatsError::Internal(format!("compaction reader lost input {path}"))
                 })?;
                 runtime.block_on(async {
-                    let input =
-                        open_cached_parquet(objects.as_ref(), reference, &visibility).await?;
+                    let input = open_cached_parquet(Arc::clone(&objects), reference).await?;
                     if input.is_cached() {
                         cached_inputs += 1;
                     } else {
@@ -386,7 +397,8 @@ async fn commit_replacement(
         }
         Err(error) => return Err(error.into()),
     };
-    let _visibility_guard = compaction.query_visibility.write().await;
+    // Object snapshots own immutable references. Updating this accounting view
+    // neither unlinks their files nor requires waiting for unrelated readers.
     let rows = published
         .iter()
         .map(|segment| segment.row_count)

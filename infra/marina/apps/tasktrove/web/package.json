@@ -15,6 +15,6 @@
     "@rsbuild/core": "^1.1.13",
     "@rsbuild/plugin-vue": "^1.0.5",
     "typescript": "^5.7.3",
-    "vue-tsc": "^2.2.0"
+    "vue-tsc": "^3.3.14"
   }
 }

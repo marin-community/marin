@@ -268,6 +268,7 @@ def test_controller_non_200_raises_upstream_error():
 def _run(conclusion, status="completed", started="2026-07-17T03:00:00Z", updated="2026-07-17T03:05:00Z"):
     return {
         "id": 1,
+        "run_attempt": 1,
         "conclusion": conclusion,
         "status": status,
         "head_sha": "abcdef1234567890",
@@ -290,6 +291,37 @@ def test_ferries_shape_and_success_rate():
     first = rows[0]
     assert first["sha"] == "abcdef1" and first["duration_seconds"] == 300 and first["success_rate"] == 0.5
     assert first["group"] == "Canary ferry"
+
+
+@pytest.mark.parametrize(("skip_step_conclusion", "state"), [("success", "skipped"), ("skipped", "run")])
+def test_nightlies_mark_a_green_run_skipped_only_when_its_skip_step_ran(skip_step_conclusion, state):
+    lane = next(lane for lane in NIGHTLY_LANES if lane.skip_step is not None)
+    run_day = (datetime.now(UTC) - timedelta(days=1)).replace(
+        hour=lane.hour, minute=lane.minute, second=0, microsecond=0
+    )
+    run = _run("success", started=run_day.isoformat(), updated=(run_day + timedelta(minutes=5)).isoformat())
+    jobs_requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/jobs"):
+            jobs_requests.append(request.url.path)
+            steps = [{"name": lane.skip_step, "conclusion": skip_step_conclusion}]
+            return httpx.Response(200, json={"jobs": [{"steps": steps}]})
+        if lane.workflow_file in request.url.path:
+            return httpx.Response(200, json={"workflow_runs": [run]})
+        return httpx.Response(200, json={"workflow_runs": []})
+
+    source = _github(handler)
+    source.nightlies()
+    rows = source.nightlies()
+
+    (cell,) = [row for row in rows if row["lane_id"] == lane.id and row["url"] == "https://x"]
+    assert cell["state"] == state
+    # A completed attempt never changes, so its jobs are read once; a re-run is a new attempt.
+    assert len(jobs_requests) == 1
+    run["run_attempt"] = 2
+    source.nightlies()
+    assert len(jobs_requests) == 2
 
 
 def test_builds_maps_state_and_finalized_success_rate():
@@ -798,6 +830,7 @@ def test_nightlies_endpoint_returns_linked_long_cells():
                 "workflow_runs": [
                     {
                         "id": 1,
+                        "run_attempt": 1,
                         "status": "completed",
                         "conclusion": "success",
                         "head_sha": "abcdef1234567890",

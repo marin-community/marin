@@ -28,16 +28,16 @@ jobs:
       RUN_ID: ${{ github.event_name == 'schedule' && 'hero-canary' || 'hero-canary-manual' }}-${{ github.run_id }}-${{ github.run_attempt }}
       # Re-pin only when the hero's checkpoint layout or context length changes;
       # the report compares runs from the same checkpoint only.
-      HERO_CANARY_CHECKPOINT: s3://marin-us-east-02a/marin/grug/hero-gradclip-step356k/2026.08.19.2/checkpoints/step-372000
-      HERO_CANARY_START_STEP: "372000"
+      HERO_CANARY_CHECKPOINT: s3://marin-us-east-02a/marin/grug/hero-ctx65k-step372k/2026.08.19.2/checkpoints/step-390251
+      HERO_CANARY_START_STEP: "390251"
       # 35 updates: ~4 warmup steps, then ~30 steady steps for a ±0.5% step-time median.
       HERO_CANARY_STEPS: "35"
-      # The production hero's schedule length, so the run uses the raw production mixture.
+      # The production hero's schedule length, so the run keeps the hero's schedule.
       HERO_SCHEDULE_STEPS: "390251"
       # Unique per concurrent gang; the hero itself uses 32614.
       IRIS_PORT_JAX: "32650"
       # Loose loss ceilings, like the H100 canary's: one-rack runs from a nearby checkpoint
-      # ended at train loss 0.917 and dropless eval macro loss 1.998.
+      # ended at train loss 0.83 and dropless eval macro loss 1.79.
       HERO_CANARY_MAX_TRAIN_LOSS: "1.5"
       HERO_CANARY_MAX_EVAL_LOSS: "2.5"
       # Five hours for the training job to start before the day is skipped.
@@ -93,6 +93,7 @@ jobs:
               --restore-from "$HERO_CANARY_CHECKPOINT" \
               --num-steps "$end_step" \
               --schedule-steps "$HERO_SCHEDULE_STEPS" \
+              --long-context-start-step "$HERO_CANARY_START_STEP" \
               --gc-interval 100 \
               --eval-every "$end_step" \
               --version dev \
@@ -211,3 +212,17 @@ jobs:
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":large_orange_circle: *Hero GB200 canary step time changed* ${{ needs.hero-canary.outputs.regression_detail }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  # A day skipped for lack of capacity finishes green, so it gets its own, non-failure message.
+  notify-skipped:
+    needs: hero-canary
+    if: always() && needs.hero-canary.outputs.resource_exhausted == 'true' && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Notify Slack
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: ":white_circle: *Hero GB200 canary skipped*: no capacity, so it did not run. This is not a failure.\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

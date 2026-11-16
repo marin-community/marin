@@ -32,6 +32,7 @@ _BASE_LANE = NightlyLane(
     overdue_grace_minutes=240,
     expected_min_seconds=None,
     expected_max_seconds=None,
+    skip_step=None,
 )
 
 _BASE_RUN = NightlyRun(
@@ -43,6 +44,7 @@ _BASE_RUN = NightlyRun(
     run_started_at="2026-07-17T11:00:00.000Z",
     updated_at="2026-07-17T11:10:00.000Z",
     url="https://github.com/marin-community/marin/actions/runs/1",
+    skipped=False,
 )
 
 
@@ -141,6 +143,21 @@ def test_too_short_success_is_excluded_from_health_but_baseline_pending_is_healt
     today_rows = [row for row in rows if row["date"] == "2026-07-17"]
     assert sum(row["due"] for row in today_rows) == 2
     assert sum(row["healthy"] for row in today_rows) == 1
+
+
+def test_capacity_skip_is_neither_passed_nor_failed_even_when_too_short():
+    bounded = _lane(expected_min_seconds=360, expected_max_seconds=900)
+    now = datetime(2026, 7, 17, 15, 0, 0, tzinfo=UTC)
+    skipped_run = _run(skipped=True, updated_at="2026-07-17T11:01:11.000Z")
+
+    rows = project_nightlies([bounded], [_snapshot(bounded.id, [skipped_run])], now)
+
+    today = _cell(rows, bounded, "2026-07-17")
+    assert today["state"] == "skipped"
+    assert today["healthy"] is False
+    assert today["duration_state"] == "not-applicable"
+    assert today["status_code"] == 7
+    assert today["url"] == skipped_run.url
 
 
 def test_projection_exposes_active_run_lifecycle_and_elapsed_duration():

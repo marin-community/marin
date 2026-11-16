@@ -1,5 +1,6 @@
 """Tests for BaseEnvironment capability validation in __init__."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ from harbor.models.trial.paths import TrialPaths
 class _StubEnvironment(BaseEnvironment):
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.DOCKER
+        return EnvironmentType.LOCAL
 
     @classmethod
     def resource_capabilities(cls) -> EnvironmentResourceCapabilities:
@@ -31,7 +32,9 @@ class _StubEnvironment(BaseEnvironment):
     def _validate_definition(self):
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         pass
 
     async def stop(self, delete: bool):
@@ -59,12 +62,6 @@ class _WindowsSupportingEnvironment(_StubEnvironment):
         return EnvironmentCapabilities(windows=True)
 
 
-class _DockerComposeSupportingEnvironment(_StubEnvironment):
-    @property
-    def capabilities(self) -> EnvironmentCapabilities:
-        return EnvironmentCapabilities(docker_compose=True)
-
-
 class _ResourceSupportingEnvironment(_StubEnvironment):
     @classmethod
     def resource_capabilities(cls) -> EnvironmentResourceCapabilities:
@@ -87,7 +84,7 @@ def _make_legacy_environment_class() -> type[BaseEnvironment]:
     class LegacyPropertyEnvironment(BaseEnvironment):
         @staticmethod
         def type() -> EnvironmentType:
-            return EnvironmentType.DOCKER
+            return EnvironmentType.LOCAL
 
         @property
         def supports_gpus(self) -> bool:
@@ -104,7 +101,9 @@ def _make_legacy_environment_class() -> type[BaseEnvironment]:
         def _validate_definition(self):
             pass
 
-        async def start(self, force_build: bool) -> None:
+        async def start(
+            self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+        ) -> None:
             pass
 
         async def stop(self, delete: bool):
@@ -134,7 +133,6 @@ def _construct(
     task_os: TaskOS,
     *,
     task_env_config: EnvironmentConfig | None = None,
-    extra_docker_compose: list[Path] | None = None,
     cpu_enforcement_policy: ResourceMode = ResourceMode.AUTO,
     memory_enforcement_policy: ResourceMode = ResourceMode.AUTO,
 ) -> BaseEnvironment:
@@ -148,7 +146,6 @@ def _construct(
         session_id="session",
         trial_paths=trial_paths,
         task_env_config=task_env_config,
-        extra_docker_compose=extra_docker_compose,
         cpu_enforcement_policy=cpu_enforcement_policy,
         memory_enforcement_policy=memory_enforcement_policy,
     )
@@ -167,37 +164,6 @@ def test_windows_task_on_windows_environment_succeeds(tmp_path: Path) -> None:
 def test_linux_task_on_non_windows_environment_succeeds(tmp_path: Path) -> None:
     env = _construct(_StubEnvironment, tmp_path, TaskOS.LINUX)
     assert env.capabilities.windows is False
-
-
-def test_extra_docker_compose_on_unsupported_environment_raises(
-    tmp_path: Path,
-) -> None:
-    extra = tmp_path / "extra.yaml"
-    extra.write_text("services: {}\n")
-
-    with pytest.raises(ValueError, match="does not support --extra-docker-compose"):
-        _construct(
-            _StubEnvironment,
-            tmp_path,
-            TaskOS.LINUX,
-            extra_docker_compose=[extra],
-        )
-
-
-def test_extra_docker_compose_on_supported_environment_succeeds(
-    tmp_path: Path,
-) -> None:
-    extra = tmp_path / "extra.yaml"
-    extra.write_text("services: {}\n")
-
-    env = _construct(
-        _DockerComposeSupportingEnvironment,
-        tmp_path,
-        TaskOS.LINUX,
-        extra_docker_compose=[extra],
-    )
-
-    assert env.extra_docker_compose_paths == [extra.resolve()]
 
 
 def test_cpu_limit_on_unsupported_environment_raises(tmp_path: Path) -> None:

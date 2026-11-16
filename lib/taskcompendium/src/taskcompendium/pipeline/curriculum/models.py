@@ -29,13 +29,19 @@ class EmbeddingSpec(_Record):
 
 
 class AlignmentSource(_Record):
+    """A matched source or an inventory-only declaration in a curriculum release.
+
+    Declared sources have no placement statistics or intended use.
+    """
+
     source_id: str
     source_key: str
     population: Literal["converted", "admitted"]
-    intended_use: str
+    intended_use: str | None
     task_count: int
     ready_count: int
     insufficient_context_count: int
+    basis: Literal["matched", "declared"]
     curation_root: str | None = None
     input_rows: int | None = None
     converted_rows: int | None = None

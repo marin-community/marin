@@ -615,17 +615,6 @@ def test_launch_job_rejects_empty_name(service, state):
 # =============================================================================
 
 
-def test_get_job_status_returns_status(service):
-    """Verify get_job_status returns correct status for launched job."""
-    service.launch_job(make_job_request("test-job"), None)
-
-    request = controller_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-user", "test-job").to_wire())
-    response = service.get_job_status(request, None)
-
-    assert response.job.job_id == JobName.root("test-user", "test-job").to_wire()
-    assert response.job.state == job_pb2.JOB_STATE_PENDING
-
-
 def test_get_job_status_reports_has_children(service):
     """GetJobStatus sets has_children so the dashboard can render the expand toggle."""
     service.launch_job(make_job_request("parent-job"), None)

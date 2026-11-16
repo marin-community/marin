@@ -282,9 +282,9 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
                     env="daytona",
                     task_limit=2,
                     config_digest="sha256:" + "a" * 64,
-                    harbor_config_commit="b" * 40,
                 ),
-            )
+            ),
+            "provenance": Provenance(git_sha="abc123", launch_host="dev-box"),
         }
     )
 
@@ -299,8 +299,8 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
         "env": "daytona",
         "task_limit": 2,
         "config_digest": "sha256:" + "a" * 64,
-        "harbor_config_commit": "b" * 40,
     }
+    assert raw["provenance"] == {"git_sha": "abc123", "launch_host": "dev-box"}
 
 
 def test_record_json_includes_normalized_evalchemy_configuration(tmp_path):

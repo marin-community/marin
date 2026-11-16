@@ -20,6 +20,9 @@ from levanter.compat.hf_checkpoints import (
     build_generation_config,
     save_hf_checkpoint_callback,
 )
+from levanter.compat.hf_generation_config import export_generation_config
+
+QWEN_STYLE_TEMPLATE = "{% for m in messages %}<|im_start|>{{ m['content'] }}<|im_end|>{% endfor %}"
 
 
 class _FakeTokenizer:
@@ -37,6 +40,9 @@ class _FakeTokenizer:
         if 0 <= tid < self._vocab_size:
             return f"<tok_{tid}>"
         return None
+
+    def get_vocab(self) -> dict[str, int]:
+        return {"<|im_end|>": 5, "<|eot_id|>": 6, "<|endoftext|>": 7}
 
 
 class TestBuildGenerationConfig:
@@ -67,6 +73,32 @@ class TestBuildGenerationConfig:
         tok = _FakeTokenizer(vocab_size=100)
         with pytest.raises(ValueError, match="out of range"):
             build_generation_config(tok, [-1])
+
+
+def test_export_generation_config_preserves_source_and_adds_turn_stop():
+    source = {"eos_token_id": 7, "temperature": 0.7, "top_k": 20, "transformers_version": "5.16.1"}
+
+    config = export_generation_config(
+        _FakeTokenizer(eos_token_id=7), chat_template=QWEN_STYLE_TEMPLATE, explicit=source
+    )
+
+    assert config == {
+        "eos_token_id": [5, 7],
+        "temperature": 0.7,
+        "top_k": 20,
+        "transformers_version": "5.16.1",
+        "do_sample": True,
+        "top_p": 0.95,
+        "bos_token_id": 1,
+    }
+
+
+def test_export_generation_config_keeps_greedy_sampling():
+    config = export_generation_config(
+        _FakeTokenizer(eos_token_id=7), chat_template=None, explicit={"do_sample": False}
+    )
+
+    assert config == {"do_sample": False, "eos_token_id": [7], "bos_token_id": 1}
 
 
 class _CapturingConverter:

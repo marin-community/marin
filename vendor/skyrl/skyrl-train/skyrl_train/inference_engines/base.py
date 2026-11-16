@@ -38,6 +38,8 @@ def request_group_from_id(request_id: str) -> str:
         if separator and group:
             return group
     return request_id
+
+
 UNSTAMPED_POLICY_STEP = -1
 # Chat-completion choice field with one policy step per token in ``token_ids``.
 CHOICE_POLICY_STEPS_KEY = "policy_steps"
@@ -72,13 +74,9 @@ class InferenceEngineInput(TypedDict):
 
 
 class InferenceEngineOutput(TypedDict):
-    # We always return both tokens and text outputs. The tokens are the outputs
-    # of inference engine, and the text is the decoded text output. Therefore,
-    # it is guaranteed that tokenizer.decode(response_token_ids, skip_special_tokens=True) == responses,
-    # but the reverse is not guaranteed, since there are multiple ways to
-    # represent the same text with tokens. Therefore, for multi-turn generation,
-    # please use token-in-token-out to ensure correctness.
-    # `skip_special_tokens=True` is needed because string responses do not include EOS tokens like `<|im_end|>`
+    # Sampled token IDs are authoritative. Text may omit special tokens according
+    # to backend decoding settings and need not round-trip to the same IDs.
+    # Use token-in-token-out for multi-turn generation.
     responses: List[str]
     response_ids: List[List[int]]
     stop_reasons: List[str]

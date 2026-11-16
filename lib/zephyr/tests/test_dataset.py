@@ -16,7 +16,7 @@ from fray.types import ResourceConfig
 from zephyr import counters
 from zephyr._test_helpers import SampleDataclass
 from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset, FilterOp, GlobSource, MapOp, WindowOp, resolve_glob
+from zephyr.dataset import Dataset, FilterOp, GlobSource, MapOp, resolve_glob
 from zephyr.expr import col
 from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 from zephyr.readers import load_file, load_parquet
@@ -266,22 +266,6 @@ def test_complex_pipeline(zephyr_ctx):
     assert len(result) == 8  # 6, 8, 10, 12, 14, 16, 18, 20
     assert all(item["label"] == "even" for item in result)
     assert all(item["value"] % 2 == 0 for item in result)
-
-
-def test_operations_are_dataclasses():
-    """Test that operations are stored as inspectable dataclasses."""
-    ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2).filter(lambda x: x > 2).window(2)
-
-    # Should have 3 operations
-    assert len(ds.operations) == 3
-
-    # Check operation types
-    assert isinstance(ds.operations[0], MapOp)
-    assert isinstance(ds.operations[1], FilterOp)
-    assert isinstance(ds.operations[2], WindowOp)
-    # WindowOp has folder_fn and initial_state
-    assert callable(ds.operations[2].folder_fn)
-    assert ds.operations[2].initial_state == 0
 
 
 def test_from_files_basic(tmp_path):

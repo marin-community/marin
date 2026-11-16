@@ -18,10 +18,10 @@ use crate::indices::trigram::ByteReader;
 
 const MAGIC: &[u8; 4] = b"FIDX";
 const VERSION: u8 = 1;
-const FIXED_PREFIX_LEN: usize = 4 + 1 + 1 + 4;
+pub(crate) const FIXED_PREFIX_LEN: usize = 4 + 1 + 1 + 4;
 const CHECKSUM_LEN: usize = 32;
 const TEMP_SUFFIX: &str = ".tmp";
-const MAX_HEADER_LEN: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_HEADER_LEN: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -345,7 +345,11 @@ pub fn read_section(path: &Path, header: &BundleHeader, id: &str) -> Option<Vec<
     let mut payload = vec![0_u8; len];
     let file = File::open(path).ok()?;
     file.read_exact_at(&mut payload, section.offset).ok()?;
-    (fingerprint(&payload) == section.checksum).then_some(payload)
+    valid_section(section, &payload).then_some(payload)
+}
+
+pub(crate) fn valid_section(section: &SectionEntry, payload: &[u8]) -> bool {
+    payload.len() as u64 == section.len && fingerprint(payload) == section.checksum
 }
 
 pub fn write_bundle(

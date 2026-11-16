@@ -94,6 +94,14 @@ config:
       source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-discord-webhook-code-review/versions/1
       disposition: remove-candidate
       note: No current workflow reference; the current shell value matches the GCP version.
+    - name: DISCORD_WEBHOOK_GCS_EGRESS
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: gcp-secret
+      source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-discord-webhook-gcs-egress/versions/1
+      disposition: keep
+      note: Consumed by .github/workflows/ops-egress-report.yaml.
     - name: DISCORD_WEBHOOK_INTERNAL_DISCUSS
       scope: repository
       repository: marin-community/marin

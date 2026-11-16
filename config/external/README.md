@@ -4,11 +4,11 @@ This directory records promoted vLLM GPU releases and paired vLLM/TPU source
 revisions. Runtime code reads the generated
 `lib/marin/src/marin/external_dependencies.py` module.
 
-Evalchemy and Harbor live in `vendor/evalchemy` and `vendor/harbor`, each with its
-own lock and local FineStore and Rigging sources. Both are excluded from workspace
-membership and default installs, including `uv sync --all-packages`. Evaluator
-changes land with Marin. Historical commit metadata validates saved cohort
-records; reproducing those runs requires their recorded Marin checkout.
+Harbor lives in `vendor/harbor` with its own lock and local FineStore and Rigging
+sources. It is excluded from workspace membership and default installs. Standard
+evaluations use curated TaskSpec corpora and the Marin driver. Historical Evalchemy
+commit metadata validates saved cohort records; reproducing those runs requires
+their recorded Marin checkout.
 
 `vllm/gpu.toml` records the published CUDA release, Torch backend, wheel URLs and
 SHA-256 for each architecture. The

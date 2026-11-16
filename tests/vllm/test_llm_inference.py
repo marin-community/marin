@@ -8,7 +8,7 @@ import pytest
 from marin.inference.config import InferenceModelConfig
 from marin.inference.vllm_server import resolve_model_name_or_path
 
-from tests.test_utils import skip_if_no_tpu
+from tests.vllm.tpu_availability import skip_if_no_tpu
 
 try:
     from vllm import LLM, SamplingParams

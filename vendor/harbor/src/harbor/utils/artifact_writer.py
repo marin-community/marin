@@ -462,6 +462,32 @@ class ArtifactWriter:
             )
         return self._count_and_log_failures(done, prefix)
 
+    async def flush_async(
+        self, prefix: str | None = None, timeout: float | None = DEFAULT_FLUSH_TIMEOUT
+    ) -> int:
+        """Drain matching pending writes without blocking the event loop.
+
+        Return the number of failed writes; raise ArtifactWriteTimeoutError if
+        the deadline expires while any matched write remains pending.
+        """
+        futures = self._matching_futures(prefix)
+        if not futures:
+            return 0
+        drain = asyncio.gather(
+            *(asyncio.wrap_future(future) for future in futures),
+            return_exceptions=True,
+        )
+        try:
+            await asyncio.wait_for(asyncio.shield(drain), timeout)
+        except TimeoutError:
+            pending = sum(not future.done() for future in futures)
+            raise ArtifactWriteTimeoutError(
+                f"Artifact writer flush timed out after {timeout}s with "
+                f"{pending} write(s) still pending"
+                + (f" under {prefix}" if prefix else "")
+            ) from None
+        return self._count_and_log_failures(futures, prefix)
+
     def _matching_futures(self, prefix: str | None) -> list[concurrent.futures.Future]:
         if prefix is None:
             with self._lock:

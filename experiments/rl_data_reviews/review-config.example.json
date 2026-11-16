@@ -13,8 +13,8 @@
   "runtime": {
     "marinskyrl_checkout": "/path/to/MarinSkyRL",
     "gym_python": "/path/to/MarinSkyRL/skyrl-gym/.venv/bin/python",
-    "harbor_checkout": "/path/to/harbor",
-    "harbor_python": "/path/to/harbor/.venv/bin/python",
+    "harbor_checkout": "/path/to/marin/vendor/harbor",
+    "harbor_python": "/path/to/marin/vendor/harbor/.venv/bin/python",
     "gym_config": {},
     "max_turns": 50,
     "agent_timeout": 1800,
@@ -31,7 +31,7 @@
       }
     },
     "harbor_environment": {
-      "type": "docker",
+      "type": "daytona",
       "delete": true
     },
     "harbor_verifier": {}

@@ -9,7 +9,7 @@ import time
 import uuid
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Generator, Sequence
+from collections.abc import AsyncIterator, Generator, Mapping, Sequence
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Literal
 
@@ -20,6 +20,7 @@ from harbor.environments.capabilities import (
     EnvironmentResourceCapabilities,
 )
 from harbor.environments.definition import should_upload_environment_dir
+from harbor.host_capabilities import HostCapabilities
 from harbor.environments.resource_policies import (
     validate_resource_capabilities,
     validate_resource_values,
@@ -32,13 +33,36 @@ from harbor.models.task.config import (
 )
 from harbor.models.trial.config import ResourceMode, ServiceVolumeConfig
 from harbor.models.trial.paths import TrialPaths
-from harbor.utils.env import resolve_env_vars
+from harbor.utils.env import resolve_env_vars, validate_task_environment
 from harbor.utils.logger import logger as global_logger
 from harbor.utils.scripts import quote_shell_arg
 
 EnvironmentPath = str | PurePath
+EXEC_OUTPUT_LIMIT_BYTES = 128 * 1024 * 1024
 _TRANSFER_TAR_TEMPLATE = ".hb-transfer-{uuid}.tar.gz"
 _ENV_TRANSFER_TAR_DIR = PurePosixPath("/tmp")
+
+BASE_ENVIRONMENT_ARGUMENTS = frozenset(
+    {
+        "environment_dir",
+        "environment_name",
+        "session_id",
+        "trial_paths",
+        "task_env_config",
+        "logger",
+        "override_cpus",
+        "override_memory_mb",
+        "override_storage_mb",
+        "override_gpus",
+        "override_tpu",
+        "cpu_enforcement_policy",
+        "memory_enforcement_policy",
+        "persistent_env",
+        "mounts",
+        "host_capabilities",
+        "guest_environment",
+    }
+)
 
 
 class HealthcheckError(RuntimeError):
@@ -74,7 +98,7 @@ class BaseEnvironment(ABC):
     The containerized environment the agent interacts with.
     Consists of 1+ container(s).
 
-    Examples of types of environments: Docker, Apptainer, Containerd, Podman
+    Execution is supplied by a maintained Shellbox backend adapter.
     """
 
     environment_dir: Path
@@ -82,7 +106,6 @@ class BaseEnvironment(ABC):
     session_id: str
     trial_paths: TrialPaths
     task_env_config: EnvironmentConfig
-    extra_docker_compose_paths: list[Path]
     logger: logging.Logger
 
     default_user: str | int | None
@@ -111,7 +134,8 @@ class BaseEnvironment(ABC):
         memory_enforcement_policy: ResourceMode = ResourceMode.AUTO,
         persistent_env: dict[str, str] | None = None,
         mounts: list[ServiceVolumeConfig] | None = None,
-        extra_docker_compose: Sequence[Path | str] | None = None,
+        host_capabilities: HostCapabilities = HostCapabilities(),
+        guest_environment: Mapping[str, str] = {},
         *args,
         **kwargs,
     ):
@@ -135,8 +159,6 @@ class BaseEnvironment(ABC):
                 that bind-mount may apply a back-compat default. Subclasses
                 that don't bind-mount (cloud providers) may ignore the list
                 or use the target paths only as mkdir hints.
-            extra_docker_compose: Additional Docker Compose overlay files to
-                layer on top of the task's environment definition.
         """
         if "suppress_override_warnings" in kwargs:
             warnings.warn(
@@ -152,12 +174,9 @@ class BaseEnvironment(ABC):
         self.trial_paths = trial_paths
         self.default_user = None
         self.agent_timeout_sec = None
-        self.extra_docker_compose_paths = self._normalize_extra_docker_compose_paths(
-            extra_docker_compose
-        )
-
         self.task_env_config = task_env_config
-        self._validate_extra_docker_compose_support()
+        self.host_capabilities = host_capabilities
+        self.guest_environment = dict(guest_environment)
 
         self._override_cpus = override_cpus
         self._override_memory_mb = override_memory_mb
@@ -167,6 +186,9 @@ class BaseEnvironment(ABC):
         self._cpu_resource_mode = ResourceMode(cpu_enforcement_policy)
         self._memory_resource_mode = ResourceMode(memory_enforcement_policy)
         self._persistent_env: dict[str, str] = persistent_env or {}
+        validate_task_environment(
+            self._persistent_env, protected_values=host_capabilities.protected_values
+        )
         self._exec_env_overlays: contextvars.ContextVar[tuple[dict[str, str], ...]] = (
             contextvars.ContextVar(f"harbor_exec_env_overlays_{id(self)}", default=())
         )
@@ -184,32 +206,26 @@ class BaseEnvironment(ABC):
         self._validate_internet_config()
         self._validate_windows_support()
 
-    @staticmethod
-    def _normalize_extra_docker_compose_paths(
-        paths: Sequence[Path | str] | None,
-    ) -> list[Path]:
-        normalized: list[Path] = []
-        for raw_path in paths or []:
-            path = Path(raw_path).expanduser()
-            if not path.is_file():
-                raise FileNotFoundError(f"Extra Docker Compose file not found: {path}")
-            normalized.append(path.resolve())
-        return normalized
-
     @property
     def _uses_compose(self) -> bool:
         return False
 
-    def _validate_extra_docker_compose_support(self):
-        if self.extra_docker_compose_paths and not self.capabilities.docker_compose:
-            raise ValueError(
-                f"{self.type()} environment does not support --extra-docker-compose."
-            )
-
     def _maybe_resolve_task_env(self):
         if self.task_env_config.env and not self._uses_compose:
-            resolved = resolve_env_vars(self.task_env_config.env)
+            resolved = resolve_env_vars(
+                self.task_env_config.env,
+                source=self.guest_environment,
+                protected_values=self.host_capabilities.protected_values,
+            )
             self._persistent_env = {**resolved, **self._persistent_env}
+
+    def resolve_env_vars(self, values: dict[str, str]) -> dict[str, str]:
+        """Resolve guest templates from this execution's captured inputs."""
+        return resolve_env_vars(
+            values,
+            source=self.guest_environment,
+            protected_values=self.host_capabilities.protected_values,
+        )
 
     def _maybe_override_task_env_config(self):
         if self._override_cpus is not None:
@@ -374,6 +390,9 @@ class BaseEnvironment(ABC):
             merged.update(env)
         for scoped_env in overlays:
             merged.update(scoped_env)
+        validate_task_environment(
+            merged, protected_values=self.host_capabilities.protected_values
+        )
         return merged or None
 
     @contextlib.contextmanager
@@ -600,8 +619,7 @@ class BaseEnvironment(ABC):
         ``EnvironmentCapabilities`` instance. Accessed during ``__init__``
         by the capability validators, so subclasses that derive
         capabilities from instance state must set up that state before
-        calling ``super().__init__`` (see Modal's ``_compose_mode`` for
-        an example).
+        calling ``super().__init__``.
 
         For backwards compatibility, this default implementation also
         reads the deprecated ``supports_gpus`` / ``can_disable_internet``
@@ -620,8 +638,8 @@ class BaseEnvironment(ABC):
     def resource_capabilities(cls) -> EnvironmentResourceCapabilities | None:
         """Resource policy capabilities without constructing the environment.
 
-        Used by job-level resource policy preflight. Override on built-in
-        providers; return None for unknown custom environments to skip preflight.
+        Used by job-level resource policy preflight. Adapters without explicit
+        resource policy declarations return None.
         """
         return None
 
@@ -645,8 +663,7 @@ class BaseEnvironment(ABC):
         if self._effective_gpus > 0 and not self.capabilities.gpus:
             raise RuntimeError(
                 f"Task requires {self._effective_gpus} GPU(s) but {self.type()} "
-                f"environment does not support GPU allocation. Please use a GPU-capable "
-                f"environment type (e.g., Modal, Docker with nvidia-docker)."
+                f"environment does not support GPU allocation."
             )
 
     def _validate_tpu_support(self):
@@ -661,8 +678,7 @@ class BaseEnvironment(ABC):
             raise RuntimeError(
                 f"Task requires a TPU slice (type={tpu.type}, "
                 f"topology={tpu.topology}) but {self.type()} environment "
-                "does not support TPU allocation. Please use a TPU-capable "
-                "environment type (e.g., GKE)."
+                "does not support TPU allocation."
             )
 
     def _validate_internet_config(self):
@@ -691,8 +707,7 @@ class BaseEnvironment(ABC):
         if self.task_env_config.os == TaskOS.WINDOWS and not self.capabilities.windows:
             raise RuntimeError(
                 f"Task declares [environment].os = 'windows' but the "
-                f"{self.type()} environment does not support Windows containers. "
-                "Use an environment type that does (currently: docker)."
+                f"{self.type()} environment does not support Windows containers."
             )
 
     @classmethod
@@ -725,19 +740,38 @@ class BaseEnvironment(ABC):
         await self.upload_dir(self.environment_dir, workdir)
 
     @abstractmethod
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         """Starts the environment and optionally forces a build."""
 
     @abstractmethod
     async def stop(self, delete: bool):
-        """Stops the environment and optionally deletes it."""
+        """Stop and reclaim the environment; retention is rejected before allocation."""
+
+    async def collect_runtime_logs(self) -> None:
+        """Copy declared runtime output into the actor before grading or recovery."""
+
+    async def quiesce_agent_commands(self) -> None:
+        """Stop retained agent commands before granting verifier-only authority."""
+
+    @property
+    def requires_agent_quiescence_for_verifier(self) -> bool:
+        """Whether grading grants authority that must be isolated from the agent."""
+        return False
+
+    @contextlib.asynccontextmanager
+    async def verifier_model_access(
+        self, service_tasks: asyncio.TaskGroup
+    ) -> AsyncIterator[None]:
+        """Grant model services required only while the verifier is running."""
+        yield
 
     async def prepare_logs_for_host(self) -> None:
         """Fix log file permissions so the host process can read them.
 
         Called before agent logs are read on the host side (e.g. for trajectory
-        conversion). Mounted environments (Docker on Linux) need to chown files
-        written by the in-container agent user; other environments are no-ops.
+        conversion). Adapters may override this when log permissions require it.
         """
 
     @abstractmethod

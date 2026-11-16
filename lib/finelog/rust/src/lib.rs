@@ -15,6 +15,7 @@ pub mod migrations;
 pub(crate) mod partition_policy;
 pub(crate) mod policies;
 pub mod query;
+pub(crate) mod read_work;
 pub mod server;
 pub(crate) mod storage_policy;
 pub mod store;

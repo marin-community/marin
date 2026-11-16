@@ -192,7 +192,9 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                 if remaining <= 0:
                     return scored(0.0, reason="timeout", passed=0, total=0)
                 files = _candidate_error_files(failures, directory, protected, spec.candidate_modules)
-                if files and _pytest_available(spec.python, Path(scratch), remaining):
+                if not files:
+                    _validate_test_dependencies(failures)
+                if files and _pytest_available(spec.python, Path(scratch), max(0.0, deadline - time.monotonic())):
                     candidate_failure = scored(
                         0.0,
                         reason="startup_error",
@@ -204,7 +206,6 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                         total=0,
                     )
                     continue
-                _validate_test_dependencies(failures, paths, directory)
                 raise RuntimeError(
                     f"pytest wrote no json report (exit {result.returncode}): {_tail(result.stderr or result.stdout)}"
                 )
@@ -220,7 +221,8 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                     raise RuntimeError("pytest collection failure has no exception provenance")
                 files = _candidate_error_files(collection_failures, directory, protected, spec.candidate_modules)
                 if not files:
-                    _validate_test_dependencies(collection_failures, paths, directory)
+                    _validate_test_dependencies(collection_failures)
+                if not files:
                     raise RuntimeError(
                         "pytest collection failed in trusted code or dependencies: "
                         f"{_tail(result.stderr or result.stdout)}"
@@ -331,6 +333,12 @@ def _candidate_error_files(
                 or module.startswith(failure.missing_module + ".")
             )
             if matching_modules:
+                candidate_paths = [root / _candidate_module_path(module, root) for module in matching_modules]
+                if any(
+                    path.with_suffix(".py").resolve() in protected or (path / "__init__.py").resolve() in protected
+                    for path in candidate_paths
+                ):
+                    return []
                 if failure.kind == _FailureKind.IMPORT:
                     files.update(_candidate_module_path(module, root) for module in matching_modules)
                 else:
@@ -366,20 +374,9 @@ def _candidate_module_path(module: str, workspace: Path) -> str:
     return module.removeprefix(workspace.name + ".").replace(".", "/")
 
 
-def _validate_test_dependencies(failures: list[_PytestFailure], paths: tuple[str, ...], workspace: Path) -> None:
-    """Reject missing imports raised directly by a collected test module."""
-    if not failures or any(failure.kind != _FailureKind.DEPENDENCY for failure in failures):
-        return
-    test_paths = {(path if path.is_absolute() else workspace / path).resolve() for path in map(Path, paths)}
-    for failure in failures:
-        if not failure.filename:
-            return
-        filename = Path(failure.filename)
-        if not filename.is_absolute():
-            filename = workspace / filename
-        if filename.resolve() not in test_paths:
-            return
-    missing = sorted({failure.missing_module for failure in failures if failure.missing_module})
+def _validate_test_dependencies(failures: list[_PytestFailure]) -> None:
+    """Raise InvalidTask when pytest failures identify missing dependencies."""
+    missing = sorted({failure.missing_module for failure in failures if failure.kind == _FailureKind.DEPENDENCY})
     if missing:
         raise InvalidTask(f"pytest tests require modules missing from the grader environment: {', '.join(missing)}")
 

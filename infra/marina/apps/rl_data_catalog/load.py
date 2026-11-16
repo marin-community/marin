@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from typing import Any
 
 import click
-from finestore.rl.curation import CurationCatalog, JudgmentStatus, validate_items
+from finestore.rl.curation import MAX_UNAVAILABLE_JUDGMENT_SHARE, CurationCatalog, JudgmentStatus, validate_items
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
@@ -125,8 +125,9 @@ def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]
             raise ValueError("Selected assessment belongs to another source")
         populations, items = catalog.populations(key), list(catalog.items(key))
         validate_items(populations, items)
-        if any(item.status != JudgmentStatus.REVIEWED for item in items):
-            raise ValueError(f"Selected assessment has unavailable judgments: {key}")
+        unavailable = sum(1 for item in items if item.status != JudgmentStatus.REVIEWED)
+        if items and unavailable / len(items) > MAX_UNAVAILABLE_JUDGMENT_SHARE:
+            raise ValueError(f"Selected assessment exceeds the unavailable-judgment threshold: {key}")
         metadata["assessments"].append(assessment.model_dump(mode="json"))
         metadata["populations"].extend(row.model_dump(mode="json") for row in populations)
         metadata["items"].extend(row.model_dump(mode="json") for row in items)

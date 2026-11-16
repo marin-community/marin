@@ -79,6 +79,18 @@ def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch
         # The vLLM backend imports GitPython lazily, which probes the git executable.
         if Path(command[0]).name == "git":
             return real_popen(command, **kwargs)
+        # Exercise the actual constructed script invocation through argparse.
+        # Without safe-path mode, sibling types.py shadows stdlib types before
+        # the supervisor can start. Stop at --help so no Ray/model runs locally.
+        with real_popen(
+            [sys.executable, *command[command.index("python") + 1 : -2], "--help"],
+            env=kwargs["env"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ) as probe:
+            _, error = probe.communicate(timeout=10)
+            assert probe.returncode == 0, error
         launch = json.loads(Path(command[-1]).read_text())
         commands.append(launch)
         Path(launch["ready_path"]).write_text("{}")

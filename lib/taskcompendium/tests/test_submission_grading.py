@@ -15,6 +15,7 @@ from verifyit.spec import (
     JudgeSpec,
     McqSpec,
     NumericSpec,
+    ReasoningMarkupSpec,
     ScriptSpec,
     Spec,
     StructuredExactSpec,
@@ -157,6 +158,13 @@ def test_plain_text_passes_blank_candidates_to_a_verifier_that_grades_them():
     task = _task(_grader(ExactSpec(expected=("",), empty_output=EmptyOutputPolicy.GRADE)))
     result = grade_answer(task, _attempt(task, " \n"))
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+
+
+@pytest.mark.parametrize("stop_reason,reward", [("length", 1.0), ("stop", 0.0), (None, 0.0)])
+def test_reasoning_markup_excuses_a_span_cut_off_by_the_token_limit(stop_reason, reward):
+    task = _task(_grader(ReasoningMarkupSpec()))
+    attempt = GradingAttempt(_conversation(task, "<|start_think|>still planning"), stop_reason=stop_reason)
+    assert grade_answer(task, attempt).reward == reward
 
 
 def test_captured_null_state_is_a_submission_but_missing_state_is_not():

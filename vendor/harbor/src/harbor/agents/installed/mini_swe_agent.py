@@ -1,5 +1,4 @@
 import json
-import os
 import shlex
 import uuid
 from datetime import datetime, timezone
@@ -596,8 +595,9 @@ class MiniSweAgent(BaseInstalledAgent):
             "MSWEA_COST_TRACKING": "ignore_errors",  # Ignore unknown model costs
         }
 
-        if "MSWEA_API_KEY" in os.environ:
-            env["MSWEA_API_KEY"] = os.environ["MSWEA_API_KEY"]
+        api_key = self._get_env("MSWEA_API_KEY")
+        if api_key is not None:
+            env["MSWEA_API_KEY"] = api_key
         elif self.model_alias.startswith(_HOSTED_VLLM_PREFIX):
             # Hosted vLLM is an internal OpenAI-compatible endpoint. It ignores
             # credentials, but mini-swe-agent requires a non-empty key.
@@ -606,24 +606,25 @@ class MiniSweAgent(BaseInstalledAgent):
             try:
                 api_key_vars = get_api_key_var_names_from_model_name(self.model_alias)
                 for api_key_var in api_key_vars:
-                    if api_key_var in os.environ:
-                        env[api_key_var] = os.environ[api_key_var]
+                    api_key = self._get_env(api_key_var)
+                    if api_key is not None:
+                        env[api_key_var] = api_key
                     else:
                         raise ValueError(
                             f"Unset API variable for model {self.model_alias}. "
-                            f"Please set {api_key_var} or MSWEA_API_KEY environment variable"
+                            f"Grant an explicit {api_key_var} or MSWEA_API_KEY task capability"
                         )
-                env["MSWEA_API_KEY"] = os.environ[api_key_vars[0]]
+                env["MSWEA_API_KEY"] = env[api_key_vars[0]]
             except ValueError as e:
                 raise ValueError(
                     f"Unable to determine API key for model {self.model_alias}: {e}. "
-                    "Please set MSWEA_API_KEY environment variable as fallback"
+                    "Grant an explicit MSWEA_API_KEY task capability as fallback"
                 )
 
         api_base = (
             self._api_base
-            or os.environ.get("OPENAI_BASE_URL")
-            or os.environ.get("OPENAI_API_BASE")
+            or self._get_env("OPENAI_BASE_URL")
+            or self._get_env("OPENAI_API_BASE")
         )
 
         cli_flags = self.build_cli_flags()

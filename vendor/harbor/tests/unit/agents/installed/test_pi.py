@@ -22,6 +22,8 @@ from harbor.agents.installed.pi import Pi
 from harbor.llms.base import ContextLengthExceededError
 from harbor.literal.proxy import CORRELATION_ID_HEADER
 from harbor.models.agent.context import AgentContext
+from harbor.models.trajectories.trajectory import Trajectory
+from harbor.utils.artifact_writer import get_artifact_writer
 
 
 @pytest.fixture
@@ -35,21 +37,19 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
     monkeypatch.setattr(Pi, "_ENDPOINT_ENV_PATH", str(endpoint_path))
     monkeypatch.setattr(Pi, "_CONTEXT_BUDGET_EXTENSION_PATH", str(extension_path))
 
-    bootstrap_bin = temp_dir / "bootstrap-bin"
     fake_bin = temp_dir / "fake-bin"
-    nvm_dir = temp_dir / ".nvm"
     artifact_dir = temp_dir / "pi-artifacts"
-    for directory in (bootstrap_bin, fake_bin, nvm_dir, artifact_dir):
+    for directory in (fake_bin, artifact_dir):
         directory.mkdir()
 
     node = shutil.which("node")
     assert node is not None
-    (bootstrap_bin / "rm").symlink_to("/bin/rm")
     scripts = {
         fake_bin / "node": f'#!/bin/sh\nexec {shlex.quote(node)} "$@"\n',
         fake_bin / "pi": pi_script,
         fake_bin / "stdbuf": '#!/bin/sh\nshift\nexec "$@"\n',
-        fake_bin / "tee": (
+        fake_bin
+        / "tee": (
             "#!/bin/sh\n"
             'mkdir -p "$HOME/pi-artifacts"\n'
             'exec /usr/bin/tee "$HOME/pi-artifacts/$(basename "$1")"\n'
@@ -58,15 +58,6 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
     for path, contents in scripts.items():
         path.write_text(contents)
         path.chmod(0o755)
-    # Sourcing NVM selects the task image's default Node, not Pi's install version.
-    (nvm_dir / "nvm.sh").write_text(
-        'export PATH="$HOME/bootstrap-bin:/usr/bin:/bin"\n'
-        "nvm() {\n"
-        '  [ "$1" = use ] && [ "$2" = 22 ] || return 1\n'
-        '  export PATH="$HOME/fake-bin:/usr/bin:/bin"\n'
-        "}\n"
-    )
-
     class LocalShellEnvironment:
         async def upload_file(self, source_path, target_path):
             shutil.copyfile(source_path, target_path)
@@ -76,7 +67,7 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
                 ["/bin/bash", "-c", command],
                 capture_output=True,
                 text=True,
-                env={"HOME": str(temp_dir), "PATH": str(bootstrap_bin)},
+                env={"HOME": str(temp_dir), "PATH": f"{fake_bin}:/usr/bin:/bin"},
             )
             return SimpleNamespace(
                 return_code=completed.returncode,
@@ -93,52 +84,20 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
 
 
 @pytest.mark.asyncio
-async def test_version_check_uses_installed_node_with_different_nvm_default(
-    temp_dir, monkeypatch
-):
+@pytest.mark.parametrize("requested_version", [None, "0.87.0", "0.80.5"])
+async def test_image_pi_preserves_requested_version(temp_dir, monkeypatch, requested_version):
     shell = _local_pi_shell(temp_dir, monkeypatch, '#!/bin/sh\nprintf "0.87.0\\n"\n')
-    agent = Pi(logs_dir=temp_dir)
+    agent = Pi(logs_dir=temp_dir, version=requested_version)
 
-    result = await shell.environment.exec(agent.get_version_command())
-
-    assert result.return_code == 0
-    assert agent.parse_version(result.stdout) == "0.87.0"
+    if requested_version == "0.80.5":
+        with pytest.raises(RuntimeError, match="Image provides Pi"):
+            await agent.install(shell.environment)
+    else:
+        await agent.install(shell.environment)
+        assert agent.version() == "0.87.0"
 
 
 class TestPiAgent:
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("version", "expected_package"),
-        [
-            (None, "@earendil-works/pi-coding-agent@latest"),
-            ("0.73.1", "@mariozechner/pi-coding-agent@0.73.1"),
-            ("0.74.0", "@earendil-works/pi-coding-agent@0.74.0"),
-        ],
-    )
-    async def test_install_uses_version_compatible_package(
-        self, temp_dir, version, expected_package
-    ):
-        agent = Pi(logs_dir=temp_dir, version=version)
-        mock_env = AsyncMock()
-        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-
-        await agent.install(mock_env)
-
-        install_command = next(
-            call.kwargs["command"]
-            for call in mock_env.exec.call_args_list
-            if "npm install -g" in call.kwargs["command"]
-        )
-        assert f"npm install -g --ignore-scripts {expected_package}" in install_command
-
-    @pytest.mark.asyncio
-    async def test_install_rejects_invalid_package_version(self, temp_dir):
-        agent = Pi(logs_dir=temp_dir, version="latest??")
-        mock_env = AsyncMock()
-
-        with pytest.raises(ValueError, match="not a valid package version"):
-            await agent.install(mock_env)
-
     @pytest.mark.asyncio
     async def test_run_command_structure(self, temp_dir):
         agent = Pi(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
@@ -182,36 +141,25 @@ class TestPiAgent:
         assert "--provider my-provider --model my-model" in run_command
 
     @pytest.mark.asyncio
-    async def test_api_key_forwarding_anthropic(self, temp_dir):
-        agent = Pi(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
-        mock_env = AsyncMock()
-        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-        env_vars = {
-            "ANTHROPIC_API_KEY": "ak-123",
-            "UNRELATED_KEY": "ignored",
-        }
-        with patch.dict(os.environ, env_vars, clear=False):
-            await agent.run("Fix the bug", mock_env, AsyncMock())
-
-        run_env = mock_env.exec.call_args_list[-1].kwargs["env"]
-        assert run_env["ANTHROPIC_API_KEY"] == "ak-123"
-        assert "UNRELATED_KEY" not in run_env
-
-    @pytest.mark.asyncio
-    async def test_api_key_forwarding_openai(self, temp_dir):
-        agent = Pi(logs_dir=temp_dir, model_name="openai/gpt-4")
-        mock_env = AsyncMock()
-        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-        env_vars = {
-            "OPENAI_API_KEY": "sk-456",
-            "UNRELATED_KEY": "ignored",
-        }
-        with patch.dict(os.environ, env_vars, clear=False):
-            await agent.run("Fix the bug", mock_env, AsyncMock())
-
-        run_env = mock_env.exec.call_args_list[-1].kwargs["env"]
-        assert run_env["OPENAI_API_KEY"] == "sk-456"
-        assert "UNRELATED_KEY" not in run_env
+    @pytest.mark.parametrize(
+        ("provider", "key"),
+        [("anthropic", "ANTHROPIC_API_KEY"), ("openai", "OPENAI_API_KEY")],
+    )
+    async def test_provider_receives_only_explicit_inert_capabilities(
+        self, temp_dir, monkeypatch, provider, key
+    ):
+        monkeypatch.setenv(key, "host-provider-private-canary")
+        agent = Pi(
+            logs_dir=temp_dir, model_name=f"{provider}/model", extra_env={key: "EMPTY"}
+        )
+        environment = AsyncMock()
+        environment.exec.return_value = SimpleNamespace(
+            return_code=0, stdout="", stderr=""
+        )
+        await agent.run("Fix the bug", environment, AgentContext())
+        run_env = environment.exec.call_args.kwargs["env"]
+        assert run_env[key] == "EMPTY"
+        assert "host-provider-private-canary" not in json.dumps(run_env)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -222,7 +170,11 @@ class TestPiAgent:
         ],
     )
     async def test_provider_base_url_forwarding(self, temp_dir, model_name, variable):
-        agent = Pi(logs_dir=temp_dir, model_name=model_name)
+        agent = Pi(
+            logs_dir=temp_dir,
+            model_name=model_name,
+            extra_env={variable: "https://provider.example.test/v1"},
+        )
         mock_env = AsyncMock()
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         endpoint = "https://provider.example.test/v1"
@@ -368,8 +320,9 @@ class TestPiAgent:
     ],
 )
 async def test_hosted_vllm_endpoint_registers_pi_provider(
-    temp_dir, model_name, thinking_format
+    temp_dir, model_name, thinking_format, monkeypatch
 ):
+    monkeypatch.setenv("OPENAI_API_KEY", "host-provider-private-canary")
     endpoint = "https://iris.example/proxy/t/cluster=cw/scoped-token/serve.inference/v1"
     served_id = "campaign-model"
     agent = Pi(
@@ -377,7 +330,7 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
         model_name=model_name,
         model_alias=f"hosted_vllm/{served_id}",
         api_base=endpoint,
-        api_key="dummy-key",
+        api_key="EMPTY",
         model_info={"max_input_tokens": 65536, "max_output_tokens": 16384},
         thinking_format=thinking_format,
     )
@@ -401,7 +354,7 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
             **os.environ,
             "HOME": str(temp_dir),
             "HARBOR_PI_API_BASE": endpoint,
-            "HARBOR_PI_API_KEY": "dummy-key",
+            "HARBOR_PI_API_KEY": "EMPTY",
         },
     )
     await agent.run("Fix the bug", mock_env, AgentContext())
@@ -443,9 +396,10 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
     assert run_tokens[run_tokens.index("--model") + 1] == served_id
     assert run_call.kwargs["env"] == {}
     assert uploaded_files[Pi._ENDPOINT_ENV_PATH] == (
-        f"export HARBOR_PI_API_BASE={endpoint}\nexport HARBOR_PI_API_KEY=dummy-key\n"
+        f"export HARBOR_PI_API_BASE={endpoint}\nexport HARBOR_PI_API_KEY=EMPTY\n"
     )
     assert Pi._CONTEXT_BUDGET_EXTENSION_PATH in uploaded_files
+    assert "host-provider-private-canary" not in json.dumps(uploaded_files)
     assert all(
         endpoint not in call.kwargs["command"] for call in mock_env.exec.call_args_list
     )
@@ -463,7 +417,7 @@ async def test_hosted_vllm_request_budget_uses_exact_server_token_count(
         model_name="open-athena/test-model",
         model_alias="hosted_vllm/served-model",
         api_base=endpoint,
-        api_key="dummy-key",
+        api_key="EMPTY",
         model_info={"max_input_tokens": 32768, "max_output_tokens": 16384},
         thinking_format="chat-template",
     )
@@ -537,7 +491,7 @@ async def test_hosted_vllm_request_budget_truncates_token_dense_tool_output(
         model_name="open-athena/test-model",
         model_alias="hosted_vllm/served-model",
         api_base=endpoint,
-        api_key="dummy-key",
+        api_key="EMPTY",
         model_info={"max_input_tokens": 32768, "max_output_tokens": 16384},
         thinking_format="chat-template",
     )
@@ -619,7 +573,7 @@ process.stdout.write(JSON.stringify({ transformed, promptTokens: tokenCount(tran
 
 
 @pytest.mark.asyncio
-async def test_hosted_vllm_full_command_loads_nvm_and_preserves_capability_url(
+async def test_hosted_vllm_command_classifies_authentication_and_cleans_provider_config(
     temp_dir, monkeypatch
 ):
     endpoint = "https://iris.example/proxy/t/scoped-token/eval/v1"
@@ -642,7 +596,7 @@ async def test_hosted_vllm_full_command_loads_nvm_and_preserves_capability_url(
         model_name="Qwen/Qwen3.6-35B-A3B",
         model_alias="hosted_vllm/served-model",
         api_base=endpoint,
-        api_key="dummy-key",
+        api_key="EMPTY",
         thinking_format="qwen-chat-template",
     )
 
@@ -699,7 +653,7 @@ async def test_hosted_vllm_failure_is_classified(
         model_name="Qwen/Qwen3.6-35B-A3B",
         model_alias="hosted_vllm/served-model",
         api_base=endpoint,
-        api_key="dummy-key",
+        api_key="EMPTY",
         thinking_format="qwen-chat-template",
     )
 
@@ -724,7 +678,7 @@ async def test_killed_output_validator_preserves_signal_error(temp_dir, monkeypa
         model_name="Qwen/Qwen3.6-35B-A3B",
         model_alias="hosted_vllm/served-model",
         api_base="https://iris.example/proxy/t/scoped-token/eval/v1",
-        api_key="dummy-key",
+        api_key="EMPTY",
         thinking_format="qwen-chat-template",
     )
 
@@ -820,7 +774,7 @@ fetch(`${provider.baseUrl}/chat/completions`, {
         model_name="Qwen/Qwen3.6-35B-A3B",
         model_alias="hosted_vllm/served-model",
         api_base=endpoint,
-        api_key="dummy-key",
+        api_key="EMPTY",
         thinking_format="qwen-chat-template",
     )
 
@@ -835,7 +789,7 @@ fetch(`${provider.baseUrl}/chat/completions`, {
     event = json.loads(output_path.read_text())
     assert received == {
         "path": "/proxy/t/redacted/endpoint/v1/chat/completions",
-        "authorization": "Bearer dummy-key",
+        "authorization": "Bearer EMPTY",
         "model": "served-model",
     }
     assert event["message"]["content"] == [
@@ -852,7 +806,11 @@ fetch(`${provider.baseUrl}/chat/completions`, {
 
 @pytest.mark.asyncio
 async def test_builtin_provider_does_not_replace_models_document(temp_dir):
-    agent = Pi(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
+    agent = Pi(
+        logs_dir=temp_dir,
+        model_name="anthropic/claude-sonnet-4-5",
+        extra_env={"ANTHROPIC_API_KEY": "EMPTY"},
+    )
     mock_env = AsyncMock()
     mock_env.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
 
@@ -864,7 +822,7 @@ async def test_builtin_provider_does_not_replace_models_document(temp_dir):
         for call in mock_env.exec.call_args_list
     )
     assert mock_env.exec.call_args_list[-1].kwargs["env"] == {
-        "ANTHROPIC_API_KEY": "test-key"
+        "ANTHROPIC_API_KEY": "EMPTY"
     }
 
 
@@ -927,31 +885,21 @@ def test_rollout_collection_stamps_a_unique_trial_header(temp_dir):
     assert correlation_ids[0] != correlation_ids[1]
 
 
-@pytest.mark.asyncio
-async def test_hosted_vllm_failure_preserves_capability_url_and_redacts_api_key(
-    temp_dir,
+def test_hosted_provider_rejects_real_authentication_before_staging(
+    temp_dir, monkeypatch
 ):
-    endpoint = "https://iris.example/proxy/t/scoped-token/eval/v1"
-    api_key = "secret-api-key"
-    agent = Pi(
-        logs_dir=temp_dir,
-        model_name="hosted_vllm/served-model",
-        api_base=endpoint,
-        api_key=api_key,
-        thinking_format="qwen-chat-template",
-    )
-    mock_env = AsyncMock()
-    mock_env.exec.return_value = SimpleNamespace(
-        return_code=1,
-        stdout="",
-        stderr=f"request to {endpoint} with key {api_key} failed",
-    )
-
-    with pytest.raises(RuntimeError) as error:
-        await agent.run("Fix the bug", mock_env, AgentContext())
-
-    assert endpoint in str(error.value)
-    assert api_key not in str(error.value)
+    monkeypatch.setenv("OPENAI_API_KEY", "host-provider-private-canary")
+    with pytest.raises(
+        ValueError, match="credentials must remain on the host"
+    ) as error:
+        Pi(
+            logs_dir=temp_dir,
+            model_name="hosted_vllm/served-model",
+            api_base="http://127.0.0.1:8787/v1",
+            api_key="host-provider-private-canary",
+            thinking_format="qwen-chat-template",
+        )
+    assert "host-provider-private-canary" not in str(error.value)
 
 
 class TestPiPopulateContext:
@@ -1240,3 +1188,352 @@ class TestPiPopulateContext:
         agent.populate_context_post_run(context)
         assert context.n_input_tokens == 10
         assert context.n_output_tokens == 5
+
+
+class TestPiTrajectoryConversion:
+    """populate_context_post_run converts pi.txt into an ATIF trajectory.json.
+
+    ``_events()`` is an anonymized, trimmed slice of a real BFCL pi.txt session
+    stream: one turn with two tool calls, their results, and a final answer.
+    """
+
+    @staticmethod
+    def _events():
+        return [
+            {
+                "type": "session",
+                "version": 3,
+                "id": "11111111-2222-3333-4444-555555555555",
+                "timestamp": "2026-11-05T03:00:00.000Z",
+                "cwd": "/app",
+            },
+            {"type": "agent_start"},
+            {"type": "turn_start"},
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "system",
+                    "content": "",
+                    "sections": {
+                        "preamble": "You are a test assistant operating inside a coding agent harness."
+                    },
+                },
+                "timestamp": 1762309200000,
+            },
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "List the files in /app and write a greeting."}],
+                },
+                "timestamp": 1762309200001,
+            },
+            {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "Checking"}},
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "List files before writing."},
+                        {"type": "text", "text": "Listing the directory before writing."},
+                        {
+                            "type": "toolCall",
+                            "id": "chatcmpl-tool-aaa",
+                            "name": "bash",
+                            "arguments": {"command": "ls -la"},
+                        },
+                    ],
+                    "api": "openai-completions",
+                    "provider": "hosted_vllm",
+                    "model": "hosted_vllm/test-model",
+                    "usage": {
+                        "input": 100,
+                        "output": 20,
+                        "cacheRead": 5,
+                        "cacheWrite": 2,
+                        "cost": {"input": 0.1, "output": 0, "total": 0.1},
+                    },
+                    "stopReason": "toolCall",
+                },
+                "timestamp": 1762309200003,
+            },
+            {
+                "type": "tool_execution_start",
+                "toolCallId": "chatcmpl-tool-aaa",
+                "toolName": "bash",
+            },
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "toolResult",
+                    "toolCallId": "chatcmpl-tool-aaa",
+                    "toolName": "bash",
+                    "content": [{"type": "text", "text": "total 4\nhello.txt"}],
+                    "isError": False,
+                    "timestamp": 1762309200004,
+                },
+            },
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Writing the greeting now."},
+                        {
+                            "type": "toolCall",
+                            "id": "chatcmpl-tool-bbb",
+                            "name": "write",
+                            "arguments": {"path": "/app/greeting.txt", "content": "hello"},
+                        },
+                    ],
+                    "model": "hosted_vllm/test-model",
+                    "usage": {"input": 140, "output": 35},
+                    "stopReason": "toolCall",
+                },
+                "timestamp": 1762309200005,
+            },
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "toolResult",
+                    "toolCallId": "chatcmpl-tool-bbb",
+                    "toolName": "write",
+                    "content": [{"type": "text", "text": "wrote /app/greeting.txt"}],
+                    "isError": True,
+                    "timestamp": 1762309200006,
+                },
+            },
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Done. The directory contains hello.txt and the greeting was written.",
+                        }
+                    ],
+                    "model": "hosted_vllm/test-model",
+                    "usage": {"input": 180, "output": 40},
+                    "stopReason": "stop",
+                },
+                "timestamp": 1762309200007,
+            },
+            {"type": "turn_end"},
+            {"type": "agent_end", "messages": []},
+            {"type": "agent_settled"},
+        ]
+
+    def _agent(self, temp_dir, **kwargs):
+        return Pi(logs_dir=temp_dir, model_name="hosted_vllm/test-model", **kwargs)
+
+    @staticmethod
+    def _read_trajectory(temp_dir):
+        """Flush the artifact writer, then load and validate trajectory.json."""
+        get_artifact_writer().flush(str(temp_dir / "trajectory.json"))
+        return Trajectory.model_validate(
+            json.loads((temp_dir / "trajectory.json").read_text())
+        )
+
+    @staticmethod
+    def _write_jsonl(path, events):
+        path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+
+    def test_converts_session_to_valid_atif_trajectory(self, temp_dir):
+        agent = self._agent(temp_dir, version="1.2.3")
+        self._write_jsonl(temp_dir / "pi.txt", self._events())
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)
+
+        trajectory = self._read_trajectory(temp_dir)
+        assert trajectory.schema_version == "ATIF-v1.7"
+        assert trajectory.session_id == "11111111-2222-3333-4444-555555555555"
+        assert trajectory.agent.name == "pi"
+        assert trajectory.agent.version == "1.2.3"
+        assert trajectory.agent.model_name == "hosted_vllm/test-model"
+
+        assert [step.source for step in trajectory.steps] == [
+            "system",
+            "user",
+            "agent",
+            "agent",
+            "agent",
+        ]
+        for step in trajectory.steps:
+            assert step.timestamp is not None and step.timestamp.endswith("Z")
+
+        tool_step = trajectory.steps[2]
+        assert tool_step.message == "Listing the directory before writing."
+        assert tool_step.reasoning_content == "List files before writing."
+        assert tool_step.model_name == "hosted_vllm/test-model"
+        assert [call.function_name for call in tool_step.tool_calls] == ["bash"]
+        assert tool_step.tool_calls[0].tool_call_id == "chatcmpl-tool-aaa"
+        assert tool_step.tool_calls[0].arguments == {"command": "ls -la"}
+        assert tool_step.metrics.prompt_tokens == 105  # 100 input + 5 cached
+        assert tool_step.metrics.cached_tokens == 5
+        assert tool_step.metrics.completion_tokens == 20
+        result = tool_step.observation.results[0]
+        assert result.source_call_id == "chatcmpl-tool-aaa"
+        assert result.content == "total 4\nhello.txt"
+        assert result.extra == {"is_error": False}
+
+        second_tool_step = trajectory.steps[3]
+        assert [call.function_name for call in second_tool_step.tool_calls] == ["write"]
+        assert second_tool_step.observation.results[0].content == "wrote /app/greeting.txt"
+        assert second_tool_step.observation.results[0].extra == {"is_error": True}
+
+        final = trajectory.steps[4]
+        assert final.message == (
+            "Done. The directory contains hello.txt and the greeting was written."
+        )
+        assert final.tool_calls is None
+        assert final.metrics.prompt_tokens == 180
+
+        # Source session: 105 + 140 + 180 prompt, 20 + 35 + 40 completion,
+        # five system/user/assistant messages, and two tool results.
+        assert trajectory.final_metrics.total_prompt_tokens == context.n_input_tokens == 425
+        assert trajectory.final_metrics.total_completion_tokens == context.n_output_tokens == 95
+        assert trajectory.final_metrics.total_cached_tokens == context.n_cache_tokens == 5
+        assert trajectory.final_metrics.total_cost_usd == context.cost_usd == 0.1
+        assert trajectory.final_metrics.total_steps == len(trajectory.steps) == 5
+
+        # Usage still counts every assistant turn, including the turns the
+        # trajectory records as steps.
+        assert context.n_input_tokens == 425  # (100 + 5) + 140 + 180
+        assert context.n_output_tokens == 95
+        assert context.n_cache_tokens == 5
+
+    def test_truncated_output_yields_partial_trajectory(self, temp_dir):
+        agent = self._agent(temp_dir)
+        pi_output = temp_dir / "pi.txt"
+        self._write_jsonl(pi_output, self._events())
+        lines = pi_output.read_text().splitlines()
+        # Keep the stream through the first tool call and end with a
+        # half-written tool result, as a killed pi process might leave.
+        pi_output.write_text("\n".join(lines[:8]) + "\n" + lines[8][:30])
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)
+
+        trajectory = self._read_trajectory(temp_dir)
+        assert [step.source for step in trajectory.steps] == ["system", "user", "agent"]
+        assert [call.function_name for call in trajectory.steps[2].tool_calls] == ["bash"]
+        assert trajectory.steps[2].observation is None
+        assert trajectory.final_metrics.total_steps == 3
+        assert context.n_input_tokens == 105  # 100 + 5 cacheRead
+        assert context.n_output_tokens == 20
+
+    def test_tool_result_without_agent_step_stays_valid(self, temp_dir):
+        agent = self._agent(temp_dir)
+        self._write_jsonl(
+            temp_dir / "pi.txt",
+            [
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "go"}],
+                    },
+                },
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "toolResult",
+                        "toolCallId": "call-orphan",
+                        "toolName": "bash",
+                        "content": [{"type": "text", "text": "orphan output"}],
+                    },
+                },
+            ],
+        )
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)
+
+        trajectory = self._read_trajectory(temp_dir)
+        orphan_step = trajectory.steps[-1]
+        assert orphan_step.observation.results[0].content == "orphan output"
+        # The dangling id would fail ATIF's tool-call reference validation.
+        assert orphan_step.observation.results[0].source_call_id is None
+
+    def test_unmatched_tool_result_id_is_cleared_not_dropped(self, temp_dir):
+        agent = self._agent(temp_dir)
+        self._write_jsonl(
+            temp_dir / "pi.txt",
+            [
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "toolCall",
+                                "id": "call-1",
+                                "name": "bash",
+                                "arguments": {},
+                            }
+                        ],
+                        "model": "hosted_vllm/test-model",
+                    },
+                },
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "toolResult",
+                        "toolCallId": "call-other",
+                        "content": [{"type": "text", "text": "mismatched"}],
+                    },
+                },
+            ],
+        )
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)
+
+        trajectory = self._read_trajectory(temp_dir)
+        result = trajectory.steps[0].observation.results[0]
+        assert result.content == "mismatched"
+        assert result.source_call_id is None
+
+    def test_malformed_usage_values_do_not_escape(self, temp_dir):
+        agent = self._agent(temp_dir)
+        self._write_jsonl(
+            temp_dir / "pi.txt",
+            [
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "usage": {"input": None, "output": "many", "cacheRead": 3},
+                    },
+                },
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "usage": {"input": 10, "output": 5},
+                    },
+                },
+            ],
+        )
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)  # must not raise
+
+        # The malformed record is skipped; the well-formed one is counted.
+        assert context.n_input_tokens == 10
+        assert context.n_output_tokens == 5
+        get_artifact_writer().flush(str(temp_dir / "trajectory.json"))
+        assert (temp_dir / "trajectory.json").exists()
+
+    def test_unparseable_output_writes_no_trajectory(self, temp_dir):
+        agent = self._agent(temp_dir)
+        (temp_dir / "pi.txt").write_text("not json at all\n\x01\x02 not json either\n")
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)
+
+        assert not (temp_dir / "trajectory.json").exists()
+        assert context.n_input_tokens == 0
+        assert context.n_output_tokens == 0

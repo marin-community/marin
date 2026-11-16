@@ -27,6 +27,7 @@ from infra.ci.select_tests import (
     select_all_tests,
     select_changed_tests,
     select_local_tests,
+    shard_files,
 )
 
 GITHUB_FILE = re.compile(r"\.github/[\w./-]+\.yaml")
@@ -196,7 +197,6 @@ def test_standalone_rollout_dependencies_select_marin_and_experiment_consumers(
         ([], True),
         (["pyproject.toml"], False),
         (["experiments/moe/conftest.py"], False),
-        (["experiments/moe/fixtures/weights.json"], False),
     ],
 )
 def test_full_marin_suite_includes_experiment_tests(
@@ -208,6 +208,72 @@ def test_full_marin_suite_includes_experiment_tests(
     selection = select_changed_tests(changed_files, tmp_path, run_all_tests=run_all_tests)
 
     assert leg_paths(selection.matrix, "marin") == ["experiments/moe/test_optimizer.py", "tests/test_root.py"]
+
+
+def _experiment_areas(repo_root: Path) -> None:
+    write(repo_root, "experiments/moe/test_optimizer.py", "def test_optimizer():\n    assert True\n")
+    write(repo_root, "experiments/moe/data/test_loader.py", "def test_loader():\n    assert True\n")
+    write(repo_root, "experiments/grug/test_model.py", "def test_model():\n    assert True\n")
+    write(
+        repo_root,
+        "tests/test_moe_configs.py",
+        'CONFIG = "experiments/moe/configs/base.yaml"\n\ndef test_config():\n    assert CONFIG\n',
+    )
+    write(
+        repo_root,
+        "tests/test_moe_tree.py",
+        'from pathlib import Path\n\nROOT = Path("x") / "experiments" / "moe"\n\ndef test_tree():\n    assert ROOT\n',
+    )
+    write(repo_root, "tests/test_root.py", "def test_root():\n    assert True\n")
+
+
+@pytest.mark.parametrize(
+    "changed_file",
+    ["experiments/moe/fixtures/weights.json", "experiments/moe/configs/base.yaml", "experiments/moe/launch.sh"],
+)
+def test_experiment_asset_selects_its_area_and_tests_that_name_it(tmp_path: Path, changed_file: str) -> None:
+    _experiment_areas(tmp_path)
+
+    matrix = select_matrix([changed_file], tmp_path)
+
+    assert leg_paths(matrix, "marin") == [
+        "experiments/moe/data/test_loader.py",
+        "experiments/moe/test_optimizer.py",
+        "tests/test_moe_configs.py",
+        "tests/test_moe_tree.py",
+    ]
+
+
+def test_experiment_asset_selects_tests_that_import_its_area(tmp_path: Path) -> None:
+    """A test that reaches the asset through an area module is selected by import."""
+    write(tmp_path, "experiments/__init__.py")
+    write(tmp_path, "experiments/datakit/__init__.py")
+    write(tmp_path, "experiments/datakit/manifest.py", 'PATH = "manifest.json"\n')
+    write(
+        tmp_path,
+        "tests/datakit/test_manifest.py",
+        "from experiments.datakit import manifest\n\ndef test_manifest():\n    assert manifest.PATH\n",
+    )
+    write(tmp_path, "tests/test_root.py", "def test_root():\n    assert True\n")
+
+    matrix = select_matrix(["experiments/datakit/manifest.json"], tmp_path)
+
+    assert leg_paths(matrix, "marin") == ["tests/datakit/test_manifest.py"]
+
+
+def test_experiment_readme_selects_no_tests(tmp_path: Path) -> None:
+    _experiment_areas(tmp_path)
+
+    assert select_matrix(["experiments/moe/README.md", "experiments/README.md"], tmp_path) == []
+
+
+def test_asset_directly_in_experiments_runs_full_marin_suite(tmp_path: Path) -> None:
+    _experiment_areas(tmp_path)
+
+    matrix = select_matrix(["experiments/defaults.yaml"], tmp_path)
+
+    assert "tests/test_root.py" in leg_paths(matrix, "marin")
+    assert "experiments/grug/test_model.py" in leg_paths(matrix, "marin")
 
 
 def test_deleted_experiment_source_runs_full_marin_suite(tmp_path: Path) -> None:
@@ -323,34 +389,61 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
+def test_skyrl_changes_select_the_launch_census(tmp_path: Path) -> None:
+    census = "tests/rl/test_rl_launch_documents.py"
+    write(tmp_path, census, "def test_launch(): pass\n")
+    for changed in ("vendor/skyrl/uv.lock", "lib/skyrlrecipe/src/skyrlrecipe/recipe.py"):
+        assert leg_paths(select_matrix([changed], tmp_path), "marin") == [census]
+
+
 @pytest.mark.parametrize(
     "changed_path,suites",
     [
         (
             "lib/taskcompendium/src/taskcompendium/lowering.py",
-            ["rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            ["harbor-unit", "rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
         ),
         ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "skyrl-wheel", "taskforge-unit"]),
         (
             "lib/shellbox/src/shellbox/machine.py",
-            ["rolloutengine-unit", "shellbox-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            [
+                "harbor-unit",
+                "rolloutengine-unit",
+                "shellbox-unit",
+                "skyrl-wheel",
+                "taskcompendium-unit",
+                "taskforge-unit",
+            ],
         ),
         (
             "lib/shellbox/tests/test_docker_machine.py",
-            ["rolloutengine-unit", "shellbox-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            [
+                "harbor-unit",
+                "rolloutengine-unit",
+                "shellbox-unit",
+                "skyrl-wheel",
+                "taskcompendium-unit",
+                "taskforge-unit",
+            ],
         ),
         (
             "lib/shellbox/pyproject.toml",
-            ["rolloutengine-unit", "shellbox-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            [
+                "harbor-unit",
+                "rolloutengine-unit",
+                "shellbox-unit",
+                "skyrl-wheel",
+                "taskcompendium-unit",
+                "taskforge-unit",
+            ],
         ),
         (
             "lib/verifyit/src/verifyit/grading.py",
-            ["rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            ["harbor-unit", "rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
         ),
         (
             "lib/rigging/src/rigging/message.py",
             [
-                "evalchemy-unit",
                 "harbor-unit",
                 "rolloutengine-unit",
                 "skyrl-wheel",
@@ -360,7 +453,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ),
         ("vendor/harbor/src/harbor/job.py", ["harbor-unit", "skyrl-wheel"]),
         ("vendor/harbor/uv.lock", ["harbor-unit", "skyrl-wheel"]),
-        ("lib/finestore/src/finestore/table.py", ["evalchemy-unit", "harbor-unit", "skyrl-wheel"]),
+        ("lib/finestore/src/finestore/table.py", ["harbor-unit", "skyrl-wheel"]),
         ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "skyrl-wheel", "taskforge-unit"]),
         ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
         ("vendor/skyrl/skyrl-train/skyrl_train/trainer.py", ["skyrl-wheel"]),
@@ -382,6 +475,10 @@ def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_p
     [
         "experiments/post_training/task_curation/harbor_hub.py",
         "experiments/post_training/task_curation/tests/test_harbor_hub.py",
+        "experiments/post_training/task_curation/calibforge_rebuild.py",
+        "experiments/post_training/task_curation/tests/test_calibforge_rebuild.py",
+        "experiments/post_training/task_curation/daytona_identity.py",
+        "experiments/post_training/task_curation/tests/test_daytona_identity.py",
     ],
 )
 def test_harbor_acquisition_changes_select_isolated_runtime(tmp_path: Path, path: str) -> None:
@@ -400,25 +497,9 @@ def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Pat
 
 
 @pytest.mark.parametrize(
-    "path",
-    [
-        "vendor/evalchemy/eval/chat_benchmarks/MRCR/eval_instruct.py",
-        "vendor/evalchemy/uv.lock",
-        "lib/finestore/src/finestore/client.py",
-        "lib/marin/src/marin/evaluation/evalchemy/runner.py",
-        "experiments/evaluation/evals.py",
-    ],
-)
-def test_evaluator_changes_select_the_isolated_evalchemy_suite(tmp_path: Path, path: str) -> None:
-    selection = select_changed_tests([path], tmp_path)
-
-    assert "evalchemy-unit" in selection.suites
-
-
-@pytest.mark.parametrize(
     "suite_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
 )
-@pytest.mark.parametrize("suite", ["shellbox", "skyrl", "evalchemy", "harbor"])
+@pytest.mark.parametrize("suite", ["shellbox", "skyrl", "harbor"])
 def test_required_unit_check_propagates_isolated_suite_result(suite: str, suite_result: str, expected_exit: int) -> None:
     workflow_path = Path(__file__).resolve().parents[3] / ".github/workflows/unified-unit.yaml"
     aggregate = yaml.safe_load(workflow_path.read_text())["jobs"]["unit_tests"]
@@ -823,3 +904,15 @@ def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
     matrix = select_matrix(["uv.lock"], tmp_path)
     assert matrix, "broad trigger emits the full matrix"
     assert all(leg.setup == "" for leg in matrix)
+
+
+def test_shards_spread_each_directory_across_runners() -> None:
+    """A directory of neighbouring test files must not land on a single shard."""
+    heavy = [f"experiments/grug/test_{index}.py" for index in range(6)]
+    light = [f"tests/test_{index}.py" for index in range(9)]
+    files = sorted(heavy + light)
+
+    chunks = shard_files(files, 3)
+
+    assert sorted(path for chunk in chunks for path in chunk) == files
+    assert [sum(path in heavy for path in chunk) for chunk in chunks] == [2, 2, 2]

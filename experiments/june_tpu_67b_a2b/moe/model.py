@@ -143,6 +143,8 @@ class GrugModelConfig:
     them through one ``jax.lax.scan``. Collapses N per-layer subgraphs into one
     scan body so XLA only plans HBM for one iteration's intermediates — needed
     at scale where the unrolled program OOMs at compile time."""
+    scan_unroll: int = 1
+    """Layers per iteration of the stacked-blocks scan. Larger values expose more layers to XLA's scheduler."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -748,6 +750,7 @@ class Transformer(eqx.Module):
                 _scan_layers,
                 hidden,
                 xs=(self.stacked_blocks.stacked, mask_schedule),
+                unroll=cfg.scan_unroll,
             )
             router_metrics = {
                 "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],

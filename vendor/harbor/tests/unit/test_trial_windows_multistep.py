@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -52,6 +54,7 @@ def _make_trial_for_step_verification(
     trial.paths.mkdir()
     trial.agent_env_paths = EnvironmentPaths.for_windows()
     trial.agent_environment = MagicMock()
+    trial.agent_environment.verifier_model_access = lambda _: contextlib.nullcontext()
     trial.agent_environment.capabilities.mounted = True
     trial.agent_environment.reset_dirs = AsyncMock(
         return_value=ExecResult(stdout="", stderr="", return_code=0)
@@ -65,6 +68,8 @@ def _make_trial_for_step_verification(
     trial._create_step_dirs = MagicMock()
     trial._prepare_step = AsyncMock()
     trial._run_step_agent = AsyncMock()
+    trial._collect_runtime_logs = AsyncMock()
+    trial._sync_agent_output = AsyncMock()
     trial._upload_agent_logs = AsyncMock()
     trial._collect_step_artifacts = AsyncMock(
         return_value=trial.paths.step_artifacts_dir("grade")
@@ -84,9 +89,13 @@ def _make_trial_for_step_verification(
 
 
 @pytest.mark.asyncio
-async def test_verify_step_uses_windows_paths_and_step_test(tmp_path: Path) -> None:
+async def test_verify_step_uses_windows_paths_and_step_test(
+    tmp_path: Path, service_tasks
+) -> None:
     task_dir = _make_windows_multi_step_task(tmp_path, step_test=True)
     trial, environment = _make_trial_for_step_verification(tmp_path, task_dir)
+    trial._service_tasks = service_tasks
+    result = StepResult(step_name="grade")
     lifecycle_events: list[TrialEvent] = []
 
     async def record_event(event: TrialEvent) -> None:
@@ -105,7 +114,7 @@ async def test_verify_step_uses_windows_paths_and_step_test(tmp_path: Path) -> N
 
         await trial._run_step(
             StepConfig(name="grade"),
-            StepResult(step_name="grade"),
+            result,
             index=1,
             total=1,
         )
@@ -121,6 +130,8 @@ async def test_verify_step_uses_windows_paths_and_step_test(tmp_path: Path) -> N
     environment.reset_dirs.assert_not_awaited()
 
     verifier_kwargs = create_verifier.call_args.kwargs
+    assert result.exception_info is None
+    assert result.verifier_result.rewards == {"reward": 1.0}
     assert verifier_kwargs["step_name"] == "grade"
     assert "tests_source_dir" not in verifier_kwargs
     assert "test_path" not in verifier_kwargs
@@ -131,9 +142,13 @@ async def test_verify_step_uses_windows_paths_and_step_test(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_verify_step_falls_back_to_shared_windows_test(tmp_path: Path) -> None:
+async def test_verify_step_falls_back_to_shared_windows_test(
+    tmp_path: Path, service_tasks
+) -> None:
     task_dir = _make_windows_multi_step_task(tmp_path, step_test=False)
     trial, _environment = _make_trial_for_step_verification(tmp_path, task_dir)
+    trial._service_tasks = service_tasks
+    result = StepResult(step_name="grade")
 
     with patch(
         "harbor.trial.trial.VerifierFactory.create_verifier_from_config"
@@ -146,10 +161,18 @@ async def test_verify_step_falls_back_to_shared_windows_test(tmp_path: Path) -> 
 
         await trial._run_step(
             StepConfig(name="grade"),
-            StepResult(step_name="grade"),
+            result,
             index=1,
             total=1,
         )
 
     verifier_kwargs = create_verifier.call_args.kwargs
+    assert result.exception_info is None
+    assert result.verifier_result.rewards == {"reward": 1.0}
     assert verifier_kwargs["step_name"] == "grade"
+
+
+@pytest.fixture
+async def service_tasks():
+    async with asyncio.TaskGroup() as tasks:
+        yield tasks

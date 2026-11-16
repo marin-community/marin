@@ -109,7 +109,9 @@ pub struct TableRuntime {
     /// How this table's specification transition is failing, carried across
     /// maintenance ticks.
     pub(super) migration_block: Mutex<MigrationBlock>,
-    pub(super) last_object_gc: Mutex<Option<Instant>>,
+    /// When the current object-collection interval began: the last collection,
+    /// or the first backlogged visit of a table that has not collected yet.
+    pub(super) object_gc_interval_start: Mutex<Option<Instant>>,
     pub(super) last_orphan_sweep: Mutex<Option<Instant>>,
     /// Latched stop flag the dispatched work checks at the top of each loop
     /// iteration.
@@ -238,7 +240,7 @@ impl TableRuntime {
             layout_tracker: LayoutTracker::default(),
             index_skips: Mutex::new(BackfillSkips::default()),
             migration_block: Mutex::new(MigrationBlock::default()),
-            last_object_gc: Mutex::new(None),
+            object_gc_interval_start: Mutex::new(None),
             last_orphan_sweep: Mutex::new(None),
             stopped: AtomicBool::new(false),
             task_handles: Mutex::new(Vec::new()),
@@ -434,6 +436,7 @@ impl TableRuntime {
     /// Only sealed segments appear: queries see flushed data, never the in-RAM
     /// buffer.
     pub fn query_snapshot(&self) -> Result<SegmentSnapshot, StatsError> {
+        let read_started = tokio::time::Instant::now();
         if let Some(snapshot) = self.controller.snapshot() {
             if snapshot
                 .state()
@@ -442,7 +445,7 @@ impl TableRuntime {
                 .unwrap_or(0)
                 > 0
             {
-                return self.object_query_snapshot(&snapshot);
+                return self.object_query_snapshot(&snapshot, read_started);
             }
         }
         Ok(self.segments.snapshot())
@@ -481,12 +484,23 @@ impl TableRuntime {
     fn object_query_snapshot(
         &self,
         snapshot: &TableSnapshot,
+        read_started: tokio::time::Instant,
     ) -> Result<SegmentSnapshot, StatsError> {
         let store = self.controller.object_store().ok_or_else(|| {
             StatsError::Internal(format!("table {:?} has no object store", self.name))
         })?;
         let planned = plan_visible_segments(snapshot, store.as_ref())?;
         let mut view = SegmentSnapshot {
+            read_deadline: Some(
+                read_started
+                    + Duration::from_millis(
+                        snapshot
+                            .state()
+                            .catalog()
+                            .max_query_time_ms
+                            .unwrap_or(crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS),
+                    ),
+            ),
             paths: Vec::with_capacity(planned.len()),
             key_bounds: Default::default(),
             seq_bounds: Default::default(),
@@ -516,20 +530,6 @@ impl TableRuntime {
             view.paths.push(segment.path);
         }
         Ok(view)
-    }
-
-    /// The maximum query time this table's pinned state promises. `None` for a
-    /// legacy table, whose readable window is the query-visibility lock rather
-    /// than a duration.
-    pub fn snapshot_query_bound(&self) -> Option<Duration> {
-        let snapshot = self.controller.snapshot()?;
-        let catalog = snapshot.state().catalog();
-        if catalog.active_table_spec_version.unwrap_or(0) == 0 {
-            return None;
-        }
-        Some(Duration::from_millis(catalog.max_query_time_ms.unwrap_or(
-            crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS,
-        )))
     }
 
     /// Aggregate row/byte/seq stats over sealed segments plus the RAM buffer.

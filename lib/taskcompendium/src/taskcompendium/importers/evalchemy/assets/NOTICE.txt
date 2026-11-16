@@ -1,3 +1,6 @@
+Checkpoint few-shot demonstrations in checkpoint_prompts.json derive from
+lm-evaluation-harness (MIT), revision 6d642546f4688648fced259eb3302efd36ece5af.
+
 The code extraction, private test-program preparation, and CruxEval prompt
 templates derive from Marin's Evalchemy at revision
 623134de90723e7f189036da005067f36817b6e7, lm-evaluation-harness (MIT), and

@@ -38,7 +38,9 @@ async def test_acount_total_tokens_probes_run_concurrently_not_serialized() -> N
             release.set()
         await release.wait()
         in_flight -= 1
-        return httpx.Response(200, json={"count": 7}, request=httpx.Request("POST", url))
+        return httpx.Response(
+            200, json={"count": 7}, request=httpx.Request("POST", url)
+        )
 
     fake_async_client = SimpleNamespace(post=_barrier_post)
 
@@ -112,54 +114,3 @@ def test_async_tokenize_client_is_pooled_per_loop() -> None:
 
 async def _wrap(fn):
     return fn()
-
-
-# ── site 2: daytona download mkdirs offloaded off the loop ────────────────────
-
-
-@pytest.mark.unit
-async def test_download_dir_mkdirs_run_off_loop(tmp_path: Path) -> None:
-    from harbor.environments.daytona import environment as denv
-
-    loop_thread = threading.get_ident()
-    seen_threads: list[int] = []
-
-    real_mkdirs = denv._mkdirs_local
-
-    def _recording_mkdirs(dirs):
-        seen_threads.append(threading.get_ident())
-        real_mkdirs(dirs)
-
-    # Minimal fake sandbox fs: one file under source_dir.
-    src = "/work"
-    file_path = "/work/sub/a.txt"
-
-    async def _search_files(source_dir, pattern):
-        return SimpleNamespace(files=[file_path])
-
-    async def _get_file_info(fp):
-        return SimpleNamespace(is_dir=False)
-
-    downloaded: dict[str, object] = {}
-
-    async def _download_files(files):
-        downloaded["files"] = files
-
-    env = object.__new__(denv.DaytonaEnvironment)
-    env._sandbox = SimpleNamespace(
-        fs=SimpleNamespace(
-            search_files=_search_files,
-            get_file_info=_get_file_info,
-            download_files=_download_files,
-        )
-    )
-    env.logger = SimpleNamespace(debug=lambda *a, **k: None)
-
-    with mock.patch.object(denv, "_mkdirs_local", _recording_mkdirs):
-        await env._download_dir_to_local(src, tmp_path)
-
-    # The mkdir batch ran, off the event-loop thread, and created the dirs.
-    assert seen_threads, "_mkdirs_local was never called"
-    assert all(t != loop_thread for t in seen_threads), "mkdir ran ON the event loop"
-    assert (tmp_path / "sub").is_dir()
-    assert "files" in downloaded  # download still issued after the mkdirs

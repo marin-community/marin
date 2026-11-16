@@ -37,12 +37,11 @@ from marin.inference.vllm_server import (
     _ProcessGroupStatus,
     _starts_nccl_ras_probe,
 )
+from marin.testing.inference.fake_vllm_server import FakeVllmLauncher
 from prometheus_client.parser import text_string_to_metric_families
 from rigging import telemetry
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper
 from rigging.testing import RecordingTelemetryTransport
-
-from tests.inference.fake_vllm_server import FakeVllmLauncher
 
 
 def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:

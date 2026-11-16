@@ -28,14 +28,28 @@ class CatalogColumn:
 
 
 @dataclass(frozen=True)
+class DirectQuerySegment:
+    """One stable segment of an object-backed table, as its catalog names it."""
+
+    object_uri: str
+    byte_size: int
+    row_count: int
+    created_at_ms: int
+
+
+@dataclass(frozen=True)
 class CatalogPin:
     namespace: str
     catalog_generation: int
     table_spec_version: int
     max_query_time_ms: int
     high_water: int
-    object_uris: tuple[str, ...]
+    segments: tuple[DirectQuerySegment, ...]
     columns: tuple[CatalogColumn, ...]
+
+    @property
+    def object_uris(self) -> tuple[str, ...]:
+        return tuple(segment.object_uri for segment in self.segments)
 
 
 _OBJECT_CATALOG_ROOT = ("_finelog", "tables")
@@ -114,13 +128,18 @@ class ObjectQueryClient:
             raise ValueError(f"invalid namespace {namespace!r}")
         head, catalog = self._load_catalog(namespace)
         active_version, spec = _validated_active_spec(namespace, head, catalog)
-        object_uris = tuple(
-            self._object_uri(
-                _table_object_id(
-                    segment.source.object_id,
-                    namespace,
-                    "directQuerySegments[].source.objectId",
+        segments = tuple(
+            DirectQuerySegment(
+                object_uri=self._object_uri(
+                    _table_object_id(
+                        segment.source.object_id,
+                        namespace,
+                        "directQuerySegments[].source.objectId",
+                    ),
                 ),
+                byte_size=segment.source.byte_size,
+                row_count=segment.row_count,
+                created_at_ms=segment.created_at_ms,
             )
             for segment in catalog.direct_query_segments
         )
@@ -132,7 +151,7 @@ class ObjectQueryClient:
             table_spec_version=active_version,
             max_query_time_ms=catalog.max_query_time_ms,
             high_water=catalog.direct_query_high_water,
-            object_uris=object_uris,
+            segments=segments,
             columns=_catalog_columns(spec.logical_schema),
         )
 

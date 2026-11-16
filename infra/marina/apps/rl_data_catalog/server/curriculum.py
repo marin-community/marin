@@ -59,6 +59,7 @@ def source_coverage(connection: Connection) -> dict[str, dict[str, Any]]:
             """
         SELECT s.source_id, (s.alignment->>'task_count')::bigint AS example_count,
             s.alignment->>'intended_use' AS intended_use,
+            s.alignment->>'basis' AS basis,
             area.subject_id, area.node_id, area.name, area.instances
         FROM curriculum_sources s JOIN curriculum_current c USING (load_id)
         LEFT JOIN LATERAL (
@@ -77,6 +78,7 @@ def source_coverage(connection: Connection) -> dict[str, dict[str, Any]]:
         row["source_id"]: {
             "example_count": row["example_count"],
             "intended_use": row["intended_use"],
+            "basis": row["basis"],
             "top_area": (
                 {key: row[key] for key in ("subject_id", "node_id", "name", "instances")}
                 if row["subject_id"] is not None

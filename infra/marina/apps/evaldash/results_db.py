@@ -22,6 +22,7 @@ from itertools import batched
 
 import sqlalchemy
 from marin.evaluation.records import EvalRunRecord
+from marin.evaluation.repeat_aggregates import normalize_repeat_record
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -352,6 +353,7 @@ def set_model_archived(engine: Engine, model_name: str, archived: bool, updated_
 
 def run_row(record: EvalRunRecord) -> dict:
     """Flatten a record to the legacy and catalog serving columns."""
+    record = normalize_repeat_record(record)
     return {
         "run_id": record.run_id,
         "group_id": record.group_id,

@@ -62,6 +62,7 @@ from marina.applets import (
     AppletPackage,
     AppletRuntime,
     AppletStore,
+    IndexFallback,
     InvalidQuery,
     PublishResult,
     QueryLimitExceeded,
@@ -365,9 +366,13 @@ def accepts_encoding(header: str, encoding: str) -> bool:
     return qualities.get(encoding.lower(), qualities.get("*", 0)) > 0
 
 
-def accepts_html(header: str) -> bool:
-    accepted = {item.split(";", 1)[0].strip().lower() for item in header.split(",")}
-    return not accepted or "text/html" in accepted or "*/*" in accepted
+def index_fallback(accept: str) -> IndexFallback:
+    accepted = {item.split(";", 1)[0].strip().lower() for item in accept.split(",")}
+    if "text/html" in accepted:
+        return IndexFallback.ANY_PATH
+    if "*/*" in accepted:
+        return IndexFallback.EXTENSIONLESS
+    return IndexFallback.NONE
 
 
 def sqlstate(error: sqlalchemy.exc.SQLAlchemyError) -> str | None:
@@ -1197,7 +1202,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
                 version,
                 path,
                 accept_gzip=accepts_encoding(request.headers.get("accept-encoding", ""), "gzip"),
-                accept_html=accepts_html(request.headers.get("accept", "")),
+                index_fallback=index_fallback(request.headers.get("accept", "")),
             )
         except AppletNotFound as error:
             raise HTTPException(status_code=404, detail="applet file not found") from error

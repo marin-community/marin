@@ -31,11 +31,11 @@ from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
+from marin.datakit.source_key import datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
-from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from marin.schemas.web.convert import ResiliparseConfig
@@ -44,6 +44,12 @@ from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration
+
+from experiments.datakit.global_exact_dedup import (
+    GLOBAL_EXACT_DEDUP_DATA_VERSION,
+    GlobalExactDedupData,
+    global_exact_deduplicate,
+)
 
 configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -58,6 +64,7 @@ LOCAL_TOKENIZER_FILE = REPO_ROOT / "lib" / "levanter" / "tests" / "gpt2_tokenize
 LOCAL_TOKENIZER_CONFIG = REPO_ROOT / "lib" / "levanter" / "tests" / "gpt2_tokenizer_config.json"
 # Vocab size of the reduced fixture above (matches lib/levanter/tests/conftest.py).
 LOCAL_TOKENIZER_VOCAB_SIZE = 5027
+LOCAL_TOKENIZER_EOS_TOKEN_ID = 5026
 
 _S3_ENV_KEYS = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL", "FSSPEC_S3"]
 
@@ -104,36 +111,43 @@ def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[StepSpec]
         file_extensions=(".jsonl.gz",),
     )
 
-    # Dedup (exact only — fuzzy dedup has 4 iterative rounds of pod scheduling on K8s)
-    dedup_exact_paragraph_spec = StepSpec(
-        name=os.path.join(prefix, "dedup_exact_paragraph"),
-        hash_attrs={"mode": "exact_paragraph"},
+    # Dedup (exact only — fuzzy dedup has 4 iterative rounds of pod scheduling on K8s).
+    # Normalized record IDs are content hashes, so equal IDs mark exact-duplicate documents.
+    exact_dedup_spec = StepSpec(
+        name=os.path.join(prefix, "global_exact_dedup"),
+        hash_attrs={"v": GLOBAL_EXACT_DEDUP_DATA_VERSION},
         deps=[normalize_hq_spec],
-        fn=lambda output_path: dedup_exact_paragraph(
-            input_paths=[read_artifact(normalize_hq_spec.output_path, NormalizedData).main_output_dir],
+        fn=lambda output_path: global_exact_deduplicate(
+            sources={"hq": read_artifact(normalize_hq_spec.output_path, NormalizedData)},
             output_path=output_path,
+            worker_resources=ResourceConfig.with_cpu(),
+            max_workers=1,
         ),
     )
 
-    # Consolidate
-    consolidate_spec = StepSpec(
-        name=os.path.join(prefix, "cleaned"),
-        deps=[normalize_hq_spec, dedup_exact_paragraph_spec],
-        fn=lambda output_path: consolidate(
-            input_path=read_artifact(normalize_hq_spec.output_path, NormalizedData).main_output_dir,
+    def _consolidate(output_path: str):
+        main_output_dir = read_artifact(normalize_hq_spec.output_path, NormalizedData).main_output_dir
+        exact_dups = read_artifact(exact_dedup_spec.output_path, GlobalExactDedupData)
+        return consolidate(
+            input_path=main_output_dir,
             output_path=output_path,
             # Normalize emits parquet; override the jsonl.gz default.
             filetype="parquet",
             filters=[
                 FilterConfig(
-                    type=FilterType.REMOVE_SPANS,
-                    attribute_path=f"{dedup_exact_paragraph_spec.output_path}/data",
-                    name="dup_spans",
+                    type=FilterType.REMOVE_DOC,
+                    attribute_path=exact_dups.sources[datakit_source_key(main_output_dir)].attr_dir,
+                    name="dup_doc",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
                 ),
             ],
-        ),
+        )
+
+    consolidate_spec = StepSpec(
+        name=os.path.join(prefix, "cleaned"),
+        deps=[normalize_hq_spec, exact_dedup_spec],
+        fn=_consolidate,
     )
 
     # Tokenize
@@ -179,6 +193,8 @@ def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[StepSpec]
                 },
                 train_config=TrainLmConfig(
                     data=train_data_config,
+                    # The local fixture is offline and has no reference generation_config.json.
+                    hf_generation_eos_token_ids=[LOCAL_TOKENIZER_EOS_TOKEN_ID] if Path(tokenizer).is_dir() else None,
                     # hf_save_steps=2 (not 1): at num_train_steps=2, final info.step=1 doesn't match
                     # every=2, so Trainer.train's end-of-train run_hooks(force=True) flushes the HF
                     # save exactly once. hf_save_steps=1 would double-fire on info.step=1.
@@ -203,7 +219,7 @@ def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[StepSpec]
     return [
         transform_hq_data_spec,
         normalize_hq_spec,
-        dedup_exact_paragraph_spec,
+        exact_dedup_spec,
         consolidate_spec,
         tokenize_spec,
         train_spec,

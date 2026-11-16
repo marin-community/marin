@@ -28,7 +28,6 @@ retry:
   max_wait_sec: 60.0
 environment:
   type: daytona
-  force_build: true
 agents:
 - name: terminus-2
   override_setup_timeout_sec: 360

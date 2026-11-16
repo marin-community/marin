@@ -12,6 +12,7 @@ import pytest
 import transformers
 from jax import random
 from levanter.testing.helpers import (
+    assert_grads_finite_and_nonzero,
     check_load_config,
     check_model_works_with_seqlen,
     parameterize_with_configs,
@@ -85,7 +86,9 @@ def test_mistral_lm_head_model_bwd(use_flash, num_kv_heads):
         out = llama_model(input_ids, mask)
         return hax.sum(out).scalar()
 
-    _, grads = eqx.filter_eval_shape(eqx.filter_value_and_grad(f), llama_model, input_ids, mask)
+    _, grads = eqx.filter_value_and_grad(f)(llama_model, input_ids, mask)
+
+    assert_grads_finite_and_nonzero(grads)
 
 
 @skip_if_no_torch

@@ -1,20 +1,17 @@
 import json
 import logging
+import os
 import signal
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
 import yaml
-from dotenv import dotenv_values, load_dotenv
-from upath import UPath
-from rich.console import Console
-from rich.table import Table
-from typer import Argument, Option, Typer
-
-from harbor.agents.factory import AgentFactory
+from dotenv import load_dotenv
 from harbor.cli.notifications import show_registry_hint_if_first_run
 from harbor.cli.utils import (
+    cli_guest_environment,
+    cli_host_capabilities,
     load_mcp_servers,
     parse_env_vars,
     parse_kwargs,
@@ -22,7 +19,6 @@ from harbor.cli.utils import (
     run_async,
 )
 from harbor.models.agent.name import AgentName
-from harbor.models.bridge import BridgeConfig, BridgeKind
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.job.config import (
     DatasetConfig,
@@ -35,166 +31,20 @@ from harbor.models.trial.config import (
     EnvironmentConfig,
     ResourceMode,
     TaskConfig,
-    UserAgentConfig,
 )
 from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import TrialResult
-from harbor.trial.simulated_user import validate_user_agent_version_pin
 from harbor.utils.artifact_authority import validate_artifact_authority
+from rich.console import Console
+from rich.table import Table
+from typer import Argument, Context, Option, Typer
+from upath import UPath
 
 jobs_app = Typer(
     no_args_is_help=True, context_settings={"help_option_names": ["-h", "--help"]}
 )
 console = Console()
 logger = logging.getLogger(__name__)
-
-
-def _validate_bridge_target_agents(agents: list[AgentConfig], kind: BridgeKind) -> None:
-    """Fail before task startup for built-in targets without bridge support."""
-    for agent in agents:
-        if agent.name is None or agent.name not in AgentName.values():
-            continue
-        agent_cls = AgentFactory.get_agent_class(AgentName(agent.name))
-        if kind not in agent_cls.SUPPORTED_BRIDGES:
-            raise ValueError(
-                f"Agent '{agent.name}' does not support the '{kind}' bridge."
-            )
-
-
-def _confirm_host_env_access(
-    job,
-    console: Console,
-    *,
-    explicit_env_file_keys: set[str] | None = None,
-    skip_confirm: bool = False,
-) -> None:
-    import os
-    import tomllib
-
-    from pydantic import ValidationError
-
-    from harbor.models.task.config import TaskConfig as TaskDefinitionConfig
-    from harbor.models.task.paths import TaskPaths
-    from harbor.utils.env import get_required_host_vars
-
-    is_oracle = any(a.name == AgentName.ORACLE.value for a in job.config.agents)
-    explicit_env_file_keys = explicit_env_file_keys or set()
-    explicit_job_environment_keys = set(job.config.environment.env)
-    explicit_job_verifier_keys = set(job.config.verifier.env)
-    sections: dict[str, list[tuple[str, str | None]]] = {}
-
-    for task_config in job._task_configs:
-        try:
-            local_path = task_config.get_local_path()
-        except ValueError:
-            continue
-        if not local_path.exists():
-            continue
-        try:
-            task_config_model = TaskDefinitionConfig.model_validate_toml(
-                TaskPaths(local_path).config_path.read_text()
-            )
-        except (OSError, tomllib.TOMLDecodeError, ValidationError):
-            continue
-
-        env_sections = [
-            ("environment", task_config_model.environment.env),
-            ("verifier", task_config_model.verifier.env),
-        ]
-        if is_oracle:
-            env_sections.append(("solution", task_config_model.solution.env))
-
-        for section_name, env_dict in env_sections:
-            filtered_env_dict = env_dict
-            if section_name == "environment" and explicit_job_environment_keys:
-                filtered_env_dict = {
-                    key: value
-                    for key, value in env_dict.items()
-                    if key not in explicit_job_environment_keys
-                }
-            elif section_name == "verifier" and explicit_job_verifier_keys:
-                filtered_env_dict = {
-                    key: value
-                    for key, value in env_dict.items()
-                    if key not in explicit_job_verifier_keys
-                }
-
-            required = [
-                item
-                for item in get_required_host_vars(filtered_env_dict)
-                if item[0] not in explicit_env_file_keys
-            ]
-            if required:
-                key = f"[{section_name}.env]"
-                existing = sections.get(key, [])
-                for item in required:
-                    if item not in existing:
-                        existing.append(item)
-                if existing:
-                    sections[key] = existing
-
-    if not sections:
-        return
-
-    missing = []
-    for section, vars_list in sections.items():
-        for var_name, default in vars_list:
-            if default is None and var_name not in os.environ:
-                missing.append((section, var_name))
-
-    if missing:
-        table = Table(
-            title="Missing Environment Variables",
-            title_style="bold red",
-            show_header=True,
-            header_style="bold",
-            padding=(0, 2),
-            show_edge=False,
-            show_lines=False,
-        )
-        table.add_column("Variable", style="cyan")
-        table.add_column("Phase", style="dim")
-
-        for section, var_name in missing:
-            escaped = section.replace("[", "\\[")
-            table.add_row(var_name, escaped)
-
-        console.print()
-        console.print(table)
-        console.print(
-            "\n[yellow]Export them in your shell or pass --env-file.[/yellow]"
-        )
-        raise SystemExit(1)
-
-    if skip_confirm:
-        return
-
-    table = Table(
-        title="Environment Variables",
-        title_style="bold",
-        show_header=True,
-        header_style="bold",
-        padding=(0, 2),
-        show_edge=False,
-        show_lines=False,
-    )
-    table.add_column("Variable", style="cyan")
-    table.add_column("Phase", style="dim")
-
-    for section, vars_list in sections.items():
-        escaped = section.replace("[", "\\[")
-        for var_name, default in vars_list:
-            table.add_row(var_name, escaped)
-
-    console.print()
-    console.print(table)
-    console.print()
-
-    response = console.input(
-        "Tasks in this run will load these from your environment. [yellow]Proceed? (Y/n):[/yellow] "
-    )
-    if response.strip().lower() in ("n", "no"):
-        raise SystemExit(0)
 
 
 def _format_duration(started_at: datetime | None, finished_at: datetime | None) -> str:
@@ -312,6 +162,7 @@ def _handle_sigterm(signum, frame):
 
 
 def start(
+    context: Context,
     config_path: Annotated[
         Path | None,
         Option(
@@ -492,19 +343,7 @@ def start(
         Option(
             "-a",
             "--agent",
-            help=(
-                "Agent name or ACP registry shorthand "
-                "(for example: acp:opencode@1.3.9)."
-            ),
-            rich_help_panel="Agent",
-            show_default=False,
-        ),
-    ] = None,
-    agent_import_path: Annotated[
-        str | None,
-        Option(
-            "--agent-import-path",
-            help="Import path for custom agent",
+            help=f"Supported agent: {', '.join(name.value for name in AgentName)}.",
             rich_help_panel="Agent",
             show_default=False,
         ),
@@ -563,123 +402,12 @@ def start(
             show_default=False,
         ),
     ] = None,
-    user_agent_name: Annotated[
-        str | None,
-        Option(
-            "--user-agent",
-            help="Agent that plays the simulated user.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_agent_import_path: Annotated[
-        str | None,
-        Option(
-            "--user-agent-import-path",
-            help="Import path for a custom simulated-user agent.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_model: Annotated[
-        str | None,
-        Option(
-            "--user-model",
-            help="Model name for the simulated-user agent.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_agent_kwargs: Annotated[
-        list[str] | None,
-        Option(
-            "--uk",
-            "--user-agent-kwarg",
-            help="Simulated-user agent kwarg in key=value format.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_agent_env: Annotated[
-        list[str] | None,
-        Option(
-            "--ue",
-            "--user-agent-env",
-            help="Environment variable for the simulated-user agent in KEY=VALUE format.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_mcp_config: Annotated[
-        list[Path] | None,
-        Option(
-            "--user-mcp-config",
-            help="MCP config for the simulated-user agent. Can be repeated.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_persona_path: Annotated[
-        Path | None,
-        Option(
-            "--user-persona-path",
-            help="Plain-text persona for the simulated user.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_prompt_template_path: Annotated[
-        Path | None,
-        Option(
-            "--user-prompt-template-path",
-            help="Jinja2 prompt template for the simulated user.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    bridge_kind: Annotated[
-        BridgeKind | None,
-        Option(
-            "--bridge",
-            help="Protocol bridge connecting the simulated user to the target.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    bridge_prompt_path: Annotated[
-        Path | None,
-        Option(
-            "--bridge-prompt-path",
-            help="Instructions teaching the user agent how to use the bridge.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    bridge_kwargs: Annotated[
-        list[str] | None,
-        Option(
-            "--bk",
-            "--bridge-kwarg",
-            help="Bridge kwarg in key=value format.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
     environment_type: Annotated[
         EnvironmentType | None,
         Option(
             "-e",
             "--env",
-            help=f"Environment type (default: {EnvironmentType.DOCKER.value})",
-            rich_help_panel="Environment",
-            show_default=False,
-        ),
-    ] = None,
-    environment_import_path: Annotated[
-        str | None,
-        Option(
-            "--environment-import-path",
-            help="Import path for custom environment (module.path:ClassName).",
+            help=f"Environment type (default: {EnvironmentType.LOCAL.value})",
             rich_help_panel="Environment",
             show_default=False,
         ),
@@ -701,11 +429,7 @@ def start(
         bool | None,
         Option(
             "--delete/--no-delete",
-            help=f"Whether to delete the environment after completion (default: {
-                '--delete'
-                if EnvironmentConfig.model_fields['delete'].default
-                else '--no-delete'
-            })",
+            help="Shellbox environments are always deleted; --no-delete is unsupported.",
             rich_help_panel="Environment",
             show_default=False,
         ),
@@ -789,15 +513,6 @@ def start(
             show_default=False,
         ),
     ] = None,
-    extra_docker_compose: Annotated[
-        list[Path] | None,
-        Option(
-            "--extra-docker-compose",
-            help="Additional Docker Compose overlay file. Can be used multiple times.",
-            rich_help_panel="Environment",
-            show_default=False,
-        ),
-    ] = None,
     environment_kwargs: Annotated[
         list[str] | None,
         Option(
@@ -808,18 +523,6 @@ def start(
             show_default=False,
         ),
     ] = None,
-    yes: Annotated[
-        bool,
-        Option(
-            "-y",
-            "--yes",
-            help=(
-                "Auto-confirm prompts, including host environment access and "
-                "sharing with organizations you are not a member of."
-            ),
-            rich_help_panel="Job Settings",
-        ),
-    ] = False,
     env_file: Annotated[
         Path | None,
         Option(
@@ -1046,18 +749,31 @@ def start(
             raise SystemExit(1)
         load_dotenv(env_file, override=True)
 
+    host_environment = dict(os.environ)
+
     base_config = None
     if config_path is not None:
         if config_path.suffix == ".yaml":
             base_config = JobConfig.model_validate(
-                yaml.safe_load(config_path.read_text())
+                yaml.safe_load(config_path.read_text()), extra="forbid"
             )
         elif config_path.suffix == ".json":
-            base_config = JobConfig.model_validate_json(config_path.read_text())
+            base_config = JobConfig.model_validate_json(
+                config_path.read_text(), extra="forbid"
+            )
         else:
             raise ValueError(f"Unsupported config file format: {config_path.suffix}")
 
-    config = base_config if base_config is not None else JobConfig()
+    if base_config is None:
+        if agent_name is None:
+            raise ValueError(
+                "Specify --agent or a config with an explicit supported agent"
+            )
+        config = JobConfig(
+            agents=[AgentConfig(name=agent_name)]
+        )
+    else:
+        config = base_config
 
     if job_name is not None:
         config.job_name = job_name
@@ -1099,7 +815,7 @@ def start(
     if retry_exclude_exceptions is not None:
         config.retry.exclude_exceptions = set(retry_exclude_exceptions)
 
-    if agent_name is not None or agent_import_path is not None:
+    if agent_name is not None:
         config.agents = []
         parsed_kwargs = parse_kwargs(agent_kwargs)
         parsed_env = parse_env_vars(agent_env)
@@ -1113,7 +829,6 @@ def start(
             config.agents = [
                 AgentConfig(
                     name=agent_name,
-                    import_path=agent_import_path,
                     model_name=model_name,
                     skills=skills or [],
                     kwargs=parsed_kwargs,
@@ -1126,7 +841,6 @@ def start(
             config.agents = [
                 AgentConfig(
                     name=agent_name,
-                    import_path=agent_import_path,
                     skills=skills or [],
                     kwargs=parsed_kwargs,
                     env=parsed_env,
@@ -1152,110 +866,8 @@ def start(
                 if skills:
                     agent.skills.extend(skills)
 
-    if user_agent_name is not None and user_agent_import_path is not None:
-        console.print(
-            "[red]Error:[/red] Use either --user-agent or "
-            "--user-agent-import-path, not both."
-        )
-        raise SystemExit(1)
-
-    user_agent_requested = (
-        user_agent_name is not None or user_agent_import_path is not None
-    )
-    if user_agent_requested:
-        existing_bridge = (
-            config.user_agent.bridge.model_copy(deep=True)
-            if config.user_agent is not None
-            else None
-        )
-        resolved_bridge_kind = bridge_kind or (
-            existing_bridge.kind if existing_bridge is not None else None
-        )
-        if resolved_bridge_kind is None:
-            console.print("[red]Error:[/red] --user-agent requires --bridge.")
-            raise SystemExit(1)
-        bridge = existing_bridge or BridgeConfig(kind=resolved_bridge_kind)
-        bridge.kind = resolved_bridge_kind
-        if bridge_prompt_path is not None:
-            bridge.prompt_path = bridge_prompt_path
-        if bridge_kwargs is not None:
-            bridge.kwargs.update(parse_kwargs(bridge_kwargs))
-        user_mcp_servers = [
-            server
-            for config_path in user_mcp_config or []
-            for server in load_mcp_servers(config_path)
-        ]
-        config.user_agent = UserAgentConfig(
-            name=user_agent_name,
-            import_path=user_agent_import_path,
-            model_name=user_model,
-            kwargs=parse_kwargs(user_agent_kwargs),
-            env=parse_env_vars(user_agent_env),
-            mcp_servers=user_mcp_servers,
-            user_persona_path=user_persona_path,
-            user_prompt_template_path=user_prompt_template_path,
-            bridge=bridge,
-        )
-    elif config.user_agent is not None:
-        if user_model is not None:
-            config.user_agent.model_name = user_model
-        if user_agent_kwargs is not None:
-            config.user_agent.kwargs.update(parse_kwargs(user_agent_kwargs))
-        if user_agent_env is not None:
-            config.user_agent.env.update(parse_env_vars(user_agent_env))
-        if user_mcp_config is not None:
-            config.user_agent.mcp_servers.extend(
-                server
-                for config_path in user_mcp_config
-                for server in load_mcp_servers(config_path)
-            )
-        if user_persona_path is not None:
-            config.user_agent.user_persona_path = user_persona_path
-        if user_prompt_template_path is not None:
-            config.user_agent.user_prompt_template_path = user_prompt_template_path
-        if bridge_kind is not None:
-            config.user_agent.bridge.kind = bridge_kind
-        if bridge_prompt_path is not None:
-            config.user_agent.bridge.prompt_path = bridge_prompt_path
-        if bridge_kwargs is not None:
-            config.user_agent.bridge.kwargs.update(parse_kwargs(bridge_kwargs))
-
-    if config.user_agent is None and (
-        user_model is not None
-        or user_agent_kwargs
-        or user_agent_env
-        or user_mcp_config
-        or user_persona_path is not None
-        or user_prompt_template_path is not None
-        or bridge_kind is not None
-        or bridge_prompt_path is not None
-        or bridge_kwargs
-    ):
-        console.print(
-            "[red]Error:[/red] simulated-user and bridge flags require "
-            "--user-agent, --user-agent-import-path, or user_agent in the job config."
-        )
-        raise SystemExit(1)
-
-    if config.user_agent is not None:
-        try:
-            _validate_bridge_target_agents(config.agents, config.user_agent.bridge.kind)
-            for agent in config.agents:
-                validate_user_agent_version_pin(
-                    agent.name,
-                    agent.kwargs.get("version"),
-                    config.user_agent.name,
-                    config.user_agent.kwargs.get("version"),
-                )
-        except ValueError as exc:
-            console.print(f"[red]Error:[/red] {exc}")
-            raise SystemExit(1) from exc
-
     if environment_type is not None:
         config.environment.type = environment_type
-    if environment_import_path is not None:
-        config.environment.import_path = environment_import_path
-        config.environment.type = None  # Clear type so import_path takes precedence
     if environment_force_build is not None:
         config.environment.force_build = environment_force_build
     if environment_delete is not None:
@@ -1276,8 +888,6 @@ def start(
         config.environment.override_tpu = parse_tpu_spec(override_tpu)
     if mounts is not None:
         config.environment.mounts = json.loads(mounts)
-    if extra_docker_compose is not None:
-        config.environment.extra_docker_compose.extend(extra_docker_compose)
     if environment_kwargs is not None:
         config.environment.kwargs.update(parse_kwargs(environment_kwargs))
 
@@ -1391,13 +1001,19 @@ def start(
                 "--exclude-task-name without also specifying --dataset, --task, or --path."
             )
 
+    host_capabilities = cli_host_capabilities(
+        host_environment,
+        environment_kwargs=config.environment.kwargs,
+        agents=config.agents,
+        verifier_environment=config.verifier.env,
+    )
+    guest_environment = cli_guest_environment(config.environment.kwargs)
+
     async def _run_job():
-        job = await Job.create(config)
-        _confirm_host_env_access(
-            job,
-            console,
-            explicit_env_file_keys=explicit_env_file_keys,
-            skip_confirm=yes,
+        job = await Job.create(
+            config,
+            host_capabilities=host_capabilities,
+            guest_environment=guest_environment,
         )
         job_result = await job.run()
         console.print()
@@ -1414,14 +1030,7 @@ def start(
 
     EnvironmentFactory.run_preflight(
         type=config.environment.type,
-        import_path=config.environment.import_path,
     )
-
-    explicit_env_file_keys: set[str] = set()
-    if env_file is not None:
-        explicit_env_file_keys = {
-            key for key in dotenv_values(env_file).keys() if key is not None
-        }
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
 
@@ -1536,6 +1145,8 @@ def resume(
     """Resume an existing job from its job directory."""
     from harbor.job import Job
 
+    host_environment = dict(os.environ)
+
     job_dir = Path(job_path)
     config_path = job_dir / "config.json"
 
@@ -1565,11 +1176,22 @@ def resume(
 
     EnvironmentFactory.run_preflight(
         type=config.environment.type,
-        import_path=config.environment.import_path,
     )
 
+    host_capabilities = cli_host_capabilities(
+        host_environment,
+        environment_kwargs=config.environment.kwargs,
+        agents=config.agents,
+        verifier_environment=config.verifier.env,
+    )
+    guest_environment = cli_guest_environment(config.environment.kwargs)
+
     async def _run_job():
-        job = await Job.create(config)
+        job = await Job.create(
+            config,
+            host_capabilities=host_capabilities,
+            guest_environment=guest_environment,
+        )
         return await job.run()
 
     job_result = run_async(_run_job())

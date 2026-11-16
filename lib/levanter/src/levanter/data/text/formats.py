@@ -3,7 +3,7 @@
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 import numpy as np
 from draccus import PluginRegistry
@@ -12,6 +12,11 @@ from levanter.data._preprocessor import BatchProcessor
 from levanter.tokenizers import MarinTokenizer, chat_template_has_generation_block
 
 from ._batch_tokenizer import BatchTokenizer
+
+
+class TokenSeqDict(TypedDict):
+    input_ids: np.ndarray
+    loss_weights: NotRequired[np.ndarray]
 
 
 class LmDatasetFormatBase(PluginRegistry, discover_packages_path="levanter.data.text"):

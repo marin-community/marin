@@ -29,7 +29,7 @@ def normalized_rows():
         tasktrove_row(
             {
                 "instruction.md": b"List /workspace and save output to /output/command_capture.txt.",
-                "environment/Dockerfile": b"FROM debian:bookworm\nWORKDIR /workspace\n",
+                "environment/Dockerfile": b"FROM debian:12-slim\n",
                 "tests/test.sh": b"#!/bin/bash\nexit 1\n",
                 "tests/verifier_data.json": b'{"expected_output": "notes.txt"}',
             }

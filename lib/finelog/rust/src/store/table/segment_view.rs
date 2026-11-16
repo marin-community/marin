@@ -28,6 +28,7 @@ use crate::store::types::{segment_to_row, LocalSegment, SegmentRow};
 /// only after the scan localizes the ones it selected. A legacy table plans it
 /// from files already on disk and carries no `sources`.
 pub struct SegmentSnapshot {
+    pub read_deadline: Option<tokio::time::Instant>,
     pub paths: Vec<String>,
     pub key_bounds: BTreeMap<String, (String, String)>,
     /// Exact per-segment `seq` bounds, so a `seq`-bounded scan selects only the
@@ -193,6 +194,7 @@ impl SegmentView {
     pub fn snapshot(&self) -> SegmentSnapshot {
         let segments = self.segments.lock().unwrap();
         SegmentSnapshot {
+            read_deadline: None,
             paths: segments.iter().map(|s| s.path.clone()).collect(),
             key_bounds: segments
                 .iter()

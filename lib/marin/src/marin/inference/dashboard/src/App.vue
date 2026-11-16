@@ -240,6 +240,7 @@ function clearHistory() {
           :has-chat-template="info ? info.has_chat_template : true"
           :chat-template-protocol="info?.chat_template_protocol ?? null"
           :streaming="info ? info.streaming : true"
+          :web-search-available="info?.web_search ?? false"
           @persist="persist"
         />
         <CompareView

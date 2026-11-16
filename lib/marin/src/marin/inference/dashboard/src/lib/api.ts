@@ -62,6 +62,14 @@ export async function invokeShell(
   return postJsonResult('shell', { files, commits, history, command }, signal, 'shell command', baseUrl)
 }
 
+export async function invokeWebSearch(
+  arguments_: Record<string, unknown>,
+  signal: AbortSignal,
+  baseUrl?: string,
+): Promise<unknown> {
+  return postJsonResult('web-search', arguments_, signal, 'web search', baseUrl)
+}
+
 export interface RepositorySnapshot {
   files: Record<string, string>
   commits: ImportedGitCommit[]

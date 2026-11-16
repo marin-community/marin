@@ -8,18 +8,20 @@ import asyncio
 import hashlib
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
+from harbor.cli.utils import cli_guest_environment
+from harbor.host_capabilities import host_capabilities_from_environment
 from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
 from review_io import append_event, capture_native_sources, execution_error, native_calls, write_json
 from skyrl_train.trajectory_runners.harbor.contracts import verification_from_harbor_result
 
 
-async def run_task(data: dict, root: Path) -> dict:
+async def run_task(data: dict, root: Path, *, host_environment: Mapping[str, str]) -> dict:
     config, model = data["config"], data["model"]
-    if model.get("api_key_env") is not None:
-        os.environ["OPENAI_API_KEY"] = os.environ[model["api_key_env"]]
+    api_key = host_environment[model["api_key_env"]] if model.get("api_key_env") else "EMPTY"
     task_dir = data["task"]["task_dir"]
     if data["task"].get("packed_task"):
         # Optional packed-source dependencies live in the selected native runtime.
@@ -58,8 +60,17 @@ async def run_task(data: dict, root: Path) -> dict:
     )
     if trial_config.verifier.disable or trial_config.verifier.import_path:
         raise ValueError("Review must use the task native verifier, enabled")
+    authentication = {model["base_url"]: api_key}
+    for name in ("model_endpoint", "candidate_model_endpoint"):
+        if endpoint := trial_config.environment.kwargs.get(name):
+            authentication[endpoint] = api_key
+    host_capabilities = host_capabilities_from_environment(host_environment, model_authentication=authentication)
     append_event(root / "verifier-trace.jsonl", {"event": "trial_start"})
-    trial = await Trial.create(trial_config)
+    trial = await Trial.create(
+        trial_config,
+        host_capabilities=host_capabilities,
+        guest_environment=cli_guest_environment(trial_config.environment.kwargs),
+    )
     result = await trial.run()
     write_json(root / "harbor-result.json", result.model_dump(mode="json"))
     append_event(
@@ -85,10 +96,13 @@ def main() -> None:
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
+    host_environment = dict(os.environ)
     args.output.mkdir(parents=True, exist_ok=True)
     with native_calls() as called:
         try:
-            result = asyncio.run(run_task(json.loads(args.input.read_text()), args.output))
+            result = asyncio.run(
+                run_task(json.loads(args.input.read_text()), args.output, host_environment=host_environment)
+            )
         except Exception as error:
             result = execution_error(error, args.output, False)
         finally:

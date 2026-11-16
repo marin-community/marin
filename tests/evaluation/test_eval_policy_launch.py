@@ -3,20 +3,20 @@
 
 """Published launch recipes materialize the benchmark settings they claim."""
 
-from dataclasses import replace
+
+import runpy
 from pathlib import Path
 
 import pytest
 import yaml
 from iris.rpc import job_pb2
 from marin.evaluation.eval_policy import SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
-from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.hardware import Platform
 from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.records import EvaluationSelection
 from marin.evaluation.runner import LaunchProvenance
 
 from eval_policy.launch import _harbor_config, launch_policy
-from experiments.evaluation.evals import EvalchemyDefinition
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch
 
 
@@ -39,13 +39,10 @@ def test_september_16_mini_datasets_use_pinned_registry(tmp_path):
 
 @pytest.mark.parametrize("version", [SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION])
 def test_verified_launch_requires_its_historical_evaluator_checkout(monkeypatch, version):
-    path = Path(__file__).resolve().parents[2] / "experiments/evaluation/configs/evalchemy/math500.yaml"
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
+        evals=(EvaluationSelection(benchmark="math500"),),
         model=ModelConfig(name="test-model", location="org/test-model"),
-        evals=(),
-        evalchemy_definitions=(EvalchemyDefinition(name="math500", config_path=path),),
-        harbor_definitions=(),
         platform=Platform.GPU,
         accelerator="H100x8",
         limit=None,
@@ -56,29 +53,21 @@ def test_verified_launch_requires_its_historical_evaluator_checkout(monkeypatch,
         version=version,
     )
 
-    with pytest.raises(ValueError, match="requires historical Evalchemy commit"):
+    with pytest.raises(ValueError, match="requires its historical Evalchemy checkout"):
         build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "test")
-
-    ad_hoc = build_evaluation_batch(
-        replace(spec, version=None), LaunchProvenance(git_sha="abc", launch_host="test"), "test"
-    ).evaluations[0]
-    assert isinstance(ad_hoc.executor, EvalchemyExecutor)
-    assert ad_hoc.identity.eval_runtime.startswith("evalchemy[")
-    assert "vendor/evalchemy#sha256=" in ad_hoc.identity.eval_runtime
 
 
 @pytest.mark.parametrize("version", [SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION])
 @pytest.mark.parametrize(
-    ("selection", "evaluator"),
+    "selection",
     [
-        (None, "Evalchemy"),
-        (("math500",), "Evalchemy"),
-        (("swebench-recovery", "math500"), "Evalchemy"),
-        (("swebench-recovery", "ot-tblite-recovery"), "Harbor"),
+        None,
+        ("math500",),
+        ("swebench-recovery", "math500"),
     ],
 )
-def test_policy_launcher_rejects_historical_evaluators_before_writing_or_launching(
-    tmp_path, monkeypatch, version, selection, evaluator
+def test_policy_launcher_rejects_historical_evalchemy_before_writing_or_launching(
+    tmp_path, monkeypatch, version, selection
 ):
     output_dir = tmp_path / "eval_policy"
     output_dir.mkdir()
@@ -88,8 +77,13 @@ def test_policy_launcher_rejects_historical_evaluators_before_writing_or_launchi
     monkeypatch.setattr("eval_policy.launch.ROOT", tmp_path)
     monkeypatch.setattr("eval_policy.launch.run", lambda command, **_kwargs: launched.append(command))
 
-    with pytest.raises(ValueError, match=rf"requires historical {evaluator} commit.*checkout"):
+    with pytest.raises(ValueError, match=r"requires historical Evalchemy commit.*checkout"):
         launch_policy(version, model_path, None, None, "cw-rno2a", selection)
 
     assert not launched
     assert not list(output_dir.iterdir())
+
+
+def test_curated_campaign_metrics_match_the_publication_contract():
+    checker = Path("experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/check_policy_metrics.py")
+    runpy.run_path(str(checker))["main"]()

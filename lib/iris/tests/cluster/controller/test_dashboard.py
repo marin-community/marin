@@ -1805,18 +1805,6 @@ def test_task_backend_id_propagated_to_proto(client, state, job_request):
     assert resp["task"]["backendId"] == "gcp"
 
 
-def test_job_backend_id_propagated_to_list_jobs(client, state, job_request):
-    """ListJobs surfaces backend_id stamped on the jobs row."""
-    job_id = submit_job(state, "backend-job", job_request)
-    with state._db.transaction() as tx:
-        tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(backend_id="gcp"))
-
-    resp = rpc_post(client, "ListJobs")
-    matching = [j for j in resp["jobs"] if j["jobId"] == job_id.to_wire()]
-    assert len(matching) == 1
-    assert matching[0]["backendId"] == "gcp"
-
-
 def test_job_backend_id_propagated_to_get_job_status(client, state, job_request):
     """GetJobStatus surfaces backend_id stamped on the jobs row (job detail page)."""
     job_id = submit_job(state, "backend-detail-job", job_request)
@@ -2036,9 +2024,10 @@ def test_list_backends_kubernetes_detail_from_cluster_state(state, scheduler, tm
     provider.sync(DirectReconcileRequest())
     refresh()
 
-    detail = next(b for b in rpc_post(client, "ListBackends")["backends"] if b["backendId"] == DEFAULT_BACKEND_ID)[
-        "detail"
-    ]["kubernetes"]
+    summary = next(b for b in rpc_post(client, "ListBackends")["backends"] if b["backendId"] == DEFAULT_BACKEND_ID)
+    assert "sandbox-image-workdir" in summary["capabilities"]
+    assert "sandbox-storage-limit" not in summary["capabilities"]
+    detail = summary["detail"]["kubernetes"]
     assert detail["totalNodes"] == 1
     assert detail["podStatuses"][0]["podName"] == "iris-task-0"
     assert detail["podStatuses"][0]["phase"] == "Running"

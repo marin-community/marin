@@ -2,16 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 import tempfile
+import types
 
 import equinox as eqx
 import haliax as hax
 import haliax.nn as hnn
 import jax
+import jax.numpy as jnp
+import jmp
 import numpy as np
 import optax
-from chex import assert_trees_all_close
+from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax.quantization import DefaultDotGeneralOp, DotGeneralOp
+from haliax.state_dict import to_torch_compatible_state_dict
 from safetensors import safe_open
 from levanter.testing.helpers import (
     skip_if_hf_model_not_accessible,
@@ -27,12 +32,15 @@ from levanter.adaptor.lora import (
     lora_trainable_params_filter,
     loraize,
     merge_lora_modules,
+    save_merged_hf_checkpoint_callback,
     save_merged_hf_model,
     save_peft_pretrained,
 )
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import Checkpointer
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+from levanter.field_dtype_overrides import with_field_dtype_overrides
+from levanter.main.lora_lm import load_base_model
 from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
@@ -376,7 +384,7 @@ def test_lora_peft_export_does_not_use_generic_numpy_state_dict(tmp_path, monkey
 
 
 def test_lora_works_with_checkpointer():
-    with tempfile.TemporaryDirectory() as tempdir:
+    with tempfile.TemporaryDirectory() as tempdir, use_test_mesh():
         k0 = jax.random.PRNGKey(0)
         k1 = jax.random.PRNGKey(1)
 
@@ -389,7 +397,8 @@ def test_lora_works_with_checkpointer():
 
         module = Module(first=hnn.Linear.init(In, Mid, key=k0), second=hnn.Linear.init(Mid, Out, key=k1))
 
-        loraized = loraize(module, LoraConfig(r=8, target_modules=["first"], a_init_mode="random"), key=k0)
+        lora_config = LoraConfig(r=8, target_modules=["first"], a_init_mode="random")
+        loraized = loraize(module, lora_config, key=k0)
         lora_filter = lora_trainable_params_filter(loraized)
 
         optimizer = optax.adam(1e-3)
@@ -404,6 +413,22 @@ def test_lora_works_with_checkpointer():
             destination="loraized",
         )
         checkpointer.wait_until_finished()
+
+        # Restore into a state whose LoRA weights came from a different key, so the
+        # comparison below only passes if the checkpoint values were actually loaded.
+        other_loraized = loraize(module, lora_config, key=k1)
+        template = TrainerState.init(optimizer, other_loraized, key=k1, is_trainable=lora_filter)
+        assert not np.allclose(
+            template.model.first.lora.lora_A.weight.array, trainer_state.model.first.lora.lora_A.weight.array
+        )
+
+        restored = checkpointer.load_checkpoint(template.saveable_state, os.path.join(tempdir, "loraized"))
+
+        assert int(restored.step) == int(trainer_state.step)
+        assert_trees_all_equal(
+            eqx.filter(restored, eqx.is_array),
+            eqx.filter(trainer_state.saveable_state, eqx.is_array),
+        )
 
 
 def test_loraize_a_init_mode_zero():
@@ -453,3 +478,55 @@ def test_loraize_a_zero_and_b_zero_degenerate():
     )
     assert hax.all(loraized.first.lora.lora_A.weight == 0.0)
     assert hax.all(loraized.first.lora.lora_B.weight == 0.0)
+
+
+def test_lora_lm_load_and_merged_export_honour_field_dtype_overrides(local_gpt2_tokenizer_path, tmp_path):
+    """A float32 bias override survives lora_lm's base load from a bfloat16 source and the merged export."""
+    converter = Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
+    config = Gpt2Config(max_seq_len=16, hidden_dim=16, num_layers=1, num_heads=2)
+    overrides = {"bias": jnp.dtype("float32")}
+    mp = with_field_dtype_overrides(jmp.get_policy("p=f32,c=bf16"), overrides)
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config=config, key=jax.random.PRNGKey(0))
+        model = jax.tree_util.tree_map_with_path(
+            lambda path, leaf: (
+                hax.full_like(leaf, 0.1234567) if path[-1] == jax.tree_util.GetAttrKey("bias") else leaf
+            ),
+            model,
+            is_leaf=lambda leaf: isinstance(leaf, hax.NamedArray),
+        )
+        original = to_torch_compatible_state_dict(model)
+        bias_keys = {name for name in original if name.endswith(".bias")}
+        assert bias_keys
+        source = converter.replaced(reference_checkpoint=RepoRef(str(tmp_path / "base")))
+        converter.save_pretrained(
+            model, str(tmp_path / "base"), save_tokenizer=False, dtype=jnp.bfloat16, field_dtype_overrides=overrides
+        )
+
+        loaded = load_base_model(source, config, {}, mp)
+        for name, value in to_torch_compatible_state_dict(loaded).items():
+            if name in bias_keys:
+                assert value.dtype == jnp.float32
+                np.testing.assert_array_equal(value, original[name])
+            else:
+                assert value.dtype == jnp.bfloat16
+
+        lora_config = LoraConfig(r=4, target_modules=["c_attn"], a_init_mode="random")
+        loraized = loraize(loaded, lora_config, key=jax.random.PRNGKey(1))
+        callback = save_merged_hf_checkpoint_callback(
+            str(tmp_path / "merged"), converter, field_dtype_overrides=overrides, save_tokenizer=False
+        )
+        callback(types.SimpleNamespace(step=1, eval_model=loraized))
+        merged = to_torch_compatible_state_dict(merge_lora_modules(loraized))
+
+    exported = {}
+    for filename in (tmp_path / "merged" / "step-1").glob("*.safetensors"):
+        with safe_open(filename, framework="jax", device="cpu") as shard:
+            exported.update({name: shard.get_tensor(name) for name in shard.keys()})
+    assert exported.keys() == merged.keys()
+    for name, value in exported.items():
+        if name in bias_keys:
+            assert value.dtype == jnp.float32
+            np.testing.assert_array_equal(value, original[name])
+        else:
+            np.testing.assert_array_equal(value, merged[name])

@@ -309,7 +309,16 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         output = fused_impl(pred_embeddings, target_y, lm_head)
     else:
         axis_mapping = current_thread_local_mapping() or {}
-        output = shard_map(fused_impl, axis_mapping=axis_mapping, check_rep=False)(pred_embeddings, target_y, lm_head)
+        # The local kernel requires the complete contraction and vocabulary dimensions.
+        batch_axes = hax.axis.without_axes(pred_embeddings.axes, Contract)
+        loss_axis_mapping = {axis.name: axis_mapping[axis.name] for axis in batch_axes if axis.name in axis_mapping}
+        with hax.axis_mapping(loss_axis_mapping):
+            pred_embeddings = hax.shard(pred_embeddings, loss_axis_mapping)
+            target_y = hax.shard(target_y, loss_axis_mapping)
+            lm_head = hax.shard(lm_head, loss_axis_mapping)
+            output = shard_map(fused_impl, axis_mapping=loss_axis_mapping, check_rep=False)(
+                pred_embeddings, target_y, lm_head
+            )
 
     if return_argmax:
         loss, argmax = cast(tuple[NamedArray, NamedArray], output)

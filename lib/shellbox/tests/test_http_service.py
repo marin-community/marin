@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import socket
+from contextlib import AsyncExitStack
 from dataclasses import replace
 from pathlib import Path
 
@@ -95,7 +96,10 @@ def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(ca
             return HttpResponse(201, json.dumps({"answer": body["number"] + 1}).encode())
 
         machine = ProcessMachine()
-        async with serve_http(machine, handler, port=available_port()) as url:
+        async with (
+            asyncio.TaskGroup() as service_tasks,
+            serve_http(machine, handler, task_group=service_tasks, port=available_port()) as url,
+        ):
             async with httpx.AsyncClient(trust_env=False) as client:
                 slow = asyncio.create_task(client.post(url + "/slow", timeout=30))
                 await asyncio.wait_for(blocked.wait(), 5)
@@ -140,8 +144,11 @@ def test_http_capability_rejects_malformed_guest_body_before_host_dispatch(body)
             dispatched.append(request)
             return HttpResponse(200, b"{}")
 
-        with pytest.raises(ValueError):
-            async with serve_http(machine, handler, port=available_port()):
+        with pytest.RaisesGroup(ValueError):
+            async with (
+                asyncio.TaskGroup() as service_tasks,
+                serve_http(machine, handler, task_group=service_tasks, port=available_port()),
+            ):
                 await asyncio.wait_for(asyncio.Event().wait(), 5)
         assert dispatched == []
         assert machine.processes[0].returncode is not None
@@ -156,11 +163,46 @@ def test_http_capability_helper_exit_interrupts_idle_context_and_reaps_process()
         async def handler(request):
             return HttpResponse(200, b"{}")
 
-        with pytest.raises(RuntimeError, match="process ended"):
-            async with serve_http(machine, handler, port=available_port()):
+        with pytest.RaisesGroup(pytest.RaisesExc(RuntimeError, match="process ended")):
+            async with (
+                asyncio.TaskGroup() as service_tasks,
+                serve_http(machine, handler, task_group=service_tasks, port=available_port()),
+            ):
                 machine.processes[0].kill()
                 await asyncio.wait_for(asyncio.Event().wait(), 5)
         assert machine.processes[0].returncode is not None
+
+    asyncio.run(check())
+
+
+def test_http_capability_late_failure_reaches_group_owner_after_startup_and_spares_neighbor():
+    async def check():
+        failed, neighbor = ProcessMachine(), ProcessMachine()
+
+        async def handler(request):
+            return HttpResponse(200, b"alive")
+
+        async with (
+            asyncio.TaskGroup() as neighbor_tasks,
+            serve_http(neighbor, handler, task_group=neighbor_tasks, port=available_port()) as neighbor_url,
+        ):
+            with pytest.RaisesGroup(pytest.RaisesExc(RuntimeError, match="process ended")):
+                async with asyncio.TaskGroup() as trial_tasks:
+                    async with AsyncExitStack() as resources:
+
+                        async def startup():
+                            await resources.enter_async_context(
+                                serve_http(failed, handler, task_group=trial_tasks, port=available_port())
+                            )
+
+                        startup_task = asyncio.create_task(startup())
+                        await startup_task
+                        failed.processes[0].kill()
+                        await asyncio.wait_for(asyncio.Event().wait(), 5)
+            async with httpx.AsyncClient(trust_env=False) as client:
+                response = await client.get(neighbor_url)
+                assert (response.status_code, response.content) == (200, b"alive")
+            assert failed.processes[0].returncode is not None
 
     asyncio.run(check())
 
@@ -184,8 +226,11 @@ def test_http_capability_preserves_body_error_when_helper_close_fails():
         async def handler(request):
             return HttpResponse(200, b"{}")
 
-        with pytest.raises(ValueError, match="body failure"):
-            async with serve_http(machine, handler, port=available_port()):
+        with pytest.RaisesGroup(pytest.RaisesExc(ValueError, match="body failure")):
+            async with (
+                asyncio.TaskGroup() as service_tasks,
+                serve_http(machine, handler, task_group=service_tasks, port=available_port()),
+            ):
                 raise ValueError("body failure")
         assert machine.processes[0].returncode is not None
 
@@ -215,7 +260,10 @@ def test_http_capability_repeated_cancellation_finishes_owned_process_cleanup():
             return HttpResponse(200, b"{}")
 
         async def serve():
-            async with serve_http(machine, handler, port=available_port()):
+            async with (
+                asyncio.TaskGroup() as service_tasks,
+                serve_http(machine, handler, task_group=service_tasks, port=available_port()),
+            ):
                 entered.set()
                 await asyncio.Event().wait()
 
@@ -251,8 +299,11 @@ def test_http_capability_rejects_oversized_guest_frames_and_reaps_process():
         async def handler(request):
             raise AssertionError("Invalid guest frames must not reach the host handler")
 
-        with pytest.raises(ValueError, match="exceeds its limit"):
-            async with serve_http(machine, handler, port=available_port()):
+        with pytest.RaisesGroup(pytest.RaisesExc(ValueError, match="exceeds its limit")):
+            async with (
+                asyncio.TaskGroup() as service_tasks,
+                serve_http(machine, handler, task_group=service_tasks, port=available_port()),
+            ):
                 await asyncio.wait_for(asyncio.Event().wait(), 5)
         assert machine.processes[0].returncode is not None
 
@@ -281,7 +332,10 @@ def test_http_capability_bounds_close_when_host_handler_defers_cancellation(monk
         try:
             async with httpx.AsyncClient(trust_env=False) as client:
                 async with asyncio.timeout(5):
-                    async with serve_http(machine, handler, port=available_port()) as url:
+                    async with (
+                        asyncio.TaskGroup() as service_tasks,
+                        serve_http(machine, handler, task_group=service_tasks, port=available_port()) as url,
+                    ):
                         request = asyncio.create_task(client.post(url + "/wait"))
                         await entered.wait()
                 assert cancelled.is_set()
@@ -312,7 +366,10 @@ def test_http_capability_close_cancels_pending_host_work():
             raise AssertionError("unreachable")
 
         async with httpx.AsyncClient(trust_env=False) as client:
-            async with serve_http(ProcessMachine(), handler, port=available_port()) as url:
+            async with (
+                asyncio.TaskGroup() as service_tasks,
+                serve_http(ProcessMachine(), handler, task_group=service_tasks, port=available_port()) as url,
+            ):
                 request = asyncio.create_task(client.post(url + "/wait"))
                 await asyncio.wait_for(entered.wait(), 5)
             assert cancelled.is_set()
@@ -412,7 +469,10 @@ def test_denied_container_relay_limits_host_authority_and_reclaims_listener(tmp_
                             cancelled.set()
                     return HttpResponse(403, b'{"error":"denied"}')
 
-                async with serve_http(machine, handler, port=8787) as url:
+                async with (
+                    asyncio.TaskGroup() as service_tasks,
+                    serve_http(machine, handler, task_group=service_tasks, port=8787) as url,
+                ):
                     slow = asyncio.create_task(request(url + "/slow"))
                     pending.append(slow)
                     await asyncio.wait_for(blocked.wait(), 10)

@@ -151,11 +151,18 @@ def _score_label(row: ScoreRow) -> str:
 
 def load_archive(uri: str) -> ArchiveData:
     view = ReadView(uri)
-    manifests = [ManifestRow.model_validate(row) for row in view.scan(MANIFEST_TABLE).to_pylist()]
+    manifest_table = view.scan(MANIFEST_TABLE)
+    if manifest_table is None:
+        raise ValueError(f"mismatch archive {uri} has no manifest table")
+    manifests = [ManifestRow.model_validate(row) for row in manifest_table.to_pylist()]
     if len(manifests) != 1 or manifests[0].status != ArchiveStatus.COMPLETE:
         raise ValueError(f"mismatch archive {uri} is incomplete or has no unique manifest")
     manifest = manifests[0]
-    probes = [ProbeRow.model_validate(row) for row in view.scan(PROBE_TABLE).to_pylist()]
+    probe_table = view.scan(PROBE_TABLE)
+    score_table = view.scan(SCORES_TABLE)
+    if probe_table is None or score_table is None:
+        raise ValueError(f"mismatch archive {uri} is missing probe or score tables")
+    probes = [ProbeRow.model_validate(row) for row in probe_table.to_pylist()]
     probes.sort(key=lambda row: row.batch_position)
     if not probes or len({row.sample_id for row in probes}) != len(probes):
         raise ValueError("mismatch archive has no unique frozen samples")
@@ -163,7 +170,7 @@ def load_archive(uri: str) -> ArchiveData:
         raise ValueError("mismatch archive probe rows disagree with its manifest hash")
     scores: dict[str, dict[str, ScoreRow]] = {}
     valid_ids = {row.sample_id for row in probes}
-    for raw in view.scan(SCORES_TABLE).to_pylist():
+    for raw in score_table.to_pylist():
         row = ScoreRow.model_validate(raw)
         if row.probe_hash != manifest.probe_hash or row.sample_id not in valid_ids:
             raise ValueError("mismatch archive has a scoring outside its frozen probe")

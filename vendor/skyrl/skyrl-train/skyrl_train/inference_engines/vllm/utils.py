@@ -1,5 +1,6 @@
-import json
 import errno
+import json
+from collections.abc import Mapping
 from typing import Any, Dict, Protocol
 
 from skyrl_train.config.behavior_logprobs import (
@@ -134,18 +135,23 @@ def ensure_token_ids_in_sse_chunk(sse_chunk: str) -> str:
 
 
 def apply_openai_sampling(
-    body: Dict[str, Any], sampling_params: Dict[str, Any], validate_rollout_logprob_sampling: bool
-) -> None:
-    """Apply generator sampling overrides and validate training probabilities."""
-    body.update(
-        {
-            "temperature": sampling_params.get("temperature", 1.0),
-            "top_p": sampling_params.get("top_p", 1.0),
-            "top_k": sampling_params.get("top_k", -1),
-            "min_p": sampling_params.get("min_p", 0.0),
-        }
-    )
+    body: Mapping[str, Any], sampling_params: Mapping[str, Any], validate_rollout_logprob_sampling: bool
+) -> dict[str, Any]:
+    """Return a request with sampling defaults and validated training probabilities."""
+    defaults = {
+        "temperature": sampling_params.get("temperature", 1.0),
+        "top_p": sampling_params.get("top_p", 1.0),
+        "top_k": sampling_params.get("top_k", -1),
+        "min_p": sampling_params.get("min_p", 0.0),
+    }
+    resolved_body = dict(body)
+    for key, value in defaults.items():
+        if resolved_body.get(key) is None:
+            resolved_body[key] = value
     # Completion logprobs=0 requests sampled-token probabilities; False disables chat logprobs.
-    logprobs = body.get("logprobs")
+    logprobs = resolved_body.get("logprobs")
     if validate_rollout_logprob_sampling and logprobs is not None and logprobs is not False:
-        validate_behavior_logprob_sampling(body)
+        validate_behavior_logprob_sampling(resolved_body)
+        if resolved_body["temperature"] != defaults["temperature"]:
+            raise ValueError("Behavior-logprob request temperature must match the configured training temperature")
+    return resolved_body

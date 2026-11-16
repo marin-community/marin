@@ -201,7 +201,10 @@ def test_daytona_http_capability_uses_one_persistent_provider_session(session_ma
             return HttpResponse(201, request.body[::-1], "application/octet-stream")
 
         try:
-            async with serve_http(machine, handler, port=unused_tcp_port) as endpoint:
+            async with (
+                asyncio.TaskGroup() as service_tasks,
+                serve_http(machine, handler, task_group=service_tasks, port=unused_tcp_port) as endpoint,
+            ):
                 async with httpx.AsyncClient(trust_env=False) as client:
                     slow = asyncio.create_task(client.post(endpoint + "/blocked", content=b"slow"))
                     try:

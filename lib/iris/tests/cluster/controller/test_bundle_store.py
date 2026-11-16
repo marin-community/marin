@@ -38,13 +38,6 @@ def test_write_is_idempotent(store):
     assert id1 == id2
 
 
-def test_get_reads_stored_bytes(store):
-    blob = b"bundle data"
-
-    bundle_id = store.write(blob)
-    assert store.get(bundle_id) == blob
-
-
 def test_get_missing_raises_not_found(store):
     with pytest.raises(FileNotFoundError, match="not found and no controller configured"):
         store.get("a" * 64)

@@ -169,20 +169,21 @@ class TestProviderBaseUrl:
         result = self._parse_config(agent._build_register_config_command())
         assert "options" not in result["provider"]["openai"]
 
-    def test_vllm_provider_uses_openai_compatible_npm_and_options(
+    def test_vllm_provider_uses_openai_wire_format_without_host_credentials(
         self, temp_dir, monkeypatch
     ):
-        # The `vllm` provider id must route through the openai-compatible npm
-        # package (POST /v1/chat/completions, not the Responses API) with
-        # baseURL + apiKey sourced from the OPENAI_* env.
-        monkeypatch.setenv("OPENAI_BASE_URL", "https://ingress/proxy/otagent-j/v1")
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-123")
-        agent = OpenCode(logs_dir=temp_dir, model_name="vllm/1783107198924068")
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://host-provider.invalid/v1")
+        monkeypatch.setenv("OPENAI_API_KEY", "host-provider-private-canary")
+        agent = OpenCode(
+            logs_dir=temp_dir,
+            model_name="vllm/1783107198924068",
+            api_base="http://127.0.0.1:8788/v1",
+        )
         result = self._parse_config(agent._build_register_config_command())
         vllm = result["provider"]["vllm"]
         assert vllm["npm"] == "@ai-sdk/openai-compatible"
-        assert vllm["options"]["baseURL"] == "https://ingress/proxy/otagent-j/v1"
-        assert vllm["options"]["apiKey"] == "sk-test-123"
+        assert vllm["options"] == {"baseURL": "http://127.0.0.1:8788/v1", "apiKey": "EMPTY"}
+        assert "host-provider" not in json.dumps(result)
         assert "1783107198924068" in vllm["models"]
 
 

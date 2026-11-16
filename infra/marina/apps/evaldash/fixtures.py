@@ -27,17 +27,23 @@ from finestore.eval import (
     SAMPLES_SUFFIX,
     Choice,
     EvalSample,
+    EvaluationStore,
     Grading,
     Message,
     SampleKind,
+    sample_to_archive_row,
     write_sample_parquet,
 )
+from finestore.schema import arrow_schema
+from finestore.store import DataStore
 from fsspec.core import url_to_fs
 from marin.evaluation.metric_selection import base_metric, declared_metric
 from marin.evaluation.records import (
     RECORD_FILE,
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
+    CuratedRef,
+    CuratedSettings,
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
@@ -46,12 +52,18 @@ from marin.evaluation.records import (
     MetricKind,
     ModelRef,
     Provenance,
+    ResolvedEvaluationSelection,
     RunStatus,
     RunTiming,
     ServingParams,
     TaskCoverage,
     write_record,
 )
+from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
+from rigging.filesystem.storage_path import prefix_join
+from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection
+from taskcompendium.evaluation.spec import EvaluationProtocol, LikelihoodMetric, Metric, Sampling, TrialPolicy
+from taskcompendium.grading_result import Outcome
 
 # The one model with a run in every suite, so a view that compares models has a complete series.
 REFERENCE_MODEL = "snowball"
@@ -420,6 +432,7 @@ _HEADLINE = {
     "arc-challenge": ("acc_norm,none", "acc_norm_stderr,none"),
     "gsm8k": ("exact_match,flexible-extract", "exact_match_stderr,flexible-extract"),
     "gsm8k-0shot": ("exact_match,flexible-extract", "exact_match_stderr,flexible-extract"),
+    "gsm8k-5shot": ("exact_match,flexible-extract", "exact_match_stderr,flexible-extract"),
     "humaneval": ("pass@1", "pass@1_stderr"),
     "math500": ("accuracy", None),
     "aime24": ("accuracy_avg", "accuracy_std_err"),
@@ -982,9 +995,163 @@ def build_fixtures(dest: str) -> list[str]:
     return written
 
 
+def build_native_fixtures(dest: str) -> list[str]:
+    """Write native raw runs for browser checks of historical comparisons and retry-safe samples."""
+    written = []
+    for name, shots, metric in (
+        ("mmlu", 5, "acc,none"),
+        ("humaneval", 0, "accuracy"),
+        ("gsm8k-0shot", 0, "exact_match,flexible-extract"),
+        ("gsm8k-5shot", 5, "exact_match,flexible-extract"),
+    ):
+        run_id = f"native-fixture-{name}"
+        root = prefix_join(dest, f"{run_id}/results")
+        dataset = f"fixture-{name}"
+        likelihood = name == "mmlu"
+        protocol = EvaluationProtocol(
+            benchmark="gsm8k" if name.startswith("gsm8k-") else name,
+            version="fixture-v1",
+            operation="choice_likelihood" if likelihood else "text_generation",
+            sampling=(
+                None
+                if likelihood
+                else Sampling(temperature=0, top_p=None, top_k=None, max_tokens=64, stop=(), chat_template_kwargs={})
+            ),
+            trials=TrialPolicy(count=1, seed=0),
+            metrics=(Metric(name=metric, kind="binary", higher_is_better=True),),
+            primary_metric=metric,
+            num_fewshot=shots,
+            summary="mean",
+            expected_population=3,
+            likelihood_metrics=(LikelihoodMetric(name=metric, normalization="raw"),) if likelihood else (),
+        )
+        with DataStore.open(root) as store:
+            EvaluationStore(store)
+            store.table(
+                ATTEMPTS_TABLE,
+                schema=arrow_schema(Attempt),
+                primary_key=("dataset", "source_row", "trial", "retry", "phase"),
+                schema_version=1,
+            )
+            store.table(
+                SELECTIONS_TABLE, schema=arrow_schema(Selection), primary_key=("dataset", "source_row"), schema_version=1
+            )
+            with store.transaction() as transaction:
+                transaction.write_object(
+                    RUN_OBJECT,
+                    json.dumps(
+                        {
+                            "datasets": [
+                                {
+                                    "dataset": dataset,
+                                    "protocol": protocol.model_dump(mode="json"),
+                                    "manifest": {"rows": 3, "source_dataset": "local-fixture", "source_revision": "v1"},
+                                }
+                            ],
+                            "driver_revision": "fixture",
+                        }
+                    ).encode(),
+                )
+                for index, score in enumerate((1.0, 0.0, 1.0)):
+                    source_row = f"rows:{index}"
+                    transaction.table(SELECTIONS_TABLE).add(
+                        Selection(
+                            dataset=dataset,
+                            source_row=source_row,
+                            source_ordinal=index,
+                            status="selected",
+                            reason=None,
+                            rank=index,
+                            context_window=1024,
+                            max_tokens=64,
+                            prompt_tokens=16,
+                            reference_tokens=None,
+                        ).model_dump(mode="json")
+                    )
+                    attempt = Attempt(
+                        dataset=dataset,
+                        task_id=str(index),
+                        source_row=source_row,
+                        trial=0,
+                        retry=1 if index == 0 else 0,
+                        phase="finished",
+                        seed=0,
+                        outcome="graded",
+                        error=None,
+                        result_blob=None,
+                        prompt_tokens=16,
+                        completion_tokens=8,
+                    )
+                    if index == 0:
+                        transaction.table(ATTEMPTS_TABLE).add(
+                            attempt.model_copy(
+                                update={
+                                    "retry": 0,
+                                    "outcome": Outcome.INFRA_ERROR,
+                                    "error": "fixture transport interruption",
+                                }
+                            ).model_dump(mode="json")
+                        )
+                        transaction.table(ATTEMPTS_TABLE).add(
+                            attempt.model_copy(
+                                update={
+                                    "retry": 2,
+                                    "phase": AttemptPhase.STARTED,
+                                    "outcome": None,
+                                }
+                            ).model_dump(mode="json")
+                        )
+                    transaction.table(ATTEMPTS_TABLE).add(attempt.model_dump(mode="json"))
+                    sample = (
+                        _mcq_sample(name, str(index), model_choice=0, target_choice=0 if score else 1)
+                        if likelihood
+                        else _generation_sample(name, str(index), extracted="42" if score else "0", target="42")
+                    )
+                    sample = sample.model_copy(
+                        update={
+                            "metrics": {metric: score},
+                            "grading": Grading(method="fixture", metric=metric, score=score, passed=bool(score)),
+                        }
+                    )
+                    transaction.table("samples").add(
+                        sample_to_archive_row(sample, trial_id=f"{dataset}/0/{attempt.retry}")
+                    )
+        record = _record(
+            run_id=run_id,
+            group_id="native-fixture",
+            model="native-qwen3-8b",
+            version="native-fixture",
+            created_at="2026-11-05T23:00:00+00:00",
+            evaluation=EvalRef(
+                name=name,
+                mechanism="curated",
+                curated=CuratedRef(
+                    datasets=(dataset,),
+                    settings=CuratedSettings(),
+                    selection=(
+                        ResolvedEvaluationSelection(
+                            benchmark="gsm8k", protocol="harness", num_fewshot=shots, prompt_format="completion"
+                        )
+                        if name.startswith("gsm8k-")
+                        else None
+                    ),
+                ),
+            ),
+            status=RunStatus.SUCCEEDED,
+            results_path=root,
+            metrics={},
+            description="Native raw observations with failed and unfinished retries",
+        )
+        record = record.model_copy(
+            update={"provenance": record.provenance.model_copy(update={"eval_runtime": "fixture-native"})}
+        )
+        written.append(write_record(record, dest))
+    return written
+
+
 def main() -> None:
     dest = sys.argv[1] if len(sys.argv) > 1 else "/tmp/evaldash-fixtures"
-    written = build_fixtures(dest)
+    written = [*build_fixtures(dest), *build_native_fixtures(dest)]
     print(f"wrote {len(written)} records under {dest}")
 
 

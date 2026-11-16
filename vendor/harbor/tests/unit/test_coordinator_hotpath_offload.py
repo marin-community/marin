@@ -30,6 +30,7 @@ import threading
 from types import SimpleNamespace
 from unittest import mock
 
+import httpx
 import pytest
 from harbor.agents.terminus_2 import terminus_2 as t2
 from harbor.agents.terminus_2.terminus_2 import Terminus2
@@ -153,29 +154,27 @@ def test_get_shared_tokenize_client_is_a_singleton() -> None:
 
 
 @pytest.mark.unit
-def test_count_total_tokens_uses_shared_client_not_fresh_httpx() -> None:
+def test_count_total_tokens_reuses_transport_at_server_root() -> None:
     agent = object.__new__(Terminus2)
     agent._llm = SimpleNamespace(_api_base="http://localhost:8000/v1")
     agent.model_alias = "hosted_vllm/test-model"
 
     chat = SimpleNamespace(messages=[{"role": "user", "content": "hi"}])
 
-    fake_client = mock.MagicMock()
-    fake_client.post.return_value = SimpleNamespace(
-        status_code=200, json=lambda: {"count": 7}
-    )
+    requests: list[httpx.Request] = []
+
+    def tokenize(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"count": 7})
 
     with (
-        mock.patch.object(
-            t2, "_get_shared_tokenize_client", return_value=fake_client
-        ) as shared,
-        mock.patch("httpx.Client") as fresh_client_ctor,
+        httpx.Client(transport=httpx.MockTransport(tokenize)) as client,
+        mock.patch.object(t2, "_TOKENIZE_HTTP_CLIENT", client),
     ):
-        result = agent._count_total_tokens(chat)
+        assert agent._count_total_tokens(chat) == 7
+        assert agent._count_total_tokens(chat) == 7
 
-    assert result == 7
-    shared.assert_called_once()  # went through the pooled client
-    fresh_client_ctor.assert_not_called()  # no per-call client / SSL context
-    # vLLM serves /tokenize at the server root (not under /v1).
-    posted_url = fake_client.post.call_args[0][0]
-    assert posted_url == "http://localhost:8000/tokenize"
+    assert [str(request.url) for request in requests] == [
+        "http://localhost:8000/tokenize",
+        "http://localhost:8000/tokenize",
+    ]

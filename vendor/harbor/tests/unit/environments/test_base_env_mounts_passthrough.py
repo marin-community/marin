@@ -1,5 +1,6 @@
 """BaseEnvironment.__init__ accepts and stores `mounts` for any subclass."""
 
+import asyncio
 from pathlib import Path
 
 
@@ -15,7 +16,7 @@ class _StubEnv(BaseEnvironment):
 
     @staticmethod
     def type() -> str:
-        return EnvironmentType.DOCKER
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
@@ -25,7 +26,9 @@ class _StubEnv(BaseEnvironment):
     def _validate_definition(self):
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         pass
 
     async def stop(self, delete: bool):

@@ -94,6 +94,8 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          # Planning compares paths and reads package metadata from the current tree.
+          filter: blob:none
 
       - name: Find changed source files
         env:
@@ -213,7 +215,7 @@ jobs:
       # v1.14.2 bundles twine 7, which accepts core metadata 2.5. Hatchling now
       # stamps Metadata-Version: 2.5, and v1.14.0's older twine rejected it
       # ("'2.5' is not a valid metadata version"), failing every publish.
-      - uses: pypa/gh-action-pypi-publish@v1.14.2
+      - uses: pypa/gh-action-pypi-publish@v1.14.3
         with:
           packages-dir: dist/
           skip-existing: true
