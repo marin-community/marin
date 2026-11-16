@@ -484,6 +484,9 @@ class Algorithm(Section):
 
 
 class RolloutBuffer(Section):
+    consumed_route_quotas: OpenMap = field({})
+    "Exact consumed-group quotas, enforced at lease admission; full_batch only."
+    source_routes: OpenMap = field({})
     max_staleness_steps: NonNegativeInt = field(0)
     "How many steps the generating policy may lag the step that trains on its group. colocate_all requires 0."
     batch_policy: Literal["full_batch", "rolling"] = field("full_batch")
