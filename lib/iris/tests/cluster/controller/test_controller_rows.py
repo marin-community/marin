@@ -100,6 +100,7 @@ def _run_on_node(state: ControllerTestState, task, worker_id, node_name: str) ->
                             new_state=job_pb2.TASK_STATE_RUNNING,
                             pod_name="pod-a",
                             node_name=node_name,
+                            topology={"rack": "rack-3"},
                         )
                     ],
                 )
@@ -141,6 +142,7 @@ def test_attempt_rows_record_the_node_and_join_their_job(state):
 
     running = [a for a in rows.attempts if a.state == "TASK_STATE_RUNNING"]
     assert running and running[-1].node_name == "gpu-node-7"
+    assert json.loads(running[-1].topology_json) == {"rack": "rack-3"}
     assert running[-1].worker_id == "w1"
     assert running[-1].started_at is not None
     final = rows.attempts[-1]
@@ -523,6 +525,7 @@ _COLUMNS: dict[str, _Classified] = {
             "constraints_json": "constraints_json",
             "has_coscheduling": "has_coscheduling",
             "coscheduling_group_by": "coscheduling_group_by",
+            "coscheduling_group_sizes": "coscheduling_group_sizes",
             "scheduling_timeout_ms": "scheduling_timeout_ms",
             "max_task_failures": "max_task_failures",
             "max_retries_failure": "max_retries_failure",
@@ -596,6 +599,7 @@ _COLUMNS: dict[str, _Classified] = {
             "pod_name": "pod_name",
             "pod_uid": "pod_uid",
             "node_name": "node_name",
+            "topology_json": "topology_json",
             "terminal_reason": "terminal_reason",
         },
         {},

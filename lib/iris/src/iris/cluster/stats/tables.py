@@ -314,6 +314,9 @@ class IrisJobConfig:
     has_coscheduling: bool
     # The worker attribute coscheduled tasks share, such as "tpu-name".
     coscheduling_group_by: str
+    # The requested locality group sizes as a JSON list of task counts; "[]" when
+    # the job asks for none.
+    coscheduling_group_sizes: str
     priority_band: str
     preemption_policy: str
     existing_job_policy: str
@@ -413,6 +416,9 @@ class IrisTaskAttempt:
     pod_name: str
     pod_uid: str
     backend_id: str
+    # The topology domains the scheduler selected, keyed by node label, as a JSON
+    # object; "{}" until assigned or when the backend exposes none.
+    topology_json: str
     ts: datetime
 
 

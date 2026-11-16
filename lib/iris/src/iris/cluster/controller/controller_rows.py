@@ -23,6 +23,7 @@ A failed snapshot or write is logged and drops that transaction's rows; it never
 rolls back the controller's own writes or stops its later post-commit hooks.
 """
 
+import json
 import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -295,6 +296,7 @@ def _snapshot_configs(cur: RowCursor, tables: ControllerRowTables, marked: _Mark
                     constraints_json=r.constraints_json,
                     has_coscheduling=bool(r.has_coscheduling),
                     coscheduling_group_by=r.coscheduling_group_by,
+                    coscheduling_group_sizes=json.dumps(list(r.coscheduling_group_sizes)),
                     priority_band=job_pb2.PriorityBand.Name(r.priority_band),
                     preemption_policy=job_pb2.JobPreemptionPolicy.Name(r.preemption_policy),
                     existing_job_policy=job_pb2.ExistingJobPolicy.Name(r.existing_job_policy),
@@ -391,6 +393,7 @@ def _snapshot_attempts(cur: RowCursor, tables: ControllerRowTables, marked: _Mar
                     pod_name=r.pod_name,
                     pod_uid=r.pod_uid,
                     backend_id=r.backend_id,
+                    topology_json=json.dumps(r.topology_json, sort_keys=True),
                     ts=ts,
                 )
             )
