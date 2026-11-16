@@ -212,23 +212,40 @@ def source_bootstrap_command(setup: str, contract: SharedIntegrityContract) -> s
     """Run the source setup, then unpack and bootstrap the protected controller.
 
     Python resolution happens here, with the task environment's PATH, because the
-    source image is not guaranteed to keep an interpreter on its build PATH.
+    source image is not guaranteed to keep an interpreter on its build PATH. The
+    controller requires 3.9+ and takes the first PATH interpreter that qualifies;
+    the source's own scorer keeps running on the task environment's python.
     """
     unpack = (
         "import pathlib,zlib; "
         f"pathlib.Path({BOOTSTRAP_INPUT!r}).write_bytes("
         f"zlib.decompress(pathlib.Path('/{SOURCE_ARCHIVE}').read_bytes()))"
     )
-    return (
-        "set -euo pipefail\n"
-        + setup
-        + "\n"
-        + 'control_python="$(readlink -f "$(command -v python3 || command -v python)")"\n'
-        + f'ln -sfn "$control_python" {BOOTSTRAP_DIRECTORY}/python\n'
-        + f'"$control_python" -I -S -B -c {shlex.quote(unpack)}\n'
-        + f'"$control_python" -I -S -B {BOOTSTRAP} bootstrap {BOOTSTRAP_INPUT}\n'
-        + f"rm {BOOTSTRAP_INPUT} /{SOURCE_ARCHIVE}\n"
-    )
+    probe = "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)"
+    lines = [
+        "set -euo pipefail",
+        setup,
+        'control_python=""',
+        'for control_dir in $(printf "%s\n" "$PATH" | tr ":" " "); do',
+        "  for control_name in python3 python; do",
+        '    [ -x "$control_dir/$control_name" ] || continue',
+        f'    if "$control_dir/$control_name" -c {shlex.quote(probe)} 2>/dev/null; then',
+        '      control_python="$control_dir/$control_name"',
+        "      break 2",
+        "    fi",
+        "  done",
+        "done",
+        'if [ -z "$control_python" ]; then',
+        '  echo "shared-source adapter requires a python >= 3.9 on PATH" >&2',
+        "  exit 1",
+        "fi",
+        'control_python="$(readlink -f "$control_python")"',
+        f'ln -sfn "$control_python" {BOOTSTRAP_DIRECTORY}/python',
+        f'"$control_python" -I -S -B -c {shlex.quote(unpack)}',
+        f'"$control_python" -I -S -B {BOOTSTRAP} bootstrap {BOOTSTRAP_INPUT}',
+        f"rm {BOOTSTRAP_INPUT} /{SOURCE_ARCHIVE}",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def source_grader_script(contract: SharedIntegrityContract) -> bytes:
