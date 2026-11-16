@@ -4,39 +4,40 @@ Marin Belay tests pretraining ideas against a fixed recipe and records every res
 idea in a GitHub comment; a maintainer approves it; an agent implements it behind a default-off flag, runs it against
 a baseline, and posts the verdict. This page is the whole contributor workflow. Hand it to your agent as context.
 
-**Every experiment is compared to the official recipe by default** (currently Belay Ckpt Oct 20 2026, tag
-`belay-ckpt-2026-10-20`): the `speedrun`, `ladder` and `competitive-*` Tracks all run against it. The `vanilla-*`
-and `moe-*` Tracks are the opt-in exceptions. Ideas that pass `speedrun`, `hero-mfu` and the `ladder` can be merged
-into the official recipe by a maintainer, and later ideas are then measured against the improved recipe.
+**Every experiment is compared to the official recipe by default**: the `speedrun`, `ladder` and `competitive-*`
+Tracks all run against it. The `vanilla-*` and `moe-*` Tracks are the opt-in exceptions. Ideas that pass
+`speedrun`, `hero-mfu` and the `ladder` can be merged into the official recipe by a maintainer, and later ideas are
+then measured against the improved recipe.
 
 ## Links
 
 | What | Where |
 |---|---|
-| Recipe code (build on this) | branch [`marin_belay_v1_recipe`](https://github.com/marin-community/marin/tree/marin_belay_v1_recipe), model in [`experiments/grug/fast_track/model.py`](https://github.com/marin-community/marin/blob/marin_belay_v1_recipe/experiments/grug/fast_track/model.py), launched by `experiments/grug/fast_track/belay_s7.py --ladder s7n` |
+| Official recipe (build on this) | branch [`marin_belay_v1_recipe`](https://github.com/marin-community/marin/tree/marin_belay_v1_recipe), model in [`experiments/grug/fast_track/model.py`](https://github.com/marin-community/marin/blob/marin_belay_v1_recipe/experiments/grug/fast_track/model.py); every launch command: `uv run python -m experiments.belay tracks` |
 | Submit ideas | [marin#9514](https://github.com/marin-community/marin/issues/9514), one idea per comment |
 | Status page | [Belay Status](https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status); one idea: `…/#status/X####` |
-| Front page (gates, tracks, scaling starter kit) | [Belay](https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/) |
+| Front page (current recipe, gates, tracks, scaling starter kit) | [Belay](https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/) |
 | Experiment registry | branch [`marin_belay_v1_registry`](https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay/registry), one `X####-<slug>.yaml` per idea, reports under `experiments/belay/analysis/X####/` |
 | W&B runs | project [`marin-community/marin_moe`](https://wandb.ai/marin-community/marin_moe) |
-| Experiment code | this week's branch `marin_belay_v1_w<monday>`, e.g. `marin_belay_v1_w2026-11-16`; every run pins a commit |
+| Experiment code | the week's branch `marin_belay_v1_w<monday>`; every run pins a commit |
 
 ## Recommended flow
 
-### 1. Check the idea against the current recipe, locally
+### 1. Check the idea against the official recipe, locally
 
-Check out `marin_belay_v1_recipe` and point your agent at `experiments/grug/fast_track/model.py` (and
-`belay_s7.py` for the ladder configs). Before writing anything up, work out:
+Check out `marin_belay_v1_recipe` and point your agent at `experiments/grug/fast_track/model.py`. The front page
+summarises the recipe's architecture, optimizer and data. Before writing anything up, work out:
 
-- **Is it already there, or already tried?** The recipe already has MLA + KDA attention, a 384-expert top-8 MoE,
-  gated norms, MuonH, z-loss and a 16k tokenizer. Search the registry for earlier attempts; a past loss is not a
-  verdict on the idea, but read how it was implemented.
+- **Is it already there, or already tried?** Read the model code, and search the registry for earlier attempts. A
+  past loss is not a verdict on the idea, but read how it was implemented.
 - **Does it replace, add to, or adapt an existing feature?** Say which, and which optimizer and learning rate its
   new parameters use.
 - **Does it scale cleanly?** Ideas that join the recipe must be sized by a rule (e.g. "width 0.5·d", "only the
   last two layers"), not a constant tuned at one size.
-- **Out of scope for now:** tokenizer and data changes, eval-only changes, and ideas that win only by adding
-  parameters or compute (the ladder compares at matched compute per step).
+- **Does it win on more than size?** Ideas that win only by adding parameters or compute per step are not what
+  Belay is looking for.
+- **Is the area open?** Some areas, such as tokenizer and data changes, can be closed to hill-climbing; the front
+  page says which.
 
 Iterate on the design until it fits in a short, unambiguous description. Optional: sketch the change as a
 default-off config flag in `model.py` and link it in your comment. The agent still implements from your
@@ -49,19 +50,19 @@ where, at what size, and how new parameters are initialised and optimised; the a
 
 ```
 Track: speedrun
-Replace the sigmoid router scoring with sqrt-softplus, on every MoE layer. Keep the 2.5× renormalisation.
+Replace the sigmoid router scoring with sqrt-softplus, on every MoE layer. Keep the existing renormalisation.
 ```
 
-Pick the Track by what you want to learn:
+Pick the Track by what you want to learn. The front page lists every Track with its current sizes and baselines.
 
 | Track | Runs against | Use it when |
 |---|---|---|
-| `speedrun` (default) | the current recipe at d512 for 8 minutes (3,030 steps), with a same-commit control | The normal first test: is the idea compatible with the recipe, and is there signal? |
-| `vanilla-d512` … `vanilla-d1280` | a plain dense transformer at that size | A radical idea that would not survive the tuned recipe yet: look for signs of life first. |
-| `moe-d512` … `moe-d1280` | a basic MoE at that size | MoE-specific ideas (routing, experts) without the rest of the recipe in the way. |
-| `hero-mfu` | step time on one GB200 rack at hero scale | The idea changes speed or memory materially (new kernels, big extra compute). A maintainer runs it. |
-| `ladder` | all four `competitive-*` rungs (d512 → d1280), launched together | After a promising speedrun: does the gain hold as the model scales? |
-| `competitive-d512` … `competitive-d1280` | the recipe's finished run at one rung | Re-checking one rung. |
+| `speedrun` (default) | a short fixed-time run of the official recipe at the smallest rung, with a same-commit control | The normal first test: is the idea compatible with the recipe, and is there signal? |
+| `vanilla-<rung>` | a plain dense transformer at that size | A radical idea that would not survive the tuned recipe yet: look for signs of life first. |
+| `moe-<rung>` | a basic MoE at that size | MoE-specific ideas (routing, experts) without the rest of the recipe in the way. |
+| `hero-mfu` | step time at hero scale on hero hardware | The idea changes speed or memory materially (new kernels, big extra compute). A maintainer runs it. |
+| `ladder` | every `competitive-*` rung, launched together | After a promising speedrun: does the gain hold as the model scales? |
+| `competitive-<rung>` | the official recipe's finished run at one rung | Re-checking one rung. |
 | `custom` | a baseline you state | A study answered by analysing runs (no win/loss verdict). The approver sets its budget. |
 
 A maintainer reviews the comment on the admin page; a 👀 reaction means it was reviewed (approved or declined).
@@ -83,10 +84,10 @@ The registry entry (`X####-<slug>.yaml` on `marin_belay_v1_registry`) records th
 commits, every trial's runs, loss, Δ and step-time change. Each finished trial has a report with loss curves at
 `experiments/belay/analysis/X####/t00N.md`.
 
-**Reading the verdict.** The metric is Paloma macro loss (lower is better). Δ ≤ −0.005 is a win, ≥ +0.005 a loss,
-anything between is noise. Trials are single seed, and seed-to-seed spread is about the size of the noise band, so
-treat a result near ±0.005 as weak evidence. On `speedrun`, the verdict is at equal wall-clock time, so an idea
-that slows each step pays for it.
+**Reading the verdict.** Each Track has a fixed metric and noise band, stated in every trial's report: a change
+beyond the band is a win or a loss, anything inside it is noise. Trials are single seed, and seed-to-seed spread is
+about the size of the noise band, so treat a result near its edge as weak evidence. On `speedrun`, the verdict is at
+equal wall-clock time, so an idea that slows each step pays for it.
 
 ### 4. If the result looks promising, submit the ladder
 
@@ -94,10 +95,10 @@ Post a new comment on #9514 that names the idea's registry id:
 
 ```
 Track: ladder
-Follow-up to X0226 (speedrun −0.0112): run the 4-rung ladder with the same implementation.
+Follow-up to X0123 (speedrun win): run the ladder with the same implementation.
 ```
 
-The ladder shows whether the gain holds from d512 to d1280 and projects it to hero scale. Until the idea has a
+The ladder shows whether the gain holds as the model scales and projects it to hero scale. Until the idea has a
 `hero-mfu` result, ladder rungs run at the baseline's step counts and the verdict is **provisional**: an idea needs a
 hero-mfu measurement before it can join the recipe. If the idea changes step time noticeably, ask for `hero-mfu`
 first; the ladder's step counts are then adjusted for the measured speed change.
