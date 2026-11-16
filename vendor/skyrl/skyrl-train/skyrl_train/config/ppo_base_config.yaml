@@ -566,6 +566,5 @@ trajectory_runner:
     cpus_per_worker: 8
     executor_threads: 256 # Default thread pool for blocking task operations.
     progress_timeout_seconds: 21600 # fail a worker's requests when none of them completes for this long
-    # Workers start one at a time, this long after the previous one is up, so their imports and tokenizer loads
-    # from a shared filesystem do not overlap; zero starts them all at once.
-    start_interval_seconds: 2.0
+    # Zero starts workers together; a positive interval staggers their imports and tokenizer loads.
+    start_interval_seconds: 0.0
