@@ -12,6 +12,7 @@ serve:
   tensor_parallel_size: 2
   data_parallel_size: 2
   max_model_len: 262144
+  reasoning_parser: qwen3
   limit_mm_per_prompt: '{"image":0,"video":0}'
   vllm_extra_args:
   - --enable-prefix-caching
