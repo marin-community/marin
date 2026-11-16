@@ -6,7 +6,8 @@ import os
 import sys
 from pathlib import Path
 
-from taskcompendium.harbor.negative_control import NativeInstructionSetup, NegativeControlSource
+from pydantic import TypeAdapter
+from taskcompendium.harbor.negative_control import DeclaredSourceSetup, NativeInstructionSetup, NegativeControlSource
 
 from harbor.host_capabilities import host_capabilities_from_environment
 from harbor.models.trial.config import TrialConfig
@@ -21,7 +22,7 @@ def main() -> None:
             TrialConfig.model_validate(request["trial"]),
             NegativeControlSource.model_validate(request["source"]),
             Path(request["output_root"]),
-            NativeInstructionSetup.model_validate(setup) if setup is not None else None,
+            TypeAdapter(NativeInstructionSetup | DeclaredSourceSetup).validate_python(setup) if setup is not None else None,
             host_capabilities_from_environment(os.environ, model_authentication={}),
         )
     )

@@ -14,6 +14,8 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.harbor.adapter import actor_machine_required
 from taskcompendium.harbor.negative_control import (
     NegativeControlSetupKind,
+    NegativeControlSource,
+    declared_setup_preparation,
     negative_control_setup_kind,
     public_task_preparation,
 )
@@ -24,6 +26,57 @@ from taskcompendium.pipeline.oracle_filter import NativeVerifierGrade, OracleNeg
 
 from experiments.post_training.task_curation.archive_evidence import verified_archive_members
 from experiments.post_training.task_curation.harbor_inspection import harbor_inspection
+
+
+def preparation_filename(kind: NegativeControlSetupKind | None) -> str:
+    if kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION:
+        return "task-spec-preparation.json"
+    if kind is NegativeControlSetupKind.DECLARED_SETUP:
+        return "declared-setup-preparation.json"
+    return "original-public-setup.sh"
+
+
+def _require_declared_setup(
+    members: dict[str, bytes],
+    root: PurePosixPath,
+    control: dict,
+    result: dict,
+    setup: dict,
+    execution_requirements: ExecutionRequirements,
+) -> None:
+    specification_bytes = members[str(root / "source-task-spec.json")]
+    task = TaskSpec.model_validate_json(specification_bytes)
+    source = NegativeControlSource(
+        **{
+            name: control[name]
+            for name in (
+                "task_id",
+                "source_task_sha256",
+                "source_task_checksum",
+                "task_sha256",
+                "runtime_sha256",
+                "task_checksum",
+            )
+        },
+        execution_requirements=execution_requirements,
+        verifier_execution_requirements=result["config"]["task"].get("verifier_execution_requirements"),
+    )
+    preparation = declared_setup_preparation(task, source, members[str(root / "consumed-task.toml")])
+    preparation["task_spec_file_sha256"] = hashlib.sha256(specification_bytes).hexdigest()
+    if (
+        json.loads(members[str(root / "declared-setup-preparation.json")]) != preparation
+        or control["preparation"] != preparation
+        or setup["setup_exit_code"] is not None
+    ):
+        raise ValueError("Negative control changed the source-declared native setup")
+    if setup["preparation_completed"] and (
+        setup["event"] != "agent_start"
+        or control["hook_calls"] != 1
+        or setup["environment_setup"] != result["environment_setup"]
+        or result["environment_setup"]["started_at"] is None
+        or result["environment_setup"]["finished_at"] is None
+    ):
+        raise ValueError("Negative control did not observe completed production native setup")
 
 
 def _require_task_spec_preparation(
@@ -118,12 +171,16 @@ def negative_control_from_archive(
     setup_member = str(root / "setup-receipt.json")
     setup_kind = NegativeControlSetupKind(control["setup_kind"]) if control.get("setup_kind") is not None else None
     converted = setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION
-    descriptor_member = str(root / ("task-spec-preparation.json" if converted else "original-public-setup.sh"))
+    declared = setup_kind is NegativeControlSetupKind.DECLARED_SETUP
+    automatic_preparation = converted or declared
+    descriptor_member = str(root / preparation_filename(setup_kind))
     verdict_member = str(trial_root / "verifier/verdict.json")
     rewards = {str(trial_root / "verifier" / name) for name in ("reward.json", "reward.txt")}
     preparation_names = (
         {str(root / "source-task-spec.json"), str(trial_root / "network-policy.json")} if converted else set()
     )
+    if declared:
+        preparation_names = {str(root / "source-task-spec.json"), str(root / "consumed-task.toml")}
     members = verified_archive_members(
         archive,
         {control_member, result_member, setup_member, descriptor_member, *preparation_names},
@@ -165,7 +222,14 @@ def negative_control_from_archive(
     )
     if setup_kind is not None and setup["setup_kind"] != setup_kind.value:
         raise ValueError("Negative-control preparation kind differs from its actual setup receipt")
-    if not converted and control.get("preparation") is not None:
+    if declared:
+        if (
+            control["source_task_sha256"] != source_task_sha256
+            or control["source_task_checksum"] != source_task_checksum
+        ):
+            raise ValueError("Declared negative control belongs to another original source")
+        _require_declared_setup(members, root, control, result, setup, execution_requirements)
+    if not automatic_preparation and control.get("preparation") is not None:
         raise ValueError("Native negative controls cannot claim TaskSpec preparation")
 
     def reference(name: str) -> ContentEvidenceReference:
@@ -216,7 +280,7 @@ def negative_control_from_archive(
         result_artifact=reference(result_member),
         setup_artifact=reference(setup_member),
         setup_kind=setup_kind,
-        preparation_artifact=reference(descriptor_member) if converted else None,
+        preparation_artifact=reference(descriptor_member) if automatic_preparation else None,
         prepared_source_runtime=prepared_runtime,
         verdict_artifact=reference(verdict_member) if verdict_member in members else None,
         trial=trial,
@@ -224,7 +288,7 @@ def negative_control_from_archive(
         verifier_exit_code=control["verifier_exit_code"],
         setup_exit_code=setup["setup_exit_code"],
         original_public_setup=(
-            setup["preparation_completed"] if converted else setup["setup_from_original_public_instruction"]
+            setup["preparation_completed"] if automatic_preparation else setup["setup_from_original_public_instruction"]
         ),
         redrive_parent=redrive_parent,
         redrive_decision=redrive_decision,
@@ -243,22 +307,8 @@ def require_negative_control(receipt: OracleNegativeControlReceipt) -> None:
         parent = receipt.redrive_parent
         parent_root = PurePosixPath(parent.control.uri.split("#", 1)[1]).parent
         root = PurePosixPath(receipt.control.uri.split("#", 1)[1]).parent
-        parent_name = str(
-            parent_root
-            / (
-                "task-spec-preparation.json"
-                if parent.setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION
-                else "original-public-setup.sh"
-            )
-        )
-        name = str(
-            root
-            / (
-                "task-spec-preparation.json"
-                if receipt.setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION
-                else "original-public-setup.sh"
-            )
-        )
+        parent_name = str(parent_root / preparation_filename(parent.setup_kind))
+        name = str(root / preparation_filename(receipt.setup_kind))
         if verified_archive_members(parent.archive, {parent_name})[parent_name] != (
             verified_archive_members(receipt.archive, {name})[name]
         ):

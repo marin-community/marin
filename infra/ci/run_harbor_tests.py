@@ -102,6 +102,7 @@ def run_harbor_tests(repo_root: Path, extra_args: tuple[str, ...] = ()) -> int:
             "experiments/post_training/task_curation/tests/test_daytona_census.py",
             "experiments/post_training/task_curation/tests/test_calibforge_rebuild.py",
             "experiments/post_training/task_curation/tests/test_queued_calibration.py",
+            "experiments/post_training/task_curation/tests/test_declared_setup_control.py",
             *extra_args,
         ],
         cwd=repo_root,

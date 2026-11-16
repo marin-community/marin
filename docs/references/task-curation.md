@@ -3549,6 +3549,18 @@ failure. Admission derives the
 preparation kind from the source contract; verifier allocation presence does
 not select it.
 
+Native packages whose `task.toml` declares `[environment.setup]` use
+`native_setup: {"task_spec": <original source TaskSpec>}` instead of an
+instruction block. Harbor executes that declared command once during normal
+preparation. The control observes `agent_start` after preparation succeeds; it
+does not execute the command again. Its `declared_setup` receipt archives the
+original TaskSpec, consumed `task.toml`, `declared-setup-preparation.json`, and
+production environment timing. The collector checks the verbatim command and
+declared setup timeout against the original package, together with source and
+consumed identities. This path also has no aggregate shell exit code. A failed
+setup never reaches the observation hook and remains pending. Instruction-block
+selection is rejected for a package with declared setup.
+
 An inherited Trial configuration can leave `source_runtime` null while
 production preparation reads the binding from the consumed native packet.
 For this case the collector requires the archived

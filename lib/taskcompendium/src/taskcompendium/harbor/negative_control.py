@@ -3,15 +3,21 @@
 
 """Original source identities and public preparation for physical nop controls."""
 
+import hashlib
+import tomllib
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from taskcompendium.harbor.execution import native_execution_limits
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, NoGrader, TaskSpec
+from taskcompendium.runtime.resources import resource_bytes
 
 
 class NegativeControlSetupKind(StrEnum):
     NATIVE_SCRIPT = "native_script"
+    DECLARED_SETUP = "declared_setup"
     TASK_SPEC_PREPARATION = "task_spec_preparation"
 
 
@@ -34,6 +40,44 @@ class NativeInstructionSetup(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     block_index: int = Field(ge=0)
+
+
+class DeclaredSourceSetup(BaseModel):
+    """Bind native Trial preparation to the unchanged original source TaskSpec."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    task_spec: TaskSpec
+
+
+def declared_setup_preparation(task: TaskSpec, source: NegativeControlSource, config_bytes: bytes) -> dict:
+    """Verify the consumed native setup against its original source declaration."""
+    config = tomllib.loads(config_bytes.decode())
+    setup = config["environment"]["setup"]
+    original = next(resource for resource in task.resources.verifier if resource.path == "task.toml")
+    original_setup = tomllib.loads(resource_bytes(original).decode())["environment"]["setup"]
+    if (
+        negative_control_setup_kind(task) is not NegativeControlSetupKind.DECLARED_SETUP
+        or task.id != source.task_id
+        or canonical_sha256(task.model_dump(mode="json")) != source.source_task_sha256
+        or task.environment_requirements.setup_commands != (setup["command"],)
+        or setup != original_setup
+        or native_execution_limits(config).requirements != source.execution_requirements
+        or not setup["command"].strip()
+        or setup["timeout_sec"] <= 0
+    ):
+        raise ValueError("Declared negative-control setup differs from the original source")
+    return {
+        "version": 1,
+        "setup_kind": NegativeControlSetupKind.DECLARED_SETUP.value,
+        "task_spec_file": "source-task-spec.json",
+        "task_spec_sha256": source.source_task_sha256,
+        "source_task_checksum": source.source_task_checksum,
+        "source_native_checksum": source.task_checksum,
+        "native_config_file": "consumed-task.toml",
+        "native_config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+        "declared_setup": setup,
+        "declared_setup_executed_once_by_trial": True,
+    }
 
 
 def require_nop_trial_config(config: dict) -> None:
@@ -84,5 +128,7 @@ def public_task_preparation(task: TaskSpec) -> dict:
 def negative_control_setup_kind(task: TaskSpec) -> NegativeControlSetupKind:
     """Distinguish native Harbor payloads from executable converted TaskSpecs."""
     if isinstance(task.grader, NoGrader) and "harbor" in task.tags:
+        if task.environment_requirements.setup_commands:
+            return NegativeControlSetupKind.DECLARED_SETUP
         return NegativeControlSetupKind.NATIVE_SCRIPT
     return NegativeControlSetupKind.TASK_SPEC_PREPARATION

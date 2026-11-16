@@ -14,9 +14,11 @@ from pathlib import Path
 
 from rigging.timing import active_timeout
 from taskcompendium.harbor.negative_control import (
+    DeclaredSourceSetup,
     NativeInstructionSetup,
     NegativeControlSetupKind,
     NegativeControlSource,
+    declared_setup_preparation,
     public_task_preparation,
     require_nop_trial_config,
 )
@@ -53,14 +55,14 @@ async def run_negative_control(
     config: TrialConfig,
     source: NegativeControlSource,
     output_root: Path,
-    native_setup: NativeInstructionSetup | None,
+    native_setup: NativeInstructionSetup | DeclaredSourceSetup | None,
     host_capabilities: HostCapabilities,
 ) -> dict:
     """Run one nop Trial and write its actual preparation and result artifacts.
 
     Callers own host admission and archive/upload this fresh directory. Native
-    setup selects a verbatim public instruction block; TaskSpec preparation is
-    performed entirely by the production adapter before the agent-start event.
+    setup selects a verbatim public instruction block or observes task-declared
+    setup. Automatic preparation runs before the agent-start event.
     """
     if config.task.path is None:
         raise ValueError("Negative controls require the frozen physical task package")
@@ -76,7 +78,15 @@ async def run_negative_control(
         raise ValueError("Native setup selection must match the actual source workload")
     setup_kind = NegativeControlSetupKind.TASK_SPEC_PREPARATION if converted else NegativeControlSetupKind.NATIVE_SCRIPT
     script = None
-    if native_setup is not None:
+    preparation = None
+    if isinstance(native_setup, DeclaredSourceSetup):
+        setup_kind = NegativeControlSetupKind.DECLARED_SETUP
+        preparation = declared_setup_preparation(
+            native_setup.task_spec, source, packet.paths.config_path.read_bytes()
+        )
+    elif isinstance(native_setup, NativeInstructionSetup):
+        if packet.config.environment.setup is not None:
+            raise ValueError("Task-declared setup must be observed without replaying an instruction block")
         blocks = list(re.finditer(r"```bash\r?\n(.*?)\r?\n```", packet.instruction, re.DOTALL))
         if native_setup.block_index >= len(blocks):
             raise ValueError("The selected original public bash setup block does not exist")
@@ -85,7 +95,6 @@ async def run_negative_control(
     trial = await Trial.create(config, host_capabilities=host_capabilities)
     if isinstance(trial, TaskSpecTrial) != converted:
         raise ValueError("Production trial dispatch differs from the original source workload")
-    preparation = None
     if isinstance(trial, TaskSpecTrial):
         specification = trial.specification
         if (
@@ -114,6 +123,14 @@ async def run_negative_control(
         }
         descriptor = output_root / "task-spec-preparation.json"
         _write_json(descriptor, preparation)
+    elif isinstance(native_setup, DeclaredSourceSetup):
+        assert preparation is not None
+        specification_bytes = native_setup.task_spec.model_dump_json(indent=2).encode()
+        (output_root / "source-task-spec.json").write_bytes(specification_bytes)
+        shutil.copy2(packet.paths.config_path, output_root / "consumed-task.toml")
+        preparation["task_spec_file_sha256"] = hashlib.sha256(specification_bytes).hexdigest()
+        descriptor = output_root / "declared-setup-preparation.json"
+        _write_json(descriptor, preparation)
     else:
         assert script is not None
         descriptor = output_root / "original-public-setup.sh"
@@ -140,10 +157,10 @@ async def run_negative_control(
         hook_calls += 1
         if hook_calls != 1:
             raise ValueError("A negative control cannot replay public setup within its Trial")
-        if isinstance(trial, TaskSpecTrial):
+        if setup_kind is not NegativeControlSetupKind.NATIVE_SCRIPT:
             observed = trial.result.environment_setup
             if observed is None or observed.finished_at is None:
-                raise ValueError("TaskSpec public preparation has not completed")
+                raise ValueError("Production public preparation has not completed")
             setup = {
                 **setup,
                 "event": event.event.value,

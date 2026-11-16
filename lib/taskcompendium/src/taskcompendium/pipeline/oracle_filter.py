@@ -998,12 +998,14 @@ class OracleNegativeControlReceipt(BaseModel):
             or prepared_runtime.runtime_sha256 != self.runtime_sha256
         ):
             raise ValueError("Prepared negative-control runtime differs from its source or recorded configuration")
-        if (self.setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION) != (
-            self.preparation_artifact is not None
-        ):
-            raise ValueError("TaskSpec negative controls require their physical preparation manifest")
-        if self.setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION and self.setup_exit_code is not None:
-            raise ValueError("TaskSpec preparation has no aggregate shell exit code")
+        automatic_preparation = self.setup_kind in (
+            NegativeControlSetupKind.TASK_SPEC_PREPARATION,
+            NegativeControlSetupKind.DECLARED_SETUP,
+        )
+        if automatic_preparation != (self.preparation_artifact is not None):
+            raise ValueError("Automatic negative-control setup requires its physical preparation manifest")
+        if automatic_preparation and self.setup_exit_code is not None:
+            raise ValueError("Automatic preparation has no aggregate shell exit code")
         if (result.get("agent_info") or {}).get("name") != "nop":
             raise ValueError("Negative control requires an actual production nop agent")
         if result.get("task_checksum") != self.consumed_task_checksum:
@@ -1057,6 +1059,14 @@ class OracleNegativeControlReceipt(BaseModel):
             or self.trial.verifier_resource_usage.oom_kills
         ):
             return False
+        if self.setup_kind is NegativeControlSetupKind.DECLARED_SETUP:
+            preparation = self.trial.result.get("environment_setup") or {}
+            return (
+                self.original_public_setup
+                and self.setup_exit_code is None
+                and preparation.get("started_at") is not None
+                and preparation.get("finished_at") is not None
+            )
         if self.setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION:
             preparation = self.trial.result.get("environment_setup") or {}
             configured_runtime = self.trial.result["config"]["task"].get("source_runtime")
