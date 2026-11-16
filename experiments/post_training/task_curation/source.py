@@ -38,6 +38,13 @@ from finestore.rl.curation import (
     source_title,
 )
 from finestore.rl.licenses import LicenseReceipt, require_license
+from finestore.rl.status_taxonomy import (
+    ExclusionClaim,
+    ExclusionEvidence,
+    ExclusionEvidenceKind,
+    ExclusionReason,
+    SourceStatus,
+)
 from marin.execution.lazy import ArtifactStep
 from pydantic import Field
 from taskcompendium.derived_contract import DerivedContractSummary
@@ -45,6 +52,7 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.exclusion_registry import manual_exclusion_claims
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
 from experiments.post_training.task_curation.source_policy import (
     GRANDFATHERED_DAYTONA_EXEMPTION,
@@ -56,6 +64,38 @@ from infra.marina.apps.rl_data_catalog.server.admission import (
 )
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned, source_license_ban
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
+
+POPULATION_BLOCKER_REASONS: dict[str, ExclusionReason] = {
+    "admission requires a nonempty retained population": ExclusionReason.RETAINED_POPULATION_EMPTY,
+    "actor census does not cover the retained population": ExclusionReason.ACTOR_CENSUS_STALE,
+    "grading census does not cover the complete retained population": ExclusionReason.GRADING_CENSUS_INCOMPLETE,
+    "grading census counts do not cover the complete retained population": (
+        ExclusionReason.GRADING_CENSUS_COUNTS_INCOMPLETE
+    ),
+    "admitted source has tasks without runnable graders": ExclusionReason.GRADER_MISSING,
+}
+
+_LEXICAL_EVAL_MESSAGE = "Evaluation requires a measured lexical receipt for the current dataset pin"
+
+
+def population_blocker_reason(blocker: str) -> ExclusionReason:
+    """Map a population admission blocker string to its exclusion reason."""
+    if reason := POPULATION_BLOCKER_REASONS.get(blocker):
+        return reason
+    raise ValueError(f"Unmapped population admission blocker: {blocker}")
+
+
+def lexical_blocker_reason(message: str) -> ExclusionReason:
+    """Map a lexical qualification failure to its exclusion reason.
+
+    The evaluation path requires a measured receipt; every training-path
+    failure requires decontamination remediation at the current pin.
+    """
+    if message == _LEXICAL_EVAL_MESSAGE:
+        return ExclusionReason.LEXICAL_RECEIPT_MISSING
+    if message.startswith("Decontamination") or message.startswith("Atlas"):
+        return ExclusionReason.LEXICAL_REMEDIATION_REQUIRED
+    raise ValueError(f"Unmapped lexical qualification failure: {message}")
 
 
 class PinnedReference(Protocol):
@@ -387,6 +427,193 @@ class RlDataSource[ConfigT: CatalogConfig]:
         return tuple(blockers)
 
     @property
+    def admission_claims(self) -> tuple[ExclusionClaim, ...]:
+        """Typed exclusion claims mirroring ``admission_blockers`` one-to-one.
+
+        Every blocker string this source can emit maps to exactly one
+        ``ExclusionReason`` with typed evidence; ``population_blocker_reason``
+        and the lexical message rules below define the mapping.
+        """
+        info = self.info
+        inherited_legacy_admission = info.id in GRANDFATHERED_MARINSKYRL_SOURCES and info.inherited_admission is not None
+        claims: list[ExclusionClaim] = []
+        dataset = self.dataset
+        if ban := source_license_ban(info.id, dataset.name if dataset else None, info.license_receipt):
+            claims.append(
+                ExclusionClaim(
+                    reason=ExclusionReason.LICENSE_BAN,
+                    evidence=ExclusionEvidence(
+                        kind=ExclusionEvidenceKind.ISSUE_LINK, message=ban.reason, uri=ban.issue_url
+                    ),
+                )
+            )
+        if info.oracle_filtration is not None and info.oracle_filtration.admitted_count == 0:
+            claims.append(
+                ExclusionClaim(
+                    reason=ExclusionReason.ORACLE_FILTRATION_RETAINED_ZERO,
+                    evidence=ExclusionEvidence(
+                        kind=ExclusionEvidenceKind.RECEIPT,
+                        message="oracle filtration retained no tasks: "
+                        + ", ".join(sorted(info.oracle_filtration.exclusion_counts)),
+                        uri=info.oracle_filtration.validation.uri,
+                    ),
+                )
+            )
+        actor = info.actor_census_input
+        if actor is not None and (
+            dataset is None
+            or (actor.dataset_id, actor.dataset_revision, actor.converter_version)
+            != (dataset.name, dataset.revision, self.version)
+        ):
+            claims.append(
+                ExclusionClaim(
+                    reason=ExclusionReason.ACTOR_CENSUS_STALE,
+                    evidence=ExclusionEvidence(
+                        kind=ExclusionEvidenceKind.CHECK_OUTPUT,
+                        message="actor census does not cover the current configured input",
+                        expected=f"census for ({dataset.name if dataset else None}, "
+                        f"{dataset.revision if dataset else None}, {self.version})",
+                    ),
+                )
+            )
+        if blocker := population_admission_blocker(
+            actor,
+            info.within_source_dedup.unique_count if info.within_source_dedup else 0,
+            info.grading_environment,
+        ):
+            claims.append(
+                ExclusionClaim(
+                    reason=population_blocker_reason(blocker),
+                    evidence=ExclusionEvidence(kind=ExclusionEvidenceKind.CHECK_OUTPUT, message=blocker),
+                )
+            )
+        if self.is_grandfathered_blend:
+            return tuple(claims)
+        try:
+            require_lexical_qualification(
+                info.lexical_contamination,
+                dataset.name if dataset else None,
+                dataset.revision if dataset else None,
+                self.intended_use,
+            )
+        except ValueError as error:
+            claims.append(
+                ExclusionClaim(
+                    reason=lexical_blocker_reason(str(error)),
+                    evidence=ExclusionEvidence(kind=ExclusionEvidenceKind.CHECK_OUTPUT, message=str(error)),
+                )
+            )
+        if not self.has_actor_census:
+            claims.append(
+                ExclusionClaim(
+                    reason=ExclusionReason.ACTOR_CENSUS_MISSING,
+                    evidence=ExclusionEvidence(
+                        kind=ExclusionEvidenceKind.MISSING_ARTIFACT,
+                        message="actor census evidence is missing",
+                        expected="actor census receipt at the current pin",
+                    ),
+                )
+            )
+        elif inherited_legacy_admission:
+            actor = info.actor_census_input
+            if (
+                actor is None
+                or dataset is None
+                or (actor.dataset_id, actor.dataset_revision, actor.converter_version)
+                != (dataset.name, dataset.revision, self.version)
+            ):
+                claims.append(
+                    ExclusionClaim(
+                        reason=ExclusionReason.ACTOR_CENSUS_STALE,
+                        evidence=ExclusionEvidence(
+                            kind=ExclusionEvidenceKind.CHECK_OUTPUT,
+                            message="actor census does not cover the current retained release",
+                            expected=f"census for ({dataset.name if dataset else None}, "
+                            f"{dataset.revision if dataset else None}, {self.version})",
+                        ),
+                    )
+                )
+        if not inherited_legacy_admission and (
+            info.oversight is None
+            or info.oversight.level not in {OversightLevel.SAMPLE, OversightLevel.FULL}
+            or not info.oversight.verification.strip()
+        ):
+            claims.append(
+                ExclusionClaim(
+                    reason=ExclusionReason.OVERSIGHT_MISSING,
+                    evidence=ExclusionEvidence(
+                        kind=ExclusionEvidenceKind.MISSING_ARTIFACT,
+                        message="evidence-derived SAMPLE or FULL oversight is missing",
+                        expected="SAMPLE or FULL oversight with recorded verification",
+                    ),
+                )
+            )
+        if "agentic" not in info.tags:
+            return tuple(claims)
+        if info.task_format is None or (
+            info.task_format is TaskFormat.MARINSKYRL and info.id not in GRANDFATHERED_MARINSKYRL_SOURCES
+        ):
+            claims.append(
+                ExclusionClaim(
+                    reason=ExclusionReason.AGENTIC_TASK_FORMAT_MISSING,
+                    evidence=ExclusionEvidence(
+                        kind=ExclusionEvidenceKind.MISSING_ARTIFACT,
+                        message="accepted agentic task format is missing",
+                        expected="TaskFormat.TASKCOMPENDIUM or TaskFormat.HARBOR declaration",
+                    ),
+                )
+            )
+        if info.daytona_snapshot_count is None or not (info.daytona_count_basis or "").strip():
+            claims.append(
+                ExclusionClaim(
+                    reason=ExclusionReason.SNAPSHOT_IDENTITY_MISSING,
+                    evidence=ExclusionEvidence(
+                        kind=ExclusionEvidenceKind.MISSING_ARTIFACT,
+                        message="production snapshot identity measurement is missing",
+                        expected="production snapshot identity measurement at the current pin",
+                    ),
+                )
+            )
+        if info.daytona_execution_failures is None:
+            claims.append(
+                ExclusionClaim(
+                    reason=ExclusionReason.EXECUTION_REQUIREMENT_MISSING,
+                    evidence=ExclusionEvidence(
+                        kind=ExclusionEvidenceKind.MISSING_ARTIFACT,
+                        message="execution requirement measurement is missing",
+                        expected="execution requirement measurement",
+                    ),
+                )
+            )
+        return tuple(claims)
+
+    @property
+    def exclusion_claims(self) -> tuple[ExclusionClaim, ...]:
+        """All typed exclusion claims: admission-derived claims plus recorded manual rulings."""
+        return self.admission_claims + manual_exclusion_claims(self.info.id)
+
+    @property
+    def status(self) -> SourceStatus:
+        """The catalog status for the Atlas taxonomy.
+
+        Not selectable folds into Excluded. A deprecated tag yields Deprecated
+        only when no exclusion reason applies; a Deprecated source must be
+        trainable. An ``excluded`` tag without any claim is a registry bug and
+        fails loudly.
+        """
+        claims = self.exclusion_claims
+        if "excluded" in self.info.tags and not claims:
+            raise ValueError(
+                f"Source {self.info.id} carries an excluded tag without a typed exclusion claim; "
+                "record its reason in exclusion_registry"
+            )
+        if claims or "excluded" in self.info.tags:
+            return SourceStatus.EXCLUDED
+        if "deprecated" in self.info.tags:
+            return SourceStatus.DEPRECATED
+        return SourceStatus.AVAILABLE
+
+    @property
     def derived_turns(self) -> str:
         """The population's derived turn shape for the Atlas, empty while the census is pending."""
         summary = self.info.derived_contract
@@ -481,14 +708,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
             is_benchmark="benchmark" in tags,
             intended_use=self.intended_use,
             kind="Generator" if "generator" in tags else "Dataset",
-            status=(
-                "Excluded"
-                if source_license_ban(info.id, dataset.name if dataset else None, info.license_receipt) is not None
-                else next(
-                    (label for tag, label in (("deprecated", "Deprecated"), ("excluded", "Excluded")) if tag in tags),
-                    "Not selectable" if self.admission_blockers else "Available",
-                )
-            ),
+            status=self.status,
+            exclusion_claims=list(self.exclusion_claims),
             pipeline=invocation,
             license_receipt=info.license_receipt,
             independent_qc=info.independent_qc,

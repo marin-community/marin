@@ -101,7 +101,7 @@ def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monke
             _ = source.declaration
         return
     assert source.name not in runnable_sources()
-    assert source.declaration.status == "Not selectable"
+    assert source.declaration.status == "Excluded"
 
 
 @pytest.mark.data_integration

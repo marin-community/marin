@@ -24,12 +24,14 @@ PREVIEW_APP_ID = "c9742a15-fb46-4d56-bc88-aa916351ebd3"
 MODEL_SOURCES = {
     "licenses.py": "lib/finestore/src/finestore/rl/licenses.py",
     "curation.py": "lib/finestore/src/finestore/rl/curation.py",
+    "status_taxonomy.py": "lib/finestore/src/finestore/rl/status_taxonomy.py",
     "difficulty.py": "lib/finestore/src/finestore/rl/difficulty.py",
     "source_fingerprints.py": "lib/taskcompendium/src/taskcompendium/source_fingerprints.py",
 }
 IMPORT_RELOCATIONS = {
     "from finestore.rl.licenses import ": "from .bundled.licenses import ",
     "from finestore.rl.curation import ": "from .bundled.curation import ",
+    "from finestore.rl.status_taxonomy import ": "from .bundled.status_taxonomy import ",
     "from finestore.rl.difficulty import ": "from .bundled.difficulty import ",
     "from taskcompendium.source_fingerprints import ": "from .bundled.source_fingerprints import ",
 }
@@ -122,6 +124,7 @@ def prepare_preview(
         digest = hashlib.sha256(raw).hexdigest()
         packaged = raw.replace(b"from finestore.rl.curation import ", b"from .curation import ")
         packaged = packaged.replace(b"from finestore.rl.licenses import ", b"from .licenses import ")
+        packaged = packaged.replace(b"from finestore.rl.status_taxonomy import ", b"from .status_taxonomy import ")
         (bundled / name).write_bytes(packaged)
         modules.append(
             {

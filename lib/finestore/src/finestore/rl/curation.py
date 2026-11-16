@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from finestore.layout import BlobTables, OnConflict, parse_uri
 from finestore.reader import ReadView
 from finestore.rl.licenses import LicenseReceipt
+from finestore.rl.status_taxonomy import ExclusionClaim
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 
@@ -855,6 +856,8 @@ class SourceDeclaration(CatalogRecord):
     quality_result: SourceQualityResult | None = None
     quality_result_finalization: QualityResultFinalization | None = None
     quality_result_waiver: ContentEvidenceReference | None = None
+    exclusion_claims: list[ExclusionClaim] = Field(default_factory=list)
+    """Typed exclusion reasons with evidence; an Excluded source carries at least one."""
 
     @model_validator(mode="after")
     def _canonical_identity(self) -> "SourceDeclaration":

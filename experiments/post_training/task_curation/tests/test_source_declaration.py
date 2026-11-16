@@ -180,7 +180,7 @@ def test_quick_pipeline_identity_is_available_before_actor_census(tmp_path):
 def test_reply_only_sources_require_oversight_for_selection(tmp_path):
     source = number_source(tmp_path / "input")
     source = replace(source, info=replace(source.info, oversight=None))
-    assert source.declaration.status == "Not selectable"
+    assert source.declaration.status == "Excluded"
     qualified = replace(
         source,
         info=replace(
