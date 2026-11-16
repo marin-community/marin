@@ -3544,6 +3544,14 @@ Review the staged shards, then use the
 with that fresh staging root. The checked-in `datasets/lexical_measurement_receipts`
 directory contains references, not writable receipt bodies.
 
+Before submitting `remediation_publish`, use the
+[registry update procedure](#updating-pinned-registry-receipts) to archive the raw
+actor-census and lexical-measurement receipts for each plan's exact input. Land
+the references under `datasets/daytona_census_receipts/` and
+`datasets/lexical_measurement_receipts/`, then submit from a checkout containing
+that commit. The regional publisher reads these references from its submitted
+checkout; a completed scan and frozen plan do not update that checkout.
+
 Approved frozen combined plans are published with `remediation_publish`.
 The command publishes every supplied plan, including zero-drop plans that
 retain all converted tasks. `--exclude-source` explicitly omits a source. Run
