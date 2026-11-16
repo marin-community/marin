@@ -59,7 +59,7 @@ def build_problem_statement(row: dict) -> str:
     return "\n\n".join(parts)
 
 
-def build_image(row: dict) -> str:
+def source_image_reference(row: dict) -> str:
     """The row's raw source image ref: `docker_image` as-is when present, otherwise the
     upstream Docker Hub `mswebench/<org>_m_<repo>:pr-<number>` ref. The Prime platform
     resolves these natively (platform copies exist under the same names; anything missing
