@@ -28,6 +28,9 @@ from experiments.post_training.task_curation.tests.admission_fixtures import (
     isolated_admission_census as isolated_admission_census,
 )
 from experiments.post_training.task_curation.tests.license_fixtures import isolated_license_bans as isolated_license_bans
+from experiments.post_training.task_curation.tests.license_fixtures import (
+    isolated_license_registry as isolated_license_registry,
+)
 from experiments.post_training.task_curation.tests.local_grader import (
     LEAN_KERNEL_GRADER_IMAGE,
     LocalGraderMachines,

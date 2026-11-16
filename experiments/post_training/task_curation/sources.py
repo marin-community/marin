@@ -70,7 +70,7 @@ from experiments.post_training.task_curation.grading_binding import bind_grading
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.license_binding import (
-    LICENSE_REGISTRY,
+    LICENSE_RECEIPT_INDEX,
     bind_license_receipt,
     read_license_receipts,
 )
@@ -212,7 +212,7 @@ def all_sources() -> dict[str, RlDataSource]:
         )
         for source_id, source in sources.items()
     }
-    license_receipts = read_license_receipts(LICENSE_REGISTRY)
+    license_receipts = read_license_receipts(LICENSE_RECEIPT_INDEX)
     selected = {
         source_id: bind_license_receipt(source, license_receipts.get(source_id))
         for source_id, source in selected.items()

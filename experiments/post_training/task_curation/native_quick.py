@@ -26,7 +26,7 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode, run_
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.datasets.native_harbor import VERSION, hub_rows, native_task, unpack_native
-from experiments.post_training.task_curation.license_binding import LICENSE_REGISTRY, read_license_receipts
+from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
 from experiments.post_training.task_curation.license_publication import (
     check_publication,
     licensed_dataset_card,
@@ -214,7 +214,7 @@ def main() -> None:
     parser.add_argument("--evidence-root", required=True)
     parser.add_argument("--hub-input")
     parser.add_argument("--version", required=True, help="New immutable private repository version")
-    parser.add_argument("--license-receipts", type=Path, default=LICENSE_REGISTRY)
+    parser.add_argument("--license-receipts", type=Path, default=LICENSE_RECEIPT_INDEX)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     entries = {entry["id"]: entry for entry in read_registry_json(RETIRED)["entries"]}

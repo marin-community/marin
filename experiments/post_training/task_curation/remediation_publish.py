@@ -25,7 +25,7 @@ from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation.calibforge_publish import publish
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
-from experiments.post_training.task_curation.license_binding import LICENSE_REGISTRY, read_license_receipts
+from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
 from experiments.post_training.task_curation.license_publication import (
     LicensePublication,
     check_publication,
@@ -392,7 +392,7 @@ def main() -> None:
     parser.add_argument("--evidence-root", required=True)
     parser.add_argument("--workers", type=int, required=True)
     parser.add_argument("--exclude-source", action="append", default=[])
-    parser.add_argument("--license-receipts", type=Path, default=LICENSE_REGISTRY)
+    parser.add_argument("--license-receipts", type=Path, default=LICENSE_RECEIPT_INDEX)
     parser.add_argument(
         "--raw-archives", help="Verified raw snapshot receipt list; required for flagged external inputs"
     )

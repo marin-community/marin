@@ -36,7 +36,7 @@ from experiments.post_training.task_curation.datasets.prime_intellect.capture_mo
     CaptureInput,
     ImageBinding,
 )
-from experiments.post_training.task_curation.license_binding import LICENSE_REGISTRY, read_license_receipts
+from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 
 LOGGER = logging.getLogger(__name__)
@@ -280,7 +280,7 @@ def main() -> None:
     parser.add_argument("--images-sha256", required=True)
     parser.add_argument("--cluster", required=True)
     parser.add_argument("--concurrency", type=int, required=True)
-    parser.add_argument("--license-receipts", type=Path, default=LICENSE_REGISTRY)
+    parser.add_argument("--license-receipts", type=Path, default=LICENSE_RECEIPT_INDEX)
     parser.add_argument("--artifact-root", required=True)
     parser.add_argument("--artifact-version", required=True)
     parser.add_argument("--output", type=Path, required=True)

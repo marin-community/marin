@@ -14,18 +14,26 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_s
 RECEIPTS_PER_SHARD = 64
 
 
-def read_receipt_shards[T: BaseModel](
-    directory: Path, model: type[T], kind: str, *, load_json: Callable[[Path], dict]
+def receipts_from_documents[T: BaseModel](
+    documents: Mapping[str, Mapping[str, object]], model: type[T], kind: str
 ) -> dict[str, T]:
+    """Merge parsed shard documents into one keyed receipt map, rejecting duplicates."""
     receipts = {}
-    for path in sorted(directory.glob("part-*.json")):
-        for source_id, record in load_json(path).items():
+    for document in (document for _, document in sorted(documents.items())):
+        for source_id, record in document.items():
             source_id = canonical_source_id(source_id)
             receipt = model.model_validate(record)
             if source_id != receipt.model_dump()["source_id"] or source_id in receipts:
                 raise ValueError(f"Duplicate or mismatched {kind} source identity: {source_id}")
             receipts[source_id] = receipt
     return receipts
+
+
+def read_receipt_shards[T: BaseModel](
+    directory: Path, model: type[T], kind: str, *, load_json: Callable[[Path], dict]
+) -> dict[str, T]:
+    documents = {path.name: load_json(path) for path in sorted(directory.glob("part-*.json"))}
+    return receipts_from_documents(documents, model, kind)
 
 
 def write_receipt_shards(

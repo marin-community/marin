@@ -41,7 +41,7 @@ from experiments.post_training.task_curation.lexical_scan import (
     measure_marks,
     population_key,
 )
-from experiments.post_training.task_curation.license_binding import LICENSE_REGISTRY, read_license_receipts
+from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.pipeline import HfSource, download_step
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
@@ -294,7 +294,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
-    receipt = read_license_receipts(LICENSE_REGISTRY)[EVAL_SOURCE_ID]
+    receipt = read_license_receipts(LICENSE_RECEIPT_INDEX)[EVAL_SOURCE_ID]
     require_license(receipt, EVAL_SOURCE_ID, EVAL_DATASET, IFBENCH_REVISION, "eval")
     require_unbanned(EVAL_SOURCE_ID, EVAL_DATASET, receipt)
     if file_sha256(StoragePath(str(args.populations))) != args.populations_sha256:
@@ -304,7 +304,7 @@ def main() -> None:
         raise ValueError("Frozen shared DF population inventory has duplicate sources")
     (train,) = [p for p in populations if p.source_id == TRAIN_SOURCE_ID]
     require_license(
-        read_license_receipts(LICENSE_REGISTRY)[TRAIN_SOURCE_ID],
+        read_license_receipts(LICENSE_RECEIPT_INDEX)[TRAIN_SOURCE_ID],
         TRAIN_SOURCE_ID,
         train.dataset_id,
         train.dataset_revision,

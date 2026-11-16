@@ -16,7 +16,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
 from taskcompendium.evaluation.corpus import file_sha256
 
-from experiments.post_training.task_curation.license_binding import LICENSE_REGISTRY, read_license_receipts
+from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
 from experiments.post_training.task_curation.license_publication import (
     check_publication,
     licensed_dataset_card,
@@ -112,7 +112,7 @@ def main() -> None:
     parser.add_argument("--version", required=True, help="New private repository version suffix")
     parser.add_argument("--evidence-root", required=True)
     parser.add_argument("--use", choices=["train", "eval"], required=True)
-    parser.add_argument("--license-receipts", type=Path, default=LICENSE_REGISTRY)
+    parser.add_argument("--license-receipts", type=Path, default=LICENSE_RECEIPT_INDEX)
     args = parser.parse_args()
     configure_coreweave_s3()
     stages = json.loads(StoragePath(args.snapshots).read_text())

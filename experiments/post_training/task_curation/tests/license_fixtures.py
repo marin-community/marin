@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseReceipt
 
+from experiments.post_training.task_curation import license_binding
 from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource
 from infra.marina.apps.rl_data_catalog.server import licensing
@@ -58,4 +59,18 @@ def isolated_license_bans(monkeypatch, request):
     monkeypatch.setattr(licensing, "LICENSE_BANS", '{"version":"fixture","bans":[]}')
     licensing.license_bans.cache_clear()
     yield
-    licensing.license_bans.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def isolated_license_registry(monkeypatch, request):
+    """Unit tests never read the referenced license registry; integration tests may.
+
+    The registry lives in a private Hugging Face dataset behind a committed reference
+    index, so reading it in a unit test would touch the network. Binding behavior in
+    the default lane is exercised through locally attached fixture receipts.
+    """
+    if request.node.get_closest_marker("data_integration") is not None:
+        yield
+        return
+    monkeypatch.setattr(license_binding, "load_referenced_json", lambda index_path: {})
+    yield licensing.license_bans.cache_clear()
