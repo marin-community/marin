@@ -167,6 +167,11 @@ async def _snapshot_metadata(
     )
 
 
+def daytona_image(source: RegistryImage | DockerfileSource) -> str | Image:
+    """Convert a validated source to the image argument Daytona builds from."""
+    return source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
+
+
 async def _resolve_snapshot(client: AsyncDaytona, request: SnapshotRequest) -> Snapshot:
     name = request.name
     try:

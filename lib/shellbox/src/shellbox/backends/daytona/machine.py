@@ -42,6 +42,7 @@ from shellbox.backends.daytona.provider import (
     retry_provider_call,
 )
 from shellbox.backends.daytona.snapshot import (
+    daytona_image,
     ensure_snapshot,
     snapshot_request_for_spec,
 )
@@ -141,6 +142,19 @@ async def _delete_named_sandbox(
 
     async with wait_policy.timeout(INTERRUPT_TIMEOUT):
         await wait_policy.request("sandbox.delete", delete, request_timeout=PROVIDER_REQUEST_TIMEOUT)
+
+
+class DaytonaImageBuild(StrEnum):
+    """How a sandbox gets its image.
+
+    ``SNAPSHOT`` builds each distinct image once into a named account snapshot and starts
+    sandboxes from it; snapshots persist and count against the account's snapshot quota.
+    ``DECLARATIVE`` builds the image for every sandbox and creates no snapshot. The account
+    must permit declarative builds.
+    """
+
+    SNAPSHOT = "snapshot"
+    DECLARATIVE = "declarative"
 
 
 class DaytonaNetworkMode(StrEnum):
@@ -604,12 +618,14 @@ class DaytonaMachineFactory:
         create_timeout: float = 600,
         network_policy: DaytonaNetworkPolicy | None = None,
         provider_wait_policy: ProviderWaitPolicy = ProviderWaitPolicy.PHASE,
+        image_build: DaytonaImageBuild = DaytonaImageBuild.SNAPSHOT,
     ):
         self.client_factory = client_factory
         self.ttl_minutes = ttl_minutes
         self.create_timeout = create_timeout
         self.network_policy = network_policy
         self.provider_wait_policy = ProviderWaitPolicy(provider_wait_policy)
+        self.image_build = image_build
 
     def _clients(self) -> Callable[[], AsyncDaytona]:
         """Resolve the configured client factory for one provider session."""
@@ -666,6 +682,8 @@ class DaytonaMachineFactory:
 
         Pin registry sources by digest to reuse immutable image content.
         """
+        if self.image_build != DaytonaImageBuild.SNAPSHOT:
+            raise ValueError(f"{self.image_build} image builds create no snapshot to prepare")
         client_factory = self._clients()
         timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
         async with client_factory() as client, self.provider_wait_policy.timeout(timeout) as deadline:
@@ -693,6 +711,11 @@ class DaytonaMachineFactory:
         name: str,
         deadline: float | None,
     ) -> CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams:
+        if self.image_build != DaytonaImageBuild.SNAPSHOT:
+            request = snapshot_request_for_spec(spec)
+            return CreateSandboxFromImageParams(
+                image=daytona_image(request.source), resources=request.resources, **self._sandbox_parameters(spec, name)
+            )
         snapshot = await self._prepare(client, spec, self.provider_wait_policy.startup_deadline(deadline))
         return CreateSandboxFromSnapshotParams(snapshot=snapshot, **self._sandbox_parameters(spec, name))
 

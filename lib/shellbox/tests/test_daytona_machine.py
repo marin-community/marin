@@ -39,6 +39,7 @@ from daytona import (
     DaytonaNotFoundError,
     DaytonaTimeoutError,
     DaytonaValidationError,
+    Image,
     Resources,
 )
 from daytona_api_client_async import SandboxState, SnapshotState
@@ -47,6 +48,7 @@ from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
     DaytonaDeclarativeMachineFactory,
+    DaytonaImageBuild,
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkMode,
@@ -470,8 +472,10 @@ class LocalDaytona:
         self.snapshot = LocalSnapshots()
 
     async def create(self, params, *, timeout):
-        assert isinstance(params, CreateSandboxFromSnapshotParams)
-        await self.snapshot.get(params.snapshot)
+        if isinstance(params, CreateSandboxFromSnapshotParams):
+            await self.snapshot.get(params.snapshot)
+        else:
+            assert isinstance(params, CreateSandboxFromImageParams)
         self.params = params
         self.timeout = timeout
         return self.sandbox
@@ -694,6 +698,7 @@ def test_snapshot_preflight_builds_without_starting_sandbox_and_reuses_image():
 
 
 @pytest.mark.parametrize("policy", [None, DaytonaNetworkPolicy(DaytonaNetworkMode.DOMAIN_ALLOW_LIST, "example.org")])
+@pytest.mark.requires_host_setsid
 def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     async def scenario() -> None:
         client = LocalDaytona()
@@ -749,6 +754,7 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_host_setsid
 def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path) -> None:
     workdir = tmp_path / "work"
     workdir.mkdir()
@@ -784,6 +790,7 @@ def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path) -> N
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_host_setsid
 def test_daytona_output_count_ignores_provider_diagnostics(tmp_path: Path) -> None:
     class NoisyCountProcess(LocalProcess):
         async def exec(self, command, **kwargs):
@@ -929,6 +936,7 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
 
 @pytest.mark.parametrize("interrupt_failure", ["exit", "timeout", "files"])
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
+@pytest.mark.requires_host_setsid
 def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_failure, interruption):
     entered = asyncio.Event()
 
@@ -974,6 +982,7 @@ def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_
 
 
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
+@pytest.mark.requires_host_setsid
 def test_daytona_user_probe_is_bounded_and_cancellation_closes_the_machine(tmp_path, interruption):
     entered = asyncio.Event()
 
@@ -1019,6 +1028,7 @@ def test_daytona_user_probe_is_bounded_and_cancellation_closes_the_machine(tmp_p
 
 
 @pytest.mark.parametrize("command_timeout", [None, 30])
+@pytest.mark.requires_host_setsid
 def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, command_timeout):
     provider_error = TimeoutError("Provider request timed out")
 
@@ -1078,6 +1088,7 @@ def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_host_setsid
 def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error():
     output_error = TimeoutError("Provider output request timed out")
 
@@ -1105,6 +1116,7 @@ def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error():
 
 
 @pytest.mark.parametrize("path_source", ["image", "task"])
+@pytest.mark.requires_host_setsid
 def test_daytona_root_cleanup_does_not_execute_candidate_path_programs(tmp_path, path_source):
     binary = tmp_path / "bin"
     binary.mkdir()
@@ -1144,6 +1156,7 @@ def test_daytona_root_cleanup_does_not_execute_candidate_path_programs(tmp_path,
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_host_setsid
 def test_daytona_completion_between_probe_and_stop_preserves_the_machine(tmp_path):
     paths = []
 
@@ -1194,7 +1207,6 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
 ):
     provider_error = OSError("Provider command failed")
     deletion_error = DaytonaConflictError("Sandbox state change in progress", status_code=409)
-
     class FailedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
             if "candidate-fail" in command_script(command) and primary_failure:
@@ -1328,6 +1340,7 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_host_setsid
 def test_daytona_rejects_nonroot_execution_without_session_preserving_su(tmp_path):
     class MissingSessionOption(LocalProcess):
         async def exec(self, command, **kwargs):
@@ -1354,6 +1367,7 @@ def test_daytona_rejects_nonroot_execution_without_session_preserving_su(tmp_pat
 
 
 @pytest.mark.parametrize("mode, exit_code", [(0o755, 0), (0o640, 126)])
+@pytest.mark.requires_host_setsid
 def test_daytona_upload_preserves_script_permissions(tmp_path: Path, mode: int, exit_code: int) -> None:
     async def scenario() -> None:
         source = tmp_path / "grader.sh"
@@ -1375,6 +1389,7 @@ def test_daytona_upload_preserves_script_permissions(tmp_path: Path, mode: int, 
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_host_setsid
 def test_daytona_factory_owns_clients_across_worker_event_loops(tmp_path: Path) -> None:
     clients = []
 
@@ -1417,6 +1432,7 @@ def test_daytona_factory_owns_clients_across_worker_event_loops(tmp_path: Path) 
     assert sum(client.deleted for client in clients) == 2
 
 
+@pytest.mark.requires_host_setsid
 def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path: Path, monkeypatch) -> None:
     snapshots = LocalSnapshots()
     clients = []
@@ -1454,15 +1470,49 @@ def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path
     assert all(client.deleted and client.closed for client in clients)
 
 
+@pytest.mark.parametrize("image_build", list(DaytonaImageBuild))
 @pytest.mark.parametrize("instruction", ["ADD payload.tar /opt/", 'add ["payload.tar", "/opt/"]'])
-def test_daytona_rejects_add_inputs_before_snapshot_creation(tmp_path, instruction):
+def test_daytona_rejects_add_inputs_before_building(tmp_path, instruction, image_build):
     dockerfile = tmp_path / "Dockerfile"
     dockerfile.write_text(f"FROM ubuntu:24.04\n{instruction}\n")
     (tmp_path / "payload.tar").write_bytes(b"archive fixture")
     client = LocalDaytona()
+    factory = DaytonaMachineFactory(lambda: client, image_build=image_build)
     with pytest.raises(UnsupportedMachineSpec, match="ADD"):
-        asyncio.run(DaytonaMachineFactory(lambda: client).create(MachineSpec(DockerfileSource(tmp_path, dockerfile))))
+        asyncio.run(factory.create(MachineSpec(DockerfileSource(tmp_path, dockerfile))))
     assert not client.snapshot.snapshots
+    assert client.params is None
+
+
+@pytest.mark.parametrize("source_kind", ["registry", "dockerfile"])
+def test_declarative_build_starts_sandbox_from_image_without_snapshot(tmp_path, source_kind):
+    context = tmp_path / "context"
+    context.mkdir()
+    dockerfile = context / "Dockerfile"
+    dockerfile.write_text("FROM ubuntu:24.04\nRUN true\n")
+    source = RegistryImage("ubuntu:24.04") if source_kind == "registry" else DockerfileSource(context, dockerfile)
+    client = LocalDaytona()
+    factory = DaytonaMachineFactory(lambda: client, image_build=DaytonaImageBuild.DECLARATIVE)
+    spec = MachineSpec(source=source, workdir=str(tmp_path / "work"), cpus=4, memory_mb=8192, storage_mb=10240)
+
+    async def scenario():
+        machine = await factory.create(spec)
+        try:
+            assert (await machine.run(Command(("printf", "ok")))).stdout == b"ok"
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+    assert isinstance(client.params, CreateSandboxFromImageParams)
+    if source_kind == "registry":
+        assert client.params.image == "ubuntu:24.04"
+    else:
+        assert isinstance(client.params.image, Image)
+        assert client.params.image.dockerfile() == dockerfile.read_text()
+    resources = client.params.resources
+    assert (resources.cpu, resources.memory, resources.disk) == (4, 8, 10)
+    assert not client.snapshot.snapshots
+    assert client.deleted and client.closed
 
 
 @pytest.mark.parametrize("invalid_source", ["add", "outside_context"])

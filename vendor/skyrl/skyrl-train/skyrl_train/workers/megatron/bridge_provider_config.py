@@ -14,7 +14,6 @@ def configure_bridge_provider(
     expert_model_parallel_size: int,
     expert_tensor_parallel_size: int,
     bf16: bool,
-    attention_backend: str,
 ) -> None:
     """Apply the worker's topology and kernel choices to a bridge provider in place."""
     provider.tensor_model_parallel_size = tensor_model_parallel_size
@@ -24,7 +23,6 @@ def configure_bridge_provider(
     provider.expert_model_parallel_size = expert_model_parallel_size
     provider.expert_tensor_parallel_size = expert_tensor_parallel_size
     provider.sequence_parallel = tensor_model_parallel_size > 1
-    provider.attention_backend = attention_backend
     provider.variable_seq_lengths = True
     provider.masked_softmax_fusion = True
     provider.moe_token_dispatcher_type = "alltoall"

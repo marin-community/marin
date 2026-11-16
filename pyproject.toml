@@ -98,7 +98,7 @@ constraint-dependencies = [
     "multidict>=6.9.1",
     "oauthlib>=4.0.1",
     "opentelemetry-api>=1.45.1",
-    "soupsieve>=2.9.0",
+    "soupsieve>=4.0.0",
     "urllib3>=2.8.0",
     "werkzeug>=3.1.9",
     # CVE-2026-111497: reject vulnerable transitive Brotli releases.
