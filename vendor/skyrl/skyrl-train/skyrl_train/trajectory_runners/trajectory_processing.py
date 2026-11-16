@@ -518,8 +518,6 @@ def rollout_counter_metrics(
 
     rollout_metrics.update(_merge_batch_failure_metrics(group_metrics))
 
-    # Retention counts per group, and this rebuilds rollout_metrics from responses and rewards, so
-    # the per-group counters have to be carried across or the archives are written unobserved.
     for output in group_metrics:
         for name, value in output.items():
             if name.startswith(
