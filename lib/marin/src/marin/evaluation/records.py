@@ -189,6 +189,7 @@ class ModelServeConfig(BaseModel):
     limit_mm_per_prompt: str | None
     tool_call_parser: str | None
     reasoning_parser: str | None
+    eos_token_ids: tuple[int, ...] = ()
     vllm_batch_invariant: bool | None = None
     vllm_use_flashinfer_sampler: bool | None = None
     runai_streamer_concurrency: int | None = None

@@ -560,6 +560,7 @@ def _vllm_model_spec(model: ServedModelConfig, num_chips: int, tensor_parallel_s
         tokenizer=model.tokenizer,
         revision=model.revision,
         tokenizer_revision=model.effective_tokenizer_revision,
+        eos_token_ids=model.eos_token_ids,
     )
 
 
