@@ -19,8 +19,14 @@ from experiments.post_training.mochi_rl.launch import PROFILES, main
 @pytest.mark.parametrize("profile", PROFILES)
 @pytest.mark.parametrize("response_tokens", [None, 1024])
 @pytest.mark.parametrize("resume_step", [None, 13])
+@pytest.mark.parametrize("smoke", [False, True])
 def test_cli_renders_direct_training_and_native_continuation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resume_step: int | None, profile: str, response_tokens: int | None
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resume_step: int | None,
+    profile: str,
+    response_tokens: int | None,
+    smoke: bool,
 ) -> None:
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-08a")
     config_path = tmp_path / "launch.yaml"
@@ -34,6 +40,8 @@ def test_cli_renders_direct_training_and_native_continuation(
         --config-output "{config_path}"
     """
     first_tasks.mkdir()
+    validation = tmp_path / "held-out"
+    args += " --smoke" if smoke else f' --validation-data-uri "{validation}"'
     (first_tasks / "train.parquet").write_bytes(b"pinned mixed tasks")
     use_checksum = response_tokens is not None or PROFILES[profile].data_namespace is not None
     if use_checksum:
@@ -52,7 +60,7 @@ def test_cli_renders_direct_training_and_native_continuation(
     assert result.exit_code == 0, result.output
     launch = yaml.safe_load(config_path.read_text())
     trainer = launch["skyrl"]["trainer"]
-    assert launch["skyrl"]["context_budget"]["max_new_tokens_per_turn"] == (response_tokens or 8192)
+    assert launch["skyrl"]["context_budget"]["max_new_tokens_per_turn"] == (response_tokens or 16384)
 
     inputs = launch["inputs"]
     assert (inputs["model"]["uri"], inputs["model"]["tokenizer_uri"]) == (str(model), str(tokenizer))
@@ -61,6 +69,14 @@ def test_cli_renders_direct_training_and_native_continuation(
     assert trainer["max_steps"] == (resume_step or 0) + 3
     assert launch["run"]["mode"] == "train" and not launch["run"]["export_hf"]
     assert trainer["resume_mode"] == "latest"
+    callbacks = {callback["type"] for callback in trainer["callbacks"]}
+    assert {"checkpoint", "wall_time_budget"} <= callbacks
+    if smoke:
+        assert {"evaluation", "best_checkpoint"}.isdisjoint(callbacks)
+    else:
+        assert {"evaluation", "best_checkpoint"} <= callbacks
+        assert inputs["validation_data"][0]["uri"] == str(validation)
+        assert inputs["validation_data"][0]["local_path"] not in {s["local_path"] for s in inputs["train_data"]}
     if resume_step is not None:
         assert inputs["starting_checkpoint"]["uri"] == str(native)
     if use_checksum:
@@ -96,11 +112,18 @@ def test_continuations_keep_distinct_inputs_and_coordinator_queue_time(tmp_path:
                 checkpoint_count=2,
                 ttl_days=3,
                 config_output=None,
+                smoke=True,
             )
         graph = graph_handles([step])
         assert [handle for handle in graph if handle.adopt_source is None] == [step]
         checkpoints.append(next(dep for dep in graph if dep.name.endswith("/inputs/resume")))
     assert len({(checkpoint.name, checkpoint.version) for checkpoint in checkpoints}) == 2
-    env = {"DAYTONA_RL_API_KEY": "test", "DAYTONA_EVAL_API_KEY": "test", "MARIN_PREFIX": "s3://marin-us-east-08a"}
+    env = {
+        "DAYTONA_RL_API_KEY": "test",
+        "DAYTONA_EVAL_API_KEY": "test",
+        "DAYTONA_TARGET": "us",
+        "TOGETHER_API_KEY": "test",
+        "MARIN_PREFIX": "s3://marin-us-east-08a",
+    }
     _, request = _coordinator_request([step], "experiments.post_training.mochi_rl.launch", (), 1, tmp_path, env)
     assert request.timeout >= Duration.from_hours(120)

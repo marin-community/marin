@@ -32,13 +32,16 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import ContextBudget, RecipePatch, SkyRLRecipe, sections
 from skyrlrecipe.locality import RoleTopologyMode
 
 RECIPE_PATH = Path(__file__).with_name("recipe.yaml")
-DEFAULT_MAX_NEW_TOKENS = 8192
+DEFAULT_MAX_NEW_TOKENS = 16384
+SMOKE_BATCH_GROUPS = 2
+SMOKE_BUDGET_SECONDS = 3600
 SEED = 20261020
 COORDINATOR_QUEUE_ALLOWANCE_HOURS = 48
 ROLE_PLAN = SkyRLRolePlan(
@@ -50,8 +53,8 @@ ROLE_PLAN = SkyRLRolePlan(
     inference_engine_pipeline_parallel_size=1,
     inference_engine_data_parallel_size=12,
     inference_engine_expert_parallel_size=12,
-    train_batch_size=2,
-    policy_mini_batch_size=2,
+    train_batch_size=32,
+    policy_mini_batch_size=32,
     micro_train_batch_size_per_gpu=1,
     n_samples_per_prompt=8,
 )
@@ -72,10 +75,16 @@ EXECUTION = IrisSkyRLExecution(
     max_retries=0,
     target_cluster="cw-us-east-08a",
     parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-    coordinator_timeout_hours=72,
-    job_timeout_seconds=24 * 60 * 60,
+    coordinator_timeout_hours=96,
+    job_timeout_seconds=48 * 60 * 60,
     wandb_entity="marin-community",
-    required_env_vars=("DAYTONA_RL_API_KEY", "DAYTONA_EVAL_API_KEY", "MARIN_PREFIX"),
+    required_env_vars=(
+        "DAYTONA_RL_API_KEY",
+        "DAYTONA_EVAL_API_KEY",
+        "DAYTONA_TARGET",
+        "TOGETHER_API_KEY",
+        "MARIN_PREFIX",
+    ),
     container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
     role_topology=RoleTopologyMode.NVLINK_DOMAIN,
 )
@@ -92,7 +101,6 @@ class MochiProfile:
     execution: IrisSkyRLExecution
     patch: RecipePatch = field(default_factory=RecipePatch)
     data_namespace: str | None = None
-    checkpoint_at_target: bool = False
 
 
 PROFILES = MappingProxyType(
@@ -108,12 +116,11 @@ PROFILES = MappingProxyType(
                 inference_engine_expert_parallel_size=64,
             ),
             megatron=replace(MEGATRON, pipeline_model_parallel_size=16),
-            execution=replace(EXECUTION, job_timeout_seconds=6 * 3600),
+            execution=EXECUTION,
             data_namespace="documents/mochi-three-rack",
-            checkpoint_at_target=True,
             patch=RecipePatch(
                 context_budget=ContextBudget(
-                    request_window_tokens=262144, max_new_tokens_per_turn=DEFAULT_MAX_NEW_TOKENS, max_turns=4
+                    request_window_tokens=262144, max_new_tokens_per_turn=DEFAULT_MAX_NEW_TOKENS, max_turns=128
                 ),
                 trainer=sections.Trainer(
                     project_name="mochi-three-rack",
@@ -140,6 +147,7 @@ PROFILES = MappingProxyType(
                     expert_block_sync=sections.ExpertBlockSync(verify=True, timeout_seconds=1800),
                     # The 0.75 KV budget missed the full-context startup requirement by 0.47 GiB.
                     gpu_memory_utilization=0.80,
+                    max_num_seqs=64,
                     trajectory_retention=sections.TrajectoryRetention(
                         max_bytes_per_step=256 * 1024**2, max_bytes_per_run=1024**3
                     ),
@@ -165,6 +173,11 @@ def build_run(
     model: ArtifactHfModel,
     train_data: tuple[ArtifactDataSource, ...],
     max_steps: int,
+    validation_data: tuple[ArtifactDataSource, ...] = (),
+    smoke: bool = False,
+    batch_groups: int | None = None,
+    eval_interval: int | None = None,
+    checkpoint_interval: int | None = None,
     resume: ArtifactStep[Artifact] | None = None,
     recipe_path: Path = RECIPE_PATH,
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
@@ -179,30 +192,69 @@ def build_run(
     supply a new source identity. The file is checked when the launch config is rendered.
     An execution override replaces the profile's placement and timeout settings.
     """
+    if not smoke and not validation_data:
+        raise ValueError("Normal Mochi RL requires held-out data; select smoke explicitly to omit evaluation")
     if profile.data_namespace is not None and data_sha256 is None:
         raise ValueError(f"{profile.output_name} requires data_sha256")
     if data_sha256 is not None and len(train_data) != 1:
         raise ValueError("data_sha256 requires exactly one training data source")
+    groups = (
+        batch_groups if batch_groups is not None else SMOKE_BATCH_GROUPS if smoke else profile.role_plan.train_batch_size
+    )
+    if groups < 2 or groups % 2:
+        raise ValueError("Batch groups must be positive and even for equal agentic and nonagentic quotas")
+    profile = replace(
+        profile, role_plan=replace(profile.role_plan, train_batch_size=groups, policy_mini_batch_size=groups)
+    )
     recipe = SkyRLRecipe.from_document(yaml.safe_load(recipe_path.read_text())).merge(profile.patch)
-    if profile.checkpoint_at_target:
-        recipe = recipe.merge(
-            RecipePatch(
-                trainer=sections.Trainer(
-                    ckpt_interval=max_steps,
-                    callbacks=tuple(
-                        callback.replace(save_steps=max_steps) if callback.type == "checkpoint" else callback
-                        for callback in recipe.trainer.callbacks
-                    ),
-                )
-            )
-        )
+    eval_interval = recipe.trainer.eval_interval if eval_interval is None else eval_interval
+    checkpoint_interval = recipe.trainer.ckpt_interval if checkpoint_interval is None else checkpoint_interval
+    context = recipe.context_budget.replace(max_new_tokens_per_turn=max_new_tokens)
+    callback_updates = {
+        "checkpoint": {"save_steps": checkpoint_interval},
+        "evaluation": {"eval_steps": eval_interval},
+        "best_checkpoint": {"evaluation_interval": eval_interval},
+        "wall_time_budget": {"groups_per_step": groups},
+    }
+    callbacks = []
+    for callback in recipe.trainer.callbacks:
+        if smoke and callback.type in ("evaluation", "best_checkpoint"):
+            continue
+        if smoke and callback.type == "wall_time_budget":
+            callback = callback.replace(seconds=SMOKE_BUDGET_SECONDS)
+        callbacks.append(callback.replace(**callback_updates.get(callback.type, {})))
     recipe = recipe.merge(
         RecipePatch(
-            context_budget=recipe.context_budget.replace(max_new_tokens_per_turn=max_new_tokens),
+            context_budget=context,
+            trajectory_runner=sections.TrajectoryRunner(
+                rollout_workers=sections.RolloutWorkers(
+                    num_workers=SMOKE_BATCH_GROUPS if smoke else recipe.trajectory_runner.rollout_workers.num_workers
+                )
+            ),
+            terminal_bench={
+                "installed_agent": {
+                    "agent": {
+                        "kwargs": {
+                            "model_info": {
+                                "max_input_tokens": context.request_window_tokens,
+                                "max_output_tokens": max_new_tokens,
+                            },
+                            "compaction_reserve_tokens": max_new_tokens,
+                        }
+                    }
+                }
+            },
             trainer=sections.Trainer(
                 # Leave enough epochs for small task sets to reach the global-step target.
                 epochs=max_steps,
                 max_steps=max_steps,
+                eval_interval=-1 if smoke else eval_interval,
+                ckpt_interval=checkpoint_interval,
+                callbacks=tuple(callbacks),
+                rollout_buffer=sections.RolloutBuffer(
+                    consumed_route_quotas={"agentic": groups // 2, "nonagentic": groups // 2},
+                    max_in_flight=SMOKE_BATCH_GROUPS if smoke else recipe.trainer.rollout_buffer.max_in_flight,
+                ),
                 micro_forward_batch_size_per_gpu=profile.role_plan.micro_train_batch_size_per_gpu,
                 policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(**asdict(profile.megatron))),
                 ref=sections.Ref(megatron_config=sections.RefMegatronConfig(**asdict(profile.megatron))),
@@ -216,7 +268,7 @@ def build_run(
             config_yaml=yaml.safe_dump(recipe.to_skyrl(), sort_keys=False),
             model=model,
             train_data=train_data,
-            validation_data=(),
+            validation_data=validation_data,
             topology=SkyRLTopology(
                 num_nodes=profile.role_plan.num_nodes,
                 gpus_per_node=profile.role_plan.policy_num_gpus_per_node,
@@ -237,7 +289,9 @@ def build_run(
     def bind_runtime(ctx: StepContext) -> SkyRLRunConfig:
         if not ctx.is_fingerprint:
             source = train_data[0]
-            with (StoragePath(ctx.artifact_path(source.step)) / source.relative_path).open("rb") as stream:
+            uri = str(StoragePath(ctx.artifact_path(source.step)) / source.relative_path)
+            fs, path = filesystem_for(uri)
+            with fs.open(path, "rb") as stream:
                 observed = hashlib.file_digest(stream, "sha256").hexdigest()
             if observed != data_sha256:
                 raise ValueError("The mixed-task Parquet input differs from its pinned SHA-256")
@@ -248,6 +302,22 @@ def build_run(
 
 @click.command(help=__doc__)
 @click.option("--profile", type=click.Choice(tuple(PROFILES)), required=True)
+@click.option(
+    "--smoke",
+    is_flag=True,
+    help="Use two groups and a one-hour budget after the first update; skip evaluation and selection.",
+)
+@click.option(
+    "--batch-groups",
+    type=click.IntRange(min=2),
+    help="Even prompt-group count; defaults to the profile, or two for smoke.",
+)
+@click.option(
+    "--eval-interval", type=click.IntRange(min=1), help="Evaluate every N updates; defaults to the recipe cadence."
+)
+@click.option(
+    "--checkpoint-interval", type=click.IntRange(min=1), help="Save every N updates, independently of --max-steps."
+)
 @click.option("--model-uri", required=True, help="Completed schema-3 BF16 HF export with its portable model manifest.")
 @click.option("--tokenizer-uri", help="Pinned tokenizer artifact; defaults to the model export.")
 @click.option("--tokenizer-revision", required=True)
@@ -256,6 +326,10 @@ def build_run(
 )
 @click.option("--data-sha256", help="SHA-256 of one data file; checked before launch and included in its identity.")
 @click.option("--data-file", default="train.parquet", show_default=True)
+@click.option(
+    "--validation-data-uri", multiple=True, help="Held-out artifact directory; required unless --smoke is selected."
+)
+@click.option("--validation-data-file", default="validation.parquet", show_default=True)
 @click.option("--input-version", required=True, help="Immutable version identifying the adopted input set.")
 @click.option("--name", help="Output name within your user namespace; defaults to the selected profile's output name.")
 @click.option("--max-steps", type=click.IntRange(min=1), required=True, help="Stop at this absolute optimizer step.")
@@ -296,8 +370,16 @@ def main(
     checkpoint_count: int,
     ttl_days: int,
     config_output: Path | None,
+    smoke: bool = False,
+    batch_groups: int | None = None,
+    eval_interval: int | None = None,
+    checkpoint_interval: int | None = None,
+    validation_data_uri: tuple[str, ...] = (),
+    validation_data_file: str = "validation.parquet",
 ) -> ArtifactStep[SkyRLRun]:
     selected = PROFILES[profile]
+    if not smoke and not validation_data_uri:
+        raise click.UsageError("--validation-data-uri is required for normal RL; select --smoke to omit evaluation")
     if selected.data_namespace is not None and data_sha256 is None:
         raise click.UsageError(f"--data-sha256 is required for {profile}")
     if data_sha256 is not None and len(data_uri) != 1:
@@ -327,12 +409,24 @@ def main(
         for index, uri in enumerate(data_uri)
     )
     resume = ArtifactStep.adopt(f"{name}/inputs/resume", version, source=resume_uri) if resume_uri is not None else None
+    validation_data = tuple(
+        ArtifactDataSource(
+            ArtifactStep.adopt(f"{name}/inputs/validation-{index}", input_version, source=uri),
+            relative_path=validation_data_file,
+        )
+        for index, uri in enumerate(validation_data_uri)
+    )
     step = build_run(
         profile=selected,
         name=name,
         version=version,
         model=model,
         train_data=train_data,
+        validation_data=validation_data,
+        smoke=smoke,
+        batch_groups=batch_groups,
+        eval_interval=eval_interval,
+        checkpoint_interval=checkpoint_interval,
         max_steps=max_steps,
         max_new_tokens=max_new_tokens,
         data_sha256=data_sha256,
