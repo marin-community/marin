@@ -3,8 +3,7 @@
 
 """JAX entry points for the cudnn-frontend MXFP8 MoE grouped GEMMs (SM100 only).
 
-The kernels come from the nvidia-cudnn-frontend package (``cudnn.gemm.cutedsl.grouped``). This
-module holds the two without an activation and what every wrapper shares.
+The kernels come from the nvidia-cudnn-frontend package (``cudnn.gemm.cutedsl.grouped``).
 
 - :func:`mxfp8_fused_gemm`: a grouped GEMM with a bf16 epilogue.
 - :func:`mxfp8_fused_wgrad`: the grouped weight gradient from two token-axis quantized operands.
@@ -47,10 +46,9 @@ from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call, g
 from levanter.grug._moe.mxfp8.layout import GROUP_PAD
 from levanter.grug._moe.mxfp8.quantize import MXFP8_BLOCK_SIZE, SF_TILE_ROWS, WeightMajor
 
-# (mma_tiler_mn, cluster_shape_mn) per kernel: the winners of the research ablations in
-# c3cb334f8e:experiments/grug/moe/mxfp8.py. A sweep of tile and
-# cluster shapes at the hero expert chunk (H = I = 3072, 3 experts, 302,336 rows) on one B200
-# found no other configuration more than 3% faster for any kernel.
+# (mma_tiler_mn, cluster_shape_mn) per kernel. A sweep of tile and cluster shapes on one B200 at
+# H = I = 3072, 3 experts and 302,336 rows found no other configuration more than 3% faster for
+# either kernel.
 _GEMM_TILING = ((256, 256), (2, 1))
 _WGRAD_TILING = ((256, 256), (2, 2))
 # An MMA tile this many rows tall runs as a 2-CTA instruction over a pair of SMs.

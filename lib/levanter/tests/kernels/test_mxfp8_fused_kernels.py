@@ -27,7 +27,8 @@ _HIGHEST = jax.lax.Precision.HIGHEST
 _E4M3_NAN_BYTE = 0x7F
 _E8M0_NAN_BYTE = 0xFF
 
-# Research gates (c3cb334f8e:experiments/grug/moe/standalone/test_mxfp8_op_gpu.py).
+# Bounds on the relative Frobenius error against the f32 reference rounded to the output's
+# precision. The kernels accumulate in f32, so the measured errors are 1e-4 or less.
 _GEMM_TOLERANCE = 1e-3
 _WGRAD_TOLERANCE = 2e-3
 
