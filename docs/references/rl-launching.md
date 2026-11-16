@@ -233,6 +233,10 @@ to false as well. Without export, successful runs retain native recovery checkpo
 in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
 is null. Pipelines that serve the resulting model for downstream evaluation must request export.
 
+With `SkyRLSpec`, configuration rendering binds the `best_checkpoint` callback's
+`initial_model_uri` to the resolved model input before artifact fingerprinting.
+Standalone recipes must set this URI explicitly.
+
 The `best_checkpoint` callback accepts a `selection_metric` whose values must be
 finite normalized scores in [0, 1], with larger values preferred. Set
 `save_after_fraction` to delay trained-checkpoint selection until that fraction
