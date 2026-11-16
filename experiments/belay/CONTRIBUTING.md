@@ -33,7 +33,7 @@ Every experiment is compared to the official recipe unless its Track says otherw
    | `vanilla-<rung>` / `moe-<rung>` | Radical ideas: look for signs of life against a plain dense model or a basic MoE first. The rung is the model width, `d512`, `d768`, `d1024` or `d1280` (e.g. `moe-d768`). |
    | `hero-mfu` | Ideas that change speed or memory: step time at hero scale. Run by a maintainer. |
    | `ladder` | After a promising speedrun: every recipe rung, to see whether the gain holds with scale. |
-   | `custom` | A study answered by analysis, with no win/loss verdict. |
+   | `custom` | A study answered by analysis, with no win/loss verdict. It can involve generating plots from checkpoint weights. |
 
 3. **Follow along on Status** (`…/#status/X####` once it has a registry id). Its row links the **code commit** (check
    the diff matches your intent), the **W&B runs** (variant vs. same-commit control), and the agent's plan and verdict.
