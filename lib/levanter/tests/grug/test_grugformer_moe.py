@@ -29,7 +29,7 @@ from levanter.grug._moe.common import (
     _scaled_capacity,
     _swiglu_gate_up_backward,
 )
-from levanter.grug._moe.ep_common import _aligned_group_sizes, _aligned_receiver_rows, _combine_gather_sum
+from levanter.grug._moe.ep_common import _aligned_receiver_rows, _combine_gather_sum
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
@@ -1674,7 +1674,7 @@ def _expected_receiver_buffer(sorted_payload, starts, clipped, *, receiver, loca
             [sorted_payload[s][starts[s, g] : starts[s, g] + clipped[s, g]] for s in range(shards)]
         )
         expected[start : start + len(arrivals)] = arrivals
-        start = _aligned_group_sizes(start + len(arrivals), alignment)
+        start = -(-(start + len(arrivals)) // alignment) * alignment  # the next multiple of the alignment
     return expected
 
 
