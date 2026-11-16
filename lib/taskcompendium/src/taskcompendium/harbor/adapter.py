@@ -13,7 +13,7 @@ import tomlkit
 from taskcompendium.browsecomp import BROWSECOMP_ACTION_INTERFACE, browsecomp_state, browsecomp_tools
 from taskcompendium.grading_environment import GradingEnvironmentMode, assess_grading_environment
 from taskcompendium.harbor.execution import native_execution_limits
-from taskcompendium.integrity import RootDeliveryContract
+from taskcompendium.integrity import MultiSweDeliveryContract, RootDeliveryContract
 from taskcompendium.models import (
     AnswerType,
     DockerBuildExecution,
@@ -126,7 +126,9 @@ def unsupported_harbor_contract(
     # deliver the private verifier files and run the source's verifier verbatim)
     # and copies the reward to the grading machine.
     shared_required = assess_grading_environment(task).required == GradingEnvironmentMode.SHARED
-    if task.integrity_contract is not None and not isinstance(task.integrity_contract, RootDeliveryContract):
+    if task.integrity_contract is not None and not isinstance(
+        task.integrity_contract, (RootDeliveryContract, MultiSweDeliveryContract)
+    ):
         return "task_spec_shared_executor_required"
     if task.integrity_contract is None and shared_required:
         return "task_spec_shared_executor_required"

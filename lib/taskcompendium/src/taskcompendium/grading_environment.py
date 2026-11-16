@@ -10,7 +10,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, computed_field
 
-from taskcompendium.integrity import RootDeliveryContract
+from taskcompendium.integrity import MultiSweDeliveryContract, RootDeliveryContract
 from taskcompendium.integrity import SharedDependencyState as SharedDependencyState
 from taskcompendium.models import (
     AnswerType,
@@ -85,7 +85,7 @@ def assess_grading_environment(task: TaskSpec) -> GradingEnvironmentAssessment:
             verifier.get("environment_mode") or ("separate" if verifier.get("environment") is not None else "shared")
         )
     elif isinstance(task.grader, NoGrader):
-        if not isinstance(task.integrity_contract, RootDeliveryContract):
+        if not isinstance(task.integrity_contract, (RootDeliveryContract, MultiSweDeliveryContract)):
             return GradingEnvironmentAssessment(
                 required=GradingEnvironmentMode.SEPARATE, declared=None, reason="No executable grader is declared"
             )
@@ -93,7 +93,7 @@ def assess_grading_environment(task: TaskSpec) -> GradingEnvironmentAssessment:
     # A root-delivery contract declares the SHARED boundary itself, whatever the
     # grader kind: the agent phase keeps the original root user and grading
     # delivers the private verifier material at grading time.
-    if isinstance(task.integrity_contract, RootDeliveryContract):
+    if isinstance(task.integrity_contract, (RootDeliveryContract, MultiSweDeliveryContract)):
         return GradingEnvironmentAssessment(
             required=GradingEnvironmentMode.SHARED,
             declared=GradingEnvironmentMode.SHARED,

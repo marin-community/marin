@@ -43,7 +43,7 @@ from verifyit.spec import (
     spec_from_table,
 )
 
-from taskcompendium.integrity import RootDeliveryContract, SharedIntegrityContract
+from taskcompendium.integrity import MultiSweDeliveryContract, RootDeliveryContract, SharedIntegrityContract
 
 SCHEMA_VERSION = "0.30"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
@@ -978,7 +978,7 @@ class TaskSpec(BaseModel):
     resources: ResourceGroups = Field(default_factory=ResourceGroups)
     tags: tuple[str, ...] = ()
     labels: dict[str, str] = Field(default_factory=dict)
-    integrity_contract: SharedIntegrityContract | RootDeliveryContract | None = None
+    integrity_contract: SharedIntegrityContract | RootDeliveryContract | MultiSweDeliveryContract | None = None
 
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":

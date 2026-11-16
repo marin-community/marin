@@ -3,15 +3,18 @@
 
 """Grading-time host delivery for root-actor sources with hidden verifiers.
 
-Sources like RST keep the original root actor semantics: no UID demotion and no
-in-container protected root. Their verifier material therefore never exists in
-the container during the actor phase. At grading time, after the actor finishes,
-two trusted root ``collect`` commands run on the agent machine: one quiesces
-every process outside the exec's own ancestry, and the next writes the private
-verifier files (base64-embedded in the declared argv) and executes the
-source's original ``tests/test.sh`` bytes verbatim, so the source writes its own
-reward. Copied artifacts carry the reward to the grading machine; the container
-is never trusted to score beyond the source's own script.
+Sources like RST and Multi-SWE keep the original root actor semantics: no UID
+demotion and no in-container protected root. Their private grading material
+therefore never exists in the container during the actor phase. At grading
+time, after the actor finishes, trusted root ``collect`` commands run on the
+agent machine: one quiesces every process outside the exec's own ancestry,
+and the next writes the private grading material (base64-embedded in the
+declared argv, delivered under ``/tests`` for RST and restored from the
+original compressed capture archive under ``/home`` for Multi-SWE), then
+executes the source's own pipeline verbatim so the source produces its own
+reward inputs. Copied artifacts carry the reward inputs to the grading
+machine; the container is never trusted to score beyond the source's own
+parser, which runs host-side.
 """
 
 import base64
@@ -162,7 +165,132 @@ for entry in os.scandir("/proc"):
     try:
         os.kill(victim, signal.SIGKILL)
         killed.append(victim)
-    except (OSError, ProcessLookupError):
-        pass
+    except ProcessLookupError:
+        continue
+    except OSError as error:
+        # A failed kill means the victim may survive: the quiesce cannot be
+        # guaranteed, so the advisory must fail instead of passing silently.
+        print(f"quiesce kill failed for {victim}: {error}", file=sys.stderr)
+        raise
 print(len(killed))
 """
+
+
+# Multi-SWE delivery: the original compressed capture archive (exact modes and
+# mtimes inside) is delivered in bounded base64 chunks and restored verbatim
+# under the home root, then the source's own extract-and-run pipeline executes
+# there. All guest commands are pure POSIX shell + GNU coreutils: the source
+# images span C/Go/Java/JS/TS and guarantee no interpreter.
+
+HOME_RESTORE_CHUNK_BYTES = 48 * 1024
+"""Raw bytes per chunk; base64 renders ~64 KiB, well inside the argv cap."""
+
+
+def home_restore_commands(
+    archive: bytes, *, restore_root: str = "/home", chunk_bytes: int = HOME_RESTORE_CHUNK_BYTES
+) -> tuple[VerifierCommand, ...]:
+    """Deliver the original compressed capture archive in chunks and restore it verbatim.
+
+    The archive carries the exact member modes and mtimes, so ``tar`` reproduces
+    them without any per-file repair. Each chunk renders under ~64 KiB of argv
+    (encoded chunks are multiples of four so ``base64 -d`` decodes them
+    standalone); the staging file is removed after the restore.
+    """
+    if not archive:
+        raise ValueError("The home delivery archive is empty")
+    encoded = base64.b64encode(archive)
+    staging = PurePosixPath(restore_root) / ".capture.tar.gz"
+    encoded_chunk = max(4, chunk_bytes * 4 // 3 // 4 * 4)
+    commands: list[VerifierCommand] = []
+    for index in range(0, len(encoded), encoded_chunk):
+        chunk = encoded[index : index + encoded_chunk]
+        commands.append(
+            VerifierCommand(
+                argv=(
+                    "bash",
+                    "-c",
+                    "mkdir -p "
+                    + shlex.quote(restore_root)
+                    + " && printf '%s' "
+                    + shlex.quote(chunk.decode("ascii"))
+                    + " | base64 -d >> "
+                    + shlex.quote(str(staging)),
+                ),
+                cwd="/",
+            )
+        )
+    commands.append(
+        VerifierCommand(
+            argv=(
+                "bash",
+                "-c",
+                f"tar -xzf {shlex.quote(str(staging))} -C {shlex.quote(restore_root)}"
+                f" && rm -f {shlex.quote(str(staging))}",
+            ),
+            cwd="/",
+        )
+    )
+    return tuple(commands)
+
+
+def multiswe_run_command(
+    *,
+    repo: str,
+    base: str,
+    output_path: str,
+    read_exit_code_path: str,
+    pipeline_stdout_path: str,
+    pipeline_stderr_path: str,
+    pipeline_rc_path: str,
+    cat_rc_path: str,
+    restore_root: str = "/home",
+    extract_entry: str = "extract_multiswe_fix_patch.sh",
+    run_entry: str = "fix-run.sh",
+    test_output_path: str | None = None,
+) -> VerifierCommand:
+    """Run the source's extract-and-run pipeline with independently captured streams.
+
+    Faithful to the upstream taskset: extract runs at ``/home/{repo}`` with the
+    literal ``.`` argument and the row's base commit (prep nonzero fails the
+    collection), the pipeline's exit is ignored with its stdout and stderr
+    captured separately, and the exact ``cat`` stdout and exit code of
+    ``/home/test_output.txt`` are persisted for the host-side selection. The
+    container never scores: the host parser consumes the copied artifacts.
+    """
+    if not repo or not base:
+        raise ValueError("Multi-SWE delivery requires the row repo and base commit")
+    for path in (
+        output_path,
+        read_exit_code_path,
+        pipeline_stdout_path,
+        pipeline_stderr_path,
+        pipeline_rc_path,
+        cat_rc_path,
+    ):
+        if not PurePosixPath(path).is_absolute():
+            raise ValueError(f"The Multi-SWE delivery paths must be absolute: {path}")
+    root = restore_root.rstrip("/")
+    workdir = f"{root}/{repo}"
+    extract = f"{root}/{extract_entry}"
+    pipeline = f"{root}/{run_entry}"
+    test_output = test_output_path or f"{root}/test_output.txt"
+    script = "\n".join(
+        (
+            "set -eu",
+            f"cd {shlex.quote(workdir)}",
+            f"chmod +x {shlex.quote(extract)}",
+            f"bash {shlex.quote(extract)} . {shlex.quote(base)}",
+            "set +e",
+            f"bash -o pipefail -c 'bash {shlex.quote(pipeline)} 2>&1 | tee {shlex.quote(test_output)}'"
+            f" > {shlex.quote(pipeline_stdout_path)} 2> {shlex.quote(pipeline_stderr_path)}",
+            "pipeline_rc=$?",
+            f"cat {shlex.quote(test_output)} > {shlex.quote(output_path)}",
+            "cat_rc=$?",
+            "set -e",
+            f"printf '%s\\n' \"$pipeline_rc\" > {shlex.quote(pipeline_rc_path)}",
+            f"printf '%s\\n' \"$cat_rc\" > {shlex.quote(cat_rc_path)}",
+            f"printf '%s\\n' \"$cat_rc\" > {shlex.quote(read_exit_code_path)}",
+            "exit 0",
+        )
+    )
+    return VerifierCommand(argv=("bash", "-c", script), cwd="/")

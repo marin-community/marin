@@ -14,6 +14,7 @@ from taskcompendium.grading_environment import (
 from taskcompendium.harbor.adapter import unsupported_harbor_contract, write_harbor_task
 from taskcompendium.integrity import (
     DeliveredVerifierFile,
+    MultiSweDeliveryContract,
     RootDeliveryContract,
     SharedDependencyState,
     SharedIntegrityContract,
@@ -244,3 +245,47 @@ def test_declared_build_opt_in_exports_root_delivery_tasks_with_their_original_c
         unsupported_harbor_contract(unbacked, docker_build=DockerBuildExecution.DECLARATIVE)
         == "task_spec_shared_executor_required"
     )
+
+
+def test_multi_swe_delivery_contract_declares_the_shared_boundary(tmp_path) -> None:
+    """The Multi-SWE contract binds ScriptGrader tasks to the delivery executor."""
+    contract = MultiSweDeliveryContract(
+        dependency_state=SharedDependencyState.AGENT_MUTABLE,
+        archive_sha256="e" * 64,
+    )
+    grader = ScriptGrader(
+        argv=("python", "-m", "multiswe.host_grade"),
+        environment=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_image="example.test/multiswe@sha256:" + "a" * 64,
+        ),
+        answer_path=None,
+        artifacts=(
+            VerifierArtifact(source="/source-test-output.txt", target="/source-test-output.txt", kind=ArtifactKind.FILE),
+        ),
+        timeout=900.0,
+    )
+    task = TaskSpec(
+        id="multiswe-row",
+        source=Source(
+            dataset="PrimeIntellect/Multi-SWE-RL-Verified",
+            revision="pinned",
+            row="train.parquet:0",
+            importer_revision="1",
+        ),
+        context=ConversationInput(events=(TextMessage(role="user", content="Fix the build."),)),
+        answer_type=AnswerType.WORKSPACE_STATE,
+        answer_format=PlainText(),
+        grader=grader,
+        environment_requirements=EnvironmentRequirements(),
+        resources=ResourceGroups(),
+        integrity_contract=contract,
+    )
+    assessment = assess_grading_environment(task)
+    assert assessment.required is GradingEnvironmentMode.SHARED
+    assert assessment.declared is GradingEnvironmentMode.SHARED
+    assert shared_integrity_issue(task) is None
+    assert unsupported_harbor_contract(task) is None
+    write_harbor_task(task, tmp_path / "packet", REQUIREMENTS)
+    exported = TaskSpec.model_validate_json((tmp_path / "packet" / "task-spec.json").read_text())
+    assert exported.integrity_contract == contract

@@ -4,10 +4,13 @@
 """Regressions for grading-time host delivery of hidden root-actor verifiers."""
 
 import base64
+import io
 import os
 import shutil
+import stat
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -18,6 +21,8 @@ from taskcompendium.harbor.root_delivery import (
     QUIESCE_PROGRAM,
     DeliveredVerifier,
     delivery_commands,
+    home_restore_commands,
+    multiswe_run_command,
     quiesce_command,
 )
 from taskcompendium.models import VerifierCommand
@@ -188,3 +193,125 @@ def test_native_reward_mode_persists_exit_code_and_lets_collect_finish(tmp_path,
 def test_native_reward_mode_paths_must_be_absolute() -> None:
     with pytest.raises(ValueError, match="exit-code path"):
         delivery_commands(delivered(), exit_code_path="relative/exit.txt")
+
+
+def test_home_restore_commands_chunk_round_trip_exact_modes_and_mtime(tmp_path):
+    """The archive restores verbatim under the home root; tar carries modes+mtimes."""
+    home = tmp_path / "home"
+    member = home / "repo" / "fix-run.sh"
+    member.parent.mkdir(parents=True)
+    member.write_text("#!/bin/bash\necho ran\n")
+    member.chmod(0o755)
+    old = 1_600_000_000
+    os.utime(member, (old, old))
+    patch = home / "test.patch"
+    patch.write_bytes(b"diff\n")
+    patch.chmod(0o644)
+    os.utime(patch, (old, old))
+    archive_bytes = io.BytesIO()
+    with tarfile.open(fileobj=archive_bytes, mode="w:gz") as bundle:
+        for path in (member, patch):
+            bundle.add(path, arcname=str(path.relative_to(home)), recursive=False)
+    payload = archive_bytes.getvalue()
+    assert len(payload) > 64  # force multiple chunks
+
+    commands = home_restore_commands(payload, restore_root=str(home), chunk_bytes=64)
+    assert len(commands) >= 3
+    for command in commands:
+        result = subprocess.run(command.argv, cwd="/", capture_output=True, text=True, timeout=120)
+        assert result.returncode == 0, result.stderr[-2000:]
+    restored = home / "repo" / "fix-run.sh"
+    assert restored.read_text() == "#!/bin/bash\necho ran\n"
+    assert stat.S_IMODE(restored.stat().st_mode) == 0o755
+    assert int(restored.stat().st_mtime) == old
+    assert (home / "test.patch").read_bytes() == b"diff\n"
+    assert not (home / ".capture.tar.gz").exists()
+
+
+def test_multiswe_run_command_captures_streams_and_status_independently(tmp_path):
+    """Prep nonzero fails; pipeline/cat streams and statuses persist separately."""
+    home = tmp_path / "home"
+    repo = home / "myrepo"
+    repo.mkdir(parents=True)
+    (home / "extract_multiswe_fix_patch.sh").write_text("#!/bin/bash\nprintf prep > prep.out\n")
+    (home / "fix-run.sh").write_text("#!/bin/bash\necho pipeline-stdout-line\necho pipeline-stderr-line >&2\n")
+    (home / "test_output.txt").write_text("combined tee output\n")
+    command = multiswe_run_command(
+        repo="myrepo",
+        base="0" * 40,
+        restore_root=str(home),
+        test_output_path=str(home / "test_output.txt"),
+        output_path=str(tmp_path / "cat-stdout.txt"),
+        read_exit_code_path=str(tmp_path / "read-exit-code.txt"),
+        pipeline_stdout_path=str(tmp_path / "pipeline-stdout.txt"),
+        pipeline_stderr_path=str(tmp_path / "pipeline-stderr.txt"),
+        pipeline_rc_path=str(tmp_path / "pipeline-rc.txt"),
+        cat_rc_path=str(tmp_path / "cat-rc.txt"),
+    )
+    result = subprocess.run(command.argv, cwd="/", capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr[-2000:]
+    # Upstream merges fix-run streams through 2>&1 | tee: the outer -c stdout is
+    # the tee passthrough (merged content) and its stderr is the shell's own.
+    merged = "pipeline-stdout-line\npipeline-stderr-line\n"
+    assert (tmp_path / "pipeline-stdout.txt").read_text() == merged
+    assert (tmp_path / "pipeline-stderr.txt").read_text() == ""
+    assert (home / "test_output.txt").read_text() == merged
+    assert (tmp_path / "cat-stdout.txt").read_text() == merged
+    assert (tmp_path / "cat-rc.txt").read_text().strip() == "0"
+    assert (tmp_path / "read-exit-code.txt").read_text().strip() == "0"
+    # The pipeline exit is evidence only: nonzero must not fail the collection.
+    (home / "fix-run.sh").write_text("#!/bin/bash\nexit 9\n")
+    result = subprocess.run(command.argv, cwd="/", capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert (tmp_path / "pipeline-rc.txt").read_text().strip() == "9"
+    # The failing fix-run produced no output: tee's test_output is empty and the
+    # exact cat stdout is empty too — host-side selection owns the fallback.
+    assert (tmp_path / "cat-stdout.txt").read_text() == ""
+    assert (tmp_path / "cat-rc.txt").read_text().strip() == "0"
+
+
+def test_multiswe_prep_nonzero_fails_the_collection(tmp_path):
+    home = tmp_path / "home"
+    repo = home / "myrepo"
+    repo.mkdir(parents=True)
+    (home / "extract_multiswe_fix_patch.sh").write_text("#!/bin/bash\nexit 4\n")
+    command = multiswe_run_command(
+        repo="myrepo",
+        base="0" * 40,
+        restore_root=str(home),
+        test_output_path=str(home / "test_output.txt"),
+        output_path=str(tmp_path / "cat-stdout.txt"),
+        read_exit_code_path=str(tmp_path / "read-exit-code.txt"),
+        pipeline_stdout_path=str(tmp_path / "pipeline-stdout.txt"),
+        pipeline_stderr_path=str(tmp_path / "pipeline-stderr.txt"),
+        pipeline_rc_path=str(tmp_path / "pipeline-rc.txt"),
+        cat_rc_path=str(tmp_path / "cat-rc.txt"),
+    )
+    result = subprocess.run(command.argv, cwd="/", capture_output=True, text=True, timeout=120)
+    assert result.returncode != 0, "prep nonzero must fail the collection"
+    assert not (tmp_path / "cat-stdout.txt").exists()
+
+
+def test_multiswe_run_command_guards(tmp_path):
+    with pytest.raises(ValueError, match="repo and base"):
+        multiswe_run_command(
+            repo="",
+            base="",
+            output_path="/o",
+            read_exit_code_path="/e",
+            pipeline_stdout_path="/p",
+            pipeline_stderr_path="/s",
+            pipeline_rc_path="/r",
+            cat_rc_path="/c",
+        )
+    with pytest.raises(ValueError, match="absolute"):
+        multiswe_run_command(
+            repo="myrepo",
+            base="0" * 40,
+            output_path="relative",
+            read_exit_code_path="/e",
+            pipeline_stdout_path="/p",
+            pipeline_stderr_path="/s",
+            pipeline_rc_path="/r",
+            cat_rc_path="/c",
+        )

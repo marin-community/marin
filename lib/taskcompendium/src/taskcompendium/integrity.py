@@ -23,6 +23,31 @@ class DeliveredVerifierFile(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class MultiSweDeliveryContract(BaseModel):
+    """The typed SHARED integrity contract for Multi-SWE delivered-pipeline sources.
+
+    Same original-root delivery semantics as the root-delivery contract, with
+    the captured ``/home`` artifacts restored verbatim (the archive itself
+    carries modes and mtimes) and the reward parsed host-side by the pinned
+    upstream parser from the copied artifacts. ``archive_sha256`` pins the
+    delivered capture archive bytes; ``undeclared_deadline`` records sources
+    with no verifier deadline.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    version: Literal[1] = 1
+    id: Literal["multi-swe-delivery"] = "multi-swe-delivery"
+    dependency_state: SharedDependencyState
+    agent_user: str | None = None
+    archive_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    undeclared_deadline: bool = False
+    known_open_gaps: tuple[str, ...] = (
+        "Agent-installed build tools and imports in the shared image environment",
+        "Candidate-produced test-output injection",
+    )
+
+
 class RootDeliveryContract(BaseModel):
     """The typed SHARED integrity contract for original-root delivery sources.
 
