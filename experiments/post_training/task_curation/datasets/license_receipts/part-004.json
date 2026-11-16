@@ -1228,7 +1228,7 @@
           "train"
         ],
         "source_id": "TaskTrove:smartie-calibforge-shared-v2",
-        "when": "2026-11-16T07:15:00-05:00",
+        "when": "2026-11-16T06:25:36-05:00",
         "who": "user"
       }
     ],
@@ -1329,7 +1329,7 @@
           "train"
         ],
         "source_id": "TaskTrove:smartie-swesmith-admitted",
-        "when": "2026-11-16T07:15:00-05:00",
+        "when": "2026-11-16T06:25:36-05:00",
         "who": "user"
       }
     ],
