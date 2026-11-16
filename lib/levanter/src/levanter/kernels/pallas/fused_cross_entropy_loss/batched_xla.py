@@ -25,7 +25,8 @@ _GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3072
 _LARGE_VOCAB_THRESHOLD = 65536
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
-_AMD_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB = 4096
+# MI355X, x [32768, 2560] x w [2560, 128256] bf16: the backward takes 52.3 ms at 8192 and 56.1 ms at 4096.
+_AMD_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB = 8192
 _GPU_MIN_B_BLOCK_SIZE = 128
 _H100_FULL_VOCAB_B_TILED_BLOCK_SIZE = 8192
 _H100_FULL_VOCAB_B_TILED_MIN_BATCH = 8192
@@ -636,7 +637,11 @@ def _streaming_block_grads(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H Vb"]]:
-    """One vocabulary block's float32 input- and weight-gradient terms; columns at or past ``v_valid`` are masked."""
+    """One vocabulary block's input- and weight-gradient terms; a partial block is masked from ``v_valid`` on.
+
+    The input-gradient term is float32. The weight-gradient GEMM accumulates in float32 and returns the wider of the
+    activation and weight dtypes, so a bf16 weight's block is rounded once, in the GEMM, and a float32 weight's is not
+    rounded at all."""
     v_block_size = w_block.shape[1]
     logits_raw = jax.lax.dot_general(
         x,
@@ -646,8 +651,9 @@ def _streaming_block_grads(
     ).astype(jnp.float32)
     logits = _apply_logit_soft_cap(logits_raw, logit_soft_cap)
 
-    in_vocab = jnp.arange(v_block_size, dtype=jnp.int32) < v_valid
-    probs = jnp.where(in_vocab[None, :], jnp.exp(logits - lse[:, None]), 0.0)
+    probs = jnp.exp(logits - lse[:, None])
+    if v_valid < v_block_size:
+        probs = jnp.where((jnp.arange(v_block_size, dtype=jnp.int32) < v_valid)[None, :], probs, 0.0)
     dlogits = probs * g_softmax[:, None]
 
     in_block = (labels >= v_start) & (labels < v_start + v_block_size)
@@ -673,7 +679,7 @@ def _streaming_block_grads(
         dlogits_for_matmul,
         (((0,), (0,)), ((), ())),
         precision=precision,
-        preferred_element_type=jnp.float32,
+        preferred_element_type=jnp.promote_types(dlogits_for_matmul.dtype, w_block.dtype),
     )
     return grad_x_block, grad_w_block
 
@@ -693,8 +699,8 @@ def _backward_streaming_from_lse(
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
     """Streaming backward pass over vocab blocks using saved LSE.
 
-    Each block's weight gradient comes from a float32 GEMM, is rounded once to ``w``'s dtype and is written into the
-    ``[H, V]`` result in place. Only a partial last block is padded."""
+    Each block's weight gradient comes from a GEMM that accumulates in float32 and writes ``w``'s dtype (rounding
+    once), and goes into the ``[H, V]`` result in place. Only a partial last block is padded."""
     b_dim, h_dim = x.shape
     v_dim = w.shape[1]
     num_full_blocks, tail = divmod(v_dim, v_block_size)
