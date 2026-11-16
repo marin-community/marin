@@ -222,7 +222,7 @@ _BLOOM_CACHE_DIR = os.path.join(tempfile.gettempdir(), "marin-decon-bloom")
 
 @functools.lru_cache(maxsize=2)
 def _load_bloom(bloom_path: str) -> dupekit.Bloom:
-    """Load a bloom filter once per process through a node-local copy.
+    """Load a bloom filter through a complete node-local copy.
 
     The subprocess-per-shard runner starts a fresh interpreter for every shard,
     so the process cache alone would re-read the filter from object storage per
@@ -232,10 +232,13 @@ def _load_bloom(bloom_path: str) -> dupekit.Bloom:
     local_path = os.path.join(_BLOOM_CACHE_DIR, hashlib.sha256(bloom_path.encode()).hexdigest())
     if not os.path.exists(local_path):
         os.makedirs(_BLOOM_CACHE_DIR, exist_ok=True)
-        partial_path = f"{local_path}.{os.getpid()}.partial"
-        with open(partial_path, "wb") as fh:
-            fh.write(StoragePath(bloom_path).read_bytes())
-        os.replace(partial_path, local_path)
+        # Local Zephyr threads share a PID. Each fill needs its own path so a
+        # concurrent writer cannot truncate or rename another writer's file.
+        with tempfile.TemporaryDirectory(dir=_BLOOM_CACHE_DIR) as staging:
+            partial_path = os.path.join(staging, "filter.bin")
+            with open(partial_path, "wb") as fh:
+                fh.write(StoragePath(bloom_path).read_bytes())
+            os.replace(partial_path, local_path)
     return dupekit.Bloom.load(local_path)
 
 
