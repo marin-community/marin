@@ -30,6 +30,7 @@ from harbor.host_capabilities import host_capabilities_from_environment
 from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
 from rigging.filesystem.transfer import copy
+from rigging.secrets import get_secret
 from taskcompendium.harbor.shared_source import (
     SCALE_SWE_PROFILE,
     SWE_LEGO_PROFILE,
@@ -109,6 +110,13 @@ LAYER_SETUP = (
 )
 
 
+def qa_environment_kind() -> str:
+    kind = os.environ.get("QA_ENVIRONMENT", "daytona")
+    if kind not in ("daytona", "local"):
+        raise ValueError(f"Unsupported QA environment: {kind}")
+    return kind
+
+
 def adapt_for_local(files: dict[str, bytes], workdir: str, pinned_reference: str) -> None:
     """Move the landed image layer into the pre-agent setup and declare the source image."""
     dockerfile = files["environment/Dockerfile"].decode()
@@ -127,6 +135,13 @@ def adapt_for_local(files: dict[str, bytes], workdir: str, pinned_reference: str
         raise ValueError("Unexpected hardened setup command shape")
     task["environment"]["setup"]["command"] = head + "\n" + LAYER_SETUP + rest
     files["task.toml"] = tomlkit.dumps(task).encode()
+
+
+limits_holder: dict = {}
+
+
+def _worker_limits():
+    return limits_holder.get("value", {})
 
 
 def run_checked(command: list[str], **kwargs) -> str:
@@ -210,7 +225,10 @@ def write_package(root: Path, name: str, files: dict[str, bytes], row: dict, fam
     if package.exists():
         raise FileExistsError(package)
     package.mkdir(parents=True)
-    adapt_for_local(files, workdir, row["pinned_reference"])
+    preparation = "original landed package with its Dockerfile layer (Daytona declarative build)"
+    if qa_environment_kind() == "local":
+        adapt_for_local(files, workdir, row["pinned_reference"])
+        preparation = "image layer installed at setup time; source image consumed digest-pinned without a build"
     for relative, content in sorted(files.items()):
         target = package / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -221,7 +239,7 @@ def write_package(root: Path, name: str, files: dict[str, bytes], row: dict, fam
         "source_row": row["source_row"],
         "pinned_reference": row["pinned_reference"],
         "taskset_revision": swe_module.TASKSET_REVISION,
-        "local_preparation": "image layer installed at setup time; source image consumed digest-pinned without a build",
+        "local_preparation": preparation,
         "files": {
             relative: {"sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content)}
             for relative, content in sorted(files.items())
@@ -269,11 +287,25 @@ async def run_trial(config_path: Path) -> dict:
     }
 
 
-def trial_config(package: Path, trials_dir: Path, agent: dict, limits: dict, name: str) -> dict:
+def trial_environment() -> dict:
+    """The declared QA executor; shared adapters need a real-root backend."""
+    kind = qa_environment_kind()
+    if kind == "local":
+        return {"type": "local", "kwargs": dict(_worker_limits())}
+    # Validation builds use the dedicated eval account, mapped per the Daytona
+    # runbook; the RL credential is never touched in this QA job. The key
+    # arrives as an Iris-delivered secret file or an environment value.
+    if get_secret("DAYTONA_EVAL_API_KEY") is None:
+        raise ValueError("Daytona QA requires the DAYTONA_EVAL_API_KEY secret")
+    os.environ["DAYTONA_API_KEY"] = get_secret("DAYTONA_EVAL_API_KEY")
+    return {"type": "daytona", "kwargs": {}}
+
+
+def trial_config(package: Path, trials_dir: Path, agent: dict, name: str) -> dict:
     return {
         "task": {"path": str(package)},
         "agent": agent,
-        "environment": {"type": "local", "kwargs": dict(limits)},
+        "environment": trial_environment(),
         "trials_dir": str(trials_dir),
         "trial_name": name,
         "trial_attempt_timeout_sec": ATTEMPT_TIMEOUT,
@@ -285,7 +317,7 @@ async def _run_logged(config_path: Path, log_path: Path) -> dict:
         return await run_trial(config_path)
 
 
-def qa_task(root: Path, limits: dict, family: str, row: dict) -> dict:
+def qa_task(root: Path, family: str, row: dict) -> dict:
     name = row["instance_id"]
     LOGGER.info("[%s] building hardened package", name)
     files, workdir = package_files(row, family)
@@ -303,7 +335,7 @@ def qa_task(root: Path, limits: dict, family: str, row: dict) -> dict:
     ):
         attempt = root / "trials" / f"{family}-{name}-{phase}"
         attempt.mkdir(parents=True)
-        config = trial_config(package, attempt / "jobs", agent, limits, f"{family}-{name}-{phase}")
+        config = trial_config(package, attempt / "jobs", agent, f"{family}-{name}-{phase}")
         config_path = attempt / "trial.json"
         config_path.write_text(json.dumps(config))
         summary = asyncio.run(
@@ -341,12 +373,13 @@ def main() -> None:
         )
         + "\n"
     )
-    limits = worker_limits(root)
-    LOGGER.info("worker limits: %s", json.dumps(limits))
+    if qa_environment_kind() == "local":
+        limits_holder["value"] = worker_limits(root)
+        LOGGER.info("worker limits: %s", json.dumps(limits_holder["value"]))
     selected = [(family, row) for family, section in mapping["families"].items() for row in section["rows"]]
     records = []
     with ThreadPoolExecutor(max_workers=2) as pool:
-        for record in pool.map(lambda item: qa_task(root, limits, *item), selected):
+        for record in pool.map(lambda item: qa_task(root, *item), selected):
             records.append(record)
     (root / "qa-records.json").write_text(json.dumps(records, indent=2) + "\n")
     verdicts = {
