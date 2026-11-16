@@ -37,6 +37,6 @@ CalibForge-style semantic TB variants exist. Recommended folders: BugsInPy 471, 
 
 ## Next
 
+- LANDED 9c40911e70 (lane build) and 4f674d012a (docs + STATUS) on atlas-env-audit.
 - Awaiting coordinator/user ruling on the NL2Bash normalization policy; then the GPU comparative pass for whichever folder the user picks.
-- Docs: task-curation.md "Repair candidates" stage + guide.html text to coordinator (pending policy outcome).
 - Production merge/publish (new PRIVATE version + provenance) after a folder passes review + oracle/NoP.
