@@ -5,6 +5,7 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseReceipt
@@ -12,8 +13,6 @@ from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseReceipt
 from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource
 from infra.marina.apps.rl_data_catalog.server import licensing
-
-from pathlib import Path
 
 
 def openmdw_license_text() -> bytes:
