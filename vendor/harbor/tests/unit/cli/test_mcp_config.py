@@ -6,7 +6,7 @@ from unittest.mock import patch
 from harbor.cli.main import app
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.job.config import JobConfig
-from harbor.models.task.config import MCPServerConfig
+from harbor.models.task.config import MCPServerConfig, TaskConfig
 from harbor.models.trial.config import AgentConfig
 from harbor.trial.single_step import SingleStepTrial
 from typer.testing import CliRunner
@@ -116,12 +116,7 @@ def test_trial_init_agent_merges_mcp_servers_by_name(tmp_path):
         )
     )
     trial.task = SimpleNamespace(
-        config=SimpleNamespace(
-            environment=SimpleNamespace(
-                mcp_servers=[task_server],
-                skills_dir=None,
-            )
-        )
+        config=TaskConfig.model_validate({"environment": {"mcp_servers": [task_server]}})
     )
     trial.paths = SimpleNamespace(agent_dir=tmp_path / "agent")
     trial.logger = logging.getLogger(__name__)
