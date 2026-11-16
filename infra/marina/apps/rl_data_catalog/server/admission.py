@@ -1,7 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Current-release admission checks shared by curation and the packaged Atlas app."""
+"""Current-release admission checks shared by curation and the packaged Atlas app.
+
+The packaged app imports this module in Marina's base environment, which has no
+``taskcompendium``: keep runtime imports to the bundled models and treat the
+backend survey shape by its string labels.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from finestore.rl.curation import (
     ActorCensusInput,
@@ -16,15 +25,18 @@ from finestore.rl.curation import (
     require_decontamination,
 )
 from finestore.rl.licenses import require_license
-from taskcompendium.backend_requirements import BackendSourceMap, FitSupport
 
 from .licensing import require_unbanned, source_license_ban
 
+if TYPE_CHECKING:
+    from taskcompendium.backend_requirements import BackendSourceMap
+
 MISSING_GRADER_REASON = "No executable grader is declared"
 
-# A backend the survey measured as partial still runs part of the population;
-# admission requires that some backend can run the source at all.
-RUNNABLE_FIT = frozenset({FitSupport.SUPPORTED, FitSupport.PARTIAL})
+# The survey's aggregate support labels; "supported" and "partial" mean some
+# backend can run the source at all. The labels are matched as strings because
+# the packaged runtime has no taskcompendium.
+RUNNABLE_FIT = frozenset({"supported", "partial"})
 
 
 def population_admission_blocker(
@@ -64,7 +76,7 @@ def backend_support_blocker(capabilities: BackendSourceMap, status: str | None) 
     verdicts = {name: fit.support.value for name, fit in capabilities.backends.items()}
     if any(support in RUNNABLE_FIT for support in verdicts.values()):
         return None
-    if verdicts and all(support == FitSupport.ROLE_ABSENT for support in verdicts.values()):
+    if verdicts and all(support == "role_absent" for support in verdicts.values()):
         return None
     return "no surveyed backend can run the source: " + ", ".join(
         f"{name}={support}" for name, support in sorted(verdicts.items())

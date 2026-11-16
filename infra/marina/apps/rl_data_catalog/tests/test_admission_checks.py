@@ -3,6 +3,10 @@
 
 """Admission requires declared environment artifacts and one runnable backend."""
 
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 from finestore.rl.curation import ActorCensusInput, GradingEnvironmentEvidence
 from taskcompendium.backend_requirements import BackendFit, BackendSourceMap, FitSupport
@@ -117,3 +121,30 @@ def test_role_absent_everywhere_needs_no_backend_and_keeps_its_labels():
 def test_empty_backend_map_stays_blocked():
     """An unassessed Available row with no survey cells is not exempted by the N/A rule."""
     assert backend_support_blocker(source_map({}), "Available") is not None
+
+
+def test_packaged_admission_imports_without_taskcompendium():
+    """Marina's base image has no taskcompendium; the packaged module must not need it."""
+    probe = "\n".join(
+        [
+            "import importlib, importlib.abc, sys",
+            "class Blocked(importlib.abc.MetaPathFinder):",
+            "    def find_spec(self, name, path=None, target=None):",
+            "        if name == 'taskcompendium' or name.startswith('taskcompendium.'):",
+            "            raise ModuleNotFoundError(f'blocked: {name}')",
+            "        return None",
+            "sys.meta_path.insert(0, Blocked())",
+            "importlib.import_module('infra.marina.apps.rl_data_catalog.server.admission')",
+            "print('ok')",
+        ]
+    )
+    root = Path(__file__).parents[4]
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        cwd=root,
+        check=False,
+    )
+    assert result.returncode == 0, f"import probe failed: {result.stderr[-500:]}"
+    assert "ok" in result.stdout
