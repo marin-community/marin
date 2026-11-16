@@ -271,7 +271,9 @@ rotate between routes so one repeatedly failing route cannot occupy every slot.
 With `rollout_spans`, `rollout_group_disposition` records each group's UID,
 source and buffer wait for consumed and rejected groups. Native task workers
 emit `task_group_completed` with the source, UID, duration and projected failure
-and masking counts. Join these records to learner batch dumps by UID to inspect
+and masking counts. Each rollout actor starts its own telemetry exporter and
+drains queued events on shutdown, including when runner cleanup fails.
+Join these records to learner batch dumps by UID to inspect
 source-specific advantages; constant-reward RLOO groups are zeroed in the learner
 rather than removed at buffer admission.
 
