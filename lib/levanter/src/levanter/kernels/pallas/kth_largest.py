@@ -21,10 +21,14 @@ from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 _SIGN = 0x80000000
 # The float whose key is 0, the smallest (a negative NaN): padding with it never changes the k-th largest key.
 _SMALLEST_KEY_FLOAT_BITS = 0xFFFFFFFF
-# Tuned on MI355X at [256, 32768]: one program per row reads it in tiles of this many columns.
-DEFAULT_BLOCK = 16384
+# Tuned on MI355X at [256, 32768], with and without an RCCL all-to-all running beside the kernel. A row of up to this
+# many columns is read once into registers (32 per thread) and every pass counts from there; longer rows are read once
+# per pass in tiles of this many columns. With the row in registers the time is in the compares, so one-bit digits win:
+# 32 passes of one compare per element. A program uses 60 VGPRs (32 hold the row) and 64 bytes of LDS on MI355X, so two
+# fit on a compute unit and they fit beside a collective's workgroups.
+DEFAULT_BLOCK = 32768
 DEFAULT_NUM_WARPS = 16
-DEFAULT_RADIX_BITS = 4
+DEFAULT_RADIX_BITS = 1
 
 
 def ordered_key(x: Float[Array, "..."]) -> jax.Array:
@@ -75,19 +79,25 @@ def kth_largest_reference(
 def _kth_largest_kernel(x_ref, k_ref, out_ref, *, columns: int, block: int, radix_bits: int):
     row = pl.program_id(0)
     k = k_ref[...]
-    digits = jnp.arange(1 << radix_bits, dtype=jnp.uint32)
+    tiles = columns // block
+    # A row of one tile is read once and stays in registers for every pass.
+    whole_row = ordered_key(x_ref[row, :]) if tiles == 1 else None
 
     def one_pass(p, prefix):
         shift = (32 - radix_bits - p * radix_bits).astype(jnp.uint32)
-        candidates = prefix | (digits << shift)
+        # Digit 0 is the prefix itself, whose count always reaches k: count only the other candidates.
+        candidates = [prefix | (jnp.uint32(d) << shift) for d in range(1, 1 << radix_bits)]
+        if whole_row is not None:
+            counts = [jnp.sum((whole_row >= cand).astype(jnp.int32)) for cand in candidates]
+        else:
+            # Each lane keeps its own counts over the tiles, so the threads sum them only once per pass.
+            def count_block(j, counts):
+                key = ordered_key(x_ref[row, pl.ds(j * block, block)])
+                return tuple(c + (key >= cand).astype(jnp.int32) for c, cand in zip(counts, candidates, strict=True))
 
-        def count_block(j, counts):
-            key = ordered_key(x_ref[row, pl.ds(j * block, block)])
-            return counts + jnp.sum((key[None, :] >= candidates[:, None]).astype(jnp.int32), axis=1)
-
-        counts = jax.lax.fori_loop(0, columns // block, count_block, jnp.zeros((1 << radix_bits,), jnp.int32))
-        # Digit 0 is the prefix itself, whose count always reaches k.
-        digit = jnp.sum((counts >= k).astype(jnp.uint32)) - jnp.uint32(1)
+            zeros = tuple(jnp.zeros((block,), jnp.int32) for _ in candidates)
+            counts = [jnp.sum(c) for c in jax.lax.fori_loop(0, tiles, count_block, zeros)]
+        digit = sum((c >= k).astype(jnp.uint32) for c in counts)
         return prefix | (digit << shift)
 
     prefix = jax.lax.fori_loop(0, 32 // radix_bits, one_pass, jnp.uint32(0))
@@ -130,9 +140,10 @@ def kth_largest(
 ) -> Float[Array, "R"]:
     """:func:`kth_largest_reference` as one Pallas-Triton kernel, one program per row.
 
-    Same result, bit for bit. Each program reads its row once per pass, in ``block``-column tiles (at most the row
-    length rounded up to a power of two; the row is padded to a whole number of tiles). ``x`` gets no gradient. The
-    call runs on whatever ``x`` each device holds: call it inside a ``shard_map`` when ``x`` is sharded.
+    Same result, bit for bit. Each program reads its row in ``block``-column tiles (at most the row length rounded up
+    to a power of two; the row is padded to a whole number of tiles): a row of one tile once, kept in registers for
+    every pass, a longer row once per pass. ``x`` gets no gradient. The call runs on whatever ``x`` each device holds:
+    call it inside a ``shard_map`` when ``x`` is sharded.
 
     The kernel is written for the Pallas Triton backend and raises on TPU. On CPU this is
     :func:`kth_largest_reference` (the Pallas interpreter cannot run inside a ``shard_map`` that checks varying axes),
