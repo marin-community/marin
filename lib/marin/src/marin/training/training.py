@@ -32,6 +32,7 @@ from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.execution.artifact import Artifact
+from marin.inference.generation_config import MARIN_GENERATION_CONFIG_DEFAULTS
 from marin.processing.tokenize import read_tokenized_cache_stats
 from marin.training.run_environment import add_run_env_variables
 
@@ -229,7 +230,8 @@ def checkpoint_resume_paths(
 def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConfigT:
     """Set every run-scoped path on ``train_config`` from ``output_path``.
 
-    Points the checkpointer at ``output_path`` and sets ``hf_save_path`` to ``<output_path>/hf``.
+    Points the checkpointer at ``output_path``, sets ``hf_save_path`` to ``<output_path>/hf``, and applies
+    Marin's generation defaults when LM or DPO callers did not provide their own.
     Adapter LM/DPO exports PEFT rather than a merged HF model, so for those the merged ``hf_save_path``
     is cleared and ``peft_save_path`` takes the HF location.
     """
@@ -245,6 +247,9 @@ def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConf
         ),
         hf_save_path=prefix_join(output_path, DEFAULT_HF_CHECKPOINTS_PATH),
     )
+
+    if isinstance(config, (TrainDpoConfig, TrainLmConfig)) and config.hf_generation_config_defaults is None:
+        config = replace(config, hf_generation_config_defaults=dict(MARIN_GENERATION_CONFIG_DEFAULTS))
 
     if isinstance(config, (TrainDpoConfig, TrainLmConfig)) and not isinstance(config.adapter, NoAdaptorConfig):
         peft_save_path = config.peft_save_path

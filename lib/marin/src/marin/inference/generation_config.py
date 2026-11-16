@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Marin policy for sampling defaults stored with exported models."""
+"""Marin inference policy stored with exported models."""
 
 from collections.abc import Mapping
 from types import MappingProxyType

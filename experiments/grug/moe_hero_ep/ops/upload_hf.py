@@ -24,7 +24,7 @@ from huggingface_hub.errors import HfHubHTTPError
 from levanter.compat.hf_export import HFShardRecord
 from levanter.compat.hf_generation_config import export_generation_config, write_generation_config
 from levanter.tokenizers import load_tokenizer
-from marin.export.generation_config import MARIN_GENERATION_CONFIG_DEFAULTS
+from marin.inference.generation_config import MARIN_GENERATION_CONFIG_DEFAULTS
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
