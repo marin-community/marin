@@ -26,13 +26,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.models import ReviewStatus
+from taskcompendium.pipeline.models import ImportRejection, ReviewStatus
 from taskcompendium.pipeline.repair import ComparativeOutcome, RepairMatchClass
 
 from experiments.post_training.task_curation.full_qc import LONG_REQUEST_TIMEOUT, ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.registry import read_registry_json
-from experiments.post_training.task_curation.repair_candidates import CANDIDATE_REPO, load_candidate_population
+from experiments.post_training.task_curation.repair_candidates import (
+    CANDIDATE_REPO,
+    load_candidate_population,
+    preview_task,
+)
 from experiments.post_training.task_curation.repair_match import MatchOutcome, match_candidates
 from experiments.post_training.task_curation.repair_review import (
     ComparativeBatchResult,
@@ -113,8 +117,16 @@ class MatchedPairs:
     """Candidate task ID to tracked task ID; a local join key, never the match itself."""
 
 
-def load_tracked_tasks(uris: tuple[str, ...]) -> dict[str, TaskSpec]:
-    """Decode every pinned tracked TaskSpec, keyed by its ID for local joins only."""
+def load_tracked_tasks(
+    uris: tuple[str, ...], *, tracked_source_id: str, revision: str = "tracked-archive-preview"
+) -> dict[str, TaskSpec]:
+    """Decode every pinned tracked TaskSpec, keyed by its ID for local joins only.
+
+    Pinned inputs come in two shapes: complete TaskSpec JSON rows (``task_spec`` or
+    ``lowered_task_spec``), and TaskTrove task archives (``task_binary``), which are lowered
+    through the same preview conversion the candidate loader uses, so both sides hash
+    identically at the instruction, state, reference and grading-contract level.
+    """
     tasks: dict[str, TaskSpec] = {}
     for uri in uris:
         with tempfile.TemporaryFile() as local:
@@ -123,10 +135,27 @@ def load_tracked_tasks(uris: tuple[str, ...]) -> dict[str, TaskSpec]:
             local.seek(0)
             with pq.ParquetFile(local) as handle:
                 names = handle.schema_arrow.names
-                column = "lowered_task_spec" if "lowered_task_spec" in names else "task_spec"
-                for batch in handle.iter_batches(batch_size=256, columns=[column]):
-                    for encoded in batch.column(column).to_pylist():
-                        task = TaskSpec.model_validate(json.loads(encoded))
+                if "lowered_task_spec" in names:
+                    column, archive = "lowered_task_spec", False
+                elif "task_spec" in names:
+                    column, archive = "task_spec", False
+                elif "task_binary" in names:
+                    column, archive = "task_binary", True
+                else:
+                    raise ValueError(f"Tracked input has no known task column: {uri}")
+                for batch in handle.iter_batches(batch_size=64, columns=[column]):
+                    for value in batch.column(column).to_pylist():
+                        if archive:
+                            task = preview_task(
+                                value,
+                                candidate_source_id=tracked_source_id,
+                                revision=revision,
+                            )
+                            if isinstance(task, ImportRejection):
+                                logger.warning("Tracked archive rejected in preview: %s", task.reason)
+                                continue
+                        else:
+                            task = TaskSpec.model_validate(json.loads(value))
                         if task.id in tasks:
                             raise ValueError(f"Duplicate tracked task ID: {task.id}")
                         tasks[task.id] = task
@@ -261,7 +290,7 @@ def dry_run(
     candidates = load_candidate_population(
         folders=folders, repo=repo, revision=candidate_revision, candidate_source_id=candidate_source_id
     )
-    tracked_tasks = load_tracked_tasks(tracked_uris)
+    tracked_tasks = load_tracked_tasks(tracked_uris, tracked_source_id=tracked_source_id)
     tracked = tracked_index(tracked_tasks, tracked_uris)
     candidates_rows = candidate_index(candidates)
     outcome = match_candidates(
