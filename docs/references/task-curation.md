@@ -3230,7 +3230,7 @@ privacy, every archived byte hash and the archive pin's own license check.
 it cannot substitute for the raw source snapshot.
 
 Produce raw archive receipts with `raw_source_publish`, after completing the
-standard [`download_step` acquisition](../../experiments/post_training/task_curation/pipeline.py)
+standard [`download_step` acquisition](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py)
 for the **entire** pinned Hugging Face repository. Set `HfSource.files=()` to
 use recursive repository listing. Independently build the expected inventory from
 `HfApi().dataset_info(DATASET, revision=PIN).siblings`, rather than from a
