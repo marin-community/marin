@@ -41,6 +41,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
+    LocalCommitStatus,
     TensorStoreReadConfig,
     TensorStoreWriteConfig,
     tree_deserialize_leaves_tensorstore,
@@ -906,9 +907,9 @@ def save_checkpoint(
             progress_logger.publish_staged_host_bytes(staged_host_bytes)
             progress_logger.set_phase("async_commit_in_flight")
 
-    def on_local_commit(status: str) -> None:
+    def on_local_commit(status: LocalCommitStatus) -> None:
         if jax.process_index() != 0:
-            if status == "completed":
+            if status == LocalCommitStatus.COMPLETED:
                 save_span.__exit__(None, None, None)
             else:
                 error = RuntimeError("Local checkpoint commit failed")

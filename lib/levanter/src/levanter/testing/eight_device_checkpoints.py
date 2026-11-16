@@ -27,6 +27,7 @@ import numpy as np
 import tensorstore as ts
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from rigging.training_journal import TrainingJournal, verify_training_journals
 
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint_metadata
 from levanter.config import register_codecs
@@ -154,7 +155,10 @@ def _async_checkpoint_roundtrip(checkpoint_path: str) -> np.ndarray:
         base_path=checkpoint_path, append_run_id_to_base_path=False, save_interval=None, keep=None
     )
     config = draccus.decode(CheckpointerConfig, json.loads(json.dumps(draccus.encode(config))))
-    checkpointer = config.create("async-wire-roundtrip")
+    journal = TrainingJournal(
+        str(Path(checkpoint_path) / "telemetry"), "async-wire-roundtrip", "sft", f"rank-{jax.process_index()}"
+    )
+    checkpointer = config.create("async-wire-roundtrip", training_journal=journal)
     mesh = Mesh(np.array(jax.devices()), ("replica",))
     expected = np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
     with jax.set_mesh(mesh):
@@ -164,12 +168,20 @@ def _async_checkpoint_roundtrip(checkpoint_path: str) -> np.ndarray:
         saved = str(Path(checkpoint_path) / "step-1")
         metadata = load_checkpoint_metadata(saved)
         assert metadata["step"] == 1 and metadata["is_temporary"] is False
-        return np.asarray(checkpointer.load_checkpoint(source, saved)["model"])
+        restored = np.asarray(checkpointer.load_checkpoint(source, saved)["model"])
+    journal.log({"checkpoint/restored_values": int(restored.size)}, step=metadata["step"], commit=True)
+    journal.finish(status="completed")
+    return restored
 
 
 def async_checkpoint_roundtrip_across_processes() -> None:
     with TemporaryDirectory() as tmpdir:
         results = _run_across_processes(_async_checkpoint_roundtrip, tmpdir)
+        verify_training_journals(
+            str(Path(tmpdir) / "telemetry"),
+            {f"rank-{rank}" for rank in range(DISTRIBUTED_PROCESS_COUNT)},
+            {"checkpoint_save"},
+        )
     for result in results:
         np.testing.assert_array_equal(result, np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32))
 

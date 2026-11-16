@@ -46,6 +46,12 @@ from levanter.utils.byte_budget import HostByteBudget
 
 logger = logging.getLogger(__name__)
 
+
+class LocalCommitStatus(StrEnum):
+    COMPLETED = "local_completed"
+    FAILED = "local_failed"
+
+
 ARRAY_DRIVER = "zarr3"
 KVSTORE_DRIVER = "ocdbt"
 # JAX's memory kind for host memory a device can address. Offloaded optimizer state lives here.
@@ -588,7 +594,7 @@ def tree_serialize_leaves_tensorstore(
     manager: Optional[array_ser.GlobalAsyncCheckpointManager] = None,
     *,
     commit_callback: Optional[Callable] = None,
-    on_local_commit: Optional[Callable[[str], None]] = None,
+    on_local_commit: Optional[Callable[[LocalCommitStatus], None]] = None,
     on_staged: Optional[Callable[[int], None]] = None,
     debug_checkpointer: bool = False,
     debug_log_flush: Callable[[logging.Logger], None] | None = flush_debug_output,
@@ -691,7 +697,7 @@ def _serialize_arrays(
     manager: array_ser.GlobalAsyncCheckpointManager,
     config: TensorStoreWriteConfig,
     commit_callback: Callable,
-    on_local_commit: Optional[Callable[[str], None]],
+    on_local_commit: Optional[Callable[[LocalCommitStatus], None]],
     on_staged: Optional[Callable[[int], None]],
 ) -> int:
     """Write every array according to its plan and start the asynchronous commit.
@@ -808,7 +814,7 @@ def _serialize_arrays(
     if on_local_commit is not None:
         remaining = len(commit_futures)
         callback_lock = threading.Lock()
-        local_status = "local_completed"
+        local_status = LocalCommitStatus.COMPLETED
 
         def local_write_finished(future: ts.Future) -> None:
             nonlocal remaining, local_status
@@ -819,7 +825,7 @@ def _serialize_arrays(
                 failed = True
             with callback_lock:
                 if failed:
-                    local_status = "local_failed"
+                    local_status = LocalCommitStatus.FAILED
                 remaining -= 1
                 if remaining == 0:
                     on_local_commit(local_status)
