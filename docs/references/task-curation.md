@@ -1562,8 +1562,11 @@ sample review found, and its derived oversight level stays QUICK or below.
 
 ### Choose a judge tier
 
-When a repair meets a judged source without a specified judge, the repairer
-works out the judge it needs:
+When a repair meets a judged source without a reachable or specified judge, the
+repairer works out the judge it needs. A source's declared judge is unreachable
+when we cannot serve it as a `JUDGE_TIERS` model (for example a closed hosted
+model outside the tiers). Re-pin such a source to a tier in a new private
+remediation version, with the validation below, rather than excluding it:
 
 1. Judge ten tasks from the frozen sample yourself, under the source's rubric if
    it has one. For each task, record the verdict, the evidence the judgment
