@@ -198,29 +198,32 @@ def test_native_reward_mode_paths_must_be_absolute() -> None:
 def test_home_restore_commands_chunk_round_trip_exact_modes_and_mtime(tmp_path):
     """The archive restores verbatim under the home root; tar carries modes+mtimes."""
     home = tmp_path / "home"
-    member = home / "repo" / "fix-run.sh"
-    member.parent.mkdir(parents=True)
+    home.mkdir(parents=True)
+    # Real capture archives carry flat /home members (fix-run.sh, test.patch, ...).
+    member = home / "staged-fix-run.sh"
     member.write_text("#!/bin/bash\necho ran\n")
     member.chmod(0o755)
     old = 1_600_000_000
     os.utime(member, (old, old))
-    patch = home / "test.patch"
-    patch.write_bytes(b"diff\n")
-    patch.chmod(0o644)
-    os.utime(patch, (old, old))
+    staged_patch = home / "staged-test.patch"
+    staged_patch.write_bytes(b"diff\n")
+    staged_patch.chmod(0o644)
+    os.utime(staged_patch, (old, old))
     archive_bytes = io.BytesIO()
     with tarfile.open(fileobj=archive_bytes, mode="w:gz") as bundle:
-        for path in (member, patch):
-            bundle.add(path, arcname=str(path.relative_to(home)), recursive=False)
+        for path, arcname in ((member, "fix-run.sh"), (staged_patch, "test.patch")):
+            bundle.add(path, arcname=arcname, recursive=False)
     payload = archive_bytes.getvalue()
     assert len(payload) > 64  # force multiple chunks
 
     commands = home_restore_commands(payload, restore_root=str(home), chunk_bytes=64)
     assert len(commands) >= 3
+    # A leftover staging file from an interrupted run must be truncated fresh.
+    (home / ".capture.tar.gz").write_bytes(b"leftover")
     for command in commands:
         result = subprocess.run(command.argv, cwd="/", capture_output=True, text=True, timeout=120)
         assert result.returncode == 0, result.stderr[-2000:]
-    restored = home / "repo" / "fix-run.sh"
+    restored = home / "fix-run.sh"
     assert restored.read_text() == "#!/bin/bash\necho ran\n"
     assert stat.S_IMODE(restored.stat().st_mode) == 0o755
     assert int(restored.stat().st_mtime) == old
@@ -315,3 +318,89 @@ def test_multiswe_run_command_guards(tmp_path):
             pipeline_rc_path="/r",
             cat_rc_path="/c",
         )
+
+
+def test_home_restore_replaces_destinations_that_became_directories(tmp_path):
+    """The source removes each member destination (rm -rf) before extracting."""
+    home = tmp_path / "home"
+    member = home / "fix-run.sh"
+    home.mkdir(parents=True)
+    # The actor replaced the fix-run.sh destination with a directory during work.
+    (member / "junk").mkdir(parents=True)
+    (member / "junk" / "nested.txt").write_text("actor junk\n")
+    archive_bytes = io.BytesIO()
+    with tarfile.open(fileobj=archive_bytes, mode="w:gz") as bundle:
+        info = tarfile.TarInfo("fix-run.sh")
+        content = b"#!/bin/bash\necho ran\n"
+        info.size = len(content)
+        info.mode = 0o755
+        bundle.addfile(info, io.BytesIO(content))
+    commands = home_restore_commands(archive_bytes.getvalue(), restore_root=str(home))
+    for command in commands:
+        result = subprocess.run(command.argv, cwd="/", capture_output=True, text=True, timeout=120)
+        assert result.returncode == 0, result.stderr[-2000:]
+    restored = home / "fix-run.sh"
+    assert restored.is_file()
+    assert restored.read_bytes() == content
+    assert not (home / "fix-run.sh" / "junk").exists()
+
+
+def test_home_restore_rejects_unexpected_member_paths(tmp_path):
+    """A member with a subdirectory path fails the restore (source semantics)."""
+    home = tmp_path / "home"
+    home.mkdir(parents=True)
+    archive_bytes = io.BytesIO()
+    with tarfile.open(fileobj=archive_bytes, mode="w:gz") as bundle:
+        info = tarfile.TarInfo("sub/escaped.sh")
+        content = b"escaped\n"
+        info.size = len(content)
+        bundle.addfile(info, io.BytesIO(content))
+    commands = home_restore_commands(archive_bytes.getvalue(), restore_root=str(home))
+    for command in commands[:-1]:
+        result = subprocess.run(command.argv, cwd="/", capture_output=True, text=True, timeout=120)
+        assert result.returncode == 0, result.stderr[-2000:]
+    result = subprocess.run(commands[-1].argv, cwd="/", capture_output=True, text=True, timeout=120)
+    assert result.returncode != 0, "unexpected member paths must fail the restore"
+
+
+@pytest.mark.manual
+@pytest.mark.skipif(sys.platform != "linux" or os.geteuid() != 0, reason="process quiesce requires Linux root")
+@pytest.mark.skipif(shutil.which("unshare") is None, reason="PID namespace isolation requires unshare")
+def test_shell_quiesce_kills_strays_inside_its_own_pid_namespace(tmp_path):
+    driver = (
+        "import pathlib, subprocess, sys, time\n"
+        "marker = pathlib.Path(sys.argv[1])\n"
+        "stray = subprocess.Popen([sys.executable, '-c',\n"
+        "    'import pathlib, time, sys\\n"
+        'pathlib.Path(sys.argv[1]).write_text("alive")\\n'
+        "while pathlib.Path(sys.argv[1]).exists(): time.sleep(0.05)',\n"
+        "    str(marker)])\n"
+        "deadline = time.monotonic() + 10\n"
+        "while not marker.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.05)\n"
+        "assert marker.exists(), 'stray never started'\n"
+        "result = subprocess.run(['bash', '-c', sys.argv[2]], capture_output=True, text=True, timeout=60)\n"
+        "assert result.returncode == 0, result.stderr[-2000:]\n"
+        "int(result.stdout.strip())\n"
+        "marker.unlink()\n"
+        "assert stray.wait(timeout=30) != 0, 'the stray survived quiesce'\n"
+        "print('quiesce-ok')\n"
+    )
+    result = subprocess.run(
+        [
+            "unshare",
+            "--pid",
+            "--fork",
+            "--mount-proc",
+            sys.executable,
+            "-I",
+            "-c",
+            driver,
+            str(tmp_path / "stray.txt"),
+            root_delivery.SHELL_QUIESCE_SCRIPT,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert "quiesce-ok" in result.stdout, result.stderr[-2000:]

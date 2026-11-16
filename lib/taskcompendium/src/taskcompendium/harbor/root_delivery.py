@@ -204,6 +204,8 @@ def home_restore_commands(
     commands: list[VerifierCommand] = []
     for index in range(0, len(encoded), encoded_chunk):
         chunk = encoded[index : index + encoded_chunk]
+        # The first chunk truncates: staging always starts fresh.
+        redirect = ">" if index == 0 else ">>"
         commands.append(
             VerifierCommand(
                 argv=(
@@ -213,23 +215,33 @@ def home_restore_commands(
                     + shlex.quote(restore_root)
                     + " && printf '%s' "
                     + shlex.quote(chunk.decode("ascii"))
-                    + " | base64 -d >> "
+                    + f" | base64 -d {redirect} "
                     + shlex.quote(str(staging)),
                 ),
                 cwd="/",
             )
         )
-    commands.append(
-        VerifierCommand(
-            argv=(
-                "bash",
-                "-c",
-                f"tar -xzf {shlex.quote(str(staging))} -C {shlex.quote(restore_root)}"
-                f" && rm -f {shlex.quote(str(staging))}",
-            ),
-            cwd="/",
+    # Reproduce the source's RESTORE_GRADING_ARTIFACTS exactly (taskset.py at
+    # pinned b41d875): each archive member must be a plain relative filename and
+    # its destination is removed (rm -rf) before extraction, so a destination the
+    # actor turned into a directory cannot survive; then extract and clean up.
+    restore = "\n".join(
+        (
+            "set -euo pipefail",
+            f"tar -tzf {shlex.quote(str(staging))} | while IFS= read -r artifact; do",
+            '  case "$artifact" in',
+            '    ""|/*|*/*)',
+            '    echo "unexpected Multi-SWE grading artifact path: $artifact" >&2',
+            "    exit 1",
+            "    ;;",
+            "  esac",
+            f'  rm -rf -- "{restore_root}/$artifact"',
+            "done",
+            f"tar -C {shlex.quote(restore_root)} -xzf {shlex.quote(str(staging))}",
+            f"rm -f {shlex.quote(str(staging))}",
         )
     )
+    commands.append(VerifierCommand(argv=("bash", "-c", restore), cwd="/"))
     return tuple(commands)
 
 
@@ -294,3 +306,45 @@ def multiswe_run_command(
         )
     )
     return VerifierCommand(argv=("bash", "-c", script), cwd="/")
+
+
+SHELL_QUIESCE_SCRIPT = """set -eu
+self=$$
+ancestry=" $self "
+pid=$self
+while [ "$pid" -gt 1 ]; do
+  line=$(cat "/proc/$pid/stat" 2>/dev/null) || break
+  rest=${line##*) }
+  state=${rest%% *}
+  ppid=${rest#* }
+  ppid=${ppid%% *}
+  case $ppid in ''|*[!0-9]*) break;; esac
+  ancestry="$ancestry $ppid "
+  pid=$ppid
+done
+killed=0
+for entry in /proc/[0-9]*; do
+  victim=${entry#/proc/}
+  case $ancestry in *" $victim "*) continue;; esac
+  [ "$victim" -gt 1 ] || continue
+  line=$(cat "/proc/$victim/stat" 2>/dev/null) || continue
+  rest=${line##*) }
+  case ${rest%% *} in Z*) continue;; esac
+  kill -9 "$victim" 2>/dev/null || {
+    echo "quiesce kill failed for $victim" >&2
+    exit 1
+  }
+  killed=$((killed + 1))
+done
+echo "$killed"
+"""
+
+
+def shell_quiesce_command() -> VerifierCommand:
+    """Quiesce with pure shell for images that ship no guest interpreter.
+
+    Same ancestry semantics as :func:`quiesce_command`: every process outside
+    the exec's own ancestry is killed (PID 1, the exec's own tree and zombies
+    spared), and a failed kill fails the command instead of silently passing.
+    """
+    return VerifierCommand(argv=("bash", "-c", SHELL_QUIESCE_SCRIPT), cwd="/")
