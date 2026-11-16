@@ -136,3 +136,16 @@ def test_delivery_commands_recreate_and_run_the_original_verifier(tmp_path):
     assert (root / "mode.txt").read_text().strip() == "755"
     assert (root / "reward.txt").read_text().strip() == "1"
     shutil.rmtree(root)
+
+
+def test_delivery_output_path_redirects_the_entry_script_streams() -> None:
+    (delivery,) = delivery_commands(delivered(), output_path="/logs/verifier/test-output.txt", cwd="/app")
+    script = delivery.argv[-1]
+    assert "bash /tests/test.sh > /logs/verifier/test-output.txt 2>&1" in script
+    assert "mkdir -p /logs/verifier" in script
+    assert delivery.cwd == "/app"
+
+
+def test_delivery_output_path_must_be_absolute() -> None:
+    with pytest.raises(ValueError, match="absolute"):
+        delivery_commands(delivered(), output_path="relative/output.txt")

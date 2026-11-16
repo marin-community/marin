@@ -64,13 +64,20 @@ def quiesce_command() -> VerifierCommand:
 
 
 def delivery_commands(
-    verifier: DeliveredVerifier, *, entrypoint: str = "test.sh", cwd: str | None = None
+    verifier: DeliveredVerifier,
+    *,
+    entrypoint: str = "test.sh",
+    cwd: str | None = None,
+    output_path: str | None = None,
 ) -> tuple[VerifierCommand, ...]:
     """Write the private verifier files and run the source's original entry script.
 
     The commands carry no deadline of their own: the grading layer applies the
     resolved verifier deadline (a root-delivery contract with
     ``undeclared_deadline`` grades unbounded through ``ScriptGrader.timeout = None``).
+    ``output_path`` redirects the entry script's stdout and stderr into that file
+    (an absolute guest path) instead of the collect result, so the caller can
+    declare the file as a copied artifact; the source's scoring bytes stay unchanged.
     """
     if entrypoint not in verifier.files:
         raise ValueError(f"Delivered verifier lacks its entry script: {entrypoint}")
@@ -87,14 +94,19 @@ def delivery_commands(
             + f"\nchmod {mode:o} "
             + shlex.quote(str(PurePosixPath(DELIVERY_ROOT) / name))
         )
+    if output_path is not None and not PurePosixPath(output_path).is_absolute():
+        raise ValueError(f"The delivery output path must be absolute: {output_path}")
+    entry = "bash " + shlex.quote(str(PurePosixPath(DELIVERY_ROOT) / entrypoint))
+    if output_path is not None:
+        entry += " > " + shlex.quote(output_path) + " 2>&1"
     script = "\n".join(
         (
             "set -eu",
             f"mkdir -p {DELIVERY_ROOT}",
             *writes,
-            f"mkdir -p {PurePosixPath(REWARD_PATH).parent}",
+            f"mkdir -p {PurePosixPath(output_path or REWARD_PATH).parent}",
             # The source's own script bytes run verbatim and write their own reward.
-            "bash " + shlex.quote(str(PurePosixPath(DELIVERY_ROOT) / entrypoint)),
+            entry,
         )
     )
     return (VerifierCommand(argv=("bash", "-c", script), cwd=cwd),)
