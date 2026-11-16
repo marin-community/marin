@@ -14,7 +14,8 @@ identical prompts.
 """
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from typing import Any
 
 from rigging.filesystem.storage_path import StoragePath
 
@@ -54,7 +55,7 @@ def read_longbench_v2(path: StoragePath, _context: ConversionContext) -> Iterato
         yield from ijson.items(stream, "item")
 
 
-def longbench_v2_prompt(row: dict) -> str:
+def longbench_v2_prompt(row: Mapping[str, Any]) -> str:
     """Fill the upstream 0-shot template without substituting placeholders inside the context."""
     return LONGBENCH_V2_PROMPT.format(
         context=row["context"].strip(),
@@ -99,6 +100,7 @@ def longbench_v2_item(task: TaskSpec, *, budgets: tuple[int, ...]) -> Evaluation
     is the final fallback.
     """
     [message] = task.context.events
+    assert isinstance(message, TextMessage)
     tokenizer = official_tokenizer()
     ids = tokenizer.encode(message.content, disallowed_special=())
     truncated = [
