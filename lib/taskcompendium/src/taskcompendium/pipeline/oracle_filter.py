@@ -1241,7 +1241,7 @@ class OracleTaskReceipt(BaseModel):
         source = self.calibration.attempts[-1]
         if control.trial.verifier_execution_requirements != self.verifier_execution_requirements:
             raise ValueError("Negative control differs from the original verifier allocation")
-        if control.conclusive and (source.verdict is None) != (control.trial.verdict is None):
+        if control.conclusive and source.graded and (source.verdict is None) != (control.trial.verdict is None):
             raise ValueError("Negative control uses a different production grading contract")
         return self
 
