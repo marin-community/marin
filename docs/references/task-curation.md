@@ -3456,8 +3456,10 @@ duplicate and lexical evidence, combined exclusions and counts. Public training
 inputs with lexical exclusions also receive a private original archive.
 
 Both `remediation_publish` and `native_quick` require exact-input stage-0
-receipts before reading task payloads. Pass `--license-receipts RECEIPTS.json`
-when the receipts are not in the canonical registry. Their shared
+receipts before reading task payloads. By default, they read
+`experiments/post_training/task_curation/datasets/license_receipts/`.
+Use `--license-receipts RECEIPT_DIRECTORY` to replace that input with another
+directory of `part-*.json` receipt shards. Their shared
 `license_publication` helper preserves the checked upstream license fields,
 original card and notices, and pinned evidence URLs. `license_source` identifies
 the checked dataset grant; `license_input` separately records the physical input
