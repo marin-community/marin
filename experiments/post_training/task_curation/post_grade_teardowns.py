@@ -18,7 +18,8 @@ from taskcompendium.pipeline.oracle_filter import (
 
 from experiments.post_training.task_curation.archive_evidence import verified_archive_members
 
-AUTHORITY_MESSAGE = "7cf3d8d1fd2b9bb4c9998a4b758746d4"
+ORACLE_AUTHORITY_MESSAGE = "7cf3d8d1fd2b9bb4c9998a4b758746d4"
+NOP_AUTHORITY_MESSAGE = "d01cf03119d70430139c23c1c1227f4f"
 
 
 def require_post_grade_teardown(evidence: PostGradeTeardownEvidence, trial: OracleTrialReceipt) -> None:
@@ -29,18 +30,24 @@ def require_post_grade_teardown(evidence: PostGradeTeardownEvidence, trial: Orac
     OracleTrialReceipt.model_validate(
         {**trial.model_dump(mode="json"), "post_grade_teardown": evidence.model_dump(mode="json")}
     )
-    path = PurePosixPath(trial.path)
-    root = path.parent.relative_to("/tmp")
+    oracle = evidence.kind == "oracle_verdict_before_environment_stop"
     actual = urlparse(result["trial_uri"])
-    if actual.scheme != "file" or PurePosixPath(unquote(actual.path)) != path.parent:
+    if actual.scheme != "file":
+        raise ValueError("Recorded teardown grade requires an actual production Trial URI")
+    path = PurePosixPath(unquote(actual.path))
+    root = path.relative_to("/tmp")
+    expected_path = str(path / "result.json") if oracle else evidence.result_artifact.uri
+    if trial.path != expected_path:
         raise ValueError("Recorded teardown grade belongs to another physical Trial")
     references = {
         "result.json": evidence.result_artifact,
         "verifier/verdict.json": evidence.verdict_artifact,
         "verifier/reward.txt": evidence.reward_artifact,
-        "agent/exit-code.txt": evidence.oracle_exit_artifact,
         "exception.txt": evidence.teardown_exception_artifact,
     }
+    if oracle:
+        assert evidence.oracle_exit_artifact is not None
+        references["agent/exit-code.txt"] = evidence.oracle_exit_artifact
     for name, reference in references.items():
         if reference.uri != f"{evidence.archive.uri}#{root / name}":
             raise ValueError("Recorded teardown evidence differs from its original archive members")
@@ -54,7 +61,7 @@ def require_post_grade_teardown(evidence: PostGradeTeardownEvidence, trial: Orac
         or json.loads(selected[str(root / "config.json")]) != result["config"]
         or verdict != trial.verdict
         or float(selected[str(root / "verifier/reward.txt")]) != verdict["reward"]
-        or int(selected[str(root / "agent/exit-code.txt")]) != trial.oracle_exit_code
+        or (oracle and int(selected[str(root / "agent/exit-code.txt")]) != trial.oracle_exit_code)
     ):
         raise ValueError("Archived oracle grade or original exit differs from the recorded Trial")
     phases = [
@@ -81,13 +88,13 @@ def require_post_grade_teardown(evidence: PostGradeTeardownEvidence, trial: Orac
     cases = approval.get("cases", {})
     case = cases.get(trial.result_sha256, {})
     if (
-        approval.get("authority_message") != AUTHORITY_MESSAGE
-        or len(cases) != 4
+        approval.get("authority_message") != (ORACLE_AUTHORITY_MESSAGE if oracle else NOP_AUTHORITY_MESSAGE)
+        or len(cases) != (4 if oracle else 2)
         or case.get("task_id") != result["task_name"]
         or case.get("reward") != verdict["reward"]
         or not result["task_name"].startswith("scale-swe-verified-")
     ):
-        raise ValueError("Recorded grade is outside the approved four-oracle partition")
+        raise ValueError("Recorded grade is outside the approved physical Trial partition")
 
 
 def bind_post_grade_teardowns(task_map: Path, evidence: dict[str, PostGradeTeardownEvidence], output: Path) -> None:

@@ -2576,8 +2576,13 @@ Bind a JSON list of `PostGradeTeardownEvidence` with
 --evidence recorded-grades.json --output bound-map.json`. This scoped collector
 rule requires the original archive's Result, config, scored verdict, reward file,
 zero oracle exit, ordered completed actor/verifier phases and cleanup exception,
-plus the exact four-oracle decision manifest. It preserves the recorded reward,
-including source failures, without replaying the oracle or changing raw Results.
+plus the exact four-oracle decision manifest. The two approved NoP teardown
+cases use the same archive and phase proof with kind
+`nop_verdict_before_environment_stop`, their separate two-case decision and no
+oracle-exit artifact. Pass the proof to `negative_control_from_archive`; it
+recollects the unchanged public setup and physical NoP archive before accepting
+the recorded zero grade. It preserves the recorded reward, including source
+failures, without replaying either actor or changing raw Results.
 The teardown exception remains provenance. Other lifecycle failures retain their
 existing classification.
 

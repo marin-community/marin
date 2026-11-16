@@ -106,16 +106,18 @@ class PriorPhaseFailureReceipt(BaseModel):
 
 
 class PostGradeTeardownEvidence(BaseModel):
-    """Archived oracle grading completed before its environment teardown failed."""
+    """Archived oracle or NoP grading completed before environment teardown failed."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
-    kind: Literal["oracle_verdict_before_environment_stop"] = "oracle_verdict_before_environment_stop"
+    kind: Literal["oracle_verdict_before_environment_stop", "nop_verdict_before_environment_stop"] = (
+        "oracle_verdict_before_environment_stop"
+    )
     result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     archive: ContentEvidenceReference
     result_artifact: ContentEvidenceReference
     verdict_artifact: ContentEvidenceReference
     reward_artifact: ContentEvidenceReference
-    oracle_exit_artifact: ContentEvidenceReference
+    oracle_exit_artifact: ContentEvidenceReference | None = Field(default=None, exclude_if=lambda value: value is None)
     teardown_exception_artifact: ContentEvidenceReference
     decision: ContentEvidenceReference
 
@@ -242,12 +244,18 @@ class OracleTrialReceipt(BaseModel):
             verdict = self.verdict or {}
             reward = verdict.get("reward")
             exception = self.result.get("exception_info") or {}
+            oracle = completed.kind == "oracle_verdict_before_environment_stop"
+            agent = "oracle" if oracle else "nop"
             if (
                 completed.result_sha256 != self.result_sha256
                 or self.prior_phase_failure is not None
-                or (self.result.get("agent_info") or {}).get("name") != "oracle"
-                or self.result.get("config", {}).get("agent", {}).get("name") != "oracle"
-                or self.oracle_exit_code != 0
+                or (self.result.get("agent_info") or {}).get("name") != agent
+                or self.result.get("config", {}).get("agent", {}).get("name") != agent
+                or (oracle and (self.oracle_exit_code != 0 or completed.oracle_exit_artifact is None))
+                or (
+                    not oracle
+                    and (self.oracle_exit_code is not None or completed.oracle_exit_artifact is not None or reward != 0)
+                )
                 or self.native_grade is not None
                 or (
                     (self.result.get("verifier_result") or {}).get("rewards") is not None
@@ -261,7 +269,7 @@ class OracleTrialReceipt(BaseModel):
                 or isinstance(reward, bool)
                 or not math.isfinite(reward)
             ):
-                raise ValueError("Recorded oracle grade does not precede the reported teardown failure")
+                raise ValueError("Recorded grade does not precede the reported teardown failure")
         config = self.result.get("config", {})
         verifier_allocation = self.verifier_execution_requirements
         configured_verifier = config.get("task", {}).get("verifier_execution_requirements")
@@ -1166,7 +1174,7 @@ class OracleNegativeControlReceipt(BaseModel):
     def completed_public_setup(self) -> bool:
         if (
             self.trial.result.get("finished_at") is None
-            or self.trial.result.get("completion") is None
+            or (self.trial.result.get("completion") is None and self.trial.post_grade_teardown is None)
             or self.trial.result.get("secondary_exception_info")
             or self.trial.resource_usage.oom_kills
             or self.trial.verifier_resource_usage.oom_kills
@@ -1290,9 +1298,9 @@ class OracleNegativeControlReceipt(BaseModel):
     def conclusive(self) -> bool:
         return (
             self.completed_public_setup
-            and self.trial.result.get("exception_info") is None
+            and (self.trial.result.get("exception_info") is None or self.trial.post_grade_teardown is not None)
             and self.trial.result.get("finished_at") is not None
-            and self.trial.result.get("completion") is not None
+            and (self.trial.result.get("completion") is not None or self.trial.post_grade_teardown is not None)
             and self.verifier_exit_code in {None, 0}
             and (self.trial.verdict or {}).get("detail", {}).get("reason") != "setup_failed"
             and (

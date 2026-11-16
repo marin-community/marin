@@ -21,6 +21,7 @@ from taskcompendium.pipeline.oracle_filter import (
     OracleFilterReceipt,
     OracleNegativeControlReceipt,
     OracleTaskReceipt,
+    PostGradeTeardownEvidence,
 )
 
 from experiments.post_training.task_curation.negative_controls import (
@@ -424,3 +425,96 @@ def test_conclusive_nop_compares_channels_only_to_a_graded_source(tmp_path, outc
     assert receipt.exclusion_reason is OracleExclusionReason.VERIFIER_TIMEOUT
     assert receipt.negative_control == control
     assert receipt.negative_control.conclusive and receipt.negative_control.score == 0
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_recorded_zero_nop_before_teardown_requires_archive_and_decision_proof(tmp_path, approved):
+    source = json.loads((FIXTURES / "packet-runtime-fallback-index.json").read_text())["source"]
+    root = "nop-control/trials/nop"
+    cleanup = "in _stop_environment\nharbor.trial.errors.EnvironmentStopError: Environment teardown failed\n"
+    with tarfile.open(FIXTURES / "packet-runtime-fallback.tar.gz") as original:
+        members = {item.name: original.extractfile(item).read() for item in original.getmembers() if item.isfile()}
+    control = json.loads(members["nop-control/negative-control.json"])
+    result = control["trial_result"]
+    result.update(
+        task_name="scale-swe-verified-nop-fixture",
+        trial_uri=f"file:///tmp/{root}",
+        verifier_result=None,
+        completion=None,
+        finished_at="2026-11-14T21:41:19Z",
+        exception_info={"exception_type": "EnvironmentStopError", "exception_message": "Environment teardown failed"},
+    )
+    verdict = control["physical_verdict"]
+    verdict["detail"]["exit_code"] = 0
+    result_bytes = json.dumps(result).encode()
+    control["trial_result_path"] = f"/tmp/{root}/result.json"
+    control["trial_result_file_sha256"] = hashlib.sha256(result_bytes).hexdigest()
+    members.update(
+        {
+            f"{root}/result.json": result_bytes,
+            f"{root}/config.json": json.dumps(result["config"]).encode(),
+            f"{root}/verifier/verdict.json": json.dumps(verdict).encode(),
+            f"{root}/verifier/reward.txt": b"0",
+            f"{root}/exception.txt": cleanup.encode(),
+            "nop-control/negative-control.json": json.dumps(control).encode(),
+        }
+    )
+    archive = tmp_path / "recorded-nop.tar.gz"
+    with tarfile.open(archive, "w:gz") as output:
+        for name, data in members.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            output.addfile(member, io.BytesIO(data))
+    original_bytes = archive.read_bytes()
+    reference = ContentEvidenceReference(uri=str(archive), sha256=hashlib.sha256(original_bytes).hexdigest())
+    digest = canonical_sha256(result)
+    decision = tmp_path / "decision.json"
+    decision.write_text(
+        json.dumps(
+            {
+                "authority_message": "d01cf03119d70430139c23c1c1227f4f" if approved else "unapproved",
+                "cases": {
+                    digest: {"task_id": result["task_name"], "reward": 0},
+                    "a" * 64: {"task_id": "scale-swe-verified-other", "reward": 0},
+                },
+            }
+        )
+    )
+
+    def artifact(name):
+        return ContentEvidenceReference(
+            uri=f"{reference.uri}#{root}/{name}", sha256=hashlib.sha256(members[f"{root}/{name}"]).hexdigest()
+        )
+
+    proof = PostGradeTeardownEvidence(
+        kind="nop_verdict_before_environment_stop",
+        result_sha256=digest,
+        archive=reference,
+        result_artifact=artifact("result.json"),
+        verdict_artifact=artifact("verifier/verdict.json"),
+        reward_artifact=artifact("verifier/reward.txt"),
+        teardown_exception_artifact=artifact("exception.txt"),
+        decision=ContentEvidenceReference(uri=str(decision), sha256=hashlib.sha256(decision.read_bytes()).hexdigest()),
+    )
+    arguments = {
+        "source_task_sha256": source["source_task_sha256"],
+        "source_task_checksum": source["source_task_checksum"],
+        "execution_requirements": ExecutionRequirements.model_validate(source["execution_requirements"]),
+    }
+    original = negative_control_from_archive(reference, "nop-control/negative-control.json", **arguments)
+    assert not original.conclusive
+    if not approved:
+        with pytest.raises(ValueError, match="approved physical Trial partition"):
+            negative_control_from_archive(
+                reference, "nop-control/negative-control.json", post_grade_teardown=proof, **arguments
+            )
+        return
+    observed = negative_control_from_archive(
+        reference, "nop-control/negative-control.json", post_grade_teardown=proof, **arguments
+    )
+    require_negative_control(observed)
+    assert observed.conclusive and not observed.passed(None)
+    assert observed.trial.result == original.trial.result and observed.trial.verdict == original.trial.verdict
+    assert observed.trial.result["completion"] is None and observed.trial.result["verifier_result"] is None
+    assert observed.trial.post_grade_teardown == proof and observed.score == 0
+    assert archive.read_bytes() == original_bytes

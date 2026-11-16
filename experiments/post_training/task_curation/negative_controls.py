@@ -27,10 +27,12 @@ from taskcompendium.pipeline.oracle_filter import (
     NegativeControlInfrastructureApproval,
     OracleNegativeControlReceipt,
     OracleTrialReceipt,
+    PostGradeTeardownEvidence,
 )
 
 from experiments.post_training.task_curation.archive_evidence import verified_archive_members
 from experiments.post_training.task_curation.harbor_inspection import harbor_inspection
+from experiments.post_training.task_curation.post_grade_teardowns import require_post_grade_teardown
 
 
 def preparation_filename(kind: NegativeControlSetupKind | None) -> str:
@@ -161,6 +163,7 @@ def negative_control_from_archive(
     redrive_parent: OracleNegativeControlReceipt | None = None,
     redrive_decision: ContentEvidenceReference | None = None,
     redrive_infrastructure: NegativeControlInfrastructureApproval | None = None,
+    post_grade_teardown: PostGradeTeardownEvidence | None = None,
 ) -> OracleNegativeControlReceipt:
     """Bind an archived setup/nop/result tuple without changing its source result."""
     root = PurePosixPath(control_member).parent
@@ -274,7 +277,12 @@ def negative_control_from_archive(
         ),
         native_grade=native_grade,
         network_policy=network,
+        post_grade_teardown=post_grade_teardown,
     )
+    if post_grade_teardown is not None:
+        if post_grade_teardown.kind != "nop_verdict_before_environment_stop" or post_grade_teardown.archive != archive:
+            raise ValueError("Negative-control teardown evidence differs from its physical archive")
+        require_post_grade_teardown(post_grade_teardown, trial)
     receipt = OracleNegativeControlReceipt(
         source_task_sha256=source_task_sha256,
         source_task_checksum=source_task_checksum,
@@ -340,6 +348,7 @@ def require_negative_control(receipt: OracleNegativeControlReceipt) -> None:
         redrive_parent=receipt.redrive_parent,
         redrive_decision=receipt.redrive_decision,
         redrive_infrastructure=receipt.redrive_infrastructure,
+        post_grade_teardown=receipt.trial.post_grade_teardown,
     )
     if observed != receipt:
         raise ValueError("Negative-control receipt differs from its retained physical evidence")
