@@ -158,7 +158,9 @@ def test_admission_blocker_strings_stay_mapped():
     """Every blocker string the population check can emit keeps its typed reason."""
     admission = ast.parse((Path("infra/marina/apps/rl_data_catalog/server/admission.py")).read_text())
     function = next(
-        node for node in admission.body if isinstance(node, ast.FunctionDef) and node.name == "population_admission_blocker"
+        node
+        for node in admission.body
+        if isinstance(node, ast.FunctionDef) and node.name == "population_admission_blocker"
     )
     emitted = {
         node.value.value
