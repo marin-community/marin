@@ -35,7 +35,7 @@ from taskcompendium.harbor.protected_runtime import (
 )
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, write_source_runtime
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
+from taskcompendium.integrity import DeliveredVerifierFile, MultiSweDeliveryContract, RootDeliveryContract, SharedDependencyState
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.importers.evalchemy.financebench import convert_finance
 from taskcompendium.models import (
@@ -94,7 +94,8 @@ REPOSITORY_INTERFACE = "shell:v1"
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("agent,expected", [("nop", 0.0), ("oracle", 1.0)])
-async def test_declarative_task_spec_grades_original_actor_state_and_closes_contexts(tmp_path, monkeypatch, agent, expected):
+@pytest.mark.parametrize("delivery", ["rst", "multiswe"])
+async def test_declarative_task_spec_grades_original_actor_state_and_closes_contexts(tmp_path, monkeypatch, agent, expected, delivery):
     build = DockerBuildContext(files=(
         inline_resource("Dockerfile", b"FROM ubuntu:24.04\nWORKDIR /app\nCOPY initial value\n"),
         inline_resource("initial", b"base"),
@@ -113,7 +114,9 @@ async def test_declarative_task_spec_grades_original_actor_state_and_closes_cont
         resources=ResourceGroups(worker=(inline_resource("app/gold", b"gold"),), oracle=(inline_resource("solution/solve.sh", b"cp gold value\n"),)),
         integrity_contract=RootDeliveryContract(dependency_state=SharedDependencyState.AGENT_MUTABLE,
                            verifier_files=(DeliveredVerifierFile(name="state.sh", mode=0o755, sha256=hashlib.sha256(source_check.encode()).hexdigest()),),
-                           undeclared_deadline=True),
+                           undeclared_deadline=True) if delivery == "rst" else MultiSweDeliveryContract(
+                               dependency_state=SharedDependencyState.AGENT_MUTABLE,
+                               archive_sha256=hashlib.sha256(source_check.encode()).hexdigest(), undeclared_deadline=True),
     )
     directory = tmp_path / "task"
     write_harbor_task(task, directory, INITIAL_REQUIREMENTS, docker_build=DockerBuildExecution.DECLARATIVE)

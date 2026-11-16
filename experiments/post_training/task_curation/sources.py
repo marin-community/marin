@@ -41,6 +41,7 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra import comp
 from experiments.post_training.task_curation.datasets.oracle_admitted_releases import oracle_admitted_release_receipts
 from experiments.post_training.task_curation.datasets.oracle_releases import oracle_release_receipts
 from experiments.post_training.task_curation.datasets.prime_intellect import swe as prime_swe
+from experiments.post_training.task_curation.datasets.prime_intellect.multiswe import convert as prime_multiswe
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
 from experiments.post_training.task_curation.datasets.retained_releases import retained_release_receipts
 from experiments.post_training.task_curation.datasets.sample_qc_results import sample_qc_receipts
@@ -91,6 +92,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *lean_proofs.sources(),
     *lean_numina.sources(),
     *prime_swe.sources(),
+    *prime_multiswe.sources(),
     *rst.sources(),
 )
 

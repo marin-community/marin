@@ -47,7 +47,7 @@ from taskcompendium.harbor.adapter import (
     unsupported_harbor_contract,
 )
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.integrity import RootDeliveryContract
+from taskcompendium.integrity import MultiSweDeliveryContract, RootDeliveryContract
 from taskcompendium.harbor.protected_runtime import (
     RUNTIME_OBSERVATION_TIMEOUT,
     RuntimeRole,
@@ -561,7 +561,7 @@ class TaskSpecTrial(Trial):
                 machine, self.verdicts, self.paths.agent_dir / "resource-usage.json",
                 download_evidence_dir=(
                     self.paths.verifier_dir / "source-artifacts"
-                    if isinstance(task.integrity_contract, RootDeliveryContract) else None
+                    if isinstance(task.integrity_contract, (RootDeliveryContract, MultiSweDeliveryContract)) else None
                 ),
             )
             self._owned.push_async_callback(self.machine.finish_usage)
@@ -727,7 +727,7 @@ class TaskSpecTrial(Trial):
                     cleanup_timeout=self.config.trial_cleanup_grace_sec,
                 )
             )
-            if isinstance(self.agent, TaskSpecEmptyAgent) and not isinstance(task.integrity_contract, RootDeliveryContract):
+            if isinstance(self.agent, TaskSpecEmptyAgent) and not isinstance(task.integrity_contract, (RootDeliveryContract, MultiSweDeliveryContract)):
                 return await grade_empty_in_sandbox(
                     task,
                     factory,

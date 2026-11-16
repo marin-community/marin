@@ -2493,6 +2493,12 @@ machines close. It preserves build bytes, file modes, timestamps and the image-d
 working directory. Daytona commands use its existing root account unless a command
 selects a user; RST retains its original root actor. Mutable bases and downloads remain mutable; this
 route records a direct build rather than claiming an immutable image pin.
+A source host parser can declare its own fresh `grader.environment.docker_build`
+with a digest-pinned base and hash-locked dependencies. Bind that complete context
+in the TaskSpec and use the same EVAL declarative selection. No baked grader-image
+publication is needed. Count actor and parser machines against the same physical
+sandbox cap; a two-machine TaskSpec trial uses two slots.
+
 Other callers retain the unresolved-build rejection. State capture, other tool
 providers and shared grading without a supported contract remain execution blockers.
 

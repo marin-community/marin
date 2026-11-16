@@ -89,7 +89,7 @@ partial archives stay preserved; a failure prevents a complete-source result.
 `capture-result.json` references the complete `captures.json` manifest and its
 hash. Preserve both with the intake evidence. The private auxiliary input is frozen at
 `open-athena/atlas-multiswe-grading-artifacts-20261115-v1@acc1f291ad6ad293c095bd8cde868ab2715717a2`.
-The TaskSpec converter and execution qualification remain pending.
+The TaskSpec converter binds this input under version2026.11.16.1; current execution qualification remains pending.
 
 Docker Hub resolution must be single-threaded and honor `Retry-After`, with
 exponential backoff capped at ten minutes. Anonymous registry `HEAD` version
@@ -107,11 +107,12 @@ authorization tokens. See [Docker's version-check procedure](https://docs.docker
 `multiswe/data.py` and `multiswe/score.py` retain the source taskset's row restoration,
 instance construction, report generation and expected-test checks at
 `research-environments@b41d8759070715dc102000e06fba0d73ebce9955`. The source's
-Qiskit import shim is retained under `multiswe/_qiskit/`. The private grader
-uses `MULTISWE_REPORT_GRADER`, which pins the original `multi-swe-bench` 1.1.2
-source distribution by SHA-256 and compiles transitive dependencies with the
-standard environment builder. Build its registered environment by identity before
-planning conversion.
+Qiskit import shim is retained under `multiswe/_qiskit/`. The fresh private grader uses `multiswe/parser/Dockerfile`, with a digest-pinned
+Python3.12 base and `requirements.lock` compiled by the standard environment builder
+from the original `multi-swe-bench`1.1.2 source distribution and its SHA-256.
+`parser/provenance.json` records the cutoff, platform and lock hash. Export and
+execute the unchanged context through the explicit EVAL declarative route; no baked
+image publication is required. Actor and parser sandboxes share the validation cap.
 
 `multiswe/host_grade.py` runs on the fresh grading machine after original
 `/home` harness execution on the actor's machine. It consumes the raw source row,
@@ -124,3 +125,18 @@ errors. Harness exit status alone does not replace the source score.
 The host parser and its dependency image do not change the actor image or
 install Python in it. Parser probes supply no execution qualification; complete
 oracle, NoP, final-pin SAMPLE and admission receipts are still required.
+
+
+The Multi-SWE converter is `multiswe/convert.py`, version2026.11.16.1. It binds
+all2,232 rows to the2,231 captured original image digests, preserves source
+4CPU/4GiB/10GiB actor limits, and keeps the original setup, prompt and golden
+patch. Source-private /home files are removed during public preparation and
+restored from the frozen archive only at grading time. The original fix-extraction
+script and pipeline run on that actor machine; the original parser runs in a
+fresh machine. Original member bytes, modes and mtimes remain in the archive.
+
+The source's largest raw row is28.1MB and largest golden patch14.6MB; its
+recipe declares a64MiB decoded-resource budget. Archive delivery uses bounded
+commands rather than excluding large patches. Undeclared source deadlines remain
+absent in the grader and are recorded separately from calibration attempt budgets.
+Conversion, census and static export do not establish execution qualification.
