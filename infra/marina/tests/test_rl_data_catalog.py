@@ -99,8 +99,8 @@ from infra.marina.apps.rl_data_catalog.release_evidence import (
 )
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
-from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 from infra.marina.apps.rl_data_catalog.server.quality import result
+from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
@@ -1468,7 +1468,10 @@ def test_migrate_appends_audit_counts_to_the_retained_cohort_view(database_url: 
                 )
             before = (
                 connection.execute(
-                    text("SELECT grade, good_fraction, issue_count, issue_rate, unavailable_count FROM atlas_cohort_summary")
+                    text(
+                        "SELECT grade, good_fraction, issue_count, issue_rate, unavailable_count"
+                        " FROM atlas_cohort_summary"
+                    )
                 )
                 .mappings()
                 .one()
