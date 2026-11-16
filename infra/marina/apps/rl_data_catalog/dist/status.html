@@ -21,10 +21,19 @@
     /* The inner .table-scroller owns scrolling (max-height + overflow:auto); a hidden outer
        box only double-clips the open reason panels. */
     .catalog { overflow:visible; }
+    /* Fixed layout keeps the Reasons column from starving Source and Last change:
+       the reason chips' intrinsic width otherwise claims most of the table. */
+    #status-table { table-layout: fixed; }
+    #status-table th:nth-child(1) { width: 30%; }
+    #status-table th:nth-child(2) { width: 15%; }
+    #status-table th:nth-child(3) { width: 35%; }
+    #status-table th:nth-child(4) { width: 14%; }
+    #status-table th:nth-child(5) { width: 12%; }
+    #status-table td, #status-table th { overflow-wrap: break-word; }
     .status-reasons details { display:inline-block; margin:0 .25rem .25rem 0; max-width:100%; }
     .status-reasons summary { cursor:pointer; list-style:none; }
     .status-reasons summary::-webkit-details-marker { display:none; }
-    .status-explanation { max-width:34rem; padding:.5rem .75rem; margin-top:.25rem; border:1px solid var(--line); border-radius:.5rem; background:var(--surface); font-size:.85rem; }
+    .status-explanation { max-width:100%; padding:.5rem .75rem; margin-top:.25rem; border:1px solid var(--line); border-radius:.5rem; background:var(--surface); font-size:.85rem; }
     .status-explanation p { margin:.15rem 0; overflow-wrap:anywhere; }
     .status-explanation .meaning { font-weight:600; }
     .status-evidence a { display:inline-block; margin-right:.75rem; overflow-wrap:anywhere; }

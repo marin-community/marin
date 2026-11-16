@@ -159,6 +159,17 @@ def test_status_page_lists_every_status_with_clickable_reasons(journey: Journey,
     page.goto(base + "status.html")
     expect(page.locator("#rows tr").first).to_be_visible()
     expect(page.locator("#message")).to_have_text("")
+    layout = page.evaluate(
+        """() => {
+        const row = document.querySelector('#rows tr');
+        const widths = [...row.cells].map(cell => cell.getBoundingClientRect().width);
+        return {height: row.getBoundingClientRect().height, widths};
+    }"""
+    )
+    assert layout["widths"][0] >= 260, f"Source column starved: {layout}"
+    assert layout["widths"][2] <= 560, f"Reasons column unclamped: {layout}"
+    assert layout["widths"][4] >= 110, f"Last-change column starved: {layout}"
+    assert layout["height"] <= 200, f"First row too tall: {layout}"
 
     counts = page.locator("#status-counts")
     expect(counts.locator("button", has_text="Pending")).to_contain_text("1")
