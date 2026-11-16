@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import dataclasses
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, TypeVar
@@ -145,12 +145,14 @@ class TrainingContext:
         payloads: PayloadStore,
         *,
         rollout_spans: bool,
+        sources_by_uid: Mapping[str, str | None] | None = None,
     ):
         self.loader = loader
         self.config = config
         self._request_spec = request_spec
         self._workers = workers
         self._rollout_spans = rollout_spans
+        self._sources_by_uid = dict(sources_by_uid or {})
         self.mode = TrainingType.SYNC if config.max_staleness_steps == 0 else TrainingType.ASYNC
         self._policy_step = 0
         self._buffer = buffer
@@ -219,6 +221,11 @@ class TrainingContext:
             ),
         )
         object_store_root = config.trainer.rollout_buffer.object_store_root
+        sources_by_uid = (
+            {dataset.uid(index): source for index, source in enumerate(dataset.dataframe["data_source"])}
+            if isinstance(dataset, PromptDataset) and "data_source" in dataset.dataframe.column_names
+            else {}
+        )
         return cls(
             PromptLoader(
                 dataset,
@@ -234,6 +241,7 @@ class TrainingContext:
             workers,
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
+            sources_by_uid=sources_by_uid,
         )
 
     def start(self) -> None:
@@ -336,6 +344,8 @@ class TrainingContext:
                         tokens=outcome.tokens,
                         step=self._policy_step,
                         dwell_seconds=outcome.dwell_seconds,
+                        uid=outcome.uid,
+                        source=self._sources_by_uid.get(outcome.uid),
                     )
             record_rollout_buffer(admission.ready_count, self.config.max_untrained_groups)
             if admission.admitted:
