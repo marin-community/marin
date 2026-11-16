@@ -9,7 +9,6 @@ import json
 import logging
 from collections import Counter, defaultdict
 from collections.abc import Iterator
-from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -31,22 +30,30 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from experiments.sft_new_mix.exp3_filters import MAX_TOKENS, Document, Stage, apply_stage
-from experiments.sft_new_mix.exp3_runtime import build_config, configure_storage, count_stage, tokenizer_for
+from experiments.sft_new_mix.exp3_runtime import (
+    build_config,
+    configure_storage,
+    count_stage,
+    implementation_identity,
+    tokenizer_for,
+)
 from experiments.sft_new_mix.loss_modes import LossMode, prediction_weights
 from experiments.sft_new_mix.relay_teacher import render_teacher_transcript
 
-
-def implementation_identity() -> str:
-    digest = hashlib.sha256()
-    for name in ("materialize_relay.py", "relay_teacher.py", "loss_modes.py", "exp3_filters.py"):
-        digest.update(name.encode())
-        digest.update(Path(__file__).with_name(name).read_bytes())
-    return digest.hexdigest()
+# The files whose bytes determine relay teacher shards; the shared runtime module
+# is included so helper drift changes the pin.
+RELAY_IMPLEMENTATION_FILES = (
+    "exp3_runtime.py",
+    "materialize_relay.py",
+    "relay_teacher.py",
+    "loss_modes.py",
+    "exp3_filters.py",
+)
 
 
 def materialize_shard(job: dict) -> dict:
     configure_storage()
-    if job["implementation_sha256"] != implementation_identity():
+    if job["implementation_sha256"] != implementation_identity(RELAY_IMPLEMENTATION_FILES):
         raise ValueError("Relay builder implementation changed")
     root = StoragePath(job["output_prefix"]) / f"shard-{job['shard']:05d}"
     receipt_path = root / "receipt.json"
@@ -235,7 +242,12 @@ def main() -> None:
     plan = json.loads(StoragePath(args.plan).read_text())
     base = {key: plan["jobs"][0][key] for key in ("tokenizer_uri", "tokenizer_sha256", "config_uri", "config_sha256")}
     jobs = [
-        {**base, "shard": shard, "output_prefix": args.output_prefix, "implementation_sha256": implementation_identity()}
+        {
+            **base,
+            "shard": shard,
+            "output_prefix": args.output_prefix,
+            "implementation_sha256": implementation_identity(RELAY_IMPLEMENTATION_FILES),
+        }
         for shard in range(8)
     ]
     with ZephyrContext(

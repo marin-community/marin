@@ -19,16 +19,23 @@ MODEL_DIR = "s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate
 MODEL_FILES = ("pooled_junkgate2.eqx", "pooled_junkgate2_meta.json", "pooled_junkgate2_remap.json", "calib_bme.json")
 
 
+def model_digests(model_dir: str | None = None) -> dict[str, str]:
+    if model_dir is None:
+        model_dir = MODEL_DIR
+    digests = {}
+    for name in MODEL_FILES:
+        with (StoragePath(model_dir) / name).open("rb") as stream:
+            digests[name] = hashlib.file_digest(stream, "sha256").hexdigest()
+    return digests
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     configure_coreweave_s3()
-    hashes = {}
-    for name in MODEL_FILES:
-        with (StoragePath(MODEL_DIR) / name).open("rb") as stream:
-            hashes[name] = hashlib.file_digest(stream, "sha256").hexdigest()
+    hashes = model_digests()
     scorer = load_pooled_scorer(MODEL_DIR)
     calibration = load_calibration(MODEL_DIR)
     samples = [json.loads(path.read_text()) for path in sorted(args.sample.glob("sample-*.json"))]

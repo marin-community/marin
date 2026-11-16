@@ -21,11 +21,11 @@ from levanter.store.jagged_array import JaggedArrayStore
 from marin.datakit.chat_normalize import normalize_chat_record
 from marin.datakit.chat_render import render_chat_record
 from marin.datakit.download.nemotron_sft_v3 import row_to_chat_doc
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from experiments.sft_new_mix.exp3_filters import BOS, EOS, MESSAGE, unquote_opencode_prompt
+from experiments.sft_new_mix.exp3_filters import BOS, EOS, MAX_TOKENS, MESSAGE, unquote_opencode_prompt
 from experiments.sft_new_mix.exp3_runtime import configure_storage, read_pinned, tokenizer_for
 from experiments.sft_new_mix.loss_modes import LossMode, prediction_weights
 from experiments.sft_new_mix.prepare_overlay_gates import pinned_json
@@ -154,7 +154,7 @@ def bridge_part(job: dict) -> dict:
     configure_storage()
     tokenizer = tokenizer_for(job["tokenizer_uri"], job["tokenizer_sha256"])
     lookup = question_lookup(job["index"]["uri"], job["index"]["sha256"])
-    store = JaggedArrayStore.open(job["input_path"] + "/input_ids", mode="r", dtype=np.int32)
+    store = JaggedArrayStore.open(prefix_join(job["input_path"], "input_ids"), mode="r", dtype=np.int32)
     if len(store) != job["expected_rows"]:
         raise ValueError("Frozen original cache row count changed")
     rows = []
@@ -243,9 +243,7 @@ def repair_part(job: dict) -> dict:
     for item in job["bridges"]:
         if item["input_path"] != original["input_path"]:
             raise ValueError("Question bridge source mismatch")
-        content = StoragePath(item["pin"]["uri"]).read_bytes()
-        if hashlib.sha256(content).hexdigest() != item["pin"]["sha256"]:
-            raise ValueError("Bridge changed")
+        content = read_pinned(item["pin"]["uri"], item["pin"]["sha256"])
         for row in pq.read_table(pa.BufferReader(content)).to_pylist():
             if row["row"] in bridge:
                 raise ValueError("Overlapping question bridges")
@@ -253,8 +251,8 @@ def repair_part(job: dict) -> dict:
     tokenizer = tokenizer_for(job["tokenizer_uri"], job["tokenizer_sha256"])
     prefix = tuple(tokenizer.encode("<|start_header_id|>assistant<|end_header_id|>\n", add_special_tokens=False).ids)
     start_id = tokenizer.token_to_id("<|start_header_id|>")
-    tokens = JaggedArrayStore.open(base["cache_uri"] + "/input_ids", mode="r", dtype=np.int32)
-    masks = JaggedArrayStore.open(base["cache_uri"] + "/loss_weights", mode="r", dtype=np.float32)
+    tokens = JaggedArrayStore.open(prefix_join(base["cache_uri"], "input_ids"), mode="r", dtype=np.int32)
+    masks = JaggedArrayStore.open(prefix_join(base["cache_uri"], "loss_weights"), mode="r", dtype=np.float32)
     if len(tokens) != base["rows"] or len(masks) != base["rows"]:
         raise ValueError("Candidate cache row count changed")
     counts = Counter()
@@ -281,7 +279,7 @@ def repair_part(job: dict) -> dict:
                         after, changed = repair_text(text, question)
                         if changed:
                             new = np.asarray(tokenizer.encode(after, add_special_tokens=False).ids, dtype=np.int32)
-                            if len(new) > 262_144:
+                            if len(new) > MAX_TOKENS:
                                 raise ValueError("Question repair exceeds context limit")
                             new_weights = prediction_weights(
                                 new,

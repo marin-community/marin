@@ -9,11 +9,11 @@ import json
 from pathlib import Path
 
 from levanter.store.cache import CacheLedger
-from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.sft_new_mix.exp3_filters import Stage
 from experiments.sft_new_mix.exp3_runtime import BUILD_IMPLEMENTATION_FILES, configure_storage, implementation_identity
-from experiments.sft_new_mix.score_replay import MODEL_DIR, MODEL_FILES
+from experiments.sft_new_mix.score_replay import MODEL_DIR, model_digests
 
 OPENCODE_TOOLS = frozenset(
     (
@@ -52,14 +52,6 @@ def vetted_tools(source: str) -> list[str]:
     if source == "science-tool-use-conversations":
         tools = frozenset(("execute_bash", "bash"))
     return sorted(tools)
-
-
-def junkgate_model_digests() -> dict[str, str]:
-    digests = {}
-    for name in MODEL_FILES:
-        with (StoragePath(MODEL_DIR) / name).open("rb") as stream:
-            digests[name] = hashlib.file_digest(stream, "sha256").hexdigest()
-    return digests
 
 
 def main() -> None:
@@ -128,7 +120,7 @@ def main() -> None:
         # The cutoff is calibrated for one specific set of model weights; freeze
         # those bytes into the config so the build can verify them before scoring.
         config["junkgate_model_dir"] = MODEL_DIR
-        config["junkgate_model_sha256"] = junkgate_model_digests()
+        config["junkgate_model_sha256"] = model_digests()
     config_bytes = json.dumps(config, sort_keys=True, indent=2).encode()
     config_sha = hashlib.sha256(config_bytes).hexdigest()
     config_uri = prefix_join(args.destination, "config.json")

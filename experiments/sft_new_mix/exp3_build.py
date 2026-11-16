@@ -40,7 +40,7 @@ from experiments.sft_new_mix.exp3_runtime import (
     tokenizer_for,
 )
 from experiments.sft_new_mix.loss_modes import LossMode, prediction_weights
-from experiments.sft_new_mix.score_replay import MODEL_DIR, MODEL_FILES
+from experiments.sft_new_mix.score_replay import MODEL_DIR, model_digests
 
 logger = logging.getLogger(__name__)
 BATCH_ROWS = 512
@@ -73,15 +73,10 @@ def replay_scorer():
 
 def verified_replay_scorer(config_value: dict):
     """Refuse to score with junkgate weights that moved after the cutoff was calibrated."""
-    if config_value["junkgate_model_dir"] != MODEL_DIR:
+    if config_value.get("junkgate_model_dir") != MODEL_DIR:
         raise ValueError("Junkgate model directory changed after cutoff calibration")
-    pins = config_value["junkgate_model_sha256"]
-    if set(pins) != set(MODEL_FILES):
-        raise ValueError("Junkgate digest pins disagree with the deployed model file list")
-    for name in MODEL_FILES:
-        with (StoragePath(MODEL_DIR) / name).open("rb") as stream:
-            if hashlib.file_digest(stream, "sha256").hexdigest() != pins[name]:
-                raise ValueError("Junkgate model weights changed after cutoff calibration")
+    if config_value.get("junkgate_model_sha256") != model_digests(MODEL_DIR):
+        raise ValueError("Junkgate model weights changed after cutoff calibration")
     return replay_scorer()
 
 

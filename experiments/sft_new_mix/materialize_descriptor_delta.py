@@ -5,7 +5,6 @@
 
 import argparse
 import gzip
-import hashlib
 import json
 import logging
 from collections import Counter, defaultdict
@@ -13,11 +12,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.sft_new_mix.exp3_runtime import configure_storage
+from experiments.sft_new_mix.exp3_runtime import configure_storage, implementation_identity, read_pinned
 from experiments.sft_new_mix.job_manifests import stage_job_manifest
 from experiments.sft_new_mix.prepare_overlay_gates import pinned_json
 from experiments.sft_new_mix.run_tool_payloads import JOB_MANIFEST_WRITE_WORKERS, execute_references
-from experiments.sft_new_mix.tool_overlay import export_key, implementation_identity, select_records
+from experiments.sft_new_mix.tool_overlay import VERIFIER_IMPLEMENTATION_FILES, export_key, select_records
 
 
 def main() -> None:
@@ -39,7 +38,7 @@ def main() -> None:
     excluded = {export_key(row) for row in descriptor["excluded_exports"]}
     old_parts = {part["sha256"] for part in previous["parts"]}
     parts = [part for part in descriptor["parts"] if part["sha256"] not in old_parts]
-    if implementation_identity() != recipe["verifier_sha256"]:
+    if implementation_identity(VERIFIER_IMPLEMENTATION_FILES) != recipe["verifier_sha256"]:
         raise ValueError("Final payload verifier changed")
     counts = Counter()
     by_source = Counter()
@@ -47,9 +46,7 @@ def main() -> None:
     identities = set()
     references = []
     for part in parts:
-        content = StoragePath(part["manifest"]).read_bytes()
-        if hashlib.sha256(content).hexdigest() != part["sha256"]:
-            raise ValueError("Final admission part digest changed")
+        content = read_pinned(part["manifest"], part["sha256"])
         records, evidence = select_records([(gzip.decompress(content), 2)], inputs, excluded)
         if evidence["counts"]["manifest_rows"] != part["verified_and_actually_modified"] or evidence["superseded"]:
             raise ValueError("Final admission part has an unexpected population")

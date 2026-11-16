@@ -10,9 +10,9 @@ import json
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.sft_new_mix.exp3_runtime import configure_storage
+from experiments.sft_new_mix.exp3_runtime import configure_storage, implementation_identity, read_pinned
 from experiments.sft_new_mix.final_receipts import collect_final_inventory
-from experiments.sft_new_mix.finalize_shards import DropStage, execute_plan, implementation_identity
+from experiments.sft_new_mix.finalize_shards import FINALIZE_IMPLEMENTATION_FILES, DropStage, execute_plan
 from experiments.sft_new_mix.prepare_overlay_gates import pinned_json
 
 
@@ -62,10 +62,9 @@ def main() -> None:
     jobs, source_loss, pins = [], {}, []
     for name, source in sources.items():
         population_pin = populations[name]
-        content = (StoragePath(population_pin["path"]) / ".artifact.json").read_bytes()
-        if hashlib.sha256(content).hexdigest() != population_pin["metadata_sha256"]:
-            raise ValueError("Atlas population metadata changed")
-        population = json.loads(content)["result"]
+        population = json.loads(
+            read_pinned(population_pin["path"] + "/.artifact.json", population_pin["metadata_sha256"])
+        )["result"]
         digest = hashlib.sha256(
             json.dumps(
                 {key: source[key] for key in ("source", "source_revision", "loss_mode", "shards")}, sort_keys=True
@@ -134,7 +133,7 @@ def main() -> None:
                     "output_prefix": str(
                         StoragePath(recipe["output_prefix"]) / "components" / hashlib.sha256(name.encode()).hexdigest()
                     ),
-                    "implementation_sha256": implementation_identity(),
+                    "implementation_sha256": implementation_identity(FINALIZE_IMPLEMENTATION_FILES),
                     "overlays": [],
                     "overlay_enabled": False,
                     "real_tools_enabled": False,

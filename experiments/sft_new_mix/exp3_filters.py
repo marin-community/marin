@@ -121,11 +121,12 @@ def turns(text: str) -> list[Turn]:
 
 
 def with_turns(document: Document, before: list[Turn], after: list[Turn]) -> Document:
-    """Splice edited turn bodies back into the original rendered text.
+    """Splice edited turns back into the original rendered text.
 
     Turn framing must keep matching MARIN_CHAT_TEMPLATE, which ends assistant
-    turns with <|eot_id|> and no newline, so framing bytes are preserved
-    verbatim and only changed turn bodies are replaced.
+    turns with <|eot_id|> and no newline. Each kept turn reuses its original
+    framing bytes; turns dropped or merged away vanish together with their
+    framing, so an assistant end-of-turn never gains a newline.
     """
     if before == after:
         return document
