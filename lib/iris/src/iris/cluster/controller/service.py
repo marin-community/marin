@@ -3026,6 +3026,21 @@ class ControllerServiceImpl:
         if proxied is not None:
             return proxied
 
+        if task.state != job_pb2.TASK_STATE_RUNNING:
+            attempt = next((a for a in task.attempts if a.attempt_id == task.current_attempt_id), None)
+            if task.current_attempt_id < 0:
+                attempt_detail = "no attempt started"
+            elif attempt is None:
+                attempt_detail = f"attempt {task.current_attempt_id} not started"
+            else:
+                attempt_detail = f"attempt {task.current_attempt_id}, attempt state {task_state_friendly(attempt.state)}"
+            return controller_pb2.Controller.ExecInContainerResponse(
+                error=(
+                    f"Task {request.task_id} has no live container "
+                    f"(task state {task_state_friendly(task.state)}; {attempt_detail})"
+                )
+            )
+
         worker_request = worker_pb2.Worker.ExecInContainerRequest(
             task_id=request.task_id,
             command=request.command,
@@ -3038,11 +3053,16 @@ class ControllerServiceImpl:
         timeout = request.timeout_seconds or (60 if exec_target.worker_id is None else 0)
 
         resp = self._backend_for_id(str(task.backend_id or "")).exec_in_container(exec_target, worker_request, timeout)
+        error = resp.error
+        if error and exec_target.worker_id is None:
+            attempt = next((a for a in task.attempts if a.attempt_id == task.current_attempt_id), None)
+            attempt_state = task_state_friendly(attempt.state) if attempt is not None else "unknown"
+            error = f"{error}; task state {task_state_friendly(task.state)}, attempt state {attempt_state}"
         return controller_pb2.Controller.ExecInContainerResponse(
             exit_code=resp.exit_code,
             stdout=resp.stdout,
             stderr=resp.stderr,
-            error=resp.error,
+            error=error,
         )
 
     def execute_raw_query(

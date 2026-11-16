@@ -26,8 +26,10 @@ from iris.cluster.constraints import (
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
+from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment, finalize
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
@@ -38,13 +40,17 @@ from iris.cluster.controller.service import (
 )
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, tpu_device
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func
 from sqlalchemy import update as sa_update
 from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+from tests.cluster.controller.transition_driver import (
+    WorkerTaskUpdates,
+    apply_task_observations,
+    commit_dispatch_updates,
+)
 
 from .conftest import (
     make_job_request,
@@ -233,6 +239,73 @@ def test_profile_worker_routes_to_worker_backend(service, state):
 
     # The profile bytes could only have come from the cw backend's provider.
     assert resp.profile_data == b"cw-profile"
+
+
+@pytest.mark.parametrize("task_state", ["pending", "building", "succeeded"])
+def test_exec_without_running_task_reports_task_and_attempt_state(service, state, task_state):
+    job_id = JobName.from_wire(service.launch_job(make_job_request("exec-unavailable"), None).job_id)
+    task_id = job_id.task(0)
+    if task_state == "building":
+        service._controller.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
+        with state._db.transaction() as cur:
+            batch = dispatch.drain_for_dispatch(cur)
+        with state._db.transaction() as cur:
+            commit_dispatch_updates(
+                cur,
+                [
+                    TaskUpdate(
+                        task_id=task_id,
+                        attempt_id=batch.tasks_to_run[0].attempt_id,
+                        new_state=job_pb2.TASK_STATE_BUILDING,
+                    )
+                ],
+                now=Timestamp.now(),
+            )
+    elif task_state == "succeeded":
+        worker_id = WorkerId("exec-worker")
+        _register_worker(state, worker_id)
+        _assign_and_transition(state, task_id, worker_id, job_pb2.TASK_STATE_SUCCEEDED)
+
+    resp = service.exec_in_container(
+        controller_pb2.Controller.ExecInContainerRequest(task_id=task_id.to_wire(), command=["echo", "hello"]),
+        None,
+    )
+
+    assert task_id.to_wire() in resp.error
+    assert f"task state {task_state}" in resp.error
+    if task_state == "pending":
+        assert "no attempt started" in resp.error
+    else:
+        assert f"attempt 0, attempt state {task_state}" in resp.error
+
+
+def test_exec_running_task_without_pod_reports_recorded_state(service, state):
+    service._controller.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
+    job_id = JobName.from_wire(service.launch_job(make_job_request("exec-missing-pod"), None).job_id)
+    task_id = job_id.task(0)
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(
+                    task_id=task_id, attempt_id=batch.tasks_to_run[0].attempt_id, new_state=job_pb2.TASK_STATE_RUNNING
+                )
+            ],
+            now=Timestamp.now(),
+        )
+    service._controller.provider.exec_in_container.return_value = worker_pb2.Worker.ExecInContainerResponse(
+        error="pod missing"
+    )
+
+    resp = service.exec_in_container(
+        controller_pb2.Controller.ExecInContainerRequest(task_id=task_id.to_wire(), command=["echo", "hello"]),
+        None,
+    )
+
+    assert "pod missing" in resp.error
+    assert "task state running, attempt state running" in resp.error
 
 
 def test_get_job_status_reports_parent_job_id(service):
