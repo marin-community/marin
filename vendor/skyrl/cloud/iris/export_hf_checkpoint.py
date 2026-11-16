@@ -381,9 +381,6 @@ def _run_export(spec: ExportJobSpec, command: list[str]) -> None:
     exit_code = subprocess.call(command, stdout=sys.stderr)
     if exit_code != 0:
         raise subprocess.CalledProcessError(exit_code, command)
-    if not spec.no_wait:
-        export_path = policy_export_path(spec.request.export_path, spec.request.step)
-        _verify_hf_model_export(export_path)
 
 
 def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
@@ -466,6 +463,9 @@ def main() -> None:
         return
     if request is None:
         _run_export(spec, cmd)
+        if not spec.no_wait:
+            export_path = policy_export_path(spec.request.export_path, spec.request.step)
+            _verify_hf_model_export(export_path)
     else:
         submit_requested_export(spec, cmd)
 
