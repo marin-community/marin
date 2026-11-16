@@ -11,8 +11,11 @@ import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import (
     ActorCensusInput,
+    ContentEvidenceReference,
     DaytonaMeasurement,
     LexicalContaminationEvidence,
+    NoOracleExecutabilityPolicy,
+    NoOracleStaticRetentionEvidence,
     OracleValidation,
     OversightEvidence,
     OversightLevel,
@@ -40,6 +43,7 @@ from experiments.post_training.task_curation.lexical_policy import source_lexica
 from experiments.post_training.task_curation.remediation_binding import (
     PublicationReceipt,
     RetainedReleaseReceipt,
+    StaticRetentionBinding,
     bind_retained_release,
     measured_intake_source,
     release_lexical_evidence,
@@ -303,6 +307,49 @@ def test_binding_selects_private_retained_pin_and_uses_new_population_evidence(r
     changed = replace(source, config=replace(source.config, revision="2" * 40))
     with pytest.raises(ValueError, match="different conversion input"):
         bind_retained_release(changed, receipt)
+
+
+def static_binding(source_id, release, actor):
+    policy = NoOracleExecutabilityPolicy(
+        version=1,
+        executability_proof_required_for_no_oracle=False,
+        decision=ContentEvidenceReference(uri="s3://fixtures/no-oracle-ruling.md", sha256="a" * 64),
+    )
+    return StaticRetentionBinding(
+        policy=policy,
+        evidence=NoOracleStaticRetentionEvidence(
+            source_id=source_id,
+            source_release=release,
+            current_input=actor,
+            intended_use="train",
+            retained_cohort=ContentEvidenceReference(uri="s3://fixtures/current-cohort.parquet", sha256="b" * 64),
+            retained_count=actor.measured_tasks,
+            static_retained_count=actor.measured_tasks,
+            exclusion_counts={},
+            oracle_filter=ContentEvidenceReference(uri="s3://fixtures/static-filter.json", sha256="c" * 64),
+            policy_sha256=policy.sha256,
+        ),
+    )
+
+
+def test_retained_static_evidence_survives_archive_roundtrip_and_binds_only_to_selected_pin(retained_receipt):
+    source, receipt = retained_receipt
+    static = static_binding(receipt.source_id, receipt.publication.release, receipt.actor.input)
+    archived = RetainedReleaseReceipt.model_validate({**receipt.model_dump(), "static_retention": static})
+    restored = RetainedReleaseReceipt.model_validate_json(archived.model_dump_json())
+    bound = bind_retained_release(source, restored)
+    assert bound.declaration.no_oracle_static_retention == static.evidence
+    assert bound.declaration.no_oracle_executability_policy == static.policy
+    assert bound.declaration.dataset_revision == static.evidence.source_release.revision
+    assert source.info.no_oracle_static_retention is None
+    assert restored.original_info == receipt.original_info
+
+
+def test_old_upstream_static_evidence_cannot_certify_the_retained_pin(retained_receipt):
+    source, receipt = retained_receipt
+    old = static_binding(source.info.id, source.current_release, source.info.actor_census_input)
+    with pytest.raises(ValueError, match="another retained population"):
+        RetainedReleaseReceipt.model_validate({**receipt.model_dump(), "static_retention": old})
 
 
 @pytest.mark.parametrize("stale_actor", [False, True])

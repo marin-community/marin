@@ -15,6 +15,8 @@ from finestore.rl.curation import (
     LexicalContaminationEvidence,
     LexicalReceipt,
     LexicalUse,
+    NoOracleExecutabilityPolicy,
+    NoOracleStaticRetentionEvidence,
     PipelineReference,
     WithinSourceDedupEvidence,
 )
@@ -97,6 +99,19 @@ class PublicationReceipt(BaseModel):
         return self
 
 
+class StaticRetentionBinding(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    policy: NoOracleExecutabilityPolicy
+    evidence: NoOracleStaticRetentionEvidence
+
+    @model_validator(mode="after")
+    def _same_policy(self) -> "StaticRetentionBinding":
+        if self.evidence.policy_sha256 != self.policy.sha256:
+            raise ValueError("Static retention evidence belongs to another policy")
+        return self
+
+
 class RetainedReleaseReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -107,6 +122,7 @@ class RetainedReleaseReceipt(BaseModel):
     original_pipeline: PipelineReference
     original_info: SourceInfo
     retained_dedup: WithinSourceDedupEvidence
+    static_retention: StaticRetentionBinding | None = None
 
     @model_validator(mode="after")
     def _exact_retained_pin(self) -> "RetainedReleaseReceipt":
@@ -139,6 +155,22 @@ class RetainedReleaseReceipt(BaseModel):
             0,
         ):
             raise ValueError("Active dedup evidence must describe the retained population")
+        if self.static_retention is not None:
+            static = self.static_retention.evidence
+            if (
+                static.source_id,
+                static.source_release,
+                static.current_input,
+                static.retained_count,
+                static.intended_use.value,
+            ) != (
+                self.source_id,
+                publication.release,
+                self.actor.input,
+                publication.plan.retained_count,
+                publication.plan.lexical_use.value,
+            ):
+                raise ValueError("Static retention evidence belongs to another retained population or Use")
         return self
 
 
@@ -225,7 +257,17 @@ def bind_retained_release(source: RlDataSource, receipt: RetainedReleaseReceipt)
         ),
     )
     retained = RlDataSource(info=info, config=config, pipeline=import_retained)
-    return bind_actor_census(retained, receipt.actor)
+    retained = bind_actor_census(retained, receipt.actor)
+    if receipt.static_retention is None:
+        return retained
+    return replace(
+        retained,
+        info=replace(
+            retained.info,
+            no_oracle_executability_policy=receipt.static_retention.policy,
+            no_oracle_static_retention=receipt.static_retention.evidence,
+        ),
+    )
 
 
 def measured_intake_source(
@@ -263,8 +305,17 @@ def main() -> None:
     parser.add_argument("--censuses", type=Path, nargs="+", required=True)
     parser.add_argument("--grading", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--static-retention-bindings", type=Path, help="Per-source typed policy/evidence objects")
     parser.add_argument("--pending-source", action="append", default=[], help="Explicit pending Atlas source ID")
     args = parser.parse_args()
+    static_retention = (
+        {}
+        if args.static_retention_bindings is None
+        else {
+            key: StaticRetentionBinding.model_validate(value)
+            for key, value in json.loads(args.static_retention_bindings.read_text()).items()
+        }
+    )
     # Registry loading depends on this module once retained receipts are installed.
     from experiments.post_training.task_curation.sources import (  # noqa: PLC0415
         PENDING_MEASUREMENT_SOURCES,
@@ -300,6 +351,7 @@ def main() -> None:
                 original_pipeline=source.pipeline_reference,
                 original_info=source.info,
                 retained_dedup=WithinSourceDedupEvidence.model_validate(measured["dedup"]),
+                static_retention=static_retention.get(publication.source_id),
             )
             bound = bind_retained_release(source, receipt)
             if bound.current_release != publication.release:
@@ -307,6 +359,8 @@ def main() -> None:
             if publication.plan.lexical_use is LexicalUse.TRAIN:
                 require_private_release(bound.info.lexical_contamination, publication.repo, publication.revision)
             receipts[publication.source_id] = receipt.model_dump(mode="json")
+    if unknown := static_retention.keys() - receipts.keys():
+        raise ValueError(f"Static retention bindings have no selected publication: {sorted(unknown)}")
     args.output_dir.mkdir(parents=True, exist_ok=False)
     write_receipt_shards(args.output_dir, receipts, records_per_shard=RETAINED_RECEIPTS_PER_SHARD)
 

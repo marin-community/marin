@@ -2322,6 +2322,22 @@ Source metadata carries optional `no_oracle_executability_policy` and
 catalog records. Static evidence leaves grading-boundary, integrity, content,
 deduplication, lexical and overlap checks in force.
 
+For a retained private release, archive the policy and evidence together under
+`RetainedReleaseReceipt.static_retention`. Pass `remediation_binding
+--static-retention-bindings BINDINGS.json` a JSON object keyed by source ID;
+each value has `policy` (`NoOracleExecutabilityPolicy`) and `evidence`
+(`NoOracleStaticRetentionEvidence`). The evidence must match the source ID,
+selected private release, `actor.input` census binding, retained task count,
+intended use (`train` or `eval`) and policy SHA-256 exactly.
+It applies after retained selection and preserves the original upstream metadata.
+An absent binding supplies no new static-retention evidence.
+
+The static producer writes local output paths. When staging its outputs in
+regional storage, verify every uploaded file's SHA-256 and preserve the original
+generated evidence. Rebind only `evidence.oracle_filter.uri` to the immutable
+regional filter object, retaining the identical SHA-256; task, runtime, policy
+and filter bytes stay unchanged. Use that portable evidence in `BINDINGS.json`.
+
 For both SAMPLE and FULL, run the production Harbor Trial with the restored
 ORACLE agent over the complete oracle-bearing population. The filter retains exactly
 the tasks with a completed trial, solution exit zero, and structured scored
