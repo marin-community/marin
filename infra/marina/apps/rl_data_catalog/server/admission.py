@@ -77,19 +77,20 @@ def require_population_admission(declaration: SourceDeclaration) -> None:
 def require_content_result(
     declaration: SourceDeclaration, curation: CurationSummary | None, assessment_key: str | None
 ) -> None:
-    """Require a computed Result for Available SAMPLE/FULL sources before selecting them."""
-    if declaration.status != "Available":
-        return
+    """Require a computed Result for reviewed sources before selecting them."""
     if assessment_key is not None or declaration.quality_result is not None:
         return
     controls = curation.verification if curation is not None else None
-    reviewed = declaration.oversight in {OversightLevel.SAMPLE, OversightLevel.FULL} or (
+    campaign_reviewed = (
         curation is not None
         and curation.mode in {"sample", "full"}
         and controls is not None
         and controls.status in {"passed", "validated"}
     )
-    if reviewed:
+    oversight_reviewed = declaration.oversight in {OversightLevel.SAMPLE, OversightLevel.FULL}
+    # A campaign that reviewed its own sample owes a computed Result even when the source
+    # is Excluded or Not selectable; a declared oversight owes one only for Available sources.
+    if campaign_reviewed or (declaration.status == "Available" and oversight_reviewed):
         raise ValueError(f"SAMPLE/FULL quality requires a computed Result: {declaration.id}")
 
 
