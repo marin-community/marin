@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import replace
 
+from shellbox.image import DockerfileSource
 from shellbox.machine import (
     Backend,
     HostImage,
@@ -16,6 +17,7 @@ from shellbox.machine import (
 )
 
 from taskcompendium.models import EnvironmentRequirements, require_resolved_environment
+from taskcompendium.runtime.docker_build import require_original_docker_build
 from taskcompendium.runtime.local import local_runtime
 
 _TEMPLATE_PATTERN = re.compile(r"\$\{([^}:]+)(?::-(.*))?\}")
@@ -54,7 +56,10 @@ def bound_machine_spec(requirements: EnvironmentRequirements, spec: MachineSpec)
 
 def validate_machine_spec(requirements: EnvironmentRequirements, factory: MachineFactory, spec: MachineSpec) -> None:
     """Ask the selected factory to reject unsupported requirements before preparation."""
-    require_resolved_environment(requirements)
+    if requirements.docker_build is not None and isinstance(spec.source, DockerfileSource):
+        require_original_docker_build(requirements.docker_build, spec.source)
+    else:
+        require_resolved_environment(requirements)
     factory.check_environment(requirements, bound_machine_spec(requirements, spec))
 
 

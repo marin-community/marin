@@ -19,7 +19,8 @@ import pytest
 import tomlkit
 from rolloutengine.models import RolloutLimits
 from shellbox.backends.local.machine import LocalMachineFactory
-from shellbox.image import RegistryImage
+from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.machine import Backend, ExitReason, NetworkPolicy, Result, UnsupportedMachineSpec
 from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.harbor.oracle import ORACLE_COMMAND_FILE, write_oracle_command
@@ -33,13 +34,17 @@ from taskcompendium.harbor.protected_runtime import (
 )
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, write_source_runtime
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.importers.evalchemy.financebench import convert_finance
 from taskcompendium.models import (
     AnswerType,
+    ArtifactKind,
     CommandSemantics,
     ConversationInput,
     ConversationTrace,
+    DockerBuildContext,
+    DockerBuildExecution,
     EnvironmentRequirements,
     PlainText,
     ProviderRequirement,
@@ -51,6 +56,8 @@ from taskcompendium.models import (
     RewardFileFormat,
     TaskSpec,
     TextMessage,
+    VerifierArtifact,
+    VerifierCommand,
     verifyit_spec,
     grader_workspace,
 )
@@ -82,6 +89,57 @@ from lib.taskcompendium.tests.grading_machines import LocalGradingMachine
 
 FIXTURES = Path(__file__).parents[4] / "experiments/post_training/task_curation/tests/fixtures/harbor_task_specs"
 REPOSITORY_INTERFACE = "shell:v1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent,expected", [("nop", 0.0), ("oracle", 1.0)])
+async def test_declarative_task_spec_grades_original_actor_state_and_closes_contexts(tmp_path, monkeypatch, agent, expected):
+    build = DockerBuildContext(files=(
+        inline_resource("Dockerfile", b"FROM ubuntu:24.04\nWORKDIR /app\nCOPY initial value\n"),
+        inline_resource("initial", b"base"),
+    ))
+    environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS,
+                                          docker_build=build, working_directory="/app")
+    check = b"from pathlib import Path\nprint(float(Path('collected.txt').read_text() == 'gold'))\n"
+    task = TaskSpec(
+        id="declared-build-state", source=Source(dataset="fixture", revision="pin", row="0", importer_revision="1"),
+        context=ConversationInput(events=(TextMessage(role="user", content="Replace value with gold."),)),
+        answer_type=AnswerType.WORKSPACE_STATE, answer_format=PlainText(), environment_requirements=environment,
+        grader=ScriptGrader(argv=("python3", "/tests/check.py"), environment=environment, answer_path=None, timeout=None,
+                            collect=(VerifierCommand(argv=("bash", "-c", "cp value collected.txt"), cwd="/app"),),
+                            artifacts=(VerifierArtifact(source="/app/collected.txt", target="/app/collected.txt", kind=ArtifactKind.FILE),)),
+        resources=ResourceGroups(worker=(inline_resource("app/gold", b"gold"),), oracle=(inline_resource("solution/solve.sh", b"cp gold value\n"),), verifier=(inline_resource("check.py", check),)),
+        integrity_contract=RootDeliveryContract(dependency_state=SharedDependencyState.AGENT_MUTABLE,
+                           verifier_files=(DeliveredVerifierFile(name="check.py", mode=0o644, sha256=canonical_sha256("fixture")),),
+                           undeclared_deadline=True),
+    )
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS, docker_build=DockerBuildExecution.DECLARATIVE)
+    machines = Machines(tmp_path / "sandboxes", disk_pool=object())
+    original_create = machines.create
+    contexts = []
+
+    async def create(spec):
+        assert isinstance(spec.source, DockerfileSource)
+        contexts.append(spec.source.context)
+        assert spec.source.dockerfile.read_bytes() == b"FROM ubuntu:24.04\nWORKDIR /app\nCOPY initial value\n"
+        machine = await original_create(spec)
+        machine.local("/tmp").mkdir()
+        machine.local("/app/value").write_bytes((spec.source.context / "initial").read_bytes())
+        return machine
+
+    monkeypatch.setattr(machines, "create", create)
+    monkeypatch.setattr(adapter, "DaytonaDeclarativeMachineFactory", lambda client, **kwargs: machines)
+    trial = await Trial.create(TrialConfig(
+        task=TaskConfig(path=directory), trial_name=agent, trials_dir=tmp_path / "trials",
+        agent=AgentConfig(name=agent), environment=EnvironmentConfig(type="daytona", kwargs={"provisioning": "declarative"}),
+    ), host_capabilities=HostCapabilities(daytona=DaytonaConnection("fixture-key", "https://offline.invalid", "us")))
+    result = await trial.run()
+    assert result.exception_info is None, result.exception_info
+    assert result.verifier_result.rewards == {"reward": expected}
+    assert len(machines.machines) == 2 and all(machine.closed for machine in machines.machines)
+    assert all(not context.exists() for context in contexts)
+    assert TaskSpec.model_validate_json((directory / "task-spec.json").read_text()) == task
 
 
 @dataclass

@@ -2471,14 +2471,26 @@ kwargs. A verifier-only loopback relay carries requests to that fixed endpoint;
 provider credentials stay on the host. Agent/verifier credential declarations
 configure host transport and do not modify TaskSpec environment variables.
 
-The `oracle` control executes a preserved file-task `solution/solve.sh` in its
+The `oracle` control executes a preserved file-task or workspace-state `solution/solve.sh` in its
 declared actor environment. A task without an original oracle instead reads
 `solution/response.json`, containing a JSON array of exactly one OpenAI-format assistant message,
 from `--calibration-solutions/<task-id>/`. That response is calibration-only.
 Select `nop` for independent empty-submission liveness. These controls receive
-no candidate-model settings. Shared-state grading, state capture, other tool providers,
-unresolved image builds and oracle delivery without an explicit supported
-contract remain execution blockers; the adapter does not rewrite them.
+no candidate-model settings. A `RootDeliveryContract` keeps the original actor
+identity and grades its prepared machine through trusted collect commands.
+Its NoP runs the same collect path against that machine after public preparation;
+it does not substitute an empty grading machine for the task state.
+
+TaskSpec validation can explicitly select Daytona EVAL declarative provisioning.
+Export with `write_harbor_task(..., docker_build=\n+DockerBuildExecution.DECLARATIVE)` and run the Trial with
+`environment: {type: daytona, kwargs: {provisioning: declarative}}`.
+The Trial owns a temporary copy of each original Docker build context until its
+machines close. It preserves build bytes, file modes, timestamps and the image-default
+working directory. Daytona commands use its existing root account unless a command
+selects a user; RST retains its original root actor. Mutable bases and downloads remain mutable; this
+route records a direct build rather than claiming an immutable image pin.
+Other callers retain the unresolved-build rejection. State capture, other tool
+providers and shared grading without a supported contract remain execution blockers.
 
 Changes to TaskSpec provisioning require the dedicated LOCAL regression below
 on a privileged Linux CPU worker with delegated cgroup v2, loop devices and

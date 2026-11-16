@@ -242,7 +242,11 @@ class TaskSpecOracleAgent(TaskSpecAgent):
             return self.attempt
         resources = (*task.resources.all, *task.resources.worker, *task.resources.oracle)
         paths = {resource.path for resource in resources}
-        if task.answer_type != AnswerType.FILE or "solution/solve.sh" not in paths or machine is None:
+        if (
+            task.answer_type not in {AnswerType.FILE, AnswerType.WORKSPACE_STATE}
+            or "solution/solve.sh" not in paths
+            or machine is None
+        ):
             raise ValueError("The original TaskSpec requires an explicit oracle delivery contract for this answer type")
         await upload_resources(machine, task.resources.oracle, limits.total_turn_timeout, user=None)
         result = await machine.run(Command(("bash", "/solution/solve.sh"), timeout=limits.total_turn_timeout))

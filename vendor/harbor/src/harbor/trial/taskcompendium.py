@@ -18,8 +18,10 @@ from upath import UPath
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.machines import grading_machine_factory, prepare_machine, task_machine
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits
+from shellbox.backends.daytona.machine import DaytonaDeclarativeMachineFactory
+from shellbox.backends.daytona.provider import ProviderWaitPolicy
 from shellbox.backends.local.machine import SYSTEM_DIRECTORIES
-from shellbox.image import RegistryImage
+from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     ExitReason,
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
@@ -41,6 +43,7 @@ from taskcompendium.harbor.adapter import (
     unsupported_harbor_contract,
 )
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.integrity import RootDeliveryContract
 from taskcompendium.harbor.protected_runtime import (
     RUNTIME_OBSERVATION_TIMEOUT,
     RuntimeRole,
@@ -49,6 +52,7 @@ from taskcompendium.harbor.protected_runtime import (
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, read_source_runtime
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.models import (
+    DockerBuildExecution,
     ExecutionRequirements,
     TaskSpec,
     VerifyitGrader,
@@ -59,6 +63,7 @@ from taskcompendium.runtime.grading import (
     grade_empty_in_sandbox,
     grade_in_sandbox,
 )
+from taskcompendium.runtime.docker_build import materialize_docker_build
 from taskcompendium.runtime.output_capture import captured_output_files
 from taskcompendium.runtime.oracle import oracle_actor_required, oracle_environment
 from verifyit.modes.grade_judge import (
@@ -315,14 +320,21 @@ class TaskSpecTrial(Trial):
             actor_effective=None,
             verifier_effective=None,
         )
-        unsupported = unsupported_harbor_contract(self.specification)
+        self.docker_build_execution = (
+            DockerBuildExecution.DECLARATIVE
+            if self.config.environment.type == EnvironmentType.DAYTONA
+            and self.config.environment.kwargs.get("provisioning") == "declarative"
+            else DockerBuildExecution.REJECT
+        )
+        unsupported = unsupported_harbor_contract(self.specification, docker_build=self.docker_build_execution)
         if unsupported is not None:
             raise ValueError(unsupported)
         if not isinstance(self.agent, TaskSpecAgent):
             raise ValueError("Use a harbor.agents.taskcompendium agent for a TaskSpec payload")
         self._owned = AsyncExitStack()
         self._open_machines: set[_CleanupTrackedMachine] = set()
-        self._local_resources_qualified = False
+        self._resources_qualified = False
+        self._build_sources: dict[str, DockerfileSource] = {}
         self.machine: _MeasuredMachine | None = None
         self.verdicts: list[bytes] = []
         self.attempt = empty_attempt(self.specification)
@@ -334,14 +346,15 @@ class TaskSpecTrial(Trial):
             verifier_timeout_sec=self.task.config.verifier.timeout_sec,
         )
         require_trial_budget(self.specification, self.shape)
-        if self.config.environment.type != EnvironmentType.LOCAL:
-            raise ValueError("TaskSpec trials currently require the LOCAL backend")
         configuration = self.config.environment
-        validate_local_resources(
-            self.task.config.environment.model_copy(update={"storage_mb": None}),
-            cpu_enforcement_policy=configuration.cpu_enforcement_policy,
-            memory_enforcement_policy=configuration.memory_enforcement_policy,
-        )
+        if configuration.type == EnvironmentType.LOCAL:
+            validate_local_resources(
+                self.task.config.environment.model_copy(update={"storage_mb": None}),
+                cpu_enforcement_policy=configuration.cpu_enforcement_policy,
+                memory_enforcement_policy=configuration.memory_enforcement_policy,
+            )
+        elif self.docker_build_execution != DockerBuildExecution.DECLARATIVE:
+            raise ValueError("TaskSpec trials require LOCAL or explicit Daytona declarative provisioning")
         if any(
             value is not None
             for value in (
@@ -370,7 +383,7 @@ class TaskSpecTrial(Trial):
         ):
             raise ValueError("TaskSpec trials do not accept timeout overrides or multipliers")
         runtime = MachineRuntimeSpec(
-            backend="local",
+            backend="local" if configuration.type == EnvironmentType.LOCAL else "daytona",
             network=actor_network if actor_network is not None else NetworkPolicy.DENY,
             cpus=self.shape.cpus,
             memory_mb=self.shape.memory_mb,
@@ -461,23 +474,41 @@ class TaskSpecTrial(Trial):
                 if supplied_model is None or not supplied_model.strip():
                     raise ValueError("TaskSpec judge requires an explicit model_name when its declared model is blank")
                 self.judge_model = supplied_model
-        disk_root = kwargs.pop("disk_root", None)
-        if disk_root is None:
-            raise ValueError("Declared TaskSpec disk requires an explicit disk_root")
-        kwargs["disk_pool"] = await self._await_phase(
-            local_disk_pool(
-                self.task.config.environment,
-                disk_root=Path(disk_root),
-                cpu_enforcement_policy=self.config.environment.cpu_enforcement_policy,
-                memory_enforcement_policy=self.config.environment.memory_enforcement_policy,
-            ),
-            timeout_sec=self._environment_build_timeout_sec,
-            timeout_error=EnvironmentStartTimeoutError("TaskSpec disk qualification timed out"),
-        )
-        self._local_resources_qualified = True
-        self.factory = local_machine_factory(**kwargs)
-        if self.factory.cgroup_parent is None:
-            raise ValueError("Declared TaskSpec CPU and memory require cgroup enforcement")
+        if self.config.environment.type == EnvironmentType.LOCAL:
+            disk_root = kwargs.pop("disk_root", None)
+            if disk_root is None:
+                raise ValueError("Declared TaskSpec disk requires an explicit disk_root")
+            kwargs["disk_pool"] = await self._await_phase(
+                local_disk_pool(
+                    self.task.config.environment,
+                    disk_root=Path(disk_root),
+                    cpu_enforcement_policy=self.config.environment.cpu_enforcement_policy,
+                    memory_enforcement_policy=self.config.environment.memory_enforcement_policy,
+                ),
+                timeout_sec=self._environment_build_timeout_sec,
+                timeout_error=EnvironmentStartTimeoutError("TaskSpec disk qualification timed out"),
+            )
+            self.factory = local_machine_factory(**kwargs)
+            if self.factory.cgroup_parent is None:
+                raise ValueError("Declared TaskSpec CPU and memory require cgroup enforcement")
+        else:
+            kwargs.pop("provisioning")
+            unknown = kwargs.keys() - {"ttl_minutes", "create_timeout"}
+            if unknown:
+                raise ValueError(f"Unsupported TaskSpec Daytona arguments: {sorted(unknown)}")
+            connection = self.host_capabilities.daytona
+            if connection is None:
+                raise ValueError("TaskSpec Daytona execution requires an explicit connection")
+            self.factory = DaytonaDeclarativeMachineFactory(
+                connection.client_factory(), provider_wait_policy=ProviderWaitPolicy.JOB, **kwargs
+            )
+            contexts = Path(self._owned.enter_context(TemporaryDirectory(prefix="task-spec-build-")))
+            for role, environment in (("actor", task.environment_requirements), ("verifier", task.grader.environment)):
+                if environment is not None and environment.docker_build is not None:
+                    self._build_sources[role] = await asyncio.to_thread(
+                        materialize_docker_build, environment.docker_build, contexts / role
+                    )
+        self._resources_qualified = True
         if self.network_policy.actor_required:
             factory = _NetworkFactory(self.factory, self, "task_machine")
             if (
@@ -496,6 +527,7 @@ class TaskSpecTrial(Trial):
                         factory,
                         self.runtime,
                         cleanup_timeout=self.config.trial_cleanup_grace_sec,
+                        docker_build_source=self._build_sources.get("actor"),
                     )
                 ),
                 timeout_sec=self._environment_build_timeout_sec,
@@ -583,6 +615,7 @@ class TaskSpecTrial(Trial):
                         ),
                         self.verifier_runtime,
                         cleanup_timeout=self.config.trial_cleanup_grace_sec,
+                        docker_build_source=self._build_sources.get("verifier"),
                     )
                 ),
                 timeout_sec=self._environment_build_timeout_sec,
@@ -642,7 +675,9 @@ class TaskSpecTrial(Trial):
             return await self._grade_in_process(relay, connection)
         assert grader.environment is not None
         source = grader.environment.package_spec or HostImage()
-        if grader.environment.docker_image is not None:
+        if "verifier" in self._build_sources:
+            source = self._build_sources["verifier"]
+        elif grader.environment.docker_image is not None:
             source = RegistryImage(grader.environment.docker_image)
         spec = MachineSpec(
             source,
@@ -664,7 +699,7 @@ class TaskSpecTrial(Trial):
                     cleanup_timeout=self.config.trial_cleanup_grace_sec,
                 )
             )
-            if isinstance(self.agent, TaskSpecEmptyAgent):
+            if isinstance(self.agent, TaskSpecEmptyAgent) and not isinstance(task.integrity_contract, RootDeliveryContract):
                 return await grade_empty_in_sandbox(
                     task,
                     factory,
@@ -772,6 +807,6 @@ class TaskSpecTrial(Trial):
 
     async def _stop_agent_environment(self) -> None:
         await self._owned.aclose()
-        if self._open_machines or not self._local_resources_qualified:
+        if self._open_machines or not self._resources_qualified:
             raise RuntimeServiceError("TaskSpec machine cleanup is unconfirmed")
         self._is_agent_environment_stopped = True

@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from shellbox.image import RegistryImage
+from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     Backend,
     Command,
@@ -72,10 +72,17 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
             await machine.upload(source, f"/{resource.path}")
 
 
-def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
-    require_resolved_environment(requirements)
+def _machine_spec(
+    requirements: EnvironmentRequirements,
+    runtime: MachineRuntimeSpec,
+    docker_build_source: DockerfileSource | None = None,
+) -> MachineSpec:
+    if requirements.docker_build is None or docker_build_source is None:
+        require_resolved_environment(requirements)
     repository = repository_shell_environment(requirements)
-    if requirements.docker_image is not None:
+    if requirements.docker_build is not None and docker_build_source is not None:
+        source = docker_build_source
+    elif requirements.docker_image is not None:
         source = RegistryImage(requirements.docker_image)
     elif requirements.packages_lock is not None:
         source = HostImage()
@@ -87,7 +94,11 @@ def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntime
         raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
     workdir = requirements.working_directory
     if workdir is None:
-        workdir = repository.workspace if repository is not None else "" if requirements.docker_image else "/workspace"
+        workdir = (
+            repository.workspace
+            if repository is not None
+            else "" if requirements.docker_image or requirements.docker_build else "/workspace"
+        )
     return MachineSpec(
         source=source,
         workdir=workdir,
@@ -142,6 +153,7 @@ async def _prepare_machine(
     factories: Mapping[str, MachineFactory],
     cleanup: _Cleanup,
     owned: AsyncExitStack,
+    docker_build_source: DockerfileSource | None = None,
 ) -> Machine | None:
     """Prepare a task machine with its resources and setup commands."""
     if runtime is None:
@@ -151,7 +163,7 @@ async def _prepare_machine(
             prepare_machine_spec,
             requirements,
             factories[runtime.backend],
-            _machine_spec(requirements, runtime),
+            _machine_spec(requirements, runtime, docker_build_source),
             dict(os.environ),
         )
         machine = await _acquire_machine(runtime, prepared, factories, cleanup, owned)
@@ -244,7 +256,12 @@ async def grading_machine_factory(
 
 @asynccontextmanager
 async def task_machine(
-    task: TaskSpec, factory: MachineFactory, runtime: MachineRuntimeSpec, *, cleanup_timeout: float
+    task: TaskSpec,
+    factory: MachineFactory,
+    runtime: MachineRuntimeSpec,
+    *,
+    cleanup_timeout: float,
+    docker_build_source: DockerfileSource | None = None,
 ) -> AsyncIterator[Machine]:
     """Start a machine for ``task``: install its resources and run its setup commands. Close it on exit.
 
@@ -259,6 +276,7 @@ async def task_machine(
         factory,
         runtime,
         cleanup_timeout=cleanup_timeout,
+        docker_build_source=docker_build_source,
     ) as machine:
         yield machine
 
@@ -271,6 +289,7 @@ async def prepare_machine(
     runtime: MachineRuntimeSpec,
     *,
     cleanup_timeout: float,
+    docker_build_source: DockerfileSource | None = None,
 ) -> AsyncIterator[Machine]:
     """Install resources and run setup on a machine, closing it when the context exits.
 
@@ -278,6 +297,8 @@ async def prepare_machine(
     ``runtime.cleanup_timeout`` overrides the supplied cleanup deadline when set.
     """
     async with _machine_ownership(cleanup_timeout) as (cleanup, owned):
-        machine = await _prepare_machine(requirements, runtime, resources, {runtime.backend: factory}, cleanup, owned)
+        machine = await _prepare_machine(
+            requirements, runtime, resources, {runtime.backend: factory}, cleanup, owned, docker_build_source
+        )
         assert machine is not None
         yield machine
