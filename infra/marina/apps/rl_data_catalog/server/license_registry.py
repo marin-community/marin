@@ -4,7 +4,7 @@
 """Versioned user decisions; Python packaging preserves this registry in hosted backends."""
 
 LICENSE_BANS = r"""{
-  "version": "2026.11.16.1",
+  "version": "2026.11.16.2",
   "bans": [
     {
       "source_id": "ASDiv:asdiv",
@@ -393,82 +393,6 @@ LICENSE_BANS = r"""{
         "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
       ],
       "decided_at": "2026-11-15T17:27:51.574676+00:00",
-      "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497"
-    },
-    {
-      "source_id": "TaskTrove:R2E-Gym__R2E-Gym-V1",
-      "upstream_id": "unverified-origin:fda7e5457b14",
-      "upstream_revision": "5197693cd08583c7540ab59d11889962da4f81a3",
-      "classification": "unknown",
-      "license_ids": [
-        "apache-2.0",
-        "cc-by-4.0",
-        "mit",
-        "other"
-      ],
-      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
-      "evidence_urls": [
-        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
-      ],
-      "decided_at": "2026-11-15T17:27:51.574685+00:00",
-      "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497"
-    },
-    {
-      "source_id": "TaskTrove:SWE-Gym__SWE-Gym",
-      "upstream_id": "unverified-origin:34756fc0a4c6",
-      "upstream_revision": "203ad7878edd71b3a836c7cd414be3ff75acb89c",
-      "classification": "unknown",
-      "license_ids": [
-        "apache-2.0",
-        "cc-by-4.0",
-        "mit",
-        "other"
-      ],
-      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
-      "evidence_urls": [
-        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
-      ],
-      "decided_at": "2026-11-15T17:27:51.574687+00:00",
-      "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497"
-    },
-    {
-      "source_id": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general",
-      "upstream_id": "unverified-origin:17e9cc3c116e",
-      "upstream_revision": "d9a644247b0eeb0c02ab646b66be5ad45a92410b",
-      "classification": "unknown",
-      "license_ids": [
-        "apache-2.0",
-        "cc-by-4.0",
-        "mit",
-        "other"
-      ],
-      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
-      "evidence_urls": [
-        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
-      ],
-      "decided_at": "2026-11-15T17:27:51.574706+00:00",
-      "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497"
-    },
-    {
-      "source_id": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music",
-      "upstream_id": "unverified-origin:f01e9d445e5a",
-      "upstream_revision": "c90333fe822a670c241f6e3649552abc01d948a8",
-      "classification": "unknown",
-      "license_ids": [
-        "apache-2.0",
-        "cc-by-4.0",
-        "mit",
-        "other"
-      ],
-      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
-      "evidence_urls": [
-        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
-      ],
-      "decided_at": "2026-11-15T17:27:51.574713+00:00",
       "decision_by": "user via coordinator",
       "issue_url": "https://github.com/marin-community/marin/issues/11497"
     },
