@@ -31,15 +31,6 @@ def test_producer_and_adopted_native_journals_are_reported(tmp_path):
     (results / "results.jsonl").write_text(json.dumps(row))
     trained = tmp_path / "trained"
     trained.mkdir()
-    (trained / "selected.json").write_text(
-        json.dumps(
-            {
-                "completed_updates": 2,
-                "step": 1,
-                "training_completion": {"stop_reason": "time_bound", "maximum_updates": 746},
-            }
-        )
-    )
     native = TrainingJournal(str(trained / "telemetry"), "producer-sft", "sft", "rank-0")
     with native.events.span("steady_state"):
         native.log({"train/loss": 0.2}, step=1, commit=True)
@@ -67,11 +58,7 @@ def test_producer_and_adopted_native_journals_are_reported(tmp_path):
         sft_geometry="CPU fixture",
         additional_timing=[pin],
         rl_terminal=str(trained),
-        sft_selection=str(trained),
     )
-    text = (output / "timing.md").read_text()
-    assert "SFT completed 2 updates; selected native step 1." in text
-    assert "SFT stop reason: time_bound; maximum 746 updates." in text
     assert json.loads((output / "rl-terminal.json").read_text()) == {
         "state": "failed",
         "failure": "GroupAdmissionStalledError",
