@@ -40,6 +40,9 @@ from experiments.post_training.task_curation.oracle_filter import (
     native_requirements,
     write_task_map,
 )
+from experiments.post_training.task_curation.oracle_filter import (
+    filter_cohort as production_filter_cohort,
+)
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_cohort
 from experiments.post_training.task_curation.task_spec_harbor import prepare
 
@@ -224,6 +227,8 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
                     )
                 }
             )
+        if task_id == "pass":
+            task = task.model_copy(update={"execution_requirements": None})
         envelope["task"] = task.model_dump(mode="json")
         row["lowered_task_spec"] = json.dumps(envelope)
         rows.append(row)
@@ -394,6 +399,29 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     assert receipt.tasks["missing-exit"].trials[0].oracle_exit_code is None
     assert receipt.tasks["missing-exit"].exclusion_reason is OracleExclusionReason.INFRASTRUCTURE
     assert not receipt.tasks["missing-exit"].passed
+
+    failed_result_path = tmp_path / "jobs/pass-0/result.json"
+    failed_result = json.loads(failed_result_path.read_text())
+    failed_result["verifier_result"]["rewards"]["reward"] = 0
+    failed_result_path.write_text(json.dumps(failed_result))
+    (failed_result_path.parent / "verifier/verdict.json").write_text(json.dumps({"status": "scored", "reward": 0}))
+    failed_receipt = production_filter_cohort(
+        cohort,
+        task_map,
+        tmp_path / "jobs",
+        tmp_path / "failed-with-nop/tasks.parquet",
+        conversion_manifest=conversion_manifest,
+        executability_runs=controls,
+        negative_controls=output.parent / "nop-fixture-input/controls.jsonl",
+        negative_control_policy=receipt.negative_control_policy,
+    )
+    failed = failed_receipt.tasks["pass"]
+    assert failed.exclusion_reason is OracleExclusionReason.ORACLE_FAILED
+    assert not failed.passed
+    assert failed.source_task_sha256 == receipt.tasks["pass"].source_task_sha256
+    assert failed.task_sha256 == receipt.tasks["pass"].task_sha256 != failed.source_task_sha256
+    assert failed.negative_control == receipt.tasks["pass"].negative_control
+    assert failed.negative_control.consumed_task_sha256 == failed.task_sha256
 
     envelope = json.loads(rows[0]["lowered_task_spec"])
     envelope["task"]["labels"] = {"changed": "after Harbor export"}

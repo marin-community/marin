@@ -3996,7 +3996,14 @@ source_task_checksum=..., execution_requirements=...)`. Pass JSONL records of
 `{"task_id": ..., "receipt": ...}` to `collect --negative-controls controls.jsonl`.
 The collector verifies the archive, setup script, physical result and verdict
 bytes before binding the control to the exact original and consumed contracts.
-Original oracle trials and reward maps remain unchanged.
+Original oracle trials and reward maps remain unchanged. A scored oracle failure
+with a physical nop receipt retains the calibrated consumed TaskSpec identity,
+including its measured allocations and final `task.toml`. The failed task stays
+excluded from the oracle-filtered population. Without a physical nop receipt,
+a completed original oracle trial with a recorded exit code and valid score
+that fails the oracle success criteria keeps the original TaskSpec without
+requiring a passing allocation qualification. Infrastructure and incomplete outcomes do not qualify as scored
+failures.
 
 Run one control with `python -m harbor.cli.curation_control`, passing a JSON
 request on stdin with `trial` (the production `TrialConfig`), `source`

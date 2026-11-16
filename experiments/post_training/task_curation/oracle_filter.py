@@ -669,7 +669,10 @@ def filter_cohort(
                 ):
                     raise ValueError(f"Separate-role allocation is unqualified without verifier evidence: {task.id}")
                 final_package = Path(calibration.attempts[-1].result["config"]["task"]["path"])
-                if (qualification is not None or not is_nonagentic_task(task)) and not scored_failure:
+                # Physical NoP receipts bind the calibrated packet even when the oracle fails.
+                if (qualification is not None or not is_nonagentic_task(task)) and (
+                    not scored_failure or task.id in negative
+                ):
                     task = calibrated_task_spec(
                         task, requirements, verifier_requirements, (final_package / "task.toml").read_bytes()
                     )
