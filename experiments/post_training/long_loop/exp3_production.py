@@ -283,6 +283,9 @@ def production_plan(release: DataRelease, source_revision: str, files: dict[str,
     )
     current = Path(__file__).with_name("specs")
     documents["rl/execution.yaml"] = yaml.safe_load((current / "execution.yaml").read_text())
+    documents["rl/execution.yaml"]["coordinator"]["coordinator_name"] = "long-loop-exp3"
+    # Exp1 retained a null Evalchemy option that the native judge no longer accepts.
+    documents["rl/evaluation.yaml"]["judge"].pop("evalchemy_num_concurrent")
     documents["rl/sft.yaml"] = production_sft_recipe(release)
     documents["rl/execution.yaml"]["task_timeouts"] = {"rl": 3 * 24 * 3600}
     documents["rl/rl.yaml"]["execution"]["job_timeout_seconds"] = 3 * 24 * 3600
