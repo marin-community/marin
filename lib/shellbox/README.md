@@ -74,6 +74,14 @@ finally:
 
 ### Daytona snapshots
 
+Eval-account callers can opt into `DaytonaDeclarativeMachineFactory` to create
+sandboxes directly from the original registry image or Dockerfile context,
+without named snapshots. Harbor selects it with environment kwargs
+`{"provisioning": "declarative"}`. Task resources, command execution, provider
+retries and sandbox cleanup use the same path as the default snapshot factory.
+Credential selection is independent; use the dedicated eval account described
+in the [Daytona runbook](../../.agents/ops/daytona.md#credentials-and-account-selection).
+
 One snapshot corresponds to one image source and one CPU, memory, disk and GPU
 request. Registry images are identified by reference; Docker build contexts by
 their current contents. Memory and disk round up to whole GiB. The name is

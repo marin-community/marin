@@ -23,10 +23,12 @@ from pathlib import Path, PurePosixPath
 from daytona import (
     AsyncDaytona,
     AsyncSandbox,
+    CreateSandboxFromImageParams,
     CreateSandboxFromSnapshotParams,
     DaytonaConflictError,
     DaytonaError,
     DaytonaNotFoundError,
+    Image,
 )
 from daytona_api_client_async import SandboxState
 
@@ -107,7 +109,7 @@ def _control_command(script: str) -> str:
 
 async def _create_sandbox(
     client: AsyncDaytona,
-    params: CreateSandboxFromSnapshotParams,
+    params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams,
     timeout: float,
     *,
     deadline: float | None = None,
@@ -669,19 +671,39 @@ class DaytonaMachineFactory:
         async with client_factory() as client, self.provider_wait_policy.timeout(timeout) as deadline:
             return await self._prepare(client, spec, self.provider_wait_policy.startup_deadline(deadline))
 
-    @provider_wait_scope()
-    async def create(self, spec: MachineSpec) -> DaytonaMachine:
+    def _sandbox_parameters(self, spec: MachineSpec, name: str) -> dict:
         network = (
             {"network_block_all": spec.network is NetworkPolicy.DENY}
             if self.network_policy is None
             else self.network_policy.parameters()
         )
+        return dict(
+            name=name,
+            os_user="root",
+            env_vars=spec.env,
+            **network,
+            auto_stop_interval=0,
+            ttl_minutes=self.ttl_minutes,
+        )
+
+    async def _create_parameters(
+        self,
+        client: AsyncDaytona,
+        spec: MachineSpec,
+        name: str,
+        deadline: float | None,
+    ) -> CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams:
+        snapshot = await self._prepare(client, spec, self.provider_wait_policy.startup_deadline(deadline))
+        return CreateSandboxFromSnapshotParams(snapshot=snapshot, **self._sandbox_parameters(spec, name))
+
+    @provider_wait_scope()
+    async def create(self, spec: MachineSpec) -> DaytonaMachine:
         async with AsyncExitStack() as lifetime:
             client = await lifetime.enter_async_context(self._clients()())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
             async with self.provider_wait_policy.timeout(timeout) as deadline:
-                snapshot = await self._prepare(client, spec, self.provider_wait_policy.startup_deadline(deadline))
                 name = f"shellbox-{uuid.uuid4().hex}"
+                params = await self._create_parameters(client, spec, name, deadline)
 
                 async def delete_sandbox(_error_type, error, _traceback):
                     try:
@@ -694,15 +716,7 @@ class DaytonaMachineFactory:
                 lifetime.push_async_exit(delete_sandbox)
                 sandbox = await _create_sandbox(
                     client,
-                    CreateSandboxFromSnapshotParams(
-                        name=name,
-                        snapshot=snapshot,
-                        os_user="root",
-                        env_vars=spec.env,
-                        **network,
-                        auto_stop_interval=0,
-                        ttl_minutes=self.ttl_minutes,
-                    ),
+                    params,
                     timeout=timeout,
                     deadline=self.provider_wait_policy.startup_deadline(deadline),
                     wait_policy=self.provider_wait_policy,
@@ -719,3 +733,25 @@ class DaytonaMachineFactory:
                     raise RuntimeError(f"Failed to create workdir {spec.workdir}: {result.result!r}")
             machine.resources = lifetime.pop_all()
             return machine
+
+
+class DaytonaDeclarativeMachineFactory(DaytonaMachineFactory):
+    """Create directly from the task image without creating named snapshots."""
+
+    async def prepare(self, spec: MachineSpec) -> str:
+        raise UnsupportedMachineSpec("Declarative builds run during sandbox creation; no snapshot can be prepared")
+
+    async def _create_parameters(
+        self,
+        _client: AsyncDaytona,
+        spec: MachineSpec,
+        name: str,
+        _deadline: float | None,
+    ) -> CreateSandboxFromImageParams:
+        self._check_spec(spec)
+        request = snapshot_request_for_spec(spec)
+        source = request.source
+        image = source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
+        return CreateSandboxFromImageParams(
+            image=image, resources=request.resources, **self._sandbox_parameters(spec, name)
+        )

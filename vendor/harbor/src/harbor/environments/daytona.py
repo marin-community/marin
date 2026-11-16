@@ -33,12 +33,14 @@ from harbor.environments.model_relay import (
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.daytona.machine import (
+    DaytonaDeclarativeMachineFactory,
     INTERRUPT_TIMEOUT,
     DEFAULT_SANDBOX_TTL_MINUTES,
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkPolicy,
 )
+from shellbox.backends.daytona.provisioning import DaytonaProvisioning
 from shellbox.backends.daytona.snapshot import (
     SnapshotRequest,
     snapshot_request_for_spec,
@@ -101,6 +103,7 @@ class DaytonaEnvironment(BaseEnvironment):
         network_policy: dict[str, str] | None = None,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
+        provisioning: DaytonaProvisioning = DaytonaProvisioning.SNAPSHOT,
         trial_attempt_timeout_sec: float | None = None,
         model_endpoint: str | None = None,
         model_name: str | None = None,
@@ -131,7 +134,11 @@ class DaytonaEnvironment(BaseEnvironment):
         self.provider_wait_policy = (
             ProviderWaitPolicy.JOB if trial_attempt_timeout_sec is not None else ProviderWaitPolicy.PHASE
         )
-        self.factory = DaytonaMachineFactory(
+        factory_type = {
+            DaytonaProvisioning.SNAPSHOT: DaytonaMachineFactory,
+            DaytonaProvisioning.DECLARATIVE: DaytonaDeclarativeMachineFactory,
+        }[DaytonaProvisioning(provisioning)]
+        self.factory = factory_type(
             client_factory,
             ttl_minutes=ttl_minutes,
             create_timeout=create_timeout,

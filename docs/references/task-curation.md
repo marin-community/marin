@@ -2506,6 +2506,14 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
   --output-dir /path/to/oracle-run-v2 --environment daytona --concurrency 128
 
+# DAYTONA EVAL: original image/Dockerfile, direct provisioning without named snapshots.
+# Map DAYTONA_EVAL_API_KEY to DAYTONA_API_KEY only in this validation process.
+# Set concurrency from the eval account's available sandbox quota.
+uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
+  --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
+  --output-dir /path/to/oracle-eval-v1 --environment daytona --concurrency 2 \
+  --environment-kwargs '{"provisioning":"declarative"}'
+
 # LOCAL: prepared digest-pinned images via umoci and shellbox-images.json,
 # in PRIVILEGED Iris CPU workers with loop devices. This route supports only root commands.
 uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \

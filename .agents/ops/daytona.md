@@ -20,6 +20,18 @@ replace the RL credential: training containers remain in the RL account.
 `DaytonaValidationError: declarative builds are not allowed` is an account/build
 permission failure, not a model failure or a zero reward.
 
+For eval-account validation without named snapshots, explicitly select
+`environment: {type: daytona, kwargs: {provisioning: declarative}}` in the
+Harbor TrialConfig. This uses `DaytonaDeclarativeMachineFactory` and
+`CreateSandboxFromImageParams` to build from the original registry image or
+Dockerfile context during sandbox creation. It preserves task resources and
+shares the normal command, provider-retry and sandbox-cleanup path. The default
+`snapshot` mode still resolves named snapshots. Select the eval credential
+separately; provisioning mode does not change accounts. Bound concurrency to the
+eval sandbox quota, retain the actual provisioning mode in launch receipts, and
+leave other campaigns' snapshots and sandboxes alone. The ten-snapshot RL
+suitability census remains a measurement of the source's training configuration.
+
 The keys live in Google Secret Manager in project `hai-gcp-models`:
 `DAYTONA_RL_API_KEY` for training and `DAYTONA_EVAL_API_KEY` for validation.
 Load them into the correspondingly named environment variables before submission.

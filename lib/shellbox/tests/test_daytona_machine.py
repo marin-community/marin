@@ -29,6 +29,7 @@ pytest.importorskip("daytona")
 
 from daytona import (
     AsyncDaytona,
+    CreateSandboxFromImageParams,
     CreateSandboxFromSnapshotParams,
     DaytonaAuthorizationError,
     DaytonaConfig,
@@ -45,6 +46,7 @@ from rigging.timing import ExponentialBackoff, active_timeout
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
+    DaytonaDeclarativeMachineFactory,
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkMode,
@@ -1963,5 +1965,62 @@ def test_daytona_job_wait_preserves_external_cancellation_when_acquisition_clean
             await task
         assert client.closed
         assert not client.deleted
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("source_kind", ["registry", "dockerfile"])
+@pytest.mark.parametrize("accepted_then_failed", [False, True])
+def test_declarative_daytona_preserves_task_image_and_cleans_up_without_snapshots(
+    tmp_path, source_kind, accepted_then_failed
+):
+    class DeclarativeClient(LocalDaytona):
+        def __init__(self):
+            super().__init__()
+            # No snapshot service exists on this account. Any access is a regression.
+            del self.snapshot
+            self.sandbox.process = SimpleNamespace(exec=self.exec, close=self.close)
+
+        async def exec(self, *args, **kwargs):
+            return SimpleNamespace(exit_code=0, result="/usr/bin/setsid")
+
+        async def close(self):
+            pass
+
+        async def create(self, params, *, timeout):
+            assert isinstance(params, CreateSandboxFromImageParams)
+            self.params = params
+            self.timeout = timeout
+            if accepted_then_failed:
+                raise RuntimeError("Connection lost after provider accepted creation")
+            return self.sandbox
+
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM python:3.12-slim\nCOPY fixture.txt /fixture.txt\nWORKDIR /task\n")
+    (tmp_path / "fixture.txt").write_text("original task fixture")
+    source = (
+        RegistryImage("task@sha256:" + "a" * 64) if source_kind == "registry" else DockerfileSource(tmp_path, dockerfile)
+    )
+
+    async def scenario():
+        client = DeclarativeClient()
+        factory = DaytonaDeclarativeMachineFactory(lambda: client)
+        spec = MachineSpec(source, workdir="", cpus=2, memory_mb=4096, storage_mb=10240, env={"TASK_ENV": "kept"})
+        if accepted_then_failed:
+            with pytest.raises(RuntimeError):
+                await factory.create(spec)
+        else:
+            machine = await factory.create(spec)
+            assert machine.spec.source == source
+            await machine.close()
+        params = client.params
+        assert params.resources == Resources(cpu=2, memory=4, disk=10, gpu=None)
+        assert params.env_vars == {"TASK_ENV": "kept"}
+        assert params.network_block_all is True
+        if source_kind == "registry":
+            assert params.image == source.reference
+        else:
+            assert params.image.dockerfile() == dockerfile.read_text()
+        assert client.deleted and client.closed
 
     asyncio.run(scenario())
