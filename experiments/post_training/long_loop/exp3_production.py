@@ -320,6 +320,13 @@ def production_plan(release: DataRelease, source_revision: str, files: dict[str,
             harbor[field] = current_harbor[field]
         if stage == "evaluation":
             harbor["trial_attempt_timeout_sec"] = current_harbor["trial_attempt_timeout_sec"]
+        trainer = config["config"]["trainer"]
+        if trainer.pop("seed") != config["seed"]:
+            raise ValueError("Frozen recipe and launch seeds differ")
+        if stage == "rl" and trainer.pop("max_ckpts_to_keep") != config["retained"]:
+            raise ValueError("Frozen recipe and launch checkpoint retention differ")
+        # The current launch owns the temporary attempt trace destination.
+        config["config"]["generator"]["trajectory_retention"].pop("output_path")
         config["config"]["generator"]["model_loading"] = "stage_local"
     archive = documents["rl/archive.yaml"]
     archive["hf_upload"]["repo_prefix"] = "open-athena/Snowball-LongLoop-Round3"
