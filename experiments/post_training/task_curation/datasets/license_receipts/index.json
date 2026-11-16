@@ -31,12 +31,6 @@
       "revision": "ff127ac600209e08706c51afedeaac25ef655d50",
       "path": "part-004.json",
       "sha256": "f8fb5dbca85dcab122a0f9ef0750a20d732966d26b83a62f7584c9107e6de60a"
-    },
-    {
-      "repo": "open-athena/marin-license-receipts",
-      "revision": "a377919f316f021f0f41d138fdaea3ffe578d6df",
-      "path": "part-900-remediation.json",
-      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
     }
   ]
 }
