@@ -1,6 +1,12 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
+<<<<<<< HEAD
   "revision": "fc485eca5681926e1ed7015b6199e978f0387b72",
   "path": "experiments/post_training/task_curation/datasets/sample_qc_receipts/part-001.json",
   "sha256": "18e4ab7c934487a14a5400de24af74a42c0ec74b5d7823740b1ec6de84bece2f"
+=======
+  "revision": "dee033f203e468809895d0b956b736474027d8cb",
+  "path": "experiments/post_training/task_curation/datasets/sample_qc_receipts/part-001.json",
+  "sha256": "073e5ab37071283ba46a426f352b811b60488711dd1da0881aead814512e5d2c"
+>>>>>>> 81a428e98b (Bind the re-measured SimpleQA remediation receipts and fingerprints)
 }
