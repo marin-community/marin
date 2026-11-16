@@ -26,7 +26,7 @@ class ResolvedPolicyEvaluation:
         if self.context > self.candidate.max_context:
             raise ValueError(
                 f"{self.candidate.name} on {self.evaluation.name}: context {self.context} is larger than "
-                f"the candidate's window {self.candidate.max_context}"
+                f"the candidate's window {self.candidate.max_context}; add an override"
             )
         if self.max_output is not None and self.max_output >= self.context:
             raise ValueError(
@@ -36,10 +36,10 @@ class ResolvedPolicyEvaluation:
 
 
 def resolve(policy: EvalPolicy, candidate: PolicyCandidate) -> tuple[ResolvedPolicyEvaluation, ...]:
-    """Return every evaluation the candidate runs under the policy, in policy order.
+    """Return every evaluation the candidate runs under the policy.
 
     Excluded evaluations are left out. Each setting comes from the candidate's override, else the
-    evaluation, and context is capped at the candidate's window.
+    evaluation. A context larger than the candidate's window needs an override.
     """
     if candidate not in policy.candidates:
         raise ValueError(f"{candidate.name} is not a candidate in policy {policy.version}")
@@ -57,7 +57,7 @@ def resolve(policy: EvalPolicy, candidate: PolicyCandidate) -> tuple[ResolvedPol
             ResolvedPolicyEvaluation(
                 candidate=candidate,
                 evaluation=evaluation,
-                context=min(context, candidate.max_context),
+                context=context,
                 max_output=max_output,
                 seed=evaluation.seed,
             )

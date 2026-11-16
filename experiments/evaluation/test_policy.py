@@ -19,7 +19,7 @@ from experiments.evaluation.policy.schema import (
 )
 
 LARGE = PolicyCandidate(model=ModelConfig(name="large", location="org/large"), max_context=200_000)
-SMALL = PolicyCandidate(model=ModelConfig(name="small", location="org/small"), max_context=30_000)
+SMALL = PolicyCandidate(model=ModelConfig(name="small", location="org/small"), max_context=60_000)
 
 CONTEXT = 50_000
 PLAIN = PolicyEvaluation(definition=EvaluationSelection(benchmark="plain"), context=CONTEXT, max_output=None, seed=0)
@@ -27,7 +27,9 @@ SEEDED = PolicyEvaluation(definition=EvaluationSelection(benchmark="seeded"), co
 LONG = PolicyEvaluation(
     definition=HarborDefinition(name="long", config_path=Path("long.yaml")), context=100_000, max_output=30_000, seed=0
 )
-SMALL_LONG = PolicyOverride(candidate=SMALL, evaluation=LONG, max_output=10_000, reason="window too small")
+SMALL_LONG = PolicyOverride(
+    candidate=SMALL, evaluation=LONG, context=60_000, max_output=10_000, reason="window too small"
+)
 
 
 def _policy(**exceptions) -> EvalPolicy:
@@ -46,14 +48,16 @@ def test_candidate_runs_every_evaluation_with_its_declared_settings():
     }
 
 
-def test_candidate_window_caps_context_and_an_unfit_output_limit_needs_an_override():
+def test_context_beyond_the_candidate_window_needs_an_override():
     with pytest.raises(ValueError, match="small on long"):
         resolve(_policy(), SMALL)
+    with pytest.raises(ValueError, match="small on long"):
+        resolve(_policy(overrides=(replace(SMALL_LONG, context=20_000, max_output=None),)), SMALL)
 
     assert _settings(resolve(_policy(overrides=(SMALL_LONG,)), SMALL)) == {
-        "plain": (30_000, None, 0),
-        "seeded": (30_000, None, 7),
-        "long": (30_000, 10_000, 0),
+        "plain": (50_000, None, 0),
+        "seeded": (50_000, None, 7),
+        "long": (60_000, 10_000, 0),
     }
 
 
@@ -63,7 +67,7 @@ def test_exceptions_apply_only_to_the_named_candidate():
         overrides=(SMALL_LONG,),
     )
 
-    assert _settings(resolve(policy, SMALL)) == {"plain": (30_000, None, 0), "long": (30_000, 10_000, 0)}
+    assert _settings(resolve(policy, SMALL)) == {"plain": (50_000, None, 0), "long": (60_000, 10_000, 0)}
     assert _settings(resolve(policy, LARGE)) == _settings(resolve(_policy(), LARGE))
 
 
