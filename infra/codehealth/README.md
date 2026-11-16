@@ -51,6 +51,9 @@ connections, verifies that pull-request fingerprints remain stable during
 hydration, and bounds GitHub GraphQL and REST usage. GitHub does not expose
 deleted comments or prior edited bodies. Raw diffs can be absent when GitHub
 returns its oversized-diff response; per-file metadata remains available.
+For pull requests with more than 250 commits, the collector uses the paginated
+compare endpoint and checks its newest 250 commits against the pull-request
+connection before storing the complete commit list.
 Every sync still performs the bounded GitHub activity scan, edited-comment seed
 queries, fingerprint rechecks, and Finelog query. Matching event seeds reuse the
 stored pull request after the scan fingerprint passes both observations. New or

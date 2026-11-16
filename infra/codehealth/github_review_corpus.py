@@ -24,6 +24,7 @@ SCAN_PAGE_SIZE = 20
 CONNECTION_PAGE_SIZE = 10
 COMMIT_PARENT_PAGE_SIZE = 100
 MAX_GITHUB_CHANGED_FILES = 3_000
+MAX_GITHUB_PR_COMMITS = 250
 MAX_GRAPHQL_POINTS = 900
 MAX_REST_REQUESTS = 850
 HYDRATION_BATCH_SIZE = 20
@@ -303,6 +304,25 @@ class GitHubClient:
             raise TypeError("GitHub paginated response must be a list of pages")
         self._record_rest_requests(len(pages))
         return [item for page in pages for item in page]
+
+    def rest_compare_commits(self, repository: str, base_sha: str, head_sha: str) -> list[dict]:
+        """Fetch commits beyond GitHub's 250-commit pull-request connection cap."""
+        endpoint = f"repos/{repository}/compare/{base_sha}...{head_sha}?per_page={REST_PAGE_SIZE}"
+        result = subprocess.run(
+            ["gh", "api", endpoint, "--paginate", "--slurp"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        pages = json.loads(result.stdout)
+        if not isinstance(pages, list) or any(not isinstance(page, dict) for page in pages):
+            raise TypeError("GitHub paginated compare response must be a list of pages")
+        self._record_rest_requests(len(pages))
+        totals = {page["total_commits"] for page in pages}
+        commits = [commit for page in pages for commit in page["commits"]]
+        if len(totals) != 1 or len(commits) != totals.pop():
+            raise RuntimeError("GitHub compare returned an incomplete commit list")
+        return commits
 
     def rest_text(self, endpoint: str, accept: str) -> str | None:
         """Return text, or None only for GitHub's HTTP 406 PullRequest.diff too_large response."""
@@ -777,7 +797,12 @@ def _paginate_pull_connections(context: CollectionContext, pulls: list[dict]) ->
                 state.page_info = connection["pageInfo"]
     pulls_by_number = {int(pull["number"]): pull for pull in pulls}
     for state in states:
-        _validate_connection_nodes(state.number, state.name, state.expected, state.nodes)
+        if not (
+            state.name == "commits"
+            and state.expected > MAX_GITHUB_PR_COMMITS
+            and len(state.nodes) == MAX_GITHUB_PR_COMMITS
+        ):
+            _validate_connection_nodes(state.number, state.name, state.expected, state.nodes)
         pulls_by_number[state.number][state.name] = {
             "totalCount": state.expected,
             "pageInfo": state.page_info,
@@ -921,6 +946,28 @@ def _commit_record(pr_number: int, node: dict) -> CommitRecord:
     )
 
 
+def _compare_commit_records(context: CollectionContext, pull: dict, graphql_nodes: list[dict]) -> list[CommitRecord]:
+    number = int(pull["number"])
+    commits = context.client.rest_compare_commits(context.repository, pull["baseRefOid"], pull["headRefOid"])
+    expected = int(pull["commits"]["totalCount"])
+    shas = [commit["sha"] for commit in commits]
+    _validate_record_identities(f"PR #{number} commits", expected, shas)
+    if shas[-len(graphql_nodes) :] != [node["commit"]["oid"] for node in graphql_nodes]:
+        raise RuntimeError(f"PR #{number} compare commits do not match the pull-request connection")
+    return [
+        CommitRecord(
+            pr_number=number,
+            sha=commit["sha"],
+            author=(commit.get("author") or {}).get("login"),
+            authored_at=(commit["commit"].get("author") or {}).get("date"),
+            committed_at=(commit["commit"].get("committer") or {}).get("date"),
+            message=commit["commit"].get("message") or "",
+            parents=tuple(parent["sha"] for parent in commit["parents"]),
+        )
+        for commit in commits
+    ]
+
+
 def _pull_request_record(
     repository: str, pull: dict, commits: list[CommitRecord], review_comments: int
 ) -> PullRequestRecord:
@@ -1038,7 +1085,11 @@ def _hydrate_graphql(
     event_ids = [event.event_id for event in events]
     if len(event_ids) != len(set(event_ids)):
         raise RuntimeError(f"PR #{number} contains duplicate review event ids")
-    commits = [_commit_record(number, node) for node in commit_nodes]
+    commits = (
+        _compare_commit_records(context, pull, commit_nodes)
+        if len(commit_nodes) < int(pull["commits"]["totalCount"])
+        else [_commit_record(number, node) for node in commit_nodes]
+    )
     bundle = PullRequestBundle(
         pull_request=_pull_request_record(context.repository, pull, commits, len(thread_comments)),
         events=tuple(sorted(events, key=lambda event: (event.kind, event.database_id))),
@@ -1151,7 +1202,14 @@ def _collection_plan(
         if cached_fingerprints[number] == current_fingerprints[pull["id"]]
     )
     hydrate_numbers = tuple(number for number in sorted(relevant) if number not in reusable)
-    context.client.projected_rest_requests = context.client.rest_requests + len(hydrate_numbers) + REST_RETRY_RESERVE
+    compare_pages = sum(
+        (int(relevant[number]["commits"]["totalCount"]) + REST_PAGE_SIZE - 1) // REST_PAGE_SIZE
+        for number in hydrate_numbers
+        if int(relevant[number]["commits"]["totalCount"]) > MAX_GITHUB_PR_COMMITS
+    )
+    context.client.projected_rest_requests = (
+        context.client.rest_requests + len(hydrate_numbers) + compare_pages + REST_RETRY_RESERVE
+    )
     if context.client.projected_rest_requests > MAX_REST_REQUESTS:
         raise RuntimeError(
             f"GitHub context collection projects {context.client.projected_rest_requests} REST requests, above the "

@@ -196,6 +196,7 @@ class FakeGitHub(github.GitHubClient):
         self.file_page: dict | None = None
         self.seed_candidate: dict | None = self.scan_pull | {"__typename": "PullRequest"}
         self.diff: str | None = "diff --git a/example.py b/example.py\n"
+        self.compare_commits: list[dict] | None = None
         self.mutate_once = False
 
     def graphql(self, query: str, variables: dict[str, object]) -> dict:
@@ -256,6 +257,12 @@ class FakeGitHub(github.GitHubClient):
         self._record_rest_requests(1)
         self.text_calls += 1
         return self.diff
+
+    def rest_compare_commits(self, repository: str, base_sha: str, head_sha: str) -> list[dict]:
+        assert (repository, base_sha, head_sha) == (REPOSITORY, "base", "head")
+        assert self.compare_commits is not None
+        self._record_rest_requests(3)
+        return deepcopy(self.compare_commits)
 
 
 def _hydrated_pull(*, review: dict, thread: dict | None, changed_files: int = 1) -> dict:
@@ -530,6 +537,42 @@ def test_collect_corpus_paginates_exact_changed_file_metadata() -> None:
 
     assert [item.filename for item in result.bundles[0].files] == ["first.py", "second.py"]
     assert result.usage.rest_requests == 3
+
+
+def test_collect_corpus_fetches_commits_beyond_pull_request_connection_cap() -> None:
+    review = _review(1, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
+    scan = _scan_pull([review])
+    scan["commits"]["totalCount"] = 251
+    hydrated = _hydrated_pull(review=review, thread=None)
+    graphql_commits = []
+    for index in range(1, 251):
+        node = _commit()
+        node["commit"]["oid"] = f"sha-{index}"
+        graphql_commits.append(node)
+    hydrated["commits"] = _page(graphql_commits, total=251)
+    client = FakeGitHub(scan, hydrated)
+    client.compare_commits = [
+        {
+            "sha": f"sha-{index}",
+            "author": {"login": "author"},
+            "commit": {
+                "author": {"date": "2026-08-01T00:00:00Z"},
+                "committer": {"date": "2026-08-01T00:00:00Z"},
+                "message": "Change code",
+            },
+            "parents": [{"sha": "base"}],
+        }
+        for index in range(251)
+    ]
+
+    result = github.collect_corpus(REPOSITORY, START, END, bot_logins=set(), client=client)
+
+    bundle = result.bundles[0]
+    assert bundle.pull_request.commits == 251
+    assert len(bundle.commits) == 251
+    assert bundle.pull_request.commit_shas[-1] == "sha-250"
+    assert result.usage.rest_requests == 6
+    assert result.usage.projected_rest_requests == 156
 
 
 def test_collect_corpus_rejects_changed_file_cap_before_rest_context() -> None:
