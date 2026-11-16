@@ -64,7 +64,7 @@ def backend_support_blocker(capabilities: BackendSourceMap, status: str | None) 
     verdicts = {name: fit.support.value for name, fit in capabilities.backends.items()}
     if any(support in RUNNABLE_FIT for support in verdicts.values()):
         return None
-    if all(support == FitSupport.ROLE_ABSENT for support in verdicts.values()):
+    if verdicts and all(support == FitSupport.ROLE_ABSENT for support in verdicts.values()):
         return None
     return "no surveyed backend can run the source: " + ", ".join(
         f"{name}={support}" for name, support in sorted(verdicts.items())

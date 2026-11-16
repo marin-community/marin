@@ -112,3 +112,8 @@ def test_role_absent_everywhere_needs_no_backend_and_keeps_its_labels():
         )
         is None
     )
+
+
+def test_empty_backend_map_stays_blocked():
+    """An unassessed Available row with no survey cells is not exempted by the N/A rule."""
+    assert backend_support_blocker(source_map({}), "Available") is not None
