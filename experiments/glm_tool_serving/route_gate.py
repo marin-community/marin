@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Step-(iv) route gate: route unprocessed rows per the refocus selection manifest.
 
 Coordinator-approved plan v2, amendment 3: a row is dispositioned
@@ -11,6 +14,7 @@ behavior - correctness is never at stake, only compute) and never loads
 unverified data. The gate only ever affects rows still ahead of the cursor;
 committed rows, claims, and cursors are untouched.
 """
+
 import gzip
 import hashlib
 import json
