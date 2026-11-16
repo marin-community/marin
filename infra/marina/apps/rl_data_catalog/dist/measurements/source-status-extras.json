@@ -404,6 +404,26 @@
       "label": "Needs ruling",
       "meaning": "A legacy exclusion tag with no recoverable typed reason; transitional.",
       "clears": "A user ruling recorded as a typed reason; this reason must not persist."
+    },
+    "environment-artifact-missing": {
+      "label": "Environment artifact missing",
+      "meaning": "A declared environment artifact does not exist in any region.",
+      "clears": "Rebuilding the artifact in-region and binding its receipt; exclusion applies only when it is unrebuildable."
+    },
+    "no-supported-backend": {
+      "label": "No supported backend",
+      "meaning": "No available backend can run the population's contracts, per the backend survey's per-source capabilities.",
+      "clears": "A backend survey recording supported execution for at least one backend at the current pin."
+    },
+    "grader-judge-unavailable": {
+      "label": "Judge unavailable",
+      "meaning": "The population's judge route is unqualified: no judge-model tier or judge API qualifies.",
+      "clears": "Re-pinning to a JUDGE_TIERS tier through private remediation and running that version; exclusion applies only when no tier qualifies."
+    },
+    "invalid-reference": {
+      "label": "Invalid reference",
+      "meaning": "The population references an expected target that does not exist in its frozen sample.",
+      "clears": "A faithfully repaired private remediation version whose references resolve."
     }
   }
 }

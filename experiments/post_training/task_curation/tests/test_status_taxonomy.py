@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from finestore.rl.curation import OversightEvidence, OversightLevel
 from finestore.rl.status_taxonomy import (
+    DIFFICULTY_GAP_EXCLUSION_REASONS,
     REASON_EXPLANATIONS,
     ExclusionReason,
     SourceStatus,
@@ -184,6 +185,12 @@ def test_every_reason_has_one_canonical_explanation():
         assert explanation.label.strip()
         assert explanation.meaning.strip()
         assert explanation.clears.strip()
+
+
+def test_difficulty_gap_mapping_targets_defined_reasons():
+    for reason in DIFFICULTY_GAP_EXCLUSION_REASONS.values():
+        assert reason in ExclusionReason
+        assert reason in REASON_EXPLANATIONS  # every mapped reason carries its canonical explanation
 
 
 @pytest.mark.data_integration

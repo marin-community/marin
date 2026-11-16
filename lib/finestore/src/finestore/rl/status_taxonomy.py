@@ -91,6 +91,10 @@ class ExclusionReason(StrEnum):
     DUPLICATE_OF_SOURCE = "duplicate-of-source"
     SNAPSHOT_BUDGET_EXCEEDED = "snapshot-budget-exceeded"
     UNSPECIFIED_LEGACY = "unspecified-legacy"
+    ENVIRONMENT_ARTIFACT_MISSING = "environment-artifact-missing"
+    NO_SUPPORTED_BACKEND = "no-supported-backend"
+    GRADER_JUDGE_UNAVAILABLE = "grader-judge-unavailable"
+    INVALID_REFERENCE = "invalid-reference"
 
 
 class ReasonExplanation(BaseModel):
@@ -224,6 +228,29 @@ REASON_EXPLANATIONS: dict[ExclusionReason, ReasonExplanation] = {
         meaning="A legacy exclusion tag with no recoverable typed reason; transitional.",
         clears="A user ruling recorded as a typed reason; this reason must not persist.",
     ),
+    ExclusionReason.ENVIRONMENT_ARTIFACT_MISSING: ReasonExplanation(
+        label="Environment artifact missing",
+        meaning="A declared environment artifact does not exist in any region.",
+        clears="Rebuilding the artifact in-region and binding its receipt; "
+        "exclusion applies only when it is unrebuildable.",
+    ),
+    ExclusionReason.NO_SUPPORTED_BACKEND: ReasonExplanation(
+        label="No supported backend",
+        meaning="No available backend can run the population's contracts, "
+        "per the backend survey's per-source capabilities.",
+        clears="A backend survey recording supported execution for at least one backend at the current pin.",
+    ),
+    ExclusionReason.GRADER_JUDGE_UNAVAILABLE: ReasonExplanation(
+        label="Judge unavailable",
+        meaning="The population's judge route is unqualified: no judge-model tier or judge API qualifies.",
+        clears="Re-pinning to a JUDGE_TIERS tier through private remediation and running that version; "
+        "exclusion applies only when no tier qualifies.",
+    ),
+    ExclusionReason.INVALID_REFERENCE: ReasonExplanation(
+        label="Invalid reference",
+        meaning="The population references an expected target that does not exist in its frozen sample.",
+        clears="A faithfully repaired private remediation version whose references resolve.",
+    ),
 }
 
 
@@ -257,3 +284,25 @@ class ExclusionClaim(BaseModel):
     @property
     def explanation(self) -> ReasonExplanation:
         return REASON_EXPLANATIONS[self.reason]
+
+
+DIFFICULTY_GAP_EXCLUSION_REASONS: dict[str, ExclusionReason] = {
+    "ENVIRONMENT_ARTIFACT_MISSING": ExclusionReason.ENVIRONMENT_ARTIFACT_MISSING,
+    "TOOL_PROVIDER_REQUIRED": ExclusionReason.NO_SUPPORTED_BACKEND,
+    "UNSUPPORTED_COMPOSE_DOCUMENT": ExclusionReason.NO_SUPPORTED_BACKEND,
+    "STATE_CAPTURE_REQUIRED": ExclusionReason.NO_SUPPORTED_BACKEND,
+    "UNRESOLVED_DOCKER_BUILD": ExclusionReason.NO_SUPPORTED_BACKEND,
+    "NO_EXECUTABLE_GRADER": ExclusionReason.NO_SUPPORTED_BACKEND,
+    "PROVIDER_CONTRACT_INVALID": ExclusionReason.NO_SUPPORTED_BACKEND,
+    "NETWORK_POLICY_VIOLATION": ExclusionReason.NO_SUPPORTED_BACKEND,
+    "JUDGE_ROUTE_UNQUALIFIED": ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
+    "JUDGE_API_UNQUALIFIED": ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
+    "INVALID_REFERENCE": ExclusionReason.INVALID_REFERENCE,
+}
+"""Mapping from DifficultyGap member names to their Atlas exclusion reasons.
+
+Keyed by member NAME (not value) so the two enums stay decoupled; keep this
+the single definition and have ``finestore.rl.difficulty`` resolve its gaps
+through it. The shared owner rule: PIPELINE-owned gaps never exclude a source;
+SOURCE-owned gaps carry the reason above with the gap's own evidence.
+"""
