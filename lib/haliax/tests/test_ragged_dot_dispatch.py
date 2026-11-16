@@ -314,6 +314,8 @@ def test_triton_kernel_family_follows_gpu_family(monkeypatch, family, expected_k
 def test_tile_map_block_config_uses_amd_instinct_config(monkeypatch):
     monkeypatch.setattr(ragged_dot_module, "gpu_family", lambda: GpuFamily.AMD_INSTINCT)
 
-    config = ragged_dot_module._tile_map_block_config(ragged_dot_module.RaggedLayout.FWD, 256, 256, 256, 4)
+    fwd = ragged_dot_module.RaggedLayout.FWD
+    config = ragged_dot_module._tile_map_block_config(fwd, 256, 256, 256, 4)
 
-    assert (config.block_m, config.block_n, config.block_k, config.num_stages) == (256, 256, 64, 2)
+    assert config == ragged_dot_module._TILE_MAP_CONFIGS[GpuFamily.AMD_INSTINCT][fwd].fit(256, 256, 256)
+    assert config != ragged_dot_module._TILE_MAP_GENERIC_CONFIGS[fwd].fit(256, 256, 256)
