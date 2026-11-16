@@ -36,9 +36,6 @@ why it never uses Triton's approximate f32 division.
 Scales are stored straight into their swizzled layouts: the row scales at their `build_sfa`
 bytes, and the token scales at their `build_sf_wgrad` bytes, in the tile the inverse of
 ``block_perm`` assigns.
-
-Written against TileKernels' ``quant/common.py::get_sf_and_inv`` and the dual-write CuTe quantizer
-of c3cb334f8e:experiments/grug/moe/standalone/mxfp8_grouped/quantize_cute.py as references.
 """
 
 from typing import NamedTuple
@@ -53,6 +50,7 @@ from levanter.grug._moe.mxfp8.quantize import (
     E8M0_MAX_EXPONENT,
     E8M0_MIN_EXPONENT,
     MXFP8_BLOCK_SIZE,
+    SF_TILE_BYTES,
     SF_TILE_ROWS,
     DualQuantized,
 )
@@ -114,6 +112,9 @@ if triton is not None and tl is not None:
         h: tl.constexpr,
         padded_rows: tl.constexpr,
         block_m: tl.constexpr,
+        block_h: tl.constexpr,  # columns of one tile
+        sf_tile_rows: tl.constexpr,  # rows of one swizzled scale tile
+        sf_tile_bytes: tl.constexpr,
         tiles_per_program: tl.constexpr,
         inv_e4m3_max: tl.constexpr,
         min_exponent: tl.constexpr,
@@ -156,32 +157,42 @@ if triton is not None and tl is not None:
             # slower here than this plain loop.
             for t in tl.range(0, tiles_per_program, num_stages=1):
                 tile = pid_h * tiles_per_program + t
-                x = tl.load(x_ptrs + tile * 64, mask=source >= 0, other=0.0).to(tl.float32)
+                x = tl.load(x_ptrs + tile * block_h, mask=source >= 0, other=0.0).to(tl.float32)
                 magnitude = tl.abs(x)
                 # Reduce the in-thread axis first, so the lanes exchange one value per row or column.
                 row_amax = tl.max(tl.max(magnitude, axis=5), axis=0)  # [c, r, g, k]
                 row_exponent = _e8m0_exponent(row_amax, inv_e4m3_max, min_exponent, max_exponent)
                 q_rows = x * _e8m0_reciprocal(row_exponent)[None, :, :, :, :, None]
-                tl.store(q_rows_ptr + out_offsets + tile * 64, q_rows.to(tl.float8e4nv, fp_downcast_rounding="rtne"))
+                tl.store(
+                    q_rows_ptr + out_offsets + tile * block_h, q_rows.to(tl.float8e4nv, fp_downcast_rounding="rtne")
+                )
 
                 # The [Mp, H/32] row-scale matrix swizzled whole, as build_sfa does.
                 sf_col = tile * 2 + tl.arange(0, 2)[:, None, None, None]
-                sfa_tile = (sf_row // 128) * (h // 128) + sf_col // 4
-                sfa_offset = sfa_tile * 512 + (sf_row % 32) * 16 + ((sf_row % 128) // 32) * 4 + sf_col % 4
+                sfa_tile = (sf_row // sf_tile_rows) * (h // sf_tile_rows) + sf_col // 4
+                sfa_offset = (
+                    sfa_tile * sf_tile_bytes + (sf_row % 32) * 16 + ((sf_row % sf_tile_rows) // 32) * 4 + sf_col % 4
+                )
                 tl.store(sfa_ptr + sfa_offset, row_exponent.to(tl.uint8))
 
                 token_amax = tl.max(tl.max(magnitude, axis=4), axis=2)  # [e, c, g, d]
                 token_exponent = _e8m0_exponent(token_amax, inv_e4m3_max, min_exponent, max_exponent)
                 q_tokens = x * _e8m0_reciprocal(token_exponent)[:, :, None, :, None, :]
                 tl.store(
-                    q_tokens_ptr + out_offsets + tile * 64, q_tokens.to(tl.float8e4nv, fp_downcast_rounding="rtne")
+                    q_tokens_ptr + out_offsets + tile * block_h,
+                    q_tokens.to(tl.float8e4nv, fp_downcast_rounding="rtne"),
                 )
 
                 # The [H, Mp/32] (feature, token block) token-scale matrix swizzled whole, then tile p
                 # of the result is source tile block_perm[p]. A tile's 64 features lie in one 128-row tile.
-                feature = tile * 64 + sf_feature
-                dest_tile = tl.load(tile_dest_ptr + (tile // 2) * (padded_rows // 128) + token_block // 4)
-                sf_wgrad_offset = dest_tile * 512 + (feature % 32) * 16 + ((feature % 128) // 32) * 4 + token_block % 4
+                feature = tile * block_h + sf_feature
+                dest_tile = tl.load(tile_dest_ptr + (tile // 2) * (padded_rows // sf_tile_rows) + token_block // 4)
+                sf_wgrad_offset = (
+                    dest_tile * sf_tile_bytes
+                    + (feature % 32) * 16
+                    + ((feature % sf_tile_rows) // 32) * 4
+                    + token_block % 4
+                )
                 tl.store(sf_wgrad_ptr + sf_wgrad_offset, token_exponent.to(tl.uint8))
 
 else:
@@ -249,6 +260,9 @@ def dual_quantize_padded(
         h=hidden,
         padded_rows=padded_rows,
         block_m=tile.block_m,
+        block_h=_BLOCK_H,
+        sf_tile_rows=SF_TILE_ROWS,
+        sf_tile_bytes=SF_TILE_BYTES,
         tiles_per_program=tiles_per_program,
         inv_e4m3_max=1.0 / E4M3_MAX,
         min_exponent=E8M0_MIN_EXPONENT,

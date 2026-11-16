@@ -18,8 +18,6 @@ weight-gradient GEMMs, which contract over tokens; its data keeps the natural ro
 
 The ``build_*`` functions lay raw scale bytes out as the Blackwell block-scaled GEMMs read them,
 in tiles of 128 rows by 4 scale columns, 512 bytes each.
-
-Ported from c3cb334f8e:experiments/grug/moe/standalone/mxfp8_grouped/quantize.py.
 """
 
 from enum import StrEnum
@@ -41,6 +39,7 @@ _F32_MANTISSA_MASK = (1 << _F32_MANTISSA_BITS) - 1
 # dimension a scale matrix tiles must be a multiple of the 128 rows.
 SF_TILE_ROWS = 128
 _TILE_COLS = 4
+SF_TILE_BYTES = SF_TILE_ROWS * _TILE_COLS
 
 
 def saturating_cast_e4m3(x: Float[Array, "..."]) -> Float[Array, "..."]:
@@ -49,12 +48,12 @@ def saturating_cast_e4m3(x: Float[Array, "..."]) -> Float[Array, "..."]:
 
 
 def e8m0_to_f32(scales: UInt8[Array, "..."]) -> Float[Array, "..."]:
-    """Decode E8M0 bytes to the exact power of two, built from bits.
+    """Decode E8M0 bytes to the exact power of two.
 
-    Byte 0, which the quantizers never produce, decodes to the subnormal 2^-127. ``jnp.exp2`` is not
-    used because GPU lowers it to an approximate instruction that misses the exact power of two for
-    most exponents.
+    Byte 0, which the quantizers never produce, decodes to the subnormal 2^-127.
     """
+    # Built from bits: GPU lowers `jnp.exp2` to an approximate instruction that misses the exact
+    # power of two for most exponents.
     exponent = scales.astype(jnp.uint32)
     bits = jnp.where(exponent == 0, jnp.uint32(1 << (_F32_MANTISSA_BITS - 1)), exponent << _F32_MANTISSA_BITS)
     return jax.lax.bitcast_convert_type(bits, jnp.float32)

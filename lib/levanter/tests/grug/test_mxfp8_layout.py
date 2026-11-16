@@ -8,7 +8,7 @@ import pytest
 
 import jax.numpy as jnp
 
-from levanter.grug._moe.ep_common import _aligned_receiver_rows
+from levanter.grug._moe.ep_common import _aligned_group_sizes, _aligned_receiver_rows, _receiver_group_spans
 from levanter.grug._moe.mxfp8.layout import GROUP_PAD, aligned_dispatch_layout, wgrad_block_perm
 from levanter.grug._moe.mxfp8.quantize import (
     WeightMajor,
@@ -35,16 +35,11 @@ LAYOUT_CASES = [
 ]
 
 
-def _round_up(n: int, multiple: int) -> int:
-    return -(-n // multiple) * multiple
-
-
 def _aligned_spans(active: list[int], capacity: int) -> list[int]:
-    """Each expert's span in the aligned receiver buffer: its rows rounded up, the last taking the rest."""
+    """Each expert's span in the aligned receiver buffer the ragged backend lays out for ``capacity`` rows."""
     rows = _aligned_receiver_rows(capacity, len(active), GROUP_PAD)
-    spans = [_round_up(n, GROUP_PAD) for n in active]
-    spans[-1] += rows - sum(spans)
-    return spans
+    spans = _receiver_group_spans(jnp.asarray(active, jnp.int32), receiver_rows=rows, alignment=GROUP_PAD)
+    return np.asarray(spans).tolist()
 
 
 def _swizzle_reference(scales: np.ndarray) -> np.ndarray:
@@ -88,7 +83,7 @@ def test_aligned_dispatch_layout_keeps_each_experts_received_rows_and_zeroes_the
     assert layout.padded_rows == rows
     read = np.where(np.asarray(layout.source_valid)[:, None], aligned, 0)
     np.testing.assert_array_equal(read, expected)
-    groups = [*spans[:-1], _round_up(active[-1], GROUP_PAD)]
+    groups = [*spans[:-1], _aligned_group_sizes(active[-1], GROUP_PAD)]
     np.testing.assert_array_equal(np.asarray(layout.group_ends), np.cumsum(groups))
     np.testing.assert_array_equal(np.asarray(layout.padded_group_sizes), groups)
 
@@ -100,7 +95,7 @@ def test_wgrad_block_perm_matches_host_expert_chunk_order(active, capacity, rows
     # rows, whose tiles come after every expert's chunk.
     spans = _aligned_spans(active, capacity)
     total_tokens = sum(spans)
-    groups = [*spans[:-1], _round_up(active[-1], GROUP_PAD)]
+    groups = [*spans[:-1], _aligned_group_sizes(active[-1], GROUP_PAD)]
     token_blocks = total_tokens // 128
 
     expected = []

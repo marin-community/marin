@@ -21,6 +21,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from levanter.grug._moe.ep_common import _aligned_receiver_rows, _receiver_group_spans
 from levanter.grug._moe.mxfp8.layout import GROUP_PAD, aligned_dispatch_layout, wgrad_block_perm
 from levanter.grug._moe.mxfp8.quantize import dual_quantize_activation
 from levanter.grug._moe.mxfp8.triton_quant import dual_quantize_padded
@@ -41,10 +42,6 @@ def _requires_gpu():
     pytest.importorskip("jax_triton")
     if float(jax.devices("gpu")[0].compute_capability) < 8.9:
         pytest.skip("the Triton quantizer stores fp8e4nv, which needs compute capability 8.9 or newer")
-
-
-def _round_up(n: int, multiple: int) -> int:
-    return -(-n // multiple) * multiple
 
 
 def _pow2(exponent):
@@ -144,16 +141,13 @@ def _case(capacity: int, hidden: int, active_sizes: tuple[int, ...], seed: int):
     GROUP_PAD-row boundary, and the last expert's span takes the buffer's trailing rows, which the
     layout's last group stops short of.
     """
-    received = np.zeros(_round_up(capacity + (GROUP_PAD - 1) * len(active_sizes), GROUP_PAD), bool)
-    physical, start = [], 0
-    for size in active_sizes:
+    rows = _aligned_receiver_rows(capacity, len(active_sizes), GROUP_PAD)
+    active = jnp.asarray(active_sizes, jnp.int32)
+    physical = _receiver_group_spans(active, receiver_rows=rows, alignment=GROUP_PAD)
+    received = np.zeros(rows, bool)
+    for start, size in zip(np.cumsum(physical) - np.asarray(physical), active_sizes, strict=True):
         received[start : start + size] = True
-        physical.append(_round_up(size, GROUP_PAD))
-        start += physical[-1]
-    physical[-1] += received.size - start
-    layout = aligned_dispatch_layout(
-        jnp.asarray(physical, jnp.int32), jnp.asarray(active_sizes, jnp.int32), rows=received.size
-    )
+    layout = aligned_dispatch_layout(physical, active, rows=rows)
     block_perm = wgrad_block_perm(layout.padded_group_sizes, rows=hidden, total_tokens=layout.padded_rows)
     received = jnp.asarray(received)
     x = _adversarial_buffer(jax.random.key(seed), received, hidden=hidden)

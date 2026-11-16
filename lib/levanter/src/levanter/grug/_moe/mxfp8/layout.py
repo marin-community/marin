@@ -11,8 +11,6 @@ rows, are unspecified and may be non-finite. The kernels see every row that was 
 zero, so it adds nothing to any GEMM or weight gradient, and a non-finite row cannot reach a
 32-token scale block. The last expert's group ends at its last received row block, so the kernels
 neither read nor write the buffer's unused capacity past it.
-
-Ported from c3cb334f8e:experiments/grug/moe/mxfp8.py.
 """
 
 from typing import NamedTuple
@@ -20,6 +18,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Int
 
+from levanter.grug._moe.ep_common import _aligned_group_sizes
 from levanter.grug._moe.mxfp8.quantize import SF_TILE_ROWS
 
 # Every expert's rows start on a multiple of this in the kernel-facing buffer (the fused kernels'
@@ -61,7 +60,7 @@ def aligned_dispatch_layout(
     expert = jnp.searchsorted(span_ends, row, side="right")
     offset = row - (span_ends - physical)[expert]
     # The last span also holds the buffer's unused capacity, which no kernel needs to visit.
-    grouped = physical.at[-1].set((active[-1] + GROUP_PAD - 1) // GROUP_PAD * GROUP_PAD)
+    grouped = physical.at[-1].set(_aligned_group_sizes(active[-1], GROUP_PAD))
     return PaddedDispatch(
         group_ends=jnp.cumsum(grouped),
         padded_group_sizes=grouped,
