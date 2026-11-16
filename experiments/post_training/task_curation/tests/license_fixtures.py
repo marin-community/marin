@@ -11,6 +11,7 @@ import pytest
 from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseReceipt
 
 from experiments.post_training.task_curation import license_binding, reference_data
+from experiments.post_training.task_curation.datasets.lean import numina
 from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource
 from infra.marina.apps.rl_data_catalog.server import licensing
@@ -70,9 +71,16 @@ def isolated_license_registry(monkeypatch, request):
     would touch the network. Binding behavior in the default lane is exercised
     through locally attached fixture receipts and empty reference documents.
     """
+    # The passing-proof cache outlives a single test: clear it so a default-lane test
+    # never inherits a real read from an integration test in the same worker, and an
+    # integration test never inherits an empty isolated read.
+    numina.passing_proofs.cache_clear()
     if request.node.get_closest_marker("data_integration") is not None:
         yield
         return
     monkeypatch.setattr(license_binding, "load_referenced_json", lambda index_path: {})
     monkeypatch.setattr(reference_data, "load_referenced_document", lambda index_path, path: {})
+    # numina binds the loader directly at import time, so patch its binding too;
+    # otherwise its passing-proof check would read the private dataset here.
+    monkeypatch.setattr(numina, "load_referenced_document", lambda index_path, path: {})
     yield licensing.license_bans.cache_clear()
