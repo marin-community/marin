@@ -15,6 +15,7 @@ from typing import BinaryIO, Iterable, NamedTuple
 import torch
 from fsspec.spec import AbstractFileSystem
 from fsspec.utils import merge_offset_ranges
+from loguru import logger
 
 from marinskyrl.resource_locator import join_resource_path
 from marinskyrl.model_manifest import (
@@ -226,13 +227,18 @@ class RemoteSafetensorsTensorStore:
         return dtype, shape, offset + start, offset + end
 
     def _read(self, key: str, index: int | None = None) -> torch.Tensor:
-        """Refill only an empty buffer; an unread planned item makes later windows fall back to per-key reads."""
+        """Refill planned ranges when a read passes unconsumed buffered items."""
         dtype, shape, start, end = self._tensor_range(key, index)
         payload = None
         if self._prefetch_plan is not None:
             if not self._prefetched:
                 self._fill_window()
             payload = self._prefetched.pop((key, index), None)
+            if payload is None and (key, index) in self._prefetch_plan:
+                self._prefetch_unused += len(self._prefetched)
+                self._prefetched.clear()
+                self._fill_window()
+                payload = self._prefetched.pop((key, index), None)
             if payload is None:
                 self._prefetch_misses += 1
         started = time.monotonic()
@@ -252,6 +258,13 @@ class RemoteSafetensorsTensorStore:
         self._prefetch_unused += len(self._prefetched) + len(self._prefetch_plan or ())
         self._prefetched.clear()
         self._prefetch_plan = None
+        if self._prefetch_misses or self._prefetch_unused:
+            logger.warning(
+                "Remote weight prefetch for {} had {} misses and {} unused items",
+                self.source_uri,
+                self._prefetch_misses,
+                self._prefetch_unused,
+            )
         for source in self._handles.values():
             source.close()
         self._handles.clear()

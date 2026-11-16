@@ -148,8 +148,14 @@ def test_single_key_and_expert_slice_reads_fetch_only_requested_bytes(
     assert results[RemoteReadMode.PREFETCH] < results[RemoteReadMode.PER_KEY]
 
 
-@pytest.mark.parametrize("window_bytes", [16, 9], ids=["split-ranges", "oversized-window"])
-def test_prefetch_bounded_ranges_and_unplanned_reads_preserve_tensors(tmp_path, monkeypatch, window_bytes):
+@pytest.mark.parametrize(
+    ("window_bytes", "out_of_order"),
+    [(16, False), (9, False), (16, True)],
+    ids=["split-ranges", "oversized-window", "out-of-order"],
+)
+def test_prefetch_bounded_ranges_and_unplanned_reads_preserve_tensors(
+    tmp_path, monkeypatch, window_bytes, out_of_order
+):
     tensors = {str(index): torch.arange(12, dtype=torch.uint8) + index for index in range(3)}
     tensors.update({str(index): torch.tensor([index, index + 1], dtype=torch.uint8) for index in range(3, 7)})
     tensors.update(
@@ -185,11 +191,9 @@ def test_prefetch_bounded_ranges_and_unplanned_reads_preserve_tensors(tmp_path, 
     store = RemoteSafetensorsTensorStore("s3://bucket/policy", metadata)
     store.plan_prefetch((key, None) for key in map(str, range(7)))
     try:
-        for key in ("outside", *map(str, range(7))):
+        order = ("outside", "1", "2", "3", "4", "5", "6", "0") if out_of_order else ("outside", *map(str, range(7)))
+        for key in order:
             torch.testing.assert_close(store.load_tensors([key])[key], tensors[key], rtol=0, atol=0)
-        assert store.read_stats.prefetch_unused == 0
-        assert store.read_stats.prefetch_misses == 1  # The unplanned "outside" tensor.
-        assert store.read_stats.individual_reads == 1
     finally:
         store.close()
         assert all(handle.closed for handle in filesystem.handles)
@@ -205,4 +209,7 @@ def test_prefetch_bounded_ranges_and_unplanned_reads_preserve_tensors(tmp_path, 
         ]
     )
     assert requested == expected
-    assert filesystem.fetched_bytes == payload_start + 36 + 8 + 4 + 1
+    assert filesystem.fetched_bytes == payload_start + 36 + 8 + 4 + 1 + (12 if out_of_order else 0)
+    assert store.read_stats.prefetch_unused == int(out_of_order)
+    assert store.read_stats.prefetch_misses == 1 + int(out_of_order)
+    assert store.read_stats.individual_reads == 1 + int(out_of_order)
