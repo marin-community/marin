@@ -19,7 +19,6 @@ from marina.preview import install_preview_sources
 from marina.server import MarinaConfig
 from sqlalchemy import text
 
-from experiments.post_training.task_curation.source_status import status_extras
 from experiments.post_training.task_curation.tests.admission_fixtures import with_declaration_admission_census
 from infra.marina.apps.rl_data_catalog.server.app import migrate
 from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
@@ -48,6 +47,10 @@ def marina_kernel(marina_database: DatabaseSpec, tmp_path_factory: pytest.TempPa
     shutil.copytree(Path(__file__).resolve().parents[1], apps / "rl_data_catalog")
     # The status extras are a build-time output of the applet's build_command; the staged
     # app is packaged from this copy, so generate the artifact beside the inventory.
+    # Imported here rather than at module level: the marina test environment does not
+    # install the task-curation dependency chain (dupekit) that this import pulls in.
+    from experiments.post_training.task_curation.source_status import status_extras  # noqa: PLC0415
+
     measurements = apps / "rl_data_catalog/dist/measurements"
     measurements.mkdir(parents=True, exist_ok=True)
     (measurements / "source-status-extras.json").write_text(json.dumps(status_extras(), indent=2) + "\n")
