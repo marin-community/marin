@@ -19,10 +19,12 @@ import pytest
 
 from levanter.grug._moe.mxfp8.layout import GROUP_PAD
 from levanter.grug._moe.mxfp8.quantize import WeightMajor
+from levanter.testing.devices import nvidia_compute_capability
 
 _SF_VEC = 32
 _E4M3_MAX = 448.0
 _HIGHEST = jax.lax.Precision.HIGHEST
+_SM100_COMPUTE_CAPABILITY_MAJOR = 10
 # The bytes of an E4M3 NaN and an E8M0 NaN, for operand rows the kernels must not read.
 _E4M3_NAN_BYTE = 0x7F
 _E8M0_NAN_BYTE = 0xFF
@@ -53,10 +55,9 @@ _PROBLEMS = [*_SMALL, pytest.param(_HERO_PROBLEM, id="hero-chunk", marks=pytest.
 
 
 def _require_sm100():
-    if jax.default_backend() != "gpu":
+    capability = nvidia_compute_capability()
+    if capability is None or int(capability) != _SM100_COMPUTE_CAPABILITY_MAJOR:
         pytest.skip("fused MXFP8 kernels require an SM100 GPU")
-    if int(float(jax.devices("gpu")[0].compute_capability)) != 10:
-        pytest.skip("fused MXFP8 kernels require SM100")
     pytest.importorskip("cutlass")
     pytest.importorskip("cudnn")
     pytest.importorskip("quack")
