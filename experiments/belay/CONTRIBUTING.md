@@ -1,128 +1,48 @@
-# Contributing an idea to Marin Belay
+# Contributing to Marin Belay
 
-Marin Belay tests pretraining ideas against a fixed recipe and records every result, win or loss. You describe an
-idea in a GitHub comment; a maintainer approves it; an agent implements it behind a default-off flag, runs it against
-a baseline, and posts the verdict. This page is the whole contributor workflow. Hand it to your agent as context.
+Marin Belay tests pretraining ideas against the official recipe and records every result. You post an idea; a
+maintainer approves it; Belay's agent implements it behind a default-off flag, runs it, and posts the verdict.
+Every experiment is compared to the official recipe unless its Track says otherwise.
 
-**Every experiment is compared to the official recipe by default**: the `speedrun`, `ladder` and `competitive-*`
-Tracks all run against it. The `vanilla-*` and `moe-*` Tracks are the opt-in exceptions. Ideas that pass
-`speedrun`, `hero-mfu` and the `ladder` can be merged into the official recipe by a maintainer, and later ideas are
-then measured against the improved recipe.
+**Links:** recipe branch [`marin_belay_v1_recipe`](https://github.com/marin-community/marin/tree/marin_belay_v1_recipe)
+(model: [`experiments/grug/fast_track/model.py`](https://github.com/marin-community/marin/blob/marin_belay_v1_recipe/experiments/grug/fast_track/model.py))
+· intake [marin#9514](https://github.com/marin-community/marin/issues/9514)
+· [front page](https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/) (recipe, tracks, gates)
+· [Status](https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status)
+· [registry](https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay/registry)
+· W&B [`marin_moe`](https://wandb.ai/marin-community/marin_moe)
 
-## Links
+## Flow
 
-| What | Where |
-|---|---|
-| Official recipe (build on this) | branch [`marin_belay_v1_recipe`](https://github.com/marin-community/marin/tree/marin_belay_v1_recipe), model in [`experiments/grug/fast_track/model.py`](https://github.com/marin-community/marin/blob/marin_belay_v1_recipe/experiments/grug/fast_track/model.py); every launch command: `uv run python -m experiments.belay tracks` |
-| Submit ideas | [marin#9514](https://github.com/marin-community/marin/issues/9514), one idea per comment |
-| Status page | [Belay Status](https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status); one idea: `…/#status/X####` |
-| Front page (current recipe, gates, tracks, scaling starter kit) | [Belay](https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/) |
-| Experiment registry | branch [`marin_belay_v1_registry`](https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay/registry), one `X####-<slug>.yaml` per idea, reports under `experiments/belay/analysis/X####/` |
-| W&B runs | project [`marin-community/marin_moe`](https://wandb.ai/marin-community/marin_moe) |
-| Experiment code | the week's branch `marin_belay_v1_w<monday>`; every run pins a commit |
+1. **Check fit with the recipe.** Read `model.py` (yourself or with an agent) and search the registry for earlier
+   attempts. Decide whether the idea replaces, adds to or adapts an existing feature, and how it scales with model
+   size.
 
-## Recommended flow
+2. **Post it on #9514**, one idea per comment, with a `Track:` line (default `speedrun`). Plain-text ideas are
+   preferred. You can also link a paper, a GitHub repo, or a branch that applies the idea directly to the Belay
+   architecture.
 
-### 1. Check the idea against the official recipe, locally
+   ```
+   Track: speedrun
+   Replace the sigmoid router scoring with sqrt-softplus on every MoE layer.
+   ```
 
-Check out `marin_belay_v1_recipe` and point your agent at `experiments/grug/fast_track/model.py`. The front page
-summarises the recipe's architecture, optimizer and data. Before writing anything up, work out:
+   | Track | Use it for |
+   |---|---|
+   | `speedrun` (default) | First test: a short run of the recipe at the smallest size. Is it compatible, is there signal? |
+   | `vanilla-<rung>` / `moe-<rung>` | Radical ideas: look for signs of life against a plain dense model or a basic MoE first. |
+   | `hero-mfu` | Ideas that change speed or memory: step time at hero scale. Run by a maintainer. |
+   | `ladder` | After a promising speedrun: every recipe rung, to see whether the gain holds with scale. |
+   | `custom` | A study answered by analysis, with no win/loss verdict. |
 
-- **Is it already there, or already tried?** Read the model code, and search the registry for earlier attempts. A
-  past loss is not a verdict on the idea, but read how it was implemented.
-- **Does it replace, add to, or adapt an existing feature?** Say which, and which optimizer and learning rate its
-  new parameters use.
-- **Does it scale cleanly?** Ideas that join the recipe must be sized by a rule (e.g. "width 0.5·d", "only the
-  last two layers"), not a constant tuned at one size.
-- **Does it win on more than size?** Ideas that win only by adding parameters or compute per step are not what
-  Belay is looking for.
-- **Is the area open?** Some areas, such as tokenizer and data changes, can be closed to hill-climbing; the front
-  page says which.
+3. **Follow along on Status** (`…/#status/X####` once it has a registry id). Its row links the **code commit** (check
+   the diff matches your intent), the **W&B runs** (variant vs. same-commit control), and the agent's plan and verdict.
+   Results are single seed; treat anything near the noise band as weak evidence.
 
-Iterate on the design with your agent. You can submit it as a description, or link code: a pull request
-(`#NNNN`) or any http(s) URL to a branch, commit or file. The agent reads the links in your approved comment, and
-only those, then ports the code into `experiments/grug/fast_track/` behind one default-off flag (GPU path only). If
-your code builds on another PR, link that one too. Code written against the recipe's `model.py` ports most
-faithfully. Add a sentence or two on what the code does and why, so a port that drifts can be caught in step 3.
+4. **If it looks good, post `Track: ladder`** naming its registry id. A ladder without a `hero-mfu` result is
+   provisional; ask for `hero-mfu` too if the idea changes step time.
 
-### 2. Post the idea on marin#9514
+5. **Merge.** Once an idea holds up on `speedrun`, `hero-mfu` and the `ladder`, a maintainer can merge it into the
+   official recipe, and later ideas are compared against the improved recipe.
 
-One idea per comment, with a `Track:` line. Without one, the idea runs on `speedrun`. Say exactly what changes,
-where, at what size, and how new parameters are initialised and optimised, or link the code (step 1).
-
-```
-Track: speedrun
-Replace the sigmoid router scoring with sqrt-softplus, on every MoE layer. Keep the existing renormalisation.
-```
-
-Pick the Track by what you want to learn. The front page lists every Track with its current sizes and baselines.
-
-| Track | Runs against | Use it when |
-|---|---|---|
-| `speedrun` (default) | a short fixed-time run of the official recipe at the smallest rung, with a same-commit control | The normal first test: is the idea compatible with the recipe, and is there signal? |
-| `vanilla-<rung>` | a plain dense transformer at that size | A radical idea that would not survive the tuned recipe yet: look for signs of life first. |
-| `moe-<rung>` | a basic MoE at that size | MoE-specific ideas (routing, experts) without the rest of the recipe in the way. |
-| `hero-mfu` | step time at hero scale on hero hardware | The idea changes speed or memory materially (new kernels, big extra compute). A maintainer runs it. |
-| `ladder` | every `competitive-*` rung, launched together | After a promising speedrun: does the gain hold as the model scales? |
-| `competitive-<rung>` | the official recipe's finished run at one rung | Re-checking one rung. |
-| `custom` | a baseline you state | A study answered by analysing runs (no win/loss verdict). The approver sets its budget. |
-
-A maintainer reviews the comment on the admin page; a 👀 reaction means it was reviewed (approved or declined).
-Edits made after approval are ignored, so post a new comment instead of editing.
-
-### 3. Follow along and check the implementation matches your intent
-
-Open the Status page and find your idea (search its title, or go to `#status/X####` once it has a registry id).
-Its row expands to:
-
-- **Code**: the commit with the agent's implementation. Read the diff. This is the most important check: the flag
-  should do what you described, default off, and touch nothing else.
-- **Runs**: each run with its progress, loss and a **W&B ↗** link. On `speedrun` the pair is
-  `belay-X####-seed0` (your idea) and `belay-X####-control` (same commit, flag off). In W&B, check the run config
-  has your flag set in the variant and unset in the control, and that the parameter count changed as you expect.
-- **Agent log**: the agent's plan (flags, settings, what it compares) and, when done, the verdict.
-
-The registry entry (`X####-<slug>.yaml` on `marin_belay_v1_registry`) records the same thing permanently: code
-commits, every trial's runs, loss, Δ and step-time change. Each finished trial has a report with loss curves at
-`experiments/belay/analysis/X####/t00N.md`.
-
-**Reading the verdict.** Each Track has a fixed metric and noise band, stated in every trial's report: a change
-beyond the band is a win or a loss, anything inside it is noise. Trials are single seed, and seed-to-seed spread is
-about the size of the noise band, so treat a result near its edge as weak evidence. On `speedrun`, the verdict is at
-equal wall-clock time, so an idea that slows each step pays for it.
-
-### 4. If the result looks promising, submit the ladder
-
-Post a new comment on #9514 that names the idea's registry id:
-
-```
-Track: ladder
-Follow-up to X0123 (speedrun win): run the ladder with the same implementation.
-```
-
-The ladder shows whether the gain holds as the model scales and projects it to hero scale. Until the idea has a
-`hero-mfu` result, ladder rungs run at the baseline's step counts and the verdict is **provisional**: an idea needs a
-hero-mfu measurement before it can join the recipe. If the idea changes step time noticeably, ask for `hero-mfu`
-first; the ladder's step counts are then adjusted for the measured speed change.
-
-### 5. Once it passes all three, a maintainer merges it into the official recipe
-
-An idea that wins on `speedrun`, has a `hero-mfu` result, and holds up on the `ladder` (with steps adjusted for that
-MFU result) is a candidate for the recipe. A maintainer reviews it, weighing anything else that matters at hero
-scale (stability, routing balance, inference cost), and merges it: its flag turns on in the recipe, the recipe branch
-gets a new `belay-ckpt-<date>` tag, and the Status page marks it "in the current recipe". From then on every new
-experiment is compared against the recipe that includes it. You don't need to do anything for this step beyond
-answering questions on your idea.
-
-### 6. If the implementation didn't match your intent, submit a new idea
-
-Don't argue with a verdict on the wrong code. Post a new comment that names the old registry id, says what the
-implementation got wrong, and states the corrected design precisely:
-
-```
-Track: speedrun
-Redo of X0123: the implementation applied the gate after the norm; it should gate the residual input before the
-norm, initialised to 1.
-```
-
-The same applies to a design you want to change after seeing results: new comment, new attempt.
+6. **If the implementation missed your intent, post a new idea** naming the old registry id and what to change.
