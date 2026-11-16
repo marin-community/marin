@@ -1060,7 +1060,7 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
 
     assert batch.secret_env == {
         "DAYTONA_API_KEY": (
-            "env:DAYTONA_API_KEY",
+            "env:DAYTONA_EVAL_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         )
     }
@@ -1089,7 +1089,7 @@ def test_build_evaluation_batch_routes_declared_verifier_host_secrets(monkeypatc
 
     assert batch.secret_env == {
         "DAYTONA_API_KEY": (
-            "env:DAYTONA_API_KEY",
+            "env:DAYTONA_EVAL_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         ),
         "TOGETHER_API_KEY": (
