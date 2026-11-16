@@ -613,9 +613,8 @@ def test_publication_and_refresh_reject_oversight_without_result_before_selectin
     assert CurationCatalog(refresh_root).current().snapshot_id == "quick"
 
 
-@pytest.mark.parametrize("status", ["Excluded", "Not selectable"])
 @pytest.mark.parametrize("level", [OversightLevel.SAMPLE, OversightLevel.FULL])
-def test_publication_and_refresh_preserve_unavailable_oversight_without_result(tmp_path, status, level):
+def test_publication_and_refresh_preserve_unavailable_oversight_without_result(tmp_path, level):
     root = str(tmp_path / "catalog")
     selected = number_source(tmp_path / "input", "selected")
     metadata = number_source(tmp_path / "input", "unavailable")
@@ -623,7 +622,6 @@ def test_publication_and_refresh_preserve_unavailable_oversight_without_result(t
         metadata,
         info=replace(
             metadata.info,
-            tags=(*metadata.info.tags, "excluded") if status == "Excluded" else metadata.info.tags,
             lexical_contamination=None,
             oversight=OversightEvidence(level=level, verification="Historical review; result unavailable"),
         ),
@@ -636,7 +634,7 @@ def test_publication_and_refresh_preserve_unavailable_oversight_without_result(t
         assert CurationCatalog(root).current().snapshot_id == snapshot_id
         rows = selected_sources(root)
         row = rows[metadata.info.id]
-        assert row.declaration.status == status
+        assert row.declaration.status == "Excluded"
         assert row.declaration.oversight == level
         assert row.declaration.quality_result is None
         assert row.assessment_key is None

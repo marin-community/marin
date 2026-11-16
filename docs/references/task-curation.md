@@ -261,6 +261,101 @@ rebase conflicts and rerun. Advisory review remains required for non-trivial
 changes. Report the landed SHA to the coordinator. Never force-push or push to
 `main`. This rule ends when CI resumes.
 
+## Source status and exclusion taxonomy
+
+Every source carries exactly one `SourceStatus`: `Pending`, `Available`,
+`Excluded` or `Deprecated`. The status and every exclusion reason live in
+`finestore.rl.status_taxonomy`, the single source the catalog, the Atlas status
+page, this reference and the guide all render from.
+
+- **Pending** covers every source queued in `sources.PENDING_MEASUREMENT_SOURCES`
+  that is not configured for the catalog yet. Each Pending row records its
+  current intake stage: `Intake queued`, `Measurements pending` or
+  `Admission pending`, derived from which measurement receipts exist.
+- **Available** sources pass every admission check at their current pin.
+- **Excluded** folds the former `Not selectable` state and every policy
+  exclusion into one category. An Excluded source always carries at least one
+  `ExclusionReason` with typed `ExclusionEvidence`; exclusion without a claim is
+  a construction error, never a display state.
+- **Deprecated** means trainable but no longer supported or recommended.
+  Selection may use a Deprecated source when explicitly asked, never by
+  default. A Deprecated row must carry no exclusion reason; a deprecated-tagged
+  source with any exclusion reason is Excluded instead, and its replacement
+  source is shown when one exists.
+
+### Exclusion reasons and evidence
+
+`ExclusionReason` enumerates every reason a source can be Excluded. Admission
+blockers map one-to-one onto reasons: census coverage strings fold into
+`ACTOR_CENSUS_STALE` with the mismatched pin recorded in the evidence, the
+population admission blockers map to `RETAINED_POPULATION_EMPTY`,
+`GRADING_CENSUS_INCOMPLETE`, `GRADING_CENSUS_COUNTS_INCOMPLETE` and
+`GRADER_MISSING`, the lexical evaluation and training paths map to
+`LEXICAL_RECEIPT_MISSING` and `LEXICAL_REMEDIATION_REQUIRED`, and the
+measurement gaps map to `ACTOR_CENSUS_MISSING`, `OVERSIGHT_MISSING`,
+`AGENTIC_TASK_FORMAT_MISSING`, `SNAPSHOT_IDENTITY_MISSING` and
+`EXECUTION_REQUIREMENT_MISSING`. Policy exclusions that the admission checks
+cannot derive are recorded per source in
+`experiments/post_training/task_curation/exclusion_registry.py`: license
+reasons (`LICENSE_BAN`, `LICENSE_MISSING`), benchmark-use rulings
+(`EVAL_ONLY_BENCHMARK`, `CONTAMINATION_RISK`), replaced populations
+(`SUPERSEDED_BY_REPLACEMENT`), recorded defects (`GRADER_DEFECT`),
+duplicates (`DUPLICATE_OF_SOURCE`), provisioning limits
+(`SNAPSHOT_BUDGET_EXCEEDED`), non-task-data upstreams (`NOT_RL_TASK_DATA`) and
+`ORACLE_FILTRATION_RETAINED_ZERO`.
+
+Each claim carries a typed `ExclusionEvidence` object — a receipt URI (with its
+SHA-256 where pinned), the failing check's output, an issue link for bans, or
+the missing artifact the failing stage expected. Every reason has one canonical
+compact explanation (`label`, `meaning`, `clears`) defined next to the enum in
+`REASON_EXPLANATIONS`; the status page, the guide and this reference render
+that definition and nothing else.
+
+Tests gate the taxonomy: every Excluded row in the real catalog has at least
+one evidenced claim, every emitted blocker string maps to its claim's reason,
+manual-exclusion registry rows carry exactly their recorded claims, and
+`UNSPECIFIED_LEGACY` is transitional only — it is allowed solely on the sources
+listed in `NEEDS_RULING_SOURCES` until the user rules on them, and the status
+page shows that list under "Sources whose exclusion needs a ruling".
+
+### Admission procedure for Excluded sources
+
+A source becomes Available only when every reason is cleared by evidence, never
+by hand. Clearing a reason means producing the receipt the admission pipeline
+already defines, at the current pin:
+
+| Reason | Clearing step and receipt |
+|---|---|
+| `LICENSE_BAN` | Record a permissive grant or lift the ban in the license registry (user decision), then bind the accepted license receipt. |
+| `LICENSE_MISSING` | Establish and record a permissive grant or license receipt at the pin, then bind it. |
+| `NOT_RL_TASK_DATA` | Publish an upstream that contains usable RL task data and declare it. |
+| `ORACLE_FILTRATION_RETAINED_ZERO` | Republish the conversion so its full-population oracle filtration admits more than zero tasks; publish the new oracle release receipt and select it. |
+| `ACTOR_CENSUS_MISSING` | Run the source's licensed intake to a census receipt and bind it (`actor_census_receipts`). |
+| `ACTOR_CENSUS_STALE` | Re-measure the census at the current dataset pin and converter version; bind the new census receipt. |
+| `RETAINED_POPULATION_EMPTY` | Republish a nonempty retained population at the current pin. |
+| `GRADING_CENSUS_INCOMPLETE`, `GRADING_CENSUS_COUNTS_INCOMPLETE` | Complete the grading census over the retained population; bind the census receipt (`grading_census_receipts`). |
+| `GRADER_MISSING` | Declare runnable graders for the affected tasks and re-bind the grading census. |
+| `LEXICAL_RECEIPT_MISSING` | Measure the lexical receipt at the current pin for the declared use (`lexical_measurements`). |
+| `LEXICAL_REMEDIATION_REQUIRED` | Publish the remediated private release and bind its decontamination receipt at the current pin. |
+| `OVERSIGHT_MISSING` | Run SAMPLE or FULL content review with recorded verification and bind the receipt. |
+| `AGENTIC_TASK_FORMAT_MISSING` | Declare the accepted TaskCompendium or Harbor task format, or record the grandfathered registration. |
+| `SNAPSHOT_IDENTITY_MISSING` | Produce the production snapshot identity measurement at the current pin. |
+| `EXECUTION_REQUIREMENT_MISSING` | Produce the execution-requirement measurement. |
+| `EVAL_ONLY_BENCHMARK`, `CONTAMINATION_RISK`, `SUPERSEDED_BY_REPLACEMENT`, `GRADER_DEFECT`, `DUPLICATE_OF_SOURCE`, `SNAPSHOT_BUDGET_EXCEEDED`, `UNSPECIFIED_LEGACY` | User rulings. Record the ruling as evidence, then update the source's claims (or its registry entry) accordingly. |
+
+Declaration-only metadata rows for known-but-rejected upstreams live in
+`experiments/post_training/task_curation/metadata_exclusions.py`. They carry
+identity metadata, typed claims and the upstream pin the ruling was made
+against; they never download, convert, host or mirror data, and they publish
+through the static status artifact rather than the catalog.
+
+The Atlas status page (`status.html`) lists every source — catalog rows, the
+pending intake queue and the metadata exclusions — with columns for source,
+status, reason labels, evidence links and last-change receipt, filters by
+status and reason, counts per status, and the needs-ruling list. Reason
+explanations render only when a label is clicked open; the page shows data, not
+policy prose.
+
 ## Pipeline overview
 
 The mandatory ingest order is license permission (stage 0) → conversion → exact within-source deduplication → lexical
@@ -877,8 +972,9 @@ those measurements.
 An `RlDataSource` binds source information, a typed configuration and a registered
 conversion pipeline. A declaration without that pipeline is rejected. Every Atlas
 entry enters through QUICK, SAMPLE or FULL; QUICK means converted without review,
-and does not make a source selectable for training. The deprecated tag and its
-reason remain available for registered historical sources. Removed pipeline-less
+and does not make a source selectable for training. Deprecated means trainable
+but no longer supported or recommended: a deprecated-tagged source with any
+exclusion reason is Excluded instead. Removed pipeline-less
 entries are tracked in retired-inventory-only.json; their artifacts stay archived.
 
 `SourceInfo.origin` is a `SourceOrigin` naming the upstream provider. Internal
@@ -906,13 +1002,14 @@ their `NoGrader` transport wrapper as an absent grader. A population with no exe
 is retired into the historical ledger; aliases, previous snapshots and artifacts remain available.
 Atlas also refuses a new load of an Available source that would display SAMPLE or FULL
 without a computed Result. The content-Result and population-admission
-requirements apply only to Available rows; Excluded and Not selectable metadata
-remains unavailable and keeps its recorded quality fields, including a missing
-Result. Executed grader controls alone do not supply a content-quality
-Result. A campaign that reviewed its sources in SAMPLE or FULL mode with passed
-or validated controls owes each reviewed source a computed Result even when the
-source ends Excluded or Not selectable; a failed campaign that reviewed must
-still not move the selected catalog pointer.
+requirements apply only to Available rows; Excluded metadata remains
+unavailable and keeps its recorded quality fields, including a missing Result
+(the former `Not selectable` state is part of Excluded and carries its
+admission blockers as typed claims). Executed grader controls alone do not
+supply a content-quality Result. A campaign that reviewed its sources in
+SAMPLE or FULL mode with passed or validated controls owes each reviewed
+source a computed Result even when the source ends Excluded; a failed
+campaign that reviewed must still not move the selected catalog pointer.
 
 `admission_inventory` scans current populations through their actor-census bindings and freezes
 seed-zero panels of at most 100 tasks. It records the stored-byte scan digest independently from

@@ -239,8 +239,11 @@ path that substitutes a declared count for conversion.
 
 Catalog publication requires a current-pin license receipt for every non-banned
 source. `Available` sources must also pass population admission checks. Licensed
-`Not selectable` and `Excluded` entries can retain incomplete population evidence
-as unavailable metadata; publishing that metadata confers no admission.
+`Excluded` entries (including the folded former `Not selectable` state) can retain
+incomplete population evidence as unavailable metadata; publishing that metadata
+confers no admission. Every Excluded entry carries at least one typed exclusion
+reason with evidence; see
+[source status and exclusion taxonomy](task-curation.md#source-status-and-exclusion-taxonomy).
 
 **Not assessed** means there is no current sampled assessment; **Unknown** is a
 completed assessment without enough conclusive judgments. Curation never re-grades

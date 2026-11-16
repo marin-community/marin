@@ -178,7 +178,7 @@ def test_new_admission_requires_permission_even_with_complete_population_evidenc
     assert declaration.license_receipt.revision == declaration.dataset_revision
 
 
-@pytest.mark.parametrize("status", ["Not selectable", "Excluded"])
+@pytest.mark.parametrize("status", ["Excluded", "Deprecated"])
 def test_catalog_publishes_licensed_unavailable_metadata_without_admitting_population(tmp_path, status):
     declaration = with_admission_census(number_source(tmp_path / "input.txt")).declaration.model_copy(
         update={"status": status, "actor_census_input": None}

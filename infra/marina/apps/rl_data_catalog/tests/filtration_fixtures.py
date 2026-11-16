@@ -49,7 +49,7 @@ def filtered_declaration(retained: int) -> SourceDeclaration:
             "task_count": retained,
             "within_source_dedup": deduplication_evidence(dataset, revision, "1", retained).model_dump(mode="json"),
             "lexical_contamination": None,
-            "status": "Excluded" if retained == 0 else "Not selectable",
+            "status": "Excluded",
             "oracle_filtration": evidence,
         }
     )

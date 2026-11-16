@@ -293,6 +293,21 @@
       <p>Each source page links its pinned current release, upstream input, duplicate/drop manifests, lexical measurements, grading assessment and available QC or execution receipts. Storage pointers include Filer links. Private files require the corresponding Marina or dataset access. A missing field or inaccessible artifact remains an explicit limitation.</p>
     </article>
   </section>
+  <section id="status" aria-labelledby="status-title">
+    <h2 id="status-title">Source status and exclusions</h2>
+    <article><h3>The four statuses</h3>
+      <p>Every source carries exactly one status. <strong>Pending</strong> covers every source queued in the intake list that is not configured for the catalog yet; each Pending row records its current stage (Intake queued, Measurements pending or Admission pending). <strong>Available</strong> sources pass every admission check at their current pin. <strong>Excluded</strong> covers every source that cannot or may not be selected: the former Not-selectable state and every policy exclusion fold into it. <strong>Deprecated</strong> means trainable but no longer supported or recommended; selection may use a Deprecated source when explicitly asked, never by default, and a Deprecated row carries no exclusion reason. A deprecated-tagged source with any exclusion reason is Excluded instead, and its replacement is shown when one exists.</p>
+    </article>
+    <article><h3>Excluded requires a reason and evidence</h3>
+      <p>An Excluded source always carries at least one typed exclusion reason with evidence: a receipt URI (with its SHA-256 where pinned), the failing check's output, an issue link for bans, or the missing artifact the failing stage expected. Exclusion without a claim is a construction error, never a display state. The reasons enumerate every exclusion path: license bans and missing licenses, zero-retained oracle filtration, missing or stale actor censuses, empty retained populations, incomplete grading censuses, missing graders, missing lexical receipts or required remediation, missing oversight, missing agentic task formats, missing snapshot-identity or execution measurements, eval-only benchmark rulings, contamination risk, superseded populations, grader defects, duplicates, snapshot-budget limits, non-task-data upstreams, and a transitional needs-ruling state that the user must resolve.</p>
+    </article>
+    <article><h3>What clears an exclusion</h3>
+      <p>A source becomes Available only when every reason is cleared by evidence, never by hand. Each reason names its clearing step: census reasons clear with a census receipt at the current pin, grading reasons with a complete grading census, lexical reasons with a measured or remediated receipt at the pin, oversight with a SAMPLE or FULL review, task-format and measurement reasons with the missing measurement, and license or policy reasons with the recorded user ruling and its registry update. The full per-reason table lives in the <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#source-status-and-exclusion-taxonomy">task curation reference</a>.</p>
+    </article>
+    <article><h3>Reading the status page</h3>
+      <p>The status page lists every source — catalog rows, the pending intake queue and declaration-only metadata rows for known-but-rejected upstreams — with filters by status and reason, counts per status, and the list of sources whose exclusion still needs a ruling. Reason labels open their canonical one-line meaning and their clearing step; that explanation appears only when clicked, and the page itself shows data, never policy prose.</p>
+    </article>
+  </section>
   <p id="snapshot-info" class="snapshot-info"></p>
   </div>
 <section><h2>Curriculum confidence and examples</h2><p>Confidence selects precomputed subject and capability similarity cutoffs. All (nearest) is the default. Counts and stored sample examples update together; examples show their Source without requiring a source selection. Complete per-source counts are available below the samples. Lists are samples, not a complete instance index.</p><h2>Grader profiles</h2><p>Grader is derived from measured task contracts. Mixed uses one chip with its breakdown and judge profile in Evidence. A changed or unmeasured input stays Pending.</p></section></main>
