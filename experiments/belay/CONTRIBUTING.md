@@ -4,6 +4,11 @@ Marin Belay tests pretraining ideas against a fixed recipe and records every res
 idea in a GitHub comment; a maintainer approves it; an agent implements it behind a default-off flag, runs it against
 a baseline, and posts the verdict. This page is the whole contributor workflow. Hand it to your agent as context.
 
+**Every experiment is compared to the official recipe by default** (currently Belay Ckpt Oct 20 2026, tag
+`belay-ckpt-2026-10-20`): the `speedrun`, `ladder` and `competitive-*` Tracks all run against it. The `vanilla-*`
+and `moe-*` Tracks are the opt-in exceptions. Ideas that pass `speedrun`, `hero-mfu` and the `ladder` can be merged
+into the official recipe by a maintainer, and later ideas are then measured against the improved recipe.
+
 ## Links
 
 | What | Where |
@@ -97,10 +102,16 @@ The ladder shows whether the gain holds from d512 to d1280 and projects it to he
 hero-mfu measurement before it can join the recipe. If the idea changes step time noticeably, ask for `hero-mfu`
 first; the ladder's step counts are then adjusted for the measured speed change.
 
-Maintainers decide what joins the recipe from the ladder, hero-mfu and anything else that matters at hero scale
-(stability, routing balance, inference cost).
+### 5. Once it passes all three, a maintainer merges it into the official recipe
 
-### 5. If the implementation didn't match your intent, submit a new idea
+An idea that wins on `speedrun`, has a `hero-mfu` result, and holds up on the `ladder` (with steps adjusted for that
+MFU result) is a candidate for the recipe. A maintainer reviews it, weighing anything else that matters at hero
+scale (stability, routing balance, inference cost), and merges it: its flag turns on in the recipe, the recipe branch
+gets a new `belay-ckpt-<date>` tag, and the Status page marks it "in the current recipe". From then on every new
+experiment is compared against the recipe that includes it. You don't need to do anything for this step beyond
+answering questions on your idea.
+
+### 6. If the implementation didn't match your intent, submit a new idea
 
 Don't argue with a verdict on the wrong code. Post a new comment that names the old registry id, says what the
 implementation got wrong, and states the corrected design precisely:
