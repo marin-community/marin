@@ -194,6 +194,19 @@ def get_matching_files(
     return matched
 
 
+def get_data_guard_files(
+    patterns: list[str], all_files_list: list[pathlib.Path], exclude_patterns: list[str]
+) -> list[pathlib.Path]:
+    """Like get_matching_files, but the global excludes do not hide files from this check."""
+    matched = []
+    for file_path in all_files_list:
+        if matches_pattern(file_path, exclude_patterns):
+            continue
+        if matches_pattern(file_path, patterns):
+            matched.append(file_path)
+    return matched
+
+
 def _record(name: str, exit_code: int, output: str = "") -> int:
     """Print a one-line status and stash failure details for the summary."""
     status = "ok" if exit_code == 0 else "FAIL"
@@ -344,6 +357,159 @@ def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
         return _record("Large files", 1, buf.getvalue())
 
     return _record("Large files", 0)
+
+
+# Committed datasets balloon the checkout and the diff; the guard below keeps them out in
+# favor of references to private open-athena Hugging Face datasets. Sharding a dataset
+# across files or compressing it no longer evades the limit: every data file counts
+# against its own 100 KB, and a directory's committed data counts against 250 KB.
+LARGE_DATA_FILE_LIMIT = 100 * 1024
+LARGE_DATA_DIRECTORY_LIMIT = 250 * 1024
+DATA_FILE_SUFFIXES = frozenset(
+    {".json", ".jsonl", ".csv", ".tsv", ".parquet", ".arrow", ".npy", ".pkl", ".gz", ".zst", ".tar", ".zip"}
+)
+LARGE_DATA_ALLOWLIST_PATH = ROOT_DIR / "infra/large-data-allowlist.json"
+LARGE_DATA_MESSAGE = (
+    "publish the data to a private open-athena Hugging Face dataset and commit a reference"
+    ' {"repo": ..., "revision": ..., "path": ..., "sha256": ...} instead; readers resolve it'
+    " through the existing HF/regional helpers"
+)
+
+
+def _is_data_file(path: pathlib.Path) -> bool:
+    if path.suffix.lower() in DATA_FILE_SUFFIXES:
+        return True
+    try:
+        with path.open("rb") as stream:
+            return b"\0" in stream.read(8192)
+    except OSError:
+        return False
+
+
+def _large_data_allowlist() -> dict[str, int]:
+    if not LARGE_DATA_ALLOWLIST_PATH.exists():
+        return {}
+    document = json.loads(LARGE_DATA_ALLOWLIST_PATH.read_text())
+    assert isinstance(document, dict)
+    return {str(path): int(size) for path, size in document.items()}
+
+
+def _merge_base_ref() -> str:
+    result = subprocess.run(
+        ["git", "merge-base", "origin/main", "HEAD"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _git_blob_size(base_ref: str, path: str) -> int | None:
+    """The committed byte size of a path at the base ref, or None when absent there."""
+    result = subprocess.run(
+        ["git", "cat-file", "-s", f"{base_ref}:{path}"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return int(result.stdout.strip()) if result.returncode == 0 else None
+
+
+def _tracked_data_siblings(directory: pathlib.Path) -> list[pathlib.Path]:
+    """Tracked data files directly inside one directory, including files this branch didn't touch."""
+    result = subprocess.run(
+        ["git", "ls-files", "--", f"{directory.relative_to(ROOT_DIR).as_posix()}/"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [
+        ROOT_DIR / name
+        for name in result.stdout.splitlines()
+        if name and (ROOT_DIR / name).parent == directory and _is_data_file(ROOT_DIR / name)
+    ]
+
+
+def check_large_data(files: list[pathlib.Path], fix: bool) -> int:
+    if not files:
+        return 0
+
+    allowlist = _large_data_allowlist()
+    buf = io.StringIO()
+    failures: list[str] = []
+
+    directory_bytes: dict[str, int] = {}
+
+    def directory_total(directory: pathlib.Path) -> int:
+        key = directory.relative_to(ROOT_DIR).as_posix()
+        if key not in directory_bytes:
+            directory_bytes[key] = sum(path.stat().st_size for path in _tracked_data_siblings(directory))
+        return directory_bytes[key]
+
+    for file_path in files:
+        if file_path == LARGE_DATA_ALLOWLIST_PATH or not _is_data_file(file_path):
+            continue
+        relative = file_path.relative_to(ROOT_DIR).as_posix()
+        size = file_path.stat().st_size
+        recorded = allowlist.get(relative)
+        if recorded is not None:
+            # Allowlisted paths are grandfathered at their recorded size and may only shrink.
+            if size > recorded:
+                failures.append(
+                    f"  - {relative} grew to {size / 1024:.1f} KB (allowlisted at {recorded / 1024:.1f} KB;"
+                    f" the allowlist only shrinks)"
+                )
+            continue
+        if size > LARGE_DATA_FILE_LIMIT:
+            failures.append(f"  - {relative} is {size / 1024:.1f} KB (limit {LARGE_DATA_FILE_LIMIT // 1024} KB)")
+        directory = file_path.parent
+        total = directory_total(directory)
+        if total > LARGE_DATA_DIRECTORY_LIMIT:
+            failures.append(
+                f"  - {relative}: committed data in {directory.relative_to(ROOT_DIR).as_posix()}/"
+                f" totals {total / 1024:.1f} KB (limit {LARGE_DATA_DIRECTORY_LIMIT // 1024} KB),"
+                " so sharding cannot spread it further"
+            )
+
+    # A shrink-only allowlist. Once the allowlist itself exists on origin/main, its
+    # recorded sizes may only decrease and a new entry must reference data that
+    # origin/main already has, so a fresh dump cannot be allowlisted in the same
+    # change that adds it. Before the first merge (adoption) the entries stand as-is.
+    if LARGE_DATA_ALLOWLIST_PATH in files:
+        base_ref = _merge_base_ref()
+        result = subprocess.run(
+            ["git", "cat-file", "-p", f"{base_ref}:{LARGE_DATA_ALLOWLIST_PATH.relative_to(ROOT_DIR).as_posix()}"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            base_document = json.loads(result.stdout)
+            for path, size in allowlist.items():
+                base_size = base_document.get(path)
+                if base_size is None:
+                    if _git_blob_size(base_ref, path) is None:
+                        failures.append(
+                            f"  - allowlist entry {path} names data that does not exist on origin/main;"
+                            " commit the reference instead"
+                        )
+                elif size > int(base_size):
+                    failures.append(
+                        f"  - allowlist entry {path} grew from {int(base_size) / 1024:.1f} KB to {size / 1024:.1f} KB"
+                        " (the allowlist only shrinks)"
+                    )
+
+    if failures:
+        buf.write(f"{len(failures)} large-data violations; " + LARGE_DATA_MESSAGE + "\n")
+        for failure in failures:
+            buf.write(failure + "\n")
+        return _record("Large data", 1, buf.getvalue())
+
+    return _record("Large data", 0)
 
 
 def check_python_ast(files: list[pathlib.Path], fix: bool) -> int:
@@ -839,6 +1005,9 @@ class PrecommitConfig:
     patterns: list[str]
     checks: list[Callable[[list[pathlib.Path], bool], int]]
     exclude_patterns: list[str] = field(default_factory=list)
+    # Check the globally excluded tree too (vendored code, generated assets, binary
+    # media): only the data guard needs files those patterns hide from other checks.
+    include_globally_excluded: bool = False
 
 
 PRECOMMIT_CONFIGS = [
@@ -901,6 +1070,26 @@ PRECOMMIT_CONFIGS = [
             check_toml_yaml,
             check_trailing_whitespace,
             check_eof_newline,
+        ],
+    ),
+    PrecommitConfig(
+        # The data guard needs the globally hidden tree (gz/zip/npy are the classic
+        # evasion vectors), but not upstream code, pinned snapshots or binary media.
+        patterns=["**/*"],
+        checks=[check_large_data],
+        include_globally_excluded=True,
+        exclude_patterns=[
+            "vendor/**",
+            "tests/snapshots/**",
+            "**/*.ipynb",
+            "**/*.png",
+            "**/*.jpg",
+            "**/*.jpeg",
+            "**/*.gif",
+            "**/*.ico",
+            "**/*.mov",
+            "**/*.mp4",
+            "**/*.html",
         ],
     ),
     PrecommitConfig(
@@ -1056,7 +1245,8 @@ def main(
     only_set = set(f"check_{o}" for o in only)
 
     for config in PRECOMMIT_CONFIGS:
-        matched_files = get_matching_files(config.patterns, all_files_list, config.exclude_patterns)
+        select = get_data_guard_files if config.include_globally_excluded else get_matching_files
+        matched_files = select(config.patterns, all_files_list, config.exclude_patterns)
         matched_files = [f for f in matched_files if f.exists()]
         if not matched_files:
             continue
