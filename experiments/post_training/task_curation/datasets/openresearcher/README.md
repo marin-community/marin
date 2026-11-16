@@ -80,6 +80,16 @@ The versioned `openresearcher-bm25:v1` provider exposes `search` and
 pins the implementation, corpus, tokenizer and index manifest. The gold
 answer belongs only in private verifier resources.
 
+OpenResearcher `get_document` writes complete producer JSON to a unique temporary
+file in the actor machine and transfers it with `Machine.download`, preserving
+documents above the 16 MiB stdout capture limit. The session removes its temporary
+file after the call. Failed producers, failed transfers and malformed JSON still
+abort. Search and BrowseComp retain their existing capture limits.
+Against a sandbox using the pinned actor image, verify production-provider calls
+for a normal document and pinned corpus document `7385` (18,388,915 UTF-8 bytes).
+Check the complete returned text against the corpus. The grounding JSON-line
+replay described above tests a separate transport path.
+
 `prepare` creates the source's QUICK artifact after grounding and physical image
 QA. Its [`PreparationConfig`](prepare.py) binds the stage, question, grounding and benchmark
 hash receipts by SHA, the retrieval state, two immutable image digests and a
