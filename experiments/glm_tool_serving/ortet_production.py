@@ -23,6 +23,7 @@ from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
 from tokenizers import Tokenizer
 
+from experiments.glm_tool_serving.catalog_loader import load_catalog
 from experiments.glm_tool_serving.provenance import emit_receipt, write_provenance
 from experiments.glm_tool_serving.route_gate import gate_result, load_route_gate
 from experiments.tool_normalization.acquire import acquire_shard
@@ -104,8 +105,7 @@ def main() -> None:
     os.environ["AWS_ACCESS_KEY_ID"], os.environ["AWS_SECRET_ACCESS_KEY"] = s3_credentials(StoreType.COREWEAVE)
     os.environ["AWS_REGION"] = os.environ["AWS_DEFAULT_REGION"] = data_buckets()["marin-us-east-02a"].signing_region
     data = Path(__file__).resolve().parent / "production_data"
-    catalog = json.loads((data / args.catalog).read_text())
-    catalog_hash = hashlib.sha256((data / args.catalog).read_bytes()).hexdigest()
+    catalog, catalog_hash = load_catalog(data, args.catalog)
     recovery = json.loads((data / args.recovery_file).read_text()) if args.recovery_file else None
     shards = catalog["shards"][args.replica - 1 :: args.replicas]
     skip = set(catalog["skip_ids"])
