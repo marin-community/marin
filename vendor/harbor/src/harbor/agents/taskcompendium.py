@@ -61,7 +61,6 @@ from harbor_config.model_name import split_provider_model_name
 def empty_attempt(task: TaskSpec) -> GradingAttempt:
     return GradingAttempt(
         ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))),
-        reply_status=CONTROL_REPLY_STATUS if task.completion_protocol == "tool_free_single" else None,
     )
 
 
@@ -246,7 +245,10 @@ class TaskSpecEmptyAgent(TaskSpecAgent):
         return "nop"
 
     async def run_task(self, task: TaskSpec, machine: Machine | None, limits: RolloutLimits) -> GradingAttempt:
-        self.attempt = empty_attempt(task)
+        self.attempt = replace(
+            empty_attempt(task),
+            reply_status=CONTROL_REPLY_STATUS if task.completion_protocol == "tool_free_single" else None,
+        )
         return self.attempt
 
 

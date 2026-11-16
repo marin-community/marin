@@ -78,8 +78,10 @@ async def test_native_candidate_requires_budget_and_does_not_execute_a_returned_
         max_turns=16, max_total_tokens=None, model_turn_timeout=10, tool_turn_timeout=None,
         total_turn_timeout=10, attempt_timeout=20, verifier_timeout=5, cleanup_timeout=1,
     )
+    unconfigured = agents.TaskSpecChatAgent(**common)
     with pytest.raises(ValueError, match="native budget manifest"):
-        await agents.TaskSpecChatAgent(**common).run_task(task, None, limits)
+        await unconfigured.run_task(task, None, limits)
+    assert unconfigured.attempt.reply_status is None
     assert requests == [] and loaded == []
     agent = agents.TaskSpecChatAgent(
         **common, budget_manifest=str(path), budget_manifest_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -93,8 +95,14 @@ async def test_native_candidate_requires_budget_and_does_not_execute_a_returned_
     assert (tmp_path / "agent/tool-free/raw_response.json").is_file()
 
 
-def test_native_original_oracle_and_empty_controls_have_explicit_control_provenance():
+@pytest.mark.asyncio
+async def test_native_original_oracle_and_empty_controls_have_explicit_control_provenance(tmp_path):
     task = source_task()
-    for attempt in (oracle_answer_attempt(task, b"C:T670:N"), agents.empty_attempt(task), agents.control_attempt(task, [{"role": "assistant", "content": "C:T670:N"}])):
+    limits = RolloutLimits(
+        max_turns=1, max_total_tokens=None, model_turn_timeout=10, tool_turn_timeout=None,
+        total_turn_timeout=10, attempt_timeout=20, verifier_timeout=5, cleanup_timeout=1,
+    )
+    nop = await agents.TaskSpecEmptyAgent(logs_dir=tmp_path).run_task(task, None, limits)
+    for attempt in (oracle_answer_attempt(task, b"C:T670:N"), nop, agents.control_attempt(task, [{"role": "assistant", "content": "C:T670:N"}])):
         assert attempt.reply_status.origin == "control"
         assert not attempt.reply_status.truncated and not attempt.reply_status.provider_refusal and not attempt.reply_status.tool_events

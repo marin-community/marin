@@ -1,6 +1,20 @@
 {
   "pending": [
     {
+      "id": "OpenAthena:pdbthink-coordinate-tasks",
+      "name": "pdbthink-coordinate-train",
+      "display_name": "PDBThink v1.3.0 coordinate tasks",
+      "status": "Pending",
+      "origin": "OpenAthena",
+      "upstream_dataset": "pdbthink-coordinate-tasks",
+      "upstream_url": "https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks",
+      "notes": "Original train split only; exact native budgets and provider status required; original verifiers and oracles preserved.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": []
+    },
+    {
       "id": "POLARIS-Project:Polaris-Dataset-53K",
       "name": "polaris-53k",
       "display_name": "POLARIS-53K",
