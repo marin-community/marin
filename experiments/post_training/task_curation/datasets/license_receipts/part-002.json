@@ -1,4 +1,82 @@
 {
+  "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot": {
+    "bundled_third_party": false,
+    "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-c39d65c6-retained-20261113-v1",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "cc-by-4.0"
+        ],
+        "quoted_lines": [
+          "L4: license: cc-by-4.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: - reinforcement-learning",
+          "L8: configs:",
+          "L9: - config_name: rlvr1",
+          "L10:   data_files:",
+          "L11:   - split: train",
+          "L12:     path: rlvr1.jsonl"
+        ],
+        "restrictive_terms": false,
+        "sha256": "2b9bb8c4c104444d7f7940a6535d63a3833c8261fda4d86130b6a16b550ec72e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/resolve/482392c14c6418e26804ea2e5d10359df9877df4/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "cc-by-sa-4.0"
+        ],
+        "quoted_lines": [
+          "L73: ## License/Terms of Use:",
+          "L74: This dataset is licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/deed.en), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.en), [ODC-BY 1.0](https://opendatacommons.org/licenses/by/1-0/), [MIT](https://opensource.org/license/mit), and [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0)."
+        ],
+        "restrictive_terms": false,
+        "sha256": "2b9bb8c4c104444d7f7940a6535d63a3833c8261fda4d86130b6a16b550ec72e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/resolve/482392c14c6418e26804ea2e5d10359df9877df4/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "2b9bb8c4c104444d7f7940a6535d63a3833c8261fda4d86130b6a16b550ec72e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/resolve/482392c14c6418e26804ea2e5d10359df9877df4/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:39.909037+00:00",
+    "resolved_source": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Source pin: `nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4`. Converter: `3@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "26b872f63fb52addf7bb57f77236e20a990774da592441cb8b9dc06b0f4f720b",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-c39d65c6-retained-20261113-v1/resolve/5d7382c202ebbbfde021ab8cb1d651e41f6a0a69/README.md"
+      },
+      "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "5d7382c202ebbbfde021ab8cb1d651e41f6a0a69",
+    "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot",
+    "wrapper_chain": []
+  },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": {
     "bundled_third_party": false,
     "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261113-v1",
@@ -4467,83 +4545,6 @@
     "resolver_version": "atlas-license-v2",
     "revision": "8ecfda4d934131068163ba45e7a59f15d2f722bc",
     "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4",
-    "wrapper_chain": []
-  },
-  "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier": {
-    "bundled_third_party": true,
-    "dataset_id": "open-athena/task-trove-dcagent-inferredbugs-sandboxes-verifier-d35a1a27-taskcompendium-20261112",
-    "decisions": [],
-    "evidence": [
-      {
-        "kind": "dataset_card",
-        "license_ids": [
-          "apache-2.0"
-        ],
-        "quoted_lines": [
-          "L4: license: apache-2.0",
-          "L1: ---",
-          "L2: language:",
-          "L3: - en",
-          "L5: task_categories:",
-          "L6: - text-generation",
-          "L7: size_categories:",
-          "L8: - 1M<n<10M",
-          "L9: tags:",
-          "L10: - agent",
-          "L11: - code",
-          "L12: - agentic-tasks"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_license",
-        "license_ids": [
-          "missing"
-        ],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      },
-      {
-        "kind": "readme_notice",
-        "license_ids": [],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
-      }
-    ],
-    "model_generated_outputs": true,
-    "resolved_at": "2026-11-15T20:37:36.986048+00:00",
-    "resolved_source": {
-      "dataset_id": "open-thoughts/TaskTrove",
-      "declaration": {
-        "kind": "wrapper_source",
-        "license_ids": [],
-        "quoted_lines": [
-          "L9: Upstream: open-thoughts/TaskTrove at 02923004846e4e73862c20962f823a6d05100e7a. https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
-        ],
-        "restrictive_terms": false,
-        "sha256": "619a94fff9474034c7f518412bab45e67356b2371f8165a8ff53904eef972cda",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-inferredbugs-sandboxes-verifier-d35a1a27-taskcompendium-20261112/resolve/85ec560970adec8b9e1d409e6a63206422736834/README.md"
-      },
-      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
-      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
-    },
-    "resolver_version": "atlas-license-v2",
-    "revision": "85ec560970adec8b9e1d409e6a63206422736834",
-    "source_id": "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier",
     "wrapper_chain": []
   }
 }

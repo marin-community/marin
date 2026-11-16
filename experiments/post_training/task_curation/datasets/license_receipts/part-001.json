@@ -1766,6 +1766,153 @@
     "source_id": "Gretel:gretel_text_to_sql",
     "wrapper_chain": []
   },
+  "Harbor Hub:skill2env/skill2env@license-filtered": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/harbor-hub-skill2env-d208e05b-license-filtered-20261116-v1",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/harbor-hub-skill2env-d208e05b-license-filtered-20261116-v1",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/harbor-hub-skill2env-d208e05b-license-filtered-20261116-v1/tree/d9d97af0b8d75c5132a71c194ced9af75f0309ae",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6921268133",
+          "https://github.com/marin-community/marin/issues/11532"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6921268133",
+        "kind": "exception",
+        "rationale": "The user decided to version this source with only permissively licensed tasks (verbatim: \"drop the tasks with non-standard licenses, version the source, document the decision in gh issue\"). Every retained task's skill license is inventoried per task in the release manifest (from SkillHub/skillhub_source_licenses.csv at NVlabs/Skill2Env@a99ad513b438021ed384c60b0a6bdf650afe0a2a): 6,159 retained under Apache-2.0 / MIT / CC-BY-4.0; 3 dropped for non-standard upstream licenses (Apache-2.0 AND OFL-1.1; an EPL-1.0/EPL-2.0 bundle); 1,334 dropped because no skill license could be established at the pinned origin (1,315 without a CSV row, 19 with ambiguous identity). The deterministic checker PASSes the adopted pin (P1) through its declared NVlabs/Skill2Env hop. The prior source pin 6198459210ab98e0c9c4e021b20f50e93c41b9d4 remains banned. An exception does not transfer to a new revision.",
+        "revision": "d9d97af0b8d75c5132a71c194ced9af75f0309ae",
+        "scope": [
+          "train"
+        ],
+        "source_id": "Harbor Hub:skill2env/skill2env@license-filtered",
+        "when": "2026-11-16T08:45:00-05:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "repository_tree",
+        "license_ids": [],
+        "quoted_lines": [
+          "L1: {\"sha\": \"a99ad513b438021ed384c60b0a6bdf650afe0a2a\", \"tree\": [{\"mode\": \"100644\", \"path\": \".gitignore\", \"sha\": \"0da60255dee6d65bd57b95a388ba08fec34a0b3b\", \"size\": 174, \"type\": \"blob\", \"url\": \"https://api.github.com/repos/NVlabs/Skill2Env/git/blobs/0da60255dee6d65bd57b95a388ba08fec34a0b3b\"}, {\"mode\": \"100644\", \"path\": \"CONTRIBUTING.md\", \"sha\": \"592ebb5f67e5534b65fbe432dcb0131b25abb776\", \"size\": 2530, \"type\": \"blob\", \"url\": \"https://api.github.com/repos/NVlabs/Skill2Env/git/blobs/592ebb5f67e5534b65f"
+        ],
+        "restrictive_terms": false,
+        "sha256": "d45c970a13541629e44571148443f41d588f6b7884dcfbf8d78fd32eb3268c84",
+        "unidentified_third_party_terms": false,
+        "url": "https://api.github.com/repos/NVlabs/Skill2Env/git/trees/a99ad513b438021ed384c60b0a6bdf650afe0a2a?recursive=1"
+      },
+      {
+        "kind": "github_license_api",
+        "license_ids": [],
+        "quoted_lines": [
+          "L1: {\"allow_forking\": true, \"archive_url\": \"https://api.github.com/repos/NVlabs/Skill2Env/{archive_format}{/ref}\", \"archived\": false, \"assignees_url\": \"https://api.github.com/repos/NVlabs/Skill2Env/assignees{/user}\", \"blobs_url\": \"https://api.github.com/repos/NVlabs/Skill2Env/git/blobs{/sha}\", \"branches_url\": \"https://api.github.com/repos/NVlabs/Skill2Env/branches{/branch}\", \"clone_url\": \"https://github.com/NVlabs/Skill2Env.git\", \"collaborators_url\": \"https://api.github.com/repos/NVlabs/Skill2Env/co"
+        ],
+        "restrictive_terms": false,
+        "sha256": "1600e5e8af08c371c91039ef310b695ea15dbabd1c1671ba53de9f4b1ac31a5c",
+        "unidentified_third_party_terms": false,
+        "url": "https://api.github.com/repos/NVlabs/Skill2Env"
+      },
+      {
+        "kind": "license_file",
+        "license_ids": [
+          "Apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4:                                  Apache License",
+          "L6:                         http://www.apache.org/licenses/",
+          "L12:       \"License\" shall mean the terms and conditions for use, reproduction,",
+          "L15:       \"Licensor\" shall mean the copyright owner or entity authorized by",
+          "L16:       the copyright owner that is granting the License.",
+          "L27:       exercising permissions granted by this License.",
+          "L39:       Object form, made available under the License, as indicated by a",
+          "L47:       of this License, Derivative Works shall not include works that remain",
+          "L54:       submitted to Licensor for inclusion in the Work by the copyright owner",
+          "L58:       to the Licensor or its representatives, including but not limited to",
+          "L61:       Licensor for the purpose of discussing and improving the Work, but",
+          "L65:       \"Contributor\" shall mean Licensor and any individual or Legal Entity",
+          "L1: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.",
+          "L5:                            Version 2.0, January 2004",
+          "L8:    TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION",
+          "L10:    1. Definitions.",
+          "L13:       and distribution as defined by Sections 1 through 9 of this document.",
+          "L18:       \"Legal Entity\" shall mean the union of the acting entity and all",
+          "L19:       other entities that control, are controlled by, or are under common"
+        ],
+        "restrictive_terms": false,
+        "sha256": "4f321b887d0350e672e06c8a8bc85cff17ee2d1f3c360617079041ceee324c81",
+        "unidentified_third_party_terms": false,
+        "url": "https://github.com/NVlabs/Skill2Env/blob/a99ad513b438021ed384c60b0a6bdf650afe0a2a/LICENSE"
+      },
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "79569dd3fe0a600dd025b5e2a07098c8c092371c3a083b59f7d45f7ec84422c8",
+        "unidentified_third_party_terms": false,
+        "url": "https://github.com/NVlabs/Skill2Env/blob/a99ad513b438021ed384c60b0a6bdf650afe0a2a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "Apache-2.0"
+        ],
+        "quoted_lines": [
+          "L6: <a href=\"https://www.apache.org/licenses/LICENSE-2.0\"><img src=\"https://img.shields.io/badge/License-Apache%202.0-green.svg\" alt=\"Apache 2.0 License\" /></a>",
+          "L150: Project-owned source is licensed under [Apache-2.0](LICENSE). See the",
+          "L153: Third-party material in `SkillHub/` retains its respective copyright and license terms.",
+          "L154: See the [source and license inventory](SkillHub/skillhub_source_licenses.csv),",
+          "L155: [preserved license files](SkillHub/licenses/), and [SkillHub README](SkillHub/README.md).",
+          "L151: [third-party notices](THIRD_PARTY_NOTICES.md) for skill2env's dependencies and container/build tools."
+        ],
+        "restrictive_terms": false,
+        "sha256": "79569dd3fe0a600dd025b5e2a07098c8c092371c3a083b59f7d45f7ec84422c8",
+        "unidentified_third_party_terms": false,
+        "url": "https://github.com/NVlabs/Skill2Env/blob/a99ad513b438021ed384c60b0a6bdf650afe0a2a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "79569dd3fe0a600dd025b5e2a07098c8c092371c3a083b59f7d45f7ec84422c8",
+        "unidentified_third_party_terms": false,
+        "url": "https://github.com/NVlabs/Skill2Env/blob/a99ad513b438021ed384c60b0a6bdf650afe0a2a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-16T14:49:50.743239+00:00",
+    "resolved_source": {
+      "dataset_id": "NVlabs/Skill2Env",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L6: license_source:",
+          "L7:   dataset_id: NVlabs/Skill2Env",
+          "L8:   revision: a99ad513b438021ed384c60b0a6bdf650afe0a2a",
+          "L9:   url: https://github.com/NVlabs/Skill2Env/tree/a99ad513b438021ed384c60b0a6bdf650afe0a2a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "4ed8043b20f6744a20abeeecffd48c0fd15cf147bab09618231b139097230e33",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/harbor-hub-skill2env-d208e05b-license-filtered-20261116-v1/resolve/d9d97af0b8d75c5132a71c194ced9af75f0309ae/README.md"
+      },
+      "revision": "a99ad513b438021ed384c60b0a6bdf650afe0a2a",
+      "url": "https://github.com/NVlabs/Skill2Env/tree/a99ad513b438021ed384c60b0a6bdf650afe0a2a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "d9d97af0b8d75c5132a71c194ced9af75f0309ae",
+    "source_id": "Harbor Hub:skill2env/skill2env@license-filtered",
+    "wrapper_chain": []
+  },
   "Marin:thoughtcrime": {
     "bundled_third_party": false,
     "dataset_id": "open-athena/Marin-Thoughtcrime",
@@ -4264,84 +4411,6 @@
     "resolver_version": "atlas-license-v2",
     "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
     "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
-    "wrapper_chain": []
-  },
-  "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot": {
-    "bundled_third_party": false,
-    "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-c39d65c6-retained-20261113-v1",
-    "decisions": [],
-    "evidence": [
-      {
-        "kind": "dataset_card",
-        "license_ids": [
-          "cc-by-4.0"
-        ],
-        "quoted_lines": [
-          "L4: license: cc-by-4.0",
-          "L1: ---",
-          "L2: language:",
-          "L3: - en",
-          "L5: task_categories:",
-          "L6: - text-generation",
-          "L7: - reinforcement-learning",
-          "L8: configs:",
-          "L9: - config_name: rlvr1",
-          "L10:   data_files:",
-          "L11:   - split: train",
-          "L12:     path: rlvr1.jsonl"
-        ],
-        "restrictive_terms": false,
-        "sha256": "2b9bb8c4c104444d7f7940a6535d63a3833c8261fda4d86130b6a16b550ec72e",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/resolve/482392c14c6418e26804ea2e5d10359df9877df4/README.md"
-      },
-      {
-        "kind": "readme_license",
-        "license_ids": [
-          "cc-by-sa-4.0"
-        ],
-        "quoted_lines": [
-          "L73: ## License/Terms of Use:",
-          "L74: This dataset is licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/deed.en), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.en), [ODC-BY 1.0](https://opendatacommons.org/licenses/by/1-0/), [MIT](https://opensource.org/license/mit), and [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0)."
-        ],
-        "restrictive_terms": false,
-        "sha256": "2b9bb8c4c104444d7f7940a6535d63a3833c8261fda4d86130b6a16b550ec72e",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/resolve/482392c14c6418e26804ea2e5d10359df9877df4/README.md"
-      },
-      {
-        "kind": "readme_notice",
-        "license_ids": [],
-        "quoted_lines": [
-          "(no license statement in this document)"
-        ],
-        "restrictive_terms": false,
-        "sha256": "2b9bb8c4c104444d7f7940a6535d63a3833c8261fda4d86130b6a16b550ec72e",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/resolve/482392c14c6418e26804ea2e5d10359df9877df4/README.md"
-      }
-    ],
-    "model_generated_outputs": true,
-    "resolved_at": "2026-11-15T20:37:39.909037+00:00",
-    "resolved_source": {
-      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
-      "declaration": {
-        "kind": "wrapper_source",
-        "license_ids": [],
-        "quoted_lines": [
-          "L9: Source pin: `nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4`. Converter: `3@1509fc8638f6be3840b5c82b53348f93152a9c31`."
-        ],
-        "restrictive_terms": false,
-        "sha256": "26b872f63fb52addf7bb57f77236e20a990774da592441cb8b9dc06b0f4f720b",
-        "unidentified_third_party_terms": false,
-        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-c39d65c6-retained-20261113-v1/resolve/5d7382c202ebbbfde021ab8cb1d651e41f6a0a69/README.md"
-      },
-      "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
-      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4"
-    },
-    "resolver_version": "atlas-license-v2",
-    "revision": "5d7382c202ebbbfde021ab8cb1d651e41f6a0a69",
-    "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot",
     "wrapper_chain": []
   }
 }

@@ -1,4 +1,81 @@
 {
+  "TaskTrove:laion__nemotron-gym-qa-abstention-v4": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/task-trove-laion-nemotron-gym-qa-abstention-v4-da254a94-taskcompendium-20261112",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: size_categories:",
+          "L8: - 1M<n<10M",
+          "L9: tags:",
+          "L10: - agent",
+          "L11: - code",
+          "L12: - agentic-tasks"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a446fa7ff63164d0b2321a807155d13e11d828b20621c43c15924ed826784517",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/resolve/02923004846e4e73862c20962f823a6d05100e7a/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:36.986048+00:00",
+    "resolved_source": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Upstream: open-thoughts/TaskTrove at 02923004846e4e73862c20962f823a6d05100e7a. https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+        ],
+        "restrictive_terms": false,
+        "sha256": "2276ba574306528f73e4e5f14a7cad71fefede554a0d2508ef4cca1207ca09b7",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/task-trove-laion-nemotron-gym-qa-abstention-v4-da254a94-taskcompendium-20261112/resolve/ffd2a82011192c8ae2896ea37065ae3e1eb04987/README.md"
+      },
+      "revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "ffd2a82011192c8ae2896ea37065ae3e1eb04987",
+    "source_id": "TaskTrove:laion__nemotron-gym-qa-abstention-v4",
+    "wrapper_chain": []
+  },
   "TaskTrove:laion__nemotron-gym-reasoning-gym-v2": {
     "bundled_third_party": true,
     "dataset_id": "open-thoughts/TaskTrove",
