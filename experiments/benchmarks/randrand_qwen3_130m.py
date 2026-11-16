@@ -32,6 +32,7 @@ class Recipe(StrEnum):
     RANDRAND_MUON_HYBRID = "randrand_muon_hybrid"
     SPECTRAL_RANDRAND_MUON_HYBRID = "spectral_randrand_muon_hybrid"
     SPECTRAL_HYBRID = "spectral_hybrid"
+    SPECTRAL_PR6301 = "spectral_pr6301"
 
 
 def optimizer_config(recipe: Recipe) -> RandRANDConfig:
@@ -40,16 +41,16 @@ def optimizer_config(recipe: Recipe) -> RandRANDConfig:
         return RandRANDConfig(learning_rate=0.006, embed_lr=0.6, vector_lr=0.006)
     if recipe == Recipe.RANDRAND_MUON_HYBRID:
         return RandRANDMuonHybridConfig()
-    if recipe in (Recipe.SPECTRAL_RANDRAND_MUON_HYBRID, Recipe.SPECTRAL_HYBRID):
-        config_type = RandRANDConfig if recipe == Recipe.SPECTRAL_HYBRID else RandRANDMuonHybridConfig
+    if recipe in (Recipe.SPECTRAL_RANDRAND_MUON_HYBRID, Recipe.SPECTRAL_HYBRID, Recipe.SPECTRAL_PR6301):
+        config_type = RandRANDMuonHybridConfig if recipe == Recipe.SPECTRAL_RANDRAND_MUON_HYBRID else RandRANDConfig
         return config_type(
             variant=RandRANDVariant.SPECTRAL,
             learning_rate=0.0045,
             matrix_betas=(0.95, 0.99),
             matrix_eps=1e-8,
             weight_decay=0.0303,
-            embed_lr=0.2,
-            vector_lr=0.03,
+            embed_lr=0.6 if recipe == Recipe.SPECTRAL_PR6301 else 0.2,
+            vector_lr=0.006 if recipe == Recipe.SPECTRAL_PR6301 else 0.03,
             head_lr=0.006,
             rank=64,
             rank_sketch=256,
@@ -69,7 +70,7 @@ def model_config(recipe: Recipe) -> Qwen3Config:
         num_layers=6,
         num_heads=8,
         num_kv_heads=8,
-        hybrid_norm=recipe != Recipe.PR6301,
+        hybrid_norm=recipe not in (Recipe.PR6301, Recipe.SPECTRAL_PR6301),
         use_qk_norm=False,
         input_embedding_norm=False,
         tie_word_embeddings=False,
@@ -117,7 +118,7 @@ def build_config(
         hf_save_path=None,
         trainer=TrainerConfig(
             id=run_id,
-            seed=0 if recipe in (Recipe.PR6301, Recipe.HYBRID) else 42,
+            seed=0 if recipe in (Recipe.PR6301, Recipe.HYBRID, Recipe.SPECTRAL_PR6301) else 42,
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=128,
             num_train_steps=4959,

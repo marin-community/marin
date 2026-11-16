@@ -37,7 +37,7 @@ def test_130m_routes_preserve_whole_attention_matrices(recipe):
         counts[layout.kind] += np.prod(layout.ordered_shape)
         if layout.kind == "matrix":
             matrices.extend([(layout.rows, layout.columns)] * layout.batch_size)
-    vector_count = 13568 if recipe != Recipe.PR6301 else 7424
+    vector_count = 7424 if recipe in (Recipe.PR6301, Recipe.SPECTRAL_PR6301) else 13568
     assert counts == dict(matrix=22806528, embed=65667072, vector=vector_count, head=65667072)
     assert matrices.count((512, 512)) == 24
     assert matrices.count((1792, 512)) == 12

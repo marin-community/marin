@@ -705,6 +705,45 @@ provides the standalone counterpart to isolate the contribution of blending.
 The local result is slightly worse than the spectral blend's local result;
 both use the notebook's fixed 32-batch holdout and are not Marin Paloma BPB.
 
+#### Standalone spectral RandRAND on the PR #6301 model
+
+`--recipe spectral_pr6301` selects standalone spectral RandRAND with
+`Qwen3Config(hybrid_norm=False)`. It retains pre-norms, query/key normalization
+and the final RMSNorm. The model geometry, model seed 0, data seed 42 and
+training/evaluation configuration match `pr6301`; only the optimizer
+configuration differs. All five existing recipes retain their settings.
+
+The source local run `20261114_211622_336219` achieved validation cross-entropy
+3.28574012 at update 4800 and 3.28524035 at update 4959, the best recorded
+local RandRAND result without hybrid normalization. It used model seed 42;
+this Marin recipe deliberately uses model seed 0 to match the completed
+`pr6301` comparison. The notebook's fixed 32-batch validation loss is not
+Marin Paloma BPB, and the local loss is not a predicted Marin result.
+
+| Route | Optimizer | Peak LR | Adam betas | WD |
+|---|---|---|---|---|
+| Body matrices | Spectral RandRAND | 0.0045 | (0.95, 0.99) | 0.0303 |
+| Embedding | AdamW | 0.6 | (0.9, 0.98) | 0 |
+| Vectors | AdamW | 0.006 | (0.9, 0.98) | 0 |
+| Head | AdamW | 0.006 | (0.9, 0.98) | 0 |
+
+All spectral settings are the same as `spectral_hybrid`: rank 64, sketch
+width 256, EMA beta 0.98, first refresh after 200 completed updates, refresh
+interval 200, bank handover every fifth refresh, and relative regularization
+1e-6. Matrix LR and decoupled decay are boosted by 5 after the first nonzero
+basis refresh; the WD coefficient remains 0.0303. Matrix/auxiliary epsilons
+are 1e-8/1e-15, with clipping 1.0 in the same three buckets. The schedule is
+1,000-step warmup then cosine decay to zero over 4,959 updates. There is no
+MuonH blending or Hyperball.
+
+Use the cache/output arguments above with `--recipe spectral_pr6301` and
+`--eval-every 200`; add `--run` inside an accelerator allocation. Compare on
+the same caches as the completed standard-model `pr6301` RandRAND and Muon
+runs. This compares tuned recipes: the historical Muon reference uses its
+own LR schedule. Reuse those results only when architecture, seeds, caches
+and evaluation conditions match; the hybrid-normalized MuonH result is a
+different architecture and is not the matched reference for this entrypoint.
+
 #### Hybrid-normalization model reference
 
 The reference is Marin's historical MuonH Qwen3 scaling configuration at
