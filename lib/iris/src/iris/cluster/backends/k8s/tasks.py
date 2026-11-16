@@ -139,6 +139,7 @@ _GPU_RESOURCE = "nvidia.com/gpu"
 # Name of the task container in the pod. Exit-code/error extraction matches the
 # task status by this name rather than by position in containerStatuses.
 _TASK_CONTAINER_NAME = "task"
+_POD_PHASE_RUNNING = "Running"
 
 # Native log-shipping sidecar (initContainer + restartPolicy: Always). It reads
 # the task container's CRI log file from the node and pushes to finelog, so the
@@ -1128,7 +1129,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             **identity,
         )
 
-    if phase == "Running":
+    if phase == _POD_PHASE_RUNNING:
         return TaskUpdate(
             task_id=task_id,
             attempt_id=attempt_id,
@@ -2596,7 +2597,7 @@ class K8sTaskProvider:
         pod_name = self._live_pod_name(target)
         pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
         phase = pod.get("status", {}).get("phase", "unknown") if pod is not None else "missing"
-        if phase != "Running":
+        if phase != _POD_PHASE_RUNNING:
             return worker_pb2.Worker.ExecInContainerResponse(
                 error=(
                     f"Task {target.task_id} attempt {target.attempt_id} has no live container "
@@ -3145,7 +3146,7 @@ class K8sTaskProvider:
             if disruption is not None:
                 self._disruption_reasons[entry] = _format_disruption_reason(disruption)
             phase = pod.get("status", {}).get("phase", "")
-            if phase == "Running":
+            if phase == _POD_PHASE_RUNNING:
                 resource_pods[task_key] = pod_name
                 profile_targets[task_key] = _ProfileTarget(
                     task_id=entry.task_id.to_wire(),
