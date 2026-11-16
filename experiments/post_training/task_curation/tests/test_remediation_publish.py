@@ -848,8 +848,8 @@ def test_lineage_proof_requires_a_zero_drop_readback(retained_receipt):
     lineage = retained_lineage(zero_drop_receipt(receipt))
     assert lineage is not None
     assert lineage.source_id == receipt.source_id
-    assert lineage.original_release.repo == receipt.publication.plan.source_dataset_id
-    assert lineage.original_release.revision == receipt.publication.plan.source_revision
+    assert lineage.original_dataset_id == receipt.publication.plan.source_dataset_id
+    assert lineage.original_dataset_revision == receipt.publication.plan.source_revision
     assert lineage.original_input == receipt.original_info.actor_census_input
     assert lineage.original_unique_count == receipt.original_info.within_source_dedup.unique_count
     assert lineage.retained_content_sha256 == receipt.publication.retained_content_sha256

@@ -30,8 +30,8 @@ def sample_matches_lineage(receipt: "SampleQCReceipt", lineage: RetainedLineageP
         panel.task_specs_sha256,
         panel.retained_tasks,
     ) == (
-        lineage.original_release.repo,
-        lineage.original_release.revision,
+        lineage.original_dataset_id,
+        lineage.original_dataset_revision,
         lineage.original_input.converter_version,
         lineage.original_input.task_specs_sha256,
         lineage.original_input.measured_tasks,

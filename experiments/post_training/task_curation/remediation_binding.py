@@ -224,11 +224,8 @@ def retained_lineage(receipt: RetainedReleaseReceipt) -> RetainedLineageProof | 
         return None
     return RetainedLineageProof(
         source_id=receipt.source_id,
-        original_release=DatasetRelease(
-            repo=plan.source_dataset_id,
-            revision=plan.source_revision,
-            url=f"https://huggingface.co/datasets/{plan.source_dataset_id}/tree/{plan.source_revision}",
-        ),
+        original_dataset_id=plan.source_dataset_id,
+        original_dataset_revision=plan.source_revision,
         original_input=actor,
         original_unique_count=dedup.unique_count,
         retained_content_sha256=publication.retained_content_sha256,

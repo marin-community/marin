@@ -5,7 +5,7 @@
 
 from dataclasses import replace
 
-from finestore.rl.curation import ActorCensusInput, DatasetRelease, IndependentQC
+from finestore.rl.curation import ActorCensusInput, IndependentQC
 from pydantic import BaseModel, ConfigDict
 
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
@@ -23,7 +23,8 @@ class RetainedLineageProof(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source_id: str
-    original_release: DatasetRelease
+    original_dataset_id: str
+    original_dataset_revision: str
     original_input: ActorCensusInput
     original_unique_count: int
     retained_content_sha256: str
@@ -32,8 +33,8 @@ class RetainedLineageProof(BaseModel):
 def lineage_note(notes: str, lineage: RetainedLineageProof, label: str) -> str:
     """Record a lineage-validated receipt on the retained declaration."""
     return (
-        f"{label} validated against the original pin {lineage.original_release.repo}"
-        f"@{lineage.original_release.revision} through the zero-drop retained lineage; "
+        f"{label} validated against the original pin {lineage.original_dataset_id}"
+        f"@{lineage.original_dataset_revision} through the zero-drop retained lineage; "
         f"retained readback {lineage.retained_content_sha256[:12]} proves byte-identical "
         "retained tasks. " + notes
     ).strip()
@@ -45,8 +46,8 @@ def full_content_matches_lineage(binding: FullContentResultBinding, lineage: Ret
         binding.source_id == lineage.source_id
         and (binding.input.dataset_id, binding.input.dataset_revision)
         == (
-            lineage.original_release.repo,
-            lineage.original_release.revision,
+            lineage.original_dataset_id,
+            lineage.original_dataset_revision,
         )
         and binding.input == lineage.original_input
         and lineage.original_unique_count == binding.input.measured_tasks

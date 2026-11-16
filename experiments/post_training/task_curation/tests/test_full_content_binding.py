@@ -12,7 +12,6 @@ import pytest
 from finestore.rl.curation import (
     ActorCensusInput,
     ContentEvidenceReference,
-    DatasetRelease,
     OversightEvidence,
     OversightLevel,
     QualityResultFinalization,
@@ -381,11 +380,8 @@ def retained_lineage(source):
     actor = source.info.actor_census_input
     return RetainedLineageProof(
         source_id=source.info.id,
-        original_release=DatasetRelease(
-            repo=source.dataset.name,
-            revision=source.dataset.revision,
-            url=f"https://huggingface.co/datasets/{source.dataset.name}/tree/{source.dataset.revision}",
-        ),
+        original_dataset_id=source.dataset.name,
+        original_dataset_revision=source.dataset.revision,
         original_input=actor,
         original_unique_count=source.info.within_source_dedup.unique_count,
         retained_content_sha256="f" * 64,
@@ -413,15 +409,7 @@ def test_lineage_derives_full_from_an_archived_whole_source_result(content_sourc
 
 def test_lineage_mismatch_still_raises(content_source):
     original, retained = content_source, retained_view(content_source)
-    moved = retained_lineage(original).model_copy(
-        update={
-            "original_release": DatasetRelease(
-                repo=original.dataset.name,
-                revision="c" * 40,
-                url=f"https://huggingface.co/datasets/{original.dataset.name}/tree/" + "c" * 40,
-            )
-        }
-    )
+    moved = retained_lineage(original).model_copy(update={"original_dataset_revision": "c" * 40})
     with pytest.raises(ValueError, match="belongs to another current population"):
         bind_sample_result(retained, sample_receipt(original), retained_lineage=moved)
 
