@@ -132,8 +132,11 @@ def test_permissive_source_runs_real_ingestion_and_receipt_file_controls_access(
     input_path.write_text("3\n5\n")
     source = with_license(number_source(input_path))
     reviewed = fixture_license(source.info.id, NUMBERS_DATASET.name, NUMBERS_DATASET.revision)
-    registry = tmp_path / "licenses.json"
-    registry.write_text(json.dumps({source.info.id: reviewed.model_dump(mode="json")}))
+    registry = tmp_path / "license-receipts"
+    (registry / "part-000.json").parent.mkdir(parents=True)
+    (registry / "part-000.json").write_text(
+        json.dumps({source.info.id: reviewed.model_dump(mode="json")}, sort_keys=True) + "\n"
+    )
     source = replace(source, info=replace(source.info, license_receipt=None))
     monkeypatch.setattr(driver, "runnable_sources", lambda: {source.name: source})
     output = tmp_path / "output"
@@ -158,7 +161,9 @@ def test_permissive_source_runs_real_ingestion_and_receipt_file_controls_access(
             ]
         }
     )
-    registry.write_text(json.dumps({source.info.id: restricted.model_dump(mode="json")}))
+    (registry / "part-000.json").write_text(
+        json.dumps({source.info.id: restricted.model_dump(mode="json")}, sort_keys=True) + "\n"
+    )
     denied = CliRunner().invoke(driver.main, arguments)
     assert isinstance(denied.exception, ValueError)
     assert "restricted blocks ingest and admission" in str(denied.exception)

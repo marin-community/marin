@@ -9,15 +9,20 @@ from pathlib import Path
 
 from finestore.rl.licenses import LICENSE_REGISTRY_ISSUE, LicenseReceipt
 
+from experiments.post_training.task_curation.receipt_shards import read_receipt_shards
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource
 
-LICENSE_REGISTRY = Path(__file__).with_name("datasets") / "license_receipts.json"
+LICENSE_REGISTRY = Path(__file__).with_name("datasets") / "license_receipts"
 BANNED_SOURCES_ISSUE = LICENSE_REGISTRY_ISSUE
 
 
 def read_license_receipts(path: Path) -> dict[str, LicenseReceipt]:
-    rows = json.loads(path.read_text())
-    receipts = {key: LicenseReceipt.model_validate(value) for key, value in rows.items()}
+    receipts = read_receipt_shards(
+        path,
+        LicenseReceipt,
+        "license receipt",
+        load_json=lambda shard: json.loads(shard.read_text()),
+    )
     if any(key != receipt.source_id for key, receipt in receipts.items()):
         raise ValueError("License registry key differs from the receipt source identity")
     return receipts

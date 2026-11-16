@@ -47,9 +47,9 @@ def reviewed_evaluation_licenses(tmp_path_factory, monkeypatch):
                 receipts[source.info.id] = fixture_license(source.info.id, dataset.name, dataset.revision).model_dump(
                     mode="json"
                 )
-    path = tmp_path_factory.mktemp("reviewed-license-registry") / "licenses.json"
-    path.write_text(json.dumps(receipts))
-    monkeypatch.setattr(license_binding, "LICENSE_REGISTRY", path)
+    directory = tmp_path_factory.mktemp("reviewed-license-registry")
+    (directory / "part-000.json").write_text(json.dumps(receipts, sort_keys=True) + "\n")
+    monkeypatch.setattr(license_binding, "LICENSE_REGISTRY", directory)
     monkeypatch.setattr(licensing, "LICENSE_BANS", '{"version":"fixture","bans":[]}')
     licensing.license_bans.cache_clear()
     yield

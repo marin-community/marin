@@ -529,8 +529,8 @@ def _embedding_pass(
 )
 @click.option(
     "--license-receipts",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Reviewed exact-pin license receipt registry (JSON).",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Reviewed exact-pin license receipt registry (receipt shard directory).",
 )
 @click.option("--run", "do_run", is_flag=True)
 def main(

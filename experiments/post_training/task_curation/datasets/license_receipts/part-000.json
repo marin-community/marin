@@ -1,0 +1,4092 @@
+{
+  "AI-MO:numina_math": {
+    "bundled_third_party": false,
+    "dataset_id": "open-athena/marinskyrl-numina-math-61c8eeaa-retained-20261113-v1",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L32: license: apache-2.0",
+          "L1: ---",
+          "L2: dataset_info:",
+          "L3:   features:",
+          "L4:   - name: source",
+          "L5:     dtype: string",
+          "L6:   - name: problem",
+          "L7:     dtype: string",
+          "L8:   - name: solution",
+          "L9:     dtype: string",
+          "L10:   - name: messages",
+          "L11:     list:",
+          "L12:     - name: content"
+        ],
+        "restrictive_terms": false,
+        "sha256": "2e6fead04b0c3a7eb3d219267ca84d81f91d9b90830cfbb1fde73ddd7118a149",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/AI-MO/NuminaMath-CoT/resolve/9d8d210c9f6a36c8f3cd84045668c9b7800ef517/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "Apache-2.0"
+        ],
+        "quoted_lines": [
+          "L76: The dataset is available under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0)."
+        ],
+        "restrictive_terms": false,
+        "sha256": "2e6fead04b0c3a7eb3d219267ca84d81f91d9b90830cfbb1fde73ddd7118a149",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/AI-MO/NuminaMath-CoT/resolve/9d8d210c9f6a36c8f3cd84045668c9b7800ef517/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "2e6fead04b0c3a7eb3d219267ca84d81f91d9b90830cfbb1fde73ddd7118a149",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/AI-MO/NuminaMath-CoT/resolve/9d8d210c9f6a36c8f3cd84045668c9b7800ef517/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:35.605119+00:00",
+    "resolved_source": {
+      "dataset_id": "AI-MO/NuminaMath-CoT",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Source pin: `AI-MO/NuminaMath-CoT@9d8d210c9f6a36c8f3cd84045668c9b7800ef517`. Converter: `1@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "58e79d9cd55450895ce23f4a8d7d098e08d035288dbd46e4254d36344f936b1e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-numina-math-61c8eeaa-retained-20261113-v1/resolve/928f29ebb538758ec8c7fb5929a08560184aed78/README.md"
+      },
+      "revision": "9d8d210c9f6a36c8f3cd84045668c9b7800ef517",
+      "url": "https://huggingface.co/datasets/AI-MO/NuminaMath-CoT/tree/9d8d210c9f6a36c8f3cd84045668c9b7800ef517"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "928f29ebb538758ec8c7fb5929a08560184aed78",
+    "source_id": "AI-MO:numina_math",
+    "wrapper_chain": []
+  },
+  "AllenAI:IF_multi_constraints_upto5": {
+    "bundled_third_party": true,
+    "dataset_id": "allenai/IF_multi_constraints_upto5",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L31: license: odc-by",
+          "L1: ---",
+          "L2: dataset_info:",
+          "L3:   features:",
+          "L4:   - name: key",
+          "L5:     dtype: string",
+          "L6:   - name: messages",
+          "L7:     list:",
+          "L8:     - name: content",
+          "L9:       dtype: string",
+          "L10:     - name: role",
+          "L11:       dtype: string",
+          "L12:   - name: ground_truth"
+        ],
+        "restrictive_terms": false,
+        "sha256": "dbfe19c0b500e9c1d5f222315870f46abf236a4f3fe326de8ec23446162e0cdc",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/IF_multi_constraints_upto5/resolve/2e3a77407b7fce69f95b248d64a884e3ae1c2423/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L40: This dataset is licensed under ODC-BY-1.0. It is intended for research and educational use in accordance with Ai2's [Responsible Use Guidelines](https://allenai.org/responsible-use). This dataset includes output data generated from third party models that are subject to separate terms governing their use. "
+        ],
+        "restrictive_terms": false,
+        "sha256": "dbfe19c0b500e9c1d5f222315870f46abf236a4f3fe326de8ec23446162e0cdc",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/IF_multi_constraints_upto5/resolve/2e3a77407b7fce69f95b248d64a884e3ae1c2423/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "dbfe19c0b500e9c1d5f222315870f46abf236a4f3fe326de8ec23446162e0cdc",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/IF_multi_constraints_upto5/resolve/2e3a77407b7fce69f95b248d64a884e3ae1c2423/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T18:24:34.224908+00:00",
+    "resolver_version": "atlas-license-v2",
+    "revision": "2e3a77407b7fce69f95b248d64a884e3ae1c2423",
+    "source_id": "AllenAI:IF_multi_constraints_upto5"
+  },
+  "AllenAI:rlvr_ifeval": {
+    "bundled_third_party": true,
+    "dataset_id": "open-athena/marinskyrl-rlvr-ifeval-00227508-retained-20261113-v1",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L29: license: odc-by",
+          "L1: ---",
+          "L2: dataset_info:",
+          "L3:   features:",
+          "L4:   - name: messages",
+          "L5:     list:",
+          "L6:     - name: content",
+          "L7:       dtype: string",
+          "L8:     - name: role",
+          "L9:       dtype: string",
+          "L10:   - name: ground_truth",
+          "L11:     dtype: string",
+          "L12:   - name: dataset"
+        ],
+        "restrictive_terms": false,
+        "sha256": "b91821d619a80c9c2179ad13225bc896131035614930e68cc0aa6307ef7e2b6a",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/RLVR-IFeval/resolve/47c03c73621c4aab2b824b7818681117d662770e/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "b91821d619a80c9c2179ad13225bc896131035614930e68cc0aa6307ef7e2b6a",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/RLVR-IFeval/resolve/47c03c73621c4aab2b824b7818681117d662770e/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "b91821d619a80c9c2179ad13225bc896131035614930e68cc0aa6307ef7e2b6a",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/RLVR-IFeval/resolve/47c03c73621c4aab2b824b7818681117d662770e/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:36.364367+00:00",
+    "resolved_source": {
+      "dataset_id": "allenai/RLVR-IFeval",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Source pin: `allenai/RLVR-IFeval@47c03c73621c4aab2b824b7818681117d662770e`. Converter: `1@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "0dfa70af395236ba511ea66fad5a1b6852a01afd48af9d0b96e0ffa813839b46",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-rlvr-ifeval-00227508-retained-20261113-v1/resolve/3346512b0a166f5571b0f1a4946b3f9f823a826d/README.md"
+      },
+      "revision": "47c03c73621c4aab2b824b7818681117d662770e",
+      "url": "https://huggingface.co/datasets/allenai/RLVR-IFeval/tree/47c03c73621c4aab2b824b7818681117d662770e"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "3346512b0a166f5571b0f1a4946b3f9f823a826d",
+    "source_id": "AllenAI:rlvr_ifeval",
+    "wrapper_chain": []
+  },
+  "BytedTsinghua-SIA:dapo_math": {
+    "bundled_third_party": false,
+    "dataset_id": "open-athena/marinskyrl-dapo-math-251da0b4-retained-20261113-v1",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L2: license: apache-2.0",
+          "L1: ---",
+          "L3: task_categories:",
+          "L4: - text-generation",
+          "L5: language:",
+          "L6: - en",
+          "L7: tags:",
+          "L8: - math",
+          "L9: pretty_name: DAPO-Math-17k",
+          "L10: size_categories:",
+          "L11: - 1M<n<10M",
+          "L12: ---"
+        ],
+        "restrictive_terms": false,
+        "sha256": "f250314c953b32cd1d25327c88d44c69dc4d8cae43f5991d46d235497cca9f35",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/BytedTsinghua-SIA/DAPO-Math-17k/resolve/65877096c24ffa7abc4e4fa5edb95cf3413a5674/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "f250314c953b32cd1d25327c88d44c69dc4d8cae43f5991d46d235497cca9f35",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/BytedTsinghua-SIA/DAPO-Math-17k/resolve/65877096c24ffa7abc4e4fa5edb95cf3413a5674/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "f250314c953b32cd1d25327c88d44c69dc4d8cae43f5991d46d235497cca9f35",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/BytedTsinghua-SIA/DAPO-Math-17k/resolve/65877096c24ffa7abc4e4fa5edb95cf3413a5674/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:35.187077+00:00",
+    "resolved_source": {
+      "dataset_id": "BytedTsinghua-SIA/DAPO-Math-17k",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Source pin: `BytedTsinghua-SIA/DAPO-Math-17k@65877096c24ffa7abc4e4fa5edb95cf3413a5674`. Converter: `1@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "65d61aacaf3d3bcf52046a1b04e3b02413d978b437788ff4249b26f9efedb9ae",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-dapo-math-251da0b4-retained-20261113-v1/resolve/36fa57456e941732aa805200cda98389734b5399/README.md"
+      },
+      "revision": "65877096c24ffa7abc4e4fa5edb95cf3413a5674",
+      "url": "https://huggingface.co/datasets/BytedTsinghua-SIA/DAPO-Math-17k/tree/65877096c24ffa7abc4e4fa5edb95cf3413a5674"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "36fa57456e941732aa805200cda98389734b5399",
+    "source_id": "BytedTsinghua-SIA:dapo_math",
+    "wrapper_chain": []
+  },
+  "ChilleD:svamp": {
+    "bundled_third_party": false,
+    "dataset_id": "ChilleD/SVAMP",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L4: license: mit",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: size_categories:",
+          "L6: - n<1K",
+          "L7: task_categories:",
+          "L8: - text-generation",
+          "L9: dataset_info:",
+          "L10:   features:",
+          "L11:   - name: ID",
+          "L12:     dtype: string"
+        ],
+        "restrictive_terms": false,
+        "sha256": "c4a3321bb215ae6302291a35d2f684a974be0a8006c4cbd9b261a8a6bb1c24b8",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/ChilleD/SVAMP/resolve/5e0bf1e5e7c0e9c4bc39180d224f41f3f801b7ef/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "c4a3321bb215ae6302291a35d2f684a974be0a8006c4cbd9b261a8a6bb1c24b8",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/ChilleD/SVAMP/resolve/5e0bf1e5e7c0e9c4bc39180d224f41f3f801b7ef/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "c4a3321bb215ae6302291a35d2f684a974be0a8006c4cbd9b261a8a6bb1c24b8",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/ChilleD/SVAMP/resolve/5e0bf1e5e7c0e9c4bc39180d224f41f3f801b7ef/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:35.404914+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "5e0bf1e5e7c0e9c4bc39180d224f41f3f801b7ef",
+    "source_id": "ChilleD:svamp",
+    "wrapper_chain": []
+  },
+  "CodeParrot:apps": {
+    "bundled_third_party": false,
+    "dataset_id": "codeparrot/apps",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L7: license:",
+          "L1: ---",
+          "L2: annotations_creators: []",
+          "L3: language_creators:",
+          "L4: - crowdsourced",
+          "L5: - expert-generated",
+          "L6: language: [\"code\"]",
+          "L8: - mit",
+          "L9: multilinguality:",
+          "L10: - monolingual",
+          "L11: pretty_name: APPS",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "bc954bda94e94e9ce92d80ec16d69607444fcdff240cae89df6ca84ff497e846",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/codeparrot/apps/resolve/21e74ddf8de1a21436da12e3e653065c5213e9d1/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "bc954bda94e94e9ce92d80ec16d69607444fcdff240cae89df6ca84ff497e846",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/codeparrot/apps/resolve/21e74ddf8de1a21436da12e3e653065c5213e9d1/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "bc954bda94e94e9ce92d80ec16d69607444fcdff240cae89df6ca84ff497e846",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/codeparrot/apps/resolve/21e74ddf8de1a21436da12e3e653065c5213e9d1/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:35.609698+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "21e74ddf8de1a21436da12e3e653065c5213e9d1",
+    "source_id": "CodeParrot:apps",
+    "wrapper_chain": []
+  },
+  "EleutherAI:hendrycks_math": {
+    "bundled_third_party": false,
+    "dataset_id": "open-athena/marinskyrl-hendrycks-math-bd6fa045-retained-20261113-v1",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L2: license: mit",
+          "L1: ---",
+          "L3: dataset_info:",
+          "L4: - config_name: algebra",
+          "L5:   features:",
+          "L6:   - name: problem",
+          "L7:     dtype: string",
+          "L8:   - name: level",
+          "L9:     dtype: string",
+          "L10:   - name: type",
+          "L11:     dtype: string",
+          "L12:   - name: solution"
+        ],
+        "restrictive_terms": false,
+        "sha256": "2372e22a154ca3ed5865378e270b32d8ed5b615c4592fad42630a731a950bcc0",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/EleutherAI/hendrycks_math/resolve/21a5633873b6a120296cce3e2df9d5550074f4a3/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "2372e22a154ca3ed5865378e270b32d8ed5b615c4592fad42630a731a950bcc0",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/EleutherAI/hendrycks_math/resolve/21a5633873b6a120296cce3e2df9d5550074f4a3/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "2372e22a154ca3ed5865378e270b32d8ed5b615c4592fad42630a731a950bcc0",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/EleutherAI/hendrycks_math/resolve/21a5633873b6a120296cce3e2df9d5550074f4a3/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:35.400179+00:00",
+    "resolved_source": {
+      "dataset_id": "EleutherAI/hendrycks_math",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Source pin: `EleutherAI/hendrycks_math@21a5633873b6a120296cce3e2df9d5550074f4a3`. Converter: `1@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "7b37e9610c65be6d1f063b91fb5a08d7ca3447147a4289cfc7881375ab01d8e3",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-hendrycks-math-bd6fa045-retained-20261113-v1/resolve/29862633dc66f3228af2e99104ec2bc8251bda60/README.md"
+      },
+      "revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+      "url": "https://huggingface.co/datasets/EleutherAI/hendrycks_math/tree/21a5633873b6a120296cce3e2df9d5550074f4a3"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "29862633dc66f3228af2e99104ec2bc8251bda60",
+    "source_id": "EleutherAI:hendrycks_math",
+    "wrapper_chain": []
+  },
+  "Evalchemy:JEEBench": {
+    "bundled_third_party": false,
+    "dataset_id": "daman1209arora/jeebench",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L2: license: mit",
+          "L1: ---",
+          "L3: task_categories:",
+          "L4: - question-answering",
+          "L5: language:",
+          "L6: - en",
+          "L7: tags:",
+          "L8: - chemistry",
+          "L9: - physics",
+          "L10: - mathematics",
+          "L11: pretty_name: jeebench",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "d5b6cd0c159057c84cac844b63afad74ddc5a0cbd135075a54c74e5145f98576",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/daman1209arora/jeebench/resolve/d070d1113ce365df05903763a2017ec2d0d56118/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "d5b6cd0c159057c84cac844b63afad74ddc5a0cbd135075a54c74e5145f98576",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/daman1209arora/jeebench/resolve/d070d1113ce365df05903763a2017ec2d0d56118/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "d5b6cd0c159057c84cac844b63afad74ddc5a0cbd135075a54c74e5145f98576",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/daman1209arora/jeebench/resolve/d070d1113ce365df05903763a2017ec2d0d56118/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:33.954092+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "d070d1113ce365df05903763a2017ec2d0d56118",
+    "source_id": "Evalchemy:JEEBench",
+    "wrapper_chain": []
+  },
+  "Evalchemy:NUPA-Loose": {
+    "bundled_third_party": false,
+    "dataset_id": "HaotongYang/NUPA_text",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L4: license: mit",
+          "L1: ---",
+          "L2: task_categories:",
+          "L3: - text-generation",
+          "L5: language:",
+          "L6: - en",
+          "L7: ---"
+        ],
+        "restrictive_terms": false,
+        "sha256": "fb1fad76c70a6e22bf5e68fa8cca75fcacda4379ed511800385b6df6693d4d6b",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/HaotongYang/NUPA_text/resolve/01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "fb1fad76c70a6e22bf5e68fa8cca75fcacda4379ed511800385b6df6693d4d6b",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/HaotongYang/NUPA_text/resolve/01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "fb1fad76c70a6e22bf5e68fa8cca75fcacda4379ed511800385b6df6693d4d6b",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/HaotongYang/NUPA_text/resolve/01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:34.718950+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7",
+    "source_id": "Evalchemy:NUPA-Loose",
+    "wrapper_chain": []
+  },
+  "Evalchemy:NUPA5K-Loose": {
+    "bundled_third_party": false,
+    "dataset_id": "HaotongYang/NUPA_text",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L4: license: mit",
+          "L1: ---",
+          "L2: task_categories:",
+          "L3: - text-generation",
+          "L5: language:",
+          "L6: - en",
+          "L7: ---"
+        ],
+        "restrictive_terms": false,
+        "sha256": "fb1fad76c70a6e22bf5e68fa8cca75fcacda4379ed511800385b6df6693d4d6b",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/HaotongYang/NUPA_text/resolve/01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "fb1fad76c70a6e22bf5e68fa8cca75fcacda4379ed511800385b6df6693d4d6b",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/HaotongYang/NUPA_text/resolve/01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "fb1fad76c70a6e22bf5e68fa8cca75fcacda4379ed511800385b6df6693d4d6b",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/HaotongYang/NUPA_text/resolve/01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:34.718950+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7",
+    "source_id": "Evalchemy:NUPA5K-Loose",
+    "wrapper_chain": []
+  },
+  "Evalchemy:arc_challenge": {
+    "bundled_third_party": false,
+    "dataset_id": "allenai/ai2_arc",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "cc-by-sa-4.0"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L9: - cc-by-sa-4.0",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - found",
+          "L4: language_creators:",
+          "L5: - found",
+          "L6: language:",
+          "L7: - en",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "4a293e352253d771604725c978adcea71ee6504e89ed40e1cb0024ecafa9b37e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/ai2_arc/resolve/210d026faf9955653af8916fad021475a3f00453/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "4a293e352253d771604725c978adcea71ee6504e89ed40e1cb0024ecafa9b37e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/ai2_arc/resolve/210d026faf9955653af8916fad021475a3f00453/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "4a293e352253d771604725c978adcea71ee6504e89ed40e1cb0024ecafa9b37e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/ai2_arc/resolve/210d026faf9955653af8916fad021475a3f00453/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:33.310054+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "210d026faf9955653af8916fad021475a3f00453",
+    "source_id": "Evalchemy:arc_challenge",
+    "wrapper_chain": []
+  },
+  "Evalchemy:arc_easy": {
+    "bundled_third_party": false,
+    "dataset_id": "allenai/ai2_arc",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "cc-by-sa-4.0"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L9: - cc-by-sa-4.0",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - found",
+          "L4: language_creators:",
+          "L5: - found",
+          "L6: language:",
+          "L7: - en",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "4a293e352253d771604725c978adcea71ee6504e89ed40e1cb0024ecafa9b37e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/ai2_arc/resolve/210d026faf9955653af8916fad021475a3f00453/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "4a293e352253d771604725c978adcea71ee6504e89ed40e1cb0024ecafa9b37e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/ai2_arc/resolve/210d026faf9955653af8916fad021475a3f00453/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "4a293e352253d771604725c978adcea71ee6504e89ed40e1cb0024ecafa9b37e",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/ai2_arc/resolve/210d026faf9955653af8916fad021475a3f00453/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:33.310054+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "210d026faf9955653af8916fad021475a3f00453",
+    "source_id": "Evalchemy:arc_easy",
+    "wrapper_chain": []
+  },
+  "Evalchemy:cruxeval": {
+    "bundled_third_party": false,
+    "dataset_id": "cruxeval-org/cruxeval",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L2: license: mit",
+          "L1: ---",
+          "L3: language:",
+          "L4: - code",
+          "L5: task_categories:",
+          "L6: - text2text-generation",
+          "L7: tags:",
+          "L8: - code-generation",
+          "L9: pretty_name: CRUXEval",
+          "L10: ---"
+        ],
+        "restrictive_terms": false,
+        "sha256": "23e0189133febcb57ddb527a545d23c11a87ec4eef166bb436f7d55398e4bfd6",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cruxeval-org/cruxeval/resolve/b96af0450242eb4da433032b90998f25588a5d0f/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L37: CRUXEval is [MIT licensed](https://github.com/facebookresearch/cruxeval/blob/main/LICENSE)."
+        ],
+        "restrictive_terms": false,
+        "sha256": "23e0189133febcb57ddb527a545d23c11a87ec4eef166bb436f7d55398e4bfd6",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cruxeval-org/cruxeval/resolve/b96af0450242eb4da433032b90998f25588a5d0f/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "23e0189133febcb57ddb527a545d23c11a87ec4eef166bb436f7d55398e4bfd6",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cruxeval-org/cruxeval/resolve/b96af0450242eb4da433032b90998f25588a5d0f/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:33.114307+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "b96af0450242eb4da433032b90998f25588a5d0f",
+    "source_id": "Evalchemy:cruxeval",
+    "wrapper_chain": []
+  },
+  "Evalchemy:drop": {
+    "bundled_third_party": false,
+    "dataset_id": "EleutherAI/drop",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "cc-by-4.0"
+        ],
+        "quoted_lines": [
+          "L2: license: cc-by-4.0",
+          "L1: ---",
+          "L3: ---"
+        ],
+        "restrictive_terms": false,
+        "sha256": "78b5ec9637b7d9bd11932027ad5a9224fd7b38b913e8b6478b8b272810cd1030",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/EleutherAI/drop/resolve/619386fc7ffe6dace3cc6d3483c69b164ebf6bf3/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "78b5ec9637b7d9bd11932027ad5a9224fd7b38b913e8b6478b8b272810cd1030",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/EleutherAI/drop/resolve/619386fc7ffe6dace3cc6d3483c69b164ebf6bf3/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "78b5ec9637b7d9bd11932027ad5a9224fd7b38b913e8b6478b8b272810cd1030",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/EleutherAI/drop/resolve/619386fc7ffe6dace3cc6d3483c69b164ebf6bf3/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:33.789255+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "619386fc7ffe6dace3cc6d3483c69b164ebf6bf3",
+    "source_id": "Evalchemy:drop",
+    "wrapper_chain": []
+  },
+  "Evalchemy:gpqa-diamond": {
+    "bundled_third_party": false,
+    "dataset_id": "Idavidrein/gpqa",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "cc-by-4.0"
+        ],
+        "quoted_lines": [
+          "L2: license: cc-by-4.0",
+          "L1: ---",
+          "L3: viewer: true",
+          "L4: extra_gated_prompt: >-",
+          "L5:   You agree to NOT reveal examples from this dataset in plain text or images",
+          "L6:   online, to reduce the risk of leakage into foundation model training corpora.",
+          "L7: extra_gated_fields:",
+          "L8:   I accept these terms: checkbox",
+          "L9: configs:",
+          "L10: - config_name: gpqa_extended",
+          "L11:   data_files: gpqa_extended.csv",
+          "L12: - config_name: gpqa_main"
+        ],
+        "restrictive_terms": false,
+        "sha256": "438b45222c5148b48c9b009014bada9403a965b143ccb3467e6799b876164578",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/Idavidrein/gpqa/resolve/83022cefff930aea54f654c0b282e74b9eeda5c6/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "438b45222c5148b48c9b009014bada9403a965b143ccb3467e6799b876164578",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/Idavidrein/gpqa/resolve/83022cefff930aea54f654c0b282e74b9eeda5c6/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "438b45222c5148b48c9b009014bada9403a965b143ccb3467e6799b876164578",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/Idavidrein/gpqa/resolve/83022cefff930aea54f654c0b282e74b9eeda5c6/README.md"
+      },
+      {
+        "kind": "license_file",
+        "license_ids": [
+          "cc-by-4.0"
+        ],
+        "quoted_lines": [
+          "L3: GPQA is licensed under a Creative Commons Attribution 4.0 International License.",
+          "L5: You should have received a copy of the license along with this",
+          "L6: work. If not, see <https://creativecommons.org/licenses/by/4.0/>.",
+          "L1: GPQA (c) by Irving David Rein"
+        ],
+        "restrictive_terms": false,
+        "sha256": "c4591c2eba3382b05a60e8437b7f67cc428539acbd7081d3ffe3fa55a98132db",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/Idavidrein/gpqa/resolve/83022cefff930aea54f654c0b282e74b9eeda5c6/license.txt"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.119223+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "83022cefff930aea54f654c0b282e74b9eeda5c6",
+    "source_id": "Evalchemy:gpqa-diamond",
+    "wrapper_chain": []
+  },
+  "Evalchemy:graphwalks": {
+    "bundled_third_party": false,
+    "dataset_id": "openai/graphwalks",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L2: license: mit",
+          "L1: ---",
+          "L3: ---"
+        ],
+        "restrictive_terms": false,
+        "sha256": "c217a1631115f8188a804b16e9fc5bb4f8cb4dde92a49bc47ea8de504d3d4ca9",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/openai/graphwalks/resolve/be6cc6ecf9b4d495b07d1ff53d2a16598e90fed7/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "c217a1631115f8188a804b16e9fc5bb4f8cb4dde92a49bc47ea8de504d3d4ca9",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/openai/graphwalks/resolve/be6cc6ecf9b4d495b07d1ff53d2a16598e90fed7/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "c217a1631115f8188a804b16e9fc5bb4f8cb4dde92a49bc47ea8de504d3d4ca9",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/openai/graphwalks/resolve/be6cc6ecf9b4d495b07d1ff53d2a16598e90fed7/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.633691+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "be6cc6ecf9b4d495b07d1ff53d2a16598e90fed7",
+    "source_id": "Evalchemy:graphwalks",
+    "wrapper_chain": []
+  },
+  "Evalchemy:gsm8k": {
+    "bundled_third_party": false,
+    "dataset_id": "openai/gsm8k",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - crowdsourced",
+          "L4: language_creators:",
+          "L5: - crowdsourced",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a17e882503578c9e324560630e31017617714ee025c87cf4fea6fd916895f3c1",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/openai/gsm8k/resolve/740312add88f781978c0658806c59bc2815b9866/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L211: The GSM8K dataset is licensed under the [MIT License](https://opensource.org/licenses/MIT)."
+        ],
+        "restrictive_terms": false,
+        "sha256": "a17e882503578c9e324560630e31017617714ee025c87cf4fea6fd916895f3c1",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/openai/gsm8k/resolve/740312add88f781978c0658806c59bc2815b9866/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a17e882503578c9e324560630e31017617714ee025c87cf4fea6fd916895f3c1",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/openai/gsm8k/resolve/740312add88f781978c0658806c59bc2815b9866/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:33.626116+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "740312add88f781978c0658806c59bc2815b9866",
+    "source_id": "Evalchemy:gsm8k",
+    "wrapper_chain": []
+  },
+  "Evalchemy:gsm8k-0shot": {
+    "bundled_third_party": false,
+    "dataset_id": "openai/gsm8k",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - crowdsourced",
+          "L4: language_creators:",
+          "L5: - crowdsourced",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a17e882503578c9e324560630e31017617714ee025c87cf4fea6fd916895f3c1",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/openai/gsm8k/resolve/740312add88f781978c0658806c59bc2815b9866/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L211: The GSM8K dataset is licensed under the [MIT License](https://opensource.org/licenses/MIT)."
+        ],
+        "restrictive_terms": false,
+        "sha256": "a17e882503578c9e324560630e31017617714ee025c87cf4fea6fd916895f3c1",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/openai/gsm8k/resolve/740312add88f781978c0658806c59bc2815b9866/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "a17e882503578c9e324560630e31017617714ee025c87cf4fea6fd916895f3c1",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/openai/gsm8k/resolve/740312add88f781978c0658806c59bc2815b9866/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:33.626116+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "740312add88f781978c0658806c59bc2815b9866",
+    "source_id": "Evalchemy:gsm8k-0shot",
+    "wrapper_chain": []
+  },
+  "Evalchemy:humaneval": {
+    "bundled_third_party": false,
+    "dataset_id": "openai/openai_humaneval",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - expert-generated",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "f81cb59f7dae73d1ee1069d7de3ba1c0f9d2bd80f4df6d6990d12bf488e5b5ef",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/openai/openai_humaneval/resolve/7dce6050a7d6d172f3cc5c32aa97f52fa1a2e544/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L192: MIT License"
+        ],
+        "restrictive_terms": false,
+        "sha256": "f81cb59f7dae73d1ee1069d7de3ba1c0f9d2bd80f4df6d6990d12bf488e5b5ef",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/openai/openai_humaneval/resolve/7dce6050a7d6d172f3cc5c32aa97f52fa1a2e544/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "f81cb59f7dae73d1ee1069d7de3ba1c0f9d2bd80f4df6d6990d12bf488e5b5ef",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/openai/openai_humaneval/resolve/7dce6050a7d6d172f3cc5c32aa97f52fa1a2e544/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:33.098058+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "7dce6050a7d6d172f3cc5c32aa97f52fa1a2e544",
+    "source_id": "Evalchemy:humaneval",
+    "wrapper_chain": []
+  },
+  "Evalchemy:humanevalplus": {
+    "bundled_third_party": false,
+    "dataset_id": "evalplus/humanevalplus",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text2text-generation",
+          "L7: pretty_name: EvalPlus",
+          "L8: tags:",
+          "L9: - code-generation",
+          "L10: dataset_info:",
+          "L11:   features:",
+          "L12:   - name: task_id"
+        ],
+        "restrictive_terms": false,
+        "sha256": "e3061487a668029927cde11d75c34713aed3ea5395bdafa2cf6278eeb4d28634",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/evalplus/humanevalplus/resolve/d32357cf319e50e9c8d8dab5ea876c72b0fd321b/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "e3061487a668029927cde11d75c34713aed3ea5395bdafa2cf6278eeb4d28634",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/evalplus/humanevalplus/resolve/d32357cf319e50e9c8d8dab5ea876c72b0fd321b/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "e3061487a668029927cde11d75c34713aed3ea5395bdafa2cf6278eeb4d28634",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/evalplus/humanevalplus/resolve/d32357cf319e50e9c8d8dab5ea876c72b0fd321b/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:33.099435+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "d32357cf319e50e9c8d8dab5ea876c72b0fd321b",
+    "source_id": "Evalchemy:humanevalplus",
+    "wrapper_chain": []
+  },
+  "Evalchemy:ifbench": {
+    "bundled_third_party": true,
+    "dataset_id": "allenai/IFBench_test",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "L1: ---",
+          "L2: dataset_info:",
+          "L3:   features:",
+          "L4:   - name: key",
+          "L5:     dtype: string",
+          "L6:   - name: prompt",
+          "L7:     dtype: string",
+          "L8:   - name: instruction_id_list",
+          "L9:     sequence: string",
+          "L10:   - name: kwargs",
+          "L11:     list:",
+          "L12:     - name: N"
+        ],
+        "restrictive_terms": false,
+        "sha256": "c50b4a9c37dcfb64092e83f13031852e1d24521125afc587e82a38805aa5c702",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/IFBench_test/resolve/2e8a48de45ff3bf41242f927254ca81b59ca3ae2/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L111: This dataset is licensed under ODC-BY-1.0. It is intended for research and educational use in accordance with Ai2's [Responsible Use Guidelines](https://allenai.org/responsible-use). This dataset includes output data generated from third party models that are subject to separate terms governing their use. "
+        ],
+        "restrictive_terms": false,
+        "sha256": "c50b4a9c37dcfb64092e83f13031852e1d24521125afc587e82a38805aa5c702",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/IFBench_test/resolve/2e8a48de45ff3bf41242f927254ca81b59ca3ae2/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "c50b4a9c37dcfb64092e83f13031852e1d24521125afc587e82a38805aa5c702",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/allenai/IFBench_test/resolve/2e8a48de45ff3bf41242f927254ca81b59ca3ae2/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:33.877904+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "2e8a48de45ff3bf41242f927254ca81b59ca3ae2",
+    "source_id": "Evalchemy:ifbench",
+    "wrapper_chain": []
+  },
+  "Evalchemy:ifeval": {
+    "bundled_third_party": false,
+    "dataset_id": "google/IFEval",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L2: license: apache-2.0",
+          "L1: ---",
+          "L3: task_categories:",
+          "L4: - text-generation",
+          "L5: language:",
+          "L6: - en",
+          "L7: pretty_name: IFEval",
+          "L8: ---"
+        ],
+        "restrictive_terms": false,
+        "sha256": "c3e2d7da8286ae27649f526e3153cc72f071c21a6a7702d06f09cef5f9c114f1",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/google/IFEval/resolve/966cd89545d6b6acfd7638bc708b98261ca58e84/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "Apache-2.0"
+        ],
+        "quoted_lines": [
+          "L154: The dataset is available under the [Apache 2.0 license](https://www.apache.org/licenses/LICENSE-2.0)."
+        ],
+        "restrictive_terms": false,
+        "sha256": "c3e2d7da8286ae27649f526e3153cc72f071c21a6a7702d06f09cef5f9c114f1",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/google/IFEval/resolve/966cd89545d6b6acfd7638bc708b98261ca58e84/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "c3e2d7da8286ae27649f526e3153cc72f071c21a6a7702d06f09cef5f9c114f1",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/google/IFEval/resolve/966cd89545d6b6acfd7638bc708b98261ca58e84/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:33.852335+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "966cd89545d6b6acfd7638bc708b98261ca58e84",
+    "source_id": "Evalchemy:ifeval",
+    "wrapper_chain": []
+  },
+  "Evalchemy:lambada_openai": {
+    "bundled_third_party": false,
+    "dataset_id": "open-athena/evalchemy-lambada-openai-52fc4632-retained-20261113-v1",
+    "decisions": [
+      {
+        "approved": true,
+        "dataset_id": "open-athena/evalchemy-lambada-openai-52fc4632-retained-20261113-v1",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/EleutherAI/lambada_openai/blob/900124bf3b8235c6daf21033af9948b3f07346c4/README.md",
+          "https://github.com/marin-community/marin/issues/11497#issuecomment-6898531603"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497#issuecomment-6898531603",
+        "kind": "exception",
+        "rationale": "The user lifted the dataset-level hold based on the pinned MIT card and the retained-release binding. The automated parser still escalates the README reference to Modified MIT; this records the existing user ruling for this exact evaluation release.",
+        "revision": "81670cb498bc5118e8ff1b2232b7978bc16da3c1",
+        "scope": [
+          "eval"
+        ],
+        "source_id": "Evalchemy:lambada_openai",
+        "when": "2026-11-15T17:37:46+00:00",
+        "who": "user"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L5: license: mit",
+          "L1: ---",
+          "L2: pretty_name: LAMBADA OpenAI ",
+          "L3: language_creators:",
+          "L4: - machine-generated",
+          "L6: multilinguality:",
+          "L7: - translation",
+          "L8: task_ids:",
+          "L9: - language-modeling",
+          "L10: source_datasets:",
+          "L11: - lambada",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "2a7f96fbf8fa6859e3d0dd1bb165611b57319b21b7ac442b6a1e1a53410f51f9",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/EleutherAI/lambada_openai/resolve/900124bf3b8235c6daf21033af9948b3f07346c4/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "custom"
+        ],
+        "quoted_lines": [
+          "L145: License: [Modified MIT](https://github.com/openai/gpt-2/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "2a7f96fbf8fa6859e3d0dd1bb165611b57319b21b7ac442b6a1e1a53410f51f9",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/EleutherAI/lambada_openai/resolve/900124bf3b8235c6daf21033af9948b3f07346c4/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "2a7f96fbf8fa6859e3d0dd1bb165611b57319b21b7ac442b6a1e1a53410f51f9",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/EleutherAI/lambada_openai/resolve/900124bf3b8235c6daf21033af9948b3f07346c4/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:33.814075+00:00",
+    "resolved_source": {
+      "dataset_id": "EleutherAI/lambada_openai",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Source pin: `EleutherAI/lambada_openai@900124bf3b8235c6daf21033af9948b3f07346c4`. Converter: `2026.11.02@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "bfb50b67c0153c23b737a88ef7a2932d4ac8e7ca1450f5b81ee06582214607b1",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/evalchemy-lambada-openai-52fc4632-retained-20261113-v1/resolve/81670cb498bc5118e8ff1b2232b7978bc16da3c1/README.md"
+      },
+      "revision": "900124bf3b8235c6daf21033af9948b3f07346c4",
+      "url": "https://huggingface.co/datasets/EleutherAI/lambada_openai/tree/900124bf3b8235c6daf21033af9948b3f07346c4"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "81670cb498bc5118e8ff1b2232b7978bc16da3c1",
+    "source_id": "Evalchemy:lambada_openai",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mbppplus": {
+    "bundled_third_party": false,
+    "dataset_id": "evalplus/mbppplus",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L2: license: apache-2.0",
+          "L1: ---",
+          "L3: dataset_info:",
+          "L4:   features:",
+          "L5:   - name: task_id",
+          "L6:     dtype: int64",
+          "L7:   - name: code",
+          "L8:     dtype: string",
+          "L9:   - name: prompt",
+          "L10:     dtype: string",
+          "L11:   - name: source_file",
+          "L12:     dtype: string"
+        ],
+        "restrictive_terms": false,
+        "sha256": "179a650b19c82b439f8d63d17443cddd076f315477489140013053eaa8e3eb85",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/evalplus/mbppplus/resolve/b2d74c91837c3f2a20c1299ae98133cbe7cfa077/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "179a650b19c82b439f8d63d17443cddd076f315477489140013053eaa8e3eb85",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/evalplus/mbppplus/resolve/b2d74c91837c3f2a20c1299ae98133cbe7cfa077/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "179a650b19c82b439f8d63d17443cddd076f315477489140013053eaa8e3eb85",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/evalplus/mbppplus/resolve/b2d74c91837c3f2a20c1299ae98133cbe7cfa077/README.md"
+      }
+    ],
+    "model_generated_outputs": false,
+    "resolved_at": "2026-11-15T20:37:33.091150+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "b2d74c91837c3f2a20c1299ae98133cbe7cfa077",
+    "source_id": "Evalchemy:mbppplus",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-abstract_algebra": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-abstract_algebra",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-anatomy": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-anatomy",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-astronomy": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-astronomy",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-business_ethics": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-business_ethics",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-clinical_knowledge": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-clinical_knowledge",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-college_biology": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-college_biology",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-college_chemistry": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-college_chemistry",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-college_computer_science": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-college_computer_science",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-college_mathematics": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-college_mathematics",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-college_medicine": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-college_medicine",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-college_physics": {
+    "bundled_third_party": false,
+    "dataset_id": "open-athena/evalchemy-mmlu-college-physics-91f396d9-retained-20261113-v1",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": {
+      "dataset_id": "cais/mmlu",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Source pin: `cais/mmlu@c30699e8356da336a370243923dbaf21066bb9fe`. Converter: `2026.11.02@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "4cefe7d246a45923207fb082f8dd92d1de46e034cfe8dc6ad8b9d71174a84b78",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/evalchemy-mmlu-college-physics-91f396d9-retained-20261113-v1/resolve/2616c2d92157dbf50423b6510d53ef546700d822/README.md"
+      },
+      "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+      "url": "https://huggingface.co/datasets/cais/mmlu/tree/c30699e8356da336a370243923dbaf21066bb9fe"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "2616c2d92157dbf50423b6510d53ef546700d822",
+    "source_id": "Evalchemy:mmlu-college_physics",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-computer_security": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-computer_security",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-conceptual_physics": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-conceptual_physics",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-econometrics": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-econometrics",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-electrical_engineering": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-electrical_engineering",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-elementary_mathematics": {
+    "bundled_third_party": false,
+    "dataset_id": "open-athena/evalchemy-mmlu-elementary-mathematics-b4aafbd4-retained-20261113-v1",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": {
+      "dataset_id": "cais/mmlu",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Source pin: `cais/mmlu@c30699e8356da336a370243923dbaf21066bb9fe`. Converter: `2026.11.02@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "c9ef433d157b05c1b0ed3ff0179ae049c889680f36e70434d7fc2aabbd55b96d",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/evalchemy-mmlu-elementary-mathematics-b4aafbd4-retained-20261113-v1/resolve/5a947696be064d08c14aeaece20afff1eab20d4e/README.md"
+      },
+      "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+      "url": "https://huggingface.co/datasets/cais/mmlu/tree/c30699e8356da336a370243923dbaf21066bb9fe"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "5a947696be064d08c14aeaece20afff1eab20d4e",
+    "source_id": "Evalchemy:mmlu-elementary_mathematics",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-formal_logic": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-formal_logic",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-global_facts": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-global_facts",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_biology": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-high_school_biology",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_chemistry": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-high_school_chemistry",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_computer_science": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-high_school_computer_science",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_european_history": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-high_school_european_history",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_geography": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-high_school_geography",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_government_and_politics": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-high_school_government_and_politics",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_macroeconomics": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-high_school_macroeconomics",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_mathematics": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-high_school_mathematics",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_microeconomics": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-high_school_microeconomics",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_physics": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-high_school_physics",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_psychology": {
+    "bundled_third_party": false,
+    "dataset_id": "open-athena/evalchemy-mmlu-high-school-psychology-19c4eeec-retained-20261113-v1",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": {
+      "dataset_id": "cais/mmlu",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L9: Source pin: `cais/mmlu@c30699e8356da336a370243923dbaf21066bb9fe`. Converter: `2026.11.02@1509fc8638f6be3840b5c82b53348f93152a9c31`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "3df405005bb678b84667513235178ab49eec4bee0addd7233fd75112e2f5c3e4",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/evalchemy-mmlu-high-school-psychology-19c4eeec-retained-20261113-v1/resolve/2d5be10daee279ee51a957c629dc2bdd437c9ee9/README.md"
+      },
+      "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+      "url": "https://huggingface.co/datasets/cais/mmlu/tree/c30699e8356da336a370243923dbaf21066bb9fe"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "2d5be10daee279ee51a957c629dc2bdd437c9ee9",
+    "source_id": "Evalchemy:mmlu-high_school_psychology",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_statistics": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-high_school_statistics",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_us_history": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-high_school_us_history",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-high_school_world_history": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-high_school_world_history",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-human_aging": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-human_aging",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-human_sexuality": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-human_sexuality",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-international_law": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-international_law",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-jurisprudence": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-jurisprudence",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-logical_fallacies": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-logical_fallacies",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-machine_learning": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-machine_learning",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-management": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-management",
+    "wrapper_chain": []
+  },
+  "Evalchemy:mmlu-marketing": {
+    "bundled_third_party": false,
+    "dataset_id": "cais/mmlu",
+    "decisions": [],
+    "evidence": [
+      {
+        "kind": "dataset_card",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L8: license:",
+          "L1: ---",
+          "L2: annotations_creators:",
+          "L3: - no-annotation",
+          "L4: language_creators:",
+          "L5: - expert-generated",
+          "L6: language:",
+          "L7: - en",
+          "L9: - mit",
+          "L10: multilinguality:",
+          "L11: - monolingual",
+          "L12: size_categories:"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_license",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L2277: [MIT License](https://github.com/hendrycks/test/blob/master/LICENSE)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      },
+      {
+        "kind": "readme_notice",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "sha256": "665eef35ecd8a89037c1e4f1e1a0d7fd4c154edc04c81cea5634ace2d3e96953",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/cais/mmlu/resolve/c30699e8356da336a370243923dbaf21066bb9fe/README.md"
+      }
+    ],
+    "model_generated_outputs": true,
+    "resolved_at": "2026-11-15T20:37:34.186584+00:00",
+    "resolved_source": null,
+    "resolver_version": "atlas-license-v2",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "source_id": "Evalchemy:mmlu-marketing",
+    "wrapper_chain": []
+  }
+}
