@@ -292,9 +292,8 @@ tracked source's pinned population:
    `identical`;
 2. exact instruction with a differing contract or reference — `repaired`;
 3. nearest neighbor over stripped text — `repaired` only when each task is the other's
-   unique best neighbor at similarity ≥ 0.5 (the standing mutual-best rule,
-   `atlas-rulings/repair-lane-mutual-best-match-20261116.md`; template setup sections are
-   stripped from both sides before the comparison);
+   unique best neighbor at similarity ≥ 0.5 (the standing mutual-best rule, user ruling
+   2026-11-16; template setup sections are stripped from both sides before the comparison);
 4. non-mutual nearest neighbors, or several candidates claiming one tracked task —
    `conflicting` (a manual ruling is required; nothing is replaced by itself);
 5. below 0.5 — `new` (follows the normal admission pipeline);

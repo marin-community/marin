@@ -130,8 +130,8 @@ def match_candidates(
 ) -> MatchOutcome:
     """Classify every candidate against the tracked population and flag advisory drops.
 
-    Under the standing mutual-best rule (atlas-rulings/repair-lane-mutual-best-match-20261116.md),
-    a nearest-neighbor match is repaired only when each task is the other's unique best
+    Under the standing mutual-best rule (user ruling 2026-11-16, mutual-best matching), a
+    nearest-neighbor match is repaired only when each task is the other's unique best
     neighbor at similarity >= 0.5 after template stripping; non-mutual neighbors and several
     candidates claiming one tracked task stay conflicting. Exact hash identity is its own
     evidence and keeps its class.
