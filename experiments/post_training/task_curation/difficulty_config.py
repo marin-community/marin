@@ -29,6 +29,10 @@ class CandidateRun(BaseModel):
     api_key_secret: str | None
     provider_limits: ProviderLimits
     environment_options: dict
+    # Daytona tasks provision through this mode: snapshot names a pre-created
+    # RL-account snapshot; declarative builds the original image or Dockerfile
+    # at sandbox creation and needs an account that permits declarative builds.
+    daytona_provisioning: str = "snapshot"
     judge: JudgeRun | None
     workers: int
     gpu_count: int

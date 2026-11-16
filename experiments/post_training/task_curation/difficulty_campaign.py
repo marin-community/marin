@@ -227,6 +227,7 @@ def run_trial_worker(
     api_key: str,
     recovery_arguments: list[str],
     judge: JudgeRun | None,
+    daytona_api_key: str | None = None,
 ) -> None:
     """Launch the locked Harbor runtime with private host-side secret files."""
     secrets_dir = local_root / "framework-secrets"
@@ -234,6 +235,12 @@ def run_trial_worker(
     secrets = {**forwarded_secrets(), "ATLAS_DIFFICULTY_CANDIDATE_TOKEN": api_key}
     if judge is not None and judge.api_key_secret is not None:
         secrets[judge.api_key_secret] = require_secret(judge.api_key_secret)
+    worker_env = {**os.environ}
+    if daytona_api_key is not None:
+        # Harbor reads the Daytona connection from DAYTONA_API_KEY; measurement
+        # runs map the campaign's resolved credential onto that name without
+        # printing it and without touching other campaigns' accounts.
+        worker_env["DAYTONA_API_KEY"] = daytona_api_key
     for name, value in secrets.items():
         path = secrets_dir / name
         path.write_text(value)
@@ -262,7 +269,7 @@ def run_trial_worker(
         ],
         check=True,
         env={
-            **os.environ,
+            **worker_env,
             "PYTHONPATH": str(Path.cwd()),
             SECRETS_DIR_ENV: str(secrets_dir),
             "HARBOR_VLLM_CONTEXT_SAFETY_BUFFER": str(NATIVE_CONTEXT_SAFETY_BUFFER),
@@ -324,6 +331,17 @@ def main() -> None:
         required=True,
         choices=PRIORITY_CHOICES,
         help="Band for this campaign's serving jobs; production preempts interactive peers.",
+    )
+    parser.add_argument(
+        "--daytona-provisioning",
+        choices=("snapshot", "declarative"),
+        default="snapshot",
+        help=(
+            "How Daytona tasks provision machines: snapshot uses pre-created RL-account "
+            "snapshots (run the shellbox snapshot preflight first); declarative builds the "
+            "original image or Dockerfile at sandbox creation and needs an account that "
+            "permits declarative builds."
+        ),
     )
     args = parser.parse_args()
     if bool(args.previous_campaign) != bool(args.previous_serving_sha256):
@@ -389,6 +407,17 @@ def main() -> None:
         attempts=6 if args.solver == Solver.HOSTED else 1,
     )
     judge_limits = ProviderLimits(max_in_flight=1, attempts=6) if has_judge else None
+    has_daytona = any(task.backend == "daytona" and task.reason is None for source in prepared for task in source.tasks)
+    daytona_api_key = None
+    if has_daytona:
+        # Harbor reads the Daytona connection from DAYTONA_API_KEY. The
+        # launcher environment carries the account's key directly, or the
+        # dedicated RL measurement key under its documented name.
+        daytona_api_key = os.environ.get("DAYTONA_API_KEY") or os.environ.get("DAYTONA_RL_API_KEY")
+        if not daytona_api_key:
+            raise ValueError(
+                "Daytona tasks require DAYTONA_API_KEY or DAYTONA_RL_API_KEY in the coordinator environment"
+            )
     with solver_endpoint(args.solver, settings, priority_band_value(args.priority)) as (
         endpoint,
         api_model,
@@ -596,6 +625,7 @@ def main() -> None:
                 "api_key_secret": "ATLAS_DIFFICULTY_CANDIDATE_TOKEN",
                 "provider_limits": asdict(provider_limits),
                 "environment_options": options,
+                "daytona_provisioning": args.daytona_provisioning,
                 "workers": args.workers,
                 "gpu_count": pin.gpus,
                 "attempts_per_task": args.attempts_per_task,
@@ -650,7 +680,14 @@ def main() -> None:
                     args.sources_sha256,
                 ]
             run_trial_worker(
-                prepared_path, config_path, args.local_root, output, api_key, recovery_arguments, candidate.judge
+                prepared_path,
+                config_path,
+                args.local_root,
+                output,
+                api_key,
+                recovery_arguments,
+                candidate.judge,
+                daytona_api_key=daytona_api_key,
             )
             write_json_evidence(
                 output / "completion.json", {"solver": args.solver, "serving_jobs": jobs, "worker_exit": 0}

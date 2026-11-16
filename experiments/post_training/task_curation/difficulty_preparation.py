@@ -55,12 +55,6 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
         if reason is not None:
             reason = source_gap_reason(DifficultyGap.EXECUTABILITY_ADMISSION_PENDING, reason)
         judge = judge_spec(task.grader)
-        if reason is None and source.backend == "daytona":
-            reason = source_gap_reason(
-                DifficultyGap.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING
-                if native
-                else DifficultyGap.DAYTONA_TASK_SPEC_FACTORY_PENDING
-            )
         if reason is None and judge is not None and judge.api != "chat_completions":
             reason = source_gap_reason(DifficultyGap.JUDGE_API_UNQUALIFIED, judge.api)
         if reason is None and judge is not None and judge.model not in SERVED_JUDGE_MODELS:

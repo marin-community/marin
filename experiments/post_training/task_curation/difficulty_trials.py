@@ -271,6 +271,14 @@ def run_task(
 
         options = dict(config.environment_options)
         authentication = {endpoint: "EMPTY"}
+        if task.backend == "daytona":
+            # Daytona tasks ignore the worker-local options; their environment
+            # takes the provisioning mode and the attempt timeout. The judge
+            # and candidate relay endpoints are added below when judged.
+            options = {
+                "provisioning": config.daytona_provisioning,
+                "trial_attempt_timeout_sec": ATTEMPT_TIMEOUT,
+            }
         if task.judge_model is not None:
             if judge_url is None or config.judge is None:
                 raise ValueError("A task judge requires the protocol's host-side relay")

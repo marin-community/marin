@@ -136,7 +136,7 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
         assert with_judge and name == difficulty_campaign.GLM_BULK_TOKEN_ENV
         return "fixture-judge-key"
 
-    def launch(prepared_path, config_path, local_root, output, api_key, recovery_arguments, judge):
+    def launch(prepared_path, config_path, local_root, output, api_key, recovery_arguments, judge, daytona_api_key=None):
         config = CandidateRun.model_validate_json(config_path.read_text())
         assert config.judge == judge
         launches.append(config)
