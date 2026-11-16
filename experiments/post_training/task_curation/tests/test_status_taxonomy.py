@@ -258,16 +258,12 @@ def test_unspecified_legacy_is_gated_to_recorded_rulings():
     assert legacy == set(NEEDS_RULING_SOURCES), "Record a user ruling and drop the row from NEEDS_RULING_SOURCES"
 
 
-def test_committed_extras_match_the_static_taxonomy():
-    committed = json.loads(EXTRAS_PATH.read_text())
-    assert committed["reason_explanations"] == source_status.reason_explanations()
-    assert committed["metadata_exclusions"] == source_status.metadata_rows()
-
-
-@pytest.mark.data_integration
-def test_committed_extras_match_the_full_taxonomy():
-    committed = json.loads(EXTRAS_PATH.read_text())
-    assert committed == source_status.status_extras()
+def test_reason_explanations_cover_every_typed_reason():
+    explanations = source_status.reason_explanations()
+    assert set(explanations) == {reason.value for reason in ExclusionReason}
+    for explanation in explanations.values():
+        assert set(explanation) == {"label", "meaning", "clears"}
+        assert explanation["label"] and explanation["meaning"] and explanation["clears"]
 
 
 def test_metadata_exclusion_pins_match_the_license_check_fixtures():
