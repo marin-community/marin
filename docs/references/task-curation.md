@@ -2823,10 +2823,6 @@ the relay does not attest an immutable checkpoint. Connection fails if its model
 list does not advertise `glm-5.3`. A provider that cannot accept temperature may use
 `temperature=None` to retain its API default; zero is disallowed.
 
-When a hosted provider's worker quota is exhausted, workers fail over in a
-fixed order: Ortet first, then Together. The order is campaign-wide; a worker
-does not pick its own provider.
-
 The spec pins base rubric `task-quality-v2`, its SHA-256 content hash, and review
 payload revision `4`. To change the base rubric, edit `BASE_RUBRIC` and bump
 `BASE_RUBRIC_VERSION` in `taskcompendium.pipeline.reviewer_spec`; the content

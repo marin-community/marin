@@ -510,8 +510,7 @@ identity and a grandfathering marker, and never relabeled as current-reviewer
 output. Old invalid or truncated rows are not grandfathered and still need
 review. Raw or processed duplicates with identical content reuse the
 grandfathered review; new reviews write the shared content-addressed cache at
-commit time. Hosted reviewer and judge workers fail over by a fixed order when
-a provider's quota is exhausted: Ortet first, then Together.
+commit time.
 
 Choose `--reviewer-version v3` for future FULL-QC source starts. The ongoing
 48-worker campaign, Gym repair and Prism finalization remain on their frozen v2
