@@ -41,8 +41,7 @@ def population_admission_blocker(
     return None
 
 
-def require_declaration_admission(declaration: SourceDeclaration) -> None:
-    """Require license permission before admitting a newly published source revision."""
+def _require_declaration_license(declaration: SourceDeclaration) -> None:
     require_unbanned(declaration.id, declaration.dataset_id, declaration.license_receipt)
     require_license(
         declaration.license_receipt,
@@ -51,6 +50,11 @@ def require_declaration_admission(declaration: SourceDeclaration) -> None:
         declaration.dataset_revision,
         declaration.intended_use.value if declaration.intended_use else "unknown",
     )
+
+
+def require_declaration_admission(declaration: SourceDeclaration) -> None:
+    """Require license permission before admitting a newly published source revision."""
+    _require_declaration_license(declaration)
     require_population_admission(declaration)
 
 
@@ -124,10 +128,12 @@ def require_lexical_qualification(
 
 
 def require_catalog_declaration(declaration: SourceDeclaration) -> None:
-    """Allow a versioned ban to be published while continuing to reject admission."""
+    """Require licenses for metadata and population evidence for Available sources."""
     if (
         source_license_ban(declaration.id, declaration.dataset_id, declaration.license_receipt) is not None
         and declaration.status == "Excluded"
     ):
         return
-    require_declaration_admission(declaration)
+    _require_declaration_license(declaration)
+    if declaration.status == "Available":
+        require_population_admission(declaration)

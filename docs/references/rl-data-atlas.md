@@ -229,6 +229,12 @@ Results and sampled controls do not certify execution or admission. Source detai
 duplicates dropped, and the exclusion manifest.
 Every entry has a registered conversion pipeline; there is no inventory-only
 path that substitutes a declared count for conversion.
+
+Catalog publication requires a current-pin license receipt for every non-banned
+source. `Available` sources must also pass population admission checks. Licensed
+`Not selectable` and `Excluded` entries can retain incomplete population evidence
+as unavailable metadata; publishing that metadata confers no admission.
+
 **Not assessed** means there is no current sampled assessment; **Unknown** is a
 completed assessment without enough conclusive judgments. Curation never re-grades
 independent QC; source details present the release's reported verdict, method,

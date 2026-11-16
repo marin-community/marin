@@ -178,6 +178,21 @@ def test_new_admission_requires_permission_even_with_complete_population_evidenc
     assert declaration.license_receipt.revision == declaration.dataset_revision
 
 
+@pytest.mark.parametrize("status", ["Not selectable", "Excluded"])
+def test_catalog_publishes_licensed_unavailable_metadata_without_admitting_population(tmp_path, status):
+    declaration = with_admission_census(number_source(tmp_path / "input.txt")).declaration.model_copy(
+        update={"status": status, "actor_census_input": None}
+    )
+    # Complete inventories retain unavailable metadata before population qualification exists.
+    require_catalog_declaration(declaration)
+    with pytest.raises(ValueError, match="Admission census belongs to another current population"):
+        require_declaration_admission(declaration)
+    with pytest.raises(ValueError, match="Admission census belongs to another current population"):
+        require_catalog_declaration(declaration.model_copy(update={"status": "Available"}))
+    with pytest.raises(ValueError, match="License evidence is missing"):
+        require_catalog_declaration(declaration.model_copy(update={"license_receipt": None}))
+
+
 def test_user_ban_blocks_ingestion_and_counts_but_preserves_archived_evidence(tmp_path, monkeypatch):
 
     source = with_admission_census(number_source(tmp_path / "input.txt"))
