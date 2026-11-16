@@ -6,6 +6,7 @@
 import argparse
 import hashlib
 import json
+import math
 from collections import Counter, defaultdict
 from collections.abc import Iterator
 from functools import cache
@@ -17,15 +18,15 @@ import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from levanter.store.cache import write_levanter_cache
 from levanter.store.jagged_array import JaggedArrayStore
-from marin.datakit.chat_normalize import _normalize_chat_record
+from marin.datakit.chat_normalize import normalize_chat_record
 from marin.datakit.chat_render import render_chat_record
 from marin.datakit.download.nemotron_sft_v3 import row_to_chat_doc
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from experiments.sft_new_mix.exp3_build import configure_storage, tokenizer_for
-from experiments.sft_new_mix.exp3_filters import BOS, EOS, MESSAGE, unquote_opencode_prompt
+from experiments.sft_new_mix.exp3_filters import BOS, EOS, MAX_TOKENS, MESSAGE, unquote_opencode_prompt
 from experiments.sft_new_mix.loss_modes import LossMode, prediction_weights
 from experiments.sft_new_mix.prepare_overlay_gates import pinned_json
 
@@ -45,6 +46,21 @@ BRIDGE_SCHEMA = pa.schema(
         ("question", pa.large_string()),
     ]
 )
+
+# The raw-row adapter chain the index renders. If these files change between the
+# index build and the frozen caches, every bridge row silently becomes unjoined
+# and the repair no-ops, so every recipe must pin their bytes.
+ADAPTER_PIN_FILES = (
+    "lib/marin/src/marin/datakit/chat_normalize.py",
+    "lib/marin/src/marin/datakit/chat_render.py",
+    "lib/marin/src/marin/datakit/download/nemotron_sft_v3.py",
+)
+
+
+def require_adapter_pins(recipe: dict) -> None:
+    missing = [name for name in ADAPTER_PIN_FILES if name not in recipe["implementation"]]
+    if missing:
+        raise ValueError("Opencode recipe implementation pin omits the adapter chain: " + ", ".join(missing))
 
 
 def canonical_native(text: str) -> str:
@@ -81,7 +97,7 @@ def index_part(job: dict) -> dict:
             counts["adapter_rejected"] += 1
             continue
         try:
-            doc = _normalize_chat_record(converted[0], "messages", "id")
+            doc = normalize_chat_record(converted[0], "messages", "id")
         except ValueError as error:
             counts["normalization_rejected/" + type(error).__name__] += 1
             continue
@@ -141,7 +157,7 @@ def bridge_part(job: dict) -> dict:
     configure_storage()
     tokenizer = tokenizer_for(job["tokenizer_uri"], job["tokenizer_sha256"])
     lookup = question_lookup(job["index"]["uri"], job["index"]["sha256"])
-    store = JaggedArrayStore.open(job["input_path"] + "/input_ids", mode="r", dtype=np.int32)
+    store = JaggedArrayStore.open(prefix_join(job["input_path"], "input_ids"), mode="r", dtype=np.int32)
     if len(store) != job["expected_rows"]:
         raise ValueError("Frozen original cache row count changed")
     rows = []
@@ -240,8 +256,8 @@ def repair_part(job: dict) -> dict:
     tokenizer = tokenizer_for(job["tokenizer_uri"], job["tokenizer_sha256"])
     prefix = tuple(tokenizer.encode("<|start_header_id|>assistant<|end_header_id|>\n", add_special_tokens=False).ids)
     start_id = tokenizer.token_to_id("<|start_header_id|>")
-    tokens = JaggedArrayStore.open(base["cache_uri"] + "/input_ids", mode="r", dtype=np.int32)
-    masks = JaggedArrayStore.open(base["cache_uri"] + "/loss_weights", mode="r", dtype=np.float32)
+    tokens = JaggedArrayStore.open(prefix_join(base["cache_uri"], "input_ids"), mode="r", dtype=np.int32)
+    masks = JaggedArrayStore.open(prefix_join(base["cache_uri"], "loss_weights"), mode="r", dtype=np.float32)
     if len(tokens) != base["rows"] or len(masks) != base["rows"]:
         raise ValueError("Candidate cache row count changed")
     counts = Counter()
@@ -268,7 +284,7 @@ def repair_part(job: dict) -> dict:
                         after, changed = repair_text(text, question)
                         if changed:
                             new = np.asarray(tokenizer.encode(after, add_special_tokens=False).ids, dtype=np.int32)
-                            if len(new) > 262_144:
+                            if len(new) > MAX_TOKENS:
                                 raise ValueError("Question repair exceeds context limit")
                             new_weights = prediction_weights(
                                 new,
@@ -354,6 +370,7 @@ def main() -> None:
     for relative, expected in recipe["implementation"].items():
         if hashlib.sha256((Path(__file__).parents[2] / relative).read_bytes()).hexdigest() != expected:
             raise ValueError("Raw-question implementation differs from its recipe pin")
+    require_adapter_pins(recipe)
     mode = recipe["mode"]
     root = StoragePath(recipe["output_prefix"])
     function = {"index": index_part, "bridge": bridge_part, "repair": repair_part}[mode]
@@ -392,6 +409,11 @@ def main() -> None:
         expected = sum(job["row_stop"] - job["row_start"] for job in recipe["jobs"])
         if counts["joined"] + counts["unjoined"] != expected:
             raise ValueError("Question bridge omits original rows")
+        if "min_joined_fraction" not in recipe:
+            raise ValueError("Bridge recipe must declare min_joined_fraction")
+        minimum = math.ceil(recipe["min_joined_fraction"] * expected)
+        if counts["joined"] < minimum:
+            raise ValueError("Question bridge joined fewer original rows than the recipe requires")
         ranges = defaultdict(list)
         for part in results:
             ranges[part["input_path"]].append((part["row_start"], part["row_stop"]))

@@ -16,7 +16,7 @@ import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from huggingface_hub import hf_hub_download
 from levanter.store.cache import write_levanter_cache
-from marin.datakit.chat_normalize import _normalize_chat_record
+from marin.datakit.chat_normalize import normalize_chat_record
 from marin.datakit.chat_render import render_chat_record
 from marin.datakit.download.agenttrove import result_to_tag, row_to_chat_doc
 from marin.datakit.download.rollout_transforms import TRAJECTORY_SOLVED_TAG
@@ -66,7 +66,7 @@ def materialize_file(job: dict) -> dict:
                     if len(converted) != 1:
                         raise ValueError("AgentTrove adapter emitted multiple documents for one source row")
                     try:
-                        normalized = _normalize_chat_record(converted[0], "messages", "id")
+                        normalized = normalize_chat_record(converted[0], "messages", "id")
                     except ValueError:
                         counts["existing_chat_normalizer_rejected"] += 1
                         continue
