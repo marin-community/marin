@@ -70,41 +70,51 @@ def validate_serving_geometry_args(args: tuple[str, ...]) -> None:
             raise ValueError(f"serving geometry owns {option}; remove it from extra args")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class ServingGeometry:
-    """Global vLLM parallelism and GPU placement per Iris task.
+    """Parallelism and GPU placement for one Iris serving instance.
 
-    Local data parallelism defaults to the global data-parallel size.
+    Attributes:
+        tensor_parallel_size: GPUs sharing each model replica within one task.
+        data_parallel_size: Total model replicas across all tasks. The session
+            router has this many targets; four tasks with four ranks give 16.
+        pipeline_parallel_size: Pipeline stages per model replica, each on a
+            separate task. With multiple stages, all DP ranks must fit per task.
+        gpus_per_task: GPUs allocated to each Iris task, on one worker host.
+
+    Local DP ranks are derived as GPUs per task divided by TP size. TP must evenly
+    divide GPUs per task; cross-task DP requires PP=1. ``task_count`` and ``total_gpus``
+    are derived from these inputs. ``RemoteInferenceConfig.instances`` repeats
+    this layout as independent servers.
     """
 
     tensor_parallel_size: int
     data_parallel_size: int
     pipeline_parallel_size: int
     gpus_per_task: int
-    data_parallel_size_local: int | None = None
 
     def __post_init__(self) -> None:
-        if min(self.tensor_parallel_size, self.data_parallel_size, self.pipeline_parallel_size) < 1:
-            raise ValueError("parallel sizes must be positive")
+        if min(self.tensor_parallel_size, self.data_parallel_size, self.pipeline_parallel_size, self.gpus_per_task) < 1:
+            raise ValueError("parallel sizes and gpus_per_task must be positive")
+        if self.gpus_per_task % self.tensor_parallel_size:
+            raise ValueError("gpus_per_task must be divisible by tensor_parallel_size")
         local_dp = self.local_data_parallel_size
-        if local_dp < 1 or self.data_parallel_size % local_dp:
+        if self.data_parallel_size % local_dp:
             raise ValueError("local data parallel size must evenly divide data_parallel_size")
         if self.pipeline_parallel_size > 1 and local_dp != self.data_parallel_size:
             raise ValueError("pipeline parallelism requires all data-parallel ranks on each host")
-        if self.tensor_parallel_size * local_dp != self.gpus_per_task:
-            raise ValueError("tensor_parallel_size * local data parallel size must equal gpus_per_task")
 
     @property
     def local_data_parallel_size(self) -> int:
-        return self.data_parallel_size if self.data_parallel_size_local is None else self.data_parallel_size_local
+        return self.gpus_per_task // self.tensor_parallel_size
 
     @property
     def task_count(self) -> int:
-        return self.pipeline_parallel_size * (self.data_parallel_size // self.local_data_parallel_size)
+        return self.total_gpus // self.gpus_per_task
 
     @property
     def total_gpus(self) -> int:
-        return self.task_count * self.gpus_per_task
+        return self.tensor_parallel_size * self.data_parallel_size * self.pipeline_parallel_size
 
     @property
     def label(self) -> str:
@@ -245,6 +255,10 @@ class ServedModelConfig:
     ``revision`` pins ``weights``. ``tokenizer_revision`` pins an explicitly
     configured ``tokenizer``. When ``tokenizer`` is omitted, it defaults to the
     original weights repository and may inherit its revision.
+
+    ``tensor_parallel_size`` defaults to Iris serving geometry when supplied,
+    otherwise it is inferred from the model and available chips. An explicit
+    value must agree with the geometry.
     """
 
     weights: str
@@ -290,7 +304,12 @@ class InferenceModelConfig:
 
 @dataclass(frozen=True, kw_only=True)
 class VllmRouterConfig:
-    """Released consistent-hash routing with no request retries."""
+    """Released consistent-hash routing with no request retries.
+
+    Consistent hashing also applies to requests without a session ID. Those use
+    the upstream key fallback, so identical bodies can select the same busy rank:
+    https://github.com/vllm-project/router/blob/v0.1.16/docs/load_balancing/README.md#consistent-hash
+    """
 
     request_timeout_seconds: int = 14400
 
@@ -301,6 +320,13 @@ class VllmRouterConfig:
 
 @dataclass(frozen=True)
 class VllmEngineConfig:
+    """vLLM runtime settings and native argument overrides.
+
+    For an Iris native group, ServingGeometry owns topology flags; ``extra_args``
+    may only set other options. Single-task serving without a router retains
+    native argument overrides. vLLM YAML ``--config`` files are unsupported.
+    """
+
     launcher: VllmLauncherType = VllmLauncherType.PREINSTALLED
     source: VllmSource = VllmSource.UPSTREAM
     version: str | None = None
@@ -351,6 +377,16 @@ class LevanterEngineConfig:
 
 
 InferenceEngineConfig = VllmEngineConfig | LevanterEngineConfig
+
+
+def uses_native_vllm_group(geometry: ServingGeometry | None, engine: InferenceEngineConfig) -> bool:
+    """Use the coordinated launch for multiple tasks or routed geometry.
+
+    Single-task geometry without a router uses the local or brokered path.
+    """
+    return geometry is not None and (
+        geometry.task_count > 1 or (isinstance(engine, VllmEngineConfig) and engine.router is not None)
+    )
 
 
 @dataclass(frozen=True)
@@ -430,7 +466,12 @@ class BrokerConfig:
 
 @dataclass(frozen=True)
 class IrisConfig:
-    """Iris placement and environment for one remote inference instance."""
+    """Iris placement and environment for one remote inference instance.
+
+    Geometry with multiple tasks or a session router uses a coordinated vLLM
+    group, which requires one instance and no broker. Single-task geometry
+    without a router uses the local or brokered serving path.
+    """
 
     worker_resources: ResourceConfig
     worker_environment: EnvironmentConfig
@@ -495,13 +536,15 @@ class RemoteInferenceConfig:
                 raise ValueError("multi-host TPU serving requires shared weights with stream loading")
         geometry = self.iris.serving_geometry
         session_routing = isinstance(self.engine, VllmEngineConfig) and self.engine.router is not None
-        if geometry is not None and (
-            geometry.task_count > 1 or geometry.data_parallel_size_local is not None or session_routing
+        if (
+            geometry is not None
+            and self.model.tensor_parallel_size is not None
+            and self.model.tensor_parallel_size != geometry.tensor_parallel_size
         ):
+            raise ValueError("model tensor_parallel_size must match serving geometry")
+        if uses_native_vllm_group(geometry, self.engine):
             if not isinstance(self.engine, VllmEngineConfig):
                 raise ValueError("native GPU serving requires the vLLM backend")
-            if self.model.tensor_parallel_size != geometry.tensor_parallel_size:
-                raise ValueError("model tensor_parallel_size must match serving geometry")
             validate_serving_geometry_args(self.engine.extra_args)
         elif not session_routing:
             return

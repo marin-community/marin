@@ -266,14 +266,16 @@ def test_managed_router_rejects_native_load_balancers_that_cannot_dispatch_globa
 
 
 @pytest.mark.parametrize(
-    "geometry,native_args",
+    "with_geometry,native_args,routed,rank_count",
     [
-        (None, ("-dp", "4")),
-        (ServingGeometry(1, 4, 1, 4), ()),
+        (False, ("-dp", "4"), True, 4),
+        (True, (), True, 4),
+        (True, (), False, 4),
+        (True, ("-dp", "2"), False, 2),
     ],
 )
-def test_iris_router_routes_all_native_ranks_and_registers_the_same_topology(
-    monkeypatch, tmp_path, geometry, native_args
+def test_iris_serving_dispatches_and_reports_all_native_ranks(
+    monkeypatch, tmp_path, with_geometry, native_args, routed, rank_count
 ):
     monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _: FakeVllmLauncher("serve"))
     registered_metadata = {}
@@ -282,7 +284,19 @@ def test_iris_router_routes_all_native_ranks_and_registers_the_same_topology(
     def registered(_name, address, metadata=None, **_kwargs):
         if metadata is not None:
             registered_metadata.update(metadata)
-            _assert_native_rank_affinity(f"{address}/v1", 4)
+            if routed:
+                _assert_native_rank_affinity(f"{address}/v1", rank_count)
+            else:
+                for rank in range(rank_count + 1):
+                    response = requests.post(
+                        f"{address}/v1/chat/completions",
+                        json={"model": "fake-model", "messages": [{"role": "user", "content": "hello"}]},
+                        headers={"X-data-parallel-rank": str(rank)},
+                        timeout=10,
+                    )
+                    assert response.status_code == (200 if rank < rank_count else 400)
+                    if rank < rank_count:
+                        assert response.json()["rank"] == rank
         yield
 
     context = SimpleNamespace(registry=SimpleNamespace(registered=registered))
@@ -290,9 +304,16 @@ def test_iris_router_routes_all_native_ranks_and_registers_the_same_topology(
     monkeypatch.setattr(iris_vllm, "iris_ctx", lambda: context)
     coordinator = iris_vllm.VllmCoordinatorActor("127.0.0.1")
     monkeypatch.setattr(iris_vllm, "_coordinator_client", lambda _: coordinator)
+    geometry = (
+        ServingGeometry(tensor_parallel_size=1, data_parallel_size=4, pipeline_parallel_size=1, gpus_per_task=4)
+        if with_geometry
+        else None
+    )
     service = IrisServiceConfig(
-        model=ServedModelConfig(weights=str(tmp_path), tensor_parallel_size=1, chat_template_content="{{ messages }}"),
-        engine=VllmEngineConfig(router=VllmRouterConfig(), extra_args=native_args),
+        model=ServedModelConfig(
+            weights=str(tmp_path), tensor_parallel_size=None if geometry else 1, chat_template_content="{{ messages }}"
+        ),
+        engine=VllmEngineConfig(router=VllmRouterConfig() if routed else None, extra_args=native_args),
         iris=IrisConfig(
             worker_resources=ResourceConfig.with_gpu("H100", count=4),
             worker_environment=create_environment(docker_image="test"),
@@ -307,4 +328,4 @@ def test_iris_router_routes_all_native_ranks_and_registers_the_same_topology(
         run_iris_service(service)
     finally:
         set_job_info(None)
-    assert int(registered_metadata["data_parallel_size"]) == 4
+    assert int(registered_metadata["data_parallel_size"]) == rank_count

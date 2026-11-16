@@ -50,6 +50,7 @@ from marin.inference.config import (
     RemoteInferenceConfig,
     ServedModelConfig,
     VllmEngineConfig,
+    uses_native_vllm_group,
 )
 from marin.inference.dashboard_server import (
     BackgroundServer,
@@ -268,7 +269,8 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
     num_chips = iris.worker_resources.device.chip_count()
     if isinstance(iris.worker_resources.device, TpuConfig):
         num_chips *= iris.worker_resources.device.vm_count()
-    tensor_parallel_size = model.tensor_parallel_size
+    geometry = iris.serving_geometry
+    tensor_parallel_size = geometry.tensor_parallel_size if geometry is not None else model.tensor_parallel_size
     if tensor_parallel_size is None and isinstance(iris.worker_resources.device, TpuConfig):
         if iris.worker_resources.device.vm_count() > 1:
             tensor_parallel_size = num_chips
@@ -321,6 +323,13 @@ def _prepared_local_inference(
 ) -> Iterator[LocalInferenceSession]:
     resolved_model, num_chips = _resolved_model(model, iris)
     resolved_engine = _resolved_engine(engine, iris)
+    geometry = iris.serving_geometry
+    if geometry is not None and isinstance(resolved_engine, VllmEngineConfig):
+        # Supply geometry defaults before native arguments so existing overrides win.
+        resolved_engine = replace(
+            resolved_engine,
+            extra_args=("--data-parallel-size", str(geometry.data_parallel_size), *resolved_engine.extra_args),
+        )
     with _staged_model(resolved_model) as prepared_model:
         with local_inference(prepared_model, resolved_engine, num_chips=num_chips) as session:
             yield session
@@ -526,12 +535,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
     if isinstance(device, TpuConfig) and device.vm_count() > 1:
         _run_tpu_service(service)
         return
-    geometry = service.iris.serving_geometry
-    if geometry is not None and (
-        geometry.task_count > 1
-        or geometry.data_parallel_size_local is not None
-        or (isinstance(service.engine, VllmEngineConfig) and service.engine.router is not None)
-    ):
+    if uses_native_vllm_group(service.iris.serving_geometry, service.engine):
         _run_native_gpu_service(service)
         return
     broker = _broker_config(service.instances, service.broker)

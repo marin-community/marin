@@ -348,7 +348,14 @@ def score_vllm_against_goldens(
         ),
     )
     parities: list[NextTokenParity] = []
-    with iris_vllm_launch(ServingGeometry(1, GPU_COUNT, pipeline_parallel_size, GPU_COUNT)) as launch:
+    with iris_vllm_launch(
+        ServingGeometry(
+            tensor_parallel_size=1,
+            data_parallel_size=GPU_COUNT,
+            pipeline_parallel_size=pipeline_parallel_size,
+            gpus_per_task=GPU_COUNT,
+        )
+    ) as launch:
         logger.info(
             "vLLM requested topology: tasks=%d GPUs/task=%d DP=%d EP=%d PP=%d TP=%d task=%d",
             pipeline_parallel_size,

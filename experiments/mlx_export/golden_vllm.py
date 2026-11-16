@@ -142,7 +142,9 @@ def run_golden_job(repo: str, revision: str, cases: list, gpus: int, release_tag
             ),
         ),
     )
-    with iris_vllm_launch(ServingGeometry(1, gpus, 1, gpus)) as launch:
+    with iris_vllm_launch(
+        ServingGeometry(tensor_parallel_size=1, data_parallel_size=gpus, pipeline_parallel_size=1, gpus_per_task=gpus)
+    ) as launch:
         assert launch.is_leader, "PP=1 means one task, which is the leader"
         with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as env:
             env.wait_until_ready()

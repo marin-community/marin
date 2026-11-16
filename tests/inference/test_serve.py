@@ -856,7 +856,12 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
         iris=IrisConfig(
             worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=2),
             worker_environment=create_environment(docker_image="test"),
-            serving_geometry=ServingGeometry(tensor_parallel_size, data_parallel_size, 2, 8),
+            serving_geometry=ServingGeometry(
+                tensor_parallel_size=tensor_parallel_size,
+                data_parallel_size=data_parallel_size,
+                pipeline_parallel_size=2,
+                gpus_per_task=8,
+            ),
             cache_ttl_days=0,
         ),
         endpoint_name="/serve/pipeline",

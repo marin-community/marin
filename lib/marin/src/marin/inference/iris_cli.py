@@ -104,7 +104,6 @@ _VLLM_ONLY_OPTIONS = {
     "vllm_release": "--vllm-release",
     "session_router": "--session-router",
     "data_parallel_size": "--data-parallel-size",
-    "data_parallel_size_local": "--data-parallel-size-local",
     "vllm_args": "--vllm-arg",
     "vllm_metrics_config": "--vllm-metrics-config",
     "max_num_batched_tokens": "--max-num-batched-tokens",
@@ -417,8 +416,12 @@ def _wait_and_report_endpoint(
     help="Levanter backend: fraction of device HBM the KV cache may claim.",
 )
 @click.option("--tensor-parallel-size", type=int, default=None, help="TP size (default: auto from heads + chips).")
-@click.option("--data-parallel-size", type=click.IntRange(min=1), default=None, help="Total native GPU DP ranks.")
-@click.option("--data-parallel-size-local", type=click.IntRange(min=1), default=None, help="DP ranks per host.")
+@click.option(
+    "--data-parallel-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Total native GPU DP ranks; ranks per task are GPUs per task divided by TP size.",
+)
 @click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
 @click.option("--vllm-release", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
 @click.option("--dtype", default="bfloat16", help="Weight/compute dtype.")
@@ -520,7 +523,6 @@ def main(
     hbm_utilization: float,
     tensor_parallel_size: int | None,
     data_parallel_size: int | None,
-    data_parallel_size_local: int | None,
     session_router: bool,
     vllm_release: Path | None,
     dtype: str,
@@ -607,11 +609,9 @@ def main(
         plan = replace(plan, engine=replace(plan.engine, release=load_vllm_gpu_release(vllm_release)))
 
     geometry = None
-    if data_parallel_size is not None or data_parallel_size_local is not None:
+    if data_parallel_size is not None:
         if plan.gpu_count is None or backend != "vllm" or tensor_parallel_size is None:
             raise click.ClickException("native DP geometry requires --gpu, --backend vllm and --tensor-parallel-size")
-        if data_parallel_size is None:
-            raise click.ClickException("--data-parallel-size-local requires --data-parallel-size")
         if tensor_parallel_size < 1:
             raise click.ClickException("--tensor-parallel-size must be positive")
         geometry = ServingGeometry(
@@ -619,7 +619,6 @@ def main(
             data_parallel_size=data_parallel_size,
             pipeline_parallel_size=1,
             gpus_per_task=plan.gpu_count,
-            data_parallel_size_local=data_parallel_size_local or plan.gpu_count // tensor_parallel_size,
         )
 
     brokered = broker or instances > 1

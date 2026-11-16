@@ -148,7 +148,7 @@ For TP1/PP1/DP16, request four Iris tasks with four GPUs and four local DP ranks
 
 ```bash
 uv run marin-serve iris Qwen/Qwen3-0.6B --cluster cw-us-east-08a --gpu GB200x4 \
-  --tensor-parallel-size 1 --data-parallel-size 16 --data-parallel-size-local 4 \
+  --tensor-parallel-size 1 --data-parallel-size 16 \
   --session-router --proxy-timeout 14400 \
   --vllm-source marin-fork --vllm-release promoted-release.json \
   --vllm-arg=--enable-prefix-caching
@@ -162,9 +162,10 @@ Normal serving runtime selection applies when the option is omitted.
 Send the same `X-Session-ID` on later turns. The router selects a DP rank through the upstream
 `X-data-parallel-rank` dispatch header; the leader's internal vLLM load balancer must reach all
 ranks. The CLI uses this internal mode. External and hybrid vLLM load balancing are unsupported.
-Requests without a session header
-retain the [upstream key fallback order](https://github.com/vllm-project/router/blob/v0.1.16/docs/load_balancing/README.md#hash-key-priority),
-ending with a hash of the body. A changed body alone does not preserve conversation affinity.
+Consistent hashing also applies to requests without a session header. They follow the
+[upstream key fallback](https://github.com/vllm-project/router/blob/v0.1.16/docs/load_balancing/README.md#consistent-hash),
+so identical request bodies can select the same busy rank. A changed body alone does not preserve
+conversation affinity.
 
 Marin waits for vLLM and the router before exposing the endpoint. Router 0.1.16 detects a client
 disconnect on the next upstream chunk; a stalled stream remains subject to the request timeout.
@@ -180,9 +181,25 @@ configuration. Existing Iris whole-task retries are separate from the router's d
 retries. Treat the resubmitted job as starting with an empty KV cache.
 
 For Python integrations, use `VllmEngineConfig(router=VllmRouterConfig(),
-release=promoted_release, ...)` with
-`IrisConfig(serving_geometry=ServingGeometry(1, 16, 1, 4, data_parallel_size_local=4), ...)`, one native
-group and no broker. `VllmBackend.start()` returns a `VllmEnvironment`; call `wait_until_ready()`
+release=promoted_release, ...)` and give `IrisConfig` this geometry:
+
+```python
+ServingGeometry(
+    tensor_parallel_size=1,
+    data_parallel_size=16,
+    pipeline_parallel_size=1,
+    gpus_per_task=4,
+)
+```
+
+This describes one serving instance: four Iris tasks, four local DP ranks per task, and 16
+router targets. The local rank count and task count are derived. Geometry supplies the model's
+TP size; omit `ServedModelConfig.tensor_parallel_size` or give the same value.
+Multiple tasks or a session router select a coordinated native group, which requires one
+instance and no broker. Single-task geometry without a router uses the local or brokered path;
+geometry supplies DP defaults there, and native argument overrides still take precedence.
+
+`VllmBackend.start()` returns a `VllmEnvironment`; call `wait_until_ready()`
 before consuming its routed `server_url`. Managed serving derives the router's global rank count
 from the final native arguments. The CLI's `--instances` broker path cannot be combined with
 session routing.
