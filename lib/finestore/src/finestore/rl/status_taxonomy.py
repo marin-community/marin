@@ -73,6 +73,8 @@ class ExclusionReason(StrEnum):
     """
 
     LICENSE_BAN = "license-ban"
+    LICENSE_MISSING = "license-missing"
+    NOT_RL_TASK_DATA = "not-rl-task-data"
     ORACLE_FILTRATION_RETAINED_ZERO = "oracle-filtration-retained-zero"
     ACTOR_CENSUS_MISSING = "actor-census-missing"
     ACTOR_CENSUS_STALE = "actor-census-stale"
@@ -115,6 +117,16 @@ REASON_EXPLANATIONS: dict[ExclusionReason, ReasonExplanation] = {
         label="License ban",
         meaning="The pinned upstream or publisher license is banned for training use.",
         clears="A license receipt the ban registry accepts, with the registry updated off the ban list.",
+    ),
+    ExclusionReason.LICENSE_MISSING: ReasonExplanation(
+        label="License missing",
+        meaning="No license declaration exists in the pinned upstream primary evidence.",
+        clears="A recorded permissive grant or license receipt established at the pin.",
+    ),
+    ExclusionReason.NOT_RL_TASK_DATA: ReasonExplanation(
+        label="Not RL task data",
+        meaning="The upstream provides no RL task data; it ships harness code or trajectories only.",
+        clears="A republished upstream that contains usable RL task data.",
     ),
     ExclusionReason.ORACLE_FILTRATION_RETAINED_ZERO: ReasonExplanation(
         label="Oracle filtration retained zero",

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Status · RL Data Atlas</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="common.js" defer></script><script src="status.js" defer></script>
+</head>
+<body>
+<header class="masthead"><a class="brand" href="./"><span class="brandmark">a<span>•</span></span><span>open athena <b>/</b> research tools</span></a><span class="private-label">MARINA APP <span class="live-dot"></span> CURATED CATALOG</span></header>
+<main>
+  <section class="hero">
+    <div><p class="eyebrow">POST-TRAINING / SOURCE STATUS</p><h1 class="hero-title">Source status<span>.</span></h1></div>
+    <div class="hero-actions"><a class="secondary" href="guide.html#status">How status works</a></div>
+  </section>
+  <nav class="atlas-tabs" aria-label="Atlas views"><a href="./">By source</a><a href="curriculum.html">By curriculum</a><a href="status.html" aria-current="page">Status</a><a href="guide.html">Getting started</a><a href="archive.html">Review archive</a></nav>
+  <style>
+    .status-metrics { display:flex; gap:.5rem; flex-wrap:wrap; margin:0 0 .75rem; }
+    .status-metrics button { cursor:pointer; }
+    .status-reasons details { display:inline-block; margin:0 .25rem .25rem 0; }
+    .status-reasons summary { cursor:pointer; list-style:none; }
+    .status-reasons summary::-webkit-details-marker { display:none; }
+    .status-explanation { max-width:34rem; padding:.5rem .75rem; margin-top:.25rem; border:1px solid var(--line,#d7dbe0); border-radius:.5rem; background:var(--panel,#fff); font-size:.85rem; }
+    .status-explanation p { margin:.15rem 0; }
+    .status-explanation .meaning { font-weight:600; }
+    .status-evidence a { display:inline-block; margin-right:.75rem; }
+    .status-needs-ruling { margin:.5rem 0 0; }
+  </style>
+  <section class="metrics" aria-label="Status totals">
+    <div class="status-metrics" id="status-counts" role="group" aria-label="Counts per status"></div>
+    <div class="freshness"><span class="metric-label">DATE</span><strong id="metric-date">—</strong></div>
+  </section>
+  <p id="message" class="sync-banner" role="status" aria-live="polite">Loading source status…</p>
+  <section class="catalog">
+    <div class="catalog-top">
+      <div id="origin-tabs" class="tabs" role="group" aria-label="Origin"></div>
+      <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search sources…" aria-label="Search sources"></label>
+    </div>
+    <form id="filters" class="filters" role="search">
+      <label>Status<select id="status-filter"><option value="all">All statuses</option><option value="Pending">Pending</option><option value="Available">Available</option><option value="Excluded">Excluded</option><option value="Deprecated">Deprecated</option></select></label>
+      <label>Reason<select id="reason-filter"><option value="all">All reasons</option></select></label>
+      <button id="clear-filters" class="text-button" type="button">Reset</button>
+    </form>
+    <div class="table-scroller" tabindex="0" aria-label="Source status">
+      <table id="status-table" class="source-table"><caption class="sr-only">Every source with status, exclusion reasons and evidence, and last change</caption><thead><tr><th scope="col">Source</th><th scope="col">Status</th><th scope="col">Reasons</th><th scope="col">Evidence</th><th scope="col">Last change</th></tr></thead><tbody id="rows"></tbody></table>
+      <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search or reset the filters.</p></div>
+    </div>
+    <footer class="table-footer"><span id="visible-count"></span><span>Open a reason for what it means and what clears it</span></footer>
+    <div id="needs-ruling" class="status-needs-ruling" hidden>
+      <details><summary>Sources whose exclusion needs a ruling</summary><ul id="needs-ruling-list"></ul></details>
+    </div>
+  </section>
+  <footer class="page-footer"><span>OPEN ATHENA / RL DATA ATLAS</span><span id="snapshot-info"></span></footer>
+</main>
+</body>
+</html>

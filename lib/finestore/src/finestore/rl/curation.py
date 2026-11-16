@@ -178,7 +178,13 @@ class SourceOrigin(StrEnum):
     TASKTROVE = "TaskTrove"
     TEVATRON = "Tevatron"
     AGENTICA_ORG = "agentica-org"
+    CYBENCH = "CyBench"
     DI_ZHANG_FDU = "di-zhang-fdu"
+    GPUMODE = "GPUMODE"
+    HAL = "HAL"
+    MAI_GYM = "MAI-Gym"
+    MIROMIND_AI = "MiroVerse"
+    OPENGCUA = "OpenGCUA"
     PAFITIS = "pafitis"
 
 
