@@ -261,6 +261,77 @@ rebase conflicts and rerun. Advisory review remains required for non-trivial
 changes. Report the landed SHA to the coordinator. Never force-push or push to
 `main`. This rule ends when CI resumes.
 
+## Repair candidates
+
+A *repair candidate* is a "cleaned subset" of a source the Atlas already tracks, offered by a
+third party (for example the `FWeindel/validated-tasks` folders against their TaskTrove
+counterparts). The repair-candidate lane replaces tasks task by task; it never deprecates or
+excludes the tracked source and never admits the candidate as a parallel duplicate source.
+The lane is content-only end to end: task IDs are display labels and never matching keys.
+
+**Stage 0 first.** The candidate passes the automated license checker at its own pin before
+any conversion or matching. Tasks its license disallows are never admitted.
+
+**Match.** Load the candidate folder (for example `bugsinpy_v2` + `bugsinpy_v3`) and lower it
+to preview TaskSpecs; the preview keeps the archive's own verifier as grading terms under
+`NoGrader`, so nothing is graded on the preview's word. Match every candidate against the
+tracked source's pinned population:
+
+1. exact join on normalized instruction, state, reference and grading-contract hashes —
+   `identical`;
+2. exact instruction with a differing contract or reference — `repaired`;
+3. approximate nearest neighbor over stripped text at similarity ≥ 0.9 — `repaired`;
+4. similarity in [0.5, 0.9) or several candidates claiming one tracked task — `conflicting`
+   (a manual ruling is required; nothing is replaced by itself);
+5. below 0.5 — `new` (follows the normal admission pipeline);
+6. tracked tasks with no candidate at or above 0.5 become `dropped-by-candidate` advisories.
+
+A candidate folder with zero overlap is a parallel derivation, not a cleaned subset: the lane
+suppresses its drop advisories and reports the folder for a separate ruling (empirically, the
+FWeindel BugsInPy folder is a repo-level re-derivation of the single-file-kata
+`laion__exp_rpt_bugsinpy-v4`, with no content overlap). Receipts (`repair-match-v1`) pin both
+sides' identities, the method, similarity and class.
+
+**Comparative review (FULL).** Every `repaired` pair runs one judge call with the tracked
+original and the candidate side by side. The judge is the pinned FULL-QC reviewer (GLM-5.3,
+temperature 0.7, V3 budgets) under the `atlas-repair-comparative` rubric, returning a typed
+`ComparativeVerdict`: `BETTER`/`TIE`/`WORSE`/`INCOMPARABLE` plus the `Defect` members fixed
+and introduced. A candidate replaces its tracked counterpart only when the comparison is not
+worse, introduces no defects, and the candidate's own oracle and `nop` negative control pass;
+otherwise the original is kept and every failed gate is recorded as typed evidence on the
+pair's `ComparativeRepairReceipt`.
+
+**Dropped-by-candidate.** The candidate's own filter (for example pass@k) is a signal, not a
+mandate: each advisory flag feeds the tracked task's QC evidence and never excludes the task
+by itself.
+
+**Output.** A new PRIVATE version of the tracked source with per-task provenance
+(`original` | `replaced` | `added`), the replaced tasks' hashes, and the advisory drop flags.
+Unchanged tasks keep their content-bound census, lexical, oracle and review receipts; replaced
+and added content re-runs the gates it touches. The merged release carries its own
+qualification, SAMPLE panel re-inventory and admission receipt. The Atlas renders provenance
+and advisories through the catalog snapshot's per-task fields (`provenance`,
+`replaced_task_sha256`, `repair_advisories`) on the assessment and evidence pages; the source
+stays `Available` and carries no exclusion reason.
+
+Dry-run one folder against one tracked source (in-region, CPU; add `--run` for the GPU judge):
+
+```bash
+uv run iris --cluster marin job run --target-cluster cw-us-east-02a \
+  --cpu 8 --memory 64G --disk 200G --enable-extra-resources --extra cpu \
+  --priority batch --timeout 86400 --no-wait -- \
+  python -m experiments.post_training.task_curation.repair_lane \
+  --tracked-source-id "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2" \
+  --candidate-source-id "FWeindel:validated-tasks:nl2bash" \
+  --candidate-revision <pinned-candidate-commit> \
+  --folder nl2bash_v2 --folder nl2bash_v3 --reviewer-version v3 \
+  --report s3://REGIONAL-BUCKET/repair-candidates/<version>/nl2bash-dry-run.json
+```
+
+The report carries the match census, per-pair receipts, advisory flags, similarity
+diagnostics with instruction previews, and — with `--run` — the comparative outcomes, defect
+counts, token usage and GPU-hours.
+
 ## Source status and exclusion taxonomy
 
 Every source carries exactly one `SourceStatus`: `Pending`, `Available`,
