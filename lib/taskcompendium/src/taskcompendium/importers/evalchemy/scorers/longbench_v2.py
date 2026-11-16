@@ -27,7 +27,7 @@ def extract_answer(response: str) -> str | None:
 
 
 def grade_longbench_v2(expected: str, response: str) -> Reward:
-    """Score exact choice-letter accuracy; reasoning left inline by an unparsed template is not graded."""
+    """Score exact choice-letter accuracy after the last inline ``</think>`` tag."""
     if expected not in LONGBENCH_V2_CHOICES:
         raise InvalidTask(f"LongBench v2 requires a gold letter in A-D, got {expected!r}")
     answer = extract_answer(response.rsplit(_REASONING_END, 1)[-1])
