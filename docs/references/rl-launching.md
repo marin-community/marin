@@ -220,6 +220,13 @@ can point at an incomplete export. Keep resume behavior and terminal export expl
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
 
+Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
+training driver first waits up to 30 seconds for remote node loggers, then
+finishes its own uploads using the same SDK deadline. These waits can take up to
+60 seconds, plus other cleanup. Upload timeouts produce warnings and preserve
+the workload's success or original exception. Some W&B records may remain
+unuploaded.
+
 SkyRL keeps the two most recent recovery checkpoints by default. For an RSI loop
 that needs only the latest recovery point, set
 `retention=SkyRLRetentionPolicy(resume_checkpoint_count=1)` in `SkyRLSpec`.
