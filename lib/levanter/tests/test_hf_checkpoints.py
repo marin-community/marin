@@ -91,7 +91,7 @@ def test_save_sharded_checkpoints(local_gpt2_tokenizer_path, monkeypatch):
         use_flash_attention=False,
         tokenizer=local_gpt2_tokenizer_path,
     )
-    converter = nano_config.hf_checkpoint_converter()
+    converter = replace(nano_config.hf_checkpoint_converter(), reference_checkpoint=None)
 
     mp = jmp.get_policy("f32")
 
@@ -241,7 +241,7 @@ def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokeniz
     config = Gpt2Config(
         hidden_dim=32, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
     )
-    converter = config.hf_checkpoint_converter()
+    converter = replace(config.hf_checkpoint_converter(), reference_checkpoint=None)
     fs = fsspec.filesystem("memory")
     serial_path = f"memory://levanter/export-serial/{uuid.uuid4().hex}"
     parallel_path = f"memory://levanter/export-parallel/{uuid.uuid4().hex}"
@@ -602,7 +602,7 @@ def test_save_pretrained_to_memory_fs(local_gpt2_tokenizer_path):
     gpt2_config = Gpt2Config(
         num_layers=4, num_heads=1, hidden_dim=32, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
     )
-    converter = gpt2_config.hf_checkpoint_converter()
+    converter = replace(gpt2_config.hf_checkpoint_converter(), reference_checkpoint=None)
 
     try:
         fs.rm(path, recursive=True)
