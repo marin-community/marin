@@ -616,6 +616,12 @@ sidecars contain the unique contracts actually evaluated, in their original sour
 conversion ledger reconciles raw rows with unique tasks and dropped copies. An interrupted or
 unsuccessful publication attempt requires a new output artifact version.
 
+For a remote QUICK conversion interrupted during deduplication, preserve the
+incomplete artifact prefix and retry the driver with a fresh `--artifact-root`
+and `--output-root`. Changing only `--output-root` reuses the conversion
+artifacts. An infrastructure retry with unchanged converter semantics does not
+require a source-version bump.
+
 Selection-time deduplication retains the rules in [Final task selection](#final-task-selection); changing its grader and
 reference semantics requires a separate decision.
 
@@ -1279,6 +1285,29 @@ uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --
 ```
 
 ## Environments
+
+Converted repository or terminal tasks using the harness shell tool must
+include `"shell"` in the actor's `environment_requirements.capabilities`.
+Linux command semantics and a `WORKSPACE_STATE` answer alone do not advertise
+that tool. Given a converted `task` with no provider-owned tools, inspect the
+production ShellHarness request:
+
+```python
+from rolloutengine.harness.shell import DEFAULT_SHELL_TOOL, task_prompt
+from taskcompendium.runtime.shell import resolve_shell_tool
+
+shell = resolve_shell_tool(task, DEFAULT_SHELL_TOOL)
+assert shell is not None
+prompt = task_prompt(task, shell, ())
+assert any(tool["function"]["name"] == shell.definition.name for tool in prompt.options["tools"])
+```
+
+Harbor's converted-TaskSpec oracle and NoP agents run without candidate model
+requests, so their scores cannot verify this interface. Also dispatch a
+representative shell call through the production `task-spec-chat` consumer and
+verify that its workspace change reaches the original grader. The
+[TaskSpec consumer regressions](https://github.com/marin-community/marin/blob/main/vendor/harbor/tests/unit/test_taskcompendium_trial.py)
+exercise this path alongside oracle and NoP controls.
 
 Every conversion assesses its grading boundary from the task specification.
 WORKSPACE_STATE, repository capabilities and directory captures require SHARED
