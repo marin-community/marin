@@ -5,6 +5,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
@@ -31,9 +32,11 @@ def temp_dir(tmp_path):
     return tmp_path
 
 
-def _local_pi_shell(temp_dir, monkeypatch, pi_script):
-    endpoint_path = temp_dir / "harbor-pi-endpoint.env"
-    extension_path = temp_dir / "harbor-pi-context-budget.js"
+def _local_pi_shell(temp_dir, monkeypatch, pi_script, *, admin_uploads=False):
+    endpoint_path = temp_dir / Pi._ENDPOINT_ENV_PATH.lstrip("/")
+    extension_path = temp_dir / Pi._CONTEXT_BUDGET_EXTENSION_PATH.lstrip("/")
+    endpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    extension_path.parent.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(Pi, "_ENDPOINT_ENV_PATH", str(endpoint_path))
     monkeypatch.setattr(Pi, "_CONTEXT_BUDGET_EXTENSION_PATH", str(extension_path))
 
@@ -43,7 +46,11 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
         directory.mkdir()
 
     node = shutil.which("node")
+    bash = shutil.which("bash")
+    tee = shutil.which("tee")
     assert node is not None
+    assert bash is not None
+    assert tee is not None
     scripts = {
         fake_bin / "node": f'#!/bin/sh\nexec {shlex.quote(node)} "$@"\n',
         fake_bin / "pi": pi_script,
@@ -52,9 +59,26 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
         / "tee": (
             "#!/bin/sh\n"
             'mkdir -p "$HOME/pi-artifacts"\n'
-            'exec /usr/bin/tee "$HOME/pi-artifacts/$(basename "$1")"\n'
+            f'exec {shlex.quote(tee)} "$HOME/pi-artifacts/$(basename "$1")"\n'
         ),
     }
+    if admin_uploads:
+        # Model provider ownership at the filesystem boundary; execute the
+        # agent's shell, Node setup, output validator and EXIT trap unchanged.
+        shared_tmp = temp_dir / "tmp"
+        shared_tmp.mkdir(exist_ok=True)
+        shared_tmp.chmod(0o1777)
+        rm = shutil.which("rm")
+        assert rm is not None
+        scripts[fake_bin / "rm"] = f"""#!{sys.executable}
+import os, pathlib, stat, sys
+uploads = {(str(endpoint_path), str(extension_path))!r}
+for name in sys.argv[1:]:
+    path = pathlib.Path(name)
+    if name in uploads and path.exists() and path.parent.stat().st_mode & stat.S_ISVTX:
+        sys.exit("Cannot remove provider-owned upload from a sticky directory")
+os.execv({rm!r}, ["rm", *sys.argv[1:]])
+"""
     for path, contents in scripts.items():
         path.write_text(contents)
         path.chmod(0o755)
@@ -64,10 +88,10 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
 
         async def exec(self, command, **kwargs):
             completed = subprocess.run(
-                ["/bin/bash", "-c", command],
+                [bash, "-c", command],
                 capture_output=True,
                 text=True,
-                env={"HOME": str(temp_dir), "PATH": f"{fake_bin}:/usr/bin:/bin"},
+                env={"HOME": str(temp_dir), "PATH": f"{fake_bin}:{os.environ['PATH']}"},
             )
             return SimpleNamespace(
                 return_code=completed.returncode,
@@ -81,6 +105,36 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
         endpoint_path=endpoint_path,
         extension_path=extension_path,
     )
+
+
+@pytest.mark.asyncio
+async def test_nonroot_run_cleans_provider_uploads(temp_dir, monkeypatch):
+    shell = _local_pi_shell(
+        temp_dir,
+        monkeypatch,
+        (
+            "#!/bin/sh\n"
+            "printf '%s\\n' "
+            '\'{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}\'\n'
+        ),
+        admin_uploads=True,
+    )
+    agent = Pi(
+        logs_dir=temp_dir,
+        model_name="hosted_vllm/served-model",
+        api_base="https://model.example.test/v1",
+        api_key="EMPTY",
+        thinking_format="chat-template",
+    )
+    await agent.run("Complete the task", shell.environment, AgentContext())
+    events = [
+        json.loads(line)
+        for line in (shell.artifact_dir / "pi.txt").read_text().splitlines()
+    ]
+    assert events[-1]["message"]["stopReason"] == "stop"
+    assert not shell.endpoint_path.exists()
+    assert not shell.extension_path.exists()
+    assert not (temp_dir / ".pi/agent/models.json").exists()
 
 
 @pytest.mark.asyncio

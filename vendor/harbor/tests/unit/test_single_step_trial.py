@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -10,6 +12,8 @@ from harbor.agents.terminus_2.tmux_session import ModelInitiatedTmuxFailure
 from harbor.llms.base import ContextBudgetExceededError, ContextLengthExceededError
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.models.task.config import TaskConfig
+from harbor.models.trial.config import AgentConfig
+from harbor.host_capabilities import HostCapabilities
 from harbor.environments.base import ExecResult
 from harbor.trial.errors import AgentTimeoutError
 from harbor.trial.single_step import SingleStepTrial
@@ -28,6 +32,48 @@ def _single_step_trial(tmp_path: Path) -> SingleStepTrial:
     trial._stop_agent_environment = AsyncMock()
     trial.logger = MagicMock()
     return trial
+
+
+@pytest.mark.asyncio
+async def test_task_agent_environment_reaches_process_without_changing_verifier(tmp_path):
+    task_env = {"HOME": "/home/task-agent", "SETTING": "task"}
+    run_env = {"SETTING": "run", "RUN_ONLY": "run-only"}
+    trial = _single_step_trial(tmp_path)
+    trial.task.config = TaskConfig.model_validate(
+        {
+            "agent": {"env": task_env},
+            "environment": {"env": {"HOME": "/environment-home"}},
+            "verifier": {"env": {"HOME": "/verifier-home"}},
+        }
+    )
+    trial.config = SimpleNamespace(
+        agent=AgentConfig(name="pi", env=run_env), trial_name="fixture", job_id=None
+    )
+    trial.paths.agent_dir = tmp_path / "agent"
+    trial._effective_skills_dir = None
+    trial.guest_environment = {}
+    trial.host_capabilities = HostCapabilities()
+    trial._init_agent()
+
+    bash = shutil.which("bash")
+    assert bash is not None
+
+    async def exec(command, *, env, **kwargs):
+        completed = subprocess.run(
+            [bash, "-c", command], env=env, capture_output=True, text=True
+        )
+        return ExecResult(
+            return_code=completed.returncode, stdout=completed.stdout, stderr=completed.stderr
+        )
+
+    result = await trial.agent.exec_as_agent(
+        SimpleNamespace(exec=exec), command='printf "%s\\n" "$HOME" "$SETTING" "$RUN_ONLY"'
+    )
+    assert result.stdout.splitlines() == ["/home/task-agent", "run", "run-only"]
+    assert trial.task.config.environment.env == {"HOME": "/environment-home"}
+    assert trial.task.config.verifier.env == {"HOME": "/verifier-home"}
+    assert trial.task.config.agent.env == task_env
+    assert trial.config.agent.env == run_env
 
 
 @pytest.mark.asyncio
