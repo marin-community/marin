@@ -53,6 +53,14 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_s
 
 logger = logging.getLogger(__name__)
 
+REPAIR_PLACEMENT_WAIT_SECONDS = 24 * 3600.0
+"""How long the lane waits for a serving job to be placed.
+
+The shared inference default is four hours, which expires when the GPU queue is congested
+(the 2026-11-16 dry runs waited longer than that in the Kueue gate). The lane extends the
+wait in its own process only; a proper configuration knob belongs in marin.inference.
+"""
+
 FINGERPRINT_INDEX = Path("experiments/post_training/task_curation/source_fingerprint_index.json")
 POPULATION_LOCATORS = Path("experiments/post_training/task_curation/source_population_locators.json")
 
@@ -297,6 +305,10 @@ def review_pairs(
     pairs: list[ComparativePair], reviewer_version: ReviewerVersion
 ) -> tuple[ComparativeBatchResult, ReviewEvidence]:
     """Serve the pinned FULL-QC judge and comparatively review every pair."""
+    from marin.inference import iris as iris_inference
+
+    # Extend the placement wait in this process only; see REPAIR_PLACEMENT_WAIT_SECONDS.
+    iris_inference._ENDPOINT_PLACEMENT_TIMEOUT_SECONDS = REPAIR_PLACEMENT_WAIT_SECONDS
     spec = local_reviewer(reviewer_version)
     endpoint = spec.endpoint
     assert isinstance(endpoint, (LocalJudgeEndpoint, PinnedLocalJudgeEndpoint))
