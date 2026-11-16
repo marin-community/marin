@@ -189,7 +189,10 @@ def _num_rows(repo: str, config: str, split: str) -> int:
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     response = requests.get(DATASETS_SERVER_SIZE_URL, params={"dataset": repo}, headers=headers, timeout=60)
     response.raise_for_status()
-    splits = response.json()["size"]["splits"]
+    payload = response.json()
+    if payload.get("partial"):
+        raise ValueError(f"{repo} has a partial datasets-server size response; cannot estimate its row count")
+    splits = payload["size"]["splits"]
     matches = [s for s in splits if s["split"] == split and s["config"] == config]
     if not matches:
         available = sorted({(s["config"], s["split"]) for s in splits})

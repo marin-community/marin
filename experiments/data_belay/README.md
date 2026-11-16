@@ -63,6 +63,8 @@ cache it prepares (`p20`) names the share exactly.
 It rejects NC and ND licenses, and refuses any other license for a person to review: `other`, a missing license, or a
 second license that is not allowed. It also refuses a share that reads the dataset more than 4 times at the
 largest rung. It sizes the head commit only, because the row count comes from the datasets-server, which sizes the head.
+If the datasets-server marks its size response as partial, intake refuses the dataset because its row count can
+understate the data that `prepare` would download and tokenize.
 `prepare` checks the epochs again on the cache it built, and writes the manifest that `train` reads only when they
 pass. `prepare-datakit` records the licenses on the sources' Hugging Face cards and does not refuse one off the
 allowlist, since the Datakit registry has already admitted the sources.
