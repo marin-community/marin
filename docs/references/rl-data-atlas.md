@@ -2,7 +2,7 @@
 
 [RL Data Atlas](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
 reads a Postgres copy of the published [curation catalog](task-curation.md#run-catalog).
-This reference is synced to preview revision 20 (2026-11-16), including the
+This reference is synced to preview revision 21 (2026-11-16), including the
 stage-0 license gate; the
 admission rules are in [Current admission policy](task-curation.md#current-admission-policy).
 Every source passes the [stage-0 license gate](task-curation.md#stage-0-binding-license-gate)
@@ -67,6 +67,20 @@ text, collections and stage audits. Previews record original sizes and selected
 indices or text prefixes and suffixes; full evidence remains in curation outputs.
 The model names any missing fact that prevents a judgment. Omitted private fixture
 text alone does not force Unknown.
+
+Every stored judgment carries typed defects from the shared `Defect` enum —
+`missing_context`, `ambiguity`, `wrong_reference`, `answer_leakage`,
+`malformed` and `rubric_mismatch` — beside its verdict, confidence and
+reference status. The assessment page shows one chip per recorded defect with
+its count and rate within the cohort's reviewed tasks, and filters the stored
+reviews by verdict, confidence, reference status and defect. A signed-in
+Marina user can also run a manual audit there: it draws a reproducible seeded
+sample of one source's stored reviews (random, or stratified across verdict
+and defect-set strata), records one judgment per task — agree or disagree,
+with a corrected verdict and defects from the reviewer's own enums — and
+reports reviewer-versus-human agreement with 95% Wilson intervals. Audit
+judgments are advisory evidence; nothing in the audit changes an admission or
+a quality label.
 
 Assessment keys use ordinary artifact dependencies and explicit versions.
 Changing only the rubric or grading model reuses curation. A failed new key has
@@ -135,9 +149,9 @@ Quality label alone never makes Result provisional. These
 counts follow the selected Result's review panel, not the execution campaign's
 processing mode or the source's entire population when only a sample is required.
 
-The default view hides QUICK and BAD entries and folds measured duplicate/subset groups. Source cells contain only the source name and optional fold toggle. Origin/build information, dataset links and qualified overlap notes belong in Evidence/detail views.
-Expand a group to inspect matching members, or enable **Show QUICK-quality and
-BAD-result sources**. Search and filters apply before grouping; a hidden canonical
+The default view hides QUICK, BAD, Excluded and Pending entries and folds measured duplicate/subset groups. Source cells contain only the source name and optional fold toggle. Origin/build information, dataset links and qualified overlap notes belong in Evidence/detail views.
+Expand a group to inspect matching members, or enable **Show QUICK-quality,
+BAD-result, Pending and Excluded sources**. Search and filters apply before grouping; a hidden canonical
 member cannot reappear through a group. Search names, datasets or tags, select a
 column heading to sort, and export filtered rows as CSV. Filters and sorting stay
 in the URL. The header counts tasks throughout: population, admission (TRAIN plus
@@ -146,8 +160,9 @@ populations, alongside catalog freshness. Releases with zero retained tasks coun
 their canonical filtration receipt's original excluded input; other releases count
 the current deduplicated population. Counts are source-specific task instances:
 the same contract in two sources can count twice. **Shown** counts displayed tasks.
-Hidden QUICK-quality/BAD-result, filtered and folded-duplicate tasks partition the
-rest without overlap, with their admitted subsets. **Show everything** clears
+Hidden excluded-status, pending-status, QUICK-quality/BAD-result, filtered and
+folded-duplicate tasks partition the rest without overlap, with their admitted
+subsets. **Show everything** clears
 filters, includes QUICK-quality/BAD-result sources and expands every group.
 **All Difficulty** is the default; selecting a model orders sources by that model's
 solve rate, highest first. Returning to All restores source-name order. Source evidence pages include exact release
@@ -1096,7 +1111,11 @@ presence alone does not indicate whether filtering is complete.
 
 Run tasks through production Harbor trials in their declared environments and
 grade each with its own grader. Select Daytona only for measured SAFE sources;
-use LOCAL/Iris otherwise. Hosted difficulty traffic admits at most four actor
+use LOCAL/Iris otherwise. Dockerfile-only Daytona tasks are measured with
+declarative provisioning (`--daytona-provisioning declarative`): the campaign
+builds each task's original image or Dockerfile at sandbox creation instead of
+naming pre-created RL-account snapshots, and it runs on the Daytona EVAL
+account, which permits declarative builds. Hosted difficulty traffic admits at most four actor
 requests and one judge request per campaign, with admission and peak counts in
 the trusted host logs. Admission waits while its caller remains connected;
 ordinary queueing does not consume a task attempt. Retry 429 and transient 5xx replies with jittered backoff,

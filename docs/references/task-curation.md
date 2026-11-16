@@ -106,8 +106,8 @@ remain intact.
 
 ## Current admission policy
 
-Synced to preview revision 20 (2026-11-16). These rules include the admission
-display policy for Atlas preview revision 20. When a later section of this
+Synced to preview revision 21 (2026-11-16). These rules include the admission
+display policy for Atlas preview revision 21. When a later section of this
 reference conflicts with them, this section is current.
 
 **Examples.** Atlas Examples is the admitted count after filtration. The Atlas
@@ -240,7 +240,18 @@ task or a source by itself: a BAD-quality source can be admitted as-is with its
 weakness documented, as with Terminal-Pivot's original weak grader. A FULL
 review may be finalized under a pinned waiver when at most 1% of retained tasks
 are unreviewed. LLM judges run at temperature 0.7 through the production judge
-service.
+service. Every recorded review carries typed defects from the shared `Defect`
+enum (`missing_context`, `ambiguity`, `wrong_reference`, `answer_leakage`,
+`malformed`, `rubric_mismatch`) beside its verdict, confidence and reference
+status; the Atlas assessment page shows one chip per defect with its count and
+rate, and filters the stored reviews by verdict, confidence, reference status
+and defect. A signed-in Marina user can also run a manual audit there: it draws
+a reproducible seeded sample of one source's stored reviews (random, or
+stratified across verdict and defect-set strata), records one judgment per
+task — agree or disagree, with a corrected verdict and defects from the
+reviewer's own enums — and reports reviewer-versus-human agreement with 95%
+Wilson intervals. Audit judgments are advisory evidence; nothing in the audit
+changes an admission or a quality label.
 
 **Jobs.** Use three-day job timeouts and an explicit `--target-cluster` in the
 data's region. Infrastructure failures are re-driven and never count as task failures.
@@ -370,11 +381,17 @@ blockers map one-to-one onto reasons: census coverage strings fold into
 `ACTOR_CENSUS_STALE` with the mismatched pin recorded in the evidence, the
 population admission blockers map to `RETAINED_POPULATION_EMPTY`,
 `GRADING_CENSUS_INCOMPLETE`, `GRADING_CENSUS_COUNTS_INCOMPLETE` and
-`GRADER_MISSING`, the lexical evaluation and training paths map to
-`LEXICAL_RECEIPT_MISSING` and `LEXICAL_REMEDIATION_REQUIRED`, and the
-measurement gaps map to `ACTOR_CENSUS_MISSING`, `OVERSIGHT_MISSING`,
-`AGENTIC_TASK_FORMAT_MISSING`, `SNAPSHOT_IDENTITY_MISSING` and
-`EXECUTION_REQUIREMENT_MISSING`. Policy exclusions that the admission checks
+`GRADER_MISSING`, declared environment artifacts that exist in no storage
+region map to `ENVIRONMENT_ARTIFACT_MISSING`, the lexical evaluation and
+training paths map to `LEXICAL_RECEIPT_MISSING` and
+`LEXICAL_REMEDIATION_REQUIRED`, and the measurement gaps map to
+`ACTOR_CENSUS_MISSING`, `OVERSIGHT_MISSING`, `AGENTIC_TASK_FORMAT_MISSING`,
+`SNAPSHOT_IDENTITY_MISSING` and `EXECUTION_REQUIREMENT_MISSING`. Admission
+also requires one surveyed backend that can run the population before a source
+is Available: a cohort no backend supports is Excluded with
+`NO_SUPPORTED_BACKEND`, while a source whose every backend cell is
+`role_absent` — it declares no machine roles at all — needs no backend.
+Policy exclusions that the admission checks
 cannot derive are recorded per source in
 `experiments/post_training/task_curation/exclusion_registry.py`: license
 reasons (`LICENSE_BAN`, `LICENSE_MISSING`), benchmark-use rulings
@@ -421,6 +438,10 @@ already defines, at the current pin:
 | `AGENTIC_TASK_FORMAT_MISSING` | Declare the accepted TaskCompendium or Harbor task format, or record the grandfathered registration. |
 | `SNAPSHOT_IDENTITY_MISSING` | Produce the production snapshot identity measurement at the current pin. |
 | `EXECUTION_REQUIREMENT_MISSING` | Produce the execution-requirement measurement. |
+| `ENVIRONMENT_ARTIFACT_MISSING` | Rebuild the declared artifact in-region and bind its receipt; exclusion applies only when the ruling confirms it cannot be rebuilt. |
+| `NO_SUPPORTED_BACKEND` | Survey a backend that runs the population at the current pin, or rebuild the unsupported contracts and re-survey. |
+| `GRADER_JUDGE_UNAVAILABLE` | Re-pin the source's judge to a served `JUDGE_TIERS` tier through a private remediation version, with fresh SAMPLE and end-to-end judge validation. |
+| `INVALID_REFERENCE` | Publish a faithfully repaired private remediation version whose references resolve. |
 | `EVAL_ONLY_BENCHMARK`, `CONTAMINATION_RISK`, `SUPERSEDED_BY_REPLACEMENT`, `GRADER_DEFECT`, `DUPLICATE_OF_SOURCE`, `SNAPSHOT_BUDGET_EXCEEDED`, `UNSPECIFIED_LEGACY` | User rulings. Record the ruling as evidence, then update the source's claims (or its registry entry) accordingly. |
 
 Declaration-only metadata rows for known-but-rejected upstreams live in
@@ -434,7 +455,9 @@ pending intake queue and the metadata exclusions — with columns for source,
 status, reason labels, evidence links and last-change receipt, filters by
 status and reason, counts per status, and the needs-ruling list. Reason
 explanations render only when a label is clicked open; the page shows data, not
-policy prose.
+policy prose. The main table's default view hides Excluded and Pending rows
+alongside QUICK-quality and BAD-result ones; a Status-filter click brings
+either group back, and Show everything clears every filter.
 
 ## Pipeline overview
 
@@ -1263,6 +1286,21 @@ their reasons, the license, and the research-artifact warning. The Atlas entry f
 converted dataset points at that repository and its pinned revision, with the upstream
 source recorded as provenance.
 
+### Committed data files and the large-data guard
+
+Curation data belongs in pinned object storage and private `open-athena`
+datasets, not in the checkout. Pre-commit fails any committed data file over
+100 KB and any directory whose committed data files together exceed 250 KB
+(`infra/pre-commit.py` counts every data file — JSON, Parquet, archives, or any
+binary — against its own limit, so sharding or compressing no longer evades
+it). Existing files over the limit are grandfathered in the shrink-only
+allowlist `infra/large-data-allowlist.json`: a recorded size may only shrink,
+and a new entry must reference data `origin/main` already has, so a fresh dump
+cannot be allowlisted in the same change that adds it. New data goes to a
+private `open-athena` Hugging Face dataset, and the commit carries a reference
+`{"repo": ..., "revision": ..., "path": ..., "sha256": ...}` that readers
+resolve through the existing HF and regional helpers.
+
 Measurement runs that production path rather than reimplementing it
 (`experiments/post_training/task_curation/daytona_identity.py`): each pinned
 task's environment is materialized to a build context, the `MachineSpec` is
@@ -1915,7 +1953,11 @@ member and fails if a not-measured record carries an unmapped reason.
 Each member's clear condition in `DIFFICULTY_GAPS` states the work that clears
 it. Schedule that work against the coverage queue: resume or re-serve the
 campaign for unscored coverage; route Daytona sources through the declarative
-Daytona executor and the TaskSpec actor factory for their snapshot preflight;
+Daytona executor and the TaskSpec actor factory for their snapshot preflight
+(Dockerfile-only Daytona tasks are measured with `--daytona-provisioning
+declarative`, which builds each task's original image or Dockerfile at sandbox
+creation on the Daytona EVAL account — the account that permits declarative
+builds);
 re-run the executability-filtered admission pass after static findings; host a
 non-GLM judge through `JUDGE_TIER_SERVING` and qualify the GLM route at the
 recorded temperature deviation where the source declares another setting. A
@@ -2193,7 +2235,14 @@ integrity-contract census. `TaskFormat.HARBOR` selects
 `import_oracle_harbor_prebuilt`; `TaskFormat.TASKCOMPENDIUM` selects
 `import_taskcompendium_prebuilt`. The selected `PrebuiltCohort.version` must match
 the actor census's recorded `converter_version` so its measurements cover that
-pipeline. Qualification of the original, unfiltered population remains archived. After oracle filtering, evaluation sources record lexical overlap measured for the exact filtered dataset revision. These measurements preserve every task and make no lexical decontamination claim. Admission preserves the configured evaluation use. Training sources still require a private dataset release with clean or remediated lexical evidence.
+pipeline. Qualification of the original, unfiltered population remains archived. A zero-drop retained release whose population is byte-identical to its
+original carries the original pin's SAMPLE and FULL content evidence through its
+retained-lineage proof (`RetainedLineageProof`): the publication readback
+verifies every retained task hash against the frozen original conversion, so
+`bind_sample_result` and `bind_full_content_result` re-attach the archived
+Result to the retained pin — recorded as a lineage note on the declaration —
+instead of treating it as another population's evidence. Changed retained bytes
+still require fresh evidence. After oracle filtering, evaluation sources record lexical overlap measured for the exact filtered dataset revision. These measurements preserve every task and make no lexical decontamination claim. Admission preserves the configured evaluation use. Training sources still require a private dataset release with clean or remediated lexical evidence.
 
 `filtration.original_release` identifies the configured source before repair.
 `filtration.original_cohort` identifies the exact executed cohort, which may be

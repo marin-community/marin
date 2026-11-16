@@ -8,7 +8,7 @@ the full browser sweep runs afterward or nightly and records a separate,
 non-blocking receipt. Report its findings to the coordinator; see
 [full audit commands](RELEASE.md#full-post-publish-or-nightly-browser-audit).
 
-Synced to preview revision 20 (2026-11-16).
+Synced to preview revision 21 (2026-11-16).
 
 The main table's source cell contains only its source-name button and, where
 needed, the fold toggle. No origin/build subtitle, dataset link, overlap note or
@@ -93,8 +93,10 @@ pending oracle filtration, exclusions and QUICK/SAMPLE/FULL quality populations.
 Releases with zero retained tasks contribute their canonical filtration receipt's
 original excluded input count; other releases contribute the current deduplicated
 population. Counts are source-specific task instances: the same contract in two
-sources can count twice. Shown, hidden QUICK-quality/BAD-result, filtered and
-folded-duplicate tasks form a mutually exclusive partition of the total. Each
+sources can count twice. The default view hides Excluded and Pending rows
+alongside QUICK-quality/BAD-result ones. Shown, hidden excluded, hidden
+pending, hidden QUICK-quality/BAD-result, filtered and folded-duplicate tasks
+form a mutually exclusive partition of the total. Each
 omitted group also reports its admitted subset. **Show everything** clears all
 filters, includes QUICK-quality/BAD-result sources and unfolds every duplicate
 group. **All Difficulty** is the default; selecting a model orders sources by
