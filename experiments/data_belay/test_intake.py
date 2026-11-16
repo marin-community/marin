@@ -1,8 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+import json
 
+import pytest
+import requests
+
+from experiments.data_belay import intake
 from experiments.data_belay.intake import LicenseVerdict, license_verdict
 from experiments.data_belay.prepare import cache_epochs
 
@@ -29,6 +33,25 @@ from experiments.data_belay.prepare import cache_epochs
 )
 def test_license_verdict(licenses, expected):
     assert license_verdict(licenses) is expected
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_size_response_refuses_partial_row_counts(monkeypatch, partial):
+    response = requests.Response()
+    response.status_code = 200
+    response._content = json.dumps(
+        {
+            "partial": partial,
+            "size": {"splits": [{"config": "default", "split": "train", "num_rows": 779_982}]},
+        }
+    ).encode()
+    monkeypatch.setattr(intake.requests, "get", lambda *args, **kwargs: response)
+
+    if partial:
+        with pytest.raises(ValueError, match="partial"):
+            intake._num_rows("mlfoundations/dclm-baseline-1.0", "default", "train")
+    else:
+        assert intake._num_rows("mlfoundations/dclm-baseline-1.0", "default", "train") == 779_982
 
 
 @pytest.mark.parametrize(
