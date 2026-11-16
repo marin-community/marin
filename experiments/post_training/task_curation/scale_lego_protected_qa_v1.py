@@ -270,7 +270,7 @@ async def run_trial(config_path: Path) -> dict:
         async def run(self, instruction, environment, context) -> None:
             # Runs with the published agent identity (the task's agent user).
             result = await environment.exec(command=f"bash -c {shlex.quote(TAMPER_SCRIPT)}", timeout_sec=900)
-            if result.exit_code != 0:
+            if result.return_code != 0:
                 raise RuntimeError(f"tamper probe failed inside the agent phase: {result.stdout[-2000:]}")
 
     agent_factory.AgentFactory._AGENT_MAP["tamper"] = TamperAgent

@@ -3,13 +3,16 @@
 
 """Standard-library-only Linux controller for protected SHARED source scorers.
 
-The source's own ``grade.py`` stays byte-identical: bootstrap freezes the
+Annotations stay lazy so the module also loads on task images whose best
+interpreter is 3.9. The source's own ``grade.py`` stays byte-identical: bootstrap freezes the
 family's test-restore scope as a grading reference, pins a pristine ``.git``
 (a declared versioned security change: committed agent history never reaches
 grading), preserves the exact pre-bootstrap workspace for the agent, and hides
 the private scorer material in the protected root. Grading restores the frozen
 state, then executes the original ``tests/test.sh`` bytes as the grading UID.
 """
+
+from __future__ import annotations
 
 import argparse
 import hashlib
