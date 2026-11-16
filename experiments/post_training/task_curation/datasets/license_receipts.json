@@ -194,16 +194,12 @@
     "decisions": []
   },
   "Nemotron:nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1": {
-    "source_id": "Nemotron:nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
-    "dataset_id": "nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
-    "revision": "eaef26944643644c8a3dbbf361ce6128142f5976",
-    "resolved_at": "2026-11-15T18:24:34.044962+00:00",
-    "resolver_version": "atlas-license-v2",
+    "bundled_third_party": false,
+    "dataset_id": "open-athena/atlas-terminal-pivot-oracle-20261115-v1",
+    "decisions": [],
     "evidence": [
       {
-        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/resolve/eaef26944643644c8a3dbbf361ce6128142f5976/README.md",
         "kind": "dataset_card",
-        "sha256": "fe5aff159810518e5854ef5aba7c3539288a4eb5c76aa70b2af4c660f8eff0a3",
         "license_ids": [
           "cc-by-4.0"
         ],
@@ -222,12 +218,12 @@
           "L12: - code"
         ],
         "restrictive_terms": false,
-        "unidentified_third_party_terms": false
+        "sha256": "fe5aff159810518e5854ef5aba7c3539288a4eb5c76aa70b2af4c660f8eff0a3",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/resolve/eaef26944643644c8a3dbbf361ce6128142f5976/README.md"
       },
       {
-        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/resolve/eaef26944643644c8a3dbbf361ce6128142f5976/README.md",
         "kind": "readme_license",
-        "sha256": "fe5aff159810518e5854ef5aba7c3539288a4eb5c76aa70b2af4c660f8eff0a3",
         "license_ids": [
           "cc-by-4.0"
         ],
@@ -236,23 +232,47 @@
           "L63: This dataset is licensed under Creative Commons Attribution 4.0 International (CC-BY-4.0)."
         ],
         "restrictive_terms": false,
-        "unidentified_third_party_terms": false
+        "sha256": "fe5aff159810518e5854ef5aba7c3539288a4eb5c76aa70b2af4c660f8eff0a3",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/resolve/eaef26944643644c8a3dbbf361ce6128142f5976/README.md"
       },
       {
-        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/resolve/eaef26944643644c8a3dbbf361ce6128142f5976/README.md",
         "kind": "readme_notice",
-        "sha256": "fe5aff159810518e5854ef5aba7c3539288a4eb5c76aa70b2af4c660f8eff0a3",
         "license_ids": [],
         "quoted_lines": [
           "(no license statement in this document)"
         ],
         "restrictive_terms": false,
-        "unidentified_third_party_terms": false
+        "sha256": "fe5aff159810518e5854ef5aba7c3539288a4eb5c76aa70b2af4c660f8eff0a3",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/resolve/eaef26944643644c8a3dbbf361ce6128142f5976/README.md"
       }
     ],
-    "bundled_third_party": false,
     "model_generated_outputs": true,
-    "decisions": []
+    "resolved_at": "2026-11-15T23:56:15.139829+00:00",
+    "resolved_source": {
+      "dataset_id": "nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L5: license_source:",
+          "L6:   dataset_id: nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
+          "L7:   revision: eaef26944643644c8a3dbbf361ce6128142f5976",
+          "L8:   url: https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/tree/eaef26944643644c8a3dbbf361ce6128142f5976"
+        ],
+        "restrictive_terms": false,
+        "sha256": "eea4028c22f84e31f8be12936eeead4c3fda5cae454a087768159293af207e85",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/atlas-terminal-pivot-oracle-20261115-v1/resolve/749601f48a75f03d4068e5d2106ffed706f5fec7/README.md"
+      },
+      "revision": "eaef26944643644c8a3dbbf361ce6128142f5976",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/tree/eaef26944643644c8a3dbbf361ce6128142f5976"
+    },
+    "resolver_version": "atlas-license-v2",
+    "revision": "749601f48a75f03d4068e5d2106ffed706f5fec7",
+    "source_id": "Nemotron:nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
+    "wrapper_chain": []
   },
   "kernelbot-data": {
     "source_id": "kernelbot-data",
