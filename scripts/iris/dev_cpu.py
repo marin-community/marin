@@ -6,7 +6,8 @@
 
 The box is one non-preemptible task under ``CONTAINER_PROFILE_PRIVILEGED``, so bubblewrap sandboxes,
 in-pod Docker and grader liveness checks behave as they do on curation workers. ``allocate`` returns
-once the pod runs; the holder job ends at ``--max-lifetime`` or on ``release``.
+once the pod runs; the holder job ends at ``--max-lifetime`` or on ``release``. Commands re-resolve
+the task's Running pod, because Iris can retry the holder onto a new pod at any time.
 """
 
 import json
@@ -25,7 +26,7 @@ from iris.cluster.types import Entrypoint, JobName, ResourceSpec
 from iris.rpc import job_pb2
 from rigging.timing import Duration
 
-from scripts.iris.dev_gpu import (
+from scripts.iris.coreweave_dev_pod import (
     HOLDER_COMMAND,
     PRIORITY_BANDS,
     CoreweaveTarget,
@@ -33,8 +34,10 @@ from scripts.iris.dev_gpu import (
     Priority,
     controller_client,
     is_job_active,
-    kubectl_base,
     kubectl_connect_cmd,
+    kubectl_copy_from_cmd,
+    kubectl_copy_to_cmd,
+    kubectl_exec_cmd,
     release_holder_job,
     require_coreweave_platform,
     run_logged,
@@ -44,6 +47,9 @@ from scripts.iris.dev_gpu import (
 )
 
 STATE_DIR = Path.home() / ".cache" / "marin" / "dev_cpu_iris"
+# A retry can land a replacement pod that is still starting, so give re-resolution
+# the same window the initial allocation uses.
+POD_RESOLVE_TIMEOUT = 120
 
 
 @dataclass(frozen=True)
@@ -82,9 +88,9 @@ class DevCpuState:
     session_name: str
     config_file: str
     job_id: str
+    task_id: str
     priority: Priority
     target: CoreweaveTarget
-    pod: PodRef
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -96,32 +102,25 @@ class DevCpuState:
             session_name=data["session_name"],
             config_file=data["config_file"],
             job_id=data["job_id"],
+            task_id=data["task_id"],
             priority=Priority(data["priority"]),
             target=CoreweaveTarget(**data["target"]),
-            pod=PodRef(**data["pod"]),
         )
 
 
-def kubectl_exec_cmd(target: CoreweaveTarget, pod: PodRef, command: tuple[str, ...]) -> list[str]:
-    return [*kubectl_base(target), "exec", pod.pod_name, "-c", pod.container, "--", *command]
+def current_pod(state: DevCpuState, *, timeout: int = POD_RESOLVE_TIMEOUT) -> PodRef:
+    """Resolve the task's Running pod afresh; a retried holder moves to a new pod."""
+    return wait_for_running_pod(state.target, state.task_id, timeout=timeout)
 
 
-def kubectl_copy_to_cmd(target: CoreweaveTarget, pod: PodRef, local: str, remote: str) -> list[str]:
-    return [*kubectl_base(target), "cp", "-c", pod.container, local, f"{pod.pod_name}:{remote}"]
-
-
-def kubectl_copy_from_cmd(target: CoreweaveTarget, pod: PodRef, remote: str, local: str) -> list[str]:
-    return [*kubectl_base(target), "cp", "-c", pod.container, f"{pod.pod_name}:{remote}", local]
-
-
-def session_summary(state: DevCpuState) -> str:
+def session_summary(state: DevCpuState, pod: PodRef) -> str:
     return "\n".join(
         [
             f"Session: {state.session_name}",
             f"Job: {state.job_id}",
             f"Config: {state.config_file}",
             f"Priority: {state.priority.value}",
-            f"Pod: {state.pod.pod_name} (namespace={state.pod.namespace}, container={state.pod.container})",
+            f"Pod: {pod.pod_name} (namespace={pod.namespace}, container={pod.container})",
         ]
     )
 
@@ -173,7 +172,9 @@ def cli(ctx, config: str | None, session_name: str, verbose: bool) -> None:
     help="Seconds before Iris ends the holder job, e.g. 259200 for three days.",
 )
 @click.option("--timeout", default=900, show_default=True, help="Seconds to wait for the task to run.")
-@click.option("--pod-timeout", default=120, show_default=True, help="Seconds to wait for the pod to run.")
+@click.option(
+    "--pod-timeout", default=POD_RESOLVE_TIMEOUT, show_default=True, help="Seconds to wait for the pod to run."
+)
 @click.pass_obj
 def allocate(
     obj: Context,
@@ -217,13 +218,13 @@ def allocate(
         session_name=obj.session_name,
         config_file=obj.config_file,
         job_id=str(job.job_id),
+        task_id=task_id,
         priority=holder.priority,
         target=target,
-        pod=pod,
     )
     state_file.parent.mkdir(parents=True, exist_ok=True)
     state_file.write_text(state.to_json())
-    print(session_summary(state))
+    print(session_summary(state, pod))
 
 
 @cli.command("exec", context_settings={"ignore_unknown_options": True})
@@ -232,7 +233,7 @@ def allocate(
 def exec_command(obj: Context, command: tuple[str, ...]) -> None:
     """Run one command in the box and exit with its status."""
     state = obj.state()
-    raise SystemExit(run_logged(kubectl_exec_cmd(state.target, state.pod, command)).returncode)
+    raise SystemExit(run_logged(kubectl_exec_cmd(state.target, current_pod(state), command)).returncode)
 
 
 @cli.command("shell")
@@ -240,7 +241,7 @@ def exec_command(obj: Context, command: tuple[str, ...]) -> None:
 def shell(obj: Context) -> None:
     """Open an interactive login shell in the box."""
     state = obj.state()
-    run_logged(kubectl_connect_cmd(state.target, state.pod), check=True)
+    run_logged(kubectl_connect_cmd(state.target, current_pod(state)), check=True)
 
 
 @cli.command("cp-to")
@@ -250,7 +251,7 @@ def shell(obj: Context) -> None:
 def copy_to(obj: Context, local: str, remote: str) -> None:
     """Copy a local file or directory into the box."""
     state = obj.state()
-    run_logged(kubectl_copy_to_cmd(state.target, state.pod, local, remote), check=True)
+    run_logged(kubectl_copy_to_cmd(state.target, current_pod(state), local, remote), check=True)
 
 
 @cli.command("cp-from")
@@ -260,7 +261,7 @@ def copy_to(obj: Context, local: str, remote: str) -> None:
 def copy_from(obj: Context, remote: str, local: str) -> None:
     """Copy a file or directory out of the box."""
     state = obj.state()
-    run_logged(kubectl_copy_from_cmd(state.target, state.pod, remote, local), check=True)
+    run_logged(kubectl_copy_from_cmd(state.target, current_pod(state), remote, local), check=True)
 
 
 @cli.command("status")
@@ -270,7 +271,7 @@ def status(obj: Context) -> None:
     state = obj.state()
     with controller_client(state.config_file) as client:
         active = is_job_active(client, state.job_id)
-    print(session_summary(state))
+    print(session_summary(state, current_pod(state)))
     print(f"Active: {active}")
 
 
