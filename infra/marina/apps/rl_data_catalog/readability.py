@@ -250,6 +250,12 @@ def readability_layout(
     expect(page.locator("#message")).not_to_contain_text("Loading", timeout=60000)
     capture("curriculum-error")
     page.unroute("**/api/curriculum?**")
+    # The status page: closed totals, then every reason explanation opened, in both
+    # themes and at every width, so its controls and panels stay readable.
+    visit("status.html", "#status-counts button")
+    capture("status", focus=True)
+    page.locator("#rows details > summary").evaluate_all("es => es.forEach(e => e.parentElement.open = true)")
+    capture("status-reason-open", focus=True)
     return views
 
 

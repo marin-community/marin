@@ -16,15 +16,25 @@
   <nav class="atlas-tabs" aria-label="Atlas views"><a href="./">By source</a><a href="curriculum.html">By curriculum</a><a href="status.html" aria-current="page">Status</a><a href="guide.html">Getting started</a><a href="archive.html">Review archive</a></nav>
   <style>
     .status-metrics { display:flex; gap:.5rem; flex-wrap:wrap; margin:0 0 .75rem; }
-    .status-metrics button { cursor:pointer; }
-    .status-reasons details { display:inline-block; margin:0 .25rem .25rem 0; }
+    /* Filter chips need house colors: the UA default measures 5.3:1 in the dark scheme. */
+    .status-metrics button { cursor:pointer; background:var(--soft); color:var(--muted); border:0; }
+    /* The inner .table-scroller owns scrolling (max-height + overflow:auto); a hidden outer
+       box only double-clips the open reason panels. */
+    .catalog { overflow:visible; }
+    .status-reasons details { display:inline-block; margin:0 .25rem .25rem 0; max-width:100%; }
     .status-reasons summary { cursor:pointer; list-style:none; }
     .status-reasons summary::-webkit-details-marker { display:none; }
-    .status-explanation { max-width:34rem; padding:.5rem .75rem; margin-top:.25rem; border:1px solid var(--line,#d7dbe0); border-radius:.5rem; background:var(--panel,#fff); font-size:.85rem; }
-    .status-explanation p { margin:.15rem 0; }
+    .status-explanation { max-width:34rem; padding:.5rem .75rem; margin-top:.25rem; border:1px solid var(--line); border-radius:.5rem; background:var(--surface); font-size:.85rem; }
+    .status-explanation p { margin:.15rem 0; overflow-wrap:anywhere; }
     .status-explanation .meaning { font-weight:600; }
-    .status-evidence a { display:inline-block; margin-right:.75rem; }
+    .status-evidence a { display:inline-block; margin-right:.75rem; overflow-wrap:anywhere; }
     .status-needs-ruling { margin:.5rem 0 0; }
+    /* Long reason options make the selects unbreakably wide on phones; give each
+       filter its own row so the select tracks the form width, not its option text. */
+    @media (max-width: 480px) {
+      .filters > label { flex: 1 1 100%; min-width: 0; white-space: normal; }
+      .filters select { width: 100%; min-width: 0; max-width: 100%; }
+    }
   </style>
   <section class="metrics" aria-label="Status totals">
     <div class="status-metrics" id="status-counts" role="group" aria-label="Counts per status"></div>
