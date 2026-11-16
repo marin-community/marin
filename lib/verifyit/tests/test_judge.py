@@ -60,7 +60,7 @@ class _Handler(BaseHTTPRequestHandler):
         usage = {}
         if server.usage_tokens:
             index = min(len(server.prompts) - 1, len(server.usage_tokens) - 1)
-            usage = {"usage": {"completion_tokens": server.usage_tokens[index]}}
+            usage = {"usage": {"completion_tokens": server.usage_tokens[index], "prompt_tokens": 123}}
         body = json.dumps(
             {
                 "id": "chatcmpl-fake",
@@ -275,6 +275,8 @@ def test_reference_retries_truncation_with_budget_and_records_attempts(tmp_path,
         {"finish_reason": "length", "completion_tokens": 1024},
         {"finish_reason": "stop", "completion_tokens": 1600},
     ]
+    assert [reply["usage"]["prompt_tokens"] for reply in reward.detail["judge_responses"]] == [123, 123]
+    assert reward.detail["judge_responses"][-1]["choices"][0]["message"]["content"] == "SCORE: 0.5"
 
 
 def test_reference_exhausted_truncation_is_unscored_with_attempts(tmp_path, fake_judge):
@@ -353,6 +355,11 @@ def test_checklist_records_attempts_per_criterion(tmp_path, fake_judge):
         ],
         [{"finish_reason": "stop", "completion_tokens": 100}],
     ]
+    assert [
+        reply["usage"]["prompt_tokens"]
+        for criterion in reward.detail["criteria"]
+        for reply in criterion["judge_responses"]
+    ] == [123, 123, 123]
 
 
 def test_checklist_truncated_criterion_keeps_partial_diagnostics_without_score(tmp_path, fake_judge):
@@ -372,12 +379,15 @@ def test_checklist_truncated_criterion_keeps_partial_diagnostics_without_score(t
 
 
 def test_checklist_shows_the_context_file_to_the_judge(tmp_path, fake_judge):
-    context = "é" * (grade_judge.CONTEXT_LIMIT - 4) + "TAIL" + "excluded"
+    context_limit = 24
+    context = "é" * (context_limit - 4) + "TAIL" + "excluded"
     (tmp_path / "conversation.txt").write_text(context)
     fake_judge.replies = ["SCORE: 1"]
-    spec = JudgeSpec(rubric="checklist", criteria=(CRITERIA[0],), context="conversation.txt")
+    spec = JudgeSpec(
+        rubric="checklist", criteria=(CRITERIA[0],), context="conversation.txt", context_char_limit=context_limit
+    )
     grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "1. 2. 3."))
-    assert context[: grade_judge.CONTEXT_LIMIT] in fake_judge.prompts[0]
+    assert context[:context_limit] in fake_judge.prompts[0]
     assert "excluded" not in fake_judge.prompts[0]
 
 
@@ -917,6 +927,8 @@ def test_responses_whole_labels_preserve_source_request_and_reject_prose(tmp_pat
         label_scores={"CORRECT": 1, "INCORRECT": 0},
         max_completion_tokens=1024,
         reasoning_effort="low",
+        temperature=None,
+        parse_attempts=1,
     )
     path = tmp_path / "verifier.toml"
     path.write_text(render_spec(spec))

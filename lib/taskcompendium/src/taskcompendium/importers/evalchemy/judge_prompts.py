@@ -123,6 +123,7 @@ def classification_spec(question: str, reference: str, template: str, labels: tu
         references=(reference,),
         model=DEFAULT_JUDGE_MODEL,
         rubric="labels",
+        parse_attempts=1,
         prompt_template=template,
         exact_gate=False,
         empty_output=EmptyOutputPolicy.GRADE,
