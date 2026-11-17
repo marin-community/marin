@@ -50,6 +50,8 @@ marina = "marina.cli:cli"
 test = [
     # The zephyr app tests run against an embedded native Finelog server.
     "marin-iris[controller]",
+    # The evaldash ingestion tests run the real evaluation pipeline to produce their records.
+    "marin-core",
 ]
 dev = [{ include-group = "test" }]
 

@@ -10,6 +10,7 @@ WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 # Install against the committed workspace lock so the image runs the same pinned set as CI.
 # uv needs the pyproject.toml of each workspace member in marina's closure to map the lock.
+# --no-dev keeps the test group, which pulls in marin-core, out of the image.
 # External dependencies first (cached across source edits), then the workspace members.
 COPY uv.lock pyproject.toml ./
 COPY lib/iris/pyproject.toml lib/iris/
@@ -22,7 +23,7 @@ COPY lib/taskcompendium/pyproject.toml lib/taskcompendium/
 COPY lib/verifyit/pyproject.toml lib/verifyit/
 COPY infra/marina/pyproject.toml infra/marina/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --package marin-marina --no-install-workspace
+    uv sync --frozen --no-dev --package marin-marina --no-install-workspace
 # rigging's wheel force-includes config/ and finelog's its own config/; shellbox and verifyit
 # package their README.
 COPY config config
@@ -41,7 +42,7 @@ COPY lib/taskcompendium/src lib/taskcompendium/src
 COPY lib/verifyit/src lib/verifyit/src
 COPY infra/marina/src infra/marina/src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --package marin-marina
+    uv sync --frozen --no-dev --package marin-marina
 COPY infra/marina/runtime.toml infra/marina/runtime.toml
 ENV FASTEMBED_CACHE_PATH=/app/models
 RUN python -m marina.model_cache
