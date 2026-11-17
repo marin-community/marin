@@ -9,12 +9,11 @@ from collections.abc import Iterator
 from functools import lru_cache
 from string import ascii_uppercase
 
-import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.evaluation.corpus import chat_item, file_sha256
+from taskcompendium.evaluation.corpus import chat_item, file_sha256, parquet_rows
 from taskcompendium.evaluation.spec import EvaluationItem
 from taskcompendium.importers.evalchemy.grader import source_package
 from taskcompendium.models import TaskSpec, TextMessage
@@ -24,7 +23,8 @@ from taskcompendium.pipeline.models import RawRow
 DATASET = "HuggingFaceBio/genomeqa"
 REVISION = "e655e415fa30681dddbaf4acc182bcbd8ac41943"
 PROMPT_REVISION = "7ccc230e734fc11a365fd1963b593b5fd11e834d"
-PROMPT_URL = f"https://raw.githubusercontent.com/ai4nucleome/GenomeQA/{PROMPT_REVISION}/run.py"
+PROMPT_FILENAME = "run.py"
+PROMPT_URL = f"https://raw.githubusercontent.com/ai4nucleome/GenomeQA/{PROMPT_REVISION}/{PROMPT_FILENAME}"
 SUBTASKS = (
     "1_enhancer_vs_promoter",
     "2_splice_sites",
@@ -37,6 +37,7 @@ FORMATS = ("binary", "mcq")
 CELL_COUNTS = {
     f"{task}/{answer_format}": 100 if task == "6_motif" else 500 for task in SUBTASKS for answer_format in FORMATS
 }
+POPULATION = sum(CELL_COUNTS.values())
 FILE_HASHES = {
     "binary": "0ef4c3d33541980e3fded9a5b23a952296ce3c51cb0415b42c0299a61c21938a",
     "mcq": "c1cbb51449eb8a5241890337c88dc1bc0a58974b8eb4cb8bc49f310b12faeb75",
@@ -61,28 +62,26 @@ def load_system_prompt(path: str) -> str:
 
 def read_genomeqa(path: StoragePath, _context: ConversionContext) -> Iterator[dict]:
     """Validate each complete pinned format before publishing its questions."""
-    answer_format = str(path).split("/")[-2]
+    answer_format = path.parent.name
     if file_sha256(path) != FILE_HASHES[answer_format]:
         raise ValueError(f"GenomeQA {answer_format} checksum mismatch")
     counts = Counter()
     seen = set()
-    with path.open("rb") as stream:
-        for batch in pq.ParquetFile(stream).iter_batches(batch_size=32):
-            for row in batch.to_pylist():
-                cell = f"{row['subtask']}/{answer_format}"
-                if cell not in CELL_COUNTS:
-                    raise ValueError(f"Unknown GenomeQA cell: {cell}")
-                key = (row["subtask"], row["id"])
-                if key in seen:
-                    raise ValueError(f"Duplicate GenomeQA identity: {key}")
-                seen.add(key)
-                choices, answer = row["options"], row["answer_index"]
-                if len(choices) != (2 if answer_format == "binary" else 4) or not 0 <= answer < len(choices):
-                    raise ValueError(f"Invalid GenomeQA options or answer: {key}")
-                if choices[answer] != row["answer_text"]:
-                    raise ValueError(f"Inconsistent GenomeQA answer: {key}")
-                counts[cell] += 1
-                yield {**row, "format": answer_format}
+    for row in parquet_rows(path):
+        cell = f"{row['subtask']}/{answer_format}"
+        if cell not in CELL_COUNTS:
+            raise ValueError(f"Unknown GenomeQA cell: {cell}")
+        key = (row["subtask"], row["id"])
+        if key in seen:
+            raise ValueError(f"Duplicate GenomeQA identity: {key}")
+        seen.add(key)
+        choices, answer = row["options"], row["answer_index"]
+        if len(choices) != (2 if answer_format == "binary" else 4) or not 0 <= answer < len(choices):
+            raise ValueError(f"Invalid GenomeQA options or answer: {key}")
+        if choices[answer] != row["answer_text"]:
+            raise ValueError(f"Inconsistent GenomeQA answer: {key}")
+        counts[cell] += 1
+        yield {**row, "format": answer_format}
     if counts != {cell: count for cell, count in CELL_COUNTS.items() if cell.endswith("/" + answer_format)}:
         raise ValueError(f"GenomeQA population differs from pinned counts: {counts}")
 
@@ -94,7 +93,7 @@ def render_question(row: dict) -> str:
 
 def convert_genomeqa(row: RawRow, context: ConversionContext) -> TaskSpec:
     data = dict(row.data)
-    prompt = load_system_prompt(str(context.inputs["prompt"] / "run.py"))
+    prompt = load_system_prompt(str(context.inputs["prompt"] / PROMPT_FILENAME))
     task = conversation_task(
         row,
         events=(TextMessage(role="system", content=prompt), TextMessage(role="user", content=render_question(data))),

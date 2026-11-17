@@ -17,9 +17,12 @@ from taskcompendium.evaluation.spec import (
     TrialPolicy,
 )
 from taskcompendium.importers.evalchemy.grader import scorer_revision
+from taskcompendium.importers.evalchemy.scorers.genomeqa import MACRO_METRIC
 from taskcompendium.importers.genomeqa import (
     DATASET,
     FORMATS,
+    POPULATION,
+    PROMPT_FILENAME,
     PROMPT_URL,
     REVISION,
     convert_genomeqa,
@@ -46,7 +49,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 origin="GenomeQA",
                 family="generated-choice",
                 tags=("eval", "single-turn", "biology", "benchmark:GenomeQA"),
-                count=5200,
+                count=POPULATION,
             ),
             config=EvaluationCorpusRecipe(
                 CurationRecipe(
@@ -66,7 +69,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                         "prompt": UrlSource(
                             PROMPT_URL,
                             "bc932144c20e02ccb18e4d8407f90814ca4f8fdc389d9309cd0cbc1525db58a3",
-                            "run.py",
+                            PROMPT_FILENAME,
                             SourceFormat.GENERATED,
                         )
                     },
@@ -85,16 +88,16 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     ),
                     trials=TrialPolicy(count=1, seed=42),
                     metrics=(
-                        Metric(name="genomeqa_macro", kind=MetricKind.CONTINUOUS, higher_is_better=True),
+                        Metric(name=MACRO_METRIC, kind=MetricKind.CONTINUOUS, higher_is_better=True),
                         Metrics.ACCURACY,
                         *(
                             Metric(name=name, kind=MetricKind.BINARY, higher_is_better=False)
                             for name in ("unanswered", "truncation", "refusal", "parse_failure")
                         ),
                     ),
-                    primary_metric="genomeqa_macro",
+                    primary_metric=MACRO_METRIC,
                     summary=SummaryKind.WEIGHTED_MEAN,
-                    expected_population=5200,
+                    expected_population=POPULATION,
                     context_policy=ContextPolicy(
                         output_fit=OutputFit.REQUIRE,
                         context_reserve=0,

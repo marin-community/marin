@@ -17,7 +17,7 @@ from experiments.evaluation.benchmarks.genomeqa import sources
 from experiments.post_training.task_curation.pipeline import source_recipe
 
 
-class CharacterTokenizer:
+class ByteTokenizer:
     def encode(self, text, *, add_special_tokens=False):
         return list(text.encode())
 
@@ -72,7 +72,7 @@ def test_published_genomeqa_excludes_reduced_budget_without_truncating_prompt(tm
                 context_window=context_window,
                 max_tokens=cap,
                 limit=None,
-                tokenizer=CharacterTokenizer(),
+                tokenizer=ByteTokenizer(),
             )
         )
         assert decision.record.reason == reason

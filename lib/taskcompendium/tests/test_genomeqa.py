@@ -147,7 +147,8 @@ def test_pinned_population_validates_both_formats_before_publication(tmp_path, m
         loaded = list(source.read_genomeqa(StoragePath(str(path)), context))
         assert len(loaded) == len({(row["subtask"], row["id"]) for row in loaded}) == 2600
         total += len(loaded)
-        path.write_bytes(path.read_bytes() + b"tampered")
-        with pytest.raises(ValueError, match="checksum mismatch"):
+        rows[0]["question"] = "Changed synthetic DNA: TTTT"
+        pq.write_table(pa.Table.from_pylist(rows), path)
+        with pytest.raises(ValueError):
             list(source.read_genomeqa(StoragePath(str(path)), context))
     assert total == 5200

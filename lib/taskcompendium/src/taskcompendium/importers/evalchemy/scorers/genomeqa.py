@@ -8,6 +8,8 @@ import re
 from verifyit.adapters.completion import final_text
 from verifyit.grade import Reward, scored
 
+MACRO_METRIC = "genomeqa_macro"
+
 _ANSWER_HEADING = "### Answer"
 _ANSWER = re.compile(
     r"\bAnswer\s*:\s*\**\s*\[?" r"([A-Za-z](?![A-Za-z])(?:\]?\**\s*(?:or|and|/|,)\s*\**\[?[A-Za-z](?![A-Za-z]))*)\]?",
@@ -49,12 +51,12 @@ def grade_genomeqa(expected: str, options: str, cell_weight: float, response: st
         correct,
         metrics={
             "accuracy": correct,
-            "genomeqa_macro": correct,
+            MACRO_METRIC: correct,
             "unanswered": float(not answer),
             "truncation": float(failure == "truncation"),
             "refusal": float(failure == "refusal"),
             "parse_failure": float(failure in {"missing_answer", "conflicting_answers", "invalid_option"}),
         },
-        metric_weights={"genomeqa_macro": cell_weight},
+        metric_weights={MACRO_METRIC: cell_weight},
         genomeqa_parsing={"selected_span": selected, "answer": answer, "failure": failure},
     )
