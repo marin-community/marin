@@ -1,0 +1,14 @@
+experiment: X0229v3
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: L2 norm cap replaces MLA q/k RMS norms, mla_qk_norm_cap=30
+    flags:
+    - --model-set
+    - mla_qk_norm_cap=30
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
+    shared: belay-X0229v1-control
