@@ -4,7 +4,7 @@ name: Separate AttnRes queries for global Q and KV
 category: Depth connections
 summary: 🤖 Posted on behalf of @ClassicLarry.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6933514429
@@ -12,3 +12,16 @@ intake:
   approved_by: ClassicLarry
 code_commits:
 - e27c30cbb206dc59031d50a2941fbdd50114c4fa
+trials:
+- id: t001
+  variant: own AttnRes query for the global layers' KV latent
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0228
+  date: '2026-11-17'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0228
+  wandb: []
+  settings:
+    attn_res_global_kv_query: 'true'
+  commit: 097b478537
+  priority: batch
