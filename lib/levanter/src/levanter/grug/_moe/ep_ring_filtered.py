@@ -136,10 +136,11 @@ _down_project_combine.defvjp(_down_project_combine_fwd, _down_project_combine_bw
 
 
 def _gather_sum_slots_clamped(rows: Float[Array, "P H"], slots: Int[Array, "T K"]) -> Float[Array, "T H"]:
-    """``ep_ring._gather_sum_slots`` for non-negative slots (``P`` and above read zero), with a clamped index and
-    every slot's validity computed together in one small kernel; ``jnp.take(mode="fill")`` makes XLA build one mask
-    kernel per slot. Same terms, same order, same bits."""
+    """``ep_ring._gather_sum_slots`` for non-negative slots (``P`` and above read zero): same terms, same order,
+    same bits."""
     num_rows = rows.shape[0]
+    # A clamped index with every slot's validity in one small kernel; jnp.take(mode="fill") builds one mask kernel
+    # per slot.
     keep = jax.lax.optimization_barrier(slots < num_rows)
     out = jnp.zeros((slots.shape[0], rows.shape[1]), dtype=jnp.float32)
     for k in range(slots.shape[1]):
@@ -149,8 +150,9 @@ def _gather_sum_slots_clamped(rows: Float[Array, "P H"], slots: Int[Array, "T K"
 
 
 # The sender's gathers move token rows into its send buffer and sum the returned rows per token; the expert side's
-# move received rows to the dispatch rows. Each Pallas-Triton entry was measured faster on MI355X at the June shape;
-# the other movements stay XLA fusions, where XLA fuses them with their neighbours.
+# move received rows to the dispatch rows. Each Pallas-Triton entry was measured faster on MI355X at the June shape.
+# The sender's token sum stays the clamped XLA fusion: a Pallas sum with the residual and shared-expert terms did not
+# beat it. The expert side's forward gather stays XLA; the kernel has not been measured there.
 _XLA_SENDER_GATHERS = RowGathers(take_valid=_take_valid_rows, gather_sum=_gather_sum_slots_clamped)
 _PALLAS_SENDER_GATHERS = RowGathers(take_valid=gather_valid_rows, gather_sum=_gather_sum_slots_clamped)
 _PALLAS_EXPERT_GATHERS = RowGathers(take_valid=_take_valid_rows, gather_sum=gather_sum_rows)
