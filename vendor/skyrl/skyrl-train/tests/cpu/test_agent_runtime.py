@@ -266,3 +266,15 @@ async def test_verifier_guest_relay_binding_keeps_real_credentials_on_host(tmp_p
     harbor = HarborTaskSettings.from_config(OmegaConf.create({"harbor": {"eval_daytona_image_build": "declarative"}}))
     harness = runtime.original_harness(lowered, "fixture", harbor, "eval")
     await harness.run_trial(unexpected_model_request)
+
+
+def test_eval_storage_override_keeps_training_sandbox_resources():
+    settings = HarborTaskSettings.from_config(
+        OmegaConf.create({"harbor": {
+            "environment_type": "daytona", "daytona_provisioning": "snapshot",
+            "eval_daytona_provisioning": "declarative",
+            "override_storage_mb": 10240, "eval_override_storage_mb": 131072,
+        }})
+    )
+    assert settings.phase_environment("train").override_storage_mb == 10240
+    assert settings.phase_environment("eval").override_storage_mb == 131072

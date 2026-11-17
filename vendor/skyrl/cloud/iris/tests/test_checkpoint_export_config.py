@@ -5,6 +5,7 @@ import json
 import sys
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from omegaconf import OmegaConf
@@ -221,7 +222,7 @@ def test_export_selection_distinguishes_best_saved_step_from_latest(tmp_path: Pa
 
 def test_export_selection_does_not_substitute_training_for_best_initializer(tmp_path: Path) -> None:
     (tmp_path / "best_checkpoint.json").write_text(json.dumps({"step": 0, "model_format": "hf"}))
-    with pytest.raises(ValueError, match="initial HF model"):
+    with pytest.raises(ValueError, match="No committed best or final native checkpoint"):
         selected_export_step(str(tmp_path), "best", 20)
 
 
@@ -242,6 +243,7 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
     trainer = RayPPOTrainer.__new__(RayPPOTrainer)
     trainer.cfg = config
     trainer.global_step = 20
+    trainer.tracker = SimpleNamespace(journal=None)
     trainer.all_timings = {}
     trainer.handle_hf_export()
     selected = root / f"global_step_{expected_step}"
@@ -258,7 +260,7 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
 @pytest.mark.parametrize(
     ("best_metadata", "expected_error"),
     [
-        (None, FileNotFoundError),
+        (None, ValueError),
         ({"step": 0, "model_format": "hf"}, ValueError),
         ({"step": 15, "model_format": "native"}, None),
     ],
@@ -278,6 +280,7 @@ async def test_best_export_waits_until_train_end(tmp_path: Path, best_metadata, 
     trainer = RayPPOTrainer.__new__(RayPPOTrainer)
     trainer.cfg = config
     trainer.global_step = 10
+    trainer.tracker = SimpleNamespace(journal=None)
     trainer.all_timings = {}
     trainer.all_metrics = {}
     trainer.num_steps_per_epoch = 20
@@ -349,6 +352,7 @@ async def test_evaluation_pauses_new_rollouts_before_checkpoint_io(tmp_path: Pat
     trainer._control = TrainerControl()
     trainer.callback_handler = CallbackHandler([CheckpointCallback(save_steps=2), EvaluationCallback(eval_steps=2)])
     trainer.eval_dataset = ["validation-task"]
+    trainer.tracker = SimpleNamespace(journal=None)
     trainer.all_timings = {}
     state = TrainerState(global_step=2, epoch=0, total_steps=4, num_steps_per_epoch=4)
     if save_fails:

@@ -33,10 +33,16 @@ def selected_export_step(checkpoint_root: str, selection: str, latest_step: int)
         return latest_step
     if selection != "best":
         raise ValueError(f"Unknown HF checkpoint selection: {selection}")
-    best = json.loads(StoragePath(join_resource_path(checkpoint_root, BEST_CHECKPOINT_FILENAME)).read_text())
-    if best["model_format"] != "native":
-        raise ValueError("Best checkpoint is the initial HF model; no trained export is available")
-    return int(best["step"])
+    path = StoragePath(join_resource_path(checkpoint_root, BEST_CHECKPOINT_FILENAME))
+    if path.exists():
+        best = json.loads(path.read_text())
+        if best["model_format"] == "native":
+            return int(best["step"])
+    final_state = StoragePath(join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{latest_step}", "trainer_state.pt"))
+    marker = StoragePath(join_resource_path(checkpoint_root, LATEST_CHECKPOINT_FILE))
+    if not final_state.exists() or not marker.exists() or int(marker.read_text().strip()) != latest_step:
+        raise ValueError("No committed best or final native checkpoint is available")
+    return latest_step
 
 
 def trailing_validation_ema(

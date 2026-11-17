@@ -110,7 +110,10 @@ class HarborTaskSettings:
         if environment.eval_image_build is None:
             raise ValueError("Daytona evaluation requires explicit eval_daytona_image_build")
         return environment.model_copy(
-            update={"kwargs": {**environment.kwargs, "image_build": environment.eval_image_build.value}}
+            update={
+                "kwargs": {**environment.kwargs, "image_build": environment.eval_image_build.value},
+                "override_storage_mb": environment.eval_override_storage_mb or environment.override_storage_mb,
+            }
         )
 
     def machine_factory(self, *, phase: str = "train") -> MachineFactory:

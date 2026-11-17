@@ -260,13 +260,15 @@ def _record_failure(
     return result
 
 
-def _has_committed_best(config: DictConfig) -> bool:
+def _has_committed_export_checkpoint(config: DictConfig) -> bool:
     path = StoragePath(join_resource_path(str(config.artifacts.checkpoint_root), BEST_CHECKPOINT_FILENAME))
-    if not path.exists():
+    if path.exists() and json.loads(path.read_text())["model_format"] == "native":
+        return True
+    marker = StoragePath(join_resource_path(str(config.artifacts.checkpoint_root), "latest_ckpt_global_step.txt"))
+    if not marker.exists():
         return False
-    best = json.loads(path.read_text())
-    # The selection callback publishes native best only after checkpoint commit.
-    return best["model_format"] == "native"
+    step = int(marker.read_text().strip())
+    return StoragePath(join_resource_path(str(config.artifacts.checkpoint_root), f"global_step_{step}", "trainer_state.pt")).exists()
 
 
 def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
@@ -318,7 +320,7 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
         )
         if failure and (finalization_mode != FinalizationMode.ANY_TERMINAL or outcome.job_state not in TERMINAL_JOB_STATES):
             return _record_failure(config, outcome, f"Iris job reached {outcome.job_state}")
-        skipped = finalization_mode == FinalizationMode.ANY_TERMINAL and not _has_committed_best(config)
+        skipped = finalization_mode == FinalizationMode.ANY_TERMINAL and not _has_committed_export_checkpoint(config)
         if config.run.export_hf and not skipped:
             try:
                 active_backend.export_terminal_policy(resolved_path)

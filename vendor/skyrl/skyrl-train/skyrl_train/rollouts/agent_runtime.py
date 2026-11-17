@@ -208,7 +208,7 @@ class InstalledAgentRuntime:
             protected_values=protected,
         )
         environment = TrialEnvironmentConfig.model_validate(
-            {**phase_environment.model_dump(exclude={"eval_image_build"}), "kwargs": kwargs}
+            {**phase_environment.model_dump(exclude={"eval_image_build", "eval_override_storage_mb"}), "kwargs": kwargs}
         )
         agent = self.settings.agent.model_copy(
             update={

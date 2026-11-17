@@ -3527,6 +3527,13 @@ class RayPPOTrainer:
                 f"completed checkpoint marker is missing at {trainer_state_path}"
             )
 
+        best_path = join_resource_path(self.cfg.trainer.ckpt_path, BEST_CHECKPOINT_FILENAME)
+        best = json.loads(io.read_bytes(best_path)) if io.exists(best_path) else None
+        export_kind = "best" if best and best["model_format"] == "native" and int(best["step"]) == export_step else "final_not_best"
+        io.write_bytes_atomic(
+            join_resource_path(self.cfg.trainer.export_path, "export-selection.json"),
+            json.dumps({"step": export_step, "selection": export_kind, "checkpoint": checkpoint_path}).encode(),
+        )
         placement = self.cfg.trainer.placement
         model = self.cfg.trainer.policy.model
         request = HFExportRequest(
