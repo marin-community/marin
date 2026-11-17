@@ -1,0 +1,13 @@
+experiment: X0232
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: char 1-4-gram spelling as own AttnRes source
+    flags:
+    - --model-set
+    - spelling_ngram_source=true
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
