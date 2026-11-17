@@ -47,8 +47,11 @@ Callers with generation stop metadata remove configured terminal markers before 
 The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
 `PytestSpec.candidate_modules` names modules the task asks the candidate to implement.
 Missing imports of those modules score zero, including an empty submission.
+Only the modules the spec names in ``candidate_modules`` (and their submodules) count as
+candidate code; imports are never guessed from distribution metadata.
+Missing modules with an installed provider remain invalid tasks.
 Workspace-qualified candidate packages add the workspace parent to Python's import path.
-Unlisted missing dependencies, errors in restored task files, and genuine interruptions remain unscored.
+Missing dependencies imported by implementation code, errors in restored task files, and genuine interruptions remain unscored.
 `protected_paths_files` lists tests-directory manifests of trusted workspace paths restored by setup.
 Every batch is checked before returning a candidate startup or collection failure.
 
@@ -84,7 +87,7 @@ text to the mode's contract; missing files still score zero. Rewards must be fin
 in `[0, 1]`. Malformed verdicts, incomplete judge replies, and failed structured script producers
 become unscored infrastructure errors. Interrupted test runs cannot retain positive credit.
 
-Pytest collection errors score zero. When pytest fails before producing a report, VerifyIT
+Candidate-attributed pytest collection errors score zero. When pytest fails before producing a report, VerifyIT
 checks the interpreter and JSON-report plugin from a temporary directory isolated from task
 imports. A healthy baseline makes the failed task run a scored startup error; an unavailable
 baseline remains an infrastructure error. The task's original import paths and tests still

@@ -30,7 +30,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.struc
     convert_nemotron_structured_outputs,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
 FILE_DELIVERY = (
@@ -121,12 +121,13 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn"),
                 count=53870,
                 notes="All formats require both a format check and a source-grounding judge.",
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-structured_outputs",
                 source=tasktrove_source(CONFIG),
                 convert=TaskTroveConverter(CONFIG, convert_structured_outputs),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=STRUCTURED_OUTPUTS_RUBRIC,
                 grader=GRADER_PACKAGES,

@@ -1,4 +1,5 @@
 import { INTERVAL_KIND, type IntervalKind, type Meta, type PanelCell, type PanelRow } from '@/types/api'
+import { formatCoverage } from './formatting'
 import { compareCells } from './ranking'
 
 // Cohort query values that name no version label; the API reads them the same way.
@@ -64,4 +65,20 @@ export interface Covered {
 // at all: that is unknown coverage, not partial coverage, and the interval kind already says so.
 export function isPartialCoverage(cell: Covered): boolean {
   return cell.interval_kind === INTERVAL_KIND.IDENTIFIED && cell.coverage !== null && cell.coverage < 1
+}
+
+export function scoredItemsLabel(cell: PanelCell): string {
+  const repeat = cell.repeat_aggregation
+  return repeat ? `${repeat.n_items} items × ${repeat.n_repeats} repeats` : `${cell.n_scored} items`
+}
+
+export function cellCoverageLabel(cell: PanelCell): string {
+  const coverage = formatCoverage(cell.coverage)
+  if (cell.repeat_aggregation?.coverage_basis === 'source') {
+    return coverage ? `${coverage} (source units)` : 'source coverage unreported'
+  }
+  if (cell.repeat_aggregation?.coverage_basis === 'item_lower_bound') {
+    return coverage ? `at least ${coverage}` : 'item coverage lower bound unreported'
+  }
+  return coverage
 }

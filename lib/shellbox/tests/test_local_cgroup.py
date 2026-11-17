@@ -5,6 +5,7 @@
 
 import asyncio
 import shutil
+import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -139,7 +140,8 @@ async def test_local_memory_limit_kills_a_forked_group_whose_combined_memory_exc
 
 
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
-async def test_local_command_interruption_reaps_detached_descendants_and_retains_task(create_task, interruption):
+@pytest.mark.parametrize("scoped", [False, True])
+async def test_local_command_interruption_reaps_detached_descendants_and_retains_task(create_task, interruption, scoped):
     spec = MachineSpec(HostImage(), workdir="/app")
     task = await create_task(
         TaskSpec(
@@ -157,9 +159,10 @@ async def test_local_command_interruption_reaps_detached_descendants_and_retains
     )
     pending = None
     try:
-        background = await task.primary.run(Command(("sh", "-c", "sleep 3600 & echo $!")))
+        runner = await cast(LocalMachine, task.primary).open_process_scope() if scoped else task.primary
+        background = await runner.run(Command(("sh", "-c", "sleep 3600 & echo $!")))
         pending = asyncio.create_task(
-            task.primary.run(Command(("python3", "-c", script), timeout=1 if interruption == "timeout" else None))
+            runner.run(Command(("python3", "-c", script), timeout=1 if interruption == "timeout" else None))
         )
         ready = await task.primary.run(
             Command(("sh", "-c", "until test -s /app/detached && test -s /app/answer; do sleep 0.01; done"), timeout=5)
@@ -181,7 +184,7 @@ async def test_local_command_interruption_reaps_detached_descendants_and_retains
             )
         )
         assert reaped.exit_code == 0
-        previous = await task.primary.run(Command(("kill", "-0", background.stdout.decode().strip())))
+        previous = await runner.run(Command(("kill", "-0", background.stdout.decode().strip())))
         assert previous.exit_code == 0
         assert (await task.containers["runtime"].run(Command(("true",)))).exit_code == 0
         assert (await neighbor.run(Command(("true",)))).exit_code == 0
@@ -209,11 +212,12 @@ async def test_local_process_close_reaps_detached_helper_without_deleting_task(c
             await session.close()
 
 
-@pytest.mark.parametrize("operation", ["run", "open_process"])
+@pytest.mark.parametrize("operation", ["run", "scoped_run", "open_process"])
 async def test_local_cancelled_acquisition_reclaims_late_command_and_retains_files(
     create_machine, monkeypatch, operation
 ):
     machine = await create_machine(MachineSpec(HostImage(), workdir="/app"))
+    runner = await machine.open_process_scope() if operation == "scoped_run" else machine
     connection_made = asyncio.subprocess.SubprocessStreamProtocol.connection_made
 
     def cancel_before_handle_returns(protocol, transport):
@@ -228,7 +232,9 @@ async def test_local_cancelled_acquisition_reclaims_late_command_and_retains_fil
         assert (await machine.run(Command(("sh", "-c", "echo answer > /app/answer")))).exit_code == 0
         monkeypatch.setattr(asyncio.subprocess.SubprocessStreamProtocol, "connection_made", cancel_before_handle_returns)
         command = Command(("setsid", "sleep", "3600"))
-        pending = asyncio.create_task(machine.run(command) if operation == "run" else machine.open_process(command))
+        pending = asyncio.create_task(
+            machine.open_process(command) if operation == "open_process" else runner.run(command)
+        )
         with pytest.raises(asyncio.CancelledError) as caught:
             await pending
         assert caught.value.args == ("original acquisition cancellation",)
@@ -237,6 +243,7 @@ async def test_local_cancelled_acquisition_reclaims_late_command_and_retains_fil
         remaining = await machine.run(Command(("sh", "-c", "ps -eo args")))
         assert remaining.exit_code == 0
         assert b"sleep 3600" not in remaining.stdout
+        assert (await runner.run(Command(("true",)))).exit_code == 0
     finally:
         if pending is not None:
             await asyncio.gather(pending, return_exceptions=True)
@@ -300,6 +307,81 @@ async def test_local_quiesce_stops_prior_tmux_agent_and_preserves_http_helper_an
         )
         assert (helper.exit_code, helper.stdout) == (0, b"helper alive\n")
         assert (await task.containers["runtime"].run(Command(("true",)))).exit_code == 0
+
+
+async def test_local_scope_stops_double_forked_writer_but_preserves_setup_service(create_machine):
+    machine = await create_machine(MachineSpec(HostImage(), workdir="/app"))
+    setup = await machine.run(Command(("sh", "-c", "sleep 3600 & echo $!")))
+    assert setup.exit_code == 0
+    scope = await machine.open_process_scope()
+    writer = (
+        "import os,pathlib,time\n"
+        "if os.fork() == 0:\n"
+        " os.setsid()\n"
+        " if os.fork() == 0:\n"
+        "  pathlib.Path('/app/writer-pid').write_text(str(os.getpid()))\n"
+        "  while True:\n"
+        "   pathlib.Path('/app/verdict').write_text('agent')\n"
+        "   time.sleep(0.01)\n"
+        " os._exit(0)\n"
+        "os.wait()\n"
+    )
+    assert (await scope.run(Command(("python3", "-c", writer)))).exit_code == 0
+    ready = await machine.run(
+        Command(("sh", "-c", "until test -s /app/writer-pid && test -s /app/verdict; do sleep 0.01; done"), timeout=5)
+    )
+    assert ready.exit_code == 0
+
+    await scope.terminate()
+    await scope.terminate()
+    with pytest.raises(RuntimeError, match="closed"):
+        await scope.run(Command(("true",)))
+    assert (
+        await machine.run(Command(("sh", "-c", 'pid=$(cat /app/writer-pid); test ! -e "/proc/$pid"')))
+    ).exit_code == 0
+    assert (await machine.run(Command(("sh", "-c", f"test -e /proc/{setup.stdout.decode().strip()}")))).exit_code == 0
+    checked = await machine.run(Command(("sh", "-c", "echo verifier > /app/verdict; sleep 0.1; cat /app/verdict")))
+    assert checked.stdout == b"verifier\n"
+
+
+async def test_local_scope_termination_waits_for_an_active_command(create_machine):
+    machine = await create_machine(MachineSpec(HostImage(), workdir="/app"))
+    scope = await machine.open_process_scope()
+    active = asyncio.create_task(scope.run(Command(("sh", "-c", "echo ready > /app/scope-ready; exec sleep 3600"))))
+    ready = await machine.run(Command(("sh", "-c", "until test -s /app/scope-ready; do sleep 0.01; done"), timeout=5))
+    assert ready.exit_code == 0
+
+    await asyncio.wait_for(scope.terminate(), 5)
+    assert (await active).exit_code != 0
+    assert (await machine.run(Command(("true",)))).exit_code == 0
+
+
+@pytest.mark.parametrize("operation", ["terminate", "machine_close"])
+async def test_local_scope_shutdown_reaps_a_launcher_before_cgroup_admission(create_machine, monkeypatch, operation):
+    machine = await create_machine(MachineSpec(HostImage(), workdir="/app"))
+    scope = await machine.open_process_scope()
+    started = asyncio.Event()
+    create_subprocess = asyncio.create_subprocess_exec
+
+    async def delayed_launcher(*args, **kwargs):
+        # Hold a real launcher outside the cgroup before its admission write.
+        process = await create_subprocess(sys.executable, "-c", "import signal; signal.pause()", **kwargs)
+        started.set()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_launcher)
+    active = asyncio.create_task(scope.run(Command(("sleep", "3600"))))
+    try:
+        await asyncio.wait_for(started.wait(), 5)
+        await asyncio.wait_for(scope.terminate() if operation == "terminate" else machine.close(), 5)
+        if operation == "terminate":
+            assert (await active).exit_code != 0
+        else:
+            with pytest.raises(MachineTerminated):
+                await active
+    finally:
+        active.cancel()
+        await asyncio.gather(active, return_exceptions=True)
 
 
 async def test_local_cancelled_readiness_preserves_helper_until_owner_closes_it(create_task):

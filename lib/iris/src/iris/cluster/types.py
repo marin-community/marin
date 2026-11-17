@@ -535,20 +535,30 @@ WorkerStatusMap = dict[str, WorkerStatus]
 class CoschedulingConfig:
     """Configuration for coscheduling job tasks together.
 
-    Coscheduling ensures that all tasks of a job are scheduled on workers
-    that share a common attribute value. This is essential for multi-host
-    TPU jobs where all workers must belong to the same TPU pod.
+    Placement follows the backend's rule for ``group_by``. ``group_sizes``
+    partitions task ordinals into contiguous groups, each placed in one domain.
+    Groups share admission, retries and cancellation. Explicit groups require
+    the Kubernetes backend and a required topology level.
 
     Example:
         >>> # Schedule all tasks on workers from the same TPU pod
         >>> CoschedulingConfig(group_by="tpu-name")
+        >>> # Eight hosts in one NVLink domain, sixteen in another if needed
+        >>> CoschedulingConfig(group_by="nvlink.domain", group_sizes=(8, 16))
     """
 
     group_by: str
+    group_sizes: tuple[int, ...] = ()
+
+    def validate(self, replicas: int) -> None:
+        if not self.group_by:
+            raise ValueError("coscheduling requires a non-empty group_by")
+        if self.group_sizes and (any(size <= 0 for size in self.group_sizes) or sum(self.group_sizes) != replicas):
+            raise ValueError("coscheduling group_sizes must be positive and sum to replicas")
 
     def to_proto(self) -> job_pb2.CoschedulingConfig:
         """Convert to protobuf representation."""
-        return job_pb2.CoschedulingConfig(group_by=self.group_by)
+        return job_pb2.CoschedulingConfig(group_by=self.group_by, group_sizes=self.group_sizes)
 
 
 def tpu_device(variant: str, count: int | None = None) -> job_pb2.DeviceConfig:

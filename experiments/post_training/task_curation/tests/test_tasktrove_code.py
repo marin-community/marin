@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2ba
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tasktrove.harbor_export import (
+    UnsupportedHarborTask,
     harbor_payload,
     harbor_record,
 )
@@ -229,7 +230,7 @@ def test_python_source_preserves_prompt():
     assert not result.changes
 
 
-def test_python_directory_source_exports_shared_without_capture_and_isolated_with_capture():
+def test_python_directory_source_requires_building_setup_before_harbor_export():
     task = converted_task(RECIPES["tasktrove-e2egit"], python_row())
     row = {"task_json": task.model_dump_json(), "source_row": "fixture/tasks.parquet:0", "original_path": "fixture"}
     options = {
@@ -238,17 +239,11 @@ def test_python_directory_source_exports_shared_without_capture_and_isolated_wit
         "family": "python",
         "verifyit_package_root": VERIFYIT_PACKAGE,
     }
-    payload = harbor_payload(row, **options)
-    config = tomllib.loads(payload.files["task.toml"].decode())
-    assert config["verifier"]["environment_mode"] == "shared"
-    assert not config["artifacts"] and "tests/Dockerfile" not in payload.files
-    assert payload.files["instruction.md"].decode() == task.context.events[0].content
-    # Without TaskTrove's shared source recipe, Harbor needs an isolated transfer contract.
+    with pytest.raises(UnsupportedHarborTask, match="Agent setup commands require an environment build"):
+        harbor_payload(row, **options)
     isolated = task.model_copy(update={"source": task.source.model_copy(update={"dataset": "fixture"})})
-    payload = harbor_payload({**row, "task_json": isolated.model_dump_json()}, **options)
-    config = tomllib.loads(payload.files["task.toml"].decode())
-    assert config["verifier"]["environment_mode"] == "separate"
-    assert config["artifacts"] == [{"source": "/app", "destination": "app"}]
+    with pytest.raises(UnsupportedHarborTask, match="Agent setup commands require an environment build"):
+        harbor_payload({**row, "task_json": isolated.model_dump_json()}, **options)
 
 
 def local_stdio(task: TaskSpec, workspace: Path) -> StdioSpec:

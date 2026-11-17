@@ -50,7 +50,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 import seaborn as sns
 import wandb
-from marin.evaluation.records import CW_RECORDS_PREFIX, RunStatus, list_records
+from evalrecords.records import CW_RECORDS_PREFIX, RunStatus, list_records
 from marin.rl.skyrl import SKYRL_TEMPORARY_STORAGE_TTL_DAYS, skyrl_temporary_run_path
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import username_segment
