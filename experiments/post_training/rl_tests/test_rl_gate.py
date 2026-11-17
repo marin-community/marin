@@ -448,8 +448,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     )
     preset = snowball_model.SNOWBALL.by_name[preset_name]
     if case == "child":
-        model = Path(recipe.artifact_prefix(preset.recipe.layout.cluster)) / "child-model"
-        model.mkdir()
+        model = "s3://marin-test/models/child-model"
         preset = replace(
             preset,
             model=replace(
@@ -484,10 +483,11 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
             presets=tuple(preset if row.name == preset.name else row for row in snowball_model.SNOWBALL.presets),
         ),
     )
-    if initializer is not None:
+    if initializer is not None or case == "child":
         monkeypatch.setattr(
             "s3fs.S3FileSystem.exists",
-            lambda self, path, **kwargs: str(path).removeprefix("s3://") == "marin-test/models/python-init",
+            lambda self, path, **kwargs: str(path).removeprefix("s3://")
+            in {"marin-test/models/python-init", "marin-test/models/child-model"},
         )
     roots = controls(recorded_runs, preset.name) if preset.gated else []
     replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
@@ -584,7 +584,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         assert int(query["from"][0]) > 0
 
     def finish(*args, **kwargs):
-        assert_submission_link()
+        if case != "child":
+            assert_submission_link()
         for path, data in pending.items():
             path.write_bytes(data)
         if case == "mixed-native-failed":

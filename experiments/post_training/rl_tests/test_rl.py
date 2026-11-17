@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
@@ -15,6 +16,7 @@ from marin.execution.lazy import OUT, ArtifactStep, apply, materialized_config, 
 from marin.rl import skyrl as skyrl_api
 from marin.rl.skyrl import ArtifactHfModel
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 
 from experiments.post_training import rl as snowball
@@ -58,11 +60,15 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
             ),
         ),
     )
-    checkpoint = tmp_path / "checkpoint"
+    checkpoint = StoragePath("s3://marin-test/models/checkpoint")
     export = checkpoint / "hf"
-    export.mkdir(parents=True)
-    for name in ("config.json", "tokenizer_config.json"):
-        (export / name).write_text("{}")
+    files = {str(export / name).removeprefix("s3://") for name in ("config.json", "tokenizer_config.json")}
+    monkeypatch.setattr("s3fs.S3FileSystem.glob", lambda self, path, **kwargs: [str(export / "config.json")])
+    monkeypatch.setattr("s3fs.S3FileSystem.modified", lambda self, path: datetime(2026, 1, 1, tzinfo=UTC))
+    monkeypatch.setattr(
+        "s3fs.S3FileSystem.exists",
+        lambda self, path, **kwargs: str(path).removeprefix("s3://") in files | {str(checkpoint).removeprefix("s3://")},
+    )
     metadata = {"train_config": {"data": {"tokenizer": "tests/own-tokenizer"}}}
     monkeypatch.setattr(model_cache, "model_info", lambda *args, **kwargs: SimpleNamespace(sha="a" * 40))
     initializer = ArtifactStep.adopt(
