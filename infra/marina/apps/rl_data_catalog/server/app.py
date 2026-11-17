@@ -4,6 +4,7 @@
 """Serve the explicitly loaded curation catalog from Postgres."""
 
 import json
+from enum import StrEnum
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -21,7 +22,7 @@ from .count_evidence import SOURCE_COUNTS
 from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
 from .derived_contract import contract_projection, contract_records
-from .difficulty import difficulty_records, difficulty_summary
+from .difficulty import difficulty_records, difficulty_summary, difficulty_table_summary, table_difficulty
 from .difficulty_coverage import difficulty_coverage
 from .duplicate_folding import (
     SourceStanding,
@@ -47,6 +48,84 @@ DEFECT_FILTERS = tuple(defect.value for defect in Defect)
 CONFIDENCE_FILTERS = (*tuple(confidence.value for confidence in Confidence), "unrecorded")
 REFERENCE_FILTERS = (*tuple(reference.value for reference in ReferenceStatus), "unrecorded")
 VERDICT_FILTERS = tuple(verdict.value for verdict in Verdict)
+
+
+class SourceProjection(StrEnum):
+    COMPLETE = "complete"
+    TABLE = "table"
+
+
+TABLE_SOURCE_FIELDS = frozenset(
+    {
+        "id",
+        "name",
+        "display_name",
+        "origin",
+        "build_path",
+        "status",
+        "notes",
+        "family",
+        "tags",
+        "dataset_id",
+        "dataset_revision",
+        "current_release",
+        "url",
+        "pipeline",
+        "grader_type",
+        "grader_type_counts",
+        "oracle_validation",
+        "oracle_filtration",
+        "within_source_dedup",
+        "lexical_contamination",
+        "grading_environment",
+        "actor_census_input",
+        "daytona",
+        "curation",
+        "task_count",
+        "quality",
+        "quality_review_status",
+        "review_scope",
+        "review_coverage",
+        "filtration",
+        "review_completeness",
+        "result_provisional",
+        "contamination_status",
+        "result",
+        "issue_rate",
+        "updated_at",
+        "coverage",
+        "difficulty",
+        "intended_use",
+        "backend_capabilities",
+        "partial_overlaps",
+        "duplicate_group",
+        "assessment",
+    }
+)
+
+
+def table_source_record(source: dict[str, Any]) -> dict[str, Any]:
+    """The values used by the source table, its tooltips and its detail dialog."""
+    row = {
+        key: table_difficulty(value) if key == "difficulty" else value
+        for key, value in source.items()
+        if key in TABLE_SOURCE_FIELDS or key.startswith("daytona_")
+    }
+    if row.get("backend_capabilities") is not None:
+        row["backend_capabilities"] = {
+            key: value
+            for key, value in row["backend_capabilities"].items()
+            if key in {"basis", "reason", "task_count", "backends"}
+        }
+    if row.get("assessment") is not None:
+        row["assessment"] = {"status": row["assessment"]["status"]}
+    if row.get("within_source_dedup") is not None:
+        row["within_source_dedup"] = {
+            key: value
+            for key, value in row["within_source_dedup"].items()
+            if key in {"raw_count", "unique_count", "within_source_duplicates", "drop_manifest_uri"}
+        }
+    return row
 
 
 def migrate(connection: Connection) -> None:
@@ -341,7 +420,7 @@ def create_api(services: AppletServices) -> FastAPI:
         return {"sources": sources, "snapshot_id": metadata["snapshot_id"], "synced_at": metadata["loaded_at"]}
 
     @api.get("/sources")
-    def sources() -> dict[str, Any]:
+    def sources(projection: SourceProjection = SourceProjection.COMPLETE) -> dict[str, Any]:
         with engine.connect() as connection:
             metadata = loaded_catalog(connection)
             measurements = difficulty_records(connection)
@@ -411,7 +490,11 @@ def create_api(services: AppletServices) -> FastAPI:
                         "updated_at": metadata["loaded_at"],
                         "daytona": daytona(row["declaration"], DAYTONA_SAFE_SNAPSHOT_LIMIT),
                         "coverage": coverage.get(row["id"]),
-                        "difficulty": difficulty_summary(row["declaration"], measurements.get(row["id"], [])),
+                        "difficulty": (
+                            difficulty_table_summary(row["declaration"], measurements.get(row["id"], []))
+                            if projection == SourceProjection.TABLE
+                            else difficulty_summary(row["declaration"], measurements.get(row["id"], []))
+                        ),
                         "intended_use": intended_use(row["declaration"]),
                         "backend_capabilities": row["backend_capabilities"],
                         "partial_overlaps": overlaps.get(row["id"], []),
@@ -430,7 +513,9 @@ def create_api(services: AppletServices) -> FastAPI:
                     }
                 )
         return {
-            "sources": inventory,
+            "sources": (
+                [table_source_record(row) for row in inventory] if projection == SourceProjection.TABLE else inventory
+            ),
             "snapshot_id": metadata["snapshot_id"],
             "created_at": metadata["created_at"],
             "synced_at": metadata["loaded_at"],

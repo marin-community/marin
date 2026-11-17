@@ -123,7 +123,7 @@ def test_filtering_canonical_keeps_unmeasured_siblings_separate(journey: Journey
             result="GOOD",
             intended_use="train" if row["id"] == "Marin:clean" else "eval",
         )
-    page.route("**/api/sources", lambda route: route.fulfill(json={**payload, "sources": rows}))
+    page.route("**/api/sources*", lambda route: route.fulfill(json={**payload, "sources": rows}))
     page.reload()
     expect(page.locator("#rows tr")).to_have_count(1)
     expect(page.locator("#rows tr")).to_have_attribute("data-source-id", "Marin:clean")
@@ -184,7 +184,7 @@ def test_source_cells_are_names_only_and_overlap_evidence_qualifies_colliding_na
             detail["declaration"].update({key: row[key] for key in ["display_name", "origin", "build_path"]})
             detail.update(duplicate_group=None, partial_overlaps=row["partial_overlaps"])
     labels = [{key: row[key] for key in ["id", "display_name", "origin", "build_path"]} for row in rows]
-    page.route("**/api/sources", lambda route: route.fulfill(json={**payload, "sources": rows}))
+    page.route("**/api/sources*", lambda route: route.fulfill(json={**payload, "sources": rows}))
     page.route("**/api/source-labels", lambda route: route.fulfill(json={"sources": labels}))
     page.route("**/api/source?source_id=Marin%3Aclean", lambda route: route.fulfill(json=detail))
     page.reload()
@@ -911,7 +911,7 @@ def test_header_distinguishes_catalog_totals_from_displayed_rows(journey: Journe
                 ],
             }
         rows.append(row)
-    page.route("**/api/sources", lambda route: route.fulfill(json={"sources": rows, "synced_at": "2026-11-14"}))
+    page.route("**/api/sources*", lambda route: route.fulfill(json={"sources": rows, "synced_at": "2026-11-14"}))
     page.reload()
     total = "60 tasks admitted (TRAIN 40 · EVAL 20) · 20 tasks pending oracle filtration · 30 tasks excluded"
     expect(page.locator("#metric-examples")).to_have_text(total)
@@ -963,7 +963,7 @@ def test_header_distinguishes_catalog_totals_from_displayed_rows(journey: Journe
         })"""
     )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    page.unroute("**/api/sources")
+    page.unroute("**/api/sources*")
     page.locator(".atlas-tabs").get_by_role("link", name="Getting started", exact=True).click()
     count = page.locator('button.count[data-leaf="sample"]')
     expect(count).to_have_text(re.compile(r"^\d+$"))
@@ -1147,7 +1147,7 @@ def test_default_source_column_bounds_long_names_and_viewer_can_expand(journey: 
     payload = page.evaluate("async () => (await fetch('api/sources')).json()")
     source = next(row for row in payload["sources"] if row["id"] == "Marin:clean")
     source["display_name"] = "A long descriptive source name with provenance encoded in its dataset name " * 4
-    page.route("**/api/sources", lambda route: route.fulfill(json=payload))
+    page.route("**/api/sources*", lambda route: route.fulfill(json=payload))
     page.reload()
     page.locator("#show-all").check()
     header = page.locator("#headers th").first
@@ -1394,3 +1394,37 @@ def test_full_review_browse_paging_filters_and_audit(journey: Journey, full_revi
     journey.sees("Sample stratified · seed journey-full-260 · 40 tasks")
     journey.sees("No judgments recorded yet.")
     journey.shoot("full-browse-audit")
+
+
+def test_table_projection_preserves_every_rendered_source_and_dialog(journey: Journey) -> None:
+    page = journey.page
+    root = f"{journey.origin}/a/{CATALOG_APP}/"
+    complete = page.request.get(root + "api/sources").json()
+    compact = page.request.get(root + "api/sources?projection=table").json()
+    assert len(compact["sources"]) == len(complete["sources"])
+    assert all("quality_result" not in source for source in compact["sources"])
+
+    def capture(payload):
+        page.route("**/api/sources?projection=table", lambda route: route.fulfill(json=payload))
+        page.goto(root)
+        expect(page.locator("#rows tr").first).to_be_visible()
+        page.locator("#show-everything").click()
+        table = page.locator("#rows").evaluate(
+            "e=>({text:e.innerText,titles:[...e.querySelectorAll('[title]')].map(x=>x.title),"
+            "links:[...e.querySelectorAll('a')].map(x=>x.getAttribute('href'))})"
+        )
+        metrics = page.locator(".metrics").inner_text()
+        dialogs = []
+        for button in page.locator("#rows .source-name").all():
+            button.click()
+            dialogs.append(
+                page.locator("#details").evaluate(
+                    "e=>({text:e.innerText,titles:[...e.querySelectorAll('[title]')].map(x=>x.title),"
+                    "links:[...e.querySelectorAll('a')].map(x=>x.getAttribute('href'))})"
+                )
+            )
+            page.locator("#close-details").click()
+        page.unroute("**/api/sources?projection=table")
+        return table, metrics, dialogs
+
+    assert capture(compact) == capture(complete)

@@ -292,7 +292,7 @@ function metrics(displayed, rows) {
   }).join(' · ') || 'All tasks shown.';
 }
 async function load() {
-  const [data, inventory] = await Promise.all([json('api/sources'), json('measurements/oracle-inventory.json')]);
+  const [data, inventory] = await Promise.all([json('api/sources?projection=table'), json('measurements/oracle-inventory.json')]);
   state.sources = data.sources.map(source => ({...source, oracle_inventory: boundOracleInventory(source, inventory)}));
   state.syncedAt = data.synced_at;
   state.daytonaLimit = data.daytona_snapshot_limit;

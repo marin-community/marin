@@ -55,7 +55,7 @@ def matches_current_pin(record: DifficultyObservation, declaration: dict[str, An
 
 def split_observations(
     declaration: dict[str, Any], records: Iterable[DifficultyObservation]
-) -> tuple[dict[Solver, DifficultyObservation], list[dict[str, Any]]]:
+) -> tuple[dict[Solver, DifficultyObservation], list[DifficultyObservation]]:
     """Split observations into the latest per-solver current-pin map and the historical remainder."""
     current: dict[Solver, DifficultyObservation] = {}
     historical = []
@@ -63,7 +63,7 @@ def split_observations(
         records, key=lambda item: (datetime.fromisoformat(item.created_at), item.measurement_id), reverse=True
     ):
         if not matches_current_pin(record, declaration) or record.solver in current:
-            historical.append(record.model_dump(mode="json", exclude={"sample": {"tasks"}}))
+            historical.append(record)
             continue
         current[record.solver] = record
     return current, historical
@@ -79,6 +79,15 @@ def current_observations(
 def difficulty_summary(declaration: dict[str, Any], records: Iterable[DifficultyObservation]) -> dict[str, Any]:
     """Choose the latest observation per solver for this exact release and converter."""
     current, historical = split_observations(declaration, records)
+    models = model_summaries(current)
+    return {
+        "protocol_id": PROTOCOL_ID,
+        "models": models,
+        "historical": [record.model_dump(mode="json", exclude={"sample": {"tasks"}}) for record in historical],
+    }
+
+
+def model_summaries(current: dict[Solver, DifficultyObservation]) -> list[dict[str, Any]]:
     models = []
     for solver in Solver:
         if solver not in current:
@@ -98,4 +107,25 @@ def difficulty_summary(declaration: dict[str, Any], records: Iterable[Difficulty
         payload = record.model_dump(mode="json", exclude={"sample": {"tasks"}})
         payload["solve_rate"] = record.solved / record.n if record.status == MeasurementStatus.MEASURED else None
         models.append(payload)
-    return {"protocol_id": PROTOCOL_ID, "models": models, "historical": historical}
+    return models
+
+
+def difficulty_table_summary(declaration: dict[str, Any], records: Iterable[DifficultyObservation]) -> dict[str, Any]:
+    """Keep current solver bars and their complete tooltip values; history stays in Evidence."""
+    return table_difficulty(
+        {"protocol_id": PROTOCOL_ID, "models": model_summaries(current_observations(declaration, records))}
+    )
+
+
+def table_difficulty(summary: dict[str, Any]) -> dict[str, Any]:
+    """The current solver values and provenance displayed by the table and dialog."""
+    fields = {"solver", "status", "reason", "n", "solved", "solve_rate", "wilson_95", "protocol_id"}
+    output = []
+    for model in summary["models"]:
+        row = {key: value for key, value in model.items() if key in fields}
+        if model.get("model") is not None:
+            row["model"] = {key: model["model"][key] for key in ["model", "revision"]}
+        if model.get("sample") is not None:
+            row["sample"] = {"pre_oracle_filter": model["sample"]["pre_oracle_filter"]}
+        output.append(row)
+    return {"protocol_id": summary["protocol_id"], "models": output}

@@ -58,6 +58,7 @@ from .release_receipts import (
     ReleaseReceipt,
     ReleaseTarget,
 )
+from .server.app import table_source_record
 from .server.curriculum import (
     AREA_SQL,
     CONFIDENCE_AREA_SQL,
@@ -330,9 +331,15 @@ def browser_checks(
                             "daytona_snapshot_limit": expected["daytona_snapshot_limit"],
                         }
                     if path == "api/sources":
+                        projection = dict(parse_qsl(parsed.query)).get("projection", "complete")
+                        projected = (
+                            {**expected, "sources": [table_source_record(source) for source in expected["sources"]]}
+                            if projection == "table"
+                            else expected
+                        )
                         if local:
-                            data = expected
-                        elif data != expected:
+                            data = projected
+                        elif data != projected:
                             raise ValueError("Hosted source API differs from the input-bound baseline projection")
                     route.fulfill(json=data)
                 elif not local:

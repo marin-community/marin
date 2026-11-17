@@ -443,6 +443,12 @@ def test_grading_census_survives_catalog_loader_and_backend_projection(catalog_d
         source = client.get("/sources").json()["sources"][0]
         assert source["grading_environment"] == evidence.model_dump(mode="json")
         assert source["backend_capabilities"]["grading_environment"] == evidence.model_dump(mode="json")
+        table = client.get("/sources", params={"projection": "table"}).json()["sources"][0]
+        assert table["grading_environment"] == evidence.model_dump(mode="json")
+        assert table["backend_capabilities"]["backends"] == source["backend_capabilities"]["backends"]
+        assert "inputs" not in table["backend_capabilities"]
+        assert table["assessment"]["status"] == source["assessment"]["status"]
+        assert "admitted" not in table["assessment"]
 
 
 def test_source_fingerprint_is_stored_separately_and_failed_refresh_keeps_previous(
@@ -2125,6 +2131,19 @@ def test_difficulty_archive_load_and_source_pin_change_preserve_history(
         detail = client.get("/source", params={"source_id": declaration.id}).json()
         assert detail["difficulty"]["models"][0] == model
         assert model["sample"]["pre_oracle_filter"] and model["sample"]["resample_after_oracle_filter"]
+        table = client.get("/sources", params={"projection": "table"}).json()["sources"][0]
+        assert table["id"] == source["id"] and table["filtration"] == source["filtration"]
+        assert table["backend_capabilities"] is None
+        assert table["daytona"] == source["daytona"]
+        assert "quality_result" not in table and "license_receipt" not in table
+        assert "historical" not in table["difficulty"]
+        compact_model = table["difficulty"]["models"][0]
+        for key in ["solver", "status", "reason", "n", "solved", "solve_rate", "wilson_95", "protocol_id"]:
+            assert compact_model.get(key) == model.get(key)
+        assert compact_model["model"] == {"model": model["model"]["model"], "revision": model["model"]["revision"]}
+        assert compact_model["sample"] == {"pre_oracle_filter": True}
+        assert source["difficulty"]["historical"][0]["measurement_id"] == older.measurement_id
+        assert detail["difficulty"]["historical"] == source["difficulty"]["historical"]
         assert [row["solver"] for row in source["difficulty"]["models"]] == [solver.value for solver in Solver]
         assert all(row["solve_rate"] is None and row["reason"] for row in source["difficulty"]["models"][1:])
         changed = declaration.model_dump(mode="json")

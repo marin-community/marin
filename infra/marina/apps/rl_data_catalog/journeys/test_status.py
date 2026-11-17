@@ -163,7 +163,7 @@ def test_default_view_hides_excluded_sources_and_counts_what_is_hidden(journey: 
     expect(page.locator("#rows tr").first).to_be_visible()
     sources = page.evaluate("async () => (await (await fetch('api/sources')).json()).sources")
     sources = [dict(row, status="Pending" if row["id"] == "Marin:stale-clean" else row["status"]) for row in sources]
-    page.route("**/api/sources", lambda route: route.fulfill(json={"sources": sources, "synced_at": "2026-11-14"}))
+    page.route("**/api/sources*", lambda route: route.fulfill(json={"sources": sources, "synced_at": "2026-11-14"}))
     page.reload()
     expect(page.locator("#rows tr").first).to_be_visible()
     excluded_row = page.locator('tr[data-source-id="Marin:filtered-zero"]')

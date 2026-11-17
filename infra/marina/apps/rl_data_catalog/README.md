@@ -34,6 +34,12 @@ missing or obsolete summaries. Increment
 `SOURCE_AREA_VERSION` when changing subject selection or tie ordering. The
 stored statistics, samples and release pointers remain unchanged.
 
+The By source page requests `api/sources?projection=table`. It returns the values
+used by the table, tooltips and source dialog. Historical difficulty records,
+raw review findings and license documents remain in the complete `api/sources`
+response and the source Evidence endpoints. The release checker compares the
+table response against the complete input-bound projection before release.
+
 The By source query selects fingerprint version, seed, task count, duplicate
 count, sample hash and lineage in PostgreSQL. It leaves fingerprint samples and
 hash arrays in storage; `api/source-fingerprint` returns the full evidence on
