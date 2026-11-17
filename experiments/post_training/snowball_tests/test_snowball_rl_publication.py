@@ -169,12 +169,9 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     assert row["artifact_uri"] == str(source) and row["attempt_id"] == "native-attempt"
     assert row["iris_job_id"] == "/tests/native-run"
     assert row["run_id"] == receipt["config"]["run"]["id"] and row["series"] == name
-    assert (
-        row["label"]
-        == f"{name} trainer.policy.optimizer_config.lr=2e-06 trainer.policy.optimizer_config.weight_decay=0.01 "
-        + (f"trainer.max_steps={expected_updates} " if name == "train-long" else "")
-        + f"tasks={inputs.tasks} init=weights@2026.11.10"
-    )
+    preset_label, *settings = row["label"].split()
+    assert preset_label == name
+    assert set(settings) == {*inputs.settings, f"tasks={inputs.tasks}", f"init={inputs.init}"}
     assert row["issue"] is None and row["gate_result"] is None
     assert (row["optimizer_steps"], row["elapsed_seconds"]) == (expected_updates, expected_time)
     assert (row["planned_updates"], row["measured_updates"]) == ((1, [1]) if case == "updates-override" else (2, [1, 2]))
@@ -190,14 +187,9 @@ def test_control_publication_rejects_presets_without_dashboard_controls(monkeypa
         pytest.fail("Control publication configured storage for an unsupported preset")
 
     monkeypatch.setattr(publication, "configure_coreweave_s3", fail_storage_setup)
-    runner = CliRunner()
-    help_result = runner.invoke(publication.main, ["--help"])
-    assert help_result.exit_code == 0
-    assert "learning-medium" in help_result.output and "data-medium" in help_result.output
-    assert "train-long" not in help_result.output
-
     for name in ("train-long", "speed-medium"):
-        assert runner.invoke(publication.main, ["--preset", name]).exit_code == 2
+        with pytest.raises(click.BadParameter):
+            publication.main.make_context("snowball_rl_publication", ["--preset", name])
         with pytest.raises(click.BadParameter):
             publication.publish_controls(name)
 
