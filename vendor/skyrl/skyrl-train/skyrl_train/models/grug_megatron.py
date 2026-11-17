@@ -32,7 +32,7 @@ from megatron.core.transformer.moe.shared_experts import SharedExpertMLP
 from megatron.core.extensions.transformer_engine import TEColumnParallelGroupedLinear, TEColumnParallelLinear, TENorm
 from megatron.core.extensions.transformer_engine_spec_provider import TESpecProvider
 from megatron.core.fusions.fused_bias_dropout import get_bias_dropout_add
-from megatron.core.models.common.embeddings.rope_utils import apply_rotary_pos_emb
+from megatron.core.models.common.embeddings.rope_utils import _apply_rotary_pos_emb_bshd, apply_rotary_pos_emb
 from megatron.core.models.gpt.gpt_model import GPTModel
 from megatron.core.models.gpt.moe_module_specs import get_moe_module_spec_for_backend
 from megatron.core.transformer.attention import SelfAttention, SelfAttentionSubmodules
@@ -50,7 +50,7 @@ from megatron.core.transformer.utils import make_sharded_tensors_for_checkpoint,
 from megatron.core.typed_torch import apply_module
 from torch import nn
 
-from skyrl_train.models.grug_log_scaling import grug_log_scaling_factor, thd_visible_keys
+from skyrl_train.models.grug_log_scaling import grug_log_scaling_factor, thd_document_positions, thd_visible_keys
 from skyrl_train.models.megatron_router_replay import RouterScoreType
 from skyrl_train.models.grug_shortconv import causal_short_conv
 from skyrl_train.models.grug_moe import (
@@ -63,6 +63,26 @@ from skyrl_train.models.grug_moe import (
     grug_rms_norm_no_weight,
     jax_top_k,
 )
+
+
+def packed_rotary_pos_emb(t, freqs, *, config, cu_seqlens, cp_group):
+    """Apply RoPE to ``[tokens, heads, dim]`` packed documents by indexing frequencies per token.
+
+    Matches Megatron's unfused packed RoPE, which builds the same frequencies one document at a time.
+    """
+    if cu_seqlens is None or config.apply_rope_fusion:
+        return apply_rotary_pos_emb(t, freqs, config=config, cu_seqlens=cu_seqlens, cp_group=cp_group)
+    cp_size = cp_group.size()
+    document, position = thd_document_positions(cu_seqlens, t.shape[0], cp_size, cp_group.rank())
+    if freqs.size(0) == t.shape[0] * cp_size:
+        # The frequencies cover every packed position, not one document's worth.
+        position = position + cu_seqlens[:-1][document]
+    return _apply_rotary_pos_emb_bshd(
+        t.unsqueeze(1),
+        freqs[position],
+        rotary_interleaved=config.rotary_interleaved,
+        multi_latent_attention=config.multi_latent_attention,
+    ).squeeze(1)
 
 
 def _first_present(preferred: torch.Tensor | None, fallback: torch.Tensor | None) -> torch.Tensor | None:
@@ -194,10 +214,10 @@ class GrugSelfAttention(SelfAttention):
             if is_thd:
                 cu_seqlens_q = _first_present(packed_seq_params.cu_seqlens_q_padded, packed_seq_params.cu_seqlens_q)
                 cu_seqlens_kv = _first_present(packed_seq_params.cu_seqlens_kv_padded, packed_seq_params.cu_seqlens_kv)
-            query = apply_rotary_pos_emb(
+            query = packed_rotary_pos_emb(
                 query, q_pos_emb, config=self.config, cu_seqlens=cu_seqlens_q, cp_group=self.pg_collection.cp
             )
-            key = apply_rotary_pos_emb(
+            key = packed_rotary_pos_emb(
                 key, k_pos_emb, config=self.config, cu_seqlens=cu_seqlens_kv, cp_group=self.pg_collection.cp
             )
 
@@ -444,11 +464,10 @@ class GrugShortConv(nn.Module):
             hidden_states = tensor_parallel.gather_from_sequence_parallel_region(
                 hidden_states, tensor_parallel_output_grad=False, group=self.pg_collection.tp
             )
-        lengths = None
+        cumulative = None
         if packed_seq_params is not None and packed_seq_params.qkv_format == "thd":
             cumulative = _first_present(packed_seq_params.cu_seqlens_q_padded, packed_seq_params.cu_seqlens_q)
-            lengths = tuple((cumulative[1:] - cumulative[:-1]).tolist())
-        result = causal_short_conv(hidden_states, self.weight, lengths, self.pg_collection.cp)
+        result = causal_short_conv(hidden_states, self.weight, cumulative, self.pg_collection.cp)
         if self.sequence_parallel:
             result = tensor_parallel.scatter_to_sequence_parallel_region(result, group=self.pg_collection.tp)
         return result
