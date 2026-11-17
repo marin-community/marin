@@ -118,6 +118,7 @@ auth:
     - principal:human-080
     - "*@openathena.ai"
     - principal:human-076
+    - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
     - morrisy@stanford.edu
     - wg0420@princeton.edu
