@@ -37,12 +37,12 @@ and asynchronous collection with staleness three. Constant-reward groups stay
 in the consumed batch and receive zero learner advantages.
 
 The normal batch is 32 groups, split equally between SWE and the combined
-reasoning/science route. This follows MA's completed three-rack batch; using it
-on one rack is a configuration choice, not a new runtime qualification.
+reasoning/science route. This follows the completed three-rack reference batch;
+using it on one rack is a configuration choice, not a new runtime qualification.
 `--batch-groups` accepts an even count and keeps eight samples per group and
-equal route quotas. Ben's reference uses 64 groups and staleness two; these
-Mochi settings follow MA's workflow. The task families, graders and sampling
-within each route remain those of the input mixture.
+equal route quotas. Ben's reference uses 64 groups and staleness two.
+The task families, graders and sampling within each route remain those of the
+input mixture.
 
 Evaluation and native checkpointing default to every two updates, following
 Ben's cadence. `--eval-interval` and `--checkpoint-interval` change their cadence
@@ -56,10 +56,9 @@ Best selection requires all 120 held-out tasks to have scores and a complete
 five-evaluation EMA window. Valid zero scores count;
 missing scores do not. A newly selected best is saved and protected from the
 two-checkpoint rolling prune policy. The selection record is
-`best_checkpoint.json` below the checkpoint root. At MA's measured collection
-and evaluation rates, the ten-hour budget may end before five complete
-evaluations, so no best is selected. Completed selection history is reused
-during same-version recovery.
+`best_checkpoint.json` below the checkpoint root. The ten-hour budget may end
+before five complete evaluations, so no best is selected. Completed selection
+history is reused during same-version recovery.
 
 The RL-budget callback requests stopping at a completed update boundary after
 ten hours measured from the first optimizer completion. It includes subsequent
@@ -253,17 +252,17 @@ provides the public serving context. Detailed matched-run receipts are not publi
 The measured gain requires neither [vLLM #130](https://github.com/marin-community/vllm/pull/130)
 nor [#11492](https://github.com/marin-community/marin/pull/11492).
 
-MA's source `612fa39494f9` completed three fresh nonzero RL updates at a
-102,400-token cap. Updated weights were verified and later used for generation in
-all eight EP16 engines. Both held-out evaluations scored 120/120 tasks, and native
-checkpoint 3 completed. The first batch's actual maximum attended length was
+Reference source `612fa39494f9` completed three fresh nonzero RL updates at a
+102,400-token context limit. Updated weights were verified and later used for
+generation in all eight EP16 engines. Each of two held-out evaluations produced
+scores for all 120 tasks, and native checkpoint 3 completed. The first batch's actual maximum attended length was
 56,196. That qualification used separate task-setup/runtime repairs and cadence;
 this draft keeps its existing setup, evaluation, selection and recovery behavior.
 Two eligible evaluations do not complete the five-evaluation selection window.
 
-Separate EP16 serving reached 262,024 total tokens. Earlier near-262K trainer
-backward at source `940be7913eb7` used the previous inference geometry. Its separate
+Separate EP16 serving completed one request with 262,024 prompt-plus-output tokens.
+Earlier near-262K trainer backward at source `940be7913eb7` used the previous inference geometry. Its separate
 fresh 32-group mixed batch reached 42,380 tokens with evaluation and saving
-disabled. This draft keeps the 262,144-token cap. Integrated near-262K training
+disabled. This draft keeps the 262,144-token context limit. Integrated near-262K training
 with all eight engines, sustained completion and live same-version recovery
-remain unqualified by those results. MA owns the continuing runtime campaign.
+remain unqualified by those results. The continuing runtime campaign is separate.
