@@ -219,8 +219,16 @@ def launch_environment() -> dict[str, str]:
     return environment
 
 
+TERMINAL_IRIS_STATES = ("succeeded", "failed", "cancelled", "killed")
+
+
 def iris_job_exists(cluster: str, job_name: str) -> bool:
-    """Whether an Iris job with this name is already live (double-submit guard)."""
+    """Whether an Iris job with this name is already live (double-submit guard).
+
+    Terminal prior attempts (failed, cancelled) do not block a relaunch; the
+    row's state column decides, so a failed first attempt of a round can be
+    resubmitted under a fresh output root.
+    """
     job_id = f"/benfeuer/{job_name}"
     try:
         listing = subprocess.run(
@@ -234,7 +242,11 @@ def iris_job_exists(cluster: str, job_name: str) -> bool:
         raise RoundsError(f"could not verify whether {job_id} is live; refusing to submit: {e}") from e
     for line in listing.stdout.splitlines():
         stripped = line.strip()
-        if stripped.startswith(job_id) and not stripped.startswith(f"{job_id}/"):
+        if not stripped.startswith(job_id) or stripped.startswith(f"{job_id}/"):
+            continue
+        fields = stripped.split()
+        state = fields[1].lower() if len(fields) > 1 else ""
+        if state and state not in TERMINAL_IRIS_STATES:
             return True
     return False
 

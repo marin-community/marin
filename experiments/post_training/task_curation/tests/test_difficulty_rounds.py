@@ -318,3 +318,25 @@ def test_operator_stopped_round_seals_for_carry_over(monkeypatch, capsys, tmp_pa
     assert payload["sealed"] is True
     assert payload["launch"]["dry_run"] is True
     assert payload["plan"]["source_ids"], "the queue carries carry-over sources"
+
+
+def test_iris_job_exists_ignores_terminal_attempts(monkeypatch):
+    """A failed prior attempt under the same name does not block a relaunch."""
+    listing = (
+        "JOB ID                                         STATE      SUBMITTED\n"
+        "/benfeuer/atlas-difficulty-small-20261117-v18  failed     2026-11-17T18:25:54Z\n"
+    )
+
+    def fake_run(*args, **kwargs):
+        class Completed:
+            stdout = listing
+            returncode = 0
+
+        return Completed()
+
+    monkeypatch.setattr(dr.subprocess, "run", fake_run)
+    assert dr.iris_job_exists("marin", "atlas-difficulty-small-20261117-v18") is False
+
+    live = listing.replace("failed", "running")
+    monkeypatch.setattr(dr.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": live, "returncode": 0})())
+    assert dr.iris_job_exists("marin", "atlas-difficulty-small-20261117-v18") is True
