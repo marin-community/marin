@@ -105,7 +105,7 @@ TABLE_SOURCE_FIELDS = frozenset(
 
 
 def table_source_record(source: dict[str, Any]) -> dict[str, Any]:
-    """The values used by the source table, its tooltips and its detail dialog."""
+    """Exclude stored-only evidence and retain source display values."""
     row = {
         key: table_difficulty(value) if key == "difficulty" else value
         for key, value in source.items()
