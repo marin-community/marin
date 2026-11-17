@@ -42,6 +42,7 @@ from belay.app import (
     registered_comments,
     requeue_idea,
     store_intake_snapshot,
+    text_label,
     visible_text,
     write_thread,
 )
@@ -586,3 +587,9 @@ def test_a_lost_sessions_secret_is_refused(api: TestClient, database_url: str) -
     mine = {**agent, "X-Belay-Session": "s1", "X-Belay-Session-Secret": secret}
     refused = client.post("/agent/activity", json={"kind": "note", "title": "late"}, headers=mine)
     assert refused.status_code == 403 and "lost" in refused.json()["detail"]
+
+
+def test_a_suggestion_label_skips_its_track_and_attribution_lines() -> None:
+    body = "🤖 Posted on behalf of @someone.\n\nTrack: speedrun\n\nDynamic **short conv** on global K and V.\nMore."
+    assert text_label(body) == "Dynamic short conv on global K and V."
+    assert text_label("Track: ladder") == "Track: ladder"

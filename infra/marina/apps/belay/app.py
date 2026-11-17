@@ -465,9 +465,20 @@ def _token_ok(settings: dict[str, Any], token: str | None) -> bool:
     return hmac.compare_digest(_sha256(token), expected)
 
 
+# Lines a suggestion's label skips: its Track line and an agent's "🤖 Posted on behalf of ..." attribution.
+LABEL_SKIP = re.compile(r"^\W*track\W*:|^\W*posted on behalf of\b", re.IGNORECASE)
+
+
+def text_label(text: str) -> str:
+    """The start of ``text``'s first line that says what the idea is, without Markdown bold."""
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    first = next((line for line in lines if not LABEL_SKIP.match(line)), lines[0] if lines else "")
+    return first.replace("**", "")[:LABEL_WIDTH]
+
+
 def _label(idea: dict[str, Any]) -> str:
-    """An idea's title, else the start of its text's first line."""
-    return idea["title"] or idea["body"].strip().splitlines()[0][:LABEL_WIDTH]
+    """An idea's title, else its text's label."""
+    return idea["title"] or text_label(idea["body"])
 
 
 def _session_active(conn: Connection) -> bool:
@@ -684,7 +695,7 @@ def intake_for_review(conn: Connection) -> dict[str, Any]:
     comments = []
     for comment in rows[0]["comments"]:
         shown, removed = visible_text(comment["body"])
-        comments.append({**comment, "visible": {"text": shown, "removed": removed}})
+        comments.append({**comment, "label": text_label(shown), "visible": {"text": shown, "removed": removed}})
     return {"fetched_at": _iso(rows[0]["fetched_at"]), "comments": comments}
 
 
@@ -1306,7 +1317,7 @@ def create_api(services: Services) -> RegisteredApi:
             "settings": {k: v for k, v in settings.items() if k not in SECRET_SETTINGS},
             "pipeline": _pipeline(ideas),
             "next": _next_step(settings, active, queued, live, len(pending)),
-            "ideas": _plain(ideas),
+            "ideas": [{**i, "label": _label(i)} for i in _plain(ideas)],
             "runs": _plain(runs),
             "activity": _plain(activity),
             "sessions": [{**_plain([s])[0], "events": _plain(s["events"])} for s in sessions],

@@ -157,7 +157,7 @@ function renderPending() {
   setChildren(
     'pending',
     pending.map((idea) => {
-      const first = (idea.title ?? idea.body.trim().split('\n')[0]).replace(/\*\*/g, '')
+      const first = idea.label
       const expanded = openBodies.has(idea.id)
       return el(
         'div',
@@ -323,7 +323,7 @@ function renderIntakeLive() {
     'intake-live',
     age,
     rows.map(({ c, idea, registered, waiting }) => {
-      const first = c.visible.text.trim().split('\n')[0].replace(/\*\*/g, '').slice(0, 110)
+      const first = c.label
       const key = `c${c.comment_id}`
       const expanded = openBodies.has(key)
       const flag = c.visible.removed.length ? el('span', { class: 'warn' }, ' · stripped hidden text') : null
@@ -380,7 +380,7 @@ function alreadyRun() {
         el(
           'span',
           { class: 'nm' },
-          el('b', {}, (idea.title ?? idea.body.trim().split('\n')[0]).replace(/\*\*/g, '').slice(0, 90)),
+          el('b', {}, idea.label),
           el('small', {}, `#9514 · ${idea.author} · done → `, link(`${PAGES.status}/${idea.registry_id}`, idea.registry_id)),
         ),
         idea.url ? link(idea.url, '↗') : el('span'),
