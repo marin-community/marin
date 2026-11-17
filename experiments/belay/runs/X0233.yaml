@@ -1,0 +1,13 @@
+experiment: X0233
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: X0226 byte rows as own AttnRes source
+    flags:
+    - --model-set
+    - spelling_byte_source=true
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
