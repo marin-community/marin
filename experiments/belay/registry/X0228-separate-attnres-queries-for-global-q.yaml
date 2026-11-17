@@ -26,3 +26,9 @@ trials:
     attn_res_global_kv_query: 'true'
   commit: 097b478537
   priority: batch
+potential:
+  score: 5
+  rationale: 'No result yet: equal-data control and variant still running (late start) → 5'
+  model: claude-opus-5-5
+  date: '2026-11-17'
+  inputs_digest: 0e70df90410c
