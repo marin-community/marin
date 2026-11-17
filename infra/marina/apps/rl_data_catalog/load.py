@@ -50,7 +50,7 @@ from experiments.post_training.task_curation.review_quality import quality_resul
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
 from infra.marina.apps.rl_data_catalog.server.admission import (
-    backend_support_blocker,
+    backend_admission_review,
     require_content_result,
     require_declaration_admission,
 )
@@ -358,6 +358,19 @@ def load_catalog(
     sources = [canonical_snapshot_source(source) for source in catalog.sources(snapshot.snapshot_id)]
     if retired := {source.id for source in sources} & retired_admission_source_ids():
         raise ValueError(f"Retired sources remain in the selected catalog: {sorted(retired)}")
+    previously_available = (
+        {
+            row["source_id"]
+            for row in execute(
+                "SELECT s.id AS source_id FROM atlas_sources s WHERE s.load_id=:load_id "
+                "AND s.declaration->>'status'='Available'",
+                {"load_id": expected_load_id},
+            )["rows"]
+        }
+        if expected_load_id is not None
+        else set()
+    )
+    verification_pending: dict[str, list[str]] = {}
     for source in sources:
         # Available rows must pass full population admission; every other status
         # publishes as metadata without admission or selectability.
@@ -366,15 +379,26 @@ def load_catalog(
             and filtration(source.declaration.model_dump(mode="json"))["state"] != "excluded"
         ):
             require_declaration_admission(source.declaration)
-        if blocker := backend_support_blocker(
+        blocker, pending = backend_admission_review(
             {
                 name: fit.support.value
                 for name, fit in next(row for row in backend_map.sources if row.source_id == source.id).backends.items()
             },
             source.declaration.status,
             backend_map.deployment_classes,
-        ):
+            previously_admitted=source.id in previously_available,
+        )
+        if blocker:
             raise ValueError(f"Backend admission blocked: {source.id}: {blocker}")
+        if pending:
+            # An already-admitted source keeps its status with a visible marker;
+            # a new admission was refused above until the live qualification lands.
+            verification_pending[source.id] = pending
+            if source.id not in previously_available:
+                raise ValueError(
+                    f"Backend admission blocked: {source.id}: backend verification pending: "
+                    + ", ".join(f"{name}=verify" for name in pending)
+                )
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
     if {source.id for source in sources} != {source.source_id for source in backend_map.sources}:
@@ -398,6 +422,7 @@ def load_catalog(
                     else None
                 ),
                 "duplicate_group": groups.get(row.id),
+                "backend_verification_pending": verification_pending.get(row.id),
             }
             for row in sources
         ],

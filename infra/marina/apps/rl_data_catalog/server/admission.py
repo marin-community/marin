@@ -62,28 +62,30 @@ def population_admission_blocker(
     return None
 
 
-def backend_support_blocker(
+def backend_admission_review(
     verdicts: Mapping[str, str],
     status: str | None,
     deployment_classes: Mapping[str, str] | None = None,
-) -> str | None:
-    """Require one surveyed PRODUCTION backend that can run the source before it is Available.
+    *,
+    previously_admitted: bool = False,
+) -> tuple[str | None, list[str]]:
+    """Review one source's backend fit for admission.
 
-    ``verdicts`` maps backend name to the survey's aggregate support label for
-    one source. ``deployment_classes`` is the survey's per-backend production /
-    dev-only map; when absent or partial, the mirrored defaults apply. Dev-only
-    backends (local Docker, Docker+runsc) are dropped before the runnable check:
-    a DEV_ONLY SUPPORTED cell can never satisfy admission. ``None`` for every
-    non-Available status: exclusion and hold statuses never need a runnable
-    backend, and a survey row measured before this check may keep its historical
-    verdict. ``role_absent`` marks a population that declares no environment for
-    a role at all, so a source whose every production cell is ``role_absent``
-    needs no backend: that applicability outcome keeps its N/A label instead of
-    becoming a failure. ``not_applicable`` and ``unsupported`` are real verdicts
-    on declared roles and still block.
+    Returns ``(blocker, verification_pending)``. A production ``verify`` cell is
+    pending live qualification, not a fit failure: an already-admitted source
+    keeps its status and the caller surfaces ``verification_pending`` as a
+    visible marker, while a new admission is refused until the live
+    qualification resolves the cell. Dev-only backends (local Docker,
+    Docker+runsc) are dropped before every check: a DEV_ONLY SUPPORTED cell can
+    never satisfy admission. ``None`` for every non-Available status: exclusion
+    and hold statuses never need a runnable backend. ``role_absent`` marks a
+    population that declares no environment for a role at all, so a source
+    whose every production cell is ``role_absent`` needs no backend.
+    ``not_applicable`` and ``unsupported`` are real verdicts on declared roles:
+    when every production backend is ``unsupported`` the blocker names them all.
     """
     if status != "Available":
-        return None
+        return None, []
     classes = dict.fromkeys(
         (*PRODUCTION_BACKENDS_DEFAULT, *DEV_ONLY_BACKENDS_DEFAULT),
         "dev_only",
@@ -92,15 +94,26 @@ def backend_support_blocker(
     if deployment_classes:
         classes.update(deployment_classes)
     production_verdicts = {
-        name: support for name, support in verdicts.items() if classes.get(name, "dev_only") == "production"
+        name: support
+        for name, support in verdicts.items()
+        if classes.get(name, "dev_only") == "production"
     }
+    pending = sorted(name for name, support in production_verdicts.items() if support == "verify")
     if any(support in RUNNABLE_FIT for support in production_verdicts.values()):
-        return None
+        return None, pending
+    if pending and all(support in {"verify", "role_absent"} for support in production_verdicts.values()):
+        if previously_admitted:
+            return None, pending
+        return (
+            "backend verification pending: "
+            + ", ".join(f"{name}=verify" for name in pending)
+            + " — new admissions wait on the live qualification"
+        ), pending
     if production_verdicts and all(support == "role_absent" for support in production_verdicts.values()):
-        return None
+        return None, []
     return "no surveyed production backend can run the source: " + ", ".join(
         f"{name}={support}" for name, support in sorted(verdicts.items())
-    )
+    ), pending
 
 
 def _require_declaration_license(declaration: SourceDeclaration) -> None:
