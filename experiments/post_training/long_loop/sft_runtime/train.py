@@ -458,6 +458,8 @@ class GrugRunConfig:
     # long schedule requires the two to differ. None runs the whole schedule.
     stop_after_steps: int | None = None
     first_checkpoint_restore_step: int | None = None
+    # Optional carried-optimizer replay: preserve every restored leaf except the local loop step.
+    reset_trainer_step_after_restore: bool = False
     native_timing_root: str | None = None
     flops_baseline: FlopsBaseline | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
@@ -737,6 +739,15 @@ class GrugTrainState:
     opt_state: optax.OptState
     ema_params: Transformer | None
     pending_qb_betas: jax.Array
+
+
+def reset_carried_trainer_step(
+    state: GrugTrainState, *, load_checkpoint: bool | None, allow_partial: bool
+) -> GrugTrainState:
+    """Start local data/loop indexing at zero, without touching any optimizer-state leaf."""
+    if load_checkpoint is not True or allow_partial or int(state.step) <= 0 or state.opt_state is None:
+        raise ValueError("local-step reset requires a fully restored nonzero-step optimizer state")
+    return replace(state, step=jnp.zeros_like(state.step))
 
 
 def scale_special_token_updates(updates: Transformer, token_ids: tuple[int, ...], multiplier: float) -> Transformer:
@@ -1237,6 +1248,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 if trainer.initialize_from is None:
                     raise ValueError("Snowball SFT requires an explicit base checkpoint")
                 state = initialize_snowball_sft(state, trainer.initialize_from, mesh, config.trainer)
+            if config.reset_trainer_step_after_restore:
+                restored_global_step = int(state.step)
+                state = reset_carried_trainer_step(
+                    state, load_checkpoint=trainer.load_checkpoint, allow_partial=trainer.allow_partial_checkpoint
+                )
+                logger.info(
+                    "Carried optimizer restored at global step %s; local trainer/data step reset to zero",
+                    restored_global_step,
+                )
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
