@@ -46,6 +46,13 @@ trials:
     mla_qk_norm_cap: '15'
   commit: 95d3fb9b5d
   priority: batch
+  loss:
+  - 3.0491
+  delta:
+  - 0.0034
+  steps: 3030
+  baseline: belay-X0229v1-control 3.0457 (same commit, seed 0)
+  step_time_change: 0%
 - id: t003
   variant: L2 norm cap replaces MLA q/k RMS norms, mla_qk_norm_cap=30
   rung: speedrun
