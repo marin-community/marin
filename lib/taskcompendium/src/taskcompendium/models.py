@@ -978,7 +978,7 @@ class TaskSpec(BaseModel):
     id: str
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
-    execution_requirements: ExecutionRequirements | None = None
+    execution_requirements: ExecutionRequirements | None = Field(default=None, exclude_if=lambda value: value is None)
     verifier_execution_requirements: ExecutionRequirements | None = Field(
         default=None, exclude_if=lambda value: value is None
     )

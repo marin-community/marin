@@ -19,6 +19,7 @@ from taskcompendium.models import (
     ConversationTrace,
     DockerBuildContext,
     EnvironmentRequirements,
+    ExecutionRequirements,
     GradingAttempt,
     PlainText,
     ResourceGroups,
@@ -52,6 +53,29 @@ def specification():
         grader=EXACT_DONE,
         source=Source(dataset="org/project", revision="pinned-revision", row="0", importer_revision="1"),
     )
+
+
+def test_absent_execution_requirements_serialize_without_the_null_key(specification):
+    """Populations frozen before the field existed must re-serialize byte-identically.
+
+    ``execution_requirements`` joined the schema after many populations were
+    frozen. Serializing its default ``None`` as an explicit ``null`` key would
+    change every re-normalization's TaskSpec digest and break the exact-input
+    bindings against the frozen measurements.
+    """
+    wire = specification.model_dump_json()
+    assert '"execution_requirements"' not in wire
+    assert TaskSpec.model_validate_json(wire).model_dump_json() == wire
+    payload = specification.model_dump(mode="json")
+    assert "execution_requirements" not in payload
+    declared = specification.model_copy(
+        update={
+            "execution_requirements": ExecutionRequirements(
+                cpus=2, memory_mb=4096, storage_mb=10240, agent_timeout_sec=600, verifier_timeout_sec=600
+            )
+        }
+    )
+    assert '"execution_requirements"' in declared.model_dump_json()
 
 
 @pytest.mark.parametrize("answer_type", [AnswerType.FILE, AnswerType.WORKSPACE_STATE])
@@ -313,7 +337,10 @@ VERIFYIT_ENVIRONMENT = {"kind": "verifyit", "environment": {"docker_image": IMAG
             {
                 "grader": (
                     VERIFYIT_ENVIRONMENT
-                    | {"mode": "exact", "parameters": {"expected": ["done"], "output": "/tests/answer.txt"}}
+                    | {
+                        "mode": "exact",
+                        "parameters": {"expected": ["done"], "output": "/tests/answer.txt"},
+                    }
                 )
             },
             id="verifyit-answer-file-under-tests",
