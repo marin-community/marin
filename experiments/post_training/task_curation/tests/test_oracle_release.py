@@ -10,12 +10,19 @@ from dataclasses import replace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import ContentEvidenceReference, OracleFiltrationEvidence, SourceDeclaration
+from finestore.rl.curation import (
+    ContentEvidenceReference,
+    OracleFiltrationEvidence,
+    OraclePendingExclusion,
+    OraclePendingExclusionReason,
+    SourceDeclaration,
+)
 from pydantic import TypeAdapter
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import ExecutionRequirements, ResourceGroups, TaskSpec
 from taskcompendium.pipeline.models import IntendedUse
-from taskcompendium.pipeline.oracle_filter import MechanicalOracleTaskReceipt, OracleFilterReceipt
+from taskcompendium.pipeline.oracle_filter import MechanicalOracleTaskReceipt, OracleExclusionReason, OracleFilterReceipt
+from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.oracle_release import (
     OracleFilteredReleaseReceipt,
@@ -26,6 +33,7 @@ from experiments.post_training.task_curation.retained_release import RETAINED_IM
 from experiments.post_training.task_curation.source import SourceInfo
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
+from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
 
 
 @pytest.fixture
@@ -156,3 +164,71 @@ def test_physical_oracle_publication_requires_exact_original_tasks(tmp_path, zer
     )
     with pytest.raises(ValueError, match="coverage"):
         verify_oracle_release(changed_evidence, original, filtered, output)
+
+
+@pytest.mark.parametrize("publication", ["passing_only", "includes_pending", "wrong_pending_id"])
+def test_passing_subset_preserves_pending_infrastructure(tmp_path, zero_release, publication):
+    _, record = zero_release
+    passed = TaskSpec.model_validate(json.loads(prebuilt_task("passed")["lowered_task_spec"])["task"]).model_copy(
+        update={
+            "resources": ResourceGroups(oracle=(inline_resource("solution/solve.sh", b"true\n"),)),
+            "execution_requirements": ExecutionRequirements(
+                cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=60, verifier_timeout_sec=60
+            ),
+        }
+    )
+    pending = passed.model_copy(update={"id": "pending"})
+    rows = [{"id": task.id, "task_spec": task.model_dump_json(), "runtime": None} for task in (passed, pending)]
+    original, output, filtered = (tmp_path / name for name in ("original.parquet", "tasks.parquet", "oracle.json"))
+    pq.write_table(pa.Table.from_pylist(rows), original)
+    pq.write_table(pa.Table.from_pylist(rows if publication == "includes_pending" else rows[:1]), output)
+    unscored = MechanicalOracleTaskReceipt(
+        task_sha256=canonical_sha256(pending.model_dump(mode="json")),
+        runtime_sha256=None,
+        has_oracle=True,
+        exclusion_reason=OracleExclusionReason.INFRASTRUCTURE,
+        evidence=(ContentEvidenceReference(uri="memory://unscored-build/result.json", sha256="e" * 64),),
+    )
+    canonical = oracle_receipt([passed])
+    canonical = canonical.model_copy(
+        update={
+            "input_cohort_sha256": hashlib.sha256(original.read_bytes()).hexdigest(),
+            "input_rows": 2,
+            "tasks": {**canonical.tasks, pending.id: unscored},
+        }
+    )
+    filtered.write_text(canonical.model_dump_json())
+
+    def reference(path):
+        return ContentEvidenceReference(uri=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+
+    evidence = OracleFiltrationEvidence.model_validate(
+        {
+            **record.filtration.model_dump(),
+            "original_count": 2,
+            "admitted_count": 1,
+            "oracle_filter_version": canonical.version,
+            "exclusion_counts": {OracleExclusionReason.INFRASTRUCTURE.value: 1},
+            "pending_exclusions": [
+                OraclePendingExclusion(
+                    task_id="another-task" if publication == "wrong_pending_id" else pending.id,
+                    reason=OraclePendingExclusionReason.INFRASTRUCTURE,
+                )
+            ],
+            "original_cohort": reference(original),
+            "oracle_filter": reference(filtered),
+            "tasks_parquet": reference(output),
+        }
+    )
+    if publication != "passing_only":
+        with pytest.raises(ValueError, match=r"admission|pending exclusions"):
+            verify_oracle_release(evidence, original, filtered, output)
+        return
+    observed = verify_oracle_release(evidence, original, filtered, output)
+    assert observed.tasks[passed.id].passed
+    assert observed.tasks[pending.id] == unscored and not observed.tasks[pending.id].passed
+    restored = OracleFiltrationEvidence.model_validate_json(evidence.model_dump_json())
+    assert restored.pending_exclusions == [
+        OraclePendingExclusion(task_id=pending.id, reason=OraclePendingExclusionReason.INFRASTRUCTURE)
+    ]
+    assert restored.exclusion_counts == {"resource_calibration:infrastructure": 1}

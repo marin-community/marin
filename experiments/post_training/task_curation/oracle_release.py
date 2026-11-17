@@ -11,6 +11,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from finestore.rl.curation import (
     OracleFiltrationEvidence,
+    OraclePendingExclusionReason,
     PipelineReference,
     WithinSourceDedupEvidence,
 )
@@ -128,8 +129,13 @@ def verify_oracle_release(
     )
     if dict(counts) != evidence.exclusion_counts:
         raise ValueError("Published exclusions differ from canonical typed outcomes")
-    if OracleExclusionReason.INFRASTRUCTURE in counts:
-        raise ValueError("Unresolved oracle/control infrastructure cannot be published")
+    pending = {
+        task_id: OraclePendingExclusionReason.INFRASTRUCTURE
+        for task_id, entry in receipt.tasks.items()
+        if entry.exclusion_reason is OracleExclusionReason.INFRASTRUCTURE
+    }
+    if {entry.task_id: entry.reason for entry in evidence.pending_exclusions} != pending:
+        raise ValueError("Published pending exclusions differ from canonical infrastructure outcomes")
     return receipt
 
 

@@ -246,6 +246,17 @@ class NoOracleStaticBlocker(StrEnum):
     SOURCE_ENV_INCOMPATIBLE_WITH_GRADER = "SOURCE_ENV_INCOMPATIBLE_WITH_GRADER"
 
 
+class OraclePendingExclusionReason(StrEnum):
+    INFRASTRUCTURE = "resource_calibration:infrastructure"
+
+
+class OraclePendingExclusion(CatalogRecord):
+    """An unscored original task excluded from the published passing subset."""
+
+    task_id: str = Field(min_length=1)
+    reason: OraclePendingExclusionReason
+
+
 class OracleFiltrationEvidence(CatalogRecord):
     """An exact original population, canonical filter and read-back private output."""
 
@@ -259,6 +270,7 @@ class OracleFiltrationEvidence(CatalogRecord):
     tasks_parquet: ContentEvidenceReference
     admitted_count: int = Field(ge=0)
     exclusion_counts: dict[str, int]
+    pending_exclusions: list[OraclePendingExclusion] = Field(default_factory=list, exclude_if=lambda value: not value)
     validation: ContentEvidenceReference
 
     @model_validator(mode="after")
@@ -269,6 +281,12 @@ class OracleFiltrationEvidence(CatalogRecord):
             raise ValueError("Filtration exclusion counts must describe observed tasks")
         if self.original_count != self.admitted_count + sum(self.exclusion_counts.values()):
             raise ValueError("Oracle filtration does not conserve the original population")
+        if len({entry.task_id for entry in self.pending_exclusions}) != len(self.pending_exclusions):
+            raise ValueError("Pending oracle exclusions duplicate an original task")
+        if len(self.pending_exclusions) != self.exclusion_counts.get(
+            OraclePendingExclusionReason.INFRASTRUCTURE.value, 0
+        ):
+            raise ValueError("Pending oracle exclusions differ from the infrastructure count")
         return self
 
 

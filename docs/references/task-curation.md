@@ -2716,6 +2716,12 @@ the tasks with a completed trial, solution exit zero, and structured scored
 reward one. Numeric reward files alone are insufficient. Retain failed oracles
 as exclusions with reasons and counts. Unresolved infrastructure errors are not
 admitted, but they stay pending for a re-drive and never count as oracle failures.
+Their presence does not block publication of the exact passing subset.
+`OracleFiltrationEvidence.pending_exclusions` lists their original task IDs with
+the typed `resource_calibration:infrastructure` reason; `exclusion_counts` records
+the matching count. Keep those outcomes in the complete canonical receipt and
+out of the published task Parquet. Publication verifies both lists against the
+canonical outcomes without changing any grade or error classification.
 Native Harbor `reward.txt` and `reward.json` outputs qualify through the production
 reward parser when their exact reward dictionary matches the validated Trial's
 `VerifierResult`. The collector records `native_grade` with the raw artifact SHA-256,
