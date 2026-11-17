@@ -6,13 +6,18 @@
 import gzip
 import hashlib
 import json
+import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
+import dupekit
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from marin.datakit import decon
 from marin.datakit.decon import (
     EvalBloom,
     NGramConfig,
@@ -885,6 +890,30 @@ def test_decon_misses_word_order_permutation(tmp_path: Path):
         ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
     )
     assert rows["doc_permuted"]["contaminated"] is True
+
+
+def test_load_bloom_concurrent_cold_cache_preserves_filter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    bloom = dupekit.Bloom(100, 1e-9)
+    bloom.add(42)
+    source = tmp_path / "filter.bin"
+    source.write_bytes(bloom.save_bytes())
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setattr(decon, "_BLOOM_CACHE_DIR", str(cache_dir))
+
+    all_ready = Barrier(4, timeout=10)
+    original_replace = os.replace
+
+    def replace_after_all_ready(source_path: str, destination_path: str) -> None:
+        all_ready.wait()
+        original_replace(source_path, destination_path)
+
+    monkeypatch.setattr(os, "replace", replace_after_all_ready)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(decon._load_bloom, str(source)) for _ in range(4)]
+        loaded = [future.result(timeout=10) for future in futures]
+
+    assert all(42 in item for item in loaded)
+    assert [path.read_bytes() for path in cache_dir.iterdir()] == [source.read_bytes()]
 
 
 # --- prebuilt-bloom path (build_eval_bloom + merge_eval_blooms) ----------

@@ -11,11 +11,12 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import yaml
+from evalrecords.records import EvalRef, JudgeIdentity, RunStatus
+from evalrecords.rollout_results import evaluation_coverage
 from finestore.reader import ReadView
 from marin.evaluation.dataset_evaluator import DatasetEvaluator
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import ModelConfig, load_model_config
-from marin.evaluation.records import EvalRef, JudgeIdentity, RunStatus
 from marin.evaluation.runner import (
     EvalExecutor,
     EvaluationError,
@@ -26,7 +27,6 @@ from marin.evaluation.runner import (
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.inference.types import InferenceBackendState
-from marin.rollouts.evaluation_results import evaluation_coverage
 
 POLICY = "marin-10197"
 MIN_SCORED_FRACTION = 0.9

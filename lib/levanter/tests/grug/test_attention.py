@@ -63,6 +63,16 @@ def test_reference_attention_applies_the_window_in_fa4_bounds():
     np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
 
 
+def test_splash_rejects_per_layer_fa4_bounds_at_trace_time():
+    q, k, v = _make_qkv(batch=1, q_len=256, k_len=256, q_heads=2, kv_heads=1)
+    local_mask = AttentionMask.causal(sliding_window=128)
+    lower_bounds, valid = fa4_cute_segment_bounds(local_mask, batch_size=1, seq_len=256, sliding_window=128)
+    layer_mask = AttentionMask.causal().with_fa4_bounds(lower_bounds, valid)
+
+    with pytest.raises(NotImplementedError, match="fa4_bounds"):
+        jax.jit(lambda q, k, v: attention(q, k, v, layer_mask, implementation="tpu_splash"))(q, k, v)
+
+
 @pytest.mark.tpu
 def test_reference_attention_supports_model_sharded_head_dimension():
     q, k, v = _make_qkv(batch=1, q_len=5, k_len=5, q_heads=2, kv_heads=1)
@@ -109,7 +119,7 @@ def test_reference_attention_eval_shape_supports_model_sharded_grouped_query_hea
 
 
 @pytest.mark.tpu
-def test_real_tpu_splash_attention_matches_reference():
+def test_real_tpu_splash_local_and_global_masks_match_reference():
     if jax.default_backend() != "tpu":
         pytest.skip("Splash attention requires a TPU backend.")
 
@@ -123,13 +133,17 @@ def test_real_tpu_splash_attention_matches_reference():
     q = jax.device_put(jax.random.normal(q_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
     k = jax.device_put(jax.random.normal(k_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
     v = jax.device_put(jax.random.normal(v_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
-    mask = AttentionMask.causal()
 
+    expected_outputs = []
     with jax.set_mesh(mesh):
-        actual = jax.jit(lambda q, k, v: attention(q, k, v, mask, implementation="tpu_splash"))(q, k, v)
-        expected = jax.jit(lambda q, k, v: reference_attention(q, k, v, mask, logits_dtype=jnp.float32))(q, k, v)
+        for mask in (AttentionMask.causal(sliding_window=128), AttentionMask.causal()):
+            actual = jax.jit(lambda q, k, v: attention(q, k, v, mask, implementation="tpu_splash"))(q, k, v)
+            expected = jax.jit(lambda q, k, v: reference_attention(q, k, v, mask, logits_dtype=jnp.float32))(q, k, v)
 
-    np.testing.assert_allclose(actual, expected, atol=1e-3, rtol=1e-3)
+            np.testing.assert_allclose(actual, expected, atol=1e-3, rtol=1e-3)
+            expected_outputs.append(expected)
+
+    assert not np.allclose(expected_outputs[0], expected_outputs[1], atol=1e-3, rtol=1e-3)
 
 
 def test_token_validity_uses_padding_ids_without_excluding_packed_boundaries():

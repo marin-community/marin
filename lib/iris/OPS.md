@@ -476,6 +476,62 @@ iris --cluster=<name> cluster status
 iris --cluster=<name> rpc controller list-backends
 ```
 
+### CPU topology admission
+
+IaC gives each CoreWeave cluster's physical CPU pool a hostname-only TAS
+admission path: the `iris-cpu` ResourceFlavor and `iris-cpu-hostname` Topology,
+placed first in `iris-cq` with zero GPU/RDMA quota. CoreWeave's
+`node-metadata-controller.compute.coreweave.com` owns the fabric,
+superpod and leafgroup labels; their live values on CPU Nodes are empty.
+Kueue v0.18.3 accepts empty topology label values;
+missing keys exclude a Node. Do not patch those provider-owned labels.
+
+`provisioning.coreweave.kueue.cpu_scale_group` names the CPU pool per cluster:
+`cpu-erapids` on 08a, `cpu-genoa` on 02a and `cpu-turin` on rno2a. That cluster's
+CPU NodePool stops declaring the four synthetic physical
+labels; capacity, instance type and taints are unchanged.
+
+With approval for a cluster, review a targeted Pulumi preview and apply
+only these four resources: `topology-cpu`, `resource-flavor-cpu`,
+`cluster-queue`, and that cluster's CPU NodePool: `nodepool-cw-use08a-cpu-erapids`
+on 08a, `nodepool-cw-use02a-cpu-genoa` on 02a, `nodepool-cw-rno2a-cpu-turin`
+on rno2a. Require no replacement,
+deletion, capacity, Helm-release or GPU-flavor change. The ClusterQueue update
+can admit existing queued work and changes the preferred pool for new CPU-only
+admissions. It does not rewrite admitted Workloads. This procedure requires no
+Iris or Kueue controller restart.
+
+From the repository root, with stack KMS access and the configured kubeconfig:
+
+```bash
+cw08_kueue_urn='urn:pulumi:cw-us-east-08a::marin-iac::marin:coreweave:KueueAddon$kubernetes:kueue.x-k8s.io/v1beta1:'
+cw08_cpu_pool_urn='urn:pulumi:cw-us-east-08a::marin-iac::marin:coreweave:CoreweaveCluster$kubernetes:compute.coreweave.com/v1alpha1:NodePool::nodepool-cw-use08a-cpu-erapids'
+cw08_targets=(
+  --target "${cw08_kueue_urn}Topology::topology-cpu"
+  --target "${cw08_kueue_urn}ResourceFlavor::resource-flavor-cpu"
+  --target "${cw08_kueue_urn}ClusterQueue::cluster-queue"
+  --target "$cw08_cpu_pool_urn"
+)
+PULUMI_PYTHON_CMD="$PWD/.venv/bin/python" KUBECONFIG="$HOME/.kube/coreweave-iris" \
+  pulumi -C infra/pulumi preview --stack cw-us-east-08a "${cw08_targets[@]}"
+```
+
+After approval of that exact preview, run the same command with `up` in place
+of `preview`. Do not use an untargeted stack update: other changes may be pending.
+The stack name and NodePool URN change per cluster; the four targets do not.
+
+Roll out one cluster at a time, starting with 08a, and apply the next cluster
+only after the previous cluster's admission canary passes. rno2a has a single
+CPU node, so check its capacity headroom before applying there.
+
+After applying, confirm `iris-cpu` references `iris-cpu-hostname`, that this
+Topology has only the hostname level, that `iris-cq` is Active, and that GPU
+and RDMA quotas on `cw-tas` retain their prior values. Keep
+`TASHandleOverlappingFlavors` enabled: both topologies end at hostname, allowing
+Kueue to account for transient overlap during rollout. Verify a separately
+authorized CPU SANDBOX canary receives an `iris-cpu` assignment, starts its
+process and exits successfully; admission alone does not verify the runtime.
+
 ### Public LoadBalancer reachability
 
 A working port-forward does not prove federation ingress works. Test controller,
