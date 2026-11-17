@@ -1239,6 +1239,8 @@ def fresh_optimizer_state(
     if state.master_params is not None:
         raise ValueError("a fresh optimizer state supports only MasterParamMode.DEVICE")
     restored = state.opt_state
+    if not all(isinstance(leaf, jax.Array) for leaf in jax.tree.leaves(restored)):
+        raise TypeError("a fresh optimizer state needs a restored optimizer state made only of jax.Array leaves")
     shardings = jax.tree.map(lambda leaf: leaf.sharding, restored)
     for leaf in jax.tree.leaves(restored):
         leaf.delete()

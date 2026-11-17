@@ -534,6 +534,27 @@ def test_fresh_optimizer_state_keeps_weights_and_zeroes_moments_and_counts_at_th
     assert [leaf.sharding for leaf in jax.tree.leaves(fresh.opt_state)] == old_shardings
 
 
+def test_fresh_optimizer_state_rebuilds_the_hero_muonh_state_tree():
+    # The SFT optimizer itself, not the small test optimizer: its state tree is what a real restore holds.
+    config = dataclasses.replace(sft_optimizer_config(muon_lr=1.32e-5, adam_lr=1.32e-5, decay_steps=692), use_syrk=False)
+    optimizer = config.build(400_407 + 6_916)
+    mesh = _one_device_mesh()
+    with jax.set_mesh(mesh):
+        state = _with_counts(_trained_state(_tiny_config(), optimizer, mesh), 400_407)
+        state = state.__class__(**{**vars(state), "step": jnp.array(400_407, dtype=jnp.int32)})
+        structure = jax.tree.structure(state.opt_state)
+        shardings = [leaf.sharding for leaf in jax.tree.leaves(state.opt_state)]
+        expected = jax.tree.map(np.asarray, optimizer.init(state.params))
+        fresh = prepare_start_state(
+            state, optimizer, special_tokens=None, fresh_optimizer_state_at_step=400_407, offload_opt_state=False
+        )
+
+    assert jax.tree.structure(fresh.opt_state) == structure
+    assert [leaf.sharding for leaf in jax.tree.leaves(fresh.opt_state)] == shardings
+    _assert_trees_equal(fresh.opt_state, expected)
+    assert int(fresh.opt_state.count) == 0
+
+
 @pytest.mark.parametrize("dp_racks", [2, 11])
 def test_sft_schedule_is_the_same_flat_lr_for_carried_and_fresh_counts_over_a_short_continuation(dp_racks):
     # The step-400407 checkpoint records step 400407 and optimizer counts 400407 (read from its arrays).
