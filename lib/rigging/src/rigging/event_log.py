@@ -15,7 +15,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 
@@ -105,5 +104,4 @@ def durable_event_log(
         if log.path.exists():
             target = StoragePath(destination)
             target.parent.mkdirs(exist_ok=True)
-            fs, key = filesystem_for(destination)
-            fs.pipe_file(key, log.path.read_bytes())
+            target.write_bytes(log.path.read_bytes())

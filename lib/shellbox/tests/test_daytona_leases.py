@@ -64,7 +64,7 @@ def test_snapshot_lease_survives_until_sandbox_deletion_is_observed(creation_fai
         sandbox = SimpleNamespace(process=SimpleNamespace(exec=execute))
         client = Client()
         factory = DaytonaMachineFactory(client_factory=lambda: client, snapshot_leaser=Leaser())
-        spec = MachineSpec(source=RegistryImage("fixture/image:1"))
+        spec = MachineSpec(source=RegistryImage("fixture/image:1"), workdir="")
         if creation_failed:
             closing = asyncio.create_task(factory.create(spec))
         else:

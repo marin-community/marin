@@ -71,8 +71,7 @@ def prepare_micro(*, output: str, dataset: str, revision: str, wheels_revision: 
             for row in prepared.to_pylist()
         ],
     }
-    environment_fs, environment_key = filesystem_for(prefix_join(output, "environment.json"))
-    environment_fs.pipe_file(environment_key, json.dumps(environment, indent=2).encode())
+    (StoragePath(output) / "environment.json").write_bytes(json.dumps(environment, indent=2).encode())
 
 
 def validate_eval_policy(model: ResolvedModelLocator, source_uri: str) -> None:

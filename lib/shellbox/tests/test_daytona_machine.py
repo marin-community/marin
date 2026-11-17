@@ -1175,6 +1175,7 @@ def test_daytona_rejects_add_inputs_before_building(tmp_path, instruction, image
     assert client.params is None
 
 
+@pytest.mark.requires_host_setsid
 @pytest.mark.parametrize("source_kind", ["registry", "dockerfile"])
 def test_declarative_build_starts_sandbox_from_image_without_snapshot(tmp_path, source_kind):
     context = tmp_path / "context"
