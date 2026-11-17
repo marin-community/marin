@@ -9,9 +9,9 @@ The applet is fast because nothing on the first paint touches S3, and nothing la
 
 | What | Where | Size | Loaded |
 |---|---|---|---|
-| Index: one columnar row per task, catalog names, pool counts | `applet/data/{meta,tasks}.json`, shipped in the package | ~1 MB | at start |
+| Index: one columnar row per task, catalog names, pool counts | `applet/data/{meta,tasks}.json.gz`, shipped gzipped in the package and inflated by the page | ~370 KB | at start |
 | Catalog detail per subject (outcome, includes, sample tasks) | `applet/data/subjects/<D..>.json` | small | on a subject or skill page |
-| Task record: prompt, grader, files, controls, rounds, decisions | `<export>/app/<snapshot>/detail/<SUBJECT>.json.gz` | one per subject | on hover or open of a task |
+| Task record: prompt, grader, files, controls, rounds, decisions | `<export>/app/<snapshot>/detail/<SUBJECT>.pack` (one gzip member per task behind an offset index) | one per subject | on hover or open of a task |
 | Trimmed transcripts for all tasks of a skill | `<export>/app/<snapshot>/trials/<capability>.json.gz` | one per skill | with the task record |
 | One full transcript | `<export>/records/<id>/trials.json.gz` | one per task | when a trial is opened |
 

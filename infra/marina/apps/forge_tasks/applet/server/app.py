@@ -6,8 +6,8 @@
 Everything the overview and the task browser need ships in the package (``dist/data``). This backend serves only
 what a task page adds, from the files ``build_data.py`` wrote under the export's ``app/<snapshot>/``:
 
-- ``/detail?snap=S&id=<capability>/<slot>``: one task. Its subject's shard is read once per process and kept, with
-  every task pre-compressed, so later tasks of the subject answer from memory.
+- ``/detail?snap=S&id=<capability>/<slot>``: one task. Its subject's shard is read once per process and kept; each
+  task is a gzip member sliced out of it, so serving costs no compression work in the shared Marina process.
 - ``/trials?snap=S&cap=<capability>``: the trimmed transcripts of every task of one capability, passed through as
   stored (gzip). The page shows these at once.
 - ``/transcript?id=<capability>/<slot>&trial=N``: one trial's complete transcript, read from the export record when
@@ -40,7 +40,8 @@ CAPABILITY = re.compile(r"d\d{2}(\.[\w-]+)+")
 TASK = re.compile(r"(d\d{2}(?:\.[\w-]+)+)/(\d{1,3})")
 CACHE_CONTROL = "public, max-age=604800, immutable"
 TRIAL_SHARDS = 512
-WARM_THREADS = 8
+WARM_THREADS = 2
+PACK_HEADER_BYTES = 8
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +71,11 @@ def create_api(services: AppletServices) -> FastAPI:
     shard_lock = threading.Lock()
 
     def load_subject(snapshot: str, subject: str) -> dict[str, bytes]:
-        tasks = json.loads(gzip.decompress(read(f"{snapshot}/detail/{subject}.json.gz")))
-        return {
-            identity: gzip.compress(json.dumps(task, separators=(",", ":")).encode(), mtime=0)
-            for identity, task in tasks.items()
-        }
+        # build_data.packed_shard: an index length, the {id: [offset, length]} index, then one gzip member per task.
+        body = read(f"{snapshot}/detail/{subject}.pack")
+        start = PACK_HEADER_BYTES + int.from_bytes(body[:PACK_HEADER_BYTES], "big")
+        index = json.loads(body[PACK_HEADER_BYTES:start])
+        return {identity: body[start + offset : start + offset + length] for identity, (offset, length) in index.items()}
 
     def subject_tasks(snapshot: str, subject: str) -> dict[str, bytes]:
         key = (snapshot, subject)
@@ -143,7 +144,7 @@ def create_api(services: AppletServices) -> FastAPI:
     warm_lock = threading.Lock()
 
     def warm_snapshot(snapshot: str) -> None:
-        subjects = [path.rsplit("/", 1)[1].removesuffix(".json.gz") for path in fs.ls(f"{root}/{snapshot}/detail")]
+        subjects = [path.rsplit("/", 1)[1].removesuffix(".pack") for path in fs.ls(f"{root}/{snapshot}/detail")]
         with concurrent.futures.ThreadPoolExecutor(WARM_THREADS) as pool:
             for subject, outcome in zip(subjects, pool.map(lambda s: subject_tasks(snapshot, s), subjects), strict=True):
                 logger.info("warmed %s/%s: %d tasks", snapshot, subject, len(outcome))

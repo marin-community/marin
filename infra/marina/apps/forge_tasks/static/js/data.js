@@ -15,12 +15,28 @@ function getJson(url) {
   return cache.get(url);
 }
 
+// The package's large index files ship gzipped (Marina serves them without Content-Encoding); inflate them here, and
+// accept an already-inflated body in case a proxy decoded it.
+function getGzJson(url) {
+  if (!cache.has(url)) {
+    const request = fetch(url).then(async (response) => {
+      if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return JSON.parse(new TextDecoder().decode(bytes));
+      return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).json();
+    });
+    request.catch(() => cache.delete(url));
+    cache.set(url, request);
+  }
+  return cache.get(url);
+}
+
 let indexPromise = null;
 
 // {meta, tasks, byId, caps, capById, subjects, subjectById}
 export function loadIndex() {
   if (!indexPromise) {
-    indexPromise = Promise.all([getJson("data/meta.json"), getJson("data/tasks.json")]).then(([meta, table]) => {
+    indexPromise = Promise.all([getGzJson("data/meta.json.gz"), getGzJson("data/tasks.json.gz")]).then(([meta, table]) => {
       // Ask the backend to load this snapshot's task records now, before the reader opens one.
       fetch(`api/warm?snap=${meta.snapshot}`).catch(() => {});
       const caps = meta.caps.map((cap, index) => ({ ...cap, index, tasks: [] }));

@@ -12,7 +12,7 @@ Outputs:
 - ``applet/data/`` (shipped in the package, loaded on first paint): ``meta.json``, ``tasks.json`` (one compact row
   per selected task, enough for every overview chart and the task browser) and ``subjects/<D..>.json`` (catalog
   entries of the covered capabilities, loaded when a subject or capability page opens).
-- ``<export>/app/<snapshot>/detail/<subject>.json.gz`` and ``trials/<capability>.json.gz`` on object storage, which
+- ``<export>/app/<snapshot>/detail/<subject>.pack`` and ``trials/<capability>.json.gz`` on object storage, which
   the backend serves and caches: one task's full public record, and trimmed solver transcripts.
 
 Run with CoreWeave credentials exported::
@@ -40,6 +40,7 @@ CATALOG = (
 APP_DATA = Path(__file__).parent / "applet" / "data"
 BAND = (0.25, 0.75)
 READ_THREADS = 64
+PACK_HEADER_BYTES = 8
 TEXT_FILE_LIMIT = 96_000
 SHORT = 600
 MEDIUM = 2_000
@@ -493,6 +494,28 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, separators=(",", ":"), ensure_ascii=False))
 
 
+def write_gz_json(path: Path, value: object) -> None:
+    """Marina serves package files uncompressed, so the large index files ship gzipped; the page inflates them."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(gz_json(value))
+
+
+def packed_shard(tasks: Mapping[str, object]) -> bytes:
+    """One subject's task records as independently gzipped members behind an offset index.
+
+    Layout: an 8-byte big-endian index length, the JSON index ``{id: [offset, length]}``, then the members. The
+    backend serves a task by slicing its member out, with no decompression or recompression.
+    """
+    members, index, offset = [], {}, 0
+    for identity, task in tasks.items():
+        member = gz_json(task)
+        index[identity] = [offset, len(member)]
+        members.append(member)
+        offset += len(member)
+    header = json.dumps(index, separators=(",", ":")).encode()
+    return len(header).to_bytes(PACK_HEADER_BYTES, "big") + header + b"".join(members)
+
+
 def build(export: str, release: Path, snapshot: str, catalog_url: str) -> None:
     fs, base = fsspec.core.url_to_fs(export)
     selection = [json.loads(line) for line in (release / "selection.jsonl").read_text().splitlines()]
@@ -537,15 +560,15 @@ def build(export: str, release: Path, snapshot: str, catalog_url: str) -> None:
         "data": f"{export}/app/{snapshot}",
     }
     APP_DATA.mkdir(parents=True, exist_ok=True)
-    for stale in APP_DATA.rglob("*.json"):
+    for stale in [*APP_DATA.rglob("*.json"), *APP_DATA.rglob("*.json.gz")]:
         stale.unlink()
-    write_json(APP_DATA / "meta.json", meta)
-    write_json(APP_DATA / "tasks.json", {"fields": FIELDS, "rows": [[row[f] for f in FIELDS] for row in rows]})
+    write_gz_json(APP_DATA / "meta.json.gz", meta)
+    write_gz_json(APP_DATA / "tasks.json.gz", {"fields": FIELDS, "rows": [[row[f] for f in FIELDS] for row in rows]})
     for subject, entries in subject_detail.items():
         write_json(APP_DATA / "subjects" / f"{subject}.json", entries)
 
     target = f"{base}/app/{snapshot}"
-    uploads = [(f"{target}/detail/{subject}.json.gz", gz_json(tasks)) for subject, tasks in details.items()]
+    uploads = [(f"{target}/detail/{subject}.pack", packed_shard(tasks)) for subject, tasks in details.items()]
     uploads += [(f"{target}/trials/{capability}.json.gz", gz_json(tasks)) for capability, tasks in trials.items()]
     with concurrent.futures.ThreadPoolExecutor(READ_THREADS) as pool:
         list(pool.map(lambda item: fs.pipe_file(*item), uploads))
