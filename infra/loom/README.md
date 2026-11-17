@@ -359,8 +359,10 @@ The `belay` watch runs the `belay` profile every 10 minutes
 runbook session that drains the queue only when events wait. Turning dispatch off in the
 Belay app's admin page pauses it without a Loom deploy.
 
-The `old-iris-jobs` watch runs the `ops` profile at 09:00 Pacific on weekdays
-([prompt](watches/old-iris-jobs.md)). It runs
+The `old-iris-jobs` watch runs the `ops-report` profile
+([instructions](profiles/ops-report/AGENTS.md)) at 09:00 Pacific on weekdays
+([prompt](watches/old-iris-jobs.md)). The profile runs Claude: a strict Codex
+profile cannot run `uv run`, because its commands cannot write the uv cache. The watch runs
 [`scripts/ops/old_iris_jobs.py`](../../scripts/ops/old_iris_jobs.py) against the
 `marin` hub and posts the Iris root jobs older than the prompt's
 `--min-age-days` to `#marin-alerts`, once per job while the job keeps running.

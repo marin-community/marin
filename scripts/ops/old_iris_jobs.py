@@ -132,7 +132,8 @@ def report(
 def read_reported(state_path: Path) -> set[str]:
     if not state_path.exists():
         return set()
-    return set(json.loads(state_path.read_text())[REPORTED_KEY])
+    # A Loom watch that has not stored a state yet holds {}.
+    return set(json.loads(state_path.read_text()).get(REPORTED_KEY, []))
 
 
 @click.command()
@@ -152,7 +153,7 @@ def read_reported(state_path: Path) -> set[str]:
     "state_path",
     type=click.Path(dir_okay=False, path_type=Path),
     required=True,
-    help='Reported-job state, {"reported": [...]}; read when it exists, then replaced.',
+    help='Reported-job state, {"reported": [...]} or {}; read when it exists, then replaced.',
 )
 @click.option(
     "--messages-dir",

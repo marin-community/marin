@@ -8,7 +8,7 @@ from iris.client.workload_codec import job_status_from_proto
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
-from scripts.ops.old_iris_jobs import MS_PER_DAY, OldJob, find_old_jobs, report
+from scripts.ops.old_iris_jobs import MS_PER_DAY, OldJob, find_old_jobs, read_reported, report
 
 NOW_MS = 1_800_000_000_000
 CUTOFF_MS = NOW_MS - 7 * MS_PER_DAY
@@ -123,3 +123,10 @@ def test_report_tells_owners_to_cancel_a_federated_job_through_the_scanned_clust
 
     assert "iris --cluster=marin job cancel" in message
     assert "--cluster=cw-rno2a" not in message
+
+
+def test_read_reported_reads_the_empty_state_of_a_new_loom_watch(tmp_path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}")
+
+    assert read_reported(state_path) == set()
