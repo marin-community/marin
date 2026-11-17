@@ -48,12 +48,13 @@ open source can be license-restricted and a private source can be Available.
 A `private_always` source's content never leaves its private store, whatever else
 changes. The served catalog keeps counts, statuses, hashes and receipts for it, and
 replaces every content-bearing value — task text, prompts, answers, resources,
-curriculum samples and previews, review excerpts and reviewer explanations, rollout
-traces, difficulty reasons and audit notes — with the visible marker text
-`Private data: content is not displayed.` The loader also never copies a private
-source's task packets into the served database, so the marker response is served from
-absence. New human audit samples for a private source are refused (HTTP 403), because
-auditing would quote its content to reviewers; legacy audit rows serve redacted text.
+curriculum samples and previews, review excerpts and reviewer explanations, the
+review rubric, rollout traces, difficulty reasons and audit notes — with the visible
+marker text `Private data: content is not displayed.` The loader also never copies a
+private source's task packets into the served database, so the marker response is
+served from absence. New human audit samples for a private source are refused (HTTP
+403), because auditing would quote its content to reviewers; legacy audit rows serve
+redacted text.
 
 Enforcement is fail closed and centralized:
 
