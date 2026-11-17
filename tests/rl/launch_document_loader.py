@@ -9,6 +9,7 @@ from pathlib import Path
 from cloud.iris import launch_config
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
 from skyrlrecipe import RLEntrypoint
+from yaml import safe_load
 
 
 def check_vendored_launcher() -> None:
@@ -31,6 +32,9 @@ def load_documents(source: Path, output: Path) -> None:
                     and config.runtime.entrypoint != RL_ENTRYPOINTS[RLEntrypoint.TASKCOMPENDIUM]
                 ):
                     raise ValueError("inventory training must resolve to the taskcompendium entrypoint")
+                loaded = config.run.attempt_id
+                written = safe_load(yaml)["run"]["attempt_id"]
+                assert loaded == written, f"run.attempt_id {written!r} loads as {loaded!r}"
             except Exception as error:
                 failures[case] = f"{type(error).__name__}: {error}"
     output.write_text(json.dumps(failures))

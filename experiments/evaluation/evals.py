@@ -28,10 +28,11 @@ logger = logging.getLogger(__name__)
 
 _DAYTONA_ENVIRONMENT_TYPE = "daytona"
 _HARBOR_CONFIG_DIR = Path(__file__).with_name("configs") / "harbor"
+# Evals run only in the Daytona eval org; RL and data keys never reach this launcher.
 _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
     {
         "DAYTONA_API_KEY": (
-            "env:DAYTONA_API_KEY",
+            "env:DAYTONA_EVAL_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         )
     }

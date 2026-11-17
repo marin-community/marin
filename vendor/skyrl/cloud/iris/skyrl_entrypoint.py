@@ -17,7 +17,7 @@ from finestore.rl.run_records import (
     write_attempt,
 )
 
-from cloud.iris.launch_config import RunMode, load_launch_config
+from cloud.iris.launch_config import RunMode, derive_launch_topology, load_launch_config
 from cloud.iris.rl_config_translation import registered_rl_entrypoint_module
 
 
@@ -62,6 +62,15 @@ def run_config(config_path: Path) -> None:
     if job_info is not None and config.run.mode != RunMode.CHECKPOINT_EXPORT:
         _start_attempt_record(config)
     run = cast(Callable[[DictConfig], None], getattr(importlib.import_module(module), "run"))
+    topology = derive_launch_topology(OmegaConf.to_container(config, resolve=True)).role_topology
+    if topology is not None:
+        with open_dict(config.skyrl):
+            if "runtime" not in config.skyrl:
+                config.skyrl.runtime = {}
+            config.skyrl.runtime.placement = {
+                "policy": topology.selector("policy"),
+                "engines": [topology.selector(role) for role in topology.roles if role != "policy"],
+            }
     run(config.skyrl)
 
 

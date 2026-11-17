@@ -531,6 +531,7 @@ def create_ray_wrapped_inference_engines(
     placement_group_timeout_seconds: int = DEFAULT_RAY_PLACEMENT_GROUP_TIMEOUT_SECONDS,
     weight_sync_pause_policy: WeightSyncPausePolicy = DEFAULT_WEIGHT_SYNC_PAUSE_POLICY,
     nccl_buffer_size_bytes: int | None = None,
+    node_label_selectors: list[dict[str, str]] | None = None,
 ) -> List[InferenceEngineInterface]:
     """
     Create a list of RayWrappedInferenceEngine instances wrapping Ray actor handles to InferenceEngineInterface instances.
@@ -609,14 +610,18 @@ def create_ray_wrapped_inference_engines(
         raise ValueError("Verified expert-block placements require local TP=1 vLLM workers")
     if require_verified_placements and inference_engine_enable_sleep and not use_hybrid_engine:
         raise ValueError("Sleeping expert-block receivers require a shared placement group")
-    if require_verified_placements and use_hybrid_engine and (
-        num_inference_engines != 1
-        or data_parallel_size != COLOCATED_EXPERT_BLOCK_GPU_COUNT
-        or expert_parallel_size != COLOCATED_EXPERT_BLOCK_GPU_COUNT
-        or pipeline_parallel_size != 1
-        or not inference_engine_enable_sleep
-        or sleep_level != 2
-        or enable_lora
+    if (
+        require_verified_placements
+        and use_hybrid_engine
+        and (
+            num_inference_engines != 1
+            or data_parallel_size != COLOCATED_EXPERT_BLOCK_GPU_COUNT
+            or expert_parallel_size != COLOCATED_EXPERT_BLOCK_GPU_COUNT
+            or pipeline_parallel_size != 1
+            or not inference_engine_enable_sleep
+            or sleep_level != 2
+            or enable_lora
+        )
     ):
         raise ValueError("Colocated expert-block receivers require one TP=PP=1 DP=EP=4 engine with level-2 sleep")
     cross_node_ep = verify_workers and pipeline_parallel_size == 1 and expert_parallel_size == data_parallel_size > 1
@@ -662,6 +667,11 @@ def create_ray_wrapped_inference_engines(
     # Single-GPU engines share a PACK group to leave whole nodes available for training.
     per_engine_pgs: list = []
     owned_placement_groups: list = []
+    if node_label_selectors is not None:
+        if len(node_label_selectors) != num_inference_engines:
+            raise ValueError("Each inference engine needs one node label selector")
+        if use_hybrid_engine or use_mp_backend:
+            raise ValueError("Node label selectors require separate Ray placement groups for inference engines")
     needs_per_engine_pg = (
         use_per_engine_pg(
             use_hybrid_engine=use_hybrid_engine,
@@ -671,6 +681,7 @@ def create_ray_wrapped_inference_engines(
             data_parallel_size=data_parallel_size,
         )
         or require_verified_placements
+        or bool(node_label_selectors)
     )
     if not use_hybrid_engine:
         if use_mp_backend:
@@ -693,10 +704,14 @@ def create_ray_wrapped_inference_engines(
         elif needs_per_engine_pg:
             # Each engine owns a group. TP/PP and ordinary DP groups remain node-local.
             # PACK prefers fewer nodes but permits spanning them for verified TP=PP=1 EP replicas.
-            for _ in range(num_inference_engines):
+            for engine_index in range(num_inference_engines):
+                bundles = [{"GPU": 1, "CPU": 1} for _ in range(per_engine_gpu_count)]
                 pg = placement_group(
-                    [{"GPU": 1, "CPU": 1} for _ in range(per_engine_gpu_count)],
+                    bundles,
                     strategy="PACK" if cross_node_ep else "STRICT_PACK",
+                    bundle_label_selector=(
+                        [node_label_selectors[engine_index]] * len(bundles) if node_label_selectors else None
+                    ),
                 )
                 per_engine_pgs.append(pg)
                 owned_placement_groups.append(pg)
@@ -795,9 +810,7 @@ def create_ray_wrapped_inference_engines(
         for dp_rank in range(data_parallel_size):
             # TP*PP slice reserved for a single DP rank.
             base_dp_pg_index = dp_rank_bundle_indices[dp_rank]
-            dp_rank_bundles = (
-                list(range(base_dp_pg_index, base_dp_pg_index + tp_pp_size)) if tp_pp_size > 1 else None
-            )
+            dp_rank_bundles = list(range(base_dp_pg_index, base_dp_pg_index + tp_pp_size)) if tp_pp_size > 1 else None
             if use_mp_backend:
                 # The mp executor's single actor reserves the whole TP*PP GPU slice itself
                 # (vLLM forks its workers locally, no per-worker Ray actors). It must land
