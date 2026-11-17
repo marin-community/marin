@@ -83,11 +83,11 @@ def validate_requirements(
 
 def validate_candidate(
     preset: presets.Preset, inputs: GateInputs, *, table: ModelPresets, control: bool = False
-) -> None:
-    """Compose the submitted inputs and check every gated control against current defaults."""
-    defaults, _ = _current_configs(preset, inputs)
+) -> dict:
+    """Return the composed candidate after checking gated controls against current defaults."""
+    defaults, candidate = _current_configs(preset, inputs)
     if control or not preset.gated:
-        return
+        return candidate
     pin = control_pin(preset, table=table)
     for index in range(pin.runs):
         path = control_path(preset, pin, index, table=table)
@@ -99,6 +99,7 @@ def validate_candidate(
         except ValueError as error:
             raise InvalidComparison(str(error)) from error
         _check_control_config(receipt.native.config, defaults, launch, preset=preset)
+    return candidate
 
 
 def gate_inputs(

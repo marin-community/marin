@@ -465,12 +465,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     initializer = None
     if case in ("train-pass", "train-entry-override"):
         preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_disk="3TB")))
-        model_root = Path(recipe.artifact_prefix(preset.recipe.layout.cluster)) / "python-init"
-        model_root.mkdir()
-        for filename in ("config.json", "tokenizer_config.json"):
-            (model_root / filename).write_text("{}")
         initializer = ArtifactHfModel(
-            ArtifactStep.adopt("tests/python-init", "2026.11.17", str(model_root), kind=preset.model.step.artifact_type),
+            ArtifactStep.adopt("tests/python-init", "2026.11.17", "s3://marin-test/models/python-init", kind=preset.model.step.artifact_type),
             "tests/python-tokenizer",
             "python-tokenizer-revision",
             relative_path="",
@@ -483,6 +479,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
             presets=tuple(preset if row.name == preset.name else row for row in snowball_model.SNOWBALL.presets),
         ),
     )
+    if initializer is not None:
+        monkeypatch.setattr("s3fs.S3FileSystem.exists", lambda self, path, **kwargs: str(path).removeprefix("s3://") == "marin-test/models/python-init")
     roots = controls(recorded_runs, preset.name) if preset.gated else []
     replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
     control = case == "control-missing-receipt"
@@ -573,6 +571,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         query = next(parse_qs(urlparse(url).query) for url in urls if parse_qs(urlparse(url).query)["to"] == ["now"])
         assert query["var-run"] == [built.runs[0].name + "-" + preset.revision]
         assert query["var-cluster"] == [preset.recipe.layout.cluster]
+        if preset.name == "train-long":
+            assert query["var-training_type"] == ["async"]
         assert int(query["from"][0]) > 0
 
     def finish(*args, **kwargs):

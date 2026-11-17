@@ -28,7 +28,7 @@ def grafana_url(
             "timezone": "utc",
             "from": utc_millis(started_at),
             "to": utc_millis(finished_at) if finished_at else "now",
-            "var-training_type": training_type or "$__all",
+            "var-training_type": training_type or "sync",
             "var-cluster": cluster,
             "var-run": run_id,
             "var-job": "$__all",

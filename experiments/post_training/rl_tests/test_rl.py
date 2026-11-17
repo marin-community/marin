@@ -405,4 +405,4 @@ def test_grafana_url_selects_native_run_and_utc_window():
         "var-execution": ["$__all"],
     }
     open_window = parse_qs(urlparse(grafana_url("generation", "marin-east", None, "2026-11-06T18:40:00Z")).query)
-    assert open_window["to"] == ["now"] and open_window["var-training_type"] == ["$__all"]
+    assert open_window["to"] == ["now"] and open_window["var-training_type"] == ["sync"]

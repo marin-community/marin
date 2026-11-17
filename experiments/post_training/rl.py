@@ -492,7 +492,14 @@ def _run_command(
                 submitted.append(
                     {
                         "name": step.name,
-                        "grafana_links": {"run": grafana_url(config.run_id, execution.cluster, None, submitted_at)},
+                        "grafana_links": {
+                            "run": grafana_url(
+                                config.run_id,
+                                execution.cluster,
+                                click.get_current_context().meta["rl_training_type"],
+                                submitted_at,
+                            )
+                        },
                     }
                 )
             _print_status({"coordinator_job_id": str(job), "submitted_at": submitted_at, "runs": submitted})
@@ -613,12 +620,13 @@ def command(
         do_run = click.get_current_context().params.get("do_run", False)
         if do_run and get_job_info() is None:
             assert run.inputs is not None
-            rl_gate.validate_candidate(
+            validated = rl_gate.validate_candidate(
                 preset,
                 run.inputs,
                 control=control,
                 table=table,
             )
+            click.get_current_context().meta["rl_training_type"] = validated["runtime"]["training_type"]
         snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
         _print_status(snapshot)
         if not do_run and _evaluation_failed(snapshot, preset):
