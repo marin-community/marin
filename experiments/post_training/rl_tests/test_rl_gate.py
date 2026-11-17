@@ -18,7 +18,6 @@ import pyarrow.parquet as pq
 import pytest
 import yaml
 from click.testing import CliRunner
-from cloud.iris import launch as native_launch
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
@@ -43,6 +42,7 @@ from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInput
 from experiments.post_training.rl_tests.fixtures import answer as _answer
 from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.rl_tests.fixtures import write_metrics, write_receipt
+from experiments.post_training.skyrl_test_support import native_json
 from experiments.post_training.task_curation.selection import TASK_MANIFEST_FILENAME
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
@@ -530,11 +530,19 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         source.rename(staged)
 
         def launch_native(command):
-            args = native_launch.create_parser().parse_args(command[command.index("marinskyrl") + 1 :])
-            assert args.forward_env == ["HF_TEST_KEY"]
-            native = native_launch.load_launch_config(args.config)
-            assert native.iris.allocation.disk == "3TB"
-            assert native.inputs.model.tokenizer_uri == "tests/python-tokenizer"
+            native_json()(
+                """
+import json, sys
+from cloud.iris import launch
+args = launch.create_parser().parse_args(sys.argv[1:])
+assert args.forward_env == ["HF_TEST_KEY"]
+native = launch.load_launch_config(args.config)
+assert native.iris.allocation.disk == "3TB"
+assert native.inputs.model.tokenizer_uri == "tests/python-tokenizer"
+print(json.dumps(None))
+""",
+                command[command.index("marinskyrl") + 1 :],
+            )
             shutil.copytree(staged, source, dirs_exist_ok=True)
             response = json.loads((source / "terminal.json").read_text())["result"]
             response["model"] = dict(
