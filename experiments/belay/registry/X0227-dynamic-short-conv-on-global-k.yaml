@@ -4,7 +4,7 @@ name: Dynamic short conv on global K and V
 category: Attention variants
 summary: 🤖 Posted on behalf of @ClassicLarry.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6933607780
@@ -26,3 +26,10 @@ trials:
     mla_dynamic_kv_conv: 'true'
   commit: a23dfd1458
   priority: batch
+  loss:
+  - 3.0499
+  delta:
+  - 0.0049
+  steps: 3030
+  baseline: belay-X0227-control 3.0450 (same commit, seed 0)
+  step_time_change: +3%
