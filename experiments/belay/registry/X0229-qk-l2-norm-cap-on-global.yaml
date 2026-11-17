@@ -4,7 +4,7 @@ name: QK L2 norm cap on global layers
 category: Normalization
 summary: 🤖 Posted on behalf of @ClassicLarry.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6933734791
@@ -26,6 +26,13 @@ trials:
     mla_qk_norm_cap: '22.6'
   commit: 1c6dc139c9
   priority: batch
+  loss:
+  - 3.0468
+  delta:
+  - 0.0011
+  steps: 3030
+  baseline: belay-X0229v1-control 3.0457 (same commit, seed 0)
+  step_time_change: +1%
 - id: t002
   variant: L2 norm cap replaces MLA q/k RMS norms, mla_qk_norm_cap=15
   rung: speedrun
