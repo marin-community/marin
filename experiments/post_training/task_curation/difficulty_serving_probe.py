@@ -66,7 +66,6 @@ def probe_endpoint(solver: Solver, endpoint: str, api_model: str, api_key: str, 
     }
     return probe_serving_endpoint(
         endpoint,
-        api_model,
         api_key,
         request,
         model_identity=SOLVER_MODELS[solver],
@@ -77,7 +76,6 @@ def probe_endpoint(solver: Solver, endpoint: str, api_model: str, api_key: str, 
 
 def probe_serving_endpoint(
     endpoint: str,
-    api_model: str,
     api_key: str,
     request: dict,
     *,
@@ -135,7 +133,6 @@ def probe_judge_endpoint(endpoint: str, definition: JudgeTierDefinition, tempera
         raise ValueError(f"The {definition} tier has no immutable checkpoint pin to probe")
     return probe_serving_endpoint(
         endpoint,
-        definition.spec.model,
         api_key,
         judge_probe_request(definition, temperature),
         model_identity=definition.model_identity,

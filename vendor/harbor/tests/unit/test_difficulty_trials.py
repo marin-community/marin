@@ -33,6 +33,7 @@ from finestore.rl.difficulty import (
     measurement_from_attempts,
 )
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.runtime import TaskSpecRuntimeBinding
 from verifyit.modes.grade_math import MATH_VERIFIER_DEADLINE
 from rigging.filesystem.storage_path import StoragePath
@@ -825,9 +826,7 @@ def test_killed_worker_resume_recovers_completed_trials_without_rerunning(tmp_pa
         assert manifest["reconstructed"] is True
         assert len(manifest["sources"]) == 1
         receipt = manifest["sources"][0]["model_requests"]
-        from rigging.filesystem.storage_path import StoragePath as _StoragePath
-        from taskcompendium.evaluation.corpus import file_sha256 as _file_sha256
-        assert _file_sha256(_StoragePath(receipt["uri"])) == receipt["sha256"]
+        assert file_sha256(StoragePath(receipt["uri"])) == receipt["sha256"]
 
 
 def test_same_root_resume_retries_from_its_own_output_without_rerunning(tmp_path, monkeypatch):

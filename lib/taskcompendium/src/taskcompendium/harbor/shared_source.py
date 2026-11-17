@@ -213,7 +213,7 @@ def source_image_layer(contract: SharedIntegrityContract) -> str:
     )
 
 
-def source_bootstrap_command(setup: str, contract: SharedIntegrityContract) -> str:
+def source_bootstrap_command(setup: str) -> str:
     """Run the source setup, then unpack and bootstrap the protected controller.
 
     Python resolution happens here, with the task environment's PATH, because the
@@ -254,9 +254,10 @@ def source_bootstrap_command(setup: str, contract: SharedIntegrityContract) -> s
 
 
 def source_grader_script(contract: SharedIntegrityContract) -> bytes:
-    """Launch the pinned controller with the bootstrapped interpreter.
+    """Run the pinned controller's grader on the protected contract.
 
-    ``-B`` keeps the protected root free of import bytecode caches.
+    The fixed interpreter flags keep the protected root free of import
+    bytecode caches and the environment isolated from the task's site packages.
     """
     return (
         "#!/bin/bash\nset -euo pipefail\n"
@@ -315,7 +316,7 @@ def harden_shared_source(
     environment = cast(Table, task_config.setdefault("environment", tomlkit.table()))
     setup_table = cast(Table, environment.setdefault("setup", tomlkit.table()))
     source_setup = str(setup_table.get("command", ""))
-    setup_table["command"] = source_bootstrap_command(source_setup, contract)
+    setup_table["command"] = source_bootstrap_command(source_setup)
     setup_table["timeout_sec"] = 1800.0
     source_environment = dict(environment.get("env", {}))
     if source_environment.get("HOME") in {None, "/root", "/home/taskcompendium-agent"}:

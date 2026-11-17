@@ -20,6 +20,7 @@ from taskcompendium.pipeline.sources import source_files_identity
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.evaluation import publish_dataset_corpus
 from experiments.post_training.task_curation.environment import Placement, placement
 from experiments.post_training.task_curation.images.build import (
     EnvironmentArtifact,
@@ -126,43 +127,15 @@ def _build_run(
 def _publish(
     dataset: EvaluationCorpusRecipe, options: PipelineOptions, identity: dict, run: EvaluationRun
 ) -> CampaignArtifact:
-    assert options.license_receipt is not None
-    (StoragePath(run.output_path) / "license.json").write_text(options.license_receipt.model_dump_json(indent=2))
-    validate_input_identity(dataset.recipe, options.inputs, identity)
-    grader_environment = None
-    if dataset.recipe.grader is not None:
-        built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
-        grader_environment = environment_requirements(dataset.recipe.grader, built)
-    publish_evaluation_corpus(
-        source_recipe(dataset.recipe, run.inputs, grader_environment),
+    return publish_dataset_corpus(
+        dataset.recipe,
         dataset.protocol,
         dataset.item_builder,
-        options.runtime.context,
-        run.source_input,
-        run.output_path,
-        source_overrides=input_file_overrides(options.inputs.files),
+        options=options,
+        identity=identity,
+        run=run,
         curation_identity=canonical_sha256(identity),
         protocol_name=dataset.protocol_name,
-    )
-    validated = False
-    try:
-        validate_input_identity(dataset.recipe, options.inputs, identity)
-        validated = True
-    finally:
-        if not validated:
-            (StoragePath(run.output_path) / MANIFEST_FILENAME).rm()
-    return CampaignArtifact(
-        path=run.output_path,
-        status=SourceStatus.COMPLETED,
-        result=PipelineResult(
-            SourceStatus.COMPLETED,
-            {
-                "normalize": str(StoragePath(run.output_path) / "normalize"),
-                "evaluation": str(StoragePath(run.output_path) / "evaluation"),
-            },
-            {"manifest": str(StoragePath(run.output_path) / MANIFEST_FILENAME)},
-            ("normalize", "evaluation"),
-        ),
     )
 
 

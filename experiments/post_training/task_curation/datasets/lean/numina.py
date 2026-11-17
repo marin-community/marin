@@ -96,10 +96,12 @@ DERIVED_INDEX = Path(__file__).resolve().parents[1] / "derived" / "index.json"
 
 @cache
 def passing_proofs() -> frozenset[str]:
-    """The proven-passing proof keys, read from the referenced derived-data registry.
+    """Proof keys whose human proof compiles as the golden control submits it.
 
-    Lazy on purpose: the read touches a private Hugging Face dataset, so importing this
-    module must not. Unit isolation swaps the reader before any call.
+    A row becomes a task only when its key is in this set, so every task has a
+    working golden control. The set is read from the referenced derived-data
+    registry; the read is lazy so importing this module never touches the
+    network, and unit isolation swaps the reader before any call.
     """
     return frozenset(load_referenced_document(DERIVED_INDEX, "lean/numina_proofs.json").get("passing", ()))
 
