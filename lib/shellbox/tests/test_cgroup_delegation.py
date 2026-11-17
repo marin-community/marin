@@ -1,18 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Delegation candidate selection reads real files; the full probe runs on cgroups.
+"""Delegation candidate and limit readback tests."""
 
-The unit tests below exercise ``_fallback_parents`` and ``cgroup_limits_applied``
-against plain files — both are pure filesystem readers, so no part of the code
-under test is mocked. The full ``delegated_cgroup_parent`` verification loop
-(create a throwaway machine cgroup, apply limits, read back, clean up) needs a
-kernel cgroup v2 filesystem and runs under the manual marker like the rest of
-the local cgroup suite.
-"""
-
-import os
-import stat
 from pathlib import Path
 
 import pytest
@@ -30,17 +20,7 @@ def _make_cgroup(root: Path, relative: str, *, procs: str) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     (path / "cgroup.procs").write_text(procs)
     (path / "cgroup.kill").write_text("")
-    (path / "cgroup.subtree_control").write_text("")
     return path
-
-
-def _reject_enable(candidate: Path) -> None:
-    """Make the kernel-refusal shape: the candidate cannot take controllers."""
-    os.chmod(candidate / "cgroup.subtree_control", stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
-
-
-def _leftover_groups(root: Path) -> list[str]:
-    return [path.name for path in root.rglob("shellbox-*")]
 
 
 @pytest.fixture
@@ -97,11 +77,7 @@ def test_pod_slice_candidates_require_no_internal_processes(pod_tree):
 
 
 def test_containment_survives_when_no_candidate_enforces_limits(pod_tree):
-    """When nothing can enforce limits, containment survives with a warning."""
     scope, slice_level = pod_tree
-    _reject_enable(scope)
-    _reject_enable(slice_level)
-    # ranking returns the first candidate that passes check_cgroup_parent
     assert delegated_cgroup_parent() == slice_level
     for candidate in (scope, slice_level):
         assert not list(candidate.glob("shellbox-*"))
@@ -133,17 +109,11 @@ def test_cgroup_limits_applied_reads_back_written_files(tmp_path: Path):
 
 @pytest.mark.manual
 def test_delegated_parent_enforces_and_cleans_up_delegation_probes():
-    """On a real delegated worker the discovery probes apply, read back and clean up.
-
-    This is the regression for the container-scope case: the pod slice (not the
-    worker's own scope) must be selected, and the probe's throwaway machine
-    cgroups must leave nothing behind.
-    """
+    """Discovery leaves no throwaway cgroups on a delegated worker."""
     parent = delegated_cgroup_parent()
     if parent is None:
         pytest.skip("Run inside a worker with a delegated cgroup v2 hierarchy")
     before = {path for path in parent.parent.rglob("shellbox-*")} | {path for path in parent.rglob("shellbox-*")}
-    # discovery itself probed and cleaned up; a second call must agree
     assert delegated_cgroup_parent() == parent
     after = {path for path in parent.parent.rglob("shellbox-*")} | {path for path in parent.rglob("shellbox-*")}
     assert before == after == set()

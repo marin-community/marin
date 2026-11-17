@@ -57,9 +57,8 @@ def probe_cgroup_limits(parent: Path, *, cpus: int = 1, memory_mb: int = 1024) -
 
     Container scopes cannot enable domain controllers while the worker's own
     process stays inside them (cgroup v2's no-internal-process rule), and some
-    runtimes also refuse the memory controller outright; a candidate that
-    silently drops limits is worse than no candidate, so this probes and reads
-    back instead of trusting the writes.
+    runtimes also refuse the memory controller outright. Readback catches
+    limit writes that only logged a warning.
     """
     try:
         cgroup = MachineCgroup.create(parent, cpus=cpus, memory_mb=memory_mb)
@@ -74,15 +73,10 @@ def probe_cgroup_limits(parent: Path, *, cpus: int = 1, memory_mb: int = 1024) -
 
 
 def _fallback_parents(current: Path) -> list[Path]:
-    """Parents that may enforce limits when the worker's own cgroup cannot.
+    """Return an empty parent unit or pod slice dedicated to this worker.
 
-    A candidate must have no internal processes (the no-internal-process rule
-    otherwise blocks enabling controllers) and must be dedicated to this
-    worker: a systemd DelegateSubgroup unit, or the container runtime's
-    pod-private slice. Shared host slices are never candidates — enabling
-    controllers there would change accounting for unrelated workloads.
-    A verifying dedicated parent is preferred over the worker's own cgroup;
-    the worker's cgroup is tried next.
+    Shared host slices are excluded because enabling controllers there changes
+    accounting for unrelated workloads.
     """
     unit_suffixes = (".service", ".scope")
     parent = current.parent
@@ -100,15 +94,9 @@ def _fallback_parents(current: Path) -> list[Path]:
 def delegated_cgroup_parent() -> Path | None:
     """Find a writable delegation, preferring one that can enforce resource limits.
 
-    Candidates are the worker's own cgroup and any dedicated parent unit
-    (:func:`_fallback_parents`). Container runtimes scope the worker into a
-    ``cri-containerd`` scope whose subtree cannot enable domain controllers
-    until the worker moves out; the wrapping pod slice can. Each candidate is
-    verified by applying and reading back limits in a throwaway machine
-    cgroup, and a verifying candidate wins. If no candidate can enforce
-    limits, the first candidate that still passes ``check_cgroup_parent`` is
-    returned so process containment is preserved and the limits degrade to
-    the documented warn-and-continue behavior.
+    Candidates are the worker's cgroup and any dedicated empty parent unit or
+    pod slice. If none can apply CPU and memory limits, retain the first
+    writable delegation for process containment.
     """
     if not (CGROUP_ROOT / "cgroup.controllers").is_file():
         return None
@@ -116,7 +104,6 @@ def delegated_cgroup_parent() -> Path | None:
     if not current.is_relative_to(CGROUP_ROOT):
         return None
     candidates = [current]
-    # DelegateSubgroup moves the worker below its unit, which then verifies.
     for parent in _fallback_parents(current):
         if parent not in candidates:
             candidates.insert(0, parent)
