@@ -1034,15 +1034,12 @@ def _uses_manifest_waves(
     staged: one transaction would defer all of its I/O to the commit. Other locking modes
     always commit per chunk, because TensorStore already batches those commits.
 
-    Process 0 also writes unsharded host leaves the others skip, so the local totals differ.
-    The wave path waits at a barrier and the per-chunk path does not, and every process has
-    to take the same one. The decision uses the largest total.
+    Each process decides from its own share, so processes may take different paths. Both paths
+    reach the same one metadata barrier under lock files, so that does not deadlock.
     """
     if file_io_locking != "lockfile":
         return False
     staged = sum(job.num_bytes for job in jobs)
-    if jax.process_count() > 1:
-        staged = max(jax_utils.multihost_allgather_sync(staged))
     return staged > config.max_staged_host_bytes
 
 

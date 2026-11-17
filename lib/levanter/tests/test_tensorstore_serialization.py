@@ -643,7 +643,7 @@ def test_processes_sharing_a_local_checkpoint_lock_with_lock_files():
 
 
 def test_ranks_on_opposite_sides_of_the_budget_finish_one_save():
-    """Process 0's host leaf must not send only that process into the wave barrier."""
+    """Two processes on different commit paths must both reach the metadata barrier and finish."""
     results = eight_device_checkpoints.uneven_staged_bytes_save_across_processes()
     shared = np.arange(eight_device_checkpoints._UNEVEN_SHARED, dtype=np.float32)
     host = np.arange(eight_device_checkpoints._UNEVEN_HOST, dtype=np.float32)

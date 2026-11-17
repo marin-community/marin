@@ -56,8 +56,8 @@ _MANIFEST_LOCK = f"manifest.ocdbt{tensorstore_serialization._LOCK_FILE_SUFFIX}"
 # for which the commit must still be pending. A hang past it fails the test.
 _LOCK_CONTENTION_DEADLINE_SECONDS = 2.0
 _COMMIT_DEADLINE_SECONDS = 30.0
-# Process 0 writes this host leaf and its half of the shared array. The other process writes
-# only its half, which is under the budget, so a per-process decision would split the barrier.
+# Process 0 writes this host leaf and its half of the shared array, so it spills past the budget.
+# The other process writes only its half, which fits, so the two processes take different paths.
 _UNEVEN_SHARED = 8
 _UNEVEN_HOST = 16
 _UNEVEN_BUDGET = 32
@@ -286,8 +286,8 @@ def _save_uneven_staged_bytes(
 def uneven_staged_bytes_save_across_processes() -> list[tuple[np.ndarray, np.ndarray]]:
     """Save from two processes whose staged bytes fall on opposite sides of the budget.
 
-    Process 0 writes a host leaf the other process skips. Deciding the manifest-wave path
-    from each process's own total would send only process 0 into the barrier.
+    Process 0 writes a host leaf the other process skips, so the two take different commit
+    paths. Both must reach the metadata barrier, or the save hangs.
     """
     with TemporaryDirectory() as tmpdir:
         return _run_on_distributed_processes(_save_uneven_staged_bytes, f"{tmpdir}/step")

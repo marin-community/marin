@@ -176,13 +176,12 @@ share fits under `max_staged_host_bytes` returns while the commits drain, and a 
 rolls through it.
 
 When several processes save to a local or NFS path, each OCDBT manifest commit takes a lock
-file that every other writer waits on. Whether the save fits is decided from the largest
-share any process stages, since process 0 also writes unsharded host leaves. A save that
-does not fit in `max_staged_host_bytes` batches each staging wave into one atomic manifest
-commit, after one process publishes the array metadata. A save that fits, and every save
-that is not using lock files, commits each chunk as soon as it is staged, which overlaps
-staging with storage I/O. A fitting multi-process lock-file save publishes that metadata
-once too, and the other processes open it without reading it back.
+file that every other writer waits on. Each process chooses its commit path from its own
+staged bytes. A save that does not fit in `max_staged_host_bytes` batches each staging wave
+into one atomic manifest commit. A save that fits, and every save that is not using lock
+files, commits each chunk as soon as it is staged, which overlaps staging with storage I/O.
+In either path, one process publishes the array metadata before the others open the arrays,
+and the others open it without reading it back.
 
 | Parameter                                  | Description                                                                            | Default |
 |--------------------------------------------|----------------------------------------------------------------------------------------|---------|
