@@ -8,7 +8,9 @@ frozen TaskSpec JSON, verify its SHA, reconstruct the native packet directory
 verbatim from the TaskSpec resources, and run the three real trials (nop,
 oracle, tamper) on those exact packet bytes through the Daytona EVAL
 declarative route. Peak two physical sandboxes; bounded row batches; no
-package reconstruction from a newer checkout.
+package reconstruction from a newer checkout. A blocked row records its
+error and the run continues; completed rows' records upload incrementally so
+a mid-run abort preserves evidence.
 """
 
 import asyncio
@@ -19,16 +21,18 @@ import json
 import logging
 import os
 import shlex
-import subprocess
 import tarfile
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path, PurePosixPath
 
 from harbor.agents import factory as agent_factory
 from harbor.agents.base import BaseAgent
 from harbor.host_capabilities import host_capabilities_from_environment
 from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
 from rigging.secrets import get_secret
 
@@ -38,9 +42,7 @@ LOGGER = logging.getLogger("packet-qa-v2")
 MAP_URI = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.16.1/swe-adapter-v2-fidelity-v3/qa-map.json"
 MAP_SHA256 = "e4df094e298a0da3aef56de72428ee8c95a840c25598812979021a6a967ad7e7"
 OUTPUT_ROOT = "s3://marin-us-east-02a/marin/rl-data/atlas/shared-grader-adapters/2026.11.16.1"
-RUN_NAME = os.environ.get("QA_RUN_NAME", "swe-v2-packet-qa-v1")
 ATTEMPT_TIMEOUT = 4 * 3600.0
-HARBOR_PROJECT = Path("vendor/harbor")
 
 TAMPER_SCRIPT = r"""
 set -uo pipefail
@@ -73,12 +75,9 @@ EOF
 exit 0
 """
 
-
-def run_checked(command: list[str], **kwargs) -> str:
-    result = subprocess.run(command, capture_output=True, text=True, check=False, **kwargs)
-    if result.returncode != 0:
-        raise RuntimeError(f"command failed ({result.returncode}): {result.stderr[-4000:]}")
-    return result.stdout
+# Per-thread probe state: the tamper agent and the owning row's loop share the
+# worker thread, so a threading.local cannot be crossed by a sibling row.
+_probe = threading.local()
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -95,9 +94,14 @@ def read_map(root: Path) -> dict:
 
 
 def fetch_task_spec(root: Path, row: dict) -> dict:
-    """Download the row's actual frozen TaskSpec and verify its exact SHA."""
+    """Download the row's actual frozen TaskSpec and verify its exact SHA.
+
+    The local path is keyed by the URI basename: task ids share prefixes
+    within a family, so a truncated id would collide across sibling rows and
+    a no-clobber copy would leave another row's bytes in place.
+    """
     uri, expected = row["task_spec_uri"], row["task_spec_sha256"]
-    path = root / "packets" / f"{row['task_id'][:24]}-task-spec.json"
+    path = root / "packets" / PurePosixPath(uri).name
     path.parent.mkdir(parents=True, exist_ok=True)
     copy(uri, str(path), no_clobber=True)
     digest = sha256_bytes(path.read_bytes())
@@ -153,7 +157,7 @@ async def run_trial(config_path: Path) -> dict:
             probe = await environment.exec(
                 command="python -c 'import sys; print(sys.version_info[:3])'", timeout_sec=120
             )
-            probe_holder["testbed_python"] = probe.stdout.strip()
+            _probe.testbed_python = probe.stdout.strip()
             result = await environment.exec(command=f"bash -c {shlex.quote(TAMPER_SCRIPT)}", timeout_sec=900)
             if result.return_code != 0:
                 raise RuntimeError(f"tamper probe failed inside the agent phase: {result.stdout[-2000:]}")
@@ -172,10 +176,7 @@ async def run_trial(config_path: Path) -> dict:
     }
 
 
-probe_holder: dict = {}
-
-
-def trial_config(packet: Path, trials_dir: Path, agent: dict, name: str, execution_requirements: dict) -> dict:
+def trial_config(packet: Path, trials_dir: Path, agent: dict, name: str) -> dict:
     return {
         "task": {"path": str(packet)},
         "agent": agent,
@@ -196,10 +197,6 @@ def qa_row(root: Path, family: str, row: dict) -> dict:
     LOGGER.info("[%s] consuming frozen packet", name)
     task_spec = fetch_task_spec(root, row)
     packet = packet_from_task_spec(root / "packets" / f"{family}-{name}", task_spec)
-    execution = task_spec["execution_requirements"] or {
-        "agent_timeout_sec": 1800.0,
-        "verifier_timeout_sec": 1800.0,
-    }
     record = {
         "task_id": row["task_id"],
         "instance_id": name,
@@ -213,25 +210,50 @@ def qa_row(root: Path, family: str, row: dict) -> dict:
         ("oracle", {"name": "oracle", "kwargs": {"resource_usage_filename": "resource-usage.json"}}),
         ("tamper", {"name": "tamper"}),
     ):
-        probe_holder.clear()
+        _probe.testbed_python = None
         attempt = root / "trials" / f"{family}-{name}-{phase}"
         attempt.mkdir(parents=True)
-        config = trial_config(packet, attempt / "jobs", agent, f"{family}-{name}-{phase}", execution)
+        config = trial_config(packet, attempt / "jobs", agent, f"{family}-{name}-{phase}")
         config_path = attempt / "trial.json"
         config_path.write_text(json.dumps(config))
         summary = asyncio.run(
             asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log"), timeout=ATTEMPT_TIMEOUT + 900)
         )
         if phase == "tamper":
-            summary["testbed_python"] = probe_holder.get("testbed_python")
+            summary["testbed_python"] = getattr(_probe, "testbed_python", None)
         record[phase] = summary
         LOGGER.info("[%s/%s] reward=%s", name, phase, summary["rewards"].get("reward"))
     return record
 
 
+def seal(run_name: str, root: Path, records: list, blocked: list) -> None:
+    """Write verdicts and upload the evidence bundle before any exit."""
+    verdicts = {}
+    for record in records:
+        verdicts[record["instance_id"]] = {
+            "failure_class": record["failure_class"],
+            "nop_reward_0": record["nop"]["rewards"].get("reward") == 0.0,
+            "oracle_reward_1": record["oracle"]["rewards"].get("reward") == 1.0,
+            "tamper_reward_0": record["tamper"]["rewards"].get("reward") == 0.0,
+            "testbed_python": record["tamper"].get("testbed_python"),
+        }
+    for entry in blocked:
+        verdicts[entry["instance_id"]] = {"failure_class": entry["failure_class"], "blocked": entry["error"]}
+    (root / "qa-verdicts.json").write_text(json.dumps(verdicts, indent=2) + "\n")
+    (root / "qa-blocked.json").write_text(json.dumps(blocked, indent=2) + "\n")
+    archive = root.parent / f"{run_name}.tar.gz"
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.add(root, arcname=root.name)
+    destination = StoragePath(OUTPUT_ROOT) / run_name
+    copy(str(archive), str(destination / "evidence.tar.gz"))
+    LOGGER.info("verdicts: %s", json.dumps(verdicts, indent=2))
+
+
 def main() -> None:
-    root = Path(os.environ["IRIS_OUTPUT_DIR"]) / RUN_NAME
+    run_name = os.environ.get("QA_RUN_NAME", "swe-v2-packet-qa-v1")
+    root = Path(os.environ["IRIS_OUTPUT_DIR"]) / run_name
     root.mkdir(parents=True)
+    configure_coreweave_s3()
     mapping = read_map(root)
     revision = os.environ.get("QA_GIT_REVISION") or "bundle"
     (root / "qa-scope.json").write_text(
@@ -255,35 +277,43 @@ def main() -> None:
         raise ValueError("Daytona QA requires the DAYTONA_EVAL_API_KEY secret")
     os.environ["DAYTONA_API_KEY"] = get_secret("DAYTONA_EVAL_API_KEY")
     selected = [(family, row) for family, section in mapping["families"].items() for row in section["rows"]]
-    records = []
+    records: list = []
+    blocked: list = []
     with ThreadPoolExecutor(max_workers=2) as pool:
-        for record in pool.map(lambda item: qa_row(root, *item), selected):
+        futures = {pool.submit(qa_row, root, family, row): (family, row) for family, row in selected}
+        for future in as_completed(futures):
+            _, row = futures[future]
+            try:
+                record = future.result()
+            except Exception as error:
+                blocked.append(
+                    {
+                        "instance_id": row["instance_id"],
+                        "family": row.get("family") or futures[future][0],
+                        "failure_class": row.get("failure_class"),
+                        "task_spec_sha256": row.get("task_spec_sha256"),
+                        "error": repr(error),
+                    }
+                )
+                LOGGER.error("[%s] blocked: %s", row["instance_id"], error)
+                continue
             records.append(record)
             (root / "qa-records.json").write_text(json.dumps(records, indent=2) + "\n")
-    verdicts = {
-        record["instance_id"]: {
-            "failure_class": record["failure_class"],
-            "nop_reward_0": record["nop"]["rewards"].get("reward") == 0.0,
-            "oracle_reward_1": record["oracle"]["rewards"].get("reward") == 1.0,
-            "tamper_reward_0": record["tamper"]["rewards"].get("reward") == 0.0,
-            "testbed_python": record["tamper"].get("testbed_python"),
-        }
-        for record in records
-    }
-    (root / "qa-verdicts.json").write_text(json.dumps(verdicts, indent=2) + "\n")
-    archive = root.parent / f"{RUN_NAME}.tar.gz"
-    with tarfile.open(archive, "w:gz") as bundle:
-        bundle.add(root, arcname=root.name)
-    copy(str(archive), f"{OUTPUT_ROOT}/{RUN_NAME}/evidence.tar.gz", no_clobber=True)
-    LOGGER.info("verdicts: %s", json.dumps(verdicts, indent=2))
+            # Durable incremental evidence: survive a mid-run abort.
+            copy(str(root / "qa-records.json"), str(StoragePath(OUTPUT_ROOT) / run_name / "qa-records.json"))
+    seal(run_name, root, records, blocked)
     failed = [
-        task
-        for task, verdict in verdicts.items()
-        if not (verdict["nop_reward_0"] and verdict["oracle_reward_1"] and verdict["tamper_reward_0"])
-    ]
+        record["instance_id"]
+        for record in records
+        if not (
+            record["nop"]["rewards"].get("reward") == 0.0
+            and record["oracle"]["rewards"].get("reward") == 1.0
+            and record["tamper"]["rewards"].get("reward") == 0.0
+        )
+    ] + [entry["instance_id"] for entry in blocked]
     if failed:
         raise SystemExit(f"QA failures: {failed}")
-    LOGGER.info("QA PASSED for all %d rows", len(verdicts))
+    LOGGER.info("QA PASSED for all %d rows", len(records))
 
 
 if __name__ == "__main__":
