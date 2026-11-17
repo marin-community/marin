@@ -25,7 +25,7 @@ from experiments.belay.branch import git
 from experiments.belay.config import CONFIG, COREWEAVE_S3_ENDPOINT
 from experiments.belay.page import call, gh_api, mark_reviewed, page_state, session_credentials
 from experiments.belay.registry_entry import reset_registry_checkout
-from experiments.belay.submit import iris_jobs
+from experiments.belay.submit import iris_jobs, job_started
 
 logger = logging.getLogger("belay.sync")
 
@@ -116,10 +116,11 @@ class Watcher:
                 coords[name] = (job.job_id, job.state)
                 submitted[name] = job.submitted_at
             elif len(parts) == 3 and parts[1].endswith("-coord"):
-                trains[parts[1].removesuffix("-coord")] = job.state
+                trains[parts[1].removesuffix("-coord")] = (job.job_id, job.state)
         reports = []
         for name, (job_id, coord_state) in coords.items():
-            state = _run_state(coord_state, trains.get(name))
+            train_id, train_state = trains.get(name, (None, None))
+            state = _run_state(coord_state, train_state)
             report = {
                 "name": name,
                 "job_id": job_id,
@@ -132,6 +133,11 @@ class Watcher:
                 report.update(self.final[name])
             elif state != "pending":
                 progress = self._wandb(name)
+                # Iris calls the training job running once it is queued; until its task gets a node (the cluster's
+                # scheduler can hold it for hours when the cluster is full) the run has not started. A run with W&B
+                # steps has, so only those without are asked about.
+                if state == "running" and progress.get("step") is None and not job_started(train_id or job_id):
+                    report["state"] = "pending"
                 report.update({k: v for k, v in progress.items() if k != "finished"})
                 if state == "succeeded" and progress.get("finished") and progress.get("loss") is not None:
                     self.final[name] = {k: v for k, v in progress.items() if k != "finished"}
