@@ -33,6 +33,7 @@ from marin.rl.skyrl import (
     TaskTroveDataSource,
     TaskTroveSelection,
     TaskTroveTagMatch,
+    reject_forced_socket_transport,
     run_skyrl,
     skyrl_cpu_command,
     skyrl_step,
@@ -1040,3 +1041,22 @@ def test_archive_retention_reaches_the_iris_launch_document() -> None:
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
     launch = yaml.safe_load(config.launch_config_yaml)
     assert launch["artifacts"]["resume_checkpoint_count"] == -1
+
+
+def test_reject_forced_socket_transport_blocks_multi_node_overrides() -> None:
+    # Multi-node jobs must keep NCCL on InfiniBand; the audit in #11619 measured
+    # 12-24x lower socket bandwidth and bootstrap hangs for partial overrides.
+    with pytest.raises(ValueError, match=r"NCCL_NET=Socket"):
+        reject_forced_socket_transport({"NCCL_NET": "Socket"}, num_nodes=32)
+    with pytest.raises(ValueError, match=r"NCCL_IB_DISABLE=1"):
+        reject_forced_socket_transport({"NCCL_IB_DISABLE": "1"}, num_nodes=5)
+    with pytest.raises(ValueError, match=r"NCCL_NET=Socket, NCCL_IB_DISABLE=1"):
+        reject_forced_socket_transport({"NCCL_NET": "Socket", "NCCL_IB_DISABLE": "1"}, num_nodes=2)
+
+
+def test_reject_forced_socket_transport_allows_non_forcing_env() -> None:
+    # AF_INET alone does not force sockets, single-node jobs have no
+    # cross-node transport to protect, and an empty env passes.
+    reject_forced_socket_transport({"NCCL_SOCKET_FAMILY": "AF_INET"}, num_nodes=32)
+    reject_forced_socket_transport({"NCCL_NET": "Socket"}, num_nodes=1)
+    reject_forced_socket_transport({}, num_nodes=32)

@@ -390,6 +390,68 @@ def run_launcher(args: argparse.Namespace) -> None:
     (RESULT_DIR / f"results-task{task_index}.json").write_text(json.dumps(report, indent=2))
 
 
+def run_gate(args: argparse.Namespace) -> None:
+    """Launch-time interconnect check: fail closed unless cross-node NCCL rides InfiniBand.
+
+    Tasks 0 and 1 of a multi-node job each run one NCCL rank over the default
+    environment and the job's own allocation. Any other task exits immediately.
+    The check passes when the census shows NET/IB or no NET transport at all
+    (intra-node NVLink), and fails with the NCCL error tail otherwise.
+    """
+    import torch  # noqa: PLC0415 - torch is an optional dependency outside the vendor runtime env
+
+    job_info = get_job_info()
+    if job_info is None:
+        raise RuntimeError("This script must run inside an Iris job (no IRIS_TASK_ID in the environment)")
+    num_tasks = job_info.num_tasks
+    task_index = job_info.task_index
+    if num_tasks < 2:
+        logger.info("gate: single-node job (%d task); NVLink only, nothing to assert", num_tasks)
+        return
+    if task_index > 1:
+        logger.info("gate: task %d of %d does not participate; exiting", task_index, num_tasks)
+        return
+    local_gpus = min(torch.cuda.device_count(), 1)
+    ctx = iris_ctx()
+    endpoint_name = f"{ENDPOINT_BASE_NAME}-gate-attempt-{job_info.attempt_id}"
+    if task_index == 0:
+        base_port = allocate_port_block(1)
+        master_host = job_info.advertise_host
+        endpoint_id = ctx.registry.register(endpoint_name, f"{master_host}:{base_port}")
+        logger.info("gate: registered rendezvous %s at %s:%d", endpoint_name, master_host, base_port)
+    else:
+        master_host, base_port = wait_for_rendezvous(ctx.resolver, endpoint_name)
+        logger.info("gate: resolved rendezvous at %s:%d", master_host, base_port)
+
+    log_dir = RESULT_DIR / f"gate-task{task_index}"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    baseline = next(variant for variant in build_variants() if variant.name == "baseline_default_env")
+    result = run_variant(baseline, task_index, local_gpus, 2, master_host, base_port, log_dir)
+    if task_index == 0:
+        ctx.registry.unregister(endpoint_id)
+    verdict = gate_verdict(result["pass"], [rank["transports"] for rank in result["ranks"]])
+    print(json.dumps({"gate": {"task_index": task_index, "verdict": verdict, "result": result}}))
+    if verdict != "pass":
+        for rank in result["ranks"]:
+            for line in rank["error_tail"]:
+                print(line, file=sys.stderr)
+        raise SystemExit(f"gate: interconnect check failed ({verdict}); refusing to start the trainer")
+
+
+def gate_verdict(passed: bool, rank_transports: list[list[str]]) -> str:
+    """Map one probe variant's outcome onto the launch-gate verdict.
+
+    NET/IB or an empty transport list (intra-node NVLink) passes; a socket
+    transport or a failed benchmark fails closed.
+    """
+    if not passed:
+        return "collective_failed"
+    flat = {transport for transports in rank_transports for transport in transports}
+    if any(transport.startswith("NET/Socket") for transport in flat):
+        return "socket_transport"
+    return "pass"
+
+
 def run_worker_mode(args: argparse.Namespace) -> None:
     """Run one rank's collectives and print its benchmark JSON on stdout."""
     import torch  # noqa: PLC0415
@@ -445,7 +507,7 @@ def run_worker_mode(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="NCCL transport probe for two-node Iris jobs")
-    parser.add_argument("--mode", choices=("launcher", "worker"), default="launcher")
+    parser.add_argument("--mode", choices=("launcher", "worker", "gate"), default="launcher")
     parser.add_argument("--variant", help="Worker mode: variant name carried into the result JSON")
     parser.add_argument("--variants", help="Launcher: comma-separated variant names to run")
     parser.add_argument("--max-local-gpus", type=int, default=MAX_LOCAL_GPUS)
@@ -477,6 +539,8 @@ def main() -> None:
         os.environ["PROBE_INIT_TIMEOUT"] = str(args.init_timeout_seconds)
     if args.mode == "launcher":
         run_launcher(args)
+    elif args.mode == "gate":
+        run_gate(args)
     else:
         run_worker_mode(args)
 
