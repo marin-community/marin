@@ -11,7 +11,10 @@ from harbor.host_capabilities import HostCapabilities
 from shellbox.backends.daytona.connection import DaytonaConnection
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import AgentConfig
+from harbor.models.trial.result import TrialResult
 from omegaconf import OmegaConf
+from rolloutengine.engine import RolloutEngine
+from rolloutengine.models import GradedRolloutInterrupted
 from shellbox.machine import ExitReason, Result
 from taskcompendium.models import Source
 
@@ -22,6 +25,8 @@ from skyrl_train.rollouts.agent_environment import BorrowedMachineEnvironment
 from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 from skyrl_train.rollouts.harbor_trial_session import run_task_setup
+from skyrl_train.rollouts.task_projections import WholeTaskProjection
+from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from tests.cpu.task_specs import lowered_task
 
 
@@ -69,6 +74,13 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     (package / "instruction.md").write_text("Write an answer.")
     (package / "task.toml").write_text('[environment]\ndocker_image = "fixture/image:latest"\n')
     task = harbor_trial_task(package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
+    task = task.model_copy(
+        update={
+            "environment_requirements": task.environment_requirements.model_copy(
+                update={"setup_commands": ("exit 23",)}
+            )
+        }
+    )
     lowered = lowered_task(task, "harbor_trial", attempt_timeout=15, total_turn_timeout=5)
     settings = InstalledAgentSettings(
         agent=AgentConfig(name="pi", kwargs={"thinking_format": "qwen-chat-template"}),
@@ -90,7 +102,17 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         daytona_connection=connections["train"],
         eval_daytona_connection=connections["eval"],
     )
-    harness = runtime.original_harness(lowered, "session", HarborTaskSettings.from_config(OmegaConf.create({})), phase)
+    harbor = HarborTaskSettings.from_config(OmegaConf.create({}))
+    worker = TaskRolloutWorker(
+        OmegaConf.create({}),
+        WholeTaskProjection(OmegaConf.create({}), UnusedDecoder()),
+        None,
+        {},
+        harbor=harbor,
+        shutdown_timeout=5,
+        installed_agents=runtime,
+    )
+    configured, harnesses = worker._configured_task_and_harnesses(lowered, harbor, "session", phase)
     monkeypatch.setenv("DAYTONA_API_KEY", "ambient-key")
     monkeypatch.setenv("DAYTONA_API_URL", "https://ambient.invalid/api")
     monkeypatch.setenv("DAYTONA_TARGET", "ambient-target")
@@ -121,12 +143,12 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     monkeypatch.setattr(agent_runtime, "registered_agent_endpoint", registered_endpoint)
     await runtime.startup()
     try:
-        result = await harness.run_trial(unexpected_model_request)
+        with pytest.raises(GradedRolloutInterrupted) as interrupted:
+            await RolloutEngine({}, harnesses).run_task(configured, unexpected_model_request)
+        assert interrupted.value.grade.reward is None
     finally:
         await runtime.shutdown()
 
-    assert result.exception_info.exception_type == "ProviderUnavailable"
-    assert result.exception_info.exception_message == "fixture provider unavailable"
     assert len(attempted) == 1
     selected = connections[phase]
     assert (attempted[0].api_key, attempted[0].api_url, attempted[0].target) == (
@@ -137,7 +159,10 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     attempts = list((tmp_path / "attempts").iterdir())
     assert len(attempts) == 1
     assert (attempts[0] / "identity.json").is_file()
-    assert list((attempts[0] / "trials").glob("*/result.json"))
+    [result_path] = list((attempts[0] / "trials").glob("*/result.json"))
+    result = TrialResult.model_validate_json(result_path.read_text())
+    assert result.exception_info.exception_type == "ProviderUnavailable"
+    assert result.exception_info.exception_message == "fixture provider unavailable"
 
 
 @pytest.mark.asyncio
