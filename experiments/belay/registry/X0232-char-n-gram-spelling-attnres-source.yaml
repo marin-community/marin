@@ -4,7 +4,7 @@ name: Char n-gram spelling AttnRes source
 category: Embeddings and inputs
 summary: 'Track: speedrun'
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6940615855
@@ -46,6 +46,13 @@ trials:
     spelling_ngram_source: 'true'
   commit: 2037ad456e
   priority: batch
+  loss:
+  - 3.0556
+  delta:
+  - 0.0093
+  steps: 2768
+  baseline: belay-X0232-control 3.0463 (same commit, seed 0)
+  step_time_change: 0%
 potential:
   score: 6
   rationale: −0.0065 at equal data (+9% step time); equal-time run (2,768 steps) running; ladder and MFU not run → 6
