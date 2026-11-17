@@ -99,7 +99,10 @@ def backend_admission_review(
     pending = sorted(name for name, support in production_verdicts.items() if support == "verify")
     if any(support in RUNNABLE_FIT for support in production_verdicts.values()):
         return None, pending
-    if pending and all(support in {"verify", "role_absent"} for support in production_verdicts.values()):
+    if pending:
+        # One production VERIFY cell is enough: not_applicable cells on other
+        # production backends are applicability outcomes, not fit failures, and
+        # cannot negate a pending live qualification.
         if previously_admitted:
             return None, pending
         return (

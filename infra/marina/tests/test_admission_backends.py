@@ -86,3 +86,12 @@ def test_all_production_unsupported_still_blocks_with_exact_verdicts():
         "no surveyed production backend can run the source: " "daytona=unsupported, iris=unsupported, local=unsupported"
     )
     assert pending == []
+
+
+def test_not_applicable_does_not_negate_a_production_verify():
+    """N/A on other production backends cannot negate one pending VERIFY cell."""
+    verdicts = {"daytona": "not_applicable", "iris": "not_applicable", "local": "verify"}
+    blocker, pending = backend_admission_review(verdicts, "Available", previously_admitted=True)
+    assert blocker is None and pending == ["local"]
+    blocker, pending = backend_admission_review(verdicts, "Available", previously_admitted=False)
+    assert blocker is not None and pending == ["local"]
