@@ -247,7 +247,8 @@ A `ScriptGrader` declares:
 | `reward` | `StdoutReward` (default), `ExitCodeReward`, or `FileReward`. |
 | `empty_output` | `ZERO` rejects an empty extracted answer; `GRADE` passes it to the script. |
 | `judge` | Optional `JudgeSpec` declaring the model service required by the script. |
-| `timeout` | Deadline in seconds for each grading command (default 600). |
+| `timeout` | Deadline in seconds for each grading command (default 600), or the complete operation when `replay` is present. |
+| `replay` | Optional `ReplayStage` that executes captured files in a separate machine before grading its declared outputs. |
 
 `StdoutReward` requires exit code 0 and one finite number on standard output; anything else is `infra_error`. `ExitCodeReward` scores 1.0 for exit code 0 and 0.0 otherwise. `FileReward.files` lists candidate reward files in priority order; the first that exists supplies the score. Each `RewardFile` holds a number, or a JSON object whose `key` (default `reward`) holds the score and whose optional `detail` object becomes the grade detail. `FileReward.pass_above` sets `GradeResult.passed`; `ExitCodeReward` sets it from the exit code. A missing, empty, or invalid reward file is `infra_error`. A timed-out command is `infra_error` for every reward source.
 
@@ -260,6 +261,21 @@ A scripted judge receives its declared specification at `/tests/judge.toml`.
 The caller supplies `JudgeConnection` separately; the runtime puts credentials
 only in the verifier machine's environment. Task serialization and staged
 archives exclude those credentials. The machine must permit network access.
+
+For file and workspace answers, `ReplayStage` declares a prepared, digest-pinned
+`environment`, an `argv` command, `cwd`, command `timeout`, and output `artifacts`.
+Replay receives shared and worker resources and captured submission files. It
+receives neither oracle/verifier resources nor inherited machine environment
+variables or judge credentials. Its image and explicit environment must be
+audited for the same separation. Replay closes before the grading machine starts;
+only declared replay outputs are transferred, with the usual archive size and
+symlink checks. The original submitted program is not transferred to grading.
+Output formats must also be safe for the grader to decode: replay isolation does
+not make a candidate-produced pickle safe to load alongside references.
+
+Candidate execution failure scores zero; setup and total-deadline failures are
+ungraded infrastructure errors. Missing outputs follow each artifact's policy.
+Replay cannot be combined with `answer_path`, `collect`, or actor `artifacts`.
 
 TaskSpec validation ties the grader to the answer:
 
@@ -416,6 +432,20 @@ restored = TaskSpec.model_validate_json(serialized)
 
 The serialized spec includes the grader configuration and verifier resources. Store it where trusted grading code can read it; build model requests with `chat_request(task)` or `render_instruction(task)`, which read only the public context, final tools, and answer format.
 
+### ScienceAgentBench Verified source preparation
+
+`taskcompendium.importers.scienceagentbench.VERIFIED_SOURCE` pins the released
+Verified annotation Parquet and rejects missing, duplicated, or unexpected task
+IDs before yielding rows. `actor_context` constructs knowledge-on/off inputs
+from explicit public fields, preserving complete instructions and previews.
+Raw annotations contain reference metadata and must not be mounted for actors;
+image preparation must also check knowledge-off isolation.
+
+This module prepares inputs only. It is not registered as a runnable evaluation:
+private artifact auditing, TaskSpec conversion, clean replay and grading, and
+official Pi/EvalDash integration remain tracked in
+[issue #11592](https://github.com/marin-community/marin/issues/11592).
+
 ## Development
 
 TaskCompendium requires Python 3.12 or 3.13 and uses `marin-rigging` for relative POSIX path and mount-collision validation. Resource names preserve Linux semantics, including colons, backslashes, trailing spaces, and case distinctions. Absolute paths, traversal, NUL bytes, duplicate files, and file/directory collisions are rejected. The validator leaf module performs no storage access.
@@ -430,5 +460,5 @@ cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-Schema `0.30` adds queryable task labels. Reconvert
+Schema `0.31` adds isolated submitted-program replay to script graders. Reconvert
 older TaskSpecs before using the updated readers; no compatibility shim is supplied.

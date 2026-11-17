@@ -21,7 +21,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import uuid4
 
-from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
+from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, RegistryImage, Result
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 from verifyit.spec import Spec, render_spec
 
@@ -39,6 +39,7 @@ from taskcompendium.models import (
     GradingAttempt,
     JsonSubmission,
     MissingArtifactPolicy,
+    ReplayStage,
     RewardFileFormat,
     ScriptGrader,
     Submission,
@@ -463,7 +464,8 @@ async def grade_in_sandbox(
     working directory and variables. ``task_machine`` is the agent's
     machine; graders that collect inputs or copy artifacts require it. Machine failures propagate.
     Input unpacking and environment setup use ``machine_spec.startup_timeout``. The grader's
-    execution limit applies only to the grading command, so slow staging cannot consume its budget.
+    execution limit normally applies only to the grading command. For a script grader with replay,
+    it bounds the combined replay, staging, and grading operation.
     """
     grading = _sandbox_grading(task, task_machine, timeout)
     validate_machine_spec(grading.environment, factory, machine_spec)
@@ -528,7 +530,101 @@ async def grade_empty_in_sandbox(
     )
 
 
+async def _replay_outputs(
+    task: TaskSpec,
+    replay: ReplayStage,
+    submissions: list[StagedFile],
+    factory: MachineFactory,
+    machine_spec: MachineSpec,
+    root: Path,
+) -> tuple[list[tuple[Path, str]], dict[str, Any]]:
+    """Execute without private resources or inherited credentials, then close before grading."""
+    assert replay.environment.docker_image is not None
+    replay_spec = replace(
+        machine_spec,
+        source=RegistryImage(replay.environment.docker_image),
+        env={},
+        workdir=replay.cwd,
+    )
+    archive = root / "replay-inputs.tar"
+    write_archive(archive, resource_files(task.resources.all + task.resources.worker, ""), [])
+    submitted_archive = root / "replay-submission.tar"
+    write_archive(submitted_archive, submissions, [])
+    async with asyncio.timeout(machine_spec.startup_timeout):
+        prepared = await asyncio.to_thread(prepare_machine_spec, replay.environment, factory, replay_spec, {})
+        machine = await factory.create(prepared)
+    outputs = []
+    try:
+        user = setup_user(factory.backend)
+        await _install_grading_archive(machine, archive, machine_spec.startup_timeout, user)
+        await _run_checked(
+            machine,
+            Command(("mkdir", "-p", replay.cwd), timeout=machine_spec.startup_timeout),
+            "Cannot initialize replay workspace",
+        )
+        for setup in replay.environment.setup_commands:
+            await _run_checked(
+                machine,
+                Command(("sh", "-c", setup), timeout=machine_spec.startup_timeout, user=user),
+                "Replay environment setup failed",
+            )
+        await _install_grading_archive(machine, submitted_archive, machine_spec.startup_timeout, user)
+        result = await machine.run(
+            Command(replay.argv, cwd=replay.cwd, timeout=replay.timeout, output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES)
+        )
+        diagnostics = _diagnostics(result)
+        if result.reason == ExitReason.TIMED_OUT or result.exit_code != 0:
+            raise _StepFailed(
+                GradeResult(
+                    Outcome.GRADED,
+                    0.0,
+                    "Submitted program failed during clean replay",
+                    diagnostics={"replay": diagnostics},
+                )
+            )
+        for index, artifact in enumerate(replay.artifacts):
+            local = root / f"replay-output-{index}"
+            if await _download_artifact(machine, artifact, local, replay.timeout):
+                outputs.append((local, artifact.target))
+        return outputs, diagnostics
+    finally:
+        await machine.close()
+
+
 async def _grade_staged(
+    task: TaskSpec,
+    attempt: GradingAttempt,
+    grading: _SandboxGrading,
+    submissions: list[StagedFile],
+    factory: MachineFactory,
+    machine_spec: MachineSpec,
+    task_machine: Machine | None,
+    host_environment: Mapping[str, str],
+    judge_connection: JudgeConnection | None,
+) -> GradeResult:
+    """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
+    limit = grading.limit if isinstance(grading.grader, ScriptGrader) and grading.grader.replay is not None else None
+    deadline = asyncio.timeout(limit)
+    try:
+        async with deadline:
+            return await _grade_staged_impl(
+                task,
+                attempt,
+                grading,
+                submissions,
+                factory,
+                machine_spec,
+                task_machine,
+                host_environment,
+                judge_connection,
+            )
+    except TimeoutError:
+        if not deadline.expired():
+            raise
+        return _infra_error("Replay and grading exceeded the total verifier deadline", GradingFailure.TIMEOUT, {})
+
+
+async def _grade_staged_impl(
     task: TaskSpec,
     attempt: GradingAttempt,
     grading: _SandboxGrading,
@@ -558,6 +654,13 @@ async def _grade_staged(
         with TemporaryDirectory(prefix="taskcompendium-grading-") as directory:
             root = Path(directory)
             downloaded = []
+            replay_diagnostics = None
+            if isinstance(grading.grader, ScriptGrader) and grading.grader.replay is not None:
+                downloaded, replay_diagnostics = await _replay_outputs(
+                    task, grading.grader.replay, submissions, factory, machine_spec, root
+                )
+                # Original submitted code and actor-produced outputs cannot enter the grader.
+                submissions = []
             for index, artifact in enumerate(grading.artifacts):
                 assert task_machine is not None
                 local = root / f"artifact-{index}"
@@ -598,7 +701,7 @@ async def _grade_staged(
                     )
                 machine = await factory.create(prepared)
             try:
-                return await _grade_on(
+                result = await _grade_on(
                     machine,
                     archive_path,
                     submission_archive,
@@ -610,6 +713,9 @@ async def _grade_staged(
                     preparation_timeout=machine_spec.startup_timeout,
                     user=setup_user(factory.backend),
                 )
+                if replay_diagnostics is not None:
+                    result = replace(result, diagnostics={**result.diagnostics, "replay": replay_diagnostics})
+                return result
             finally:
                 await machine.close()
     except _StepFailed as failure:
