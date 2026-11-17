@@ -118,3 +118,22 @@ def test_composed_reasons_never_drift_from_the_parser():
         (DifficultyGap.DAYTONA_TASK_SPEC_FACTORY_PENDING, None),
         (DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, "s3://lock"),
     ]
+    # The canonical join sorts and deduplicates its segments; the parser reads
+    # them back in that order, and the detail can no longer swallow the segment
+    # that follows it.
+    reversed_reason = join_difficulty_gap_reasons(
+        [
+            difficulty_gap_reason(DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, "s3://lock"),
+            difficulty_gap_reason(DifficultyGap.DAYTONA_TASK_SPEC_FACTORY_PENDING),
+        ]
+    )
+    require_difficulty_gaps(reversed_reason)
+    assert difficulty_gaps(reversed_reason) == [
+        (DifficultyGap.DAYTONA_TASK_SPEC_FACTORY_PENDING, None),
+        (DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, "s3://lock"),
+    ]
+
+
+def test_free_text_after_a_gap_fails_validation():
+    with pytest.raises(ValueError, match="Unmapped difficulty gap reason"):
+        require_difficulty_gaps("invalid_reference:the snapshot is broken; whatever")

@@ -122,27 +122,27 @@ def test_require_license_applies_a_registry_ban():
         issue_url=ISSUE_URL,
     )
     with pytest.raises(ValueError, match="blocks ingest and admission"):
-        require_license(receipt([evidence(("mit",))]), source_id, "math", "rev-1", "ingest", ban)
+        require_license(receipt([evidence(("mit",))]), source_id, "math", "rev-1", "ingest", ban=ban)
 
 
 def test_require_license_fails_closed_on_each_missing_prerequisite():
     source_id = "nemotron_sft_v3/math_v2/medium"
     with pytest.raises(ValueError):
-        require_license(None, source_id, "math", "rev-1", "ingest")
+        require_license(None, source_id, "math", "rev-1", "ingest", ban=None)
     stale = receipt([evidence(("mit",))])
     stale = stale.model_copy(update={"resolver_version": "atlas-license-v1"})
     with pytest.raises(ValueError):
-        require_license(stale, source_id, "math", "rev-1", "ingest")
+        require_license(stale, source_id, "math", "rev-1", "ingest", ban=None)
     with pytest.raises(ValueError):
-        require_license(receipt([evidence(("mit",))]), source_id, "math", "rev-2", "ingest")
+        require_license(receipt([evidence(("mit",))]), source_id, "math", "rev-2", "ingest", ban=None)
     banned = receipt([evidence(("mit",))], [decision(LicenseDecisionKind.BAN, True)])
     with pytest.raises(ValueError):
-        require_license(banned, source_id, "math", "rev-1", "ingest")
+        require_license(banned, source_id, "math", "rev-1", "ingest", ban=None)
     failing = receipt([evidence(("mit",), restrictive_terms=True)])
     with pytest.raises(ValueError):
-        require_license(failing, source_id, "math", "rev-1", "ingest")
+        require_license(failing, source_id, "math", "rev-1", "ingest", ban=None)
     excepted = receipt(
         [evidence(("mit",), restrictive_terms=True)],
         [decision(LicenseDecisionKind.EXCEPTION, True)],
     )
-    require_license(excepted, source_id, "math", "rev-1", "ingest")
+    require_license(excepted, source_id, "math", "rev-1", "ingest", ban=None)

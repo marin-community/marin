@@ -427,6 +427,17 @@ def difficulty_gaps(reason: str) -> list[tuple[DifficultyGap, str | None]]:
     for gap in DifficultyGap:
         if text == gap.value:
             return [(gap, None)]
+    # Canonical reasons separate segments with "; "; parse each segment on its
+    # own so one gap's detail can never swallow the next gap. The whole-string
+    # parse stays only for single segments and legacy spellings that lost their
+    # separator.
+    segments = _canonicalize_legacy_segments(text)
+    if len(segments) > 1:
+        return [
+            parse_difficulty_gap_segment(segment)
+            for segment in segments
+            if not segment.startswith(QUALIFICATION_RECEIPT_PREFIX)
+        ]
     try:
         whole = parse_difficulty_gap_segment(text)
     except ValueError:
@@ -435,7 +446,7 @@ def difficulty_gaps(reason: str) -> list[tuple[DifficultyGap, str | None]]:
         return [whole]
     return [
         parse_difficulty_gap_segment(segment)
-        for segment in _canonicalize_legacy_segments(text)
+        for segment in segments
         if not segment.startswith(QUALIFICATION_RECEIPT_PREFIX)
     ]
 

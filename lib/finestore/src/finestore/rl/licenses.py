@@ -262,9 +262,16 @@ def require_license(
     dataset_id: str | None,
     revision: str | None,
     use: str,
-    ban: LicenseBan | None = None,
+    *,
+    ban: LicenseBan | None,
 ) -> None:
-    """Fail closed before ingest or admission, including on stale evidence, bans and registry bans."""
+    """Fail closed before ingest or admission, including on stale evidence, bans and registry bans.
+
+    ``ban`` is the source's registry ban, or None after the caller checked the
+    registry; every caller states that it looked.
+    """
+    if ban is not None and ban.source_id != source_id:
+        raise ValueError(f"The registry ban names another source: {ban.source_id}")
     if receipt is None or not receipt.evidence:
         raise ValueError(f"License evidence is missing: {source_id}")
     if (receipt.source_id, receipt.dataset_id, receipt.revision) != (source_id, dataset_id, revision):
