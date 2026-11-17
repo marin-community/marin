@@ -730,6 +730,10 @@ class ActorCensusInput(CatalogRecord):
     measured_tasks: int = Field(gt=0)
     task_specs_sha256: str
     evidence_url: str
+    # Provenance when the census was not measured at this identity: the row was carried
+    # forward from an earlier converter version after a scorer-only change, with the
+    # reason and invariance evidence. None means the census was measured at this identity.
+    carry_forward: str | None = None
 
 
 class NoOracleStaticRetentionEvidence(CatalogRecord):

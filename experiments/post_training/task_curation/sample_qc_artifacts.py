@@ -34,6 +34,10 @@ class SamplePanel(BaseModel):
     panel_path: str
     panel_sha256: str
     evidence_url: str
+    # Provenance when the panel was not measured at this converter identity: the receipt
+    # was carried forward from an earlier converter version after a scorer-only change,
+    # with the reason and invariance evidence. None means a fresh qualification.
+    carry_forward: str | None = None
 
 
 class SampleInventory(SamplePanel):
