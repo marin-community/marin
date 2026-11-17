@@ -60,6 +60,7 @@ from experiments.grug.fast_track.router_metrics import (
     summarize_router_metrics,
 )
 from experiments.grug.fast_track.spelling_bytes import BYTE_POSITIONS, SpellingCase, spelling_tables
+from experiments.grug.fast_track.spelling_ngrams import ngram_tables
 from experiments.grug.moe.kda import chunk_kda, kda_fused
 from experiments.grug.moe.kda_prep_pallas import GateFn, GateKind, gate_log_decay
 from experiments.grug.moe.kda_state_pallas import StateGrads
@@ -461,8 +462,15 @@ class GrugModelConfig:
     the head reads ``[h, g * rms_norm((h @ A) * (h @ B))]`` through ``output_proj`` widened by ``D/4`` input rows
     (AdamH like the rest of the head), with ``A`` and ``B`` ``[D, D/4]`` on MuonH and a zero-init ``[D/4]`` gain
     ``g`` on Adam. The soft cap, z-loss and fused CE apply to the widened head."""
+    spelling_ngram_source: bool = False
+    """Character n-gram spelling as its own AttnRes source (``spelling_ngrams.py``): each token's feature is the sum
+    of its kept n-gram rows from one learned table plus ``spelling_byte_embeds``-style leading-space and case rows
+    (all initialised like ``token_embed``), through its own RMS norm and gain. The result is a history source ahead
+    of the token embedding, which every AttnRes gate and the final gate weight separately. Needs ``attn_res``."""
 
     def __post_init__(self) -> None:
+        if self.spelling_ngram_source and not self.attn_res:
+            raise ValueError("spelling_ngram_source is an AttnRes source; it needs attn_res")
         if self.lm_head_bilinear and self.cplm_plus:
             raise ValueError("lm_head_bilinear widens the vocabulary head that cplm_plus reads at hidden_dim")
         if self.cplm_plus and self.logit_soft_cap is not None:
@@ -512,6 +520,11 @@ class GrugModelConfig:
     def head_bilinear_dim(self) -> int:
         """Width of the ``lm_head_bilinear`` features (0 when off): the rows it adds to ``output_proj``."""
         return self.hidden_dim // 4 if self.lm_head_bilinear else 0
+
+    @property
+    def num_spelling_sources(self) -> int:
+        """AttnRes history sources ahead of the token embedding (``spelling_ngram_source``)."""
+        return int(self.spelling_ngram_source)
 
     @property
     def kv_source_layers(self) -> int:
@@ -1708,7 +1721,7 @@ def _attn_res_layer(
             return _attn_res_mix(blocks, block_logits, p, queries, gate_index, eps, plain_sum=cfg.attn_res_plain_sum)
         # The leading layers' sources: the blocks rolled at layers 0, seg, ... <= the cutoff (each holds only
         # earlier layers); the partial and later blocks are later layers' work.
-        keep = sum(start <= cfg.kv_source_layers for start in attn_res_block_starts(cfg))
+        keep = cfg.num_spelling_sources + sum(start <= cfg.kv_source_layers for start in attn_res_block_starts(cfg))
         return _attn_res_mix(
             blocks[:keep], block_logits[:keep], None, queries, gate_index, eps, plain_sum=cfg.attn_res_plain_sum
         )
@@ -1880,6 +1893,11 @@ class Transformer(eqx.Module):
     head_bilinear_a: Float[Array, "D F"] | None
     head_bilinear_b: Float[Array, "D F"] | None
     head_bilinear_gain: Float[Array, " F"] | None
+    # cfg.spelling_ngram_source: the n-gram rows, the leading-space row, the case rows and the source's norm.
+    token_embed_ngrams: Float[Array, "R D"] | None
+    token_embed_ngram_space: Float[Array, " D"] | None
+    token_embed_ngram_case: Float[Array, "C D"] | None
+    spelling_ngram_norm: RMSNorm | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -1900,6 +1918,17 @@ class Transformer(eqx.Module):
             head_bilinear_a = reshard(_init_weight(k_a, shape, cfg.initializer_std), P(_FSDP_AXES, None))
             head_bilinear_b = reshard(_init_weight(k_b, shape, cfg.initializer_std), P(_FSDP_AXES, None))
             head_bilinear_gain = reshard(jnp.zeros((cfg.head_bilinear_dim,), jnp.float32), P(None))
+        token_embed_ngrams = token_embed_ngram_space = token_embed_ngram_case = spelling_ngram_norm = None
+        if cfg.spelling_ngram_source:
+            k_rows, k_space, k_case = random.split(random.fold_in(key, 13), 3)
+            num_ngrams = ngram_tables(cfg.vocab_size).num_ngrams
+            std = cfg.initializer_std
+            token_embed_ngrams = reshard(_init_weight(k_rows, (num_ngrams, cfg.hidden_dim), std), P(None, None))
+            token_embed_ngram_space = reshard(_init_weight(k_space, (cfg.hidden_dim,), std), P(None))
+            token_embed_ngram_case = reshard(
+                _init_weight(k_case, (len(SpellingCase), cfg.hidden_dim), std), P(None, None)
+            )
+            spelling_ngram_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
 
         def stack(layers: tuple[int, ...], use_kda: bool) -> ArrayStacked[Block]:
             keys = jnp.stack([block_keys[i] for i in layers])
@@ -1955,6 +1984,10 @@ class Transformer(eqx.Module):
             head_bilinear_a=head_bilinear_a,
             head_bilinear_b=head_bilinear_b,
             head_bilinear_gain=head_bilinear_gain,
+            token_embed_ngrams=token_embed_ngrams,
+            token_embed_ngram_space=token_embed_ngram_space,
+            token_embed_ngram_case=token_embed_ngram_case,
+            spelling_ngram_norm=spelling_ngram_norm,
             config=cfg,
         )
 
@@ -1986,6 +2019,31 @@ class Transformer(eqx.Module):
             extra = extra + tables.byte_present[:, position, None] * byte_rows[position][tables.byte_ids[:, position]]
         table = self.token_embed.astype(jnp.float32) + extra
         return reshard(table.astype(self.token_embed.dtype), P(None, None))
+
+    def spelling_ngram_table(self) -> Float[Array, "V D"]:
+        """Each token's ``spelling_ngram_source`` feature before its norm: its n-gram, leading-space and case rows."""
+        assert self.token_embed_ngrams is not None and self.token_embed_ngram_space is not None
+        assert self.token_embed_ngram_case is not None
+        spelling = spelling_tables(self.config.vocab_size)
+        ngrams = ngram_tables(self.config.vocab_size)
+        # Gather in float32 so the backward scatter-adds into float32 rows; one n-gram slot per scan step keeps the
+        # live set at one [V, D] table instead of [V, K, D].
+        rows = self.token_embed_ngrams.astype(jnp.float32)
+        table = self.token_embed_ngram_case.astype(jnp.float32)[spelling.case]
+        table = table + spelling.leading_space[:, None] * self.token_embed_ngram_space.astype(jnp.float32)
+
+        def add_slot(total, slot):
+            ids, present = slot
+            return total + present[:, None] * rows[ids], None
+
+        table, _ = jax.lax.scan(add_slot, table, (ngrams.ngram_ids.T, ngrams.ngram_present.T))
+        return reshard(table.astype(self.token_embed.dtype), P(None, None))
+
+    def _spelling_sources(self, token_ids: Int[Array, "B S"]) -> tuple[Float[Array, "B S D"], ...]:
+        """The AttnRes history sources ahead of the token embedding (``num_spelling_sources``)."""
+        if self.spelling_ngram_norm is None:
+            return ()
+        return (self.spelling_ngram_norm(_embedding_gather(self.spelling_ngram_table(), token_ids)),)
 
     @property
     def Vocab(self) -> Axis:
@@ -2045,6 +2103,7 @@ class Transformer(eqx.Module):
                 long_mask.with_fa4_bounds(short_lower_bounds, valid),
                 layer_skip,
                 extra_mlp_active,
+                self._spelling_sources(token_ids),
             )
         else:
             if layer_skip is not None:
@@ -2106,11 +2165,12 @@ class Transformer(eqx.Module):
         short_layer_mask: AttentionMask,
         layer_skip: LayerSkip | None,
         extra_mlp_active: jax.Array | bool,
+        spelling_sources: tuple[Float[Array, "B S D"], ...],
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
-        The residual history is a Python tuple of completed block sums (the token embedding is the
-        first, rolled in at layer 0) plus the running partial; each layer in ``attn_res_block_starts`` rolls its
+        The residual history is a Python tuple of completed block sums (``spelling_sources``, then the token
+        embedding, rolled in at layer 0) plus the running partial; each layer in ``attn_res_block_starts`` rolls its
         incoming partial into a new block. Completed blocks are immutable, so each block's logits
         against the queries of every gate that reads it (layer ``i``'s onwards and the final gate) are
         computed once when it is rolled, and each gate then only scores the partial. Blocks are shared
@@ -2144,6 +2204,9 @@ class Transformer(eqx.Module):
         extra_state: dict[str, jax.Array] = {}
         blocks: tuple[jax.Array, ...] = ()
         block_logits: tuple[tuple[jax.Array, ...], ...] = ()
+        for source in spelling_sources:
+            blocks = (*blocks, source)
+            block_logits = (*block_logits, _logit_rows(_attn_res_source_logits(source, queries, eps)))
         partial: jax.Array | None = hidden
         for i, layer in enumerate(layers):
             if i in starts:
@@ -2206,7 +2269,7 @@ class Transformer(eqx.Module):
             final_stats[_ENTROPY_PRED] = extra_state["pred"]
         if "router_frac" in extra_state:
             final_stats["attn_res_skip_router_frac"] = extra_state["router_frac"]
-        # Source n is block n (the embedding is block 0); "p" is the running partial.
+        # Source n is block n (the embedding is block ``num_spelling_sources``); "p" is the running partial.
         for gate, (mean_weights, has_partial) in sorted(weight_logs.items()):
             num_blocks = mean_weights.shape[0] - int(has_partial)
             for n in range(num_blocks):
