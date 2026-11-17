@@ -5945,6 +5945,7 @@ dependencies = [
     { name = "marin-taskcompendium" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "upath" },
 ]
 
 [package.dev-dependencies]
@@ -5963,6 +5964,7 @@ requires-dist = [
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
     { name = "openai", specifier = ">=1.59.9" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "upath", specifier = ">=0.5" },
 ]
 
 [package.metadata.requires-dev]
@@ -11525,6 +11527,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/3d/6e/d997a70ee8f4c61f9
 wheels = [
     { url = "https://files.pythonhosted.org/packages/dd/1a/5d9a402b39ec892d856bbdd9db502ff73ce28cdf4aff72eb1ce1d6843506/universal_pathlib-0.3.10-py3-none-any.whl", hash = "sha256:dfaf2fb35683d2eb1287a3ed7b215e4d6016aa6eaf339c607023d22f90821c66", size = 83528, upload-time = "2026-02-22T14:40:57.316Z" },
 ]
+
+[[package]]
+name = "upath"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f9/bb/aa6bf93afcd72f49e7e91fecb61e020dfadb55bdea5e2895d574be3cee0a/upath-1.0.tar.gz", hash = "sha256:702fbe82141af3d7ec39621652155bdf9a66d37753a5bac5da236550e06e680b", size = 2601, upload-time = "2019-06-23T23:46:16.53Z" }
 
 [[package]]
 name = "uri-template"

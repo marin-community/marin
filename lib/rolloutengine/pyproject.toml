@@ -12,6 +12,7 @@ dependencies = [
     "marin-taskcompendium",
     "marin-shellbox",
     "openai>=1.59.9",
+    "upath>=0.5",
 ]
 
 [dependency-groups]
