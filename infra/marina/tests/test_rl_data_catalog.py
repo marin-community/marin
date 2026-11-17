@@ -531,6 +531,61 @@ def test_source_inventory_transfers_only_fingerprint_summary_and_keeps_full_evid
         observed_engine.dispose()
 
 
+def test_source_cache_reuses_unchanged_evidence_and_invalidates_previous_pin_counts(
+    catalog_database, catalog_query, tmp_path, monkeypatch
+):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "graded", source_id="Marin:cached")
+    load_catalog(CurationCatalog(root), catalog_query)
+    with catalog_database.connect() as connection:
+        schema = connection.execute(text("SELECT current_schema()")).scalar_one()
+        declaration = SourceDeclaration.model_validate(
+            connection.execute(text("SELECT declaration FROM atlas_sources WHERE id='Marin:cached'")).scalar_one()
+        )
+    observation = count_evidence(declaration, oracle_tasks=0, blocked=1)
+    monkeypatch.setattr(
+        "infra.marina.apps.rl_data_catalog.server.app.SOURCE_COUNTS",
+        json.dumps({"version": 1, "sources": [observation.model_dump(mode="json")]}),
+    )
+    deny_evidence_read = False
+
+    def decode_json(payload):
+        value = json.loads(payload)
+        if deny_evidence_read and isinstance(value, dict) and "within_source_dedup" in value:
+            raise RuntimeError("The unchanged stored declaration was fetched again")
+        return value
+
+    observed_engine = create_engine(catalog_database.url, json_deserializer=decode_json)
+
+    @event.listens_for(observed_engine, "connect")
+    def select_schema(connection, _record):
+        with connection.cursor() as cursor:
+            cursor.execute(f"SET search_path TO {schema}, public")
+        connection.commit()
+
+    try:
+        with TestClient(create_api(cast(AppletServices, CatalogServices(observed_engine)))) as client:
+            before = client.get("/sources", params={"projection": "table"}).json()
+            assert before["sources"][0]["filtration"]["admitted_count"] == 2
+            deny_evidence_read = True
+            assert client.get("/sources", params={"projection": "table"}).json() == before
+            deny_evidence_read = False
+            with catalog_database.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE atlas_sources SET declaration=jsonb_set("
+                        "declaration,'{dataset_revision}',CAST(:revision AS JSONB))"
+                    ),
+                    {"revision": json.dumps("e" * 40)},
+                )
+            changed = client.get("/sources", params={"projection": "table"}).json()["sources"][0]
+            assert changed["dataset_revision"] == "e" * 40
+            assert changed["filtration"]["admitted_count"] is None
+            assert changed["filtration"]["example_count"] is None
+    finally:
+        observed_engine.dispose()
+
+
 @pytest.fixture
 def catalog_database(database_url: str) -> Iterator[Engine]:
     admin = create_engine(database_url)
@@ -2144,6 +2199,12 @@ def test_difficulty_archive_load_and_source_pin_change_preserve_history(
         assert compact_model["sample"] == {"pre_oracle_filter": True}
         assert source["difficulty"]["historical"][0]["measurement_id"] == older.measurement_id
         assert detail["difficulty"]["historical"] == source["difficulty"]["historical"]
+        large = difficulty_measurement(declaration, Solver.LARGE, solved=3).model_copy(
+            update={"created_at": "2026-11-13T00:30:00+00:00"}
+        )
+        load_measurements([large], catalog_query)
+        refreshed = client.get("/sources", params={"projection": "table"}).json()["sources"][0]
+        assert next(row for row in refreshed["difficulty"]["models"] if row["solver"] == "large")["solve_rate"] == 1
         assert [row["solver"] for row in source["difficulty"]["models"]] == [solver.value for solver in Solver]
         assert all(row["solve_rate"] is None and row["reason"] for row in source["difficulty"]["models"][1:])
         changed = declaration.model_dump(mode="json")

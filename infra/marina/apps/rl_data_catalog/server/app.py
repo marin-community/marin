@@ -33,6 +33,7 @@ from .duplicate_folding import (
 )
 from .filtration import filtration
 from .identity_measurements import IDENTITY_REVIEWS_SQL, IDENTITY_SURVEY_SQL
+from .inventory_state import CachedInventory, inventory_input_key
 from .licensing import license_projection
 from .quality import intended_use, issue_rate, quality_display, result, review_coverage
 from .schema import SCHEMA_SQL
@@ -370,6 +371,7 @@ def create_api(services: AppletServices) -> FastAPI:
     api = FastAPI()
     engine = services.engine()
     counts = {item.source_id: item for item in SourceCounts.model_validate_json(SOURCE_COUNTS).sources}
+    inventory_responses: dict[SourceProjection, CachedInventory] = {}
     register_curriculum_routes(api, engine)
     register_audit_routes(api, engine)
 
@@ -423,6 +425,10 @@ def create_api(services: AppletServices) -> FastAPI:
     def sources(projection: SourceProjection = SourceProjection.COMPLETE) -> dict[str, Any]:
         with engine.connect() as connection:
             metadata = loaded_catalog(connection)
+            input_key = inventory_input_key(connection, metadata["load_id"])
+            cached = inventory_responses.get(projection)
+            if cached is not None and cached.input_key == input_key:
+                return cached.payload
             measurements = difficulty_records(connection)
             contracts = contract_records(connection)
             rows = [
@@ -512,7 +518,8 @@ def create_api(services: AppletServices) -> FastAPI:
                         },
                     }
                 )
-        return {
+            final_key = inventory_input_key(connection, metadata["load_id"])
+        payload = {
             "sources": (
                 [table_source_record(row) for row in inventory] if projection == SourceProjection.TABLE else inventory
             ),
@@ -521,6 +528,11 @@ def create_api(services: AppletServices) -> FastAPI:
             "synced_at": metadata["loaded_at"],
             "daytona_snapshot_limit": DAYTONA_SAFE_SNAPSHOT_LIMIT,
         }
+        # A concurrent input change must not leave a cached mixture of versions.
+        # Store at most one payload per projection; HTTP headers are never cached.
+        if final_key == input_key:
+            inventory_responses[projection] = CachedInventory(input_key, payload)
+        return payload
 
     @api.get("/backends")
     def backends() -> dict[str, Any]:

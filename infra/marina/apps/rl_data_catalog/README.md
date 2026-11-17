@@ -40,6 +40,13 @@ raw review findings and license documents remain in the complete `api/sources`
 response and the source Evidence endpoints. The release checker compares the
 table response against the complete input-bound projection before release.
 
+Each backend process caches one payload per source projection. Every request
+checks committed row versions of the inventory's inputs; inserts, updates,
+deletions and a new selected load invalidate the payload. A response built
+during an input change is not cached. Headers and authorization remain per
+request. Add new inventory query dependencies to `INVENTORY_KEY_SQL` so changed
+evidence cannot reuse an older payload.
+
 The By source query selects fingerprint version, seed, task count, duplicate
 count, sample hash and lineage in PostgreSQL. It leaves fingerprint samples and
 hash arrays in storage; `api/source-fingerprint` returns the full evidence on
