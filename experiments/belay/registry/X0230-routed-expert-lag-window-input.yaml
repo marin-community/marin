@@ -4,7 +4,7 @@ name: Routed-expert lag window input
 category: MoE and routing
 summary: 'Track: speedrun'
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6940793257
@@ -12,3 +12,16 @@ intake:
   approved_by: ClassicLarry
 code_commits:
 - e99ff55ff2ea828b3a711c25e02fe750b51153d7
+trials:
+- id: t001
+  variant: lag-1..3 causal window on routed-expert latent input
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0230
+  date: '2026-11-17'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0230
+  wandb: []
+  settings:
+    moe_lag_window: 'true'
+  commit: 7d0973a1e7
+  priority: batch
