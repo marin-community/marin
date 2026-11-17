@@ -3037,6 +3037,7 @@ dependencies = [
     { name = "marin-taskcompendium" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "universal-pathlib" },
 ]
 
 [package.metadata]
@@ -3045,14 +3046,18 @@ requires-dist = [
     { name = "marin-taskcompendium", editable = "../../lib/taskcompendium" },
     { name = "openai", specifier = ">=1.59.9" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "universal-pathlib", specifier = ">=0.2" },
 ]
 
 [package.metadata.requires-dev]
 test = [
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "marin-shellbox", extras = ["daytona", "shellsim"], editable = "../../lib/shellbox" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "tokenizers" },
+    { name = "transformers", specifier = ">=5.10.0,<6.0" },
 ]
 
 [[package]]
