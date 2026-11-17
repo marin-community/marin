@@ -155,27 +155,36 @@ def catalog_state(query: SqlQuery) -> dict[str, Any]:
     )["rows"]
     if len(current) != 1:
         raise ValueError("Atlas has no unique selected catalog")
-    archives = query(
-        "SELECT l.load_id, "
-        "(SELECT COUNT(*) FROM atlas_sources s WHERE s.load_id=l.load_id) AS sources, "
-        "(SELECT md5(COALESCE(string_agg(md5(s.declaration::text),'' ORDER BY s.id),'')) "
-        "FROM atlas_sources s WHERE s.load_id=l.load_id) AS source_checksum, "
-        "(SELECT md5(COALESCE(string_agg(md5(jsonb_build_object('fingerprint',s.source_fingerprint,"
-        "'group',s.duplicate_group)::text),'' ORDER BY s.id),'')) "
-        "FROM atlas_sources s WHERE s.load_id=l.load_id) AS identity_source_checksum, "
-        "(SELECT md5(COALESCE(string_agg(md5(to_jsonb(i)::text),'' ORDER BY i.survey_id),'')) "
-        "FROM atlas_identity_surveys i WHERE i.load_id=l.load_id) AS identity_survey_checksum, "
-        "(SELECT md5(COALESCE(string_agg(md5(r.review::text),'' ORDER BY r.left_source,r.right_source),'')) "
-        "FROM atlas_duplicate_reviews r WHERE r.load_id=l.load_id) AS duplicate_review_checksum, "
-        "(SELECT COUNT(*) FROM atlas_assessments a WHERE a.load_id=l.load_id) AS assessments, "
-        "(SELECT md5(COALESCE(string_agg(md5(to_jsonb(a)::text),'' ORDER BY a.pipeline_key),'')) "
-        "FROM atlas_assessments a WHERE a.load_id=l.load_id) AS assessment_checksum, "
-        "(SELECT COUNT(*) FROM atlas_packets p WHERE p.load_id=l.load_id) AS packets, "
-        "(SELECT md5(COALESCE(string_agg(md5(p.packet),'' ORDER BY p.pipeline_key,p.task_id),'')) "
-        "FROM atlas_packets p WHERE p.load_id=l.load_id) AS packet_checksum "
-        "FROM atlas_loads l ORDER BY l.load_id",
-        {},
-    )["rows"]
+    # One aggregate statement per retained load: a single statement over every
+    # load's sources, reviews, assessments and packets exceeded the statement
+    # timeout once the history grew past the r21 volume. Per-load execution
+    # keeps the identical row shape, ordering and checksum semantics (each
+    # original correlated subquery was already scoped to one load).
+    archives = []
+    for load_row in query("SELECT load_id FROM atlas_loads ORDER BY load_id", {})["rows"]:
+        load_id = load_row["load_id"]
+        archives.append(
+            query(
+                "SELECT :load_id AS load_id, "
+                "(SELECT COUNT(*) FROM atlas_sources s WHERE s.load_id=:load_id) AS sources, "
+                "(SELECT md5(COALESCE(string_agg(md5(s.declaration::text),'' ORDER BY s.id),'')) "
+                "FROM atlas_sources s WHERE s.load_id=:load_id) AS source_checksum, "
+                "(SELECT md5(COALESCE(string_agg(md5(jsonb_build_object('fingerprint',s.source_fingerprint,"
+                "'group',s.duplicate_group)::text),'' ORDER BY s.id),'')) "
+                "FROM atlas_sources s WHERE s.load_id=:load_id) AS identity_source_checksum, "
+                "(SELECT md5(COALESCE(string_agg(md5(to_jsonb(i)::text),'' ORDER BY i.survey_id),'')) "
+                "FROM atlas_identity_surveys i WHERE i.load_id=:load_id) AS identity_survey_checksum, "
+                "(SELECT md5(COALESCE(string_agg(md5(r.review::text),'' ORDER BY r.left_source,r.right_source),'')) "
+                "FROM atlas_duplicate_reviews r WHERE r.load_id=:load_id) AS duplicate_review_checksum, "
+                "(SELECT COUNT(*) FROM atlas_assessments a WHERE a.load_id=:load_id) AS assessments, "
+                "(SELECT md5(COALESCE(string_agg(md5(to_jsonb(a)::text),'' ORDER BY a.pipeline_key),'')) "
+                "FROM atlas_assessments a WHERE a.load_id=:load_id) AS assessment_checksum, "
+                "(SELECT COUNT(*) FROM atlas_packets p WHERE p.load_id=:load_id) AS packets, "
+                "(SELECT md5(COALESCE(string_agg(md5(p.packet),'' ORDER BY p.pipeline_key,p.task_id),'')) "
+                "FROM atlas_packets p WHERE p.load_id=:load_id) AS packet_checksum",
+                {"load_id": load_id},
+            )["rows"][0]
+        )
     assessments = query(
         "WITH records AS (SELECT DISTINCT pipeline_key,md5((to_jsonb(a)-'load_id')::text) AS digest "
         "FROM atlas_assessments a) SELECT pipeline_key,COUNT(*) AS records,"

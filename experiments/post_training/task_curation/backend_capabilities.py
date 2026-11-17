@@ -473,6 +473,7 @@ def merge_surveys(partials: list[BackendSurvey], *, catalog_root: str, snapshot_
         [cell.model_dump(mode="json") for cell in first.matrix],
         {role: profile.model_dump(mode="json") for role, profile in first.runtime_defaults.items()},
         first.deployment_limits,
+        first.deployment_classes,
     )
     for partial in projected[1:]:
         other = (
@@ -482,6 +483,7 @@ def merge_surveys(partials: list[BackendSurvey], *, catalog_root: str, snapshot_
             [cell.model_dump(mode="json") for cell in partial.matrix],
             {role: profile.model_dump(mode="json") for role, profile in partial.runtime_defaults.items()},
             partial.deployment_limits,
+            partial.deployment_classes,
         )
         if other != identity:
             raise ValueError(f"Shard {partial.snapshot_id} does not share the survey identity")
@@ -509,6 +511,7 @@ def merge_surveys(partials: list[BackendSurvey], *, catalog_root: str, snapshot_
         deployment_limits=first.deployment_limits,
         local_disk_pool=first.local_disk_pool,
         runtime_defaults=first.runtime_defaults,
+        deployment_classes=first.deployment_classes,
         sources=[*rows.values(), *unassessed.values()],
     )
 
