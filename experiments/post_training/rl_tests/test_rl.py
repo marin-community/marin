@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 import click
 import pytest
@@ -20,6 +21,7 @@ from experiments.post_training import rl as snowball
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_recipe as recipe
 from experiments.post_training import snowball_rl as snowball_model
+from experiments.post_training.rl_command import grafana_url
 from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SELECTION_PREFIX
 
@@ -386,3 +388,21 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     for tasks in (recipe.selection_artifact(snowball_model.SNOWBALL.by_name["learning-medium"].tasks), selection):
         with pytest.raises(click.BadParameter, match="full EvalLite"):
             snowball.build_run(data, tasks=tasks, table=snowball_model.SNOWBALL)
+
+
+def test_grafana_url_selects_native_run_and_utc_window():
+    result = urlparse(grafana_url("users/test/run", "marin-east", "rl", "2026-11-06T18:40:00Z", "2026-11-06T19:40:00Z"))
+    assert result.path == "/d/marin-rl-runs/rl-post-training"
+    assert parse_qs(result.query) == {
+        "orgId": ["1"],
+        "timezone": ["utc"],
+        "from": ["1793990400000"],
+        "to": ["1793994000000"],
+        "var-training_type": ["rl"],
+        "var-cluster": ["marin-east"],
+        "var-run": ["users/test/run"],
+        "var-job": ["$__all"],
+        "var-execution": ["$__all"],
+    }
+    open_window = parse_qs(urlparse(grafana_url("generation", "marin-east", None, "2026-11-06T18:40:00Z")).query)
+    assert open_window["to"] == ["now"] and open_window["var-training_type"] == ["$__all"]

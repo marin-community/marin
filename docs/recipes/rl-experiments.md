@@ -164,6 +164,36 @@ by task ID and count as scored only after successful verification without an exc
 Equal-family mean averages answers per task, tasks per family, then families. Slices use family, AAII
 category and agentic status. Task selection versions are immutable; follow the EvalLite reference to change one.
 
+## What a run writes
+
+The status block names the run's artifact output and native job. Submission prints an open-ended
+Grafana link immediately; terminal status prints the recorded native time window. For evaluation
+presets, `evaluations` lists scored and attempted answer counts and the means for each weight step.
+Train-long checks every scheduled evaluation, requires at least 99% of its tasks to score, and
+returns a failed status when this evidence is missing or below the bound. Its status also names the
+best checkpoint step, or `none eligible`.
+
+| Location | Contents and reader |
+|---|---|
+| `resolved-launch.yaml`, `terminal.json` | Native configuration and result; `read_stored_skyrl_attempt(output)` in `marin.rl.skyrl_records` reads the retained attempt without Iris. |
+| `gate_inputs.json` | The runner's declared task, initializer, settings and requirements. |
+| `exports/run-records/` | FineStore attempt receipts, numeric metrics and per-task evaluations. `read_skyrl_metrics(output, attempt_id=...)` reads a selected attempt. |
+| FineStore `evaluations` table | One task per attempt, evaluation and step, with ordered answers, native rewards, verifier bounds, normalized verifier scores, outcomes and canonical strata. `finestore.rl.run_records.read_evaluations(export_root, attempt_id=...)` reads it; `rl_scoring.evaluation_scores` joins a selected panel's membership and content to these rows. |
+| `exports/dumped_evals/<attempt_id>/...` | JSONL answers carrying attempt, step and final-turn identity; named evaluations also have their own export subtree. |
+| Native checkpoint root | Recovery checkpoints in the 14-day TTL bucket. The receipt records their location and lineage; they are separate from durable exports. |
+| `exports/best_checkpoint.json` | The selected native checkpoint step and its evaluation evidence, written when a checkpoint is eligible. |
+| HF export under `exports/` | Model configuration, weight index and shards, and tokenizer files. The completed receipt identifies the HF model for `--init`. |
+| Gate artifact `gate_report.json`, `gate_report.md` | Calibrated comparison, invariants and breakdowns for a gated preset. Train-long has evaluation invariants without a calibrated verdict. |
+
+Evaluation summaries include the native answer-weighted overall mean, task-weighted family,
+AAII-category, source, topic and difficulty means, and an AAII-weighted mean. The category weights
+are 0.2 scientific reasoning, 0.2 coding, 0.3 General and 0.3 Agents, renormalized over represented
+categories; format has zero AAII weight. Missing annotations are `untagged`. These summaries do
+not add a gate threshold. A versioned selection's `summary.json` declares its strata schema,
+reference models, difficulty bounds and parent; `task_manifest.parquet` retains all parent tasks,
+with active, candidate or retired membership. A previous version's score uses that version's active
+IDs and TaskSpec digests against the saved per-task results.
+
 ## Gaps
 
 | gap | implication and follow-up |

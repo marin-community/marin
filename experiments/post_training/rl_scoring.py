@@ -21,7 +21,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from finestore.rl.run_records import AttemptRecord, read_evaluations
 from finestore.rl.strata import MembershipState, read_selection_strata
-from marin.rl.rl_progress import Invariant
+from marin.rl.rl_progress import Comparison, ComparisonRole, Invariant
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
     RecordedLaunch,
@@ -364,6 +364,8 @@ def evaluation_statistics(scores: pa.Table) -> dict[str, float]:
         if len({row["step"] for row in rows}) != 1:
             raise ValueError(f"select one weight step before aggregating {evaluation}")
         scored = [row for row in rows if row["scored"]]
+        result[f"{evaluation}/attempted"] = len(rows)
+        result[f"{evaluation}/scored"] = len(scored)
         result[f"{evaluation}/scored_fraction"] = len(scored) / len(rows)
         represented = {
             category: weight
@@ -533,7 +535,7 @@ def _session_invariants(
     counts = Counter(row["item"] for row in rows)
     holds = len(rows) == expected and set(counts.values()) == {evaluation.answers} and set(counts) == set(task_ids)
     result = [Invariant(name=f"{name}/batch_finished", value=len(rows), limit=expected, comparator="==", holds=holds)]
-    if evaluation == preset.guarded:
+    if evaluation == preset.guarded or (preset.checkpoint_every and evaluation.held_out):
         coverage = len({row["item"] for row in rows if row["scored"]}) / (expected // evaluation.answers)
         result.append(
             Invariant(
@@ -556,6 +558,7 @@ class RunData:
     provenance: dict
     values: dict[str, float]
     invariants: tuple[Invariant, ...]
+    evaluations: tuple[Comparison, ...]
     slices: dict[str, int]
     evaluation_identity: dict[str, tuple[str | None, dict]]
     h100_hours: float | None
@@ -572,16 +575,18 @@ def load_run(
     path: str,
     preset: presets.Preset,
     inputs: GateInputs | None = None,
+    *,
+    receipt: AttemptRecord | None = None,
 ) -> RunData:
     inputs = inputs or GateInputs(preset_name=preset.name)
-    terminal = read_skyrl_attempt(path)
+    terminal = receipt or read_skyrl_attempt(path)
     if terminal is None:
         raise FileNotFoundError(f"no launch receipt at {path}")
     if terminal.native.result.state != "succeeded":
         raise InvalidComparison(f"native job {terminal.native.result.iris_job_id} is {terminal.native.result.state}")
     if terminal.native.result.provenance is None:
         raise InvalidComparison(f"run has no recorded source provenance: {path}")
-    metrics = read_skyrl_metrics(path)
+    metrics = read_skyrl_metrics(path, attempt_id=terminal.attempt_id)
     workload = preset.recipe.layout.workload
     planned = workload.planned_steps(preset.updates)
     training = [row for step, row in sorted(metrics.items()) if step in planned]
@@ -590,7 +595,7 @@ def load_run(
         launch = recorded_launch(terminal)
     except ValueError as error:
         raise InvalidComparison(str(error)) from None
-    answers = evaluation_answers(path, launch) if preset.evaluations else []
+    answers = evaluation_answers(path, launch, receipt=terminal) if preset.evaluations else []
     tracking = attempt_tracking(terminal, launch)
     try:
         recorded_task_sets = {
@@ -610,12 +615,14 @@ def load_run(
     )
     task_set = preset.eval_lite if preset.held_out is not None else None
     scores, initial_scores = [EVAL_SCORE_SCHEMA.empty_table()], []
+    evaluations = []
     for evaluation in preset.evaluations:
-        quality = evaluation.held_out and evaluation == preset.guarded
+        quality = evaluation.held_out and (evaluation == preset.guarded or bool(preset.checkpoint_every))
         expected = recipe.evaluation_answer_count(
             evaluation, recipe.evaluation_source(evaluation, selection, default, preset.eval_lite)
         )
-        table = evaluation_scores(evaluation, path, answers, launch=launch)
+        all_scores = evaluation_scores(evaluation, path, answers, launch=launch, receipt=terminal)
+        table = all_scores
         initial = table.filter(pc.equal(table["step"], 0))
         table = table.filter(pc.equal(table["step"], workload.scored_step(preset.updates)))
         scores.append(table)
@@ -626,8 +633,29 @@ def load_run(
             if initial.num_rows and frozenset(initial["item"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final evaluation task IDs differ: {path}")
             sessions.append((evaluation.name + "/initial", initial, 0))
+        if preset.checkpoint_every:
+            scheduled = set(range(evaluation.every, preset.updates, evaluation.every)) if evaluation.every else set()
+            sessions.extend(
+                (f"{evaluation.name}/step-{step}", all_scores.filter(pc.equal(all_scores["step"], step)), step)
+                for step in sorted(
+                    (set(all_scores["step"].to_pylist()) | scheduled) - {0, workload.scored_step(preset.updates)}
+                )
+            )
         prefix = native_prefix(launch, evaluation.name) + "all/outcome/"
         for session_name, session, metric_step in sessions:
+            statistics = evaluation_statistics(session)
+            slices = score_slices(session)
+            for key, value in statistics.items():
+                evaluations.append(
+                    Comparison(
+                        metric=f"{evaluation.name}@{metric_step}/{key.removeprefix(evaluation.name + '/')}",
+                        role=ComparisonRole.SLICE,
+                        run=value,
+                        n_run=1,
+                        n_control=0,
+                        tasks=len({row["item"] for row in slices[key]}) if key in slices else None,
+                    )
+                )
             invariants.extend(
                 _session_invariants(
                     session_name, session, evaluation, preset, expected, recorded_task_sets[evaluation.name].task_ids
@@ -672,6 +700,7 @@ def load_run(
         provenance=terminal.native.result.provenance,
         values=values,
         invariants=tuple(invariants),
+        evaluations=tuple(evaluations),
         slices=slices,
         evaluation_identity=identities,
         h100_hours=h100_hours,

@@ -339,6 +339,10 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     path,
                 )
             sessions = [(-1 if generating else preset.updates, score)]
+            if preset.checkpoint_every and evaluation.every:
+                sessions = [
+                    (step, score) for step in range(evaluation.every, preset.updates, evaluation.every)
+                ] + sessions
             if evaluation.at_start:
                 sessions.insert(0, (0, initial_score))
             for step, average in sessions:
