@@ -48,7 +48,7 @@ trials:
   priority: batch
 potential:
   score: 6
-  rationale: −0.0058 at equal data (+3% step time); equal-time timing probe running; ladder and MFU not run → 6
+  rationale: −0.0058 at equal data (+3% step time); equal-time run (2959 steps) running; ladder and MFU not run → 6
   model: claude-opus-5-5
   date: '2026-11-17'
-  inputs_digest: 22e8828f33f4
+  inputs_digest: 1429131232bc
