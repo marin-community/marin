@@ -678,6 +678,20 @@ def test_a_reviewed_suggestion_gets_one_reaction_and_no_reply() -> None:
     assert len(calls) == 1
 
 
+def test_a_deleted_suggestion_is_skipped_but_other_reaction_failures_raise() -> None:
+    idea = intake_idea("https://github.com/marin-community/marin/issues/9514#issuecomment-41")
+
+    def gh(stderr: str):
+        def call(args: list[str]) -> str:
+            raise subprocess.CalledProcessError(1, ["gh", "api", *args], stderr=stderr)
+
+        return call
+
+    mark_reviewed(idea, github_posting=True, gh=gh("gh: Not Found (HTTP 404)"))
+    with pytest.raises(subprocess.CalledProcessError):
+        mark_reviewed(idea, github_posting=True, gh=gh("gh: Bad credentials (HTTP 401)"))
+
+
 def test_status_links_use_the_public_page() -> None:
     assert thread_url("X0001").startswith(CONFIG.public_page_url)
 
