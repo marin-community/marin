@@ -10,7 +10,7 @@ constraints and invariants, then verdict and label. Replicate counts identify ag
 results. Attempts without report details remain descriptive; unknown measurements are explicit.
 A run-only link (`#run=<run_id>`) selects its latest attempt. Add
 `&attempt=<attempt_id>` to select a particular attempt. W&B links use the recorded
-run URL; an `issue` field links to the experiment's GitHub issue.
+run URL; the Grafana link uses the recorded native execution window. An `issue` field links to the experiment's GitHub issue. The detail view includes per-step family, AAII-category and difficulty means and scored/attempted answer counts.
 
 Malformed records are skipped individually and named in a visible note.
 
@@ -21,7 +21,7 @@ Each native `(run_id, attempt_id)` identifies one updatable JSON record. Repeat
 publication refreshes that attempt's record; a missing issue preserves its stored
 issue link. Other attempts remain separate.
 
-Native failures and failed training invariants set `status: failed` and name `failed_facts`.
+Native failures and failed training or evaluation invariants set `status: failed` and name `failed_facts`.
 Records carry native identity, source and engine facts, and the launcher's issue.
 The planned update count and measured update indices come from the run's effective configuration;
 the detail view shows them beside the observed optimizer count. Missing stored values are unknown.
@@ -51,6 +51,8 @@ uv run marina release infra/marina/apps/rl_progress --local --json
 Check cold-loaded run and attempt hash links, refresh after repeat publication,
 and the detail dialog's scrolling body, close control, Escape,
 and backdrop dismissal. Stop the local stack with Ctrl-C.
+
+The `Marin - Release RL Progress` workflow runs manually from main, with inspection as its default. The `rl-progress` CI job runs the packaged API and `marina journey rl_progress` browser owner.
 
 Deploy a Marina runtime containing `marin.rl.rl_progress` before releasing the app package.
 

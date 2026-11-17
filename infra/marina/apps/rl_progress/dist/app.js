@@ -9,6 +9,7 @@ function element(tag, text, attrs = {}) {
   return node;
 }
 const series = (run) => run.series ?? run.label;
+const grafanaLink = (run) => run.grafana_url && /^https:\/\/grafana\.oa\.dev\//.test(run.grafana_url) ? element('a', 'Grafana ↗', { href: run.grafana_url, target: '_blank', rel: 'noopener noreferrer' }) : null;
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const percent = (value) => value == null ? 'unavailable' : `${number(value, 2)}%`;
 const comparison = (row) => `${row.metric}: ${number(row.control)} → ${number(row.run)}, Δ ${percent(row.delta_percent)}, noise ±${percent(row.noise_percent)}${row.passes == null ? '' : row.passes ? ' · PASS' : ' · FAIL'}`;
@@ -44,6 +45,8 @@ function showDetails(run) {
   const links = element('div', null, { class: 'links' });
   const explicitWandb = run.wandb_url;
   if (explicitWandb && /^https:\/\/wandb\.ai\//.test(explicitWandb)) links.append(element('a', 'W&B run ↗', { href: explicitWandb, target: '_blank', rel: 'noopener noreferrer' }));
+  const grafana = grafanaLink(run);
+  if (grafana) links.append(grafana);
   if (run.issue) links.append(element('a', `Experiment #${run.issue} ↗`, { href: `https://github.com/marin-community/marin/issues/${run.issue}`, target: '_blank', rel: 'noopener noreferrer' }));
   links.append(element('a', 'Link to this run', { href: route(run) }));
   body.append(links);
@@ -66,6 +69,10 @@ function showDetails(run) {
     for (const row of run.gate_result.comparisons) body.append(element('p', comparison(row)));
     for (const row of run.gate_result.invariants) body.append(element('p', invariant(row), { class: row.holds ? 'note' : 'warning' }));
     if (run.gate_result.reason) body.append(element('p', run.gate_result.reason));
+  }
+  if (run.evaluations?.length) {
+    body.append(element('h3', 'Evaluations'));
+    for (const row of run.evaluations) body.append(element('p', `${row.metric}: ${number(row.run)}${row.tasks == null ? '' : ` · ${row.tasks} tasks`}`));
   }
   body.append(element('h3', 'Evidence and caveats'));
   const evidence = element('ul', null, { class: 'evidence' });
@@ -95,6 +102,8 @@ function render() {
     }
     attempts.onchange = () => { location.hash = route(groups.get(run.run_id).find((attempt) => attempt.attempt_id === attempts.value)); };
     name.append(attempts, element('span', run.status, { class: run.status === 'failed' ? 'warning' : 'note' }));
+    const grafana = grafanaLink(run);
+    if (grafana) name.append(grafana);
     const report = run.gate_result;
     const objectives = element('td'), constraints = element('td'), verdict = element('td');
     if (report) {

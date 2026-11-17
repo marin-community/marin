@@ -21,9 +21,11 @@ from experiments.post_training import publish_rl_progress
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_recipe as recipe
+from experiments.post_training.rl_command import grafana_url
 from experiments.post_training.rl_scoring import (
     GateInputs,
     InvalidComparison,
+    load_run,
     read_gate_inputs,
     training_invariants,
 )
@@ -96,6 +98,27 @@ def build_record(
     metrics = skyrl_records.read_skyrl_metrics(run_output, attempt_id=attempt_id)
     invariants = training_invariants(preset, metrics) if receipt.metrics_started_at is not None else ()
     failed = [fact.name for fact in invariants if not fact.holds]
+    evaluations = []
+    historical_legacy = receipt.evaluation_storage_version is None and attempt_id != attempts[0]
+    if historical_legacy:
+        evidence.append("Legacy evaluation dumps cannot be attributed to this historical attempt.")
+    if preset.evaluations and result.state == "succeeded" and not historical_legacy:
+        try:
+            data = load_run(run_output, preset, inputs, receipt=receipt)
+            evaluations = list(data.evaluations)
+            if evaluations or receipt.evaluation_storage_version == 1 or preset.checkpoint_every:
+                failed.extend(
+                    fact.name
+                    for fact in data.invariants
+                    if not fact.holds
+                    and any(fact.name.startswith(evaluation.name + "/") for evaluation in preset.evaluations)
+                )
+            else:
+                evidence.append("Legacy evaluation rows are unavailable for this attempt.")
+        except (InvalidComparison, FileNotFoundError) as error:
+            evidence.append(f"Evaluation evidence unavailable: {error}")
+            if receipt.evaluation_storage_version == 1 or preset.checkpoint_every:
+                failed.append("evaluation_records_available")
     if result.state != "succeeded":
         failed.insert(0, "native_attempt")
     optimizer_steps = (
@@ -164,6 +187,10 @@ def build_record(
         measured_updates=list(preset.measured),
         iris_job_id=result.iris_job_id,
         wandb_url=tracking.get("wandb_url"),
+        grafana_url=(
+            grafana_url(receipt.run_id, launch.cluster, launch.training_type, started, finished) if started else None
+        ),
+        evaluations=evaluations,
         engine=tracking.get("engine"),
         source_revision=(
             f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}" if provenance else "Unknown"
@@ -183,6 +210,7 @@ def publish_runs(
     gate_path: str | None = None,
     issue: int | None = None,
     service_url: str | None = None,
+    attempt_id: str | None = None,
 ) -> PublicationOutcome:
     """Rebuild and upsert each stored attempt, isolating publication failures."""
     result = PublicationOutcome()
@@ -210,28 +238,34 @@ def publish_runs(
         if current_id not in attempts:
             result.unserved_records.append(path)
             result.errors.append(f"No stored native receipt at {path} for current attempt {current_id}")
-        for attempt_id, receipt in attempts.items():
-            destination = (receipt.run_id, attempt_id)
+        selected = (
+            attempts if attempt_id is None else {key: value for key, value in attempts.items() if key == attempt_id}
+        )
+        if attempt_id is not None and not selected:
+            result.unserved_records.append((path, attempt_id))
+            result.errors.append(f"No stored native receipt at {path} for {attempt_id}")
+        for selected_id, receipt in selected.items():
+            destination = (receipt.run_id, selected_id)
             try:
-                if gate_path is not None and attempt_id == current_id and receipt.native.result.state == "succeeded":
+                if gate_path is not None and selected_id == current_id and receipt.native.result.state == "succeeded":
                     if report_error:
                         raise ValueError(report_error)
                     if report is None:
                         raise ValueError("Gate report missing for this attempt; repeat the original command with --wait")
-                current_report = report if attempt_id == current_id else None
+                current_report = report if selected_id == current_id else None
                 record = build_record(
                     path,
                     preset,
                     table=table,
-                    attempt_id=attempt_id,
+                    attempt_id=selected_id,
                     attempts=(current_id, attempts),
                     report=current_report,
                     gate_name=read_record(gate_path).name if current_report is not None else None,
-                    issue=issue if attempt_id == current_id else None,
+                    issue=issue if selected_id == current_id else None,
                 )
                 url = publish_rl_progress.publish_result(record, service_url)
                 result.served_records.append(destination)
-                if attempt_id == current_id:
+                if selected_id == current_id:
                     result.urls[path] = url
             except Exception as error:
                 result.unserved_records.append(destination)
@@ -269,14 +303,26 @@ def publish_controls(
 
 
 def control_command(table: presets.ModelPresets) -> click.Command:
-    """Build the control publication command for a model's preset table."""
+    """Build stored-attempt and pinned-control publication commands for a model table."""
 
     @click.command()
-    @click.option("--preset", "preset_name", type=click.Choice(_control_presets(table)), required=True)
+    @click.option("--preset", "preset_name", type=click.Choice(tuple(table.by_name)), required=True)
     @click.option("--url", help="Marina origin (defaults to the Marina service).")
-    def command(preset_name: str, url: str | None) -> None:
-        """Publish a preset's pinned controls from their stored native outputs."""
-        result = publish_controls(table, preset_name, service_url=url)
+    @click.option("--output", "run_output", help="Stored native run output; requires --attempt.")
+    @click.option("--attempt", help="Publish this stored attempt from --output, without native execution.")
+    def command(preset_name: str, url: str | None, run_output: str | None, attempt: str | None) -> None:
+        """Publish pinned controls or one stored native attempt."""
+        if (run_output is None) != (attempt is None):
+            raise click.UsageError("--output and --attempt are required together")
+        if run_output is not None:
+            configure_coreweave_s3()
+            result = publish_runs(
+                [run_output], table.by_name[preset_name], table=table, service_url=url, attempt_id=attempt
+            )
+            if result.unserved_records:
+                result.retry = "Repeat this publication command with --output and --attempt."
+        else:
+            result = publish_controls(table, preset_name, service_url=url)
         click.echo(json.dumps(result.to_dict()))
         if result.unserved_records:
             raise click.exceptions.Exit(1)

@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import click
 import pytest
@@ -44,6 +45,7 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
     "case, expected_updates, expected_time, expected_facts",
     [
         ("native-composed", 2, 3600, []),
+        ("versioned-missing-evaluation", None, None, ["evaluation_records_available"]),
         ("checkpoint-lineage", 2, 7200, []),
         ("lineage-unknown-grandparent", None, None, []),
         ("untracked-native", None, None, []),
@@ -75,7 +77,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     weights = Path(recipe.artifact_prefix(preset.recipe.layout.cluster)) / "weights" / "2026.11.10"
     initializer = SkyRLRun(
         path=str(weights),
-        hf_model_uri=str(weights / "policy"),
+        hf_model_uri="s3://marin-test/models/weights/policy",
         global_step=1,
         tokenizer_uri=preset.model.tokenizer_uri,
         tokenizer_revision=preset.model.tokenizer_revision,
@@ -108,7 +110,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         inputs=inputs,
     )
     receipt = json.loads((source / "terminal.json").read_text())
-    if case == "untracked-native":
+    if case in ("untracked-native", "versioned-missing-evaluation"):
         receipt["config"]["skyrl"]["trainer"]["logger"] = ["console", "files"]
     write_receipt(source, receipt)
     metrics = read_skyrl_metrics(str(source))
@@ -149,6 +151,11 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
             }
         )
         metrics[1]["attempt_id"] = "ancestor"
+    if case == "versioned-missing-evaluation":
+        metrics = {}
+        records["native-attempt"] = records["native-attempt"].model_copy(
+            update={"evaluation_storage_version": 1, "metrics_started_at": None}
+        )
     if case == "untracked-native":
         metrics = {}
         records["native-attempt"] = records["native-attempt"].model_copy(update={"metrics_started_at": None})
@@ -201,10 +208,8 @@ def test_control_publication_rejects_presets_without_dashboard_controls(monkeypa
     table = snowball_model.SNOWBALL
     command = publication.control_command(table)
     for name in ("train-long", "speed-medium"):
-        with pytest.raises(click.BadParameter):
-            command.make_context("snowball_rl_publication", ["--preset", name])
-        with pytest.raises(click.BadParameter):
-            publication.publish_controls(table, name)
+        result = CliRunner().invoke(command, ["--preset", name])
+        assert result.exit_code == 2, (result.output, result.exception)
 
 
 @pytest.mark.integration
@@ -297,7 +302,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     persisted = stored()
     assert set(persisted) == {"native-0", "native-1"} and persisted["native-0"]["issue"] == 73
     # A numeric bound is stored only as an invariant, with distinct replicate outcomes.
-    relative_key = "eval_lite/aaii_category/coding/mean"
+    relative_key = "eval_lite/aai_category/coding/mean"
     report, second_gate = saved_gate(("policy/entropy<=0", "policy/entropy>=0", f"{relative_key}>=control"))
     assert report.verdict == "fail", report.reason
     receipt = json.loads((sources[0] / "terminal.json").read_text())
@@ -344,6 +349,17 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     assert rows["native-0"]["status"] == "succeeded" and rows["native-0"]["failed_facts"] == []
     assert rows["native-1"]["status"] == "failed" and rows["native-1"]["failed_facts"] == ["require/policy/entropy"]
     assert rows["native-0"]["elapsed_seconds"] == 7200 and rows["native-0"]["issue"] == 74
+    grafana = urlparse(rows["native-0"]["grafana_url"])
+    assert grafana.path == "/d/marin-rl-runs/rl-post-training"
+    query = parse_qs(grafana.query)
+    assert query["var-run"] == [receipt["config"]["run"]["id"]]
+    assert query["var-cluster"] == [receipt["config"]["iris"]["cluster"]]
+    assert query["to"] == ["1793997600000"]
+    evaluation = {item["metric"]: item for item in rows["native-0"]["evaluations"]}
+    assert evaluation["eval_lite@25/family/small/mean"]["run"] == 0.5
+    assert evaluation["eval_lite@25/aai_category/format/mean"]["run"] == 0.5
+    assert evaluation["eval_lite@25/difficulty/untagged/mean"]["run"] == 0.5
+    assert evaluation["eval_lite@25/attempted"]["run"] == evaluation["eval_lite@25/scored"]["run"] == 20
     assert repeated.urls[str(sources[0])].endswith("&attempt=native-0")
     windowless = deepcopy(receipt)
     windowless["result"]["finished_at"] = None
@@ -457,6 +473,17 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     assert (second_receipt["config"]["run"]["id"], "native-1") in recovered_history.served_records
     historical_row = stored()["native-1"]
     assert historical_row["gate_result"] is None and historical_row["optimizer_steps"] == preset.updates
+    before = stored()
+    command = CliRunner().invoke(
+        publication.control_command(table),
+        ["--preset", preset.name, "--url", "http://localhost", "--output", str(sources[0]), "--attempt", "native-0"],
+    )
+    assert command.exit_code == 0, (command.output, command.exception)
+    assert json.loads(command.output)["served_records"] == [[receipt["config"]["run"]["id"], "native-0"]]
+    after = stored()
+    assert after["native-retry"] == before["native-retry"] and after["native-1"] == before["native-1"]
+    assert after["native-0"]["evaluations"] == []
+    assert any("historical attempt" in note for note in after["native-0"]["evidence"])
     for root in controls:
         (root / GATE_INPUTS_FILENAME).unlink()
     command = CliRunner().invoke(
