@@ -600,6 +600,11 @@ Snowball parity profiles are `snowball-one-rack` (32 + 8 GPUs) and
 26 layers cannot use Mochi's PP12 or PP16. The profiles request physical NVLink
 domains at production priority. Compilation and piecewise CUDA graphs stay on.
 
+NVL72 coordinators use `mochi-<profile>-<version>` for RL and
+`mochi-<evaluation-name>-<version>` for policy evaluation. Iris adds the submitting
+user namespace; children stay beneath that coordinator's job ID. Record the
+exact submitted IDs before using the assigned prefix for cancellation.
+
 Smoke mode uses two groups of eight samples, two rollout workers and a one-hour
 clock after the first optimizer update. It saves each update and at finalization;
 it skips held-out evaluation and best selection. Normal runs save every two hours,

@@ -133,7 +133,12 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=-1, temporary_storage_ttl_days=14),
             seed=SEED,
         ),
-        replace(EXECUTION, job_timeout_seconds=spec.job_timeout_hours * 3600, role_topology=None),
+        replace(
+            EXECUTION,
+            coordinator_name=f"mochi-{spec.name}-{version}",
+            job_timeout_seconds=spec.job_timeout_hours * 3600,
+            role_topology=None,
+        ),
         export_hf=False,
     )
     judge = draccus.decode(ModelConfig, recipe["judge"])

@@ -411,6 +411,7 @@ def profile_run(
         resume=resume,
         execution=replace(
             selected.execution,
+            coordinator_name=f"mochi-{profile}-{version}",
             job_timeout_seconds=job_timeout_hours * 3600,
             coordinator_timeout_hours=max(
                 selected.execution.coordinator_timeout_hours, job_timeout_hours + COORDINATOR_QUEUE_ALLOWANCE_HOURS

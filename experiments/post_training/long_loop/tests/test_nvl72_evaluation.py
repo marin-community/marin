@@ -53,6 +53,7 @@ def test_adopted_evaluation_has_no_training_input_and_rejects_changed_data(tmp_p
     assert launch["skyrl"]["generator"]["trajectory_retention"]["model_checkpoint_step"] == 400407
     lowered = step.lower()
     assert lowered.name == step.name
+    assert step.runtime_args["skyrl_execution"].coordinator_name == "mochi-mochi-evaluation-2026.11.17.9"
     with pytest.raises(ValueError, match="checkpoint step"):
         evaluation_from_spec(replace(spec, model_step=393491), output)
     (data / "rollouts.parquet").write_bytes(b"changed input")

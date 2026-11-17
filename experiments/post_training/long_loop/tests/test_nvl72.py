@@ -52,6 +52,7 @@ def test_profile_build_preserves_native_resume_and_nvlink_roles(run_spec, tmp_pa
     if native is not None:
         assert launch["inputs"]["starting_checkpoint"]["uri"] == native
     assert step.version == "2026.11.17.1"
+    assert step.runtime_args["skyrl_execution"].coordinator_name == f"mochi-{profile}-2026.11.17.1"
 
 
 def test_normal_run_binds_distinct_training_and_heldout_data(run_spec, tmp_path):
