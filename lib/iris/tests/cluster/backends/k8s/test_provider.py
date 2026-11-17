@@ -41,7 +41,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError
 from iris.cluster.stats.tables import ProfileTrigger
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
+from iris.rpc import job_pb2, worker_pb2
 from iris.test_util import FakeStatsTable, wait_for_condition
 from iris.testing.k8s import (
     k8s_backend_descriptor,
@@ -969,6 +969,48 @@ def _success_cp(stdout: str = "", stderr: str = "") -> ExecResult:
 
 def _failure_cp(stderr: str = "", stdout: str = "") -> ExecResult:
     return ExecResult(returncode=1, stdout=stdout, stderr=stderr)
+
+
+@pytest.mark.parametrize("phase", [None, "Pending", "Succeeded"])
+def test_exec_without_running_pod_reports_attempt_and_pod_state(provider, k8s, phase):
+    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
+    if phase is not None:
+        populate_pod(k8s, pod_name, phase)
+
+    resp = provider.exec_in_container(
+        TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None),
+        worker_pb2.Worker.ExecInContainerRequest(task_id="/job/0", command=["echo", "hello"]),
+    )
+
+    assert "/job/0" in resp.error
+    assert "attempt 0" in resp.error
+    assert (phase or "missing") in resp.error
+
+
+def test_exec_with_running_pod_returns_command_output(provider, k8s):
+    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
+    populate_pod(k8s, pod_name, "Running")
+    k8s.set_exec_response(pod_name, _success_cp(stdout="hello"))
+
+    resp = provider.exec_in_container(
+        TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None),
+        worker_pb2.Worker.ExecInContainerRequest(task_id="/job/0", command=["echo", "hello"]),
+    )
+
+    assert resp.exit_code == 0
+    assert resp.stdout == "hello"
+    assert not resp.error
+
+
+def test_exec_pod_lookup_failure_returns_exec_error(provider, k8s):
+    k8s.inject_failure("get_json", KubectlError("api unavailable"))
+
+    resp = provider.exec_in_container(
+        TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None),
+        worker_pb2.Worker.ExecInContainerRequest(task_id="/job/0", command=["echo", "hello"]),
+    )
+
+    assert "api unavailable" in resp.error
 
 
 def test_profile_threads_via_kubectl_exec(provider, k8s):

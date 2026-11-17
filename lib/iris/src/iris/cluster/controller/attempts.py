@@ -39,6 +39,7 @@ from iris.cluster.runtime.profile import (
 from iris.cluster.types import JobName, TaskAttempt, WorkerId
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.proto_display import task_state_friendly
 from iris.time_proto import duration_from_proto, timestamp_to_proto
 
 Response = TypeVar("Response")
@@ -252,6 +253,21 @@ def exec_in_container(
     if proxied is not None:
         return proxied
 
+    current_attempt = next((attempt for attempt in task.attempts if attempt.attempt_id == task.current_attempt_id), None)
+    if task.state != job_pb2.TASK_STATE_RUNNING:
+        if task.current_attempt_id < 0:
+            attempt_detail = "no attempt started"
+        elif current_attempt is None:
+            attempt_detail = f"attempt {task.current_attempt_id} not started"
+        else:
+            attempt_detail = (
+                f"attempt {task.current_attempt_id}, attempt state {task_state_friendly(current_attempt.state)}"
+            )
+        return controller_pb2.Controller.ExecInContainerResponse(
+            error=f"Task {request.task_id} has no live container "
+            f"(task state {task_state_friendly(task.state)}; {attempt_detail})"
+        )
+
     worker_request = worker_pb2.Worker.ExecInContainerRequest(
         task_id=request.task_id,
         command=request.command,
@@ -260,11 +276,15 @@ def exec_in_container(
     target = _resolve_task_target(dependencies, task, task.current_attempt_id, wire_name=request.task_id)
     timeout = request.timeout_seconds or (60 if target.worker_id is None else 0)
     response = dependencies.runtime.backend.exec_in_container(target, worker_request, timeout)
+    error = response.error
+    if error and target.worker_id is None:
+        attempt_state = task_state_friendly(current_attempt.state) if current_attempt is not None else "unknown"
+        error = f"{error}; task state {task_state_friendly(task.state)}, attempt state {attempt_state}"
     return controller_pb2.Controller.ExecInContainerResponse(
         exit_code=response.exit_code,
         stdout=response.stdout,
         stderr=response.stderr,
-        error=response.error,
+        error=error,
     )
 
 

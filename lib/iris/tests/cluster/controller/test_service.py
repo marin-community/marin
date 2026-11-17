@@ -145,6 +145,29 @@ def test_launch_job_returns_job_id(service):
     assert status_response.job.state == job_pb2.JOB_STATE_PENDING
 
 
+@pytest.mark.parametrize("completed", [False, True], ids=["pending", "succeeded"])
+def test_exec_without_running_task_reports_task_and_attempt_state(service, state, completed):
+    job_id = JobName.from_wire(service.launch_job(make_job_request("exec-unavailable"), None).job_id)
+    task_id = job_id.task(0)
+    if completed:
+        worker_id = WorkerId("exec-worker")
+        _register_worker(state, worker_id)
+        _assign_and_transition(state, task_id, worker_id, job_pb2.TASK_STATE_SUCCEEDED)
+
+    resp = service.exec_in_container(
+        controller_pb2.Controller.ExecInContainerRequest(task_id=task_id.to_wire(), command=["echo", "hello"]),
+        None,
+    )
+
+    assert task_id.to_wire() in resp.error
+    if completed:
+        assert "task state succeeded" in resp.error
+        assert "attempt 0, attempt state succeeded" in resp.error
+    else:
+        assert "task state pending" in resp.error
+        assert "no attempt started" in resp.error
+
+
 def test_get_job_status_reports_parent_job_id(service):
     """get_job_status surfaces parent_job_id for child jobs (empty for roots).
 
@@ -1657,6 +1680,35 @@ def test_recreate_running_kubernetes_job_preserves_existing_pod(coreweave_servic
     )
     assert status.job.state == job_pb2.JOB_STATE_RUNNING
     assert len(backend.kubectl.list_json(K8sResource.PODS)) == 1
+
+
+@pytest.mark.parametrize("task_state", [job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_RUNNING])
+def test_exec_kubernetes_task_without_live_pod_reports_state(coreweave_service, state, task_state):
+    request = make_job_request("exec-no-live-pod")
+    request.environment.secrets.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
+    task_id = JobName.from_wire(coreweave_service.launch_job(request, None).job_id).task(0)
+    with state._db.transaction() as cur:
+        [run_request] = dispatch.drain_for_dispatch(cur).tasks_to_run
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [TaskUpdate(task_id=task_id, attempt_id=run_request.attempt_id, new_state=task_state)],
+            now=Timestamp.now(),
+        )
+
+    resp = coreweave_service.exec_in_container(
+        controller_pb2.Controller.ExecInContainerRequest(task_id=task_id.to_wire(), command=["echo", "hello"]),
+        None,
+    )
+
+    assert task_id.to_wire() in resp.error
+    assert "has no live container" in resp.error
+    assert "attempt state " in resp.error
+    if task_state == job_pb2.TASK_STATE_BUILDING:
+        assert "task state building" in resp.error
+    else:
+        assert "pod " in resp.error and "missing" in resp.error
+        assert "task state running" in resp.error
 
 
 def test_coreweave_sandbox_does_not_require_storage_keys(coreweave_service):
