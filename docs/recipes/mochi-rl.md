@@ -19,8 +19,8 @@ inference engine at TP1/PP1/DP12/EP12. Hosts request 120 CPUs, `900GB` RAM and
 and four concurrent requests per inference worker. The inference sequence cap
 stays at 16; this workload has no new one-rack GPU memory-fit result.
 
-The one-rack runtime keeps Torch 2.14.1/CUDA 13.2, TE 2.21 and FA4. Compilation
-mode 3 stays enabled. Its CUDA graphs use `NONE` after DP12/EP12 graph replay failed during
+Both profiles keep Torch 2.14.1/CUDA 13.2, TE 2.21 and FA4. Compilation
+mode 3 stays enabled. One-rack CUDA graphs use `NONE` after DP12/EP12 graph replay failed during
 weight publication; the performance cost remains unmeasured.
 [#11307](https://github.com/marin-community/marin/pull/11307) has merged. The draft
 uses a pinned integration of the existing route-quota, selection, budget,
@@ -194,7 +194,7 @@ The allocation stays at 48 four-GPU hosts and 192 GPUs. Rack placement is mandat
 
 The trainer retains activation fusion, 256-KiB NCCL buffers and pinned CPU
 storage for checkpointed activation inputs. Cross-rack transport uses InfiniBand.
-Inference uses FlashInfer, a 128-sequence limit per engine, a 2,048-token batched
+Inference uses FlashInfer, a 128-sequence limit per vLLM DP worker (one GPU here), a 2,048-token batched
 budget, a 0.90 GPU-memory fraction and disabled prefix caching. Compilation mode 3
 uses `PIECEWISE` graphs with the existing ShortConv/attention split points and
 qualified Inductor options. Routed-expert capture and verified expert-block
@@ -252,7 +252,7 @@ provides the public serving context. Detailed matched-run receipts are not publi
 The measured gain requires neither [vLLM #130](https://github.com/marin-community/vllm/pull/130)
 nor [#11492](https://github.com/marin-community/marin/pull/11492).
 
-Reference source `612fa39494f9` completed three fresh nonzero RL updates at a
+An unpublished reference run completed three fresh nonzero RL updates at a
 102,400-token context limit. Updated weights were verified and later used for
 generation in all eight EP16 engines. Each of two held-out evaluations produced
 scores for all 120 tasks, and native checkpoint 3 completed. The first batch's actual maximum attended length was
