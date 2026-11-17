@@ -625,7 +625,7 @@ export default function (pi) {
             + "\n"
         )
         with tempfile.TemporaryDirectory() as temp_dir:
-            local_path = Path(temp_dir) / "harbor-pi-context-budget.js"
+            local_path = Path(temp_dir) / self._CONTEXT_BUDGET_EXTENSION_FILENAME
             local_path.write_text(extension)
             await self._upload_staged_file(environment, local_path, target_path)
 

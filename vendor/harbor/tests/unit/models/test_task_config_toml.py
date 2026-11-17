@@ -7,7 +7,7 @@ from pydantic import Field, ValidationError
 from harbor.models.task.config import TaskConfig
 
 
-def test_rejects_ignored_step_agent_environment():
+def test_rejects_unsupported_step_agent_environment():
     with pytest.raises(ValidationError) as error:
         TaskConfig.model_validate(
             {"steps": [{"name": "first", "agent": {"env": {"HOME": "/step-home"}}}]}
