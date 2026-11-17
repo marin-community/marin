@@ -459,7 +459,7 @@ class GrugRunConfig:
     stop_after_steps: int | None = None
     first_checkpoint_restore_step: int | None = None
     # Optional carried-optimizer replay: preserve every restored leaf except the local loop step.
-    reset_trainer_step_after_restore: bool = False
+    carried_restore_step: int | None = None
     native_timing_root: str | None = None
     flops_baseline: FlopsBaseline | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
@@ -742,10 +742,16 @@ class GrugTrainState:
 
 
 def reset_carried_trainer_step(
-    state: GrugTrainState, *, load_checkpoint: bool | None, allow_partial: bool
+    state: GrugTrainState, *, load_checkpoint: bool | None, allow_partial: bool, expected_step: int
 ) -> GrugTrainState:
     """Start local data/loop indexing at zero, without touching any optimizer-state leaf."""
-    if load_checkpoint is not True or allow_partial or int(state.step) <= 0 or state.opt_state is None:
+    if (
+        load_checkpoint is not True
+        or allow_partial
+        or expected_step <= 0
+        or int(state.step) != expected_step
+        or state.opt_state is None
+    ):
         raise ValueError("local-step reset requires a fully restored nonzero-step optimizer state")
     return replace(state, step=jnp.zeros_like(state.step))
 
@@ -1248,10 +1254,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 if trainer.initialize_from is None:
                     raise ValueError("Snowball SFT requires an explicit base checkpoint")
                 state = initialize_snowball_sft(state, trainer.initialize_from, mesh, config.trainer)
-            if config.reset_trainer_step_after_restore:
+            if config.carried_restore_step is not None:
                 restored_global_step = int(state.step)
                 state = reset_carried_trainer_step(
-                    state, load_checkpoint=trainer.load_checkpoint, allow_partial=trainer.allow_partial_checkpoint
+                    state,
+                    load_checkpoint=trainer.load_checkpoint,
+                    allow_partial=trainer.allow_partial_checkpoint,
+                    expected_step=config.carried_restore_step,
                 )
                 logger.info(
                     "Carried optimizer restored at global step %s; local trainer/data step reset to zero",

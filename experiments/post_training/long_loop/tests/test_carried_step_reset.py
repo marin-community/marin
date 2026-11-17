@@ -25,7 +25,7 @@ def state_at(step):
 
 def test_reset_preserves_nonzero_adam_moments_and_counter():
     before = state_at(161750)
-    after = reset_carried_trainer_step(before, load_checkpoint=True, allow_partial=False)
+    after = reset_carried_trainer_step(before, load_checkpoint=True, allow_partial=False, expected_step=161750)
     assert int(after.step) == 0
     assert after.params is before.params
     assert after.opt_state is before.opt_state
@@ -43,4 +43,9 @@ def test_reset_preserves_nonzero_adam_moments_and_counter():
 )
 def test_reset_rejects_non_restored_or_partial_state(step, load, partial):
     with pytest.raises(ValueError, match="fully restored"):
-        reset_carried_trainer_step(state_at(step), load_checkpoint=load, allow_partial=partial)
+        reset_carried_trainer_step(state_at(step), load_checkpoint=load, allow_partial=partial, expected_step=161750)
+
+
+def test_reset_rejects_wrong_nonzero_checkpoint_step():
+    with pytest.raises(ValueError, match="fully restored"):
+        reset_carried_trainer_step(state_at(161749), load_checkpoint=True, allow_partial=False, expected_step=161750)
