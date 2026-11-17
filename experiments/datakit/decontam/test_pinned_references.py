@@ -64,6 +64,7 @@ def test_benchmark_problem_is_detected_and_near_miss_is_retained(name, benchmark
     source = next(source for source in SOURCES if source.name == name)
     sample = SAMPLES[name]
     [record] = reference_records(iter([sample["row"]]), source)
+    assert record["id"] == sample["record_id"]
     assert record["text"] == sample["text"]
     assert benchmark_decisions[f"{source.name}:copy"] is True
     assert benchmark_decisions[f"{source.name}:near-miss"] is False

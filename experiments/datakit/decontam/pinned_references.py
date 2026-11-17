@@ -151,14 +151,24 @@ def _field_text(value: Any) -> str:
     return ""
 
 
+def _record_identifier(row: dict[str, Any], index: int, spec: dict[str, Any] | None) -> str:
+    """Trace a record to its task: id columns first, then the TaskSpec payload."""
+    for column in ("task_id", "instance_id", "id"):
+        if row.get(column):
+            return str(row[column])
+    if spec is not None and spec.get("id"):
+        return str(spec["id"])
+    return str(index)
+
+
 def reference_records(rows: Iterator[dict[str, Any]], source: ReferenceSource) -> Iterator[dict[str, str]]:
     """Extract public problem text without graders, solutions or image bytes."""
     for index, row in enumerate(rows):
         if source.benchmark is not None and row["benchmark"] != source.benchmark:
             continue
-        identifier = str(row.get("task_id", row.get("instance_id", row.get("id", index))))
-        if source.policy == TextPolicy.TASK_SPEC:
-            events = json.loads(row["task_spec"])["context"]["events"]
+        spec = json.loads(row["task_spec"]) if source.policy == TextPolicy.TASK_SPEC else None
+        if spec is not None:
+            events = spec["context"]["events"]
             text = "\n\n".join(
                 _field_text(event["content"])
                 for event in events
@@ -167,8 +177,8 @@ def reference_records(rows: Iterator[dict[str, Any]], source: ReferenceSource) -
         else:
             text = row["problem_statement"].strip()
         if not text:
-            raise ValueError(f"{source.name}: empty problem text for {identifier}")
-        yield {"id": f"{source.name}:{identifier}", "text": text}
+            raise ValueError(f"{source.name}: empty problem text for {_record_identifier(row, index, spec)}")
+        yield {"id": f"{source.name}:{_record_identifier(row, index, spec)}", "text": text}
 
 
 def _reference_rows(source: ReferenceSource) -> Iterator[dict[str, Any]]:

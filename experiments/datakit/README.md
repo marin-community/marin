@@ -185,6 +185,11 @@ counts are sealed in its manifest. Then run the reference pipeline with
 an explicit rebuild to use it. The AA/LMH corpus and LMH best-effort policy
 are unchanged.
 
+The supplement currently exists only under `s3://marin-us-east-02a/marin`.
+Because its manifest is required, `--target decon-bloom` fails against
+`gs://marin-us-central2` or `gs://marin-eu-west4` until the supplement is
+prepared there with the command above and that region's `MARIN_PREFIX`.
+
 The earlier broader release remains evidence for these benchmark additions:
 [`release-validation.json`](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fdatakit%2Fbloom%2F_combined_fixed_3a94b52b%2Frelease-validation.json)
 at `s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_3a94b52b/release-validation.json`.
