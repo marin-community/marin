@@ -102,6 +102,7 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
         {
             "run": {"id": "ownership-B", "attempt_id": "1"},
             "inputs": {"model": {"uri": "/launch/model"}},
+            "artifacts": {"attempts_root": str(tmp_path / "attempts")},
             "skyrl": staged,
         }
     )

@@ -171,7 +171,10 @@ def init_optimizer_for_trainables(optimizer, trainable_model):
     Initializes the optimizer state for the trainable parameters of the model.
     """
     _, trainable = partition_for_grad_overwrite(trainable_model)  # doesn't make a huge difference, but saves some ram
-    opt_state = optimizer.init(trainable)
+    # Compile state allocation as one sharded operation rather than issuing
+    # eager zeros_like allocations for every moment on a concrete model.
+    # Return only optimizer state to avoid another live copy of the model.
+    opt_state = haliax.named_jit(optimizer.init)(trainable)
     return opt_state
 
 

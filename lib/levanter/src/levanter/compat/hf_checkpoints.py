@@ -47,9 +47,11 @@ from jax import ShapeDtypeStruct
 from jax._src.mesh import get_concrete_mesh
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
+from rigging.training_journal import TrainingJournal, phase
 from rigging.filesystem.atomic import fetch_file_atomic
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.fsutil.verified_copy import COMPLETION_MANIFEST
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
@@ -57,6 +59,7 @@ from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read
 from levanter.compat.hf_export import run_on_export_writer, save_hf_shards
 from levanter.field_dtype_overrides import FieldDtypes, cast_with_field_dtypes, sorted_field_dtypes
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.model_cache import DEFAULT_COMPLETE_MARKER
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.byte_budget import HostByteBudget
@@ -1380,6 +1383,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 "pytorch_model.bin",
                 "pytorch_model-*.bin",
                 "pytorch_model.bin.index.json",
+                COMPLETION_MANIFEST,
+                DEFAULT_COMPLETE_MARKER,
             ]
         )
         if _is_url_like(repo):
@@ -1428,6 +1433,7 @@ def save_hf_checkpoint_callback(
     generation_config: Optional[GenerationConfigDict] = None,
     chat_template: Optional[str] = None,
     field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
+    training_journal: TrainingJournal | None = None,
     **hf_upload_kwargs,
 ):
     """
@@ -1453,16 +1459,17 @@ def save_hf_checkpoint_callback(
             my_upload_kwargs["commit_message"] = f"Upload for step {step.step} from Levanter"
         else:
             my_upload_kwargs = hf_upload_kwargs
-        converter.save_pretrained(
-            cast(ModelWithHfSerializationMixin, step.eval_model),
-            os.path.join(base_path, f"step-{step.step}"),
-            upload_to_hf=upload_to_hf,
-            dtype=save_dtype,
-            generation_config=generation_config,
-            chat_template=chat_template,
-            field_dtype_overrides=field_dtype_overrides,
-            **my_upload_kwargs,
-        )
+        with phase(training_journal, "export", step=step.step):
+            converter.save_pretrained(
+                cast(ModelWithHfSerializationMixin, step.eval_model),
+                os.path.join(base_path, f"step-{step.step}"),
+                upload_to_hf=upload_to_hf,
+                dtype=save_dtype,
+                generation_config=generation_config,
+                chat_template=chat_template,
+                field_dtype_overrides=field_dtype_overrides,
+                **my_upload_kwargs,
+            )
 
     return cb
 

@@ -18,6 +18,8 @@ from ray.util.placement_group import (
     placement_group_table,
 )
 
+from skyrl_train.telemetry import record_event
+from rigging.training_journal import TrainingJournal, phase
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.utils import generation_context_limit
@@ -247,7 +249,8 @@ def use_per_engine_pg(
 
 
 class Timer:
-    def __init__(self, message, update_dict=None, *, log_events: bool = True):
+    def __init__(self, message, update_dict=None, *, log_events: bool = True, journal: TrainingJournal | None = None):
+        self.journal = journal
         self.message = message
         self.update_dict = update_dict
         self.log_events = log_events
@@ -267,7 +270,10 @@ class Timer:
         return time.monotonic() - self.start_time
 
     def __enter__(self):
+        self.journal_span = phase(self.journal, self.message)
+        self.journal_span.__enter__()
         self.start_time = time.monotonic()
+        self.started_unix_ms = round(time.time() * 1000)
         if self.log_events:
             logger.opt(depth=1).info(f"Started: '{self.message}'")
         return self
@@ -276,6 +282,14 @@ class Timer:
         duration = time.monotonic() - self.start_time
         self._duration = duration
         if self.log_events:
+            record_event("native_timer", {
+                "phase": self.message,
+                "started_unix_ms": self.started_unix_ms,
+                "finished_unix_ms": round(time.time() * 1000),
+                "duration_seconds": duration,
+                "succeeded": exc_type is None,
+            })
+        if self.log_events:
             log = logger.opt(depth=2).info if exc_type is None else logger.opt(depth=2).error
             outcome = "Finished" if exc_type is None else "Failed"
             log(f"{outcome}: '{self.message}', time cost: {duration:.2f}s")
@@ -283,15 +297,14 @@ class Timer:
             self.update_dict[self.message] = self.update_dict.get(self.message, 0.0) + duration
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.journal_span.__exit__(exc_type, exc_val, exc_tb)
         self._finish(exc_type)
 
     async def __aenter__(self):
-        self.start_time = time.monotonic()
-        if self.log_events:
-            logger.opt(depth=1).info(f"Started: '{self.message}'")
-        return self
+        return self.__enter__()
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.journal_span.__exit__(exc_type, exc_val, exc_tb)
         self._finish(exc_type)
 
 
@@ -1190,7 +1203,7 @@ def configure_ray_worker_logging() -> None:
             except ValueError:
                 level = record.levelno
             message = record.getMessage()
-            if record.exc_info is not None and record.exc_info[1] is not None:
+            if record.exc_info and record.exc_info[1] is not None:
                 message = f"{message}\n{format_exception_text(record.exc_info[1])}"
             logger.opt(depth=6).log(level, message)
 

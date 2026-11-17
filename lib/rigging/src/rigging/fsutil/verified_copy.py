@@ -268,6 +268,9 @@ def _source_files(filesystem: AbstractFileSystem, root: str) -> list[_SourceFile
         raise VerifiedCopyError(f"source is not a directory: {root}")
     files = []
     for path, info in _find_files(filesystem, root).items():
+        if info.get("islink"):
+            # Local directory listings describe the link; reads and info() describe its target.
+            info = filesystem.info(path)
         relative = _relative_path(path, root)
         files.append(_SourceFile(relative, path, int(info.get("size") or 0), _source_identity(info)))
     files.sort(key=lambda file: file.path)

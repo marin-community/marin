@@ -13,10 +13,13 @@ from harbor.agents.factory import AgentFactory
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
-from harbor.models.task.config import EnvironmentConfig
-from harbor.host_capabilities import HostCapabilities
+from harbor.models.task.config import EnvironmentConfig, TaskConfig as PackageTaskConfig
+from harbor.host_capabilities import HostCapabilities, model_api_url, task_model_environment
+from harbor.utils.env import protected_environment_values
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
+from harbor.models.job.config import RetryConfig as HarborRetryConfig
+from harbor.trial.queue import TrialQueue
 from harbor.trial.trial import Trial
 from shellbox.backends.daytona.connection import DaytonaConnection
 from marinskyrl.harbor_environments import (
@@ -29,6 +32,8 @@ from rolloutengine.models import ModelTurn, Prompt
 from rolloutengine.models import TaskRolloutSpec
 from shellbox.machine import Machine, NetworkPolicy
 from taskcompendium.submission import conversation_messages
+from taskcompendium.runtime.resources import resource_bytes
+from verifyit.modes.grade_judge import JudgeConnection
 
 from skyrl_train.inference_engines.inference_engine_client_http_endpoint import create_app, set_global_state
 from skyrl_train.io import io
@@ -41,15 +46,15 @@ from skyrl_train.rollouts.installed_agent import run_installed_agent
 from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness, run_harbor_trial
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 from skyrl_train.rollouts.harbor_settings import EnvironmentType
+from skyrl_train.rollouts.daytona_snapshot_pool import shared_snapshot_leaser
 
 
 async def publish_attempt(evidence: Path, destination: str) -> None:
-    """Publish attempt evidence and retain the local copy if publication fails."""
+    """Publish attempt evidence; the caller owns the local copy's lifetime."""
     if io.is_cloud_path(destination):
         await asyncio.to_thread(io.upload_directory, str(evidence), destination)
     else:
         await asyncio.to_thread(shutil.copytree, evidence, destination)
-    shutil.rmtree(evidence)
 
 
 class InstalledAgentSettings(BaseModel):
@@ -64,6 +69,8 @@ class InstalledAgentSettings(BaseModel):
     service_shutdown_timeout: float
     task_bindings: dict[str, HarborTaskBinding] = Field(default_factory=dict)
     trial_reward_key: str = "reward"
+    judge_model: str | None = None
+    snapshot_capacity: int | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -85,8 +92,10 @@ class InstalledAgentRuntime:
         *,
         daytona_connection: DaytonaConnection,
         eval_daytona_connection: DaytonaConnection,
+        judge: JudgeConnection | None,
     ):
         self.settings = settings
+        self.judge = judge
         self.backend = backend
         self.daytona_connection = daytona_connection
         self.eval_daytona_connection = eval_daytona_connection
@@ -94,8 +103,17 @@ class InstalledAgentRuntime:
             value for value in (daytona_connection.api_key, eval_daytona_connection.api_key) if value
         )
         self.limits = NativeAPILimits(backend.model_name, backend.max_model_len, max_output_tokens)
+        self.snapshot_leaser = None
+        if settings.snapshot_capacity is not None:
+            if not daytona_connection.api_key or not daytona_connection.target:
+                raise ValueError("Snapshot leasing requires the RL Daytona connection")
+            self.snapshot_leaser = shared_snapshot_leaser(
+                capacity=settings.snapshot_capacity,
+                connection=daytona_connection,
+            )
         self.resources = AsyncExitStack()
         self.port: int | None = None
+        self._original_trial_queues: dict[str, TrialQueue] = {}
 
     async def startup(self) -> None:
         set_global_state(self.backend, None)
@@ -143,6 +161,7 @@ class InstalledAgentRuntime:
             await self._run_trial(machine, complete, lowered, trial_dir, messages[0]["content"], attempt_id)
         finally:
             await publish_attempt(trial_dir, destination)
+            shutil.rmtree(trial_dir)
 
     def original_harness(
         self, lowered: TaskRolloutSpec, session_id: str, settings: HarborTaskSettings, phase: str
@@ -150,20 +169,47 @@ class InstalledAgentRuntime:
         """Bind a full Harbor trial to the phase's deadlines and environment settings."""
         if lowered.limits.attempt_timeout is None:
             raise ValueError("Full Harbor trials require a finite attempt timeout for the inference capability")
-        if settings.environment.type is not EnvironmentType.DAYTONA:
+        phase_environment = settings.phase_environment(phase)
+        if phase_environment.type is not EnvironmentType.DAYTONA:
             raise ValueError(
                 "Original Harbor trials require Shellbox Daytona; engine-owned Docker "
                 "machines use the borrowed-machine harness"
             )
-        kwargs = dict(settings.environment.kwargs)
+        kwargs = dict(phase_environment.kwargs)
         kwargs.pop("api_key_env", None)
         kwargs.pop("eval_api_key_env", None)
         connection = self.eval_daytona_connection if phase == "eval" else self.daytona_connection
+        authentication = {}
+        protected = self.protected_values
+        package_config = PackageTaskConfig.model_validate_toml(
+            resource_bytes(
+                next(resource for resource in lowered.task.resources.verifier if resource.path == "task.toml")
+            ).decode()
+        )
+        verifier_environment = dict(package_config.verifier.env)
+        binding = self.settings.task_bindings.get(lowered.task.id)
+        if binding is not None and binding.verifier_environment is not None:
+            verifier_environment.update(binding.verifier_environment)
+        if (
+            (
+                model_api_url(verifier_environment) is not None
+                or model_api_url(package_config.environment.env) is not None
+            )
+            and self.judge is not None
+            and self.settings.judge_model is not None
+        ):
+            kwargs.update(model_endpoint=self.judge.base_url, model_name=self.settings.judge_model)
+            authentication[self.judge.base_url] = self.judge.api_key
+            protected = protected | protected_environment_values({"OPENAI_API_KEY": self.judge.api_key})
         host_capabilities = HostCapabilities(
             daytona=connection,
-            protected_values=self.protected_values,
+            snapshot_leaser=self.snapshot_leaser if phase == "train" else None,
+            model_authentication=authentication,
+            protected_values=protected,
         )
-        environment = TrialEnvironmentConfig.model_validate({**settings.environment.model_dump(), "kwargs": kwargs})
+        environment = TrialEnvironmentConfig.model_validate(
+            {**phase_environment.model_dump(exclude={"eval_provisioning"}), "kwargs": kwargs}
+        )
         agent = self.settings.agent.model_copy(
             update={
                 "override_timeout_sec": lowered.limits.total_turn_timeout or self.settings.run_timeout,
@@ -177,6 +223,12 @@ class InstalledAgentRuntime:
             trial_attempt_timeout_sec=lowered.limits.attempt_timeout,
             trial_cleanup_grace_sec=lowered.limits.cleanup_timeout,
         )
+        if phase not in self._original_trial_queues:
+            self._original_trial_queues[phase] = TrialQueue(
+                n_concurrent=settings.concurrent_trials,
+                retry_config=HarborRetryConfig(max_retries=0),
+            )
+        trial_queue = self._original_trial_queues[phase]
 
         async def run(complete: Callable[[Prompt], Awaitable[ModelTurn]]) -> TrialResult:
             return await self.run_original_trial(
@@ -185,6 +237,7 @@ class InstalledAgentRuntime:
                 session_id=session_id,
                 config=config,
                 host_capabilities=host_capabilities,
+                trial_queue=trial_queue,
             )
 
         return HarborTrialHarness(run, self.settings.trial_reward_key)
@@ -197,6 +250,7 @@ class InstalledAgentRuntime:
         session_id: str,
         config: TrialConfig,
         host_capabilities: HostCapabilities,
+        trial_queue: TrialQueue,
     ) -> TrialResult:
         """Execute the original package with Harbor-owned environments and verification."""
         if self.port is None:
@@ -233,11 +287,32 @@ class InstalledAgentRuntime:
                         "environment": environment,
                     }
                 )
-                trial = await Trial.create(trial_config, host_capabilities=host_capabilities, guest_environment={})
-                result = await run_harbor_trial(trial, self.backend, complete, evidence / "engine")
-                return result.model_copy(update={"trial_uri": join_resource_path(destination, "trials", attempt_id)})
+                trial = await Trial.create(
+                    trial_config,
+                    attempt_index=0,
+                    host_capabilities=host_capabilities,
+                    guest_environment=(
+                        task_model_environment(self.settings.judge_model)
+                        if self.judge is not None
+                        and self.settings.judge_model is not None
+                        and config.environment.kwargs.get("model_endpoint") is not None
+                        else {}
+                    ),
+                )
+                result = await run_harbor_trial(
+                    trial, self.backend, complete, evidence / "engine", trial_queue=trial_queue
+                )
+                relative_trial = str(trial.paths.trial_dir.relative_to(trial_config.trials_dir))
+                result = result.model_copy(
+                    update={"trial_uri": join_resource_path(destination, "trials", relative_trial)}
+                )
         finally:
             await publish_attempt(evidence, destination)
+        # Harbor certifies completion after provider shutdown and artifact flush.
+        # Deadline returns without it must leave evidence available to late cleanup.
+        if result.completion is not None:
+            shutil.rmtree(evidence)
+        return result
 
     @asynccontextmanager
     async def _served_agent(

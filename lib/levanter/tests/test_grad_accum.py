@@ -47,7 +47,7 @@ class Mlp(eqx.Module):
 
 
 @pytest.mark.parametrize("parallelism", [1, 2, 4])
-@pytest.mark.parametrize("accum_steps", [1, 3])
+@pytest.mark.parametrize("accum_steps", [1, 3, 32])
 def test_accumulate_gradients_sharded(parallelism, accum_steps):
     In = hax.Axis("In", 32)
     Out = hax.Axis("Out", 32)

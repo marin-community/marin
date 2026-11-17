@@ -5,6 +5,7 @@ import io as stdlib_io
 import json
 import math
 import os
+import pickle
 import re
 import shutil
 import threading
@@ -12,11 +13,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from jaxtyping import Float
-from pathlib import Path
 import ray
 from ray import ObjectRef
 import torch
 from loguru import logger
+from rigging.training_journal import phase
 from omegaconf import DictConfig, OmegaConf
 from ray.util.placement_group import PlacementGroup, placement_group
 from skyrl_train.utils.progress import tqdm
@@ -44,6 +45,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
     scalar_reward_token_credit,
     verifier_score_summary,
 )
+from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
 from skyrl_train.dataset.preprocess import (
     collate_response_token_channel,
@@ -62,7 +64,9 @@ from skyrl_train.tensor_math import masked_mean
 from skyrl_train.utils.policy_math import compute_approx_kl, normalize_advantages_dict
 from skyrl_train.utils.kl_controllers import get_kl_controller, FixedKLController, AdaptiveKLController
 from skyrl_train.utils.algorithm_registry import AdvantageEstimator
-from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE, compute_advantages_and_returns
+from skyrl_train.utils.advantage_estimators import (
+    GRPO_FLAT_REWARD_STD_TOLERANCE, compute_advantages_and_returns, expand_outcome_to_steps,
+)
 from marinskyrl.runtime_options import PolicyLossType, reference_model_required
 from marinskyrl.distillation import (
     DistillationObjectiveKind,
@@ -338,6 +342,7 @@ class RayPPOTrainer:
     # Set at startup when generator.weight_sync_transport is expert_block.
     _expert_block_sync: ExpertBlockSync | None = None
     _policy_version_step: int | None = None
+    first_optimizer_step_time: float | None = None
 
     _training_metrics_enabled: bool = False
     _rollout_spans_enabled: bool = False
@@ -758,7 +763,7 @@ class RayPPOTrainer:
                 and self.eval_dataset is not None
                 and self._last_evaluated_step != self.global_step
             ):
-                with Timer("eval", self.all_timings):
+                with Timer("eval", self.all_timings, journal=self.tracker.journal):
                     await self._evaluate_and_log(final_state, commit=True)
                 self._control.should_evaluate = False
         finally:
@@ -768,7 +773,7 @@ class RayPPOTrainer:
 
             # The interval save may have just written this same step; do not write it twice.
             if self._control.should_save and self._last_saved_step != self.global_step:
-                with Timer("save_checkpoints", self.all_timings):
+                with Timer("save_checkpoints", self.all_timings, journal=self.tracker.journal):
                     rollout_state = await self._rollout_state()
                     snapshot = await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
                 try:
@@ -806,7 +811,7 @@ class RayPPOTrainer:
         """Save one requested step checkpoint without terminating training on storage failure."""
         await self._drain_checkpoint_upload()
         try:
-            with Timer("save_checkpoints", self.all_timings):
+            with Timer("save_checkpoints", self.all_timings, journal=self.tracker.journal):
                 snapshot = await self._save_checkpoints_with_residency()
         except OSError:
             self._record_checkpoint_save_failure(state)
@@ -858,7 +863,7 @@ class RayPPOTrainer:
         task, state = pending
         self._pending_checkpoint_upload = None
         try:
-            with Timer("checkpoint_upload_blocking", self.all_timings, log_events=False):
+            with Timer("checkpoint_upload_blocking", self.all_timings, log_events=False, journal=self.tracker.journal):
                 duration, cleanup_duration = await task
         except OSError:
             self._record_checkpoint_save_failure(state)
@@ -879,18 +884,27 @@ class RayPPOTrainer:
         self._control.reset()
         self._control = await self.callback_handler.call_event_async("on_step_end", state, self._control, trainer=self)
 
-        if self._control.should_save:
-            if step_wall is not None:
-                step_wall.start("checkpoint_work")
-            await self._save_intermediate_checkpoint(state)
-            self._control.should_save = False
+        evaluate_requested = self._control.should_evaluate and self.eval_dataset is not None
+        if evaluate_requested:
+            # Let the existing rollout tail progress during checkpoint I/O,
+            # without dispatching fresh long episodes just before evaluation.
+            self.context.pause()
+        try:
+            if self._control.should_save:
+                if step_wall is not None:
+                    step_wall.start("checkpoint_work")
+                await self._save_intermediate_checkpoint(state)
+                self._control.should_save = False
 
-        if self._control.should_evaluate and self.eval_dataset is not None:
-            if step_wall is not None:
-                step_wall.start("evaluation")
-            with Timer("eval", self.all_timings):
-                await self._evaluate_and_log(state, commit=False)
-            self._control.should_evaluate = False
+            if evaluate_requested:
+                if step_wall is not None:
+                    step_wall.start("evaluation")
+                with Timer("eval", self.all_timings, journal=self.tracker.journal):
+                    await self._evaluate_and_log(state, commit=False)
+                self._control.should_evaluate = False
+        finally:
+            if evaluate_requested:
+                self.context.resume()
 
         if self._control.should_save_hf_model:
             if step_wall is not None:
@@ -1201,7 +1215,7 @@ class RayPPOTrainer:
         ):
             return
         timings = self.all_startup_timings if reason == "initial" else self.all_timings
-        with Timer("sync_weights", timings) as update_timer:
+        with Timer("sync_weights", timings, journal=self.tracker.journal) as update_timer:
             if self.colocate_all:
                 await asyncio.to_thread(self.policy_model.offload_to_cpu, offload_optimizer=True, offload_model=False)
                 await self.inference_engine_client.wake_up(tags=["weights"])
@@ -1277,7 +1291,7 @@ class RayPPOTrainer:
     def _offload_policy_optimizer(self, timings: dict, *, timer_label: str) -> None:
         """Move optimizer state off GPU before rollout generation or checkpoint restore."""
         if not self.colocate_all and self.cfg.trainer.offload_optimizer_during_rollouts:
-            with Timer(timer_label, timings):
+            with Timer(timer_label, timings, journal=self.tracker.journal):
                 self.policy_model.offload_to_cpu(offload_optimizer=True, offload_model=False)
 
     def _log_weight_update_completed(self, *, reason: str, duration_seconds: float) -> None:
@@ -1302,6 +1316,8 @@ class RayPPOTrainer:
         training_input: TrainingInputBatch,
         duration_seconds: float,
     ) -> None:
+        if self.first_optimizer_step_time is None:
+            self.first_optimizer_step_time = time.monotonic()
         self.all_metrics.update(training_input.metadata["consumed_stop_metrics"])
         if self._training_metrics_enabled:
             record_consumed_work(consumed_work(training_input), step=self.global_step)
@@ -1331,7 +1347,7 @@ class RayPPOTrainer:
 
         restored_data = False
         if self.resume_mode != ResumeMode.NONE:
-            with Timer("load_checkpoints", self.all_startup_timings):
+            with Timer("load_checkpoints", self.all_startup_timings, journal=self.tracker.journal):
                 self.global_step, self.loaded_checkpoint_path = self.load_checkpoints()
             logger.info(f"Resumed training from global_step {self.global_step}")
             if self._restored_rollout_state is not None:
@@ -1386,12 +1402,20 @@ class RayPPOTrainer:
 
         pbar = tqdm(total=self.total_training_steps, initial=self.global_step, desc="Training Step Progress")
         last_completed_step = self.global_step
+        first_journal_step = self.global_step + 1
         while self.global_step < self.total_training_steps:
             self.global_step += 1
             epoch = (self.global_step - 1) // self.num_steps_per_epoch
             cycle_started = time.perf_counter()
             step_wall = StepWallTime(OmegaConf.to_container(self.cfg.trainer.step_phase_budgets))
-            with Timer("step", self.all_timings) as step_timer:
+            with (
+                phase(
+                    self.tracker.journal,
+                    "first_step" if self.global_step == first_journal_step else "steady_state",
+                    step=self.global_step,
+                ),
+                Timer("step", self.all_timings, journal=self.tracker.journal) as step_timer,
+            ):
                 training_input = await self._train_step(epoch, step_wall)
                 # The core wall excludes the step-end callbacks below.
                 core_seconds = time.perf_counter() - cycle_started
@@ -1452,7 +1476,7 @@ class RayPPOTrainer:
         if not self._inference_engines_configured():
             logger.info("Skipping weight sync: no inference engines are running for this objective")
             return
-        with Timer("init_weight_sync_state", self.all_startup_timings):
+        with Timer("init_weight_sync_state", self.all_startup_timings, journal=self.tracker.journal):
             if self.cfg.generator.weight_sync_transport != WeightSyncTransport.EXPERT_BLOCK:
                 self.init_weight_sync_state()
                 return
@@ -1530,7 +1554,7 @@ class RayPPOTrainer:
             "Rollout batch started: step={} required_groups={}", self.global_step, self.context.config.batch_size
         )
         with (
-            Timer("wait_for_generation_buffer", self.all_timings) as rollout_wait_timer,
+            Timer("wait_for_generation_buffer", self.all_timings, journal=self.tracker.journal) as rollout_wait_timer,
             critical_phase("rollout_or_inference_wait", self.global_step),
             async_phase_window("rollout_wait", step=self.global_step, enabled=self._rollout_spans_enabled),
         ):
@@ -1542,6 +1566,7 @@ class RayPPOTrainer:
                 on_admitted=self._submit_admitted_groups_for_teacher_scoring,
             )
         self.all_metrics.update(selection_metrics)
+        logger.info("Admitted rollout batch: step={} selection_metrics={}", self.global_step, selection_metrics)
         await self._seal_speculator_capture()
         await self._start_speculator_update()
         if self.colocate_all:
@@ -1552,7 +1577,7 @@ class RayPPOTrainer:
 
         scored_distillation = None
         if self._distillation_runtime is not None:
-            with Timer("wait_for_teacher_evidence", self.all_timings):
+            with Timer("wait_for_teacher_evidence", self.all_timings, journal=self.tracker.journal):
                 scored_distillation = await self._await_admitted_teacher_evidence(groups)
 
         step_wall.start("batch_assembly")
@@ -1563,7 +1588,7 @@ class RayPPOTrainer:
 
         step_wall.start("training_preparation")
         with (
-            Timer("run_training", self.all_timings),
+            Timer("run_training", self.all_timings, journal=self.tracker.journal),
             async_phase_window("training", step=self.global_step, enabled=self._rollout_spans_enabled),
         ):
             status = await self._run_training(training_input, step_wall=step_wall)
@@ -1624,13 +1649,13 @@ class RayPPOTrainer:
             return
         ref_callback = self._get_ref_update_callback()
         if ref_callback is not None and ref_callback.should_update_ref:
-            with Timer("update_ref_with_policy", self.all_timings):
+            with Timer("update_ref_with_policy", self.all_timings, journal=self.tracker.journal):
                 await asyncio.to_thread(self.update_ref_with_policy)
 
     @asynccontextmanager
     async def _evaluation_session(self):
         try:
-            with Timer("eval_drain", self.all_timings if self.global_step else None):
+            with Timer("eval_drain", self.all_timings if self.global_step else None, journal=self.tracker.journal):
                 await self.context.pause_and_drain()
             async with evaluation_session(
                 self.eval_trajectory_runner, self.cfg, self.global_step, self.eval_trajectory_sink
@@ -1663,7 +1688,7 @@ class RayPPOTrainer:
 
     async def _run_pretraining_evaluation(self, state: TrainerState) -> None:
         # Pre-step evaluation must not be mixed into the first optimizer step's inclusive timers.
-        with Timer("eval_before_train") as pretrain_eval_timer:
+        with Timer("eval_before_train", journal=self.tracker.journal) as pretrain_eval_timer:
             await self._evaluate_and_log(state, commit=self.cfg.trainer.tracker_commit_each_step)
         startup_eval = {"startup/eval_before_train": pretrain_eval_timer.duration}
         self._log_metrics_stdout(startup_eval, step=self.global_step, kind="startup")
@@ -1682,7 +1707,7 @@ class RayPPOTrainer:
         # The drain after the last weight sync can go stale while the rollout buffer fills, so align the
         # policy actor loops immediately before every forward.
         await self._drain_policy_event_loops()
-        with Timer("fwd_logprobs_values_reward", self.all_timings):
+        with Timer("fwd_logprobs_values_reward", self.all_timings, journal=self.tracker.journal):
             training_input = await asyncio.to_thread(self.fwd_logprobs_values_reward, training_input)
 
         if self.distillation_plan is not None and self.distillation_plan.reward_mode is DistillationRewardMode.REPLACE:
@@ -1702,25 +1727,40 @@ class RayPPOTrainer:
             self.all_metrics.update(result.metrics)
 
         if self.cfg.trainer.algorithm.use_kl_in_reward:
-            with Timer("apply_reward_kl_penalty", self.all_timings):
+            with Timer("apply_reward_kl_penalty", self.all_timings, journal=self.tracker.journal):
                 training_input = self.apply_reward_kl_penalty(training_input)
 
         # Batch replay runs this prefix outside an optimizer step, without a step wall clock.
         if step_wall is not None:
             step_wall.start("advantages")
-        with Timer("compute_advantages_and_returns", self.all_timings):
+        if self.cfg.trainer.dump_training_order:
+            order = {
+                "global_step": self.global_step,
+                "uids": to_jsonable(training_input.metadata["uids"]),
+                "trajectory_ids": to_jsonable(training_input.metadata["trajectory_ids"]),
+                "pad_size": training_input.metadata.get("pad_size", 0),
+                "order_semantics": "assembled learner batch before optimizer update; confirm completion against step metrics",
+            }
+            order_path = join_resource_path(self.cfg.trainer.export_path, "training_order", f"step-{self.global_step}.json")
+            io.makedirs(join_resource_path(self.cfg.trainer.export_path, "training_order"), exist_ok=True)
+            io.write_bytes_atomic(order_path, json.dumps(order).encode())
+
+        with Timer("compute_advantages_and_returns", self.all_timings, journal=self.tracker.journal):
             training_input = self.compute_advantages_and_returns(training_input)
             training_input = self.finalize_advantages_for_training(training_input)
 
         if self.cfg.trainer.dump_data_batch:
             if step_wall is not None:
                 step_wall.start("training_preparation")
-            with Timer("dump_data_batch", self.all_timings):
+            with Timer("dump_data_batch", self.all_timings, journal=self.tracker.journal):
                 self.dump_data(training_input, file_name=f"global_step_{self.global_step}_training_input")
 
         if step_wall is not None:
             step_wall.start("policy_training")
-        with Timer("train_critic_and_policy", self.all_timings), critical_phase("train_step", self.global_step):
+        with (
+            Timer("train_critic_and_policy", self.all_timings, journal=self.tracker.journal),
+            critical_phase("train_step", self.global_step),
+        ):
             status = await asyncio.to_thread(self.train_critic_and_policy, training_input)
         self._policy_version_step = self.global_step
 
@@ -1777,7 +1817,7 @@ class RayPPOTrainer:
         batch_size = self.context.config.batch_size
         max_staleness_steps = self.context.config.max_staleness_steps
         assert len(groups) == batch_size, f"Expected {batch_size} groups, got {len(groups)}"
-        with Timer("assemble_generation_group_mini_batch", self.all_timings):
+        with Timer("assemble_generation_group_mini_batch", self.all_timings, journal=self.tracker.journal):
             uids = [group.uid for group in groups for _ in group.trajectory_batch["response_ids"]]
             stalenesses = [self.global_step - group.policy_step for group in groups]
             staleness_by_uid = {group.uid: staleness for group, staleness in zip(groups, stalenesses, strict=True)}
@@ -1805,7 +1845,7 @@ class RayPPOTrainer:
                 }
             )
 
-        with Timer("postprocess_trajectory_batch", self.all_timings):
+        with Timer("postprocess_trajectory_batch", self.all_timings, journal=self.tracker.journal):
             trajectory_batch = self.postprocess_trajectory_batch(trajectory_batch, uids)
             trajectory_batch, uids = self.select_trajectories(trajectory_batch, uids)
         # Built after selection, because select_trajectories may drop rows.
@@ -1813,7 +1853,7 @@ class RayPPOTrainer:
 
         logger.debug(f"Example generated: {self.tokenizer.decode(trajectory_batch['response_ids'][0])}")
 
-        with Timer("convert_to_training_input", self.all_timings):
+        with Timer("convert_to_training_input", self.all_timings, journal=self.tracker.journal):
             training_input = self.convert_to_training_input(trajectory_batch, uids, rollout_staleness=rollout_staleness)
         if self._training_metrics_enabled:
             self._record_consumed_staleness(uids, rollout_staleness, training_input["response_mask"][: len(uids)])
@@ -2282,6 +2322,22 @@ class RayPPOTrainer:
             },
             routed_expert_rows=rollout_routed_experts_rows,
         )
+        if self.cfg.trainer.dump_data_batch:
+            for row, expected_mask in enumerate(loss_masks):
+                positions = response_masks_tensor[row].bool()
+                if training_input["loss_mask"][row][positions].tolist() != expected_mask:
+                    raise ValueError("Learner collation changed rollout action loss positions")
+                if logprobs is not None:
+                    actual = training_input["rollout_logprobs"][row][positions]
+                    expected = torch.as_tensor(logprobs[row], dtype=actual.dtype, device=actual.device)
+                    if not torch.equal(actual, expected):
+                        raise ValueError("Learner collation changed behavior log probabilities")
+            record_event("learner_projection_audit", {
+                "step": self.global_step,
+                "rows": len(response_ids),
+                "action_tokens": sum(sum(mask) for mask in loss_masks),
+                "router_replay_enabled": moe_router_replay,
+            })
         training_input.update(distillation_tensors)
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
         if ftpo is not None:
@@ -2480,6 +2536,13 @@ class RayPPOTrainer:
         if loop_advantages_tensor is not None:
             training_input["loop_advantages"] = loop_advantages_tensor
         training_input.metadata = {"uids": uids}
+        trajectory_ids = trajectory_batch.get("trajectory_ids")
+        if trajectory_ids is not None:
+            if len(trajectory_ids) != len(response_ids):
+                raise ValueError("trajectory_ids must carry one identity per response row")
+            training_input.metadata["trajectory_ids"] = [identity.to_string() for identity in trajectory_ids]
+        elif self.cfg.trainer.step_wise_training or self.cfg.trainer.dump_training_order:
+            raise ValueError("Step-wise training and training-order retention require rollout trajectory_ids")
         # For RLOO-N: pass through exclude_from_baseline flags if present
         if trajectory_batch.get("exclude_from_baseline") is not None:
             training_input.metadata["exclude_from_baseline"] = np.array(
@@ -2491,12 +2554,6 @@ class RayPPOTrainer:
         # padded response length
         training_input.metadata["response_length"] = response_masks_tensor.shape[1]
         if self.cfg.trainer.step_wise_training:
-            assert "trajectory_ids" in trajectory_batch, (
-                "Expected `trajectory_ids` in trajectory batch for step wise training"
-            )
-            training_input.metadata["trajectory_ids"] = [
-                trajectory_id.to_string() for trajectory_id in trajectory_batch["trajectory_ids"]
-            ]
             training_input.metadata["avg_response_length"] = sum(
                 len(sample_response_ids)
                 for sample_response_ids, is_last_step in zip(response_ids, trajectory_batch["is_last_step"])
@@ -2658,6 +2715,7 @@ class RayPPOTrainer:
             lambd = self.cfg.trainer.algorithm.lambd
             grpo_norm_by_std = self.cfg.trainer.algorithm.grpo_norm_by_std
             last_step_rewards = token_level_rewards[is_last_step]
+            excluded = data.metadata.get("exclude_from_baseline")
             # compatible with any advantage estimator
             last_step_advantages, last_step_returns = compute_advantages_and_returns(
                 token_level_rewards=last_step_rewards,
@@ -2670,6 +2728,7 @@ class RayPPOTrainer:
                 lambd=lambd,
                 grpo_norm_by_std=grpo_norm_by_std,
                 group_advantage_invariant=self.group_advantage_invariant,
+                exclude_from_baseline=None if excluded is None else excluded[is_last_step.cpu().numpy()],
             )
             traj_ids = (
                 torch.cat([torch.tensor([False], device=is_last_step.device), is_last_step[:-1]]).int().cumsum(dim=0)
@@ -2680,6 +2739,10 @@ class RayPPOTrainer:
             )
             advantages = last_step_advantages[traj_ids]
             returns = last_step_returns[traj_ids]
+            if adv_estimator == AdvantageEstimator.RLOO_N:
+                final_mask = response_mask[is_last_step]
+                advantages = expand_outcome_to_steps(last_step_advantages, final_mask, response_mask, traj_ids)
+                returns = expand_outcome_to_steps(last_step_returns, final_mask, response_mask, traj_ids)
         else:
             # For RLOO-N: pass exclude_from_baseline if present in metadata
             exclude_from_baseline = data.metadata.get("exclude_from_baseline", None)
@@ -2803,9 +2866,11 @@ class RayPPOTrainer:
         """
         Dump data to pickle file
         """
-        data_save_dir = Path(self.cfg.trainer.export_path) / "dumped_data"
-        data_save_dir.mkdir(parents=True, exist_ok=True)
-        data.save(data_save_dir / f"{file_name}.pkl")
+        data_save_dir = join_resource_path(self.cfg.trainer.export_path, "dumped_data")
+        io.makedirs(data_save_dir, exist_ok=True)
+        path = join_resource_path(data_save_dir, f"{file_name}.pkl")
+        with io.open_file(path, "wb") as destination:
+            pickle.dump(data, destination)
 
     def pad_batch(self, training_input: TrainingInputBatch) -> TrainingInputBatch:
         """Pad the batch to be divisible by dp size"""
@@ -3100,7 +3165,7 @@ class RayPPOTrainer:
         data.metadata["global_step"] = self.global_step
         if self.colocate_all:
             if self.critic_model is not None:
-                with Timer("critic_train", self.all_timings):
+                with Timer("critic_train", self.all_timings, journal=self.tracker.journal):
                     self.critic_model.backload_to_gpu()
                     critic_refs = self.critic_model.async_run_ray_method("mesh", "ppo_train", data)
                     critic_statuses = collect_actor_results(
@@ -3109,7 +3174,7 @@ class RayPPOTrainer:
                         operation="critic ppo_train",
                     )
                     self.critic_model.offload_to_cpu()
-            with Timer("policy_train", self.all_timings):
+            with Timer("policy_train", self.all_timings, journal=self.tracker.journal):
                 self.policy_model.backload_to_gpu()
                 policy_refs = self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
                 policy_statuses = collect_actor_results(
@@ -3119,10 +3184,10 @@ class RayPPOTrainer:
                 )
         else:
             if self.cfg.trainer.offload_optimizer_during_rollouts:
-                with Timer("backload_policy_optimizer_to_gpu", self.all_timings):
+                with Timer("backload_policy_optimizer_to_gpu", self.all_timings, journal=self.tracker.journal):
                     self.policy_model.backload_to_gpu(backload_optimizer=True, backload_model=False)
             if self.critic_model is not None:
-                with Timer("policy_critic_overlap_train", self.all_timings):
+                with Timer("policy_critic_overlap_train", self.all_timings, journal=self.tracker.journal):
                     policy_refs = self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
                     critic_refs = self.critic_model.async_run_ray_method("mesh", "ppo_train", data)
                     all_statuses = collect_actor_results(
@@ -3133,7 +3198,7 @@ class RayPPOTrainer:
                     policy_statuses = all_statuses[: len(policy_refs)]
                     critic_statuses = all_statuses[len(policy_refs) :]
             else:
-                with Timer("policy_train", self.all_timings):
+                with Timer("policy_train", self.all_timings, journal=self.tracker.journal):
                     policy_refs = self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
                     policy_statuses = collect_actor_results(
                         self.policy_model.actor_infos,
@@ -3166,8 +3231,10 @@ class RayPPOTrainer:
         return actor_info.rank
 
     async def save_checkpoints(self) -> None:
-        """Wait for prior uploads, then save and publish a complete checkpoint."""
+        """Ensure this optimizer step has a committed checkpoint, awaiting any upload."""
         await self._drain_checkpoint_upload()
+        if self._last_saved_step == self.global_step:
+            return
         snapshot = await asyncio.to_thread(self._snapshot_checkpoint, await self._rollout_state())
         upload_duration, cleanup_duration = await self._finish_checkpoint_upload(snapshot, commit=True)
         self.all_timings["checkpoint_upload"] = self.all_timings.get("checkpoint_upload", 0.0) + upload_duration
@@ -3440,7 +3507,7 @@ class RayPPOTrainer:
 
     def handle_hf_export(self) -> None:
         """Persist a request for out-of-band policy checkpoint conversion."""
-        with Timer("queue_hf_export", self.all_timings):
+        with Timer("queue_hf_export", self.all_timings, journal=self.tracker.journal):
             self._handle_hf_export()
 
     def _handle_hf_export(self) -> None:

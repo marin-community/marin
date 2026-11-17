@@ -192,6 +192,36 @@ Direct datasets are expected to yield `LmExample` instances that already include
 ---
 
 
+## Bounded lookahead packing
+
+Prebuilt caches carry final prediction-indexed loss weights. Apply any weight
+transforms while producing the cache; declarative dataset configuration does not
+accept executable Python callables.
+
+Cache-backed components can fill gaps with later documents by setting
+`packing_lookahead` alongside an explicit document cap:
+
+```yaml
+format:
+  type: prebuilt
+  loss_weights_key: loss_weights
+pack: 256
+packing_lookahead: 128
+```
+
+Each pack starts with the oldest pending document, then selects the largest
+fitting document from a bounded window. Ties and document order within a pack
+follow source order. Every document appears once, and the configured sequence
+shuffle and seed still apply after packing. Oversized documents raise an error;
+lookahead never silently truncates or drops them.
+
+Token and mask fields must have equal lengths for every document. Prebuilt
+`loss_weights` index predictions: weight `i` supervises prediction of token
+`i + 1`. Packing carries these weights without another shift. Producers should
+set each document's final weight to zero, so one document never supervises the
+first token of another. Token-position assistant masks in chat caches retain
+their existing single next-token shift.
+
 # API
 
 

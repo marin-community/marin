@@ -199,7 +199,7 @@ def supervise_iris_job(job: Job) -> LaunchOutcome:
     except (KeyboardInterrupt, _LauncherTermination) as interruption:
         _cancel_iris_job_tree(job, job_id, interruption)
         exit_code = 130 if isinstance(interruption, KeyboardInterrupt) else 128 + interruption.signum
-        return LaunchOutcome(job_id=job_id, job_state=JobState.KILLED.value, exit_code=exit_code)
+        return LaunchOutcome(job_id=job_id, job_state=JobState.KILLED.value, exit_code=exit_code, failure=str(interruption))
     except BaseException as error:
         _cancel_iris_job_tree(job, job_id, error)
         raise
@@ -207,6 +207,7 @@ def supervise_iris_job(job: Job) -> LaunchOutcome:
         job_id=job_id,
         job_state=status.state.value,
         exit_code=0 if status.state is JobState.SUCCEEDED else 1,
+        failure=status.error_message or status.status_message or None if status.state is not JobState.SUCCEEDED else None,
     )
 
 

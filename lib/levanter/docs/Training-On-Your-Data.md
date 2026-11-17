@@ -431,6 +431,11 @@ You can also use this script to evaluate on other datasets by modifying the conf
 
 You can export to HF during training using the `hf_save_steps` and `hf_save_path` options in your config. You can
 also set `hf_upload` to an HF repo to automatically upload your model to HF. See the [config above](#tldr) for an example.
+Set `hf_save_steps: null` to disable HF export, including the final forced export, while keeping native checkpoints.
+
+Reference-code exports preserve model code while excluding reference weights, shard indexes and
+cache or verified-copy completion markers. Those markers describe the initializer's bytes; a new
+export needs its own transfer certification.
 
 Typically, you will have saved checkpoints in a directory like `gs://path/to/checkpoints/hf/my_run/step_10000/`.
 Hugging Face Transformers doesn't know how to read these. So, you'll need to copy the files to a local directory:

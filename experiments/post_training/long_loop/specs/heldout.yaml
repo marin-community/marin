@@ -1,0 +1,29 @@
+candidate_uri: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/swe-pi-taskpython-20261111-v3
+data_file: validation.parquet
+rows: 120
+seed: 20261109
+agentic_selection: Original20 SWE-smith heldouts retained; CalibForge absent
+composition:
+  swesmith: 20
+  snowball-100k: 100
+files:
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/validation.parquet
+  sha256: 5b85b07f8e200132da942fae0175989362fd5e60e3debb637162e73e06fafe91
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/manifest.json
+  sha256: 819c1cd8fe8f9b498e381222c3e20d91c970b5d81f809be24e9726890c94896b
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/validation.parquet.identities.jsonl
+  sha256: 7cc73be4c665ac36802fe0575297c7d83dd18df7a6b75f3ef9b26246a616ff04
+admission_pending: []
+overlap_admission:
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/overlap-admission-20261110.json
+  sha256: ac2e5c18c94222404cbc39b58077572e225efdaa125a11eb5a0375d152e83872
+uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3
+execution_overlay:
+  marin_revision: 91c49019eb078b039eb98a1837626cacad603059
+  agent: pi
+  version: pi-task-python-shared-v3
+  agent_user: longloop-agent
+  agent_uid: 10001
+  snapshot_contexts: 5
+  row_order_and_source_identity: preserved
+  upstream_manifest_sha256: cf4050ab35a497d4189552883f2e234a66a7c31fa833615b7baa8c3616bd8db4

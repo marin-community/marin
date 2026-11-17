@@ -6,6 +6,7 @@ import json
 import math
 import os
 import tempfile
+from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -14,6 +15,8 @@ import jax.random as jrandom
 import pytest
 from transformers import AutoTokenizer
 from chex import assert_trees_all_close
+from rigging.training_journal import verify_training_journals
+from rigging.filesystem.storage_path import StoragePath
 
 from haliax import Axis
 from haliax.quantization import QuantizationConfig
@@ -55,6 +58,8 @@ def _assert_training_recorded(output_path: str) -> dict:
 @pytest.mark.timeout(240)
 def test_train_lm(local_gpt2_tokenizer_path):
     with tempfile.TemporaryDirectory() as tmpdir:
+        task_outputs = Path(tmpdir) / "task-outputs"
+        task_outputs.mkdir()
         data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir, tokenizer=local_gpt2_tokenizer_path)
         config = train_lm.TrainLmConfig(
             data=data_config,
@@ -72,6 +77,8 @@ def test_train_lm(local_gpt2_tokenizer_path):
             ),
             trainer=train_lm.TrainerConfig(
                 id="template-export",
+                native_telemetry_root=os.path.join(tmpdir, "telemetry"),
+                log_dir=task_outputs,
                 num_train_steps=2,
                 train_batch_size=len(jax.devices()),
                 max_eval_batches=1,
@@ -83,6 +90,18 @@ def test_train_lm(local_gpt2_tokenizer_path):
         )
         train_lm.main(config)
         _assert_training_recorded(tmpdir)
+        receipts = verify_training_journals(
+            os.path.join(tmpdir, "telemetry"),
+            {"rank-0"},
+            {"init", "data_load", "compile", "first_step", "steady_state", "checkpoint_save", "export"},
+        )
+        history_path = StoragePath(receipts[0]["source"]).parent / "history.jsonl"
+        history = [json.loads(line) for line in history_path.read_text().splitlines()]
+        [local_history] = task_outputs.glob("training-journal-*/history.jsonl")
+        assert local_history.read_bytes() == history_path.read_bytes()
+        losses = {row["step"]: row["metrics"]["train/loss"] for row in history if "train/loss" in row["metrics"]}
+        assert set(losses) == {0, 1}
+        assert all(math.isfinite(value) for value in losses.values())
         tokenizer = AutoTokenizer.from_pretrained(os.path.join(tmpdir, "hf", "template-export", "step-1"))
         assert tokenizer.apply_chat_template([{"role": "user", "content": "hello"}], tokenize=False) == "user:hello;"
 

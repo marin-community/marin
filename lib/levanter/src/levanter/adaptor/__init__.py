@@ -140,6 +140,7 @@ def _install_full_model_export_hook(
             generation_config=export.generation_config,
             chat_template=export.chat_template,
             field_dtype_overrides=trainer.config.field_dtype_overrides,
+            training_journal=trainer.journal,
         ),
         every=export.hf_save_steps,
     )

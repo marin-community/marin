@@ -9,21 +9,28 @@ imports the module its target came from, so the scenarios live on the installed 
 any interpreter can import them regardless of its working directory.
 """
 
+import json
 import multiprocessing
 import os
 import socket
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+import draccus
 import jax
 import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from rigging.training_journal import TrainingJournal, verify_training_journals
 
+from levanter.checkpoint import CheckpointerConfig, load_checkpoint_metadata
+from levanter.config import register_codecs
 from levanter.tensorstore_serialization import (
     ReplicaRestoreMode,
     TensorStoreReadConfig,
@@ -70,7 +77,9 @@ class _DistributedRestoreResult:
     tensorstore_chunk_reads: int
 
 
-def _distributed_restore(process_id: int, coordinator: str, checkpoint_path: str) -> _DistributedRestoreResult:
+def _distributed_scenario[T](
+    scenario: Callable[[str], T], process_id: int, coordinator: str, checkpoint_path: str
+) -> T:
     for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
         os.environ.pop(name, None)
     jax.distributed.initialize(
@@ -80,28 +89,48 @@ def _distributed_restore(process_id: int, coordinator: str, checkpoint_path: str
         local_device_ids=[process_id],
     )
     try:
-        mesh = Mesh(np.array(jax.devices()), ("replica",))
-        sharding = NamedSharding(mesh, P())
-        pinned = sharding.with_memory_kind(_PINNED_HOST_MEMORY_KIND)
-
-        with jax.set_mesh(mesh):
-            before = _tensorstore_chunk_reads()
-            restored = tree_deserialize_leaves_tensorstore(
-                checkpoint_path,
-                {
-                    name: jax.ShapeDtypeStruct((DISTRIBUTED_ARRAY_SIZE,), jnp.float32, sharding=pinned)
-                    for name in ("a", "c")
-                },
-            )
-            after = _tensorstore_chunk_reads()
-            on_device = {name: jax.device_put(array, sharding) for name, array in restored.items()}
-            return _DistributedRestoreResult(
-                arrays={name: np.asarray(array) for name, array in on_device.items()},
-                memory_kinds=frozenset(array.sharding.memory_kind for array in restored.values()),
-                tensorstore_chunk_reads=after - before,
-            )
+        return scenario(checkpoint_path)
     finally:
         jax.distributed.shutdown()
+
+
+def _run_across_processes[T](scenario: Callable[[str], T], checkpoint_path: str) -> list[T]:
+    with socket.socket() as listener:
+        listener.bind((_LOOPBACK_ADDRESS, 0))
+        port = listener.getsockname()[1]
+    coordinator = f"{_LOOPBACK_ADDRESS}:{port}"
+    with mock.patch.dict(os.environ, _cpu_device_environment(DISTRIBUTED_PROCESS_COUNT)):
+        with ProcessPoolExecutor(
+            max_workers=DISTRIBUTED_PROCESS_COUNT, mp_context=multiprocessing.get_context("spawn")
+        ) as pool:
+            futures = [
+                pool.submit(_distributed_scenario, scenario, process_id, coordinator, checkpoint_path)
+                for process_id in range(DISTRIBUTED_PROCESS_COUNT)
+            ]
+            return [future.result() for future in futures]
+
+
+def _distributed_restore(checkpoint_path: str) -> _DistributedRestoreResult:
+    mesh = Mesh(np.array(jax.devices()), ("replica",))
+    sharding = NamedSharding(mesh, P())
+    pinned = sharding.with_memory_kind(_PINNED_HOST_MEMORY_KIND)
+
+    with jax.set_mesh(mesh):
+        before = _tensorstore_chunk_reads()
+        restored = tree_deserialize_leaves_tensorstore(
+            checkpoint_path,
+            {
+                name: jax.ShapeDtypeStruct((DISTRIBUTED_ARRAY_SIZE,), jnp.float32, sharding=pinned)
+                for name in ("a", "c")
+            },
+        )
+        after = _tensorstore_chunk_reads()
+        on_device = {name: jax.device_put(array, sharding) for name, array in restored.items()}
+        return _DistributedRestoreResult(
+            arrays={name: np.asarray(array) for name, array in on_device.items()},
+            memory_kinds=frozenset(array.sharding.memory_kind for array in restored.values()),
+            tensorstore_chunk_reads=after - before,
+        )
 
 
 def replica_aware_restore_across_processes() -> None:
@@ -111,26 +140,50 @@ def replica_aware_restore_across_processes() -> None:
             "c": np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32) + 1,
         }
         tree_serialize_leaves_tensorstore(tmpdir, expected)
-        with socket.socket() as listener:
-            listener.bind((_LOOPBACK_ADDRESS, 0))
-            port = listener.getsockname()[1]
-        coordinator = f"{_LOOPBACK_ADDRESS}:{port}"
-
-        with mock.patch.dict(os.environ, _cpu_device_environment(DISTRIBUTED_PROCESS_COUNT)):
-            with ProcessPoolExecutor(
-                max_workers=DISTRIBUTED_PROCESS_COUNT, mp_context=multiprocessing.get_context("spawn")
-            ) as pool:
-                futures = [
-                    pool.submit(_distributed_restore, process_id, coordinator, tmpdir)
-                    for process_id in range(DISTRIBUTED_PROCESS_COUNT)
-                ]
-                results = [future.result() for future in futures]
+        results = _run_across_processes(_distributed_restore, tmpdir)
 
     for result in results:
         for name in expected:
             np.testing.assert_array_equal(result.arrays[name], expected[name])
         assert result.memory_kinds == {_PINNED_HOST_MEMORY_KIND}
     assert sum(result.tensorstore_chunk_reads for result in results) == len(expected)
+
+
+def _async_checkpoint_roundtrip(checkpoint_path: str) -> np.ndarray:
+    register_codecs()
+    config = CheckpointerConfig(
+        base_path=checkpoint_path, append_run_id_to_base_path=False, save_interval=None, keep=None
+    )
+    config = draccus.decode(CheckpointerConfig, json.loads(json.dumps(draccus.encode(config))))
+    journal = TrainingJournal(
+        str(Path(checkpoint_path) / "telemetry"), "async-wire-roundtrip", "sft", f"rank-{jax.process_index()}"
+    )
+    checkpointer = config.create("async-wire-roundtrip", training_journal=journal)
+    mesh = Mesh(np.array(jax.devices()), ("replica",))
+    expected = np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+    with jax.set_mesh(mesh):
+        source = {"model": jax.device_put(expected, NamedSharding(mesh, P()))}
+        checkpointer.save_checkpoint(source, step=1, destination="step-1", is_temporary=False)
+        checkpointer.wait_until_finished()
+        saved = str(Path(checkpoint_path) / "step-1")
+        metadata = load_checkpoint_metadata(saved)
+        assert metadata["step"] == 1 and metadata["is_temporary"] is False
+        restored = np.asarray(checkpointer.load_checkpoint(source, saved)["model"])
+    journal.log({"checkpoint/restored_values": int(restored.size)}, step=metadata["step"], commit=True)
+    journal.finish(status="completed")
+    return restored
+
+
+def async_checkpoint_roundtrip_across_processes() -> None:
+    with TemporaryDirectory() as tmpdir:
+        results = _run_across_processes(_async_checkpoint_roundtrip, tmpdir)
+        verify_training_journals(
+            str(Path(tmpdir) / "telemetry"),
+            {f"rank-{rank}" for rank in range(DISTRIBUTED_PROCESS_COUNT)},
+            {"checkpoint_save"},
+        )
+    for result in results:
+        np.testing.assert_array_equal(result, np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32))
 
 
 def _mesh(shape: tuple[int, int] = (2, 4)) -> Mesh:

@@ -65,36 +65,46 @@ that has them).
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+import os
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
+from functools import partial
 from typing import Protocol, runtime_checkable
 
 import click
-import jax.numpy as jnp
+import draccus
 import jmp
-from fray.types import ANY_REGION, GpuConfig, ResourceConfig
+from fray.current_client import current_client
+from fray.types import ANY_REGION, CpuConfig, Entrypoint, GpuConfig, JobRequest, ResourceConfig, create_environment
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.formats import ChatLmDatasetFormat
+from levanter.eval_audit import InitialEvalMatchConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.lm_model import LmConfig
+from levanter.models.snowball_sft import SnowballSftConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower
-from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
-from marin.training.levanter import run_levanter_train_lm
-from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
-from rigging.filesystem.storage_path import prefix_join
+from marin.training.levanter import apply_output_path, resolve_training_env, run_levanter_train_lm
+from marin.training.run_environment import extras_for_resources
+from marin.training.training import (
+    LevanterCheckpoint,
+    TrainLmOnPodConfig,
+)
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.timing import Duration
 
 from experiments.datasets.instruction import (
     InstructionDatasetConfig,
@@ -114,6 +124,7 @@ _GPU_HOST_CPU_PER_DEVICE = 8
 _GPU_HOST_RAM_GB_PER_DEVICE = 96
 _GPU_HOST_DISK_GB_PER_DEVICE = 48
 LLAMA3_CHAT_EOS_TOKEN_IDS = (128001, 128009)  # <|end_of_text|> and <|eot_id|>
+DEFAULT_SFT_TASK_TIMEOUT_SECONDS = 3 * 24 * 3600
 
 
 @dataclass(frozen=True)
@@ -227,10 +238,18 @@ def _levanter_train_config(
         # One HF export: the trainer's forced end-of-run hook pass. A period equal to the run
         # length would also fire on the last step and export the same step twice.
         hf_save_steps=num_train_steps + 1,
-        hf_save_dtype=jnp.dtype(spec.hf_save_dtype) if spec.hf_save_dtype is not None else None,
+        hf_save_dtype=spec.hf_save_dtype,
         hf_save_chat_template=spec.chat_template,
         hf_generation_eos_token_ids=list(eos_token_ids),
-        z_loss_weight=0.0,
+        z_loss_weight=spec.z_loss_weight,
+        global_gradient_clip=spec.global_gradient_clip,
+        optimizer_num_train_steps=spec.optimizer_num_train_steps,
+        snowball_sft=spec.snowball_sft,
+        token_weighted_accumulation=spec.token_weighted_accumulation,
+        data_seed=spec.data_seed,
+        tensorstore_cache_bytes=spec.tensorstore_cache_bytes,
+        evaluation_data=spec.evaluation_data,
+        initial_eval_match=spec.initial_eval_match,
     )
 
 
@@ -268,13 +287,87 @@ def _levanter_pod_config(
         ),
         resources=resources,
         output_path=ctx.output_path,
+        env_vars={
+            **({"XLA_FLAGS": " ".join(spec.xla_flags)} if spec.xla_flags else {}),
+            **({"IRIS_PORT_JAX": str(spec.jax_port)} if spec.jax_port is not None else {}),
+        },
         auto_build_caches=data_config.auto_build_caches,
     )
 
 
-def _levanter_train_job(pod_config: TrainLmOnPodConfig) -> None:
+def levanter_train_request(
+    pod_config: TrainLmOnPodConfig,
+    *,
+    task_timeout_seconds: int = DEFAULT_SFT_TASK_TIMEOUT_SECONDS,
+    processes_per_task: int = 1,
+    priority: int = 0,
+) -> JobRequest:
+    """Record the consumed configuration and construct the canonical training request."""
+    environment = resolve_training_env(pod_config.env_vars, pod_config.resources)
+    environment.update(
+        {
+            key: os.environ[key]
+            for key in ("MARIN_PREFIX", "MARIN_TEMP_PREFIX", "JAX_COMPILATION_CACHE_DIR")
+            if key in os.environ
+        }
+    )
+    if isinstance(pod_config.resources.device, GpuConfig):
+        environment["JAX_PLATFORMS"] = "cuda,cpu"
+    elif isinstance(pod_config.resources.device, CpuConfig):
+        environment["JAX_PLATFORMS"] = "cpu"
+    if pod_config.output_path is not None:
+        pod_config = replace(pod_config, train_config=apply_output_path(pod_config.train_config, pod_config.output_path))
+        (StoragePath(pod_config.output_path) / "consumed-config.json").write_text(
+            json.dumps(
+                {
+                    "format": "SFTSpec",
+                    "dispatch_environment": {
+                        name: environment[name]
+                        for name in ("XLA_FLAGS", "JAX_PLATFORMS", "JAX_COMPILATION_CACHE_DIR")
+                        if name in environment
+                    },
+                    "train_config": draccus.encode(pod_config.train_config),
+                    "resources": draccus.encode(pod_config.resources),
+                    "output_path": pod_config.output_path,
+                },
+                indent=2,
+            )
+        )
+    return JobRequest(
+        name=f"sft-{pod_config.train_config.trainer.id}",
+        entrypoint=Entrypoint.from_callable(run_levanter_train_lm, args=[pod_config]),
+        resources=pod_config.resources,
+        environment=create_environment(extras=extras_for_resources(pod_config.resources), env_vars=environment),
+        timeout=Duration.from_seconds(task_timeout_seconds),
+        processes_per_task=processes_per_task,
+        priority=priority,
+        max_retries_preemption=0,
+    )
+
+
+def _levanter_train_job(
+    pod_config: TrainLmOnPodConfig,
+    *,
+    task_timeout_seconds: int = DEFAULT_SFT_TASK_TIMEOUT_SECONDS,
+    processes_per_task: int = 1,
+    priority: int = 0,
+) -> None:
     """Dispatch a Levanter ``train_lm`` config as its own Fray training job."""
-    remote(run_levanter_train_lm, resources=pod_config.resources)(pod_config)
+    job = current_client().submit(
+        levanter_train_request(
+            pod_config,
+            task_timeout_seconds=task_timeout_seconds,
+            processes_per_task=processes_per_task,
+            priority=priority,
+        )
+    )
+    if pod_config.output_path is not None:
+        (StoragePath(pod_config.output_path) / "dispatch.json").write_text(
+            json.dumps(
+                {"job_id": job.job_id, "timeout_seconds": task_timeout_seconds, "processes_per_task": processes_per_task}
+            )
+        )
+    job.wait(raise_on_failure=True)
 
 
 @dataclass(frozen=True)
@@ -291,6 +384,9 @@ class HFModel:
     tokenizer_path: str | None = None  # defaults to model_ref
     model_type: str = "qwen3"
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
+    task_timeout_seconds: int = DEFAULT_SFT_TASK_TIMEOUT_SECONDS
+    processes_per_task: int = 1
+    priority: int = 0
 
     def tokenizer_cache_key(self) -> str:
         return self.tokenizer_path or self.model_ref
@@ -300,7 +396,12 @@ class HFModel:
 
     @property
     def run(self) -> Callable[..., None]:
-        return _levanter_train_job
+        return partial(
+            _levanter_train_job,
+            task_timeout_seconds=self.task_timeout_seconds,
+            processes_per_task=self.processes_per_task,
+            priority=self.priority,
+        )
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
         return ()
@@ -320,7 +421,7 @@ class HFModel:
             resources,
             num_train_steps,
             # use_hf_model_config re-derives the arch from the checkpoint, so only the class matters.
-            model_config=LmConfig.get_choice_class(self.model_type)(),
+            model_config=spec.model_config or LmConfig.get_choice_class(self.model_type)(),
             initialize_from_hf=self.model_ref,
             initialize_model_from_checkpoint_path=None,
             use_hf_model_config=True,
@@ -528,10 +629,26 @@ class SFTSpec:
     chat_template: str  # any jinja carrying a {% generation %} block (completions-only mask)
     datasets: Sequence[DatasetSpec | ArtifactDatasetSpec]  # the instruction mixture
     optimizer: OptimizerConfig  # e.g. AdamConfig for the Levanter backend
+    prepared_data: LmDataConfig | None = None
+    """Already prepared caches and their complete mixture schedule; excludes message datasets."""
+    data_dependencies: tuple[ArtifactStep, ...] = ()
+    model_config: LmConfig | None = None
+    trainer_config: TrainerConfig | None = None
+    z_loss_weight: float = 0.0
+    global_gradient_clip: float | None = None
+    initial_eval_match: InitialEvalMatchConfig | None = None
+    optimizer_num_train_steps: int | None = None
+    snowball_sft: SnowballSftConfig | None = None
+    token_weighted_accumulation: bool = False
+    data_seed: int | None = None
+    tensorstore_cache_bytes: int | None = None
+    evaluation_data: LmDataConfig | None = None
     mesh: MeshConfig | None = None
     seq_len: int = 4096
     pack: bool = True  # chat packs by default; a step count must count packed examples
     batch_size: int = 16
+    per_device_parallelism: int = -1
+    """Concurrent examples per batch-parallel device; -1 uses the full per-device batch."""
     # Training length is exactly one of these. ``num_train_epochs`` (single dataset only) resolves the
     # step count at run time from the chat cache's token total -- ``ceil(epochs * tokens / (seq_len *
     # batch))``, the packed-sequence count -- so it is not hand-calibrated; it routes the run through a
@@ -540,7 +657,11 @@ class SFTSpec:
     num_train_steps: int | None = None
     num_train_epochs: int | None = None
     hf_save_dtype: str | None = None
+    xla_flags: Sequence[str] = ()
+    jax_port: int | None = None
+    """Explicit compiler flags for the training process and its validation callbacks."""
     wandb_project: str = "marin-sft-launcher"
+    wandb_entity: str | None = None
     checkpointer: CheckpointerConfig = field(
         default_factory=lambda: CheckpointerConfig(
             save_interval=timedelta(minutes=30), keep=None, keep_last_temporary_checkpoints=1
@@ -553,6 +674,8 @@ class SFTSpec:
     """
 
     def __post_init__(self) -> None:
+        if self.prepared_data is not None and (self.datasets or self.num_train_epochs is not None):
+            raise ValueError("prepared_data requires explicit steps and excludes datasets/epochs")
         if (self.num_train_steps is None) == (self.num_train_epochs is None):
             raise ValueError("Set exactly one of num_train_steps or num_train_epochs.")
         if self.num_train_epochs is not None and len(self.datasets) != 1:
@@ -672,6 +795,21 @@ def _trainer(
     spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool, use_explicit_mesh_axes: bool = False
 ) -> TrainerConfig:
     """Trainer config. ``gpu_allocator`` adds the GPU-only cuda_async PJRT allocator."""
+    if spec.trainer_config is not None:
+        jax_config = dict(spec.trainer_config.jax_config)
+        if gpu_allocator:
+            jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
+        return replace(
+            spec.trainer_config,
+            id=sft_run_id(spec),
+            train_batch_size=spec.batch_size,
+            num_train_steps=num_train_steps,
+            per_device_parallelism=spec.per_device_parallelism,
+            use_explicit_mesh_axes=use_explicit_mesh_axes,
+            mesh=spec.mesh if spec.mesh is not None else spec.trainer_config.mesh,
+            checkpointer=spec.checkpointer,
+            jax_config=jax_config,
+        )
     jax_config = dict(DEFAULT_JAX_CONFIG)
     if gpu_allocator:
         # The cuda_async allocator is the resume-OOM defrag fix (marin #7115), GPU-only: passing
@@ -684,11 +822,13 @@ def _trainer(
         steps_per_eval=500,
         jax_config=jax_config,
         mp=jmp.get_policy(_MARIN_PRECISION),
-        per_device_parallelism=-1,  # auto microbatch; raise on OOM (math-equivalent)
+        per_device_parallelism=spec.per_device_parallelism,
         use_explicit_mesh_axes=use_explicit_mesh_axes,
         mesh=spec.mesh if spec.mesh is not None else MeshConfig(),
         tracker=WandbConfig(
             project=spec.wandb_project,
+            entity=spec.wandb_entity,
+            id=sft_run_id(spec),
             tags=["sft", "levanter", spec.name.split("/")[-1]],
         ),
         checkpointer=spec.checkpointer,
@@ -767,7 +907,29 @@ def _resolve_epoch_steps(ctx: StepContext, spec: SFTSpec, chat_cache: ArtifactSt
     return math.ceil(spec.num_train_epochs * total_tokens / (spec.seq_len * spec.batch_size))
 
 
-def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterCheckpoint]:
+class DeprecatedSFTBackend(Protocol):
+    """An explicitly selected historical backend; its original config stays intact."""
+
+    @property
+    def run(self) -> Callable[..., None]: ...
+
+    def build_train_config(self, ctx: StepContext, resources: ResourceConfig) -> object: ...
+
+
+@dataclass(frozen=True)
+class DeprecatedSFTSpec:
+    name: str
+    version: str
+    backend: DeprecatedSFTBackend
+    deps: tuple[ArtifactStep, ...] = ()
+
+
+def sft_step(
+    spec: SFTSpec | DeprecatedSFTSpec,
+    resources: ResourceConfig,
+    *,
+    acknowledge_deprecated_config_format: bool = False,
+) -> ArtifactStep[LevanterCheckpoint]:
     """The chat-SFT run as a lazy ``ArtifactStep[LevanterCheckpoint]``.
 
     ``spec.model`` supplies the backend-specific training config and dispatch; ``resources`` is a
@@ -779,7 +941,32 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
     - ``num_train_epochs`` (a single dataset): a ``chat_tokenize`` dep materializes the chat cache so
       the step count resolves from its token total, and training reads the pre-built cache.
     """
+    if isinstance(spec, DeprecatedSFTSpec):
+        if not acknowledge_deprecated_config_format:
+            raise ValueError("Legacy SFT requires --i-know-i-am-using-a-deprecated-config-format")
+        return ArtifactStep(
+            name=spec.name,
+            version=spec.version,
+            artifact_type=LevanterCheckpoint,
+            run=spec.backend.run,
+            build_config=lambda ctx: spec.backend.build_train_config(ctx, ctx.runtime_arg(_TRAIN_RESOURCES)),
+            deps=spec.deps,
+            runtime_args={_TRAIN_RESOURCES: resources},
+        )
     model = spec.model
+    if spec.prepared_data is not None:
+        assert spec.num_train_steps is not None
+        return ArtifactStep(
+            name=spec.name,
+            version=spec.version,
+            artifact_type=LevanterCheckpoint,
+            run=model.run,
+            build_config=lambda ctx: model.build_train_config(
+                ctx, spec, spec.prepared_data, ctx.runtime_arg(_TRAIN_RESOURCES), spec.num_train_steps
+            ),
+            deps=(*spec.data_dependencies, *model.init_deps()),
+            runtime_args={_TRAIN_RESOURCES: resources},
+        )
     transform_deps = _dataset_deps(spec)
 
     if spec.num_train_epochs is not None:
@@ -816,7 +1003,7 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
     )
 
 
-def run_sft_cli(spec: SFTSpec) -> None:
+def run_sft_cli(spec: SFTSpec | DeprecatedSFTSpec) -> None:
     """Click entry point: launch ``spec`` on the accelerator named by ``--accelerator``.
 
     A config module ends with ``if __name__ == "__main__": run_sft_cli(SPEC)``; the user then runs
@@ -829,8 +1016,19 @@ def run_sft_cli(spec: SFTSpec) -> None:
         required=True,
         help="Accelerator: '<count>x<gpu>' (e.g. '8xH100') or a TPU slice variant (e.g. 'v4-64').",
     )
-    def _cli(accelerator: str) -> None:
+    @click.option("--i-know-i-am-using-a-deprecated-config-format", is_flag=True)
+    def _cli(accelerator: str, i_know_i_am_using_a_deprecated_config_format: bool) -> None:
         resources = resources_from_accelerator(accelerator)
-        StepRunner().run([lower(sft_step(spec, resources))])
+        StepRunner().run(
+            [
+                lower(
+                    sft_step(
+                        spec,
+                        resources,
+                        acknowledge_deprecated_config_format=i_know_i_am_using_a_deprecated_config_format,
+                    )
+                )
+            ]
+        )
 
     _cli()

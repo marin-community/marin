@@ -32,6 +32,7 @@ from marin.inference.iris import InferenceStartupPhase, RemoteInferenceStartupEr
 from marin.inference.model_preparation import resolve_model_path
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import secret_file_contents, secret_file_environment
+from rigging.timing import Duration
 
 REVISION = "a" * 40
 DRAFT_REVISION = "b" * 40
@@ -129,11 +130,14 @@ def _seed(model: str, revision: str, ttl: int = 14) -> StoragePath:
 
 
 def test_cold_model_is_mirrored_on_cpu_before_the_accelerator_job(serving, monkeypatch):
-    with remote_inference(_config(REVISION)):
+    config = _config(REVISION)
+    config = replace(config, iris=replace(config.iris, task_timeout=Duration.from_seconds(259200)))
+    with remote_inference(config):
         pass
 
     assert serving.events == ["prepare", "gpu"]
     (request,) = serving.requests
+    assert request.timeout == Duration.from_seconds(259200)
     assert isinstance(request.resources.device, CpuConfig)
     assert request.resources.regions == ["us-east1"]
     assert request.resources.target_cluster == "cw-rno2a"

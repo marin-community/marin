@@ -1,8 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import inspect
 from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 from itertools import product
 from pathlib import Path
@@ -10,7 +12,8 @@ from typing import Any
 
 from marin.execution.artifact import write_artifact
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
-from marin.execution.lazy import ArtifactStep, materialized_config
+from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
+from marin.experiment.cli import graph_handles
 from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
@@ -19,6 +22,9 @@ from experiments.post_training import async_rl, iceball_micro, skyrl_port_smoke,
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.inventory import train_quick_loop as inventory
+from experiments.post_training.long_loop import nvl72 as mochi
+from experiments.post_training.long_loop.run_spec import resolve_spec
+from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 from experiments.post_training.mismatch_probe import launch as mismatch
 from experiments.post_training.task_sessions import validation
 
@@ -45,6 +51,35 @@ def _probe_step(artifact_root: Path, **settings: Any) -> ArtifactStep[SkyRLRun]:
         data_uri=str(artifact_root / "gsm8k"),
         input_version=VERSION,
         **settings,
+    )
+
+
+def _mochi_step(
+    artifact_root: Path, resume: bool, profile: str, response_tokens: int, smoke: bool
+) -> ArtifactStep[SkyRLRun]:
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    data = artifact_root / "train.parquet"
+    data.write_bytes(b"pinned mixed tasks")
+    (artifact_root / "validation.parquet").write_bytes(b"pinned held-out tasks")
+    return mochi.profile_run(
+        profile=profile,
+        model_uri=str(artifact_root / "model"),
+        tokenizer_uri=None,
+        tokenizer_revision="pinned",
+        input_version=VERSION,
+        data_uri=(str(artifact_root),),
+        data_file="train.parquet",
+        data_sha256=hashlib.sha256(data.read_bytes()).hexdigest() if mochi.PROFILES[profile].data_namespace else None,
+        name=None,
+        max_steps=7 if resume else 2,
+        max_new_tokens=response_tokens,
+        job_timeout_hours=None,
+        resume_uri=str(artifact_root / "native/global_step_5") if resume else None,
+        checkpoint_count=2,
+        ttl_days=3,
+        config_output=None,
+        smoke=smoke,
+        validation_data_uri=() if smoke else (str(artifact_root),),
     )
 
 
@@ -99,6 +134,12 @@ def launch_builders(
         settings=("context_budget.request_window_tokens=256", "context_budget.max_new_tokens_per_turn=128"),
     )
     builders["canary/seed-identity"] = partial(canary.build_run, preset="dry", version=VERSION, seed=18)
+    for profile, resume, response_tokens, smoke in product(mochi.PROFILES, (False, True), (16384, 1024), (False, True)):
+        if profile.startswith("snowball-") and not smoke:
+            continue
+        builders[f"mochi/{profile}/resume={resume}/response={response_tokens}/smoke={smoke}"] = partial(
+            _mochi_step, artifact_root, resume, profile, response_tokens, smoke
+        )
     builders["inventory/train"] = partial(_inventory_step, artifact_root)
     for stage in ("train", "resume"):
         builders[f"port-smoke/{stage}"] = partial(_port_smoke_step, stage)
@@ -175,4 +216,22 @@ def render_launch_census(artifact_root: Path) -> tuple[dict[str, str], dict[str,
                 documents[name] = config.launch_config_yaml
             except Exception as error:
                 failures[name] = f"{type(error).__name__}: {error}"
+        # The long loop binds both launchers in one artifact graph. Fingerprint
+        # resolution renders its pinned model/data identities without remote I/O.
+        spec_path = Path(__file__).resolve().parents[2] / "experiments/post_training/long_loop/specs/round1.yaml"
+        resolved = resolve_spec(spec_path, smoke=False)
+        graph = build_spec_graph(resolved, VERSION, through="evaluation")
+        for step in graph_handles([graph]):
+            for stage in ("rl", "evaluation"):
+                if not (step.name == resolved[stage]["name"] or step.name.endswith("/" + resolved[stage]["name"])):
+                    continue
+                name = "long-loop/" + stage
+                try:
+                    context = StepContext.for_run(
+                        str(artifact_root / stage), str(artifact_root), deps=step.deps, runtime_args=step.runtime_args
+                    )
+                    built = step.build_config(replace(context, is_fingerprint=True))
+                    documents[name] = (built if stage == "rl" else built.skyrl).launch_config_yaml
+                except Exception as error:
+                    failures[name] = f"{type(error).__name__}: {error}"
     return documents, failures

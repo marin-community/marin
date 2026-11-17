@@ -323,6 +323,102 @@ def pack_documents(
     return pack_doc_ranges
 
 
+def lookahead_pack_documents(
+    lengths: np.ndarray, max_length: int, *, lookahead: int, max_segments_per_example: int
+) -> list[np.ndarray]:
+    """Pack each oldest document with best-fitting documents from a bounded window.
+
+    Ties keep source order. Documents retain source order within each pack and
+    appear exactly once; oversized documents fail instead of being clipped.
+    """
+    lengths = np.asarray(lengths, dtype=np.int64)
+    if lengths.ndim != 1 or max_length <= 0 or lookahead <= 0 or max_segments_per_example <= 0:
+        raise ValueError("Packing requires one-dimensional lengths and positive capacities")
+    invalid = np.flatnonzero((lengths <= 0) | (lengths > max_length))
+    if len(invalid):
+        doc = int(invalid[0])
+        raise ValueError(f"Document {doc} has {lengths[doc]} tokens outside [1, {max_length}]; no clipping is allowed")
+    pending: list[int] = []
+    cursor = 0
+    packs = []
+    while pending or cursor < len(lengths):
+        stop = min(len(lengths), cursor + lookahead - len(pending))
+        pending.extend(range(cursor, stop))
+        cursor = stop
+        selected = [pending.pop(0)]
+        remaining = max_length - int(lengths[selected[0]])
+        while len(selected) < max_segments_per_example:
+            stop = min(len(lengths), cursor + lookahead - len(pending))
+            pending.extend(range(cursor, stop))
+            cursor = stop
+            if not pending:
+                break
+            candidates = lengths[pending]
+            scores = np.where(candidates <= remaining, candidates, -1)
+            choice = int(np.argmax(scores))
+            if scores[choice] < 0:
+                break
+            selected.append(pending.pop(choice))
+            remaining -= int(scores[choice])
+        packs.append(np.asarray(sorted(selected), dtype=np.int64))
+    return packs
+
+
+class LookaheadPrepackedDataset(AsyncDataset[tuple[T, T]]):
+    """Pack aligned token/mask cache leaves without dropping or truncating documents."""
+
+    def __init__(self, dataset: T, max_length: int, *, lookahead: int, max_segments_per_example: int):
+        super().__init__()
+        self.dataset = dataset
+        self.max_length = max_length
+        offsets = jax.tree.map(lambda store: store.offsets[: store.num_rows + 1].read().result(), dataset)
+
+        def lengths_for_leaf(values):
+            values[0] = 0
+            return np.diff(values)
+
+        lengths = jax.tree.leaves(jax.tree.map(lengths_for_leaf, offsets))
+        if not lengths:
+            raise ValueError("Packing requires at least one token field")
+        if any(not np.array_equal(lengths[0], leaf) for leaf in lengths[1:]):
+            raise ValueError("Token and mask fields must have identical per-document lengths")
+        self.document_lengths = lengths[0]
+        self.document_indices = lookahead_pack_documents(
+            lengths[0], max_length, lookahead=lookahead, max_segments_per_example=max_segments_per_example
+        )
+
+    @property
+    def padding_tokens(self) -> int:
+        return len(self.document_indices) * self.max_length - int(self.document_lengths.sum())
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def async_len(self) -> int:
+        return len(self.document_indices)
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[tuple[T, T]]:
+        packs = [self.document_indices[i] for i in indices]
+        if not packs:
+            return []
+        document_ids = np.concatenate(packs).tolist()
+        boundaries = np.concatenate(([0], np.cumsum([len(pack) for pack in packs])))
+        leaves, structure = jax.tree.flatten(self.dataset)
+        batches = await asyncio.gather(*(store.get_batch(document_ids) for store in leaves))
+        result = []
+        for index, pack in enumerate(packs):
+            packed_data, packed_segments = [], []
+            for batch in batches:
+                documents = batch[boundaries[index] : boundaries[index + 1]]
+                tokens = np.concatenate(documents)
+                segment_ids = np.repeat(pack, [len(document) for document in documents])
+                padding = self.max_length - len(tokens)
+                packed_data.append(np.pad(tokens, (0, padding)))
+                packed_segments.append(np.pad(segment_ids, (0, padding), constant_values=-1))
+            result.append((jax.tree.unflatten(structure, packed_data), jax.tree.unflatten(structure, packed_segments)))
+        return result
+
+
 class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
     """
     Prepacks a dataset into a new dataset where examples are packed into a single example.
@@ -438,20 +534,10 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
                     # Read the slice from the underlying data.
                     out_data.append(store.data[token_start:token_end].read())
 
-                    # Create segment IDs for this pack
-                    segment_ids = []
-                    for doc_idx in range(len(dr)):
-                        doc_start = offsets[dr.start + doc_idx] if dr.start + doc_idx > 0 else 0
-                        doc_end = offsets[dr.start + doc_idx + 1]
-                        doc_length = doc_end - doc_start
-                        # Use the global document index as the segment ID
-                        global_doc_idx = dr.start + doc_idx
-                        # If this is a sliced document, adjust the segment IDs to match the sliced portion
-                        if doc_length > allowed and self.slice_strategy != "raise":
-                            segment_ids.extend([global_doc_idx] * allowed)
-                        else:
-                            segment_ids.extend([global_doc_idx] * doc_length)
-                    out_segment_ids.append(np.array(segment_ids))
+                    segment_lengths = np.diff(offsets[dr.start : dr.stop + 1])
+                    if self.slice_strategy != "raise":
+                        segment_lengths = np.minimum(segment_lengths, allowed)
+                    out_segment_ids.append(np.repeat(np.arange(dr.start, dr.stop), segment_lengths))
 
             # Await all reads concurrently.
             out_data = await asyncio.gather(*out_data)

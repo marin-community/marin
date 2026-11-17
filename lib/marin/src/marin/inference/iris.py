@@ -780,7 +780,7 @@ def _start_direct_inference(
         engine=config.engine,
         iris=iris,
         endpoint_name=endpoint_name,
-        timeout_hours=24 * 365,
+        timeout_hours=iris.task_timeout.to_seconds() / 3600 if iris.task_timeout is not None else 24 * 365,
         port_name=None,
     )
     device = iris.worker_resources.device
@@ -788,6 +788,7 @@ def _start_direct_inference(
     job = current_client().submit(
         JobRequest(
             name=f"inference-{run_id}",
+            timeout=iris.task_timeout,
             entrypoint=Entrypoint.from_callable(run_iris_service, args=(service,)),
             ports=ports,
             resources=iris.worker_resources,
@@ -927,6 +928,7 @@ def _submit_broker_workers(
             job = client.submit(
                 JobRequest(
                     name=worker_id,
+                    timeout=iris.task_timeout,
                     entrypoint=Entrypoint.from_callable(
                         _run_broker_worker,
                         args=(worker_id, config.model, config.engine, iris, broker, request_provider),

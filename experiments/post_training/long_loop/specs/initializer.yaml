@@ -1,0 +1,8 @@
+uri: s3://marin-us-east-02a/marin/long-loop/base/2026.11.08.8
+repo: open-athena/snowball-67b-a2b-base-262k-qk175-skew8
+revision: 058ecaf27b9e4f37219df221a51e7d490d58ec3d
+files:
+- uri: s3://marin-us-east-02a/marin/long-loop/base/2026.11.08.8/.artifact.json
+  sha256: 3dea389e30e67b4b988a32fda3ecd75d79997666632171e6c4f24455a84e43e3
+- uri: s3://marin-us-east-02a/marin/long-loop/base/2026.11.08.8/native/verification.json
+  sha256: c5ac350c0a49411a250d1a08861867552eb66c2e3b3b30645307d737f88eb4d6

@@ -1,0 +1,86 @@
+{
+  "source": "Pi0.87 real max-turns episode; final assistant/tool exchange and terminal limit event",
+  "events": [
+    {
+      "type": "message_end",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "chatcmpl-tool-a78034efdbcdb5b1",
+            "name": "bash",
+            "arguments": {
+              "command": "ls -la /testbed/"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "hosted_vllm",
+        "model": "sft-handoff",
+        "usage": {
+          "input": 14544,
+          "output": 25,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 14569,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1794433554644,
+        "responseId": "chatcmpl-c6c118275f5248408bd19628295eb1a7",
+        "rawStopReason": "tool_calls"
+      }
+    },
+    {
+      "type": "message_end",
+      "message": {
+        "role": "toolResult",
+        "toolCallId": "chatcmpl-tool-a78034efdbcdb5b1",
+        "toolName": "bash",
+        "content": [
+          {
+            "type": "text",
+            "text": "total 0\ndrwxr-xr-x 1 longloop-agent longloop-agent   6 Nov 11 21:09 .\ndrwxr-xr-x 1 root           root           130 Nov 11 21:40 ..\n"
+          }
+        ],
+        "isError": false,
+        "timestamp": 1794433557873
+      }
+    },
+    {
+      "type": "message_end",
+      "message": {
+        "role": "assistant",
+        "content": [],
+        "api": "openai-completions",
+        "provider": "hosted_vllm",
+        "model": "sft-handoff",
+        "usage": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 0,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "error",
+        "timestamp": 1794433557875,
+        "errorMessage": "400: {\"message\":\"Generation stopped: max_turns\",\"type\":\"generation_stopped\",\"code\":400}"
+      }
+    }
+  ]
+}

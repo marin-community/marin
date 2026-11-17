@@ -100,7 +100,7 @@ def prepare_hf_models(
             job = client.submit(_prepare_job_request(entry, iris, environment))
             logger.info("preparing %s in job %s", entry, job.job_id)
             jobs.append(job)
-        wait_all(jobs, timeout=_PREPARE_TIMEOUT.to_seconds())
+        wait_all(jobs, timeout=(iris.task_timeout or _PREPARE_TIMEOUT).to_seconds())
     except BaseException as exc:
         # Includes KeyboardInterrupt, so an interactive caller does not leave mirror jobs running.
         for job in jobs:
@@ -150,7 +150,7 @@ def _prepare_job_request(entry: str, iris: IrisConfig, environment: EnvironmentC
         ),
         environment=environment,
         priority=iris.priority,
-        timeout=_PREPARE_TIMEOUT,
+        timeout=iris.task_timeout or _PREPARE_TIMEOUT,
         max_retries_failure=1,
     )
 

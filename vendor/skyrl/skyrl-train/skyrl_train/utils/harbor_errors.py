@@ -24,6 +24,7 @@ _ERROR_CATEGORIES: Mapping[str, ErrorCategory] = MappingProxyType(
         "ArtifactUploadTimeoutError": ErrorCategory.INFRASTRUCTURE,
         "ArtifactWriterBacklogError": ErrorCategory.INFRASTRUCTURE,
         "EnvironmentStartTimeoutError": ErrorCategory.INFRASTRUCTURE,
+        "EnvironmentSetupError": ErrorCategory.INFRASTRUCTURE,
         "TrialTimeoutError": ErrorCategory.INFRASTRUCTURE,
         "SandboxBuildFailedError": ErrorCategory.INFRASTRUCTURE,
         "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,

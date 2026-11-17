@@ -1,4 +1,5 @@
 import asyncio
+import time
 from contextlib import asynccontextmanager, nullcontext
 import torch
 from skyrl_train.utils.progress import tqdm
@@ -7,6 +8,7 @@ from loguru import logger
 from collections import defaultdict
 from dataclasses import dataclass, replace
 
+from skyrl_train.telemetry import record_event
 from skyrl_train.utils import Timer
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.io import io
@@ -115,6 +117,8 @@ async def _collect_evaluation_rollouts(
     pool: EvaluationPool,
 ) -> _EvaluationRollouts:
     """Collect every selected row and repetition within the shared evaluation pool."""
+    wave_started = time.time_ns() // 1_000_000
+    wave_clock = time.monotonic()
     trajectory_batches: List[TrajectoryBatch] = []
     last_request = None
     last_batch = None
@@ -144,7 +148,28 @@ async def _collect_evaluation_rollouts(
                 ),
             )
             source = "native" if val_set_name is None else f"native/{val_set_name}"
-            batch = await pool.run(source, lambda: trajectory_runner.run(request))
+            submitted = time.time_ns() // 1_000_000
+            submitted_clock = time.monotonic()
+
+            async def run_measured():
+                started = time.time_ns() // 1_000_000
+                clock = time.monotonic()
+                succeeded = False
+                try:
+                    batch = await trajectory_runner.run(request)
+                    succeeded = True
+                    return batch
+                finally:
+                    record_event("evaluation_task", {
+                        "benchmark": request.metadata[0].data_source,
+                        "task_id": uids[0], "repetition": repetition, "optimizer_step": global_step,
+                        "wave": val_set_name or "eval_only", "submitted_unix_ms": submitted,
+                        "started_unix_ms": started, "finished_unix_ms": time.time_ns() // 1_000_000,
+                        "pool_wait_seconds": clock - submitted_clock,
+                        "duration_seconds": time.monotonic() - clock, "succeeded": succeeded,
+                    })
+
+            batch = await pool.run(source, run_measured)
             trajectory_batches.append(batch)
             last_request, last_batch = request, batch
 
@@ -156,6 +181,11 @@ async def _collect_evaluation_rollouts(
                 for row in rows:
                     tasks.create_task(collect(row, repetition))
     finally:
+        record_event("evaluation_wave", {
+            "wave": val_set_name or "eval_only", "optimizer_step": global_step,
+            "started_unix_ms": wave_started, "finished_unix_ms": time.time_ns() // 1_000_000,
+            "duration_seconds": time.monotonic() - wave_clock, "completed": len(trajectory_batches),
+        })
         if pbar is not None:
             pbar.close()
 
@@ -201,11 +231,14 @@ def _calculate_eval_metrics(
 ) -> Dict[str, float]:
     metrics = calculate_per_dataset_metrics(batch, uids, data_sources, samples_per_prompt)
     overall_avg_score, overall_pass_at_n = get_metrics_from_trajectory_batch(batch, uids)
+    raw_batch = {key: value for key, value in batch.items() if key != "exclude_from_baseline"}
+    _, raw_pass_at_n = get_metrics_from_trajectory_batch(raw_batch, uids)
     metrics.update(
         {
             "eval/all/num_attempted": float(len(batch["response_ids"])),
             "eval/all/avg_score": overall_avg_score,
             f"eval/all/pass_at_{samples_per_prompt}": overall_pass_at_n,
+            f"eval/all/raw_verifier_pass_at_{samples_per_prompt}": raw_pass_at_n,
         }
     )
     verifier_scores = normalized_verifier_scores(batch)

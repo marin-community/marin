@@ -32,6 +32,7 @@ from jax import numpy as jnp
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 from rigging.testing import RecordingTelemetryTransport
+from levanter.testing import eight_device_checkpoints
 from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.callbacks import StepInfo
@@ -935,6 +936,8 @@ def test_checkpointer_commits_application_metadata_with_every_save(tmp_path):
     checkpointer.save_final_checkpoint(tree=state, step=2)
     permanent = load_checkpoint_metadata(str(tmp_path / "checkpoints" / "run1" / "step-2"))
     assert (permanent["placement"], permanent["step"]) == ({"fingerprint": "abc"}, 2)
+    checkpointer.wait_until_finished()
+    assert not (tmp_path / "temporary" / "run1" / "step-1").exists()
 
 
 def test_final_checkpoint_waits_for_pending_temporary_save_and_restores_completed_state(tmp_path):
@@ -1280,3 +1283,7 @@ def test_mpmd_checkpoint_uses_standard_format_across_destination_shardings(tmp_p
     assert loaded["weights"].sharding == source_sharding
     np.testing.assert_array_equal(loaded["progress"]["step"], 7)
     assert loaded["unused"] is None
+
+
+def test_async_checkpoint_survives_wire_roundtrip_across_processes():
+    eight_device_checkpoints.async_checkpoint_roundtrip_across_processes()

@@ -4,6 +4,8 @@ from typing import Dict, Any, Optional, Union
 import random
 import hashlib
 import socket
+import sys
+from pathlib import Path
 from omegaconf import DictConfig, ListConfig
 from skyrl_train.inference_engines.inference_engine_client_http_endpoint import ErrorResponse, ErrorInfo
 from typing import List
@@ -195,13 +197,21 @@ def aggregate_completion_usage_info(
 
 _RENDEZVOUS_PORT_START = 20_000
 _RENDEZVOUS_PORT_STOP = 30_000
+_UNPRIVILEGED_PORT_START = 1_024
+_LINUX_EPHEMERAL_PORT_RANGE = Path("/proc/sys/net/ipv4/ip_local_port_range")
 
 
 def _find_available_rendezvous_port(excluded_ports: Collection[int] = ()) -> int:
-    """Choose a listener port outside Linux's default ephemeral client range."""
+    """Choose a listener port below the host's ephemeral client range."""
 
     excluded = set(excluded_ports)
-    candidates = list(range(_RENDEZVOUS_PORT_START, _RENDEZVOUS_PORT_STOP))
+    port_start, port_stop = _RENDEZVOUS_PORT_START, _RENDEZVOUS_PORT_STOP
+    if sys.platform == "linux":
+        ephemeral_start, _ = map(int, _LINUX_EPHEMERAL_PORT_RANGE.read_text().split())
+        port_stop = min(port_stop, ephemeral_start)
+        if port_stop <= port_start:
+            port_start = _UNPRIVILEGED_PORT_START
+    candidates = list(range(port_start, port_stop))
     random.shuffle(candidates)
     for port in candidates:
         if port in excluded:
@@ -212,7 +222,7 @@ def _find_available_rendezvous_port(excluded_ports: Collection[int] = ()) -> int
             except OSError:
                 continue
         return port
-    raise RuntimeError(f"No free rendezvous port in [{_RENDEZVOUS_PORT_START}, {_RENDEZVOUS_PORT_STOP})")
+    raise RuntimeError(f"No free rendezvous port in [{port_start}, {port_stop})")
 
 
 def get_pg_bundle_node_ips(placement_group, pg_indices: Collection[int]) -> List[str]:

@@ -16,11 +16,13 @@ from collections import deque
 from dataclasses import asdict, dataclass, fields, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Literal, cast
+from typing import Literal, Protocol, cast
 
 import fsspec
 import yaml
+from fray.types import GpuConfig
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, SCHEDULABLE_RACK_NODES, is_rack_based
+from iris.resources.state import TERMINAL_JOB_STATES
 from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
@@ -50,8 +52,13 @@ _COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
     """Return the lifecycle-managed storage path for a SkyRL run."""
-    temporary_root = marin_temp_bucket(ttl_days=ttl_days, source_prefix=output_path)
-    return str(StoragePath(temporary_root) / _TEMPORARY_OUTPUT_PREFIX / StoragePath(output_path).key)
+    temporary_root = StoragePath(marin_temp_bucket(ttl_days=ttl_days, source_prefix=output_path))
+    output = StoragePath(output_path)
+    try:
+        output.relative_to(temporary_root)
+    except ValueError:
+        return str(temporary_root / _TEMPORARY_OUTPUT_PREFIX / output.key)
+    return str(output)
 
 
 @dataclass(frozen=True)
@@ -243,12 +250,12 @@ class SkyRLRetentionPolicy:
     export from its terminal checkpoint.
     """
 
-    resume_checkpoint_count: int = 2
+    resume_checkpoint_count: int = 2  # -1 defers checkpoint cleanup to a verified archive post-script.
     temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
 
     def __post_init__(self) -> None:
-        if not 1 <= self.resume_checkpoint_count <= 10:
-            raise ValueError("SkyRL resume_checkpoint_count must be between one and ten")
+        if self.resume_checkpoint_count != -1 and not 1 <= self.resume_checkpoint_count <= 10:
+            raise ValueError("SkyRL resume_checkpoint_count must be -1 (keep all) or between one and ten")
         if self.temporary_storage_ttl_days <= 0:
             raise ValueError("SkyRL temporary_storage_ttl_days must be positive")
 
@@ -333,6 +340,14 @@ def _validate_relative_file_path(name: str, value: str) -> None:
     path = PurePosixPath(value)
     if not path.parts or path.is_absolute() or ".." in path.parts:
         raise ValueError(f"TaskTrove {name} must identify a file below the release root: {value!r}")
+
+
+class ArtifactModel(Protocol):
+    """Model identity and dependency resolved when its producer has committed."""
+
+    def deps(self) -> tuple[ArtifactStep, ...]: ...
+
+    def resolve(self, ctx: StepContext) -> ResolvedModelLocator: ...
 
 
 @dataclass(frozen=True)
@@ -436,7 +451,7 @@ class SkyRLSpec:
     name: str
     version: str
     config_yaml: str
-    model: ArtifactHfModel
+    model: ArtifactModel
     train_data: tuple[SkyRLDataSource, ...]
     validation_data: tuple[SkyRLDataSource, ...]
     topology: SkyRLTopology
@@ -462,6 +477,8 @@ class IrisSkyRLExecution:
     target_cluster: str | None
     parent_cluster_config: str | None
     coordinator_timeout_hours: int
+    coordinator_name: str | None = None
+    coordinator_gpu: GpuConfig | None = None
     wandb_entity: str | None = None
     job_timeout_seconds: int = 0
     required_env_vars: tuple[str, ...] = ()
@@ -714,6 +731,9 @@ class _SkyRLLaunchResponse(BaseModel):
     iris_job_id: str | None = None
     failure: str | None = None
     model: _SkyRLTerminalModel | None = None
+    iris_job_state: str | None = None
+    finalization: str | None = None
+    finalization_failure: str | None = None
 
 
 def skyrl_cpu_command(*arguments: str) -> list[str]:
@@ -793,13 +813,26 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
                 f"{completed.stderr.strip() or '(the launcher wrote nothing to stderr)'}"
             )
         response = _SkyRLLaunchResponse.model_validate_json(completed.stdout)
-        if completed.returncode != 0 or response.state != "succeeded":
+        any_terminal = yaml.safe_load(config.launch_config_yaml)["run"].get("finalization") == "any_terminal"
+        finalized_terminal = (
+            any_terminal
+            and response.iris_job_state in TERMINAL_JOB_STATES
+            and response.finalization in {"completed", "skipped_no_checkpoint"}
+            and response.finalization_failure is None
+        )
+        if (completed.returncode != 0 or response.state != "succeeded") and not finalized_terminal:
             failure = response.failure or f"launcher exited {completed.returncode}"
+            if response.finalization_failure:
+                failure += f"; finalization failed: {response.finalization_failure}"
             raise RuntimeError(f"MarinSkyRL attempt {config.attempt_id} failed: {failure}\n{completed.stderr.strip()}")
         if response.iris_job_id is None:
             raise ValueError("successful MarinSkyRL response requires iris_job_id")
         model = response.model
-        if config.export_hf and model is None:
+        if (
+            config.export_hf
+            and model is None
+            and not (finalized_terminal and response.finalization == "skipped_no_checkpoint")
+        ):
             raise ValueError("successful MarinSkyRL response requires a model when export_hf is enabled")
         result = SkyRLRun(
             path=config.output.terminal_manifest_uri,
@@ -815,7 +848,7 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
     except Exception:
         _record_skyrl_run(config, "failed", response)
         raise
-    _record_skyrl_run(config, "succeeded", response)
+    _record_skyrl_run(config, response.state, response)
     return result
 
 
@@ -863,6 +896,11 @@ def _launch_config_yaml(
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
+    callbacks = _declared_config_value(recipe, "trainer.callbacks")
+    if callbacks is not _MISSING_CONFIG_VALUE and callbacks is not None:
+        for callback in cast(list[dict[str, object]], callbacks):
+            if callback["type"] == "best_checkpoint":
+                callback["initial_model_uri"] = model.uri
     num_nodes = spec.topology.num_nodes
     if execution.role_topology is not None:
         if not is_rack_based(spec.topology.gpu_variant) or spec.topology.gpus_per_node != NVL72_GPUS_PER_NODE:
