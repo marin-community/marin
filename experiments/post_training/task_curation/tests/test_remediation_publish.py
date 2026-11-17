@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -25,6 +26,7 @@ from finestore.rl.curation import (
     SourceQualityResult,
     WithinSourceDedupEvidence,
 )
+from huggingface_hub.hf_api import RepoFile
 from marin.execution.lazy import StepContext
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -41,7 +43,9 @@ from experiments.post_training.task_curation import (
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
 from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.lexical_binding import LexicalMeasurementReceipt
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
+from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.remediation_binding import (
     PublicationReceipt,
     RetainedReleaseReceipt,
@@ -521,6 +525,172 @@ def test_flagged_external_input_requires_its_raw_snapshot_before_task_read(tmp_p
             fixture_license(plan.source_id, plan.source_dataset_id, plan.source_revision),
             None,
         )
+
+
+@pytest.fixture
+def staged_publication(tmp_path, monkeypatch, frozen_population):
+    original, specs, _ = frozen_population
+    plan = original.model_copy(update={"source_dataset_id": "open-athena/repaired-fixture"})
+    measurement = decontamination_evidence(plan.source_dataset_id, plan.source_revision, 3).model_copy(
+        update={
+            "receipt": None,
+            "converter_revision": plan.converter_revision,
+            "contaminated_tasks": 1,
+            "contaminated_fraction": 1 / 3,
+            "max_overlap": 1,
+            "mean_max_overlap": 1 / 3,
+            "p95_max_overlap": 1,
+        }
+    )
+    receipt = LexicalMeasurementReceipt(
+        source_id=plan.source_id,
+        input=ActorCensusInput(
+            dataset_id=plan.source_dataset_id,
+            dataset_revision=plan.source_revision,
+            converter_version=plan.converter_version,
+            converter_revision=plan.converter_revision,
+            measured_tasks=3,
+            task_specs_sha256=plan.task_specs_sha256,
+            evidence_url=plan.census_evidence_url,
+        ),
+        use=plan.lexical_use,
+        measurement=measurement,
+    )
+    metadata = {
+        "dataset_id": plan.source_dataset_id,
+        "dataset_revision": plan.source_revision,
+        "converter_revision": plan.converter_revision,
+        "source_version": plan.converter_version,
+        "task_specs_sha256": plan.task_specs_sha256,
+        "task_count": plan.raw_count,
+        "source_id": plan.source_id,
+        "specs_output_dir": str(specs),
+        "text_renderer_version": measurement.text_renderer_version,
+    }
+    (tmp_path / ".artifact.json").write_text(json.dumps({"result": metadata}))
+    canonical = {plan.source_id: receipt}
+    monkeypatch.setattr(remediation_publish, "lexical_measurements", lambda: canonical)
+    hub = tmp_path / "hub"
+    upstream = hub / plan.source_dataset_id
+    upstream.mkdir(parents=True)
+    (upstream / "LICENSE").write_bytes(b"SPDX-License-Identifier: MIT\n")
+
+    class LocalHub:
+        def create_repo(self, *, repo_id, repo_type, private, exist_ok):
+            (hub / repo_id).mkdir(parents=True, exist_ok=exist_ok)
+
+        def repo_info(self, *args, **kwargs):
+            return SimpleNamespace(private=True)
+
+        def list_repo_tree(self, repo_id, *, repo_type, revision, recursive):
+            return [
+                RepoFile(path=path.name, size=path.stat().st_size, oid="b" * 40) for path in (hub / repo_id).iterdir()
+            ]
+
+        def upload_folder(self, *, repo_id, repo_type, folder_path, commit_message):
+            shutil.copytree(folder_path, hub / repo_id, dirs_exist_ok=True)
+            return SimpleNamespace(oid="d" * 40)
+
+    def download(repo_id, filename, *, repo_type, revision):
+        return str(hub / repo_id / filename)
+
+    for module in (calibforge_publish, remediation_publish, license_publication):
+        monkeypatch.setattr(module, "HfApi", LocalHub)
+        monkeypatch.setattr(module, "hf_hub_download", download)
+    monkeypatch.setattr(
+        license_publication,
+        "resolve_license",
+        lambda target: fixture_license(target.source_id, target.dataset_id, target.revision),
+    )
+    return plan, receipt, canonical, hub
+
+
+@pytest.mark.parametrize("entrypoint", ["canonical", "api", "cli"])
+def test_repaired_population_publishes_from_exact_receipt_without_replacing_selected_evidence(
+    tmp_path, monkeypatch, staged_publication, entrypoint
+):
+    plan, receipt, canonical, hub = staged_publication
+    if entrypoint != "canonical":
+        canonical[plan.source_id] = LexicalMeasurementReceipt.model_validate(
+            {
+                **receipt.model_dump(),
+                "input": receipt.input.model_copy(update={"dataset_id": "open-athena/selected-fixture"}),
+                "measurement": receipt.measurement.model_copy(
+                    update={"input_dataset_id": "open-athena/selected-fixture"}
+                ),
+            }
+        )
+    selected_before = canonical[plan.source_id].model_dump_json()
+    evidence = tmp_path / "evidence"
+    license_receipt = fixture_license(plan.source_id, plan.source_dataset_id, plan.source_revision).model_copy(
+        update={
+            "evidence": [
+                license_evidence(
+                    f"https://huggingface.co/datasets/{plan.source_dataset_id}/resolve/{plan.source_revision}/LICENSE",
+                    b"SPDX-License-Identifier: MIT\n",
+                    "license_file",
+                )
+            ]
+        }
+    )
+    if entrypoint == "cli":
+        plans, licenses, measurements = tmp_path / "plans.json", tmp_path / "licenses", tmp_path / "measurements"
+        licenses.mkdir()
+        measurements.mkdir()
+        plans.write_text(json.dumps([plan.model_dump(mode="json")]))
+        (licenses / "part-000.json").write_text(json.dumps({plan.source_id: license_receipt.model_dump(mode="json")}))
+        (measurements / "part-000.json").write_text(json.dumps({plan.source_id: receipt.model_dump(mode="json")}))
+        monkeypatch.setattr(remediation_publish, "ProcessPoolExecutor", ThreadPoolExecutor)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "remediation_publish",
+                "--plans",
+                str(plans),
+                "--license-receipts",
+                str(licenses),
+                "--lexical-receipts",
+                str(measurements),
+                "--evidence-root",
+                str(evidence),
+                "--version",
+                "fixture",
+                "--workers",
+                "1",
+            ],
+        )
+        remediation_publish.main()
+        (result,) = json.loads((evidence / "releases.json").read_text())
+    else:
+        result = remediation_publish.publish_plan(
+            plan,
+            "fixture",
+            str(evidence),
+            license_receipt,
+            None,
+            measurement_receipt=receipt if entrypoint == "api" else None,
+        )
+    published = hub / result["repo"]
+    tasks = pq.read_table(published / "tasks.parquet").to_pylist()
+    assert [(row["id"], row["runtime"]) for row in tasks] == [("retained", '{ "cpus": 2 }')]
+    assert json.loads((published / "manifest.json").read_text())["lexical"]["input_dataset_id"] == plan.source_dataset_id
+    assert canonical[plan.source_id].model_dump_json() == selected_before
+
+
+def test_staged_receipt_for_same_count_but_different_tasks_cannot_publish(tmp_path, staged_publication):
+    plan, receipt, _, hub = staged_publication
+    stale = receipt.model_copy(update={"input": receipt.input.model_copy(update={"task_specs_sha256": "f" * 64})})
+    with pytest.raises(ValueError, match="Frozen lexical input differs"):
+        remediation_publish.publish_plan(
+            plan,
+            "fixture",
+            str(tmp_path / "evidence"),
+            fixture_license(plan.source_id, plan.source_dataset_id, plan.source_revision),
+            None,
+            measurement_receipt=stale,
+        )
+    assert not list(hub.glob("**/tasks.parquet"))
 
 
 @pytest.mark.parametrize("mutation", [None, "missing_file", "changed_bytes"])

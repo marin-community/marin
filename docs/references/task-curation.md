@@ -3622,6 +3622,21 @@ the references under `datasets/daytona_census_receipts/` and
 that commit. The regional publisher reads these references from its submitted
 checkout; a completed scan and frozen plan do not update that checkout.
 
+For a repair of an existing configured source, keep its canonical measurement
+and dedup receipts bound to the selected population while preparing the
+replacement. Stage the replacement receipts separately. Pass only their raw
+`LexicalMeasurementReceipt` shards with
+`remediation_publish --lexical-receipts STAGED_DIRECTORY`; this publishes from
+the staged measurement without changing catalog selection. The publisher checks
+the source, dataset pin, converter version/revision, TaskSpec digest, count, Use
+and text renderer against the replacement population described by the frozen
+plan. Select the qualified replacement pin and its matching census and dedup
+receipts together. The `publish_plan` API
+accepts the same typed receipt as `measurement_receipt`. Omitting this override
+uses the canonical measurement with the same exact-input checks. A staged
+directory must cover every supplied plan; missing entries never fall back to
+the selected population's receipt.
+
 Approved frozen combined plans are published with `remediation_publish`.
 The command publishes every supplied plan, including zero-drop plans that
 retain all converted tasks. `--exclude-source` explicitly omits a source. Run

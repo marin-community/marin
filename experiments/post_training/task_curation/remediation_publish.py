@@ -14,7 +14,7 @@ from typing import Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import DatasetRelease, LexicalUse
+from finestore.rl.curation import ActorCensusInput, DatasetRelease, LexicalUse
 from finestore.rl.licenses import LicenseReceipt, require_license
 from huggingface_hub import HfApi, hf_hub_download
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,6 +25,7 @@ from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation.calibforge_publish import publish
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
+from experiments.post_training.task_curation.lexical_binding import LexicalMeasurementReceipt
 from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
 from experiments.post_training.task_curation.license_publication import (
     LicensePublication,
@@ -33,6 +34,7 @@ from experiments.post_training.task_curation.license_publication import (
     prepare_license_publication,
 )
 from experiments.post_training.task_curation.native_quick import source_slug
+from experiments.post_training.task_curation.receipt_shards import read_receipt_shards
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
@@ -240,6 +242,8 @@ def publish_plan(
     evidence_root: str,
     license_receipt: LicenseReceipt,
     raw_archive: RawSourceArchive | None,
+    *,
+    measurement_receipt: LexicalMeasurementReceipt | None = None,
 ) -> dict:
     """Publish one approved selection and its immutable regional readback receipt."""
     require_license(
@@ -288,7 +292,27 @@ def publish_plan(
             raise ValueError(f"Frozen input {name} differs: {plan.source_id}")
     if canonical_source_id(metadata["source_id"]) != plan.source_id:
         raise ValueError(f"Frozen source identity differs: {plan.source_id}")
-    measurement = lexical_measurements()[plan.source_id].measurement.model_dump(mode="json")
+    if measurement_receipt is None:
+        measurement_receipt = lexical_measurements().get(plan.source_id)
+    expected_input = ActorCensusInput(
+        dataset_id=plan.source_dataset_id,
+        dataset_revision=plan.source_revision,
+        converter_version=plan.converter_version,
+        converter_revision=plan.converter_revision,
+        measured_tasks=plan.raw_count,
+        task_specs_sha256=plan.task_specs_sha256,
+        evidence_url=plan.census_evidence_url,
+    )
+    if (
+        measurement_receipt is None
+        or measurement_receipt.source_id != plan.source_id
+        or measurement_receipt.use is not plan.lexical_use
+        or measurement_receipt.input.model_dump(exclude={"evidence_url"})
+        != expected_input.model_dump(exclude={"evidence_url"})
+        or measurement_receipt.measurement.text_renderer_version != metadata["text_renderer_version"]
+    ):
+        raise ValueError(f"Frozen lexical input differs from the publication plan: {plan.source_id}")
+    measurement = measurement_receipt.measurement.model_dump(mode="json")
     if (measurement["measured_tasks"], measurement["contaminated_tasks"]) != (plan.raw_count, plan.raw_lexical_count):
         raise ValueError(f"Frozen lexical measurement differs: {plan.source_id}")
     with TemporaryDirectory(prefix="atlas-retention-") as scratch:
@@ -393,6 +417,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, required=True)
     parser.add_argument("--exclude-source", action="append", default=[])
     parser.add_argument("--license-receipts", type=Path, default=LICENSE_RECEIPT_INDEX)
+    parser.add_argument("--lexical-receipts", type=Path, help="Staged exact-input lexical receipt shard directory")
     parser.add_argument(
         "--raw-archives", help="Verified raw snapshot receipt list; required for flagged external inputs"
     )
@@ -415,6 +440,17 @@ def main() -> None:
             plan.source_revision,
             plan.lexical_use.value,
         )
+    staged_measurements = None
+    if args.lexical_receipts is not None:
+        staged_measurements = read_receipt_shards(
+            args.lexical_receipts,
+            LexicalMeasurementReceipt,
+            "lexical measurement",
+            load_json=lambda path: json.loads(path.read_text()),
+        )
+        missing = {plan.source_id for plan in plans} - staged_measurements.keys()
+        if missing:
+            raise ValueError(f"Staged lexical receipts are missing planned sources: {sorted(missing)}")
     with ProcessPoolExecutor(max_workers=args.workers, initializer=configure_coreweave_s3) as pool:
         futures = [
             pool.submit(
@@ -424,6 +460,7 @@ def main() -> None:
                 args.evidence_root,
                 receipts[plan.source_id],
                 raw_archives.get(plan.source_id),
+                measurement_receipt=None if staged_measurements is None else staged_measurements[plan.source_id],
             )
             for plan in plans
         ]
