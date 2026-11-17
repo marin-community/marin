@@ -23,6 +23,7 @@ all = ["marin-verifyit[math,schema,judge,reasoning-gym]"]
 
 [dependency-groups]
 test = [
+    "setuptools",
     "pytest>=8.3.2",
     "pytest-timeout",
     "pytest-xdist",
