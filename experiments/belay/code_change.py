@@ -64,6 +64,15 @@ def refuse_outside_allowed(paths: list[str]) -> None:
         raise SystemExit(f"refusing: add a test for the flag under {TESTS_PREFIX}*.py.\nnext: code-change --finish")
 
 
+def config_changes(before: dict[str, dict[str, str]], after: dict[str, dict[str, str]]) -> list[str]:
+    """Config fields added, removed or with a changed default (``Class.field``): a repair may have none."""
+    changed = []
+    for cls in sorted(before.keys() | after.keys()):
+        old, new = before.get(cls, {}), after.get(cls, {})
+        changed += [f"{cls}.{k}" for k in sorted(old.keys() | new.keys()) if old.get(k) != new.get(k)]
+    return changed
+
+
 def new_flags(week: dict[str, dict[str, str]], idea: dict[str, dict[str, str]]) -> list[str]:
     """The idea's new config fields, after checking each defaults to off and no existing default changed."""
     added = []
