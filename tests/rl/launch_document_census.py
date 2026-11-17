@@ -190,6 +190,21 @@ def _seed_dependency_metadata(step: ArtifactStep[SkyRLRun], artifact_root: str) 
             (checkpoint / "tokenizer_config.json").write_text("{}")
 
 
+def runtime_launch(tmp_path: Path):
+    source_class = get_filesystem_class("s3")
+    register_implementation("s3", _MemoryObjectStore, clobber=True)
+    prefix = "s3://launcher-test/" + tmp_path.name
+
+    def render(step):
+        _seed_dependency_metadata(step, prefix)
+        return materialized_config(step, prefix)
+
+    try:
+        yield render
+    finally:
+        register_implementation("s3", source_class, clobber=True)
+
+
 def render_launch_census(artifact_root: Path) -> tuple[dict[str, str], dict[str, str]]:
     """Render runtime documents using seeded artifact metadata without running steps."""
     builders = launch_builders(artifact_root)

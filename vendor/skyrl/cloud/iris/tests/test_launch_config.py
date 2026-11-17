@@ -94,6 +94,7 @@ def test_generation_rejects_starting_checkpoint(tmp_path: Path, entrypoint: str)
 )
 def test_cross_host_ep_launch_derives_whole_node_claims(tmp_path, trainer_gpus, rollout_gpus, expected_nodes):
     raw = raw_launch_config()
+    raw["run"]["export_hf"] = False
     raw["iris"]["allocation"].update(num_nodes=expected_nodes, gpus_per_node=4)
     raw["skyrl"]["trainer"]["placement"].update(
         colocate_all=False,
