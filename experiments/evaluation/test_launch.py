@@ -14,11 +14,11 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
+from evalrecords.records import RunStatus
 from iris.client.client import IrisClient
 from iris.cluster.client import remote_client
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation.hardware import Platform
-from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationBatch, EvaluationError, _record
 from marin.execution.step_runner import StepRunner
 from marin.inference.iris import RemoteInferenceStartupError

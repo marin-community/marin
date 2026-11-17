@@ -5,8 +5,8 @@
 
 import asyncio
 import math
-from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 import sqlalchemy
@@ -14,9 +14,8 @@ from evaldash import app as evaldash_app
 from evaldash import fixtures, ingest, results_db
 from evaldash.db_migrations import apply_migrations
 from evaldash.metrics import record_headline
-from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalRunRecord, TaskCoverage, list_records, write_record
-from marin.execution.step_status import STATUS_RUNNING, STATUS_SUCCESS, StatusFile
+from evalrecords.records import EvalRunRecord, TaskCoverage, list_records, write_record
+from rigging.filesystem.step_status import STATUS_RUNNING, STATUS_SUCCESS, get_status_path
 from sqlalchemy.pool import StaticPool
 
 
@@ -251,9 +250,31 @@ def test_snapshot_reads_record_written_before_tokenizer_revision(tmp_path):
     migrate_schema(engine)
     record = _record(tmp_path)
     stored = record.model_dump(mode="json")
-    config = asdict(ModelConfig(name=record.model.name, location=record.model.location))
-    config.pop("tokenizer_revision")
-    stored["model"]["config"] = config
+    stored["model"]["config"] = {
+        "name": record.model.name,
+        "location": record.model.location,
+        "revision": None,
+        "tokenizer": None,
+        "apply_chat_template": True,
+        "resource_hint": {"hbm_gb": None, "gpu": {}, "cpu": None, "memory": None, "disk": None},
+        "serve": {
+            "backend": "vllm",
+            "tensor_parallel_size": None,
+            "data_parallel_size": None,
+            "max_model_len": None,
+            "max_num_batched_tokens": None,
+            "max_num_seqs": None,
+            "hf_overrides": None,
+            "limit_mm_per_prompt": None,
+            "tool_call_parser": None,
+            "reasoning_parser": None,
+            "vllm_extra_args": [],
+            "chat_template": None,
+            "auto_overrides": True,
+        },
+        "generation": {"max_gen_toks": None, "extra_gen_kwargs": {}},
+        "agent": {"agent_kwargs": {}},
+    }
     with engine.begin() as conn:
         conn.execute(results_db.catalog_runs.insert(), {**results_db.run_row(record), "record": stored})
 
@@ -307,8 +328,8 @@ def test_step_completion_updates_a_cataloged_run_without_rewriting_its_record(tm
     prefix = tmp_path / "records"
     record = _record(tmp_path)
     write_record(record, str(prefix))
-    status_file = StatusFile(str(prefix / record.run_id), worker_id="test")
-    status_file.write_status(STATUS_RUNNING)
+    status_path = Path(get_status_path(str(prefix / record.run_id)))
+    status_path.write_text(STATUS_RUNNING)
     store = _store(engine)
     ingestor = evaldash_app.PostgresIngestor(engine, (str(prefix),), 600, 86400, now=clock)
 
@@ -316,7 +337,7 @@ def test_step_completion_updates_a_cataloged_run_without_rewriting_its_record(tm
     assert _stored(store, record.run_id)["step_status"] == STATUS_RUNNING
     assert store.fetch_runs()[0]["status"] == "running"
 
-    status_file.write_status(STATUS_SUCCESS)
+    status_path.write_text(STATUS_SUCCESS)
     state = next(iter(results_db.source_states(engine, str(prefix)).values()))
     clock.now = state.next_verify_at.replace(tzinfo=UTC) + timedelta(seconds=1)
     asyncio.run(ingestor.run_once())

@@ -225,6 +225,7 @@ members = [
     "marin-deploy",
     "marin-ducky",
     "marin-dupekit",
+    "marin-evalrecords",
     "marin-finelog",
     "marin-finestore",
     "marin-fray",
@@ -4596,14 +4597,15 @@ dependencies = [
     { name = "jax", version = "0.11.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-gpu' or extra == 'extra-10-marin-core-tpu' or extra == 'extra-14-marin-levanter-gpu' or extra == 'extra-14-marin-levanter-tpu' or extra == 'group-10-marin-fray-fray-tpu-test' or extra == 'group-10-marin-iris-dev' or extra == 'group-10-marin-iris-test' or (extra == 'extra-10-marin-core-rocm' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-rocm') or (extra != 'extra-10-marin-core-rocm' and extra != 'extra-10-marin-root-pipeline' and extra != 'extra-14-marin-levanter-rocm')" },
     { name = "jax", version = "0.12.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-rocm' or extra == 'extra-14-marin-levanter-rocm' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-root-pipeline' and extra == 'group-10-marin-iris-dev') or (extra == 'extra-10-marin-root-pipeline' and extra == 'group-10-marin-iris-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "jaxopt" },
+    { name = "marin-evalrecords" },
     { name = "marin-finestore" },
     { name = "marin-fray" },
     { name = "marin-haliax" },
     { name = "marin-iris" },
     { name = "marin-levanter", extra = ["serve"] },
     { name = "marin-rigging", extra = ["prometheus"] },
-    { name = "marin-skyrlrecipe" },
     { name = "marin-rolloutengine" },
+    { name = "marin-skyrlrecipe" },
     { name = "marin-taskcompendium", extra = ["pipeline"] },
     { name = "marin-zephyr" },
     { name = "markdownify" },
@@ -4768,6 +4770,7 @@ requires-dist = [
     { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.46.*" },
     { name = "luxical", marker = "extra == 'datakit'" },
     { name = "marin-dupekit", marker = "extra == 'dedup'", editable = "lib/dupekit" },
+    { name = "marin-evalrecords", editable = "lib/evalrecords" },
     { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
@@ -4775,8 +4778,8 @@ requires-dist = [
     { name = "marin-levanter", extras = ["rocm"], marker = "extra == 'rocm'", editable = "lib/levanter" },
     { name = "marin-levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["prometheus"], editable = "lib/rigging" },
-    { name = "marin-skyrlrecipe", editable = "lib/skyrlrecipe" },
     { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
+    { name = "marin-skyrlrecipe", editable = "lib/skyrlrecipe" },
     { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "markdownify", specifier = ">=0.14.1" },
@@ -5015,6 +5018,41 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ea/cd/e9ee5b400048399a11664d0d708439ee34c9c8e8188cf5378613436b5ad9/marin_dupekit_native-0.1.10.dev36179736977-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:73a53d8f5c2ab686610a2dd98b15c99371efddd8b9714c9bd41e35ff054b8fa1", size = 3972896, upload-time = "2026-09-25T20:02:20.498Z" },
     { url = "https://files.pythonhosted.org/packages/f6/0f/56cba55b151932a5bc1c5c72800f0194c56331c0343a2d5c5b1c0ea02bb6/marin_dupekit_native-0.1.10.dev36179736977-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:7585b24d6178a47c0446bcb6c3cad1da781143f171573009df628e16530004c8", size = 4157313, upload-time = "2026-09-25T20:02:22.373Z" },
     { url = "https://files.pythonhosted.org/packages/bf/f1/692e5d8a42bf69560ba556caa52c023ed1f850ec4d4a15e2e00492b60a1f/marin_dupekit_native-0.1.10.dev36179736977-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:36df81c33a6ccef194beb2f23f947efab5d5ba098556e26f3a49a72da73adcc1", size = 4494400, upload-time = "2026-09-25T20:02:24Z" },
+]
+
+[[package]]
+name = "marin-evalrecords"
+version = "0.1.0"
+source = { editable = "lib/evalrecords" }
+dependencies = [
+    { name = "marin-finestore" },
+    { name = "marin-rigging" },
+    { name = "marin-taskcompendium" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "marin-finestore", editable = "lib/finestore" },
+    { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyyaml", specifier = ">=6" },
+]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]
@@ -5774,6 +5812,7 @@ dependencies = [
     { name = "httpx" },
     { name = "httpx2" },
     { name = "marin-core" },
+    { name = "marin-evalrecords" },
     { name = "marin-finelog" },
     { name = "marin-finestore" },
     { name = "marin-iris" },
@@ -5813,6 +5852,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "httpx2", specifier = ">=2.5" },
     { name = "marin-core", editable = "lib/marin" },
+    { name = "marin-evalrecords", editable = "lib/evalrecords" },
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-iris", editable = "lib/iris" },

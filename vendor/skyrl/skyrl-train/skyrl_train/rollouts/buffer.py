@@ -139,7 +139,7 @@ class GroupRewards:
 
 @dataclass(frozen=True)
 class RowFacts:
-    """Row scalars and channel geometry for one committed group.
+    """Per-row lengths, baseline exclusions, stop reasons, and policy stamps.
 
     Separate reward totals and mask counts retain their consumers' original
     reduction arithmetic so driver metrics preserve their exact values.

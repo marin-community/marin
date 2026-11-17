@@ -26,6 +26,10 @@ from typing import Generic, TypeVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from evalrecords.metric_selection import PUBLICATION_METRICS, base_metric, declared_sample_metric, primary_filter
+from evalrecords.records import BenchmarkMetricRef, EvalRunRecord, MetricKind
+from evalrecords.rollout_attempts import RUN_OBJECT
+from evalrecords.rollout_results import logical_samples
 from finestore.eval import (
     ARCHIVE_SAMPLES_TABLE,
     FILTER_COLUMN,
@@ -41,10 +45,6 @@ from finestore.layout import FormatVersionError
 from finestore.migrations import LEGACY_READ_FORMAT_VERSION, LegacyReadView
 from finestore.reader import ReadView
 from fsspec.core import url_to_fs
-from marin.evaluation.metric_selection import PUBLICATION_METRICS, base_metric, declared_sample_metric, primary_filter
-from marin.evaluation.records import BenchmarkMetricRef, EvalRunRecord, MetricKind
-from marin.rollouts.evaluation import RUN_OBJECT
-from marin.rollouts.evaluation_results import logical_samples
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 
