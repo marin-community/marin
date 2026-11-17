@@ -614,6 +614,13 @@ def queue_source_ids(queue: Sequence[dict[str, Any]]) -> tuple[str, ...]:
     return tuple(ids)
 
 
+def frozen_source_ids() -> set[str]:
+    """Source ids in the frozen sample selection the campaigns measure."""
+    configure_coreweave_s3()
+    rows = json.loads(StoragePath(CAMPAIGN_QUEUE_SOURCES).read_text())
+    return {row["declaration"]["id"] for row in rows}
+
+
 def plan_next_round(
     sealed: dict[str, Any],
     document: DifficultyCoverage,
@@ -622,11 +629,18 @@ def plan_next_round(
 ) -> dict[str, Any]:
     """The continuation plan for a sealed round: queue, digest, idempotency verdict."""
     queue = campaign_queue(document, declarations)
-    digest = queue_digest(queue)
+    # The campaign measures the frozen sample selection; queued sources absent from
+    # it (new ingests, re-pinned sources) go back through sampling and are reported
+    # rather than submitted.
+    frozen_ids = frozen_source_ids()
+    measurable = [entry for entry in queue if entry["declaration"]["id"] in frozen_ids]
+    absent = sorted(entry["declaration"]["id"] for entry in queue if entry["declaration"]["id"] not in frozen_ids)
+    digest = queue_digest(measurable)
     plan: dict[str, Any] = {
-        "queue_entries": len(queue),
+        "queue_entries": len(measurable),
         "queue_digest": digest,
-        "source_ids": list(queue_source_ids(queue)),
+        "source_ids": list(queue_source_ids(measurable)),
+        "absent_from_frozen_selection": absent,
         "already_submitted": any(row.get("queue_digest") == digest for row in ledger),
         "previous_campaign": sealed["output_root"],
         "previous_serving_sha256": sealed["serving_json_sha256"],

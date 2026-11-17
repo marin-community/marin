@@ -120,9 +120,10 @@ def test_queue_digest_is_stable_and_order_insensitive() -> None:
     assert dr.queue_digest(rows) != dr.queue_digest([{"declaration": {"id": "b"}}])
 
 
-def test_plan_next_round_refuses_repeat_and_missing_serving() -> None:
+def test_plan_next_round_refuses_repeat_and_missing_serving(monkeypatch) -> None:
     document = dr.DifficultyCoverage(load_id=None, snapshot_id=None, generated_at="now", sources={}, counts={})
     declarations = {"a": {"id": "a"}}
+    monkeypatch.setattr(dr, "frozen_source_ids", lambda: {"a"})
     sealed = {
         "output_root": "s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.17.1/small-v17a",
         "serving_json_sha256": "abc",
@@ -280,6 +281,7 @@ def test_operator_stopped_round_seals_for_carry_over(monkeypatch, capsys, tmp_pa
         }
     }
     monkeypatch.setattr(dr, "fetch_declarations", lambda applet_id: declarations)
+    monkeypatch.setattr(dr, "frozen_source_ids", lambda: {"Evalchemy:gsm8k"})
     fixture_row = json.loads(Path(__file__).with_name("observation_fixture_row.json").read_text())
     measurement = fixture_row
     measurements_dir = tmp_path / "measurements.json"
