@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS atlas_items (
 ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS confidence TEXT;
 ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS reference_status TEXT;
 ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS defects JSONB;
+CREATE INDEX IF NOT EXISTS atlas_items_cohort ON atlas_items (load_id, pipeline_key, cohort);
 ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS provenance TEXT;
 ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS replaced_task_sha256 TEXT;
 ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS repair_advisories JSONB;
