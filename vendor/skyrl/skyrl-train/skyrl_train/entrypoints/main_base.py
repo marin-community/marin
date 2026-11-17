@@ -46,6 +46,7 @@ from marinskyrl.runtime_options import (
 )
 from marinskyrl.resource_locator import RolloutModelLoading
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat
+from skyrl_train.tokenizer import validate_checkpoint_vocabulary
 
 if TYPE_CHECKING:
     from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
@@ -297,6 +298,17 @@ class BasePPOExp:
         self.sessions = {} if sessions is None else dict(sessions)
         self._configure_log_level()
         self.tokenizer = self.get_tokenizer()
+        model = cfg.trainer.policy.model
+        runtime = cfg.get("runtime") or {}
+        tokenizer_identity = runtime.get("tokenizer_identity") or str(model.tokenizer_path)
+        validate_checkpoint_vocabulary(
+            self.tokenizer,
+            checkpoint_path=model.path,
+            checkpoint_revision=model.get("revision"),
+            checkpoint_identity=runtime.get("checkpoint_identity") or model.get("source_identity") or model.path,
+            tokenizer_identity=tokenizer_identity,
+            disable_fast_tokenizer=cfg.trainer.disable_fast_tokenizer,
+        )
         self.train_dataset = self.get_train_dataset()
         self.eval_dataset = self.get_eval_dataset()
         self.colocate_pg = self.get_colocate_pg()

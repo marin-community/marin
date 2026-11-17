@@ -3,6 +3,7 @@ from collections import Counter
 import json
 import math
 import os
+import shutil
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -40,7 +41,7 @@ from tests.cpu.tiny_training.cat_count import (
     run_cat_count_generate,
 )
 from tests.cpu.tiny_training.cpu_backend import CPUInferenceEngine
-from tests.cpu.tiny_training.experiment import read_metrics
+from tests.cpu.tiny_training.experiment import TinyGenerateExp, read_metrics
 
 pytestmark = pytest.mark.slow
 
@@ -494,6 +495,28 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     cfg.generator.eval_n_samples_per_prompt = 2
     cfg.generator.eval_sampling_params.ignore_eos = True
     cfg.generator.eval_sampling_params.max_generate_length = 8
+    swapped = root / "swapped-tokenizer"
+    shutil.copytree(cat_count_policy, swapped)
+    tokenizer_path = swapped / "tokenizer.json"
+    tokenizer_document = json.loads(tokenizer_path.read_text())
+    vocabulary = tokenizer_document["model"]["vocab"]
+    added = {token["content"] for token in tokenizer_document["added_tokens"]}
+    first, second = [token for token in vocabulary if token not in added][:2]
+    vocabulary[first], vocabulary[second] = vocabulary[second], vocabulary[first]
+    tokenizer_path.write_text(json.dumps(tokenizer_document))
+    invalid = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+    invalid.trainer.policy.model.tokenizer_path = str(swapped)
+    with pytest.raises(ValueError, match="differs from loaded tokenizer") as mismatch:
+        TinyGenerateExp(invalid)
+    assert str(cat_count_policy) in str(mismatch.value) and str(swapped) in str(mismatch.value)
+    missing = root / "model-without-vocabulary"
+    missing.mkdir()
+    shutil.copyfile(cat_count_policy / "config.json", missing / "config.json")
+    invalid.trainer.policy.model.path = str(missing)
+    invalid.trainer.policy.model.tokenizer_path = str(cat_count_policy)
+    with pytest.raises(ValueError, match="Cannot verify checkpoint vocabulary") as unavailable:
+        TinyGenerateExp(invalid)
+    assert str(missing) in str(unavailable.value) and str(cat_count_policy) in str(unavailable.value)
     records = run_process(forkserver_context, root, cfg, run_cat_count_generate)
     assert len(records) == 1
     metrics = records[0]
