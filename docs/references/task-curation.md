@@ -3178,7 +3178,7 @@ list does not advertise `glm-5.3`. A provider that cannot accept temperature may
 `temperature=None` to retain its API default; zero is disallowed.
 
 The spec pins base rubric `task-quality-v2`, its SHA-256 content hash, and review
-payload revision `5` for new reviews. To change the base rubric, edit `BASE_RUBRIC` and bump
+payload revision `6` for new reviews. To change the base rubric, edit `BASE_RUBRIC` and bump
 `BASE_RUBRIC_VERSION` in `taskcompendium.pipeline.reviewer_spec`; the content
 hash is computed from that text. Bump `REVIEW_PAYLOAD_REVISION` when changing the
 task evidence projected into the request. Quality review appends per-source
@@ -3192,24 +3192,31 @@ text previews. The original compressed archive, TaskSpec and runtime stay
 unchanged. Original scoring files receive preview space before the adapter's
 controller copies.
 
+Revision 6 also renders captured Multi-SWE verifier files from
+`home-grading.tar.gz`: `fix-run.sh`, `test-run.sh`, `run.sh`, `prepare.sh`,
+`check_git_changes.sh` and `test.patch`, when present. The decoder verifies the
+archive SHA-256 against the task's `multi-swe-delivery` contract and reads members
+in memory. It changes only quality-review requests; TaskSpecs, runtime and grading
+remain unchanged.
+
 Each preview records `truncated`, `byte_count` and the full file's `sha256`;
 `resource_manifest.omitted_count` records files outside the preview count limit.
-For a fuller audit, `protected_source_verifier_resources(task)` in
-`taskcompendium.pipeline.review` returns the decoded original resources, whose
+For a fuller audit, `protected_source_verifier_resources(task)` and
+`multiswe_verifier_resources(task)` in `taskcompendium.pipeline.review` return the decoded original resources, whose
 complete bytes are available through `taskcompendium.runtime.resources.resource_bytes`.
 
-Historical revision 4 observations and reviewer identities remain valid and are
-not re-reviewed. When assembling or finalizing a revision 4 campaign, pass
-`--review-payload-revision 4` to `full_qc_shards assemble` or
+Historical revision 4/5 observations and reviewer identities remain valid and are
+not re-reviewed. When assembling or finalizing a historical campaign, pass its
+frozen `--review-payload-revision` to `full_qc_shards assemble` or
 `full_content_receipts`. Programmatic callers use
-`local_reviewer(version, payload_revision="4")`; its requests retain the original
-revision 4 projection. New reviews default to revision 5 and its separate cache
+`local_reviewer(version, payload_revision="4")` or `payload_revision="5"`;
+their requests retain the original projection. New reviews default to revision 6 and its separate cache
 identity.
 Read the revision from the frozen review artifact's `reviewer.payload_revision`.
 The v2/v3 model profile and the review payload revision are independent pins.
 
 Revision 4 introduced separation of content quality from execution qualification:
-both supported revisions exclude
+all supported revisions exclude
 top-level `execution_requirements`, actor/grader `packages_lock` artifact paths,
 and deployment-runtime rubric text. Its semantic task ID hashes the same
 projection, so calibration-only changes reuse exact requests. Full task and

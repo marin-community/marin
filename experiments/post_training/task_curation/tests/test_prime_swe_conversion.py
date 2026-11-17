@@ -73,6 +73,7 @@ def test_conversion_uses_frozen_image_and_preserves_private_source_scorer(family
     assert config["test_ids"] == ["tests/test_fix.py::test_fix"]
     original_task = task.model_dump_json()
     projected = review_payload(task)
+    assert projected == review_payload(task, payload_revision="5")
     grader_text = {
         resource["path"]: resource["text"]
         for resource in projected["resources"]

@@ -3,9 +3,12 @@
 
 """TaskTrove-style structured review with injected batch or chat requests."""
 
+import gzip
 import hashlib
+import io
 import json
 import re
+import tarfile
 import zlib
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -50,6 +53,9 @@ PRIVATE_REASONING_PREVIEW_CHARACTERS = 512
 TOTAL_RESOURCE_PREVIEW_CHARACTERS = 32768
 MAX_RESOURCE_PREVIEWS = 256
 MAX_PROTECTED_REVIEW_BYTES = 256 * 1024 * 1024
+MULTISWE_VERIFIER_FILES = frozenset(
+    {"fix-run.sh", "test-run.sh", "run.sh", "prepare.sh", "check_git_changes.sh", "test.patch"}
+)
 
 
 def private_evidence_summary(value: Any, evidence: str, preview_characters: int = 0) -> dict[str, Any]:
@@ -287,6 +293,31 @@ def protected_source_verifier_resources(task: TaskSpec) -> tuple[TaskResource, .
     return tuple(inline_resource(f"tests/{name}", bytes.fromhex(source.tests[name])) for name in names)
 
 
+def multiswe_verifier_resources(task: TaskSpec) -> tuple[TaskResource, ...]:
+    """Read captured Multi-SWE verifier files for private review evidence."""
+    if task.integrity_contract is None or task.integrity_contract.id != "multi-swe-delivery":
+        return ()
+    (resource,) = (resource for resource in task.resources.verifier if resource.path == "home-grading.tar.gz")
+    encoded = resource_bytes(resource)
+    if hashlib.sha256(encoded).hexdigest() != task.integrity_contract.archive_sha256:
+        raise ValueError("Multi-SWE reviewer archive differs from the published integrity contract")
+    with gzip.GzipFile(fileobj=io.BytesIO(encoded)) as compressed:
+        data = compressed.read(MAX_PROTECTED_REVIEW_BYTES + 1)
+    if len(data) > MAX_PROTECTED_REVIEW_BYTES:
+        raise ValueError("Multi-SWE reviewer archive exceeds its decoded byte limit")
+    files = {}
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as archive:
+        for member in archive:
+            if member.name not in MULTISWE_VERIFIER_FILES:
+                continue
+            if not member.isfile() or member.name in files:
+                raise ValueError("Multi-SWE reviewer archive has an ambiguous verifier file")
+            stream = archive.extractfile(member)
+            assert stream is not None
+            files[member.name] = stream.read()
+    return tuple(inline_resource(f"home/{name}", files[name]) for name in sorted(files))
+
+
 def review_payload(task: TaskSpec, *, payload_revision: str = REVIEW_PAYLOAD_REVISION) -> dict[str, Any]:
     """Expose bounded readable fixture evidence without duplicating encoded bytes."""
     if payload_revision not in SUPPORTED_REVIEW_PAYLOAD_REVISIONS:
@@ -294,7 +325,9 @@ def review_payload(task: TaskSpec, *, payload_revision: str = REVIEW_PAYLOAD_REV
     payload = task.model_dump(mode="json", exclude={"execution_requirements", "verifier_execution_requirements"})
     remaining = TOTAL_RESOURCE_PREVIEW_CHARACTERS
     previews = []
-    source_verifier = protected_source_verifier_resources(task) if payload_revision == "5" else ()
+    source_verifier = protected_source_verifier_resources(task) if payload_revision in {"5", "6"} else ()
+    if payload_revision == "6":
+        source_verifier += multiswe_verifier_resources(task)
     resources = [
         (role, resource)
         for role, group in (

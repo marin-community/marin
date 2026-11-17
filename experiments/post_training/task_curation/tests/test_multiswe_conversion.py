@@ -16,6 +16,7 @@ from taskcompendium.harbor.adapter import declared_execution_limits
 from taskcompendium.harbor.negative_control import public_task_preparation
 from taskcompendium.models import DockerBuildExecution, Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow
+from taskcompendium.pipeline.review import review_payload
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.shell import resolve_shell_tool
 
@@ -43,9 +44,17 @@ def test_multiswe_frozen_row_exports_with_private_parser_and_original_actor_limi
         "fix_patch": "source gold patch",
         "test_patch": "hidden test patch",
     }
+    verifier_files = {
+        "fix-run.sh": b"source harness\n",
+        "test-run.sh": b"run original tests\n",
+        "run.sh": b"run source command\n",
+        "prepare.sh": b"prepare original inputs\n",
+        "check_git_changes.sh": b"check original changes\n",
+        "test.patch": "hidden test patch\n# café\n".encode(),
+    }
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        for name, content in {"fix-run.sh": b"source harness", "test.patch": b"hidden test patch"}.items():
+        for name, content in verifier_files.items():
             member = tarfile.TarInfo(name)
             member.size = len(content)
             member.mode = 0o644
@@ -69,6 +78,19 @@ def test_multiswe_frozen_row_exports_with_private_parser_and_original_actor_limi
     )
     task = task_from_capture(row, capture)
     assert isinstance(task, TaskSpec)
+    original = task.model_dump_json()
+    rendered = {
+        resource["path"]: resource["text"].encode()
+        for resource in review_payload(task)["resources"]
+        if resource["role"] == "source_verifier"
+    }
+    assert rendered == {f"home/{name}": content for name, content in verifier_files.items()}
+    for revision in ("4", "5"):
+        assert not any(
+            resource["role"] == "source_verifier"
+            for resource in review_payload(task, payload_revision=revision)["resources"]
+        )
+    assert task.model_dump_json() == original
     prompt = task_prompt(task, resolve_shell_tool(task, DEFAULT_SHELL_TOOL), ())
     assert len(prompt.options["tools"]) == 1
     assert prompt.options["tools"][0]["function"]["parameters"]["required"] == ["command"]
