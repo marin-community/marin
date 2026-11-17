@@ -107,6 +107,7 @@ from experiments.belay.page import (
     publish_thread,
     read_thread,
     report_idea,
+    report_launched,
     require_unedited,
     save_session,
     session_credentials,
@@ -868,6 +869,7 @@ def launch_stage(
         if dry_run:
             continue
         submit_run(commands[run.name], repo, spec.experiment)
+        report_launched(run_id, launched_job_id(run_id), TRACKS[spec.track].nodes)
         if minutes is not None:
             due = datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=minutes)
             expect_finish(run_id, due, dry_run=False)
@@ -881,6 +883,11 @@ def launch_stage(
         run_git(repo, ["commit", "--quiet", "-m", f"Belay {spec.experiment}: record launched commands"], dry_run=False)
         run_git(repo, ["push", "--quiet", "origin", branch], dry_run=False)
     return commands
+
+
+def launched_job_id(run_id: str) -> str:
+    """The Iris job a submitted run's launcher creates: its coordinator, under the submitting user."""
+    return f"/{resolve_job_user()}/{run_id}-coord"
 
 
 def launch(experiment: str, run: str, *, print_only: bool, dry_run: bool) -> None:
@@ -1151,6 +1158,7 @@ def launch_study_runs(repo: Path, study: Study, runs: list[str], idea: Idea, sta
         if dry_run:
             continue
         submit_run(command, repo, study.experiment)
+        report_launched(name, launched_job_id(name), TRACKS[run.track].nodes)
         expect_finish(name, datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=run.hours), dry_run=False)
 
 
