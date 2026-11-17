@@ -335,7 +335,7 @@ class HarborEvaluationCallback(TrainerCallback):
         if not client.enable_http_endpoint:
             raise ValueError("Harbor validation requires generator.enable_http_endpoint")
         cohorts = deepcopy(self.cohorts)
-        runtime = resolve_telemetry(run_id=trainer.cfg.runtime.run_id)
+        runtime = resolve_telemetry(run_id=trainer.cfg.get("runtime", {}).get("run_id"))
         telemetry = (
             {
                 "endpoint": runtime.resolver(runtime.endpoint).rstrip("/") + TELEMETRY_ENDPOINT_PATH,

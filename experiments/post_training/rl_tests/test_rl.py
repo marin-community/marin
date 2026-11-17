@@ -320,6 +320,7 @@ async def check_runtime_handoff():
     asyncio.create_subprocess_exec = start_worker
     try:
         for attempt in (1, 2, None):
+            trainer.cfg = native_configs[0] if attempt is not None else config.skyrl
             info = JobInfo(task_id=JobName.from_wire(f"/test/native-{attempt}/0"), attempt_uid=f"uid-{attempt}")
             set_job_info(info if attempt is not None else None)
             expected = {
