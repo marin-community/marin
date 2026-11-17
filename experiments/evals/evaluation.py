@@ -6,9 +6,9 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
+from evalrecords.records import EvaluationSelection
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
-from marin.evaluation.records import EvaluationSelection
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version

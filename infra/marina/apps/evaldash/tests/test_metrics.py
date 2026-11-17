@@ -4,17 +4,15 @@
 """The evaldash panel and comparison views: cross-cohort selection, coverage filtering, qualified
 aggregates, and head-to-head difference intervals."""
 
-from dataclasses import asdict
 
 import pytest
 from evaldash.app import MemoryRecordStore
 from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
-from marin.evaluation.eval_policy import EVALCHEMY_COMMIT
-from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
-from marin.evaluation.eval_stats import Completeness, MissingPolicy
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ServeConfig
-from marin.evaluation.model_identity import model_config_digest
-from marin.evaluation.records import (
+from evalrecords.eval_policy import EVALCHEMY_COMMIT
+from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from evalrecords.eval_stats import Completeness, MissingPolicy
+from evalrecords.model_identity import model_config_digest
+from evalrecords.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
     CuratedRef,
@@ -26,8 +24,12 @@ from marin.evaluation.records import (
     HarborRef,
     HardwareRef,
     MetricKind,
+    ModelAgentConfig,
     ModelConfigRef,
+    ModelGenerationConfig,
     ModelRef,
+    ModelResourceConfig,
+    ModelServeConfig,
     Provenance,
     ResolvedEvaluationSelection,
     RunStatus,
@@ -35,6 +37,45 @@ from marin.evaluation.records import (
 )
 
 ITEMS = 1000
+
+
+def _model_config(
+    *,
+    name: str,
+    location: str,
+    revision: str | None = None,
+    max_model_len: int | None = None,
+    max_gen_toks: int | None = None,
+    chat_template_kwargs: dict[str, bool | str] | None = None,
+) -> ModelConfigRef:
+    """The model configuration a launch stores when the model YAML sets only these fields."""
+    return ModelConfigRef(
+        name=name,
+        location=location,
+        revision=revision,
+        tokenizer=None,
+        apply_chat_template=True,
+        resource_hint=ModelResourceConfig(hbm_gb=None, gpu={}, cpu=None, memory=None, disk=None),
+        serve=ModelServeConfig(
+            backend="vllm",
+            tensor_parallel_size=None,
+            data_parallel_size=None,
+            max_model_len=max_model_len,
+            max_num_batched_tokens=None,
+            max_num_seqs=None,
+            hf_overrides=None,
+            limit_mm_per_prompt=None,
+            tool_call_parser=None,
+            reasoning_parser=None,
+            vllm_extra_args=(),
+            chat_template=None,
+            auto_overrides=True,
+        ),
+        generation=ModelGenerationConfig(
+            max_gen_toks=max_gen_toks, extra_gen_kwargs={}, chat_template_kwargs=chat_template_kwargs or {}
+        ),
+        agent=ModelAgentConfig(agent_kwargs={}),
+    )
 
 
 def _record(
@@ -756,14 +797,8 @@ def test_comparison_honours_the_benchmark_selection_it_was_asked_for():
 def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
     def policy_run(thinking: bool, config_thinking: bool, created_at: str, name: str = "same-name") -> EvalRunRecord:
         record = _record(name, "math500", "eval-policy-2026-09-24-verified", created_at, 0.5)
-        model_config = ModelConfigRef.model_validate(
-            asdict(
-                ModelConfig(
-                    name=name,
-                    location="org/model",
-                    generation=GenerationConfig(chat_template_kwargs={"enable_thinking": config_thinking}),
-                )
-            )
+        model_config = _model_config(
+            name=name, location="org/model", chat_template_kwargs={"enable_thinking": config_thinking}
         )
         return record.model_copy(
             update={
@@ -834,16 +869,8 @@ def test_panel_groups_tau_context_override_with_other_evals_despite_archived_con
                 )
             },
         )
-        config = ModelConfigRef.model_validate(
-            asdict(
-                ModelConfig(
-                    name="grug",
-                    location="org/grug",
-                    revision="1" * 40,
-                    serve=ServeConfig(max_model_len=context),
-                    generation=GenerationConfig(max_gen_toks=tokens),
-                )
-            )
+        config = _model_config(
+            name="grug", location="org/grug", revision="1" * 40, max_model_len=context, max_gen_toks=tokens
         )
         records.append(
             record.model_copy(

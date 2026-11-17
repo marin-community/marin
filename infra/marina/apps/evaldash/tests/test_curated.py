@@ -18,6 +18,22 @@ from evaldash.metrics import build_comparison, build_model_detail, build_panel, 
 from evaldash.record_reconciliation import VerificationSchedule, _inspect_record
 from evaldash.results_db import ObservationKind, SourceState
 from evaldash.samples import _archive_task_table
+from evalrecords.records import (
+    BenchmarkMetadataRef,
+    BenchmarkMetricRef,
+    CuratedRef,
+    CuratedSettings,
+    EvalRef,
+    EvalRunRecord,
+    EvalTaskRef,
+    HardwareRef,
+    ModelRef,
+    Provenance,
+    TaskCoverage,
+    write_record,
+)
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt
+from evalrecords.rollout_results import logical_samples
 from finestore.eval import (
     EvalSample,
     EvaluationStore,
@@ -33,24 +49,8 @@ from fray.local_backend import LocalClient
 from marin.evaluation.dataset_evaluator import DatasetEvaluator
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import (
-    BenchmarkMetadataRef,
-    BenchmarkMetricRef,
-    CuratedRef,
-    CuratedSettings,
-    EvalRef,
-    EvalRunRecord,
-    EvalTaskRef,
-    HardwareRef,
-    ModelRef,
-    Provenance,
-    TaskCoverage,
-    write_record,
-)
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.execution.artifact import write_artifact
-from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT, Attempt
-from marin.rollouts.evaluation_results import logical_samples
 from taskcompendium.evaluation.corpus import EvaluationManifest, evaluation_protocol
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection
 from taskcompendium.evaluation.spec import EvaluationProtocol, LikelihoodMetric, Metric, Sampling, TrialPolicy

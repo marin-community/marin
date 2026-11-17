@@ -43,6 +43,7 @@ from iris.cluster.backends.k8s.output_contract import (
     output_uploader_environment,
 )
 from iris.cluster.config import EgressAllowlistConfig, NodeHealthConfig, TaskOutputPolicy
+from iris.cluster.constraints import AttributeValue, Constraint, evaluate_constraint
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -217,7 +218,6 @@ _MAX_POD_NAME_LEN = 63
 # Map well-known Iris constraint keys to their k8s node label keys.
 _CONSTRAINT_KEY_TO_NODE_LABEL: dict[str, str] = {
     "pool": "iris.pool",
-    "region": "iris.region",
 }
 
 # Kubernetes label values: max 63 chars, alphanumeric plus [-_.], must start/end alphanumeric.
@@ -391,6 +391,19 @@ def _constraints_to_node_selector(
                 f"only CONSTRAINT_OP_EQ is supported for nodeSelector mapping"
             )
     return node_selector
+
+
+def _region_constraint_error(constraints: Sequence[job_pb2.Constraint], regions: Sequence[str]) -> str | None:
+    # Iris regions identify the backend, not a Kubernetes node label. CoreWeave
+    # advertises US-EAST-08A while its nodes carry region US-EAST-08.
+    required = [
+        Constraint.from_proto(c)
+        for c in constraints
+        if c.key == WellKnownAttribute.REGION and c.mode != job_pb2.CONSTRAINT_MODE_PREFERRED
+    ]
+    if not required or any(all(evaluate_constraint(AttributeValue(region), c) for c in required) for region in regions):
+        return None
+    return f"Region constraints do not match Kubernetes backend regions {sorted(regions)}"
 
 
 def _task_hash(task_id: str) -> str:
@@ -2666,6 +2679,10 @@ class K8sTaskProvider:
         return None
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if error := _region_constraint_error(
+            request.constraints, sorted(self.descriptor.advertised_attributes.get(WellKnownAttribute.REGION, ()))
+        ):
+            return error
         if request.coscheduling.group_sizes:
             try:
                 _validate_locality_groups(
@@ -2928,6 +2945,10 @@ class K8sTaskProvider:
 
     def _apply_pod(self, run_req: job_pb2.RunTaskRequest) -> None:
         """Create or update the Pod for a task attempt."""
+        if error := _region_constraint_error(
+            run_req.constraints, sorted(self.descriptor.advertised_attributes.get(WellKnownAttribute.REGION, ()))
+        ):
+            raise PodManifestError(error)
         manifest = _build_pod_manifest(run_req, self.pods)
 
         task_id_name = JobName.from_wire(run_req.task_id)

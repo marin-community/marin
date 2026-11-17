@@ -9,6 +9,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
+from evalrecords.records import CuratedSettings, RunStatus
 from iris.client.client import JobFailedError, iris_ctx
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
@@ -19,7 +20,6 @@ from rolloutengine.models import RolloutLimits
 
 from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import CuratedSettings, RunStatus
 from marin.evaluation.runner import (
     BACKEND_POLL_SECONDS,
     EvaluationError,
