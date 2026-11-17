@@ -14,13 +14,17 @@ object on stdout. A failing variant records the worker log tail instead of
 aborting the run.
 
 Example submission (the vendored SkyRL runtime image and its megatron profile
-provide torch with the production NCCL build):
+provide torch with the production NCCL build; the pinned image digest is the
+`IRIS_TASK_IMAGE` from `vendor/skyrl/cloud/iris/runtime_environment.py`):
+
+    IMAGE=ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8
 
     iris --config lib/iris/config/marin.yaml job run \
         --target-cluster cw-rno2a --gpu H100x1 --enable-extra-resources \
         --replicas 2 --priority production \
         --job-name ib-audit-nccl-probe-rno2a-1 --timeout 5400 --no-wait \
-        --task-image ghcr.io/marin-community/iris-task@sha256:13519c59 \
+        --task-image "$IMAGE" \
+        --cpu 8 --memory 32GB --disk 200GB \
         --no-sync -- \
         bash -c 'cd /app/vendor/skyrl && \
         bash cloud/iris/bootstrap_runtime.sh /app/vendor/skyrl "$IRIS_VENV" \
@@ -51,6 +55,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
 
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
@@ -74,6 +80,9 @@ NCCL_VERSION_RE = re.compile(r"NCCL version ([0-9.]+)")
 TRANSPORT_RE = re.compile(r"via (NET/(?:IB|Socket)\S*|NET/\S+)")
 
 DEFAULT_SOCKET_IFNAME = "^ibs,ibp,lo,docker,veth,cilium,lxc"
+
+# Endpoint states that are expected while task 0 is still starting.
+_RENDEZVOUS_PENDING_CODES = frozenset({Code.NOT_FOUND, Code.UNIMPLEMENTED, Code.UNAVAILABLE})
 
 
 @dataclass(frozen=True)
@@ -175,7 +184,6 @@ def allocate_port_block(count: int) -> int:
 def wait_for_rendezvous(resolver: Resolver, endpoint_name: str) -> tuple[str, int]:
     """Poll the Iris endpoint registry until task 0's master address appears."""
     deadline = time.time() + RENDEZVOUS_TIMEOUT_SECONDS
-    last_error = ""
     while time.time() < deadline:
         try:
             resolved = resolver.resolve(endpoint_name)
@@ -183,10 +191,13 @@ def wait_for_rendezvous(resolver: Resolver, endpoint_name: str) -> tuple[str, in
                 url = resolved.first().url
                 host, _, port = url.rpartition(":")
                 return host, int(port)
-        except Exception as error:
-            last_error = str(error)
+        except ConnectError as error:
+            # A not-yet-registered endpoint and a briefly unreachable controller
+            # are both expected while task 0 starts; everything else is real.
+            if error.code not in _RENDEZVOUS_PENDING_CODES:
+                raise
         time.sleep(2)
-    raise TimeoutError(f"No rendezvous endpoint {endpoint_name!r} after {RENDEZVOUS_TIMEOUT_SECONDS}s ({last_error})")
+    raise TimeoutError(f"No rendezvous endpoint {endpoint_name!r} after {RENDEZVOUS_TIMEOUT_SECONDS}s")
 
 
 def spawn_worker(
