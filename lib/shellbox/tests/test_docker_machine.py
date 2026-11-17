@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine, DockerMachineFactory, docker
-from shellbox.backends.gvisor.machine import GvisorMachineFactory
+from shellbox.backends.docker_gvisor.machine import DockerGvisorMachineFactory
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec
 
@@ -24,7 +24,7 @@ from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec
     [
         pytest.param(DockerMachineFactory, marks=pytest.mark.docker),
         # Requires a Docker host with runsc registered.
-        pytest.param(GvisorMachineFactory, marks=pytest.mark.manual),
+        pytest.param(DockerGvisorMachineFactory, marks=pytest.mark.manual),
     ],
 )
 def test_image_build_and_registry_cache_work_with_only_docker_on_path(tmp_path, monkeypatch, factory_type):

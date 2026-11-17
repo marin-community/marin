@@ -98,7 +98,7 @@ set, creates missing snapshots and reclaims stale ones. See the
 [Daytona operations runbook](../../.agents/ops/daytona.md#snapshot-preflight-and-reclamation)
 for the account-wide one-hour purge policy.
 
-Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local
+Use `DockerGvisorMachineFactory()` in place of `DockerMachineFactory()` for a local
 Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="cw-rno2a")`
 for the existing Iris command and file-transfer backend. Host-side Terminus-2
 uses machine commands.
@@ -226,7 +226,7 @@ transports text. HTTP request/response messages sit above this byte-stream API.
 QEMU, ShellSim and Iris do not expose process sessions; online relays require a supported
 backend and fail explicitly otherwise.
 
-The same API works with `DockerMachineFactory` and `GvisorMachineFactory`.
+The same API works with `DockerMachineFactory` and `DockerGvisorMachineFactory`.
 Create the machine with `NetworkPolicy.DENY`, then enter `serve_http` before
 running the application and close the relay before closing the machine:
 

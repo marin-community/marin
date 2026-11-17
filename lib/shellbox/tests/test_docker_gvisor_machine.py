@@ -11,7 +11,7 @@ import tarfile
 
 import pytest
 from shellbox.backends.docker.machine import DockerCommandResult
-from shellbox.backends.gvisor.machine import GvisorMachineFactory
+from shellbox.backends.docker_gvisor.machine import DockerGvisorMachineFactory
 from shellbox.machine import DockerImage, MachineSpec
 
 
@@ -38,7 +38,7 @@ def test_gvisor_transfers_binary_files_and_directory_contents_through_exec(tmp_p
         return DockerCommandResult(result.returncode, result.stdout, result.stderr)
 
     monkeypatch.setattr("shellbox.backends.docker.machine.docker", docker)
-    monkeypatch.setattr("shellbox.backends.gvisor.machine.docker", docker)
+    monkeypatch.setattr("shellbox.backends.docker_gvisor.machine.docker", docker)
     source = tmp_path / "source"
     source.mkdir()
     (source / "answer").write_bytes(b"\x00\xffpayload")
@@ -50,7 +50,7 @@ def test_gvisor_transfers_binary_files_and_directory_contents_through_exec(tmp_p
     workdir = tmp_path / "workdir"
 
     async def scenario():
-        machine = await GvisorMachineFactory().create(MachineSpec(DockerImage("fixture"), workdir=str(workdir)))
+        machine = await DockerGvisorMachineFactory().create(MachineSpec(DockerImage("fixture"), workdir=str(workdir)))
         try:
             await machine.upload(source, str(remote))
             await machine.download(str(remote), target)

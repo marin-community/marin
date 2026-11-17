@@ -16,6 +16,7 @@ from collections.abc import Iterable, Mapping, Sequence
 
 import shellsim
 from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.backends.docker_gvisor.machine import DockerGvisorMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory
@@ -109,6 +110,8 @@ def machine_factories(backends: Sequence[Backend], controller_url: str | None) -
                 factory = IrisMachineFactory(
                     controller_url=controller_url, scheduling_timeout=SANDBOX_SCHEDULING_TIMEOUT
                 )
+            case Backend.DOCKER_GVISOR:
+                factory = DockerGvisorMachineFactory()
             case Backend.DOCKER:
                 unavailable = docker_unavailable_reason()
                 if unavailable is not None:
