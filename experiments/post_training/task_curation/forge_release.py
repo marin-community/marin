@@ -66,7 +66,6 @@ CONTROLS_CREDIT_CAP = 20
 GRADER_BASE_IMAGE = "docker.io/library/python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
 EMPTY_PACKAGES = {"pypi_packages": [], "tools": []}
 ENVIRONMENTS = {CommandSemantics.SHELL_SIMULATOR: "shellsim", CommandSemantics.LINUX_PROCESS: "linux", None: "reasoning"}
-"""A task's environment, by the command semantics of its (restored) task machine."""
 
 
 class Band(StrEnum):
