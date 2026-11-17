@@ -144,7 +144,9 @@ def scienceagentbench_task(
     grader = package.grader
     if not isinstance(grader, ScriptGrader) or grader.replay is None:
         raise ValueError("ScienceAgentBench requires isolated replay before script grading")
-    if environment.docker_image is None or environment.working_directory != WORKING_DIRECTORY:
+    if (environment.docker_image is None and environment.docker_build is None) or (
+        environment.working_directory != WORKING_DIRECTORY
+    ):
         raise ValueError("ScienceAgentBench requires a prepared image with /testbed as its working directory")
     if grader.replay.environment != environment:
         raise ValueError("ScienceAgentBench actor and replay environments must match")

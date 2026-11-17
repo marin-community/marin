@@ -58,6 +58,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.environment import prepare_machine_spec, resolve_env_vars, setup_user, validate_machine_spec
 from taskcompendium.runtime.output_capture import selected_output_files
+from taskcompendium.runtime.resources import materialize_build_context
 from taskcompendium.runtime.staging import StagedFile, resource_files, write_archive
 from taskcompendium.submission import conversation_messages, native_action_text, require_submission_compatibility
 
@@ -542,10 +543,16 @@ async def _replay_outputs(
 
     Replay receives no private resources or inherited credentials.
     """
-    assert replay.environment.docker_image is not None
+    requirements = replay.environment
+    if requirements.docker_build is not None:
+        source = await asyncio.to_thread(materialize_build_context, requirements.docker_build, root / "replay-build")
+        requirements = requirements.model_copy(update={"docker_build": None})
+    else:
+        assert requirements.docker_image is not None
+        source = RegistryImage(requirements.docker_image)
     replay_spec = replace(
         machine_spec,
-        source=RegistryImage(replay.environment.docker_image),
+        source=source,
         env={},
         workdir=replay.cwd,
     )
@@ -554,7 +561,7 @@ async def _replay_outputs(
     submitted_archive = root / "replay-submission.tar"
     write_archive(submitted_archive, submissions, [])
     async with asyncio.timeout(machine_spec.startup_timeout):
-        prepared = await asyncio.to_thread(prepare_machine_spec, replay.environment, factory, replay_spec, {})
+        prepared = await asyncio.to_thread(prepare_machine_spec, requirements, factory, replay_spec, {})
         machine = await factory.create(prepared)
     outputs = []
     try:

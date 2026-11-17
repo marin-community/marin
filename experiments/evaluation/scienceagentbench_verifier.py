@@ -13,21 +13,23 @@ import hashlib
 import json
 import os
 from dataclasses import asdict, replace
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
 
 from harbor.environments.daytona import DaytonaEnvironment
 from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 from harbor.verifier.verifier import VerifierRuntimeError
-from shellbox.image import RegistryImage
+from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.scienceagentbench import SUBMISSION_PATH
 from taskcompendium.models import ConversationTrace, GradingAttempt, ScriptGrader, TaskSpec, TextMessage
 from taskcompendium.runtime.output_capture import MAX_OUTPUT_BYTES, captured_output_files
+from taskcompendium.runtime.resources import materialize_build_context
 from taskcompendium.runtime.task_grading import sandbox_grade
 from verifyit.modes.grade_judge import JudgeConnection
 
-from experiments.evaluation.scienceagentbench_tasks import TASK_SPEC_FILENAME, TASK_SPEC_HASH_KEY
+from experiments.evaluation.scienceagentbench_tasks import ACTOR_BUILD_KEY, TASK_SPEC_FILENAME, TASK_SPEC_HASH_KEY
 
 CAPTURE_TIMEOUT = 60.0
 
@@ -56,12 +58,20 @@ class ScienceAgentBenchVerifier(BaseVerifier):
         task = TaskSpec.model_validate_json(specification)
         if not isinstance(task.grader, ScriptGrader) or task.grader.replay is None:
             raise ValueError("ScienceAgentBench requires a replay-enabled script grader")
-        if task.grader.environment is None or task.grader.environment.docker_image is None:
+        if task.grader.environment is None:
             raise ValueError("ScienceAgentBench requires a prepared grading image")
         if task.output_paths != (SUBMISSION_PATH,):
             raise ValueError("ScienceAgentBench must capture only its submitted Python program")
         if task.environment_requirements.docker_image != self.task.config.environment.docker_image:
             raise ValueError("Harbor and TaskSpec actor images must match")
+        if task.environment_requirements != task.grader.replay.environment:
+            raise ValueError("The actor and replay environments must match")
+        if task.environment_requirements.docker_build is not None:
+            actor_source = environment.machine.spec.source
+            if not isinstance(actor_source, DockerfileSource) or (
+                await asyncio.to_thread(image_source_key, actor_source)
+            ) != self.task.config.metadata.get(ACTOR_BUILD_KEY):
+                raise ValueError("Actor build context differs from the exported Harbor task")
         connection = None
         if task.grader.judge is not None:
             if self.judge_base_url is None or self.judge_api_key_env is None:
@@ -82,13 +92,27 @@ class ScienceAgentBenchVerifier(BaseVerifier):
         attempt = GradingAttempt(
             ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))), files
         )
-        result = await sandbox_grade(
-            task,
-            attempt,
-            environment.factory,
-            replace(environment.machine.spec, source=RegistryImage(task.grader.environment.docker_image), env={}),
-            judge_connection=connection,
-        )
+        requirements = task.grader.environment
+        with TemporaryDirectory(prefix="scienceagentbench-grader-") as temporary:
+            if requirements.docker_build is not None:
+                source = await asyncio.to_thread(
+                    materialize_build_context, requirements.docker_build, Path(temporary) / "build"
+                )
+                grader = task.grader.model_copy(
+                    update={"environment": requirements.model_copy(update={"docker_build": None})}
+                )
+                task = task.model_copy(update={"grader": grader})
+            elif requirements.docker_image is not None:
+                source = RegistryImage(requirements.docker_image)
+            else:
+                raise ValueError("ScienceAgentBench requires a grader image or Docker build recipe")
+            result = await sandbox_grade(
+                task,
+                attempt,
+                environment.factory,
+                replace(environment.machine.spec, source=source, env={}),
+                judge_connection=connection,
+            )
         await asyncio.to_thread(
             (self.trial_paths.verifier_dir / "taskcompendium-result.json").write_text,
             json.dumps(asdict(result), allow_nan=False) + "\n",

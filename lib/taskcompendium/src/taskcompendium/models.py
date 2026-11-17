@@ -619,8 +619,8 @@ class ReplayStage(BaseModel):
 
     @model_validator(mode="after")
     def validate_replay(self) -> "ReplayStage":
-        if self.environment.docker_image is None:
-            raise ValueError("Replay requires a prepared, digest-pinned image")
+        if self.environment.docker_image is None and self.environment.docker_build is None:
+            raise ValueError("Replay requires a digest-pinned image or Docker build context")
         normalized_absolute_path(self.cwd)
         validate_output_paths(tuple(artifact.source for artifact in self.artifacts))
         validate_output_paths(tuple(artifact.target for artifact in self.artifacts))
