@@ -1,7 +1,7 @@
 """Thin, failure-isolated Harbor telemetry hooks."""
 
-import contextlib
 import asyncio
+import contextlib
 import logging
 import threading
 import time

@@ -7,12 +7,12 @@ from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 import harbor.environments.factory as environment_factory
 import harbor.utils.artifact_writer as artifact_writer
-from harbor.archive import ProcessTrialArchive
-from harbor_config.models.job.config import ArchiveConfig
-import pytest
 from harbor.agents.factory import AgentFactory
+from harbor.archive import ProcessTrialArchive
 from harbor.environments.base import ExecResult
 from harbor.job import Job
 from harbor.metrics.mean import Mean
@@ -36,7 +36,7 @@ from harbor.models.trial.result import (
 from harbor.models.verifier.result import VerifierResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor.utils.artifact_writer import ArtifactWriter, get_artifact_writer
-
+from harbor_config.models.job.config import ArchiveConfig
 from tests.unit.fake_agent import FakeAgent
 from tests.unit.test_trial_cleanup import MountedEnvironment
 

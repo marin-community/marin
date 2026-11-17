@@ -39,8 +39,8 @@ class TelemetryCapture:
 
 @pytest.fixture
 def telemetry_capture():
-    from rigging import telemetry
     import zstandard
+    from rigging import telemetry
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
