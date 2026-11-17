@@ -4,7 +4,7 @@ name: Char n-gram embeds via segment-sum table
 category: Embeddings and inputs
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6944782650
@@ -47,6 +47,13 @@ trials:
   commit: bd1e076e0e
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.8642
+  delta:
+  - -0.004
+  steps: 10767
+  baseline: s7n-d512 2.8681 (same commit, seed 0)
+  step_time_change: +1%
 - id: t003
   variant: char 1-4-gram rows summed into input embed table
   rung: competitive-d768
