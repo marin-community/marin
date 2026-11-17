@@ -443,7 +443,12 @@ resources, runtime shapes, machine sources and commands, plus Harbor environment
 fields. Schema tests fail when a field is added without classification. Backend
 selection stays deployment metadata. The survey calls production factory checks
 over generated specs, then validates each converted task's combined agent and
-grader machine demands through rolloutengine's machine mapping.
+grader machine demands through rolloutengine's machine mapping. Capabilities the
+offline survey cannot observe — memory, CPU and disk enforcement, disk quotas,
+network deny, and file mode and mtime restoration — grade as `verify`, never
+partial or unsupported: a live probe on the real backend resolves each cell, and
+admission gates wait on that live evidence instead of blocking. `unsupported` is
+reserved for a capability the backend's code demonstrably lacks.
 
 Prepare `survey-inputs.json` with `inputs` entries containing `source_id`, local
 Parquet `paths`, JSON spec `column` and `expected_tasks`. A `runtime_column`
