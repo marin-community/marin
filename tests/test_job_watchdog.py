@@ -16,7 +16,7 @@ import yaml
 from scripts.ops import job_watchdog as jw
 
 
-def make_registry(tmp_path: Path, entries: str = "") -> jw.Registry:
+def make_registry(entries: str = "") -> jw.Registry:
     raw = {
         "coordinator": "coordinator-session",
         "defaults": {
@@ -38,7 +38,7 @@ def make_registry(tmp_path: Path, entries: str = "") -> jw.Registry:
 
 
 def test_registry_defaults_propagate_and_entries_override() -> None:
-    registry = make_registry(Path("/tmp"))
+    registry = make_registry()
     entry = registry.entries[0]
     assert entry.stall_threshold == timedelta(minutes=60)
     assert entry.gated_threshold == timedelta(minutes=30)
@@ -84,7 +84,7 @@ def test_registry_log_regex_pattern_must_compile() -> None:
 
 
 def stall_entry(tmp_path: Path) -> jw.RegistryEntry:
-    registry = make_registry(tmp_path)
+    registry = make_registry()
     return registry.entries[0]
 
 
@@ -139,7 +139,7 @@ def probe_runner_for(observations: list[jw.Observation]):
 
 
 def test_failed_then_recovered_then_failed_refires(tmp_path: Path) -> None:
-    registry = make_registry(tmp_path)
+    registry = make_registry()
     state = jw.WatchdogState()
     alerts, sink = collect_alerts()
     start = datetime(2026, 11, 17, 12, 0, tzinfo=UTC)
@@ -158,7 +158,7 @@ def test_failed_then_recovered_then_failed_refires(tmp_path: Path) -> None:
 
 
 def test_no_progress_refires_only_after_cooldown(tmp_path: Path) -> None:
-    registry = make_registry(tmp_path)
+    registry = make_registry()
     state = jw.WatchdogState()
     alerts, sink = collect_alerts()
     start = datetime(2026, 11, 17, 12, 0, tzinfo=UTC)
@@ -173,7 +173,7 @@ def test_no_progress_refires_only_after_cooldown(tmp_path: Path) -> None:
 
 
 def test_gated_alert_requires_gated_threshold(tmp_path: Path) -> None:
-    registry = make_registry(tmp_path)
+    registry = make_registry()
     state = jw.WatchdogState()
     alerts, sink = collect_alerts()
     start = datetime(2026, 11, 17, 12, 0, tzinfo=UTC)
@@ -188,7 +188,7 @@ def test_gated_alert_requires_gated_threshold(tmp_path: Path) -> None:
 
 
 def test_preempted_alert_fires_on_repeated_preemptions_and_resets(tmp_path: Path) -> None:
-    registry = make_registry(tmp_path)
+    registry = make_registry()
     state = jw.WatchdogState()
     alerts, sink = collect_alerts()
     start = datetime(2026, 11, 17, 12, 0, tzinfo=UTC)
@@ -212,7 +212,7 @@ def test_preempted_alert_fires_on_repeated_preemptions_and_resets(tmp_path: Path
 
 
 def test_probe_error_alerts_and_recover_clears(tmp_path: Path) -> None:
-    registry = make_registry(tmp_path)
+    registry = make_registry()
     state = jw.WatchdogState()
     alerts, sink = collect_alerts()
     start = datetime(2026, 11, 17, 12, 0, tzinfo=UTC)
@@ -229,7 +229,7 @@ def test_probe_error_alerts_and_recover_clears(tmp_path: Path) -> None:
 
 
 def test_tick_persists_state_history_dashboard_and_alert_log(tmp_path: Path) -> None:
-    registry = make_registry(tmp_path)
+    registry = make_registry()
     state_dir = tmp_path / "state"
     dashboard = tmp_path / "dashboard.html"
     alerts_path = tmp_path / "alerts.jsonl"

@@ -56,7 +56,7 @@ from finestore.rl.difficulty import (
     register_difficulty,
 )
 from finestore.store import DataStore
-from rigging.filesystem.factory import url_to_fs
+from pydantic import ValidationError
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
@@ -415,11 +415,10 @@ def collect_observations(measurement_locations: Sequence[str]) -> dict[str, list
             trials = root / "trials"
             if not trials.exists():
                 raise RoundsError(f"no measurements.json and no trials/ under {location}")
-            filesystem, trials_path = url_to_fs(str(trials))
-            for trial_dir in filesystem.ls(trials_path, detail=False):
-                if str(trial_dir).rstrip("/").rsplit("/", 1)[-1] in ("catalog", "judge"):
+            for trial_dir in trials.ls():
+                if trial_dir.name in ("catalog", "judge"):
                     continue
-                measurement = StoragePath(trial_dir) / "measurement.json"
+                measurement = trial_dir / "measurement.json"
                 if measurement.exists():
                     rows.append(json.loads(measurement.read_text()))
         for row in rows:
@@ -428,8 +427,12 @@ def collect_observations(measurement_locations: Sequence[str]) -> dict[str, list
                 row = {**row, "sample": {key: value for key, value in sample.items() if key != "tasks"}}
             try:
                 observation = DifficultyObservation.model_validate(row)
-            except Exception:
+            except ValidationError as e:
+                # A stored row that fails the observation contract is recorded as
+                # dropped with its reason; a programming error propagates loudly.
                 dropped += 1
+                if dropped == 1:
+                    LOGGER.warning("first dropped observation %s: %s", row.get("measurement_id"), str(e)[:200])
                 continue
             kept += 1
             observations.setdefault(canonical_source_id(observation.source_id), []).append(observation)

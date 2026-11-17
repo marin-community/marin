@@ -683,9 +683,7 @@ def alert_kind_for(
     return None
 
 
-def open_alert_kinds(
-    entry: RegistryEntry, state: EntryState, record: EntryRecord, probe_ok: bool, now: datetime
-) -> tuple[str, ...]:
+def open_alert_kinds(entry: RegistryEntry, state: EntryState, record: EntryRecord, probe_ok: bool) -> tuple[str, ...]:
     """Conditions that currently hold, independent of alert dedup."""
     kinds: list[str] = []
     if not probe_ok:
@@ -901,7 +899,7 @@ def run_tick(
                 since_progress=(
                     humanize_duration(now - record.progress_changed_at) if record.progress_changed_at else "—"
                 ),
-                alerts=open_alert_kinds(entry, current_state, record, probe_ok, now),
+                alerts=open_alert_kinds(entry, current_state, record, probe_ok),
                 detail=record.detail,
                 probe_ok=probe_ok,
                 ticked_at=now,
@@ -981,10 +979,12 @@ def _log_pattern_for(ref: IrisJobRef) -> str:
 def newest_finelog_lines(
     patterns: list[str], now: datetime, window_minutes: int = LOG_WINDOW_MINUTES
 ) -> dict[str, LogLine]:
-    """Newest Finelog line per job key across all tracked patterns, in one query.
+    """Newest Finelog line per tracked pattern, in one query.
 
     Each pattern gets its own bounded subquery joined by UNION ALL, so a flood of log
-    lines from one job cannot push a quiet job's newest line out of the result.
+    lines from one job cannot push a quiet job's newest line out of the result. A
+    pattern LIMITs to one row: an exact job yields that job's newest line, and a
+    prefix yields the single newest line under the prefix across matching jobs.
     """
     since_ms = int(now.timestamp() * 1000) - int(window_minutes * 60 * 1000)
     columns = 'key, seq, epoch_ms, "data", "cluster"'
