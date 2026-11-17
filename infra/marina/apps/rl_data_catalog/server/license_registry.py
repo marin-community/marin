@@ -4,8 +4,24 @@
 """Versioned user decisions; Python packaging preserves this registry in hosted backends."""
 
 LICENSE_BANS = r"""{
-  "version": "2026.11.16.3",
+  "version": "2026.11.16.4",
   "bans": [
+    {
+      "source_id": "FWeindel:validated-tasks",
+      "upstream_id": "FWeindel/validated-tasks",
+      "upstream_revision": "317659ac88c8b706d318020c5fc3813a931fb6ec",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "Automated FAIL F2: no license declaration at the pinned upstream; standing doubt rule binding.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/FWeindel/validated-tasks/resolve/317659ac88c8b706d318020c5fc3813a931fb6ec/README.md"
+      ],
+      "decided_at": "2026-11-16T21:10:00-05:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
     {
       "source_id": "ASDiv:asdiv",
       "upstream_id": "chaochun/nlu-asdiv-dataset",
