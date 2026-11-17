@@ -465,6 +465,9 @@ class GrugModelConfig:
     ``sum_lag a[t, n, lag] * x[t - lag, n]`` over ``sconv_kernel`` lags (document-masked), with per-token, per-head
     taps ``a`` a linear map of the attention input (separate zero-initialised maps for K and V, Adam). K keeps its
     static SConv alongside."""
+    mla_qk_norm_cap: float | None = None
+    """L2 norm cap on the MLA layers' per-head queries and keys, in place of ``mla_q_norm``/``mla_k_norm``: a head
+    vector longer than the cap is rescaled to the cap, a shorter one passes through. None: off."""
 
     def __post_init__(self) -> None:
         if self.cplm_plus and self.logit_soft_cap is not None:
@@ -479,6 +482,8 @@ class GrugModelConfig:
             raise ValueError(
                 "mla_dynamic_kv_conv needs mla with local_mixer=kda (its softmax layers are the global ones)"
             )
+        if self.mla_qk_norm_cap is not None and (not self.mla or self.qk_norm or self.mla_qk_norm_cap <= 0):
+            raise ValueError("mla_qk_norm_cap needs mla, qk_norm=False and a positive cap")
         if unknown := set(self.sconv_sites) - set(SCONV_SITES):
             raise ValueError(f"sconv_sites must be a subset of {SCONV_SITES}, got {sorted(unknown)}")
         if self.moe_implementation not in MOE_IMPLEMENTATIONS:
@@ -563,6 +568,12 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     """Non-parametric RMS norm over the last dimension."""
     variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
+
+
+def l2_norm_cap(x: jax.Array, cap: float) -> jax.Array:
+    """Rescale each vector over the last dimension whose L2 norm exceeds ``cap`` to norm ``cap``."""
+    norm = jnp.linalg.norm(x.astype(jnp.float32), axis=-1, keepdims=True)
+    return (x * (cap / jnp.maximum(norm, cap))).astype(x.dtype)
 
 
 class ShortConv(eqx.Module):
@@ -840,13 +851,17 @@ class CausalSelfAttention(eqx.Module):
         cfg = self.cfg
         if cfg.mla and cfg.mla_key_offset:
             k = partial_key_offset(k, segment_ids, _partition_spec_of(k))
-        if cfg.qk_norm:
+        if cfg.mla_qk_norm_cap is not None:
+            q = l2_norm_cap(q, cfg.mla_qk_norm_cap)
+            k = l2_norm_cap(k, cfg.mla_qk_norm_cap)
+        elif cfg.qk_norm:
             q = rms_norm(q)
             k = rms_norm(k)
-        elif cfg.mla_k_norm and cfg.mla:
-            k = rms_norm(k)
-        if cfg.mla_q_norm and cfg.mla and not cfg.qk_norm:
-            q = rms_norm(q)
+        else:
+            if cfg.mla_k_norm and cfg.mla:
+                k = rms_norm(k)
+            if cfg.mla_q_norm and cfg.mla:
+                q = rms_norm(q)
         # The Inkling bias replaces RoPE (no rotation).
         if self.rel_pos is None:
             if cfg.rope_global_layers:
