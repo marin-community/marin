@@ -110,7 +110,8 @@ class Placement(Section):
     """PLACEMENT-SENSITIVE: this changes reservation order and whether policy GPUs are kept on nodes disjoint from
     rollout engines. The pre-submit topology may be numerically sufficient but impossible to realize if wrong."""
     policy_per_gpu_bundles: bool = field(False)
-    "PLACEMENT-SENSITIVE: this changes policy placement-group bundle shape from whole-node to per-GPU bundles."
+    """PLACEMENT-SENSITIVE: this changes policy placement-group bundle shape from whole-node to per-GPU bundles.
+    Wrappers must preserve the compiled pool size and the assumptions of policy_strict_spread_pg."""
     policy_force_cvd_mask: bool = field(False)
     """PLACEMENT-SENSITIVE: this binds policy actors to Ray-assigned physical GPU IDs and is valid only with the
     compatible per-GPU placement plan. It is not an independent device-selection convenience flag."""
