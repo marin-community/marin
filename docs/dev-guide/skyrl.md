@@ -275,12 +275,13 @@ and requires neither [vLLM #130](https://github.com/marin-community/vllm/pull/13
 nor [#11492](https://github.com/marin-community/marin/pull/11492).
 
 A separate RL integration completed three fresh nonzero updates at a
-102,400-token cap, verified updated weights and later generation in all eight
-engines, two evaluations with scores for all 120 tasks each, and a native checkpoint. Its first batch
-reached 56,196 attended tokens. That integration also changed task setup and
-cadence, which this fragment preserves from the caller. Separate EP16 serving
-reached 262,024 total tokens; near-262K trainer backward used the earlier inference
-layout. Sustained runs, same-version recovery and integrated near-262K training
+102,400-token context limit. It verified updated weights and generated with them
+in all eight engines. Each of two evaluations produced scores for all 120 tasks,
+and a native checkpoint completed. Its first batch reached 56,196 attended tokens. That integration also
+changed task setup and cadence, which this fragment preserves from the caller.
+Separate EP16 serving completed one request with 262,024 prompt-plus-output tokens.
+Near-262K trainer backward used the earlier inference layout. Sustained runs,
+same-version recovery and integrated near-262K training
 with all eight engines still need qualification.
 
 ## Expert-block weight sync placement
