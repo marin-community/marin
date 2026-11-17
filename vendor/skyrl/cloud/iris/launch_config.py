@@ -430,7 +430,8 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         if trainer["resume_path"] != checkpoint["uri"]:
             raise ValueError("trainer.resume_path must match inputs.starting_checkpoint.uri")
     if (
-        skyrl.get("generator", {}).get("weight_sync_transport") == WeightSyncTransport.EXPERT_BLOCK
+        run["mode"] == RunMode.TRAIN
+        and skyrl.get("generator", {}).get("weight_sync_transport") == WeightSyncTransport.EXPERT_BLOCK
         and skyrl.get("trainer", {}).get("placement", {}).get("colocate_all")
         and entrypoint != RL_ENTRYPOINTS[RLEntrypoint.STANDARD]
     ):
