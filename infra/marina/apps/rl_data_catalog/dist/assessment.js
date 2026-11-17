@@ -11,13 +11,17 @@ const defectLabels = {
 };
 const confidenceLabels = {high: "High", medium: "Medium", low: "Low"};
 const referenceLabels = {consistent: "Reference consistent", conflict: "Reference conflict", unknown: "Reference unknown"};
+const PAGE_SIZE = 100;
 const state = {
   cohort: "all",
   verdict: "all",
   confidence: "all",
   reference: "all",
+  status: "all",
   defects: new Set(),
-  samples: [],
+  search: "",
+  offset: 0,
+  counts: null,
 };
 
 async function send(method, url, body) {
@@ -51,17 +55,49 @@ function confidenceLine(counts) {
   return `Reviewer confidence: ${parts.join(" · ")}${counts.unrecorded ? ` · unrecorded ${counts.unrecorded}` : ""}`;
 }
 
-function summary(report) {
+// The scope line states whether the numbers are SAMPLE or FULL and the FULL coverage.
+function scopeLine(data) {
+  const parts = [`Review scope: ${data.scope}`];
+  const completeness = data.review_completeness;
+  if (completeness && completeness.required != null) {
+    parts.push(`${(completeness.reviewed ?? 0).toLocaleString()} / ${completeness.required.toLocaleString()} conclusive reviewed`);
+    if (completeness.provisional) parts.push("provisional");
+  }
+  if (data.finalization === "accepted_incomplete" && data.waiver) {
+    parts.push("whole-source waiver accepted for the unreviewed remainder");
+  }
+  if (data.result) parts.push(`Result ${data.result}`);
+  return parts.join(" · ");
+}
+
+function summary(data) {
+  const report = data.report;
   const target = $("summary");
+  const scopeCard = node("section", undefined, "assessment-card");
+  scopeCard.append(node("h2", "Review scope and coverage"), node("p", scopeLine(data)));
+  const quality = data.report.counts;
+  if (quality) {
+    const reviewed = quality.reviewed.toLocaleString(), population = quality.population.toLocaleString();
+    scopeCard.append(node("p", `${reviewed} reviewed rows serve this page out of a ${population} task population.`));
+  }
+  target.append(scopeCard);
   for (const cohort of ["admitted", "excluded"]) {
-    const data = report.assessment[cohort], section = node("section", undefined, "assessment-card");
+    const cohortData = report.assessment[cohort], section = node("section", undefined, "assessment-card");
     section.append(node("h2", cohort === "admitted" ? "Retained task opinions" : "Excluded row diagnostics"));
-    section.append(node("p", `${labels[data.grade]} · ${data.reviewed}/${data.sample_count} reviewed · population ${data.population.toLocaleString()}`));
-    section.append(node("p", ["good", "some_issues", "bad", "unknown"].map(verdict => `${labels[verdict]} ${data.verdict_counts[verdict]}`).join(" · ")));
-    section.append(defectChips(data.defect_counts || {}, data.reviewed));
-    section.append(node("p", confidenceLine(data.confidence_counts || {high: 0, medium: 0, low: 0, unrecorded: 0})));
-    section.append(node("p", data.good_fraction === null ? data.grade_reason : `${(100 * data.good_fraction).toFixed(1)}% Good · ${data.grade_reason}`));
-    section.append(node("p", `Missing required evidence: ${data.missing_evidence}. Packets with omissions: ${data.packets_with_omissions}.`));
+    const populationLine = `${cohortData.reviewed}/${cohortData.sample_count} reviewed · population ${cohortData.population.toLocaleString()}`;
+    if (data.scope === "FULL") {
+      section.append(node("p", populationLine));
+      section.append(node("p", "Whole-population review: this card lists every reviewed task; the Result above is the source's overall grade."));
+    } else {
+      section.append(node("p", `${labels[cohortData.grade]} · ${populationLine}`));
+    }
+    section.append(node("p", ["good", "some_issues", "bad", "unknown"].map(verdict => `${labels[verdict]} ${cohortData.verdict_counts[verdict]}`).join(" · ")));
+    section.append(defectChips(cohortData.defect_counts || {}, cohortData.reviewed));
+    section.append(node("p", confidenceLine(cohortData.confidence_counts || {high: 0, medium: 0, low: 0, unrecorded: 0})));
+    if (data.scope !== "FULL") {
+      section.append(node("p", cohortData.good_fraction === null ? cohortData.grade_reason : `${(100 * cohortData.good_fraction).toFixed(1)}% Good · ${cohortData.grade_reason}`));
+      section.append(node("p", `Missing required evidence: ${cohortData.missing_evidence}. Packets with omissions: ${cohortData.packets_with_omissions}.`));
+    }
     target.append(section);
   }
   const controls = report.curation.verification, section = node("section", undefined, "assessment-card");
@@ -72,24 +108,18 @@ function summary(report) {
   target.append(section);
 }
 
-function matches(sample) {
-  if (state.cohort !== "all" && sample.cohort !== state.cohort) return false;
-  if (state.verdict !== "all" && sample.verdict !== state.verdict) return false;
-  if (state.confidence !== "all" && (sample.confidence || "") !== state.confidence) return false;
-  if (state.reference !== "all" && (sample.reference_status || "") !== state.reference) return false;
-  for (const defect of state.defects) if (!(sample.defects || []).includes(defect)) return false;
-  return true;
-}
-
 function taskCard(sample) {
   const details = node("details", undefined, "assessment-card"), content = node("div");
+  const unavailable = sample.status === "unavailable";
   const badges = (sample.defects || []).map(defect => node("span", defectLabels[defect], "chip quality-some_issues"));
   if (sample.confidence) badges.push(node("span", `Confidence: ${confidenceLabels[sample.confidence] || sample.confidence}`, "chip quality-unassessed"));
   if (sample.reference_status) badges.push(node("span", referenceLabels[sample.reference_status] || sample.reference_status, "chip quality-unassessed"));
+  if (unavailable) badges.push(node("span", "Judgment unavailable", "chip quality-unassessed"));
   details.append(node("summary", `${labels[sample.verdict] || sample.verdict} · ${sample.task_id}`), content);
   details.addEventListener("toggle", async () => {
     if (!details.open || content.childNodes.length) return;
-    content.append(node("p", "Loading full review and packet…"));
+    content.append(node("p", unavailable ? "The reviewer never returned a usable judgment for this task." : "Loading full review and packet…"));
+    if (unavailable) return;
     try {
       const data = await json(`api/evidence?${new URLSearchParams({source_id: source, task_id: sample.task_id})}`);
       const header = node("div", undefined, "evidence-labels");
@@ -105,10 +135,22 @@ function taskCard(sample) {
   return details;
 }
 
-function browser(report) {
-  state.samples = report.evidence.samples;
+function browseQuery(offset) {
+  const parameters = new URLSearchParams({source_id: source, limit: PAGE_SIZE, offset});
+  if (state.cohort !== "all") parameters.set("cohort", state.cohort);
+  if (state.verdict !== "all") parameters.set("verdict", state.verdict);
+  if (state.confidence !== "all") parameters.set("confidence", state.confidence === "unrecorded" ? "unrecorded" : state.confidence);
+  if (state.reference !== "all") parameters.set("reference", state.reference === "unrecorded" ? "unrecorded" : state.reference);
+  if (state.status !== "all") parameters.set("status", state.status);
+  if (state.defects.size) parameters.set("defect", [...state.defects].join(","));
+  if (state.search.trim()) parameters.set("search", state.search.trim());
+  return parameters;
+}
+
+function browser(report, initialPage) {
   const section = $("browser"), filters = $("filters"), reviews = $("reviews");
   section.hidden = false;
+  let pending = initialPage;
   function select(label, key, options) {
     const wrap = node("label", undefined, "review-filter");
     wrap.append(node("span", label));
@@ -119,36 +161,87 @@ function browser(report) {
       control.append(item);
     }
     control.value = state[key];
-    control.addEventListener("change", () => { state[key] = control.value; render(); });
+    control.addEventListener("change", () => { state[key] = control.value; state.offset = 0; render(); });
     wrap.append(control);
     return wrap;
   }
   filters.append(
     select("Cohort", "cohort", [["all", "All"], ["admitted", "Retained"], ["excluded", "Excluded"]]),
     select("Verdict", "verdict", [["all", "All"], ...Object.entries(labels)]),
-    select("Confidence", "confidence", [["all", "All"], ["", "Not recorded"], ...Object.entries(confidenceLabels)]),
-    select("Reference", "reference", [["all", "All"], ["", "Not recorded"], ...Object.entries(referenceLabels)]),
+    select("Confidence", "confidence", [["all", "All"], ["unrecorded", "Not recorded"], ...Object.entries(confidenceLabels)]),
+    select("Reference", "reference", [["all", "All"], ["unrecorded", "Not recorded"], ...Object.entries(referenceLabels)]),
+    select("Status", "status", [["all", "All"], ["reviewed", "Reviewed"], ["unavailable", "Unavailable"]]),
   );
+  const searchBox = node("label", undefined, "review-filter");
+  searchBox.append(node("span", "Search"));
+  const search = node("input");
+  search.type = "search";
+  search.placeholder = "Task ID or review text";
+  search.value = state.search;
+  let searchTimer = null;
+  search.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { state.search = search.value; state.offset = 0; render(); }, 300);
+  });
+  searchBox.append(search);
+  filters.append(searchBox);
   const defectGroup = node("span", undefined, "review-filter review-defects");
   defectGroup.append(node("span", "Defects"));
+  const defectCounts = (report.counts || {}).defect_counts || {};
   for (const [defect, label] of Object.entries(defectLabels)) {
+    const count = defectCounts[defect] || 0;
     const toggle = node("label", undefined, "review-defect");
     const box = node("input");
     box.type = "checkbox";
+    box.dataset.defect = defect;
+    if (!count) box.disabled = true;
     box.addEventListener("change", () => {
       if (box.checked) state.defects.add(defect); else state.defects.delete(defect);
+      state.offset = 0;
       render();
     });
-    toggle.append(box, node("span", label));
+    toggle.append(box, node("span", count ? `${label} (${count.toLocaleString()})` : label));
     defectGroup.append(toggle);
   }
   filters.append(defectGroup);
+  const pageStatus = $("filter-count");
+  const pager = node("nav", undefined, "review-pager");
+  const previous = node("button", "← Previous page");
+  previous.type = "button";
+  const next = node("button", "Next page →");
+  next.type = "button";
+  pager.append(previous, next);
+  pageStatus.after(pager);
 
-  function render() {
-    const kept = state.samples.filter(matches);
-    $("filter-count").textContent = `${kept.length.toLocaleString()} of ${state.samples.length.toLocaleString()} stored reviews shown`;
-    reviews.replaceChildren(...kept.map(taskCard));
+  async function render() {
+    if (pending) {
+      const cached = pending;
+      pending = null;
+      return show(cached);
+    }
+    reviews.replaceChildren(node("p", "Loading reviews…"));
+    try {
+      const page = await json(`api/assessment?${browseQuery(state.offset)}`);
+      show(page);
+    } catch (error) {
+      reviews.replaceChildren(node("p", error.message, "error"));
+    }
   }
+
+  function show(page) {
+    const items = page.report.evidence.items;
+    const total = page.report.evidence.total;
+    state.counts = page.report.counts;
+    const first = total ? state.offset + 1 : 0;
+    const last = Math.min(state.offset + PAGE_SIZE, total);
+    pageStatus.textContent = `${first.toLocaleString()}-${last.toLocaleString()} of ${total.toLocaleString()} matching reviews`;
+    previous.disabled = state.offset <= 0;
+    next.disabled = state.offset + PAGE_SIZE >= total;
+    if (!items.length) reviews.replaceChildren(node("p", "No stored reviews match these filters."));
+    else reviews.replaceChildren(...items.map(taskCard));
+  }
+  previous.addEventListener("click", () => { state.offset = Math.max(0, state.offset - PAGE_SIZE); render(); });
+  next.addEventListener("click", () => { state.offset += PAGE_SIZE; render(); });
   render();
 }
 
@@ -359,9 +452,9 @@ function auditPanel() {
   try {
     const data = await json(`api/assessment?source_id=${encodeURIComponent(source)}`);
     $("title").textContent = data.source;
-    $("message").textContent = `Sampled model opinions · ${data.report.scope} curation`;
-    summary(data.report);
-    browser(data.report);
+    $("message").textContent = scopeLine(data);
+    summary(data);
+    browser(data.report, data);
     auditPanel();
     $("report").textContent = JSON.stringify(data.report, null, 2);
   } catch (error) {

@@ -597,8 +597,20 @@ uv run marina release infra/marina/apps/rl_data_catalog --base-version CURRENT_V
 
 uv run python infra/marina/apps/rl_data_catalog/load.py \
   --app-id fb11c931-5861-4878-8bb5-a964d652b45f --backend-map backend-map.json \
-  --source-identities source-identities-reviewed.json
+  --source-identities source-identities-reviewed.json \
+  --full-content-reviews full-content-results.json
 ```
+
+`--full-content-reviews` stages verified whole-source FULL review bindings (the
+derived registry's `full_content_results.json` payload, keyed by source ID). For
+each bound source without a catalog assessment, the loader reads the pinned
+consolidated `records.parquet` and receipt, reconciles the rows against the
+bound Result, and stages every review as a browseable assessment item with its
+typed defects, confidence and reference status. Unknown enum values, changed
+receipt bytes, population mismatches and Result disagreement fail the load
+loudly before selection; nothing is mapped to free text. Rows carry no task
+packets — their evidence is the recorded review itself, which `/evidence`
+serves without a packet document.
 
 `applet.toml` declares the existing app's UUID. Any authenticated internal
 Marina user can release an update. By default, source must be a clean

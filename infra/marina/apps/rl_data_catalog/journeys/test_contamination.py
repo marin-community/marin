@@ -5,13 +5,21 @@
 
 import json
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import quote, urlencode
+from uuid import UUID
 
 import pytest
+from marina.applets import applet_schema
+from marina.db import DatabaseSpec, engine_for
 from marina.journeys import Journey
 from playwright.sync_api import expect
+from sqlalchemy import text
+from taskcompendium.pipeline.models import Confidence, Defect, Quality, ReferenceStatus, ReviewRecord, ReviewVerdict
 
+from experiments.post_training.task_curation.full_qc_review import quality_result as recompute_review_result
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from infra.marina.apps.rl_data_catalog.readability import inspect_state
 from infra.marina.apps.rl_data_catalog.release_browser import (
     TABLE_BOUNDS,
@@ -21,6 +29,9 @@ from infra.marina.apps.rl_data_catalog.release_browser import (
     curriculum_sweep,
     evidence_sweep,
 )
+from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
+from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
@@ -1158,3 +1169,198 @@ def test_confidence_and_map_remain_usable_while_sample_pages_stream(journey: Jou
     page.locator("#confidence").select_option("0")
     expect(page.locator("#task-list .task-row")).to_have_count(3)
     assert requests == []
+
+
+FULL_BROWSE_APP = "fb11c931-5861-4878-8bb5-a964d652b45f"
+FULL_BROWSE_SOURCE = "Marin:full-browse"
+FULL_BROWSE_KEY = "full-browse"
+FULL_BROWSE_POPULATION = 260
+FULL_BROWSE_CYCLE = ["missing_context", "wrong_reference", "answer_leakage", "malformed", "rubric_mismatch", "ambiguity"]
+
+
+def full_browse_records() -> list:
+    """One whole-population FULL panel: 260 typed reviews, five unavailable, no packets."""
+    records = []
+    for index in range(FULL_BROWSE_POPULATION):
+        task_id = f"task-{index:04d}"
+        if index % 52 == 51:
+            records.append(
+                ReviewRecord(task_id=task_id, status="unavailable", verdict=None, detail="Response truncated.")
+            )
+            continue
+        defects = [Defect(FULL_BROWSE_CYCLE[index % len(FULL_BROWSE_CYCLE)])]
+        if index % 13 == 5:
+            verdict = ReviewVerdict(
+                task_id=task_id,
+                quality=Quality.GOOD,
+                confidence=Confidence.HIGH,
+                reference_status=ReferenceStatus.CONSISTENT,
+                defects=[],
+                evidence="Clean retained task.",
+            )
+        else:
+            verdict = ReviewVerdict(
+                task_id=task_id,
+                quality=Quality.ISSUES,
+                confidence=Confidence.LOW if index % 3 == 0 else Confidence.HIGH,
+                reference_status=ReferenceStatus.CONSISTENT,
+                defects=defects,
+                evidence=f"Recorded finding for {task_id}.",
+            )
+        records.append(ReviewRecord(task_id=task_id, status="reviewed", verdict=verdict, detail=""))
+    return records
+
+
+@pytest.fixture
+def full_review_catalog(marina_kernel, marina_database: DatabaseSpec) -> Iterator[None]:
+    """One source whose whole-population review is bound with an accepted waiver."""
+    records = full_browse_records()
+    result = recompute_review_result(records)
+    waiver = {"uri": "https://example.org/full-browse-waiver.json", "sha256": "a" * 64}
+    base = next(declaration for _, declaration in review_declarations() if declaration.id == "Marin:full-waiver")
+    declaration = base.model_copy(
+        update={
+            "id": FULL_BROWSE_SOURCE,
+            "license_receipt": fixture_license(FULL_BROWSE_SOURCE, base.dataset_id, base.dataset_revision),
+            "name": "full-browse",
+            "display_name": "full-browse",
+            "upstream_dataset": "full-browse",
+            "upstream_name": "full-browse",
+            "task_count": FULL_BROWSE_POPULATION,
+            "within_source_dedup": deduplication_evidence("fixture", "1", "1", FULL_BROWSE_POPULATION),
+            "quality_result": result,
+            "quality_result_finalization": "accepted_incomplete",
+            "quality_result_waiver": waiver,
+            "independent_qc": {
+                "verdict": result.verdict.value,
+                "method": "Whole-population review bound with the finalization waiver",
+                "reviewed": result.reviewed + result.uncertain_count,
+                "evidence_url": "https://example.org/full-browse-review",
+            },
+        }
+    )
+    completeness = review_completeness(declaration, [], [])
+    engine = engine_for(marina_database, applet_schema(UUID(FULL_BROWSE_APP)))
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO atlas_sources (load_id, id, declaration, assessment_key, latest_attempt_key, "
+                "latest_attempt_status, reason, curation, diagnostics, review_completeness) "
+                "VALUES ('lexical', :id, CAST(:declaration AS JSONB), :key, NULL, 'skipped', NULL, NULL, '[]'::jsonb, "
+                "CAST(:completeness AS JSONB))"
+            ),
+            {
+                "id": FULL_BROWSE_SOURCE,
+                "declaration": declaration.model_dump_json(),
+                "key": FULL_BROWSE_KEY,
+                "completeness": json.dumps(completeness),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO atlas_assessments VALUES ('lexical', :key, :source, 'full', "
+                '\'{"model": "glm", "revision": "pinned", "max_tokens": 8192, "max_attempts": 3, '
+                "\"retry_max_tokens\": 16384}', 'Review every retained task.', "
+                '\'{"status": "complete", "verification": null, "admission_counts": {"admitted": 0, '
+                "\"excluded\": 0}}', 'https://example.org/full-browse-review', '[]'::jsonb)"
+            ),
+            {"key": FULL_BROWSE_KEY, "source": FULL_BROWSE_SOURCE},
+        )
+        connection.execute(
+            text("INSERT INTO atlas_populations VALUES ('lexical', :key, 'admitted', :population, :population)"),
+            {"key": FULL_BROWSE_KEY, "population": FULL_BROWSE_POPULATION},
+        )
+        connection.execute(
+            text("INSERT INTO atlas_populations VALUES ('lexical', :key, 'excluded', 0, 0)"), {"key": FULL_BROWSE_KEY}
+        )
+        for record in records:
+            verdict = record.verdict
+            reviewed = record.status == "reviewed" and verdict is not None
+            connection.execute(
+                text(
+                    """
+                INSERT INTO atlas_items (load_id, pipeline_key, task_id, cohort, status, verdict, explanation,
+                    evidence_ids, packet_uri, has_task, omissions, exclusion_reason,
+                    confidence, reference_status, defects, provenance, replaced_task_sha256, repair_advisories)
+                VALUES ('lexical', :key, :task, 'admitted', :status, :verdict, :explanation, '[]'::jsonb,
+                    '', false, '[]'::jsonb, NULL, :confidence, :reference, CAST(:defects AS JSONB), NULL, NULL,
+                    '[]'::jsonb)
+            """
+                ),
+                {
+                    "key": FULL_BROWSE_KEY,
+                    "task": record.task_id,
+                    "status": "reviewed" if reviewed else "unavailable",
+                    "verdict": str(verdict.quality) if reviewed else "unknown",
+                    "explanation": verdict.evidence if reviewed else record.detail or "Judgment unavailable",
+                    "confidence": str(verdict.confidence) if reviewed else None,
+                    "reference": str(verdict.reference_status) if reviewed else None,
+                    "defects": json.dumps([str(defect) for defect in verdict.defects]) if reviewed else "[]",
+                },
+            )
+    try:
+        yield
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM atlas_sources WHERE load_id='lexical' AND id=:source"), {"source": FULL_BROWSE_SOURCE}
+            )
+            for table in ["atlas_audit_judgments", "atlas_audit_sample_tasks"]:
+                connection.execute(
+                    text(
+                        f"DELETE FROM {table} WHERE sample_id IN "
+                        "(SELECT sample_id FROM atlas_audit_samples WHERE pipeline_key = :key)"
+                    ),
+                    {"key": FULL_BROWSE_KEY},
+                )
+            connection.execute(
+                text("DELETE FROM atlas_audit_samples WHERE pipeline_key = :key"), {"key": FULL_BROWSE_KEY}
+            )
+            for table in ["atlas_items", "atlas_populations", "atlas_assessments"]:
+                connection.execute(
+                    text(f"DELETE FROM {table} WHERE load_id='lexical' AND pipeline_key=:key"), {"key": FULL_BROWSE_KEY}
+                )
+        engine.dispose()
+
+
+def test_full_review_browse_paging_filters_and_audit(journey: Journey, full_review_catalog: None) -> None:
+    """A person pages through a whole-population review, filters by defect and audits it."""
+    page = journey.page
+    page.goto(
+        f"{journey.origin}/a/{FULL_BROWSE_APP}/v/1/assessment.html?source={quote(FULL_BROWSE_SOURCE)}",
+        wait_until="domcontentloaded",
+    )
+    page.evaluate("() => document.fonts.ready")
+    journey.sees("Review scope: FULL")
+    journey.sees("whole-source waiver accepted for the unreviewed remainder")
+    journey.sees("1-100 of 260 matching reviews")
+    journey.shoot("full-browse-page-1")
+
+    # Paging moves through the whole population without reloading everything at once.
+    journey.click("Next page →")
+    journey.sees("101-200 of 260 matching reviews")
+    journey.sees("Some issues · task-0101")
+    journey.shoot("full-browse-page-2")
+
+    # The defect toggles carry whole-population counts; filtering narrows server-side.
+    ambiguous = sum(
+        1
+        for record in full_browse_records()
+        if record.verdict and "ambiguity" in [str(defect) for defect in record.verdict.defects]
+    )
+    journey.click(re.compile(r"Ambiguity \(\d+\)"))
+    journey.sees(f"1-{ambiguous} of {ambiguous} matching reviews")
+    journey.shoot("full-browse-filtered")
+    journey.click(re.compile(r"Ambiguity \(\d+\)"))
+
+    # A task's evidence opens from the row itself: these whole-population rows have no packet.
+    journey.click("Some issues · task-0002")
+    journey.sees("Recorded finding for task-0002.")
+    journey.shoot("full-browse-evidence")
+
+    # Audit mode draws its seeded sample from the full reviewed population.
+    journey.fill("Seed", "journey-full-260")
+    journey.click("Draw sample")
+    journey.sees("Sample stratified · seed journey-full-260 · 40 tasks")
+    journey.sees("No judgments recorded yet.")
+    journey.shoot("full-browse-audit")

@@ -7,6 +7,7 @@ import importlib
 import json
 import shutil
 import uuid
+from collections import Counter
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -31,14 +32,19 @@ from finestore.rl.curation import (
     AssessmentItem,
     AssessmentPopulation,
     CatalogSnapshot,
+    Confidence,
+    ContentEvidenceReference,
     CurationCatalog,
     CurationSummary,
     CurrentCatalog,
+    Defect,
     GradingEnvironmentEvidence,
     OversightLevel,
+    ReferenceStatus,
     SnapshotSource,
     SourceDeclaration,
     SourceOrigin,
+    SourceQualityResult,
     register_catalog,
 )
 from finestore.rl.difficulty import (
@@ -72,12 +78,16 @@ from taskcompendium.backend_requirements import (
     FitSupport,
     backend_schema_sha256,
 )
+from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
+from taskcompendium.pipeline.models import Quality, ReviewRecord, ReviewVerdict
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
 from experiments.post_training.task_curation import registry, retirement
 from experiments.post_training.task_curation.catalog_identity import backend_survey_payload, canonical_backend_survey
+from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
+from experiments.post_training.task_curation.full_qc_review import quality_result as recompute_review_result
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     actor_census_input,
@@ -945,7 +955,7 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
         assert assessment["excluded"]["grade"] == "bad"
         report = client.get("/assessment", params={"source_id": "Marin:math"}).json()["report"]
         assert report["assessment"]["admitted"]["missing_evidence"] == 1
-        assert report["evidence"]["samples"][2]["exclusion_reason"] == "Reference contradiction"
+        assert report["evidence"]["items"][2]["exclusion_reason"] == "Reference contradiction"
         packet = client.get("/evidence", params={"source_id": "Marin:math", "task_id": "one"}).json()
         assert packet["packet"]["task"]["prompt"] == "Null: \u0000; Unicode: π"
         assert client.get("/evidence", params={"source_id": "Marin:math", "task_id": "other"}).status_code == 404
@@ -1647,7 +1657,7 @@ def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_d
         for identifier in (old, current):
             report = client.get("/assessment", params={"source_id": identifier}).json()["report"]
             assert report["source_id"] == current and report["pipeline_key"] == "frozen"
-            assert len(report["evidence"]["samples"]) == 3
+            assert len(report["evidence"]["items"]) == 3
             packet = client.get("/evidence", params={"source_id": identifier, "task_id": "one"}).json()["packet"]
             assert packet == original_packet
             assert client.get("/source-fingerprint", params={"source_id": identifier}).json()["source_id"] == current
@@ -2492,7 +2502,7 @@ def test_typed_review_fields_load_and_serve(catalog_database, catalog_query, tmp
     )
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         report = client.get("/assessment", params={"source_id": "Marin:math"}).json()["report"]
-        samples = {row["task_id"]: row for row in report["evidence"]["samples"]}
+        samples = {row["task_id"]: row for row in report["evidence"]["items"]}
         assert samples["one"]["confidence"] == "low"
         assert samples["one"]["reference_status"] == "conflict"
         assert samples["one"]["defects"] == ["wrong_reference"]
@@ -2529,9 +2539,388 @@ def test_typed_review_fields_load_and_serve(catalog_database, catalog_query, tmp
     )
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         report = client.get("/assessment", params={"source_id": "Marin:math"}).json()["report"]
-        samples = {row["task_id"]: row for row in report["evidence"]["samples"]}
+        samples = {row["task_id"]: row for row in report["evidence"]["items"]}
         assert samples["one"]["confidence"] is None
         assert samples["one"]["defects"] == []
+
+
+FULL_QC_SOURCE = "Marin:fullqc"
+FULL_QC_POPULATION = 60
+
+
+def full_qc_review_records(reviews: list[ReviewRecord], path: Path) -> tuple[str, str]:
+    """Write one consolidated FULL review records.parquet fixture."""
+    schema = pa.schema(
+        [
+            ("task_id", pa.string()),
+            ("task_sha256", pa.string()),
+            ("runtime_sha256", pa.string()),
+            ("review", pa.large_string()),
+            ("batch_receipt", pa.string()),
+        ]
+    )
+    with pq.ParquetWriter(path, schema, compression="zstd") as writer:
+        writer.write_table(
+            pa.Table.from_pylist(
+                [
+                    {
+                        "task_id": record.task_id,
+                        "task_sha256": "b" * 64,
+                        "runtime_sha256": "c" * 64,
+                        "review": record.model_dump_json(),
+                        "batch_receipt": "s3://fixture/receipt.json",
+                    }
+                    for record in reviews
+                ],
+                schema=schema,
+            )
+        )
+    return str(path), file_sha256(path)
+
+
+def full_qc_verdict(
+    task_id: str, quality: str, confidence: str, reference: str, defects: list[str], evidence: str = "Recorded finding."
+) -> ReviewVerdict:
+    return ReviewVerdict(
+        task_id=task_id,
+        quality=Quality(quality),
+        confidence=Confidence(confidence),
+        reference_status=ReferenceStatus(reference),
+        defects=[Defect(defect) for defect in defects],
+        evidence=evidence,
+    )
+
+
+def full_qc_review_records_fixture() -> list[ReviewRecord]:
+    """A whole-population review panel: every Defect value, all confidences, one unavailable."""
+    records = [
+        ReviewRecord(
+            task_id="t01",
+            status="reviewed",
+            verdict=full_qc_verdict("t01", "some_issues", "high", "consistent", ["missing_context"]),
+            detail="",
+        ),
+        ReviewRecord(
+            task_id="t02",
+            status="reviewed",
+            verdict=full_qc_verdict("t02", "some_issues", "high", "conflict", ["wrong_reference"]),
+            detail="",
+        ),
+        ReviewRecord(
+            task_id="t03",
+            status="reviewed",
+            verdict=full_qc_verdict("t03", "bad", "medium", "conflict", ["ambiguity", "rubric_mismatch"]),
+            detail="",
+        ),
+        ReviewRecord(
+            task_id="t04",
+            status="reviewed",
+            verdict=full_qc_verdict("t04", "some_issues", "high", "consistent", ["answer_leakage"]),
+            detail="",
+        ),
+        ReviewRecord(
+            task_id="t05",
+            status="reviewed",
+            verdict=full_qc_verdict("t05", "some_issues", "high", "consistent", ["malformed"]),
+            detail="",
+        ),
+        ReviewRecord(
+            task_id="t06",
+            status="reviewed",
+            verdict=full_qc_verdict("t06", "good", "high", "consistent", []),
+            detail="",
+        ),
+        # Low confidence is uncertain and stays outside the conclusive denominator.
+        ReviewRecord(
+            task_id="t07",
+            status="reviewed",
+            verdict=full_qc_verdict("t07", "some_issues", "low", "consistent", ["ambiguity"]),
+            detail="",
+        ),
+        ReviewRecord(task_id="t08", status="unavailable", verdict=None, detail="Reviewer response truncated."),
+    ]
+    cycles = [
+        ["missing_context"],
+        ["wrong_reference"],
+        ["answer_leakage"],
+        ["malformed"],
+        ["rubric_mismatch"],
+        ["ambiguity"],
+    ]
+    for index in range(len(records), FULL_QC_POPULATION):
+        task_id = f"t{index + 1:02d}"
+        if index % 4 == 0:
+            verdict = full_qc_verdict(task_id, "good", "high", "consistent", [])
+        else:
+            verdict = full_qc_verdict(task_id, "some_issues", "high", "consistent", cycles[index % len(cycles)])
+        records.append(ReviewRecord(task_id=task_id, status="reviewed", verdict=verdict, detail=""))
+    return records
+
+
+def publish_full_bound_source(
+    root: str,
+    snapshot_id: str,
+    *,
+    result: SourceQualityResult,
+    waiver: ContentEvidenceReference,
+    population: int = FULL_QC_POPULATION,
+    source_id: str = FULL_QC_SOURCE,
+) -> None:
+    """A catalog source whose whole-population review is bound outside the campaign."""
+    declaration = SourceDeclaration(
+        license_receipt=fixture_license(source_id, "fixture", "1"),
+        id=source_id,
+        name="fullqc",
+        display_name="Full QC",
+        origin=SourceOrigin.MARIN,
+        build_path="test",
+        upstream_dataset="fullqc",
+        upstream_name="Full QC",
+        current_release={"repo": "fixture", "revision": "1", "url": "https://example.org/pin"},
+        daytona_safety="not_applicable",
+        daytona_snapshot_count=0,
+        daytona_machine_slots=0,
+        daytona_execution_failures=0,
+        daytona_count_basis="Fixture tasks contain no actor environment.",
+        grading_environment=grading_evidence(population),
+        family="Marin:fullqc",
+        tags=[],
+        task_count=population,
+        within_source_dedup=deduplication_evidence("fixture", "1", "1", population),
+        notes="",
+        oversight=OversightLevel.FULL,
+        dataset_id="fixture",
+        dataset_revision="1",
+        url=None,
+        type="RLVR",
+        turns="Single-turn",
+        is_benchmark=False,
+        intended_use="train",
+        kind="Dataset",
+        status="Available",
+        pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},
+        actor_census_input=actor_census_input("fixture", "1", "1", population),
+        quality_result=result,
+        quality_result_finalization="accepted_incomplete",
+        quality_result_waiver=waiver.model_dump(mode="json"),
+        independent_qc={
+            "verdict": result.verdict.value,
+            "method": "Whole-population review bound with the finalization waiver",
+            "reviewed": result.reviewed + result.uncertain_count,
+            "evidence_url": "https://example.org/review",
+        },
+    )
+    with DataStore.open(root, writer_id=snapshot_id) as store:
+        register_catalog(store)
+        source = SnapshotSource(
+            snapshot_id=snapshot_id,
+            id=source_id,
+            declaration=declaration,
+            assessment_key=None,
+            latest_attempt_key=None,
+            latest_attempt_status="skipped",
+            reason=None,
+            curation=None,
+        )
+        with store.transaction() as tx:
+            tx.table(INVENTORY).add(source.model_dump(mode="json"))
+            tx.table(SNAPSHOTS).add(
+                CatalogSnapshot(snapshot_id=snapshot_id, created_at="2026-11-16T00:00:00Z", source_count=1).model_dump()
+            )
+            tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id=snapshot_id).model_dump())
+
+
+def full_qc_binding(tmp_path: Path, result: SourceQualityResult, records: list[ReviewRecord]) -> dict[str, Any]:
+    records_uri, records_sha = full_qc_review_records(records, tmp_path / "records.parquet")
+    receipt_path = tmp_path / "receipt.artifact.json"
+    receipt_path.write_text(
+        json.dumps(
+            {
+                "result_type": "experiments.post_training.task_curation.full_qc_artifacts.FullQCReview",
+                "result": {
+                    "source_id": FULL_QC_SOURCE,
+                    "reviewer": {
+                        "model": "glm",
+                        "model_revision": "r1",
+                        "max_tokens": 8192,
+                        "max_attempts": 3,
+                        "retry_max_tokens": 16384,
+                    },
+                    "rubric": {"id": "atlas-retained-full-qc", "version": "2026.11.13.1", "criteria": ["Review tasks."]},
+                    "coverage_complete": result.unavailable_count == 0,
+                    "qualification_status": "pending",
+                    "attempted_count": len(records),
+                    "result": result.model_dump(mode="json"),
+                },
+            }
+        )
+    )
+    waiver_path = tmp_path / "waiver.json"
+    waiver_path.write_text(
+        json.dumps({"source_id": FULL_QC_SOURCE, "qc_unreviewed": [{"task_id": "t08", "reason": "token budget"}]})
+    )
+    waiver = ContentEvidenceReference(uri=str(waiver_path), sha256=file_sha256(waiver_path))
+    return {
+        FULL_QC_SOURCE: {
+            "source_id": FULL_QC_SOURCE,
+            "input": actor_census_input("fixture", "1", "1", FULL_QC_POPULATION).model_dump(mode="json"),
+            "contract_index": {"uri": "s3://fixture/contracts.parquet", "sha256": "0" * 64},
+            "review_receipt": {"uri": str(receipt_path), "sha256": file_sha256(receipt_path)},
+            "records": {"uri": records_uri, "sha256": records_sha},
+            "result": result.model_dump(mode="json"),
+            "coverage_complete": result.unavailable_count == 0,
+            "finalization": "accepted_incomplete",
+            "waiver": waiver.model_dump(mode="json"),
+        }
+    }
+
+
+def test_full_review_rows_load_typed_and_browseable(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "fullqc")
+    records = full_qc_review_records_fixture()
+    result = recompute_review_result(records)
+    assert result.unavailable_count == 1 and 0 < result.unavailable_count / len(records) <= 0.02
+    assert len(records) == FULL_QC_POPULATION == 60
+    expected_defects = Counter(
+        defect.value for record in records if record.verdict is not None for defect in record.verdict.defects
+    )
+    assert set(expected_defects) == {defect.value for defect in Defect}
+    bindings = full_qc_binding(tmp_path, result, records)
+    publish_full_bound_source(
+        root,
+        "fullqc",
+        result=result,
+        waiver=ContentEvidenceReference.model_validate(bindings[FULL_QC_SOURCE]["waiver"]),
+    )
+    load_result = load_surveyed_catalog(
+        CurationCatalog(root),
+        catalog_query,
+        catalog_backend_map(CurationCatalog(root)),
+        catalog_identity_map(CurationCatalog(root)),
+        full_reviews={key: FullContentResultBinding.model_validate(value) for key, value in bindings.items()},
+    )
+    assert load_result["full_reviews"] == {
+        FULL_QC_SOURCE: {"reviewed": result.reviewed, "unavailable": result.unavailable_count}
+    }
+    services = cast(AppletServices, CatalogServices(catalog_database))
+    with TestClient(create_api(services)) as client:
+        page = client.get("/assessment", params={"source_id": FULL_QC_SOURCE}).json()
+        assert page["scope"] == "FULL"
+        assert page["result"] == result.verdict.value.upper()
+        assert page["finalization"] == "accepted_incomplete"
+        assert page["waiver"]["sha256"] == bindings[FULL_QC_SOURCE]["waiver"]["sha256"]
+        assert page["review_completeness"]["coverage_complete"] is False
+        assert page["review_completeness"]["provisional"] is False
+        report = page["report"]
+        items = {row["task_id"]: row for row in report["evidence"]["items"]}
+        assert report["evidence"]["total"] == FULL_QC_POPULATION
+        assert items["t01"]["defects"] == ["missing_context"]
+        assert items["t01"]["confidence"] == "high"
+        assert items["t02"]["reference_status"] == "conflict"
+        assert items["t03"]["defects"] == ["ambiguity", "rubric_mismatch"]
+        assert items["t06"]["verdict"] == "good" and items["t06"]["defects"] == []
+        assert items["t07"]["confidence"] == "low"
+        assert items["t08"]["status"] == "unavailable" and items["t08"]["verdict"] == "unknown"
+        assert items["t08"]["explanation"] == "Reviewer response truncated."
+        # Whole-population SQL counts reconcile with the stored rows.
+        counts = report["counts"]
+        assert counts["population"] == FULL_QC_POPULATION and counts["item_count"] == FULL_QC_POPULATION
+        assert counts["defect_counts"] == {**{defect: 0 for defect in counts["defect_counts"]}, **expected_defects}
+        assert counts["confidence_counts"]["unrecorded"] == 1
+        # Pagination and the defect filter narrow the same population.
+        first = client.get("/assessment", params={"source_id": FULL_QC_SOURCE, "limit": 3}).json()["report"]["evidence"]
+        assert [row["task_id"] for row in first["items"]] == ["t01", "t02", "t03"] and first["total"] == 60
+        last = client.get("/assessment", params={"source_id": FULL_QC_SOURCE, "limit": 3, "offset": 57}).json()[
+            "report"
+        ]["evidence"]
+        assert [row["task_id"] for row in last["items"]] == ["t58", "t59", "t60"]
+        ambiguous = sum(
+            1 for record in records if record.verdict and "ambiguity" in [str(d) for d in record.verdict.defects]
+        )
+        defect_page = client.get(
+            "/assessment", params={"source_id": FULL_QC_SOURCE, "defect": "ambiguity", "limit": 2, "offset": 1}
+        ).json()["report"]["evidence"]
+        assert defect_page["total"] == ambiguous
+        assert len(defect_page["items"]) == 2
+        assert (
+            client.get("/assessment", params={"source_id": FULL_QC_SOURCE, "defect": "made_up_defect"}).status_code
+            == 422
+        )
+        # The evidence view serves whole-population rows that have no archived packet.
+        evidence = client.get("/evidence", params={"source_id": FULL_QC_SOURCE, "task_id": "t03"}).json()
+        assert evidence["packet"] is None
+        assert evidence["judgment"]["defects"] == ["ambiguity", "rubric_mismatch"]
+        # Audit mode draws from the whole reviewed population.
+        with identity_scope(VerifiedIdentity(user_id="auditor@example", role="user")):
+            sample = client.post(
+                "/audit/samples",
+                json={"source_id": FULL_QC_SOURCE, "strategy": "random", "seed": "seed-full", "sample_size": 4},
+            ).json()
+            tasks = client.get(f"/audit/samples/{sample['sample_id']}/tasks").json()
+            assert len(tasks["tasks"]) == 4
+    # An unknown defect value in a receipt fails the load loudly; nothing is mapped to free text.
+    unknown_root = str(tmp_path / "unknown-defect")
+    verdict_json = full_qc_verdict("t1", "some_issues", "high", "consistent", ["missing_context"]).model_dump_json()
+    unknown_review = verdict_json.replace('"missing_context"', '"typo_overlap"')
+    (tmp_path / "unknown").mkdir()
+    unknown_bindings = full_qc_binding(
+        tmp_path / "unknown",
+        SourceQualityResult.model_validate(bindings[FULL_QC_SOURCE]["result"]),
+        [
+            ReviewRecord(
+                task_id="t1",
+                status="reviewed",
+                verdict=full_qc_verdict("t1", "some_issues", "high", "consistent", ["missing_context"]),
+                detail="",
+            )
+        ],
+    )
+    # Swap the records for a receipt whose review JSON carries the unknown defect value.
+    schema = pa.schema(
+        [
+            ("task_id", pa.string()),
+            ("task_sha256", pa.string()),
+            ("runtime_sha256", pa.string()),
+            ("review", pa.large_string()),
+            ("batch_receipt", pa.string()),
+        ]
+    )
+    unknown_records_path = tmp_path / "unknown" / "records.parquet"
+    with pq.ParquetWriter(unknown_records_path, schema, compression="zstd") as writer:
+        writer.write_table(
+            pa.Table.from_pylist(
+                [
+                    {
+                        "task_id": "t1",
+                        "task_sha256": "b" * 64,
+                        "runtime_sha256": "c" * 64,
+                        "review": unknown_review,
+                        "batch_receipt": "s3://fixture/receipt.json",
+                    }
+                ],
+                schema=schema,
+            )
+        )
+    unknown_bindings[FULL_QC_SOURCE]["records"] = {
+        "uri": str(unknown_records_path),
+        "sha256": file_sha256(unknown_records_path),
+    }
+    publish_full_bound_source(
+        unknown_root,
+        "unknown",
+        result=SourceQualityResult.model_validate(unknown_bindings[FULL_QC_SOURCE]["result"]),
+        waiver=ContentEvidenceReference.model_validate(unknown_bindings[FULL_QC_SOURCE]["waiver"]),
+    )
+    with pytest.raises(ValueError, match="typo_overlap"):
+        load_surveyed_catalog(
+            CurationCatalog(unknown_root),
+            catalog_query,
+            catalog_backend_map(CurationCatalog(unknown_root)),
+            catalog_identity_map(CurationCatalog(unknown_root)),
+            full_reviews={
+                key: FullContentResultBinding.model_validate(value) for key, value in unknown_bindings.items()
+            },
+        )
 
 
 def test_manual_audit_sample_judgments_and_agreement(catalog_database, catalog_query, tmp_path):

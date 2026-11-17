@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
-from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT
+from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT, Confidence, Defect, ReferenceStatus, Verdict
 from marina.applets import AppletServices
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -32,10 +32,19 @@ from .duplicate_folding import (
 from .filtration import filtration
 from .identity_measurements import IDENTITY_REVIEWS_SQL, IDENTITY_SURVEY_SQL
 from .licensing import license_projection
-from .quality import intended_use, issue_rate, quality_display, result
+from .quality import intended_use, issue_rate, quality_display, result, review_coverage
 from .schema import SCHEMA_SQL
 from .source_counts import SourceCounts
 from .source_identity import canonical_source_id, original_source_id
+
+MAX_PAGE_ITEMS = 500
+DEFAULT_PAGE_ITEMS = 100
+COHORT_FILTERS = ("admitted", "excluded")
+STATUS_FILTERS = ("reviewed", "unavailable")
+DEFECT_FILTERS = tuple(defect.value for defect in Defect)
+CONFIDENCE_FILTERS = (*tuple(confidence.value for confidence in Confidence), "unrecorded")
+REFERENCE_FILTERS = (*tuple(reference.value for reference in ReferenceStatus), "unrecorded")
+VERDICT_FILTERS = tuple(verdict.value for verdict in Verdict)
 
 
 def migrate(connection: Connection) -> None:
@@ -184,6 +193,84 @@ def cohort_summaries(connection: Connection, load_id: str, pipeline_key: str) ->
     )
 
 
+def whole_population_counts(summaries: dict[str, Any]) -> dict[str, Any]:
+    """Aggregate the SQL cohort view's counts over every cohort of the assessment."""
+    verdicts = {verdict: 0 for verdict in VERDICT_FILTERS}
+    confidences = {confidence: 0 for confidence in CONFIDENCE_FILTERS}
+    defects = {defect: 0 for defect in DEFECT_FILTERS}
+    totals = {"item_count": 0, "population": 0, "reviewed": 0}
+    for data in summaries.values():
+        for key, counts in (
+            ("verdict_counts", verdicts),
+            ("confidence_counts", confidences),
+            ("defect_counts", defects),
+        ):
+            for name, count in (data.get(key) or {}).items():
+                counts[name] = counts.get(name, 0) + count
+        # Every stored row carries a verdict, so the verdict counts sum to the row count.
+        totals["item_count"] += sum((data.get("verdict_counts") or {}).values())
+        totals["population"] += data.get("population") or 0
+        totals["reviewed"] += data.get("reviewed") or 0
+    return {**totals, "verdict_counts": verdicts, "confidence_counts": confidences, "defect_counts": defects}
+
+
+def assessment_item_filters(
+    cohort: str | None,
+    verdict: str | None,
+    confidence: str | None,
+    reference: str | None,
+    status: str | None,
+    defect: str | None,
+    search: str | None,
+) -> tuple[str, dict[str, Any]]:
+    """Build the item WHERE clause from validated browse filters; unknown values fail."""
+    clauses = []
+    parameters: dict[str, Any] = {}
+    if cohort is not None:
+        if cohort not in COHORT_FILTERS:
+            raise HTTPException(422, f"cohort must be one of {COHORT_FILTERS}")
+        clauses.append("i.cohort = :cohort")
+        parameters["cohort"] = cohort
+    if verdict is not None:
+        if verdict not in VERDICT_FILTERS:
+            raise HTTPException(422, f"verdict must be one of {VERDICT_FILTERS}")
+        clauses.append("i.verdict = :verdict")
+        parameters["verdict"] = verdict
+    if status is not None:
+        if status not in STATUS_FILTERS:
+            raise HTTPException(422, f"status must be one of {STATUS_FILTERS}")
+        clauses.append("i.status = :status")
+        parameters["status"] = status
+    if confidence is not None:
+        if confidence not in CONFIDENCE_FILTERS:
+            raise HTTPException(422, f"confidence must be one of {CONFIDENCE_FILTERS}")
+        if confidence == "unrecorded":
+            clauses.append("i.confidence IS NULL")
+        else:
+            clauses.append("i.confidence = :confidence")
+            parameters["confidence"] = confidence
+    if reference is not None:
+        if reference not in REFERENCE_FILTERS:
+            raise HTTPException(422, f"reference must be one of {REFERENCE_FILTERS}")
+        if reference == "unrecorded":
+            clauses.append("i.reference_status IS NULL")
+        else:
+            clauses.append("i.reference_status = :reference")
+            parameters["reference"] = reference
+    if defect is not None:
+        defects = [value.strip() for value in defect.split(",") if value.strip()]
+        if not defects or any(value not in DEFECT_FILTERS for value in defects):
+            raise HTTPException(422, f"defect must be a comma-separated list of {DEFECT_FILTERS}")
+        clauses.append("i.defects ?| :defects")
+        parameters["defects"] = defects
+    if search is not None:
+        if not search.strip():
+            raise HTTPException(422, "search must not be empty")
+        clauses.append("(i.task_id ILIKE :search OR i.explanation ILIKE :search)")
+        parameters["search"] = f"%{search.strip()}%"
+    return (f" AND {' AND '.join(clauses)}" if clauses else ""), parameters
+
+
 def create_api(services: AppletServices) -> FastAPI:
     api = FastAPI()
     engine = services.engine()
@@ -248,6 +335,8 @@ def create_api(services: AppletServices) -> FastAPI:
                         "curation": row["curation"],
                         "quality": display.quality,
                         "quality_review_status": display.review_status,
+                        "review_scope": display.quality.value,
+                        "review_coverage": review_coverage(row["declaration"], row["review_completeness"]),
                         "filtration": filtration(row["declaration"], counts.get(row["id"])),
                         "review_completeness": row["review_completeness"],
                         "result_provisional": (row["review_completeness"] or {}).get("provisional"),
@@ -400,7 +489,22 @@ def create_api(services: AppletServices) -> FastAPI:
             }
 
     @api.get("/assessment")
-    def assessment(source_id: str) -> dict[str, Any]:
+    def assessment(
+        source_id: str,
+        cohort: str | None = None,
+        verdict: str | None = None,
+        confidence: str | None = None,
+        reference: str | None = None,
+        status: str | None = None,
+        defect: str | None = None,
+        search: str | None = None,
+        limit: int = DEFAULT_PAGE_ITEMS,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        if limit < 1 or limit > MAX_PAGE_ITEMS:
+            raise HTTPException(422, f"limit must be between 1 and {MAX_PAGE_ITEMS}")
+        if offset < 0:
+            raise HTTPException(422, "offset must not be negative")
         with engine.connect() as connection:
             source = source_record(connection, source_id)
             if source["assessment_key"] is None:
@@ -420,27 +524,56 @@ def create_api(services: AppletServices) -> FastAPI:
                 .one()
             )
             summaries = cohort_summaries(connection, **parameters)
-            samples = [
+            filter_sql, filter_parameters = assessment_item_filters(
+                cohort, verdict, confidence, reference, status, defect, search
+            )
+            item_parameters = {**parameters, **filter_parameters, "limit": limit, "offset": offset}
+            items = [
                 dict(item)
                 for item in connection.execute(
                     text(
-                        """
+                        f"""
                 SELECT task_id, cohort, verdict, status, confidence, reference_status, defects,
-                    provenance, replaced_task_sha256, repair_advisories, exclusion_reason
-                FROM atlas_items WHERE load_id = :load_id AND pipeline_key = :pipeline_key
-                ORDER BY cohort, task_id
+                    explanation, provenance, replaced_task_sha256, repair_advisories, exclusion_reason
+                FROM atlas_items i WHERE i.load_id = :load_id AND i.pipeline_key = :pipeline_key{filter_sql}
+                ORDER BY i.cohort, i.task_id
+                LIMIT :limit OFFSET :offset
             """
                     ),
-                    parameters,
+                    item_parameters,
                 ).mappings()
             ]
+            (filtered_total,) = connection.execute(
+                text(
+                    f"""
+                SELECT COUNT(*) FROM atlas_items i
+                WHERE i.load_id = :load_id AND i.pipeline_key = :pipeline_key{filter_sql}
+            """
+                ),
+                item_parameters,
+            ).one()
+        declaration = source["declaration"]
+        display = quality_display(declaration, source["curation"], source["assessment_key"])
+        finalization = declaration.get("quality_result_finalization")
         return {
-            "source": source["declaration"]["display_name"],
+            "source": declaration["display_name"],
+            "scope": display.quality.value,
+            "review_completeness": source["review_completeness"],
+            "result": result(declaration, summaries.get("admitted")),
+            "issue_rate": issue_rate(declaration, summaries.get("admitted")),
+            "waiver": declaration.get("quality_result_waiver"),
+            "finalization": finalization,
             "report": {
                 **row,
                 "source_id": canonical_source_id(row["source_id"]),
                 "assessment": summaries,
-                "evidence": {"samples": samples},
+                "counts": whole_population_counts(summaries),
+                "evidence": {
+                    "items": items,
+                    "total": filtered_total,
+                    "limit": limit,
+                    "offset": offset,
+                },
             },
         }
 
@@ -457,7 +590,7 @@ def create_api(services: AppletServices) -> FastAPI:
                     i.omissions, i.exclusion_reason, p.packet
                 FROM atlas_sources s JOIN atlas_current c USING (load_id)
                 JOIN atlas_items i ON i.load_id = s.load_id AND i.pipeline_key = s.assessment_key
-                JOIN atlas_packets p ON p.load_id = i.load_id
+                LEFT JOIN atlas_packets p ON p.load_id = i.load_id
                     AND p.pipeline_key = i.pipeline_key AND p.task_id = i.task_id
                 WHERE c.name = 'latest' AND s.id IN (:source_id, :original_source_id) AND i.task_id = :task_id
             """
@@ -491,7 +624,7 @@ def create_api(services: AppletServices) -> FastAPI:
                     "evidence_ids",
                 )
             },
-            "packet": json.loads(row["packet"]),
+            "packet": json.loads(row["packet"]) if row["packet"] is not None else None,
             "omissions": row["omissions"],
             "exclusion_reason": row["exclusion_reason"],
         }
@@ -577,6 +710,8 @@ def create_api(services: AppletServices) -> FastAPI:
             "archived_reviews": reviews,
             "quality": display.quality,
             "quality_review_status": display.review_status,
+            "review_scope": display.quality.value,
+            "review_coverage": review_coverage(declaration, source["review_completeness"]),
             "review_completeness": source["review_completeness"],
             "result_provisional": (source["review_completeness"] or {}).get("provisional"),
             "result": result(declaration, review),

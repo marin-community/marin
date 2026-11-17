@@ -129,6 +129,11 @@ ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS defects JSONB;
 ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS provenance TEXT;
 ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS replaced_task_sha256 TEXT;
 ALTER TABLE atlas_items ADD COLUMN IF NOT EXISTS repair_advisories JSONB;
+-- Whole-population FULL reviews make atlas_items far larger than SAMPLE panels;
+-- the browse pages order, filter and count through these indexes.
+CREATE INDEX IF NOT EXISTS atlas_items_cohort_order ON atlas_items (load_id, pipeline_key, cohort, task_id);
+CREATE INDEX IF NOT EXISTS atlas_items_verdict ON atlas_items (load_id, pipeline_key, verdict);
+CREATE INDEX IF NOT EXISTS atlas_items_defects ON atlas_items USING GIN (defects);
 CREATE TABLE IF NOT EXISTS atlas_audit_samples (
     sample_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, pipeline_key TEXT NOT NULL,
     load_id TEXT NOT NULL, strategy TEXT NOT NULL, seed TEXT NOT NULL,

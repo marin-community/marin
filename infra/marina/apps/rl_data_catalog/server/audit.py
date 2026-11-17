@@ -85,7 +85,10 @@ def draw_audit_sample(
     """
     ordered = sorted(items, key=lambda item: audit_order_key(seed, item["task_id"]))
     if strategy == RANDOM_STRATEGY:
-        return ordered[:sample_size]
+        return [
+            {**item, "stratum": stratum_key(item["verdict"], item.get("defects") or [])}
+            for item in ordered[:sample_size]
+        ]
     strata: dict[str, list[dict[str, Any]]] = {}
     for item in ordered:
         key = stratum_key(item["verdict"], item.get("defects") or [])

@@ -122,6 +122,21 @@ def final_whole_source_result(declaration: dict[str, Any]) -> bool:
     return finalization == QualityResultFinalization.ACCEPTED_INCOMPLETE and unavailable > 0 and waiver is not None
 
 
+def review_coverage(declaration: dict[str, Any], completeness: dict[str, Any] | None) -> dict[str, Any]:
+    """Review coverage numbers for a source: reviewed / required population, waiver if any."""
+    review = declaration.get("quality_result")
+    return {
+        "reviewed": (completeness or {}).get("reviewed"),
+        "required": (completeness or {}).get("required"),
+        "coverage_complete": (completeness or {}).get("coverage_complete"),
+        "provisional": (completeness or {}).get("provisional"),
+        "uncertain": review.get("uncertain_count") if review else None,
+        "unavailable": review.get("unavailable_count") if review else None,
+        "finalization": declaration.get("quality_result_finalization"),
+        "waiver": declaration.get("quality_result_waiver"),
+    }
+
+
 def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> Quality:
     """Report whole-source review coverage, including explicitly accepted FULL waivers."""
     review = declaration.get("quality_result")

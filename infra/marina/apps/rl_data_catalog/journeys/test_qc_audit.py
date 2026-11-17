@@ -119,10 +119,10 @@ def test_browse_filter_and_manual_audit(journey: Journey, qc_catalog: None) -> N
     journey.shoot("qc-assessment")
 
     # Filtering by one defect narrows the review list to matching tasks.
-    journey.click("Answer leakage")
-    journey.sees("1 of 8 stored reviews shown")
+    journey.click("Answer leakage (1)")
+    journey.sees("1-1 of 1 matching reviews")
     journey.shoot("qc-filtered")
-    journey.click("Answer leakage")
+    journey.click("Answer leakage (1)")
 
     # A person draws a seeded audit sample straight from the page.
     journey.fill("Seed", "journey-2026-11-16")

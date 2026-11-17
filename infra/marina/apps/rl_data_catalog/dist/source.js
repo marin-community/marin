@@ -226,6 +226,7 @@ async function render(data, sourceId) {
     ['Status', data.quality_review_status], ['Declared oversight', d.oversight],
   ], 'No exact-input Result is available yet. The preview displays QUICK while the review is pending.'));
   sections.push(card('Content review coverage', data.review_completeness ? [
+    ['Review scope', data.review_scope ? `${data.review_scope}${data.review_coverage && data.review_coverage.required != null ? ` · ${(data.review_coverage.reviewed ?? 0).toLocaleString()} / ${data.review_coverage.required.toLocaleString()} reviewed` : ''}${data.review_coverage?.finalization === 'accepted_incomplete' ? ' · whole-source waiver for the unreviewed remainder' : ''}` : null],
     ['Status', data.result_provisional ? 'Provisional / incomplete' : d.quality_result_finalization === 'accepted_incomplete' ? 'Final with accepted whole-source waiver' : !data.review_completeness.coverage_complete ? 'Final' : 'Required content review complete'],
     ['Strict coverage complete', String(data.review_completeness.coverage_complete)],
     ['Unreviewed tasks', qualityResult?.unavailable_count],

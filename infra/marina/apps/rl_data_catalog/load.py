@@ -12,16 +12,28 @@ from pathlib import Path
 from typing import Any
 
 import click
+import pyarrow.parquet as pq
 from finestore.rl.curation import (
     MAX_UNAVAILABLE_JUDGMENT_SHARE,
+    AdmissionCounts,
+    Assessment,
+    AssessmentItem,
+    AssessmentPopulation,
     CurationCatalog,
+    CurationMode,
+    CurationSummary,
     JudgmentStatus,
+    ModelReference,
+    Verdict,
     validate_items,
 )
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.backend_requirements import BackendSurvey, backend_schema_sha256
+from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.pipeline.models import ReviewRecord, ReviewStatus
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
 from experiments.post_training.task_curation.catalog_identity import (
@@ -32,6 +44,8 @@ from experiments.post_training.task_curation.catalog_identity import (
     canonical_snapshot_source,
     identity_survey_payload,
 )
+from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
+from experiments.post_training.task_curation.full_qc_review import quality_result as recompute_review_result
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
@@ -48,6 +62,7 @@ MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
 REVIEW_COMPLETENESS_VERSION = 6
+FULL_REVIEW_KEY_PREFIX = "full-content"
 
 
 class CatalogDisplayPolicy(StrEnum):
@@ -125,6 +140,132 @@ def insert_rows(query: AppletQuery, table: str, columns: str, load_id: str, rows
     return count
 
 
+def full_review_pipeline_key(source_id: str) -> str:
+    """The stable assessment key carrying a source's whole-population FULL review rows."""
+    return f"{FULL_REVIEW_KEY_PREFIX}:{source_id}"
+
+
+def read_full_review_records(uri: str, sha256: str) -> list[ReviewRecord]:
+    """Read SHA-checked consolidated review records; unknown enum values fail validation loudly."""
+    path = StoragePath(uri)
+    if file_sha256(path) != sha256:
+        raise ValueError(f"FULL review records changed: {uri}")
+    with path.open("rb") as stream:
+        rows = pq.read_table(stream).to_pylist()
+    if any("task_id" not in row or "review" not in row for row in rows):
+        raise ValueError(f"FULL review records are missing their task identity or review JSON: {uri}")
+    return [ReviewRecord.model_validate_json(row["review"]) for row in rows]
+
+
+def full_review_items(pipeline_key: str, records: list[ReviewRecord]) -> list[AssessmentItem]:
+    """Project whole-population review records into typed assessment items without packets."""
+    items = []
+    for record in records:
+        verdict = record.verdict
+        reviewed = record.status is ReviewStatus.REVIEWED and verdict is not None
+        items.append(
+            AssessmentItem(
+                pipeline_key=pipeline_key,
+                task_id=record.task_id,
+                cohort="admitted",
+                status=JudgmentStatus.REVIEWED if reviewed else JudgmentStatus.UNAVAILABLE,
+                verdict=verdict.quality if reviewed else Verdict.UNKNOWN,
+                explanation=verdict.evidence if reviewed else record.detail or "Judgment unavailable",
+                evidence_ids=[],
+                packet_uri="",
+                has_task=False,
+                omissions=[],
+                exclusion_reason=None,
+                confidence=verdict.confidence if reviewed else None,
+                reference_status=verdict.reference_status if reviewed else None,
+                defects=list(verdict.defects) if reviewed else [],
+            )
+        )
+    return items
+
+
+def stage_full_review(
+    source_id: str, binding: FullContentResultBinding
+) -> tuple[Assessment, list[AssessmentPopulation], list[AssessmentItem], dict[str, Any]]:
+    """Validate one pinned whole-source binding and stage its per-task review rows.
+
+    Every check fails loudly: the loader never fabricates typed fields or maps
+    unknown defect values to free text, and the staged rows must reconcile with
+    the bound whole-source Result.
+    """
+    if binding.source_id != source_id:
+        raise ValueError(f"FULL review binding belongs to another source: {source_id}: {binding.source_id}")
+    records = read_full_review_records(binding.records.uri, binding.records.sha256)
+    measured = binding.input.measured_tasks
+    if len({row.task_id for row in records}) != len(records) or len(records) != measured:
+        raise ValueError(
+            f"FULL review records do not cover the retained population exactly once: {source_id}: "
+            f"{len(records)} records for {measured} retained tasks"
+        )
+    recomputed = recompute_review_result(records)
+    recorded = binding.result
+    if (
+        recomputed.reviewed,
+        recomputed.issue_count,
+        recomputed.uncertain_count,
+        recomputed.unavailable_count,
+    ) != (
+        recorded.reviewed,
+        recorded.issue_count,
+        recorded.uncertain_count,
+        recorded.unavailable_count,
+    ):
+        raise ValueError(f"FULL review records disagree with the bound Result: {source_id}")
+    if binding.coverage_complete != all(row.status is ReviewStatus.REVIEWED for row in records):
+        raise ValueError(f"FULL review coverage differs from its records: {source_id}")
+    unavailable = sum(1 for row in records if row.status is not ReviewStatus.REVIEWED)
+    if records and unavailable / len(records) > MAX_UNAVAILABLE_JUDGMENT_SHARE:
+        raise ValueError(f"FULL review exceeds the unavailable-judgment threshold: {source_id}")
+    receipt = json.loads(StoragePath(binding.review_receipt.uri).read_text())
+    payload = receipt.get("result") or {}
+    reviewer = payload.get("reviewer") or {}
+    rubric = payload.get("rubric")
+    if not rubric or not reviewer.get("model"):
+        raise ValueError(f"FULL review receipt is missing its rubric or reviewer identity: {source_id}")
+    pipeline_key = full_review_pipeline_key(source_id)
+    assessment = Assessment(
+        pipeline_key=pipeline_key,
+        source_id=source_id,
+        scope="full",
+        model=ModelReference(
+            model=str(reviewer["model"]),
+            revision=str(reviewer.get("model_revision") or ""),
+            max_tokens=int(reviewer.get("max_tokens") or 0),
+            max_attempts=int(reviewer.get("max_attempts") or 0),
+            retry_max_tokens=int(reviewer.get("retry_max_tokens") or 0),
+            reviewer_spec_json=json.dumps(reviewer, sort_keys=True),
+        ),
+        rubric=json.dumps(rubric, sort_keys=True),
+        curation=CurationSummary(
+            status="complete",
+            mode=CurationMode.FULL,
+            source_revision=None,
+            recipe_revision=None,
+            raw_population_count=measured,
+            raw_sample_count=measured,
+            processed_rows=measured,
+            unprocessed_rows=0,
+            admission_counts=AdmissionCounts(),
+            verification=None,
+            quality_result=recorded,
+        ),
+        curation_uri=binding.review_receipt.uri,
+        traces=[],
+    )
+    populations = [
+        AssessmentPopulation(pipeline_key=pipeline_key, cohort="admitted", population=measured, sample_count=measured),
+        AssessmentPopulation(pipeline_key=pipeline_key, cohort="excluded", population=0, sample_count=0),
+    ]
+    items = full_review_items(pipeline_key, records)
+    validate_items(populations, items)
+    return assessment, populations, items, {"reviewed": recomputed.reviewed, "unavailable": unavailable}
+
+
 def load_catalog(
     catalog: CurationCatalog,
     query: AppletQuery,
@@ -132,8 +273,14 @@ def load_catalog(
     identities: SourceIdentitySurvey,
     *,
     display_policy: CatalogDisplayPolicy = CatalogDisplayPolicy.STRICT,
+    full_reviews: dict[str, FullContentResultBinding] | None = None,
 ) -> dict[str, Any]:
-    """Stage and validate a snapshot, then select it if the serving pointer is unchanged."""
+    """Stage and validate a snapshot, then select it if the serving pointer is unchanged.
+
+    ``full_reviews`` carries staged whole-source FULL review bindings keyed by
+    source ID. For each bound source without a catalog assessment, the loader
+    stages the pinned per-task review rows as a browseable assessment.
+    """
     started = time.monotonic()
     backend_map = canonical_backend_survey(backend_map.model_dump(mode="json"))
     identities = canonical_identity_survey(identities.model_dump(mode="json"))
@@ -274,9 +421,49 @@ def load_catalog(
         ],
     }
     all_items = []
+    full_counts: dict[str, dict[str, int]] = {}
     for source, record in zip(sources, metadata["sources"], strict=True):
         key = source.assessment_key
         record["review_completeness"] = review_completeness(source.declaration, [], [])
+        binding = full_reviews.get(source.id) if full_reviews else None
+        if key is None and binding is not None:
+            # A staged whole-source FULL review: stage its per-task rows as the
+            # source's browseable assessment. The catalog population must match
+            # the pinned binding; rows are excluded from packet reads because
+            # whole-population reviews carry their evidence in the row itself.
+            retained = source.declaration.within_source_dedup
+            if retained is None or retained.unique_count != binding.input.measured_tasks:
+                raise ValueError(
+                    f"FULL review binding belongs to another retained population: {source.id}: "
+                    f"binding {binding.input.measured_tasks} tasks vs catalog "
+                    f"{retained.unique_count if retained else None}"
+                )
+            assessment, populations, items, staged = stage_full_review(source.id, binding)
+            record["assessment_key"] = assessment.pipeline_key
+            if source.declaration.quality_result is None:
+                record["review_completeness"] = review_completeness(
+                    source.declaration.model_copy(
+                        update={
+                            "quality_result": binding.result,
+                            "quality_result_finalization": binding.finalization,
+                            "quality_result_waiver": binding.waiver,
+                        }
+                    ),
+                    [],
+                    [],
+                )
+            display = quality_display(
+                source.declaration.model_dump(mode="json"),
+                source.curation.model_dump(mode="json") if source.curation else None,
+                key,
+            )
+            if display_policy is CatalogDisplayPolicy.STRICT or display.quality is not Quality.QUICK:
+                require_content_result(source.declaration, source.curation, key)
+            metadata["assessments"].append(assessment.model_dump(mode="json"))
+            metadata["populations"].extend(row.model_dump(mode="json") for row in populations)
+            metadata["items"].extend(row.model_dump(mode="json") for row in items)
+            full_counts[source.id] = staged
+            continue
         if key is None:
             display = quality_display(
                 source.declaration.model_dump(mode="json"),
@@ -345,6 +532,7 @@ def load_catalog(
         "load_id": load_id,
         "snapshot_id": snapshot.snapshot_id,
         "counts": counts,
+        "full_reviews": full_counts,
         **packet_sizes,
         "sql_requests": requests,
         "seconds": time.monotonic() - started,
@@ -359,10 +547,33 @@ def load_catalog(
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 @click.option("--backend-map", type=click.Path(exists=True, path_type=Path), required=True)
 @click.option("--source-identities", type=click.Path(exists=True, path_type=Path), required=True)
-def main(catalog_root: str, applet_id: str, service_url: str, backend_map: Path, source_identities: Path) -> None:
+@click.option(
+    "--full-content-reviews",
+    type=click.Path(exists=True, path_type=Path),
+    help=(
+        "Staged whole-source FULL review bindings (JSON source_id -> binding). Sources without a "
+        "catalog assessment load their pinned per-task review rows as a browseable assessment."
+    ),
+)
+def main(
+    catalog_root: str,
+    applet_id: str,
+    service_url: str,
+    backend_map: Path,
+    source_identities: Path,
+    full_content_reviews: Path | None,
+) -> None:
     configure_coreweave_s3()
     survey = canonical_backend_survey(json.loads(backend_map.read_text()))
     identities = canonical_identity_survey(json.loads(source_identities.read_text()))
+    reviews = (
+        {
+            source_id: FullContentResultBinding.model_validate(payload)
+            for source_id, payload in json.loads(full_content_reviews.read_text()).items()
+        }
+        if full_content_reviews is not None
+        else None
+    )
     click.echo(
         json.dumps(
             load_catalog(
@@ -373,6 +584,7 @@ def main(catalog_root: str, applet_id: str, service_url: str, backend_map: Path,
                 display_policy=(
                     CatalogDisplayPolicy.PREVIEW if applet_id == PREVIEW_APP_ID else CatalogDisplayPolicy.STRICT
                 ),
+                full_reviews=reviews,
             )
         )
     )
