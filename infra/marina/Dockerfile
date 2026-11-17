@@ -9,7 +9,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /bin/uv
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 # Install against the committed workspace lock so the image runs the same pinned set as CI.
-# uv needs every member's pyproject.toml to map the lock; only marina's closure is installed.
+# uv needs the pyproject.toml of each workspace member in marina's closure to map the lock.
 # External dependencies first (cached across source edits), then the workspace members.
 COPY uv.lock pyproject.toml ./
 COPY lib/iris/pyproject.toml lib/iris/
