@@ -91,7 +91,7 @@ trials:
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 potential:
   score: 7
-  rationale: −0.0131 at equal time (step time within 1%); ladder and MFU not run → 7
+  rationale: −0.0131 at equal time (step time within 1%); ladder in progress (d1024 rung failed), MFU not run → 7
   model: claude-opus-5-5
   date: '2026-11-17'
-  inputs_digest: 69c41d1376cc
+  inputs_digest: 41793f421181
