@@ -22,17 +22,21 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pyarrow.parquet as pq
+from finestore.rl.licenses import LicenseCheckVerdict, LicenseReceipt
 from marin.inference import iris as iris_inference
 from marin.inference.openai_chat import OpenAIChatClient
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import ImportRejection, ReviewStatus
 from taskcompendium.pipeline.repair import ComparativeOutcome, RepairMatchClass
 
 from experiments.post_training.task_curation.full_qc import LONG_REQUEST_TIMEOUT, ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
+from experiments.post_training.task_curation.license_check import check_targets
+from experiments.post_training.task_curation.license_resolution import LicenseTarget
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.repair_candidates import (
     CANDIDATE_REPO,
@@ -50,6 +54,7 @@ from experiments.post_training.task_curation.repair_review import (
     ComparativePairReviewer,
 )
 from experiments.post_training.task_curation.task_neighbors import PopulationIndex, TaskContent, content_rows
+from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
 
 logger = logging.getLogger(__name__)
@@ -114,6 +119,8 @@ class DryRunReport(BaseModel):
     candidate_revision: str
     census: dict[str, Any]
     advisories: int
+    license: dict[str, Any] = Field(default_factory=dict)
+    """The stage-0 gate evidence bound into every report: dataset, pin, verdict, receipt digest."""
     unresolved_pairs: int = 0
     comparative: dict[str, Any] = Field(default_factory=dict)
     diagnostics: dict[str, Any] = Field(default_factory=dict)
@@ -390,6 +397,26 @@ def match_diagnostics(
     }
 
 
+def license_gate(repo: str, revision: str, *, candidate_source_id: str, cache: Path | None = None) -> LicenseReceipt:
+    """Stage 0 for a repair candidate, before any download, conversion or matching.
+
+    The automated checker must PASS at the candidate pin and the pin must be unbanned; the
+    standing doubt rule keeps an uncertain verdict out of the lane. A FAIL or ESCALATE stops
+    the run with the rule and evidence named.
+    """
+    target = LicenseTarget(candidate_source_id, repo, revision, f"https://huggingface.co/datasets/{repo}")
+    row = check_targets([target], cache, workers=1)[0]
+    verdict = row["verdict"]
+    if verdict != LicenseCheckVerdict.PASS.value:
+        raise ValueError(
+            f"License gate failed for {repo}@{revision}: {verdict} "
+            f"{row.get('rule_id')} ({row.get('quote')}); see {row.get('evidence_url')}"
+        )
+    receipt = LicenseReceipt.model_validate(row["receipt"])
+    require_unbanned(candidate_source_id, repo, receipt)
+    return receipt
+
+
 def dry_run(
     *,
     tracked_source_id: str,
@@ -401,8 +428,10 @@ def dry_run(
     repo: str,
     reviewer_version: ReviewerVersion,
     run: bool,
+    license_cache: Path | None = None,
 ) -> DryRunReport:
     """Match one candidate folder against one tracked source and comparatively review it."""
+    gate_receipt = license_gate(repo, candidate_revision, candidate_source_id=candidate_source_id, cache=license_cache)
     candidates = load_candidate_population(
         folders=folders, repo=repo, revision=candidate_revision, candidate_source_id=candidate_source_id
     )
@@ -431,6 +460,12 @@ def dry_run(
         candidate_revision=candidate_revision,
         census=outcome.census.model_dump(mode="json"),
         advisories=len(outcome.advisories),
+        license={
+            "dataset_id": repo,
+            "revision": candidate_revision,
+            "verdict": LicenseCheckVerdict.PASS.value,
+            "receipt_sha256": canonical_sha256(gate_receipt.model_dump(mode="json")),
+        },
     )
     workload = matched_pairs(
         outcome,
@@ -497,6 +532,11 @@ def main() -> None:
     parser.add_argument(
         "--reviewer-version", type=ReviewerVersion, choices=list(ReviewerVersion), default=ReviewerVersion.V3
     )
+    parser.add_argument(
+        "--license-cache",
+        type=Path,
+        help="Directory for the stage-0 license checker's evidence cache",
+    )
     parser.add_argument("--report", required=True)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
@@ -513,6 +553,7 @@ def main() -> None:
         repo=args.repo,
         reviewer_version=args.reviewer_version,
         run=args.run,
+        license_cache=args.license_cache,
     )
     write_report(report, args.report)
     logger.info("RESULT %s", report.model_dump_json())

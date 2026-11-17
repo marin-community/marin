@@ -32,6 +32,7 @@ from taskcompendium.pipeline.repair import (
     repair_decision,
 )
 
+from experiments.post_training.task_curation import repair_lane as lane
 from experiments.post_training.task_curation.full_qc import ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.repair_lane import matched_pairs
 from experiments.post_training.task_curation.repair_match import (
@@ -350,6 +351,75 @@ class TestTemplateSectionNormalization:
         rows = strip_template_sections_rows([content("t1", self.SETUP_BLOCK + self.BODY)])
         assert rows[0].instruction_hash == "i:t1"
         assert rows[0].text == self.BODY.strip()
+
+
+class TestLicenseGate:
+    """Stage 0 gates every candidate: unlicensed or banned pins are refused before any work."""
+
+    def test_unlicensed_candidate_is_refused_before_any_loading(self, monkeypatch):
+        monkeypatch.setattr(
+            lane,
+            "check_targets",
+            lambda targets, cache, workers: [
+                {
+                    "verdict": "fail",
+                    "rule_id": "F2",
+                    "quote": "L1: ---",
+                    "evidence_url": "https://example.org/README.md",
+                    "receipt": None,
+                }
+            ],
+        )
+
+        def tripwire(**kwargs):
+            raise AssertionError("candidate loading ran before the license gate")
+
+        monkeypatch.setattr(lane, "load_candidate_population", tripwire)
+        with pytest.raises(ValueError, match=r"License gate failed.*F2"):
+            lane.license_gate("FWeindel/validated-tasks", "eafe9b38", candidate_source_id="candidate:test")
+        with pytest.raises(ValueError, match="License gate failed"):
+            lane.dry_run(
+                tracked_source_id=TRACKED_SOURCE,
+                tracked_uris=(),
+                candidate_source_id=CANDIDATE_SOURCE,
+                candidate_revision="eafe9b38",
+                folders=("bugsinpy_v2",),
+                repo="FWeindel/validated-tasks",
+                reviewer_version=ReviewerVersion.V3,
+                run=False,
+            )
+
+    def test_banned_candidate_is_refused_after_pass(self, monkeypatch):
+        monkeypatch.setattr(
+            lane,
+            "check_targets",
+            lambda targets, cache, workers: [
+                {"verdict": "PASS", "rule_id": None, "quote": None, "evidence_url": None, "receipt": {"source_id": "c"}}
+            ],
+        )
+        monkeypatch.setattr(lane.LicenseReceipt, "model_validate", classmethod(lambda cls, value: value))
+        monkeypatch.setattr(
+            lane,
+            "require_unbanned",
+            lambda source_id, dataset_id, receipt=None: (_ for _ in ()).throw(
+                ValueError(f"License banned: {source_id}: dataset-level ban")
+            ),
+        )
+        with pytest.raises(ValueError, match="License banned"):
+            lane.license_gate("FWeindel/validated-tasks", "eafe9b38", candidate_source_id=CANDIDATE_SOURCE)
+
+    def test_passing_gate_binds_the_receipt(self, monkeypatch):
+        monkeypatch.setattr(
+            lane,
+            "check_targets",
+            lambda targets, cache, workers: [
+                {"verdict": "PASS", "rule_id": None, "quote": None, "evidence_url": None, "receipt": {"source_id": "c"}}
+            ],
+        )
+        monkeypatch.setattr(lane, "require_unbanned", lambda source_id, dataset_id, receipt=None: None)
+        monkeypatch.setattr(lane.LicenseReceipt, "model_validate", classmethod(lambda cls, value: value))
+        receipt = lane.license_gate("FWeindel/validated-tasks", "eafe9b38", candidate_source_id=CANDIDATE_SOURCE)
+        assert receipt == {"source_id": "c"}
 
 
 class TestRepairDecision:
