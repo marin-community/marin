@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
 
 from loguru import logger
+from shellbox.backends.daytona.machine import DaytonaImageBuild
 from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.evaluation_profiles import (
@@ -315,6 +316,12 @@ class HarborEvaluationCallback(TrainerCallback):
         minimum_native_coverage: float,
     ):
         self.cohorts = OmegaConf.to_container(cohorts, resolve=True) if OmegaConf.is_config(cohorts) else cohorts
+        # Per-sandbox declarative builds are limited to standalone evals for now; reject them
+        # before the trainer acquires resources.
+        for cohort in self.cohorts:
+            kwargs = cohort["job"].get("environment", {}).get("kwargs", {})
+            if kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT) != DaytonaImageBuild.SNAPSHOT:
+                raise ValueError(f"Harbor validation cohort {cohort['name']} requires Daytona snapshot image builds")
         self.timeout = timeout
         self.minimum_coverage = minimum_coverage
         self.minimum_native_coverage = minimum_native_coverage

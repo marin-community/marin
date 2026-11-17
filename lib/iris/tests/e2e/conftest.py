@@ -3,6 +3,8 @@
 
 """Fixtures and hooks for Iris E2E tests."""
 
+from pathlib import Path
+
 import pytest
 from iris.chaos import reset_chaos
 from iris.testing.e2e import (
@@ -27,6 +29,8 @@ def pytest_collection_modifyitems(config, items):
     is_cloud = config.getoption("--iris-controller-url") is not None
     first_smoke_test = True
     for item in items:
+        if not item.path.is_relative_to(Path(__file__).parent):
+            continue
         if item.get_closest_marker("timeout"):
             continue
         uses_smoke = "smoke_cluster" in getattr(item, "fixturenames", ())

@@ -45,7 +45,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.training.training import resolve_checkpointer_output_path
+from marin.training.levanter import resolve_checkpointer_output_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig

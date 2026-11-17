@@ -175,29 +175,12 @@ def _sympy_expression(string: str):
         return None
 
 
-def _sympy_is_equiv(candidate: str, reference: str) -> bool:
-    """Return symbolic equivalence under the pinned Minerva comparison.
+def _on_sympy_timeout(signum, frame):
+    raise TimeoutError
 
-    Identical relation strings such as ``a\\leq b`` score 0 under this comparison.
-    """
 
-    if threading.current_thread() is not threading.main_thread():
-        try:
-            # The child arms its own comparison alarm after Python and SymPy imports.
-            # Leave those imports a separate bounded allowance under concurrent grading.
-            return call_bounded(_sympy_is_equiv, candidate, reference, timeout=_WORKER_STARTUP_TIMEOUT + _SYMPY_TIMEOUT)
-        except TimeoutError:
-            return False
-        except RuntimeError as error:
-            raise GradingInfraError("Symbolic math comparison failed in its bounded worker") from error
-
-    def on_timeout(signum, frame):
-        raise TimeoutError
-
-    previous = None
+def _compare_sympy_expressions(candidate: str, reference: str) -> bool:
     try:
-        previous = signal.signal(signal.SIGALRM, on_timeout)
-        signal.alarm(_SYMPY_TIMEOUT)
         parsed_candidate = _sympy_expression(candidate)
         if parsed_candidate is None:
             return False
@@ -217,10 +200,41 @@ def _sympy_is_equiv(candidate: str, reference: str) -> bool:
     except (ArithmeticError, NotImplementedError, TypeError, ValueError, sympy.SympifyError):
         # Invalid expressions and unsupported subtraction are non-matches.
         return False
+
+
+def _sympy_is_equiv_in_worker(candidate: str, reference: str) -> bool:
+    # ITIMER_PROF counts process CPU time, which is isolated in this worker.
+    previous = signal.signal(signal.SIGPROF, _on_sympy_timeout)
+    try:
+        signal.setitimer(signal.ITIMER_PROF, _SYMPY_TIMEOUT)
+        return _compare_sympy_expressions(candidate, reference)
     finally:
-        if previous is not None:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, previous)
+        signal.setitimer(signal.ITIMER_PROF, 0)
+        signal.signal(signal.SIGPROF, previous)
+
+
+def _sympy_is_equiv(candidate: str, reference: str) -> bool:
+    """Return symbolic equivalence under the pinned Minerva comparison.
+
+    Identical relation strings such as ``a\\leq b`` score 0 under this comparison.
+    """
+
+    if threading.current_thread() is not threading.main_thread():
+        try:
+            # Leave Python and SymPy imports a separate wall-time allowance.
+            return call_bounded(
+                _sympy_is_equiv_in_worker, candidate, reference, timeout=_WORKER_STARTUP_TIMEOUT + _SYMPY_TIMEOUT
+            )
+        except (TimeoutError, RuntimeError) as error:
+            raise GradingInfraError("Symbolic math comparison failed in its bounded worker") from error
+
+    previous = signal.signal(signal.SIGALRM, _on_sympy_timeout)
+    try:
+        signal.alarm(_SYMPY_TIMEOUT)
+        return _compare_sympy_expressions(candidate, reference)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def is_equiv(candidate: str, reference: str) -> bool:

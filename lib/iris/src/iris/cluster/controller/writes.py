@@ -287,6 +287,7 @@ def insert_job_config(
     egress_allow_json: list[str] | None = None,
     submit_argv_json: list | None = None,
     fail_if_exists: bool = False,
+    coscheduling_group_sizes: Sequence[int] = (),
 ) -> None:
     """Insert one row into ``job_config``."""
     tx.execute(
@@ -300,6 +301,7 @@ def insert_job_config(
             constraints_json=constraints_json,
             has_coscheduling=has_coscheduling,
             coscheduling_group_by=coscheduling_group_by,
+            coscheduling_group_sizes=list(coscheduling_group_sizes),
             scheduling_timeout_ms=scheduling_timeout_ms,
             max_task_failures=max_task_failures,
             entrypoint_json=entrypoint_json,
@@ -1099,6 +1101,7 @@ def mirror_federated_attempts(
                 pod_name=attempt.pod_name,
                 pod_uid=attempt.pod_uid,
                 node_name=attempt.node_name,
+                topology_json=dict(attempt.topology),
                 terminal_reason=attempt.terminal_reason,
             )
             .on_conflict_do_update(
@@ -1112,6 +1115,7 @@ def mirror_federated_attempts(
                     "pod_name": attempt.pod_name,
                     "pod_uid": attempt.pod_uid,
                     "node_name": attempt.node_name,
+                    "topology_json": dict(attempt.topology),
                     "terminal_reason": attempt.terminal_reason,
                 },
             )

@@ -10,7 +10,8 @@ never shares a container with the model-authored Dockerfile.
 
 1. The build job runs a pinned ``bash`` image (Iris requires ``bash`` in the task image, so the
    kaniko image itself cannot be the task image). It fetches a sha256-checked ``crane``, exports
-   the pinned kaniko debug image's ``/kaniko`` with it, and runs kaniko on the context for
+   the pinned kaniko debug image's ``/kaniko`` with it, clears the bootstrap filesystem with
+   kaniko's ``--pre-cleanup``, and runs kaniko on the context for
    linux/amd64 with ``--no-push``, writing ``image.tar`` into ``$IRIS_OUTPUT_DIR``. kaniko needs no
    daemon, mounts or privileges, only the default capabilities and egress, which CoreWeave's
    DEFAULT profile has (buildah failed there on remount; GCP gVisor has no network and GCP DEFAULT
@@ -50,7 +51,7 @@ a parent that carries its CoreWeave keys as explicit environment (``iris job run
 Iris copies those into both jobs' environments, where they override the secrets, and blanking them
 would leave the jobs with empty storage credentials.
 
-The registry takes writes with Basic auth only (``WWW-Authenticate: Basic realm="envgen"``), so
+The default registry takes writes with Basic auth only (``WWW-Authenticate: Basic realm="envgen"``), so
 there is no short-lived scoped token to hand the push job instead. Exposure that remains: secret
 values persist in the controller database, and both image jobs carry the submitter's CoreWeave
 storage credentials, which Iris requires on every CoreWeave job and the output uploader uses. The
@@ -68,6 +69,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.request import parse_http_list, parse_keqv_list
 
 import httpx
 from iris.cli.connect import connect_controller
@@ -134,7 +136,7 @@ BUILD_SCRIPT = r"""
 set -euo pipefail
 trap 'exit "$BUILD_SETUP_FAILED_EXIT"' EXIT
 K=/kaniko
-mkdir -p "$K" /tmp/kroot /app/context "$IRIS_OUTPUT_DIR"
+mkdir -p "$K/context" /tmp/kroot "$IRIS_OUTPUT_DIR"
 wget -q -O /tmp/crane.tgz "$CRANE_URL"
 echo "$CRANE_SHA256  /tmp/crane.tgz" | sha256sum -c - > /dev/null
 tar xzf /tmp/crane.tgz -C /tmp crane
@@ -142,9 +144,11 @@ tar xzf /tmp/crane.tgz -C /tmp crane
 cp -a /tmp/kroot/kaniko/. "$K/"
 mkdir -p "$K/ssl/certs"
 cp /etc/ssl/certs/ca-certificates.crt "$K/ssl/certs/"
-tar xzf "/app/$CONTEXT_FILE" -C /app/context
-SSL_CERT_DIR="$K/ssl/certs" exec "$K/executor" --context dir:///app/context --dockerfile "/app/context/$DOCKERFILE" \
-  --destination "$DESTINATION" --no-push --tar-path "$IRIS_OUTPUT_DIR/image.tar" --custom-platform linux/amd64
+tar xzf "/app/$CONTEXT_FILE" -C "$K/context"
+# /kaniko is excluded from cleanup; the source context must survive bootstrap removal.
+SSL_CERT_DIR="$K/ssl/certs" exec "$K/executor" --context "dir://$K/context" --dockerfile "$K/context/$DOCKERFILE" \
+  --pre-cleanup --destination "$DESTINATION" --no-push --tar-path "$IRIS_OUTPUT_DIR/image.tar" \
+  --custom-platform linux/amd64
 """
 
 
@@ -220,6 +224,28 @@ def manifest_readback(credential: RegistryCredential, repository: str, tag: str)
     try:
         with httpx.Client(auth=auth, headers=headers, timeout=60, follow_redirects=False) as client:
             by_tag = client.get(f"{base}/manifests/{tag}")
+            scheme, _, parameters = by_tag.headers.get("www-authenticate", "").partition(" ")
+            if by_tag.status_code == 401 and scheme.lower() == "bearer":
+                challenge = parse_keqv_list(parse_http_list(parameters))
+                realm = httpx.URL(challenge["realm"])
+                registry = httpx.URL(f"https://{credential.registry}")
+                if (
+                    (realm.scheme, realm.host, realm.port) != (registry.scheme, registry.host, registry.port)
+                    or realm.username
+                    or realm.password
+                ):
+                    raise ValueError("Registry token endpoint must share the credential's HTTPS origin")
+                authorization = client.get(realm, params={"service": challenge["service"], "scope": challenge["scope"]})
+                authorization.raise_for_status()
+                payload = authorization.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("Registry token response must be a JSON object")
+                token = payload.get("token") or payload["access_token"]
+                if not isinstance(token, str) or not token:
+                    raise ValueError("Registry token response must contain a nonempty token")
+                client.auth = httpx.Auth()
+                client.headers["Authorization"] = f"Bearer {token}"
+                by_tag = client.get(f"{base}/manifests/{tag}")
             by_tag.raise_for_status()
             digest = f"sha256:{hashlib.sha256(by_tag.content).hexdigest()}"
             by_digest = client.get(f"{base}/manifests/{digest}")
