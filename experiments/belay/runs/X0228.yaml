@@ -1,0 +1,13 @@
+experiment: X0228
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: own AttnRes query for the global layers' KV latent
+    flags:
+    - --model-set
+    - attn_res_global_kv_query=true
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
