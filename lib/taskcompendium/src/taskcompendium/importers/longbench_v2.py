@@ -121,7 +121,7 @@ def longbench_v2_item(task: TaskSpec, *, budgets: tuple[int, ...]) -> Evaluation
         update={
             "operation": ChatGeneration(
                 prompt_selection="fit_context",
-                response_selection="final_or_complete_reasoning",
+                response_selection="final_only",
                 variants=variants,
             ),
             "groups": {
