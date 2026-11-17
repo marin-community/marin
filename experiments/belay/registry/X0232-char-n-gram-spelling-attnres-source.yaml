@@ -33,3 +33,9 @@ trials:
   steps: 3030
   baseline: belay-X0232-control 3.0463 (same commit, seed 0)
   step_time_change: +9%
+potential:
+  score: 6
+  rationale: −0.0065 at equal data (+9% step time); equal-time probe running; ladder and MFU not run → 6
+  model: claude-opus-5-5
+  date: '2026-11-17'
+  inputs_digest: 486cb28731e8
