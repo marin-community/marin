@@ -194,7 +194,7 @@ def retry_case(tmp_path, monkeypatch, request):
     def execute(args, **kwargs):
         if "harbor" not in args:
             return production_run(args, **kwargs)
-        config = json.loads(Path(args[-1]).read_text())
+        config = json.loads(Path(args[args.index("--config") + 1]).read_text())
         package = Path(config["task"]["path"])
         calls.append(str(package))
         shape = native_requirements(package)

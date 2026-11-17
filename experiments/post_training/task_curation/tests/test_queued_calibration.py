@@ -92,7 +92,7 @@ def test_calibration_consumes_queued_attempt_verdicts_and_infrastructure_failure
     def execute(args, **kwargs):
         if "harbor" not in args or "start" not in args:
             return run_process(args, **kwargs)
-        config = TrialConfig.model_validate_json(Path(args[-1]).read_text())
+        config = TrialConfig.model_validate_json(Path(args[args.index("--config") + 1]).read_text())
         asyncio.run(TrialQueue(n_concurrent=1).submit(config))
         return subprocess.CompletedProcess(args, 0)
 

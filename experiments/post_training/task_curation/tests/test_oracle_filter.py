@@ -521,7 +521,7 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
     def execute(args, **kwargs):
         if "harbor" not in args:
             return production_run(args, **kwargs)
-        config = json.loads(Path(args[-1]).read_text())
+        config = json.loads(Path(args[args.index("--config") + 1]).read_text())
         package = Path(config["task"]["path"])
         shape = native_requirements(package)
         assert json.loads((package.parent / "prepared.json").read_text()) == shape.model_dump()
