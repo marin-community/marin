@@ -26,3 +26,9 @@ trials:
     kda_local_attn_fused_window: '64'
   commit: a33a14c494
   priority: batch
+potential:
+  score: 5
+  rationale: Variant run belay-X0236-seed0 failed before a result; escalated for log review → 5
+  model: claude-opus-5-5
+  date: '2026-11-17'
+  inputs_digest: d46053704ba2
