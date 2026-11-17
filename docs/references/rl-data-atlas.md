@@ -454,7 +454,13 @@ offline survey cannot observe — memory, CPU and disk enforcement, disk quotas,
 network deny, and file mode and mtime restoration — grade as `verify`, never
 partial or unsupported: a live probe on the real backend resolves each cell, and
 admission gates wait on that live evidence instead of blocking. `unsupported` is
-reserved for a capability the backend's code demonstrably lacks. A source that is
+reserved for a capability the backend's code demonstrably lacks. `partial` means
+the backend runs the population with a named capability only partly met (for
+example `non_root_user`); admission treats it as runnable (`RUNNABLE_FIT` is
+`supported` and `partial`), and Backends shows it as its own state with the
+capability and per-role counts. A role with a complete matched delivery
+contract (`absent_contract_tasks == 0`) does not need its `docker_build`
+resolved. A source that is
 already Available stays Available with a backend-verification-pending marker
 while its probe runs; a new admission waits for the result. Each backend carries a
 deployment class: production backends count toward admission, and
