@@ -4,7 +4,7 @@ name: KDA local exact-attention branch (window 64)
 category: Linear attention / KDA
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6943201377
@@ -12,3 +12,16 @@ intake:
   approved_by: armorfaye (trusted)
 code_commits:
 - 7ba06ae7d905c867bb2f9103c87dcc908699f86f
+trials:
+- id: t001
+  variant: 64-token softmax branch beside every KDA read
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0234
+  date: '2026-11-17'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0234
+  wandb: []
+  settings:
+    kda_local_attn_window: '64'
+  commit: f5b5844c74
+  priority: batch
