@@ -221,8 +221,9 @@ def test_lexical_only_sources_queue_as_pending_with_the_remediation_stage():
     A source whose only exclusion claim is the missing lexical remediation
     receipt queues for remediation when no user ruling excludes it and the
     population is nonempty — a stale legacy ``excluded`` tag must not keep it
-    Excluded. The six rebuilt cohorts named in the excluded-triage brief are
-    the regression rows.
+    Excluded. The six rebuilt cohorts named in the excluded-triage brief were
+    the regression rows; their remediation completed, so they must now be
+    Available or Pending, never Excluded.
     """
     lexical_only = {}
     for source in all_sources().values():
@@ -237,12 +238,19 @@ def test_lexical_only_sources_queue_as_pending_with_the_remediation_stage():
         assert (
             source.status is SourceStatus.PENDING
         ), f"Lexical-remediation-only source must queue as Pending: {source.info.id}"
-    for expected in REBUILT_LEXICAL_ONLY_SOURCES:
-        assert expected in lexical_only, f"Rebuilt lexical-only source is not queued: {expected}"
     remediation = {row["id"]: row for row in source_status.remediation_rows()}
     for expected in REBUILT_LEXICAL_ONLY_SOURCES:
-        row = remediation.get(expected)
-        assert row is not None, f"Remediation queue lacks the rebuilt source: {expected}"
+        status = {source.info.id: source.status for source in all_sources().values()}[expected]
+        assert status in {
+            SourceStatus.AVAILABLE,
+            SourceStatus.PENDING,
+        }, f"Rebuilt lexical-only source regressed to Excluded: {expected}"
+        if status is SourceStatus.PENDING:
+            row = remediation.get(expected)
+            assert row is not None and row["stage"] == source_status.PendingStage.LEXICAL_REMEDIATION_QUEUED.value
+    for source in lexical_only.values():
+        row = remediation.get(source.info.id)
+        assert row is not None, f"Remediation queue lacks the queued source: {source.info.id}"
         assert row["stage"] == source_status.PendingStage.LEXICAL_REMEDIATION_QUEUED.value
         assert {claim["reason"] for claim in row["reasons"]} == {ExclusionReason.LEXICAL_REMEDIATION_REQUIRED.value}
 
