@@ -302,9 +302,9 @@ resource failure and Iris returns the attempt to `PENDING` for fresh admission.
 | Task Pods and their lifecycle | `K8sTaskProvider` |
 | Node scheduling and provisioning | Kubernetes and CoreWeave |
 
-`K8sControllerProvider.verify_prerequisites()` checks selected Pulumi-owned
-resources, but does not check the configured sandbox RuntimeClass. It does not
-create or repair them. Read the
+`K8sControllerProvider.verify_prerequisites()` checks selected controller
+prerequisites, including the configured sandbox RuntimeClass. It does not create
+or repair them. Read the
 [Pulumi guide](../../../infra/pulumi/README.md) before changing that substrate;
 a destructive NodePool plan can deprovision reserved hardware.
 
@@ -615,18 +615,18 @@ failed through that wrapper, and an independent CPU probe reported the same
 failure. The wrapper's underlying cause is unknown. The 02a config selects the
 Pulumi-owned `iris-gvisor-cpu` RuntimeClass, which requests the direct
 `cw-gvisor-cpu` handler and restricts placement to `cpu-genoa` nodes marked
-gVisor-capable. The direct CPU handler started a bounded probe on
-cw-us-west-04a, but it has not been verified on 02a. See
+gVisor-capable and labelled for that handler. The direct CPU handler started a
+bounded probe on cw-us-west-04a, but it has not been verified on 02a. See
 [incidents 631](https://marina.oa.dev/echo/wiki/631) and
 [976](https://marina.oa.dev/echo/wiki/976).
 
 ```mermaid
 flowchart TD
     request[CPU SANDBOX request] --> pod[Iris sets runtimeClassName<br/>iris-gvisor-cpu]
-    pod --> selector[RuntimeClass adds cpu-genoa<br/>and gVisor node selectors]
+    pod --> selector[RuntimeClass selects cpu-genoa<br/>gVisor and cw-gvisor-cpu nodes]
     selector --> admission[Kueue prefers iris-cpu<br/>hostname-only flavor]
     admission --> fit{CPU node fits?}
-    fit -- No --> wait[Remain SchedulingGated]
+    fit -- No --> spill[Check cw-tas spill admission]
     fit -- Yes --> node[Kubernetes assigns cpu-genoa node]
     node --> handler[kubelet invokes cw-gvisor-cpu]
     handler --> runsc{runsc starts sandbox?}

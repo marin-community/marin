@@ -72,6 +72,7 @@ provisioning:
       node_selector:
         iris-cw-use02a-scale-group: cpu-genoa
         node.coreweave.cloud/gvisor: "true"
+        node.coreweave.cloud/container-runtime.cw-gvisor-cpu: "true"
 
 platform:
   label_prefix: cw-use02a

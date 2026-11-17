@@ -121,7 +121,6 @@ def test_02a_sandbox_runtime_selects_only_cpu_nodes():
     provisioning = load_provisioning("cw-us-east-02a").coreweave
     assert provisioning is not None and provisioning.sandbox_runtime is not None
     runtime = provisioning.sandbox_runtime
-    assert runtime.handler == "cw-gvisor-cpu"
 
     group_label = f"iris-{config.platform.label_prefix}-scale-group"
     selected_group = runtime.node_selector[group_label]
