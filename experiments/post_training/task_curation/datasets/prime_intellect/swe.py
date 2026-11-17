@@ -32,7 +32,7 @@ from experiments.post_training.task_curation.pipeline import CurationRecipe, HfS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 HERE = Path(__file__).parent
-VERSION = "2026.11.16.1"
+VERSION = "2026.11.16.3"
 IMAGE_BINDINGS_INPUT = "images"
 IMAGE_BINDINGS_FILENAME = "image-bindings.json"
 IMAGE_BINDINGS = {
