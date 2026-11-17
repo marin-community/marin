@@ -41,6 +41,7 @@ from belay.app import (
     record_intake_comment,
     registered_comments,
     requeue_idea,
+    requeueable,
     store_intake_snapshot,
     text_label,
     visible_text,
@@ -294,6 +295,32 @@ def test_a_running_idea_whose_runs_ended_can_be_requeued(conn) -> None:
     assert (
         requeue_idea(conn, running_study(conn, "succeeded"), "maintainer", "rerun the analysis")["state"] == "approved"
     )
+
+
+def test_a_running_idea_whose_finished_run_waits_to_be_recorded_is_not_requeued(conn) -> None:
+    ended = running_study(conn, "succeeded")
+    conn.execute(
+        text(
+            "INSERT INTO events (kind, ref, summary, payload) VALUES ('run_finished', 'belay-X0224-dynamics', 'done', "
+            "CAST(:p AS JSONB))"
+        ),
+        {"p": json.dumps({"experiment": "X0224"})},
+    )
+    with pytest.raises(HTTPException, match="no live run"):
+        requeue_idea(conn, ended, "maintainer", "again")
+    # A session took the event and ended without recording the result: now the idea is stuck, so it may be re-queued.
+    conn.execute(text("INSERT INTO sessions (id, state) VALUES ('s1', 'succeeded')"))
+    conn.execute(text("UPDATE events SET session_id = 's1'"))
+    assert requeue_idea(conn, ended, "maintainer", "again")["state"] == "approved"
+
+
+def test_a_planned_idea_is_offered_for_requeue_only_when_no_session_is_working(conn) -> None:
+    record_intake_comment(conn, comment())
+    approve_idea(conn, idea_id(conn), "maintainer")
+    conn.execute(text("UPDATE ideas SET state = 'planned', registry_id = 'X0230'"))
+    idea = conn.execute(text("SELECT * FROM ideas")).mappings().one()
+    assert requeueable(conn, dict(idea), session_active=False)
+    assert not requeueable(conn, dict(idea), session_active=True)
 
 
 def test_a_running_idea_with_a_live_run_is_not_requeued_or_declined(conn) -> None:

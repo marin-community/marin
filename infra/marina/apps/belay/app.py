@@ -749,7 +749,8 @@ REQUEUEABLE_STATES = (IdeaState.APPROVED, IdeaState.PLANNED, IdeaState.RECORDED)
 
 
 def _ended_run(conn: Connection, idea: dict[str, Any]) -> bool:
-    """Whether ``idea`` is running in state only: none of its runs (its ladder rungs' included) is live."""
+    """Whether ``idea`` is running in state only: none of its runs (its ladder rungs' and sweep values' included) is
+    live, and no finished run of it waits for a session to record it."""
     if idea["state"] != IdeaState.RUNNING:
         return False
     live = _rows(
@@ -757,7 +758,29 @@ def _ended_run(conn: Connection, idea: dict[str, Any]) -> bool:
         f"SELECT 1 FROM runs WHERE registry_id = :r AND state NOT IN ({_TERMINAL_SQL}) LIMIT 1",
         r=idea["registry_id"],
     )
-    return not live
+    return not live and not _awaiting_record(conn, idea["registry_id"])
+
+
+def _awaiting_record(conn: Connection, registry_id: str) -> bool:
+    """Whether a finished run of ``registry_id`` waits for a session: its event is queued or held by a running one."""
+    return bool(
+        _rows(
+            conn,
+            "SELECT 1 FROM events e LEFT JOIN sessions s ON s.id = e.session_id WHERE e.kind = :kind "
+            "AND e.payload->>'experiment' ~ :pattern AND (e.session_id IS NULL OR s.state = :running) LIMIT 1",
+            kind=EventKind.RUN_FINISHED.value,
+            pattern=f"^{registry_id}([^0-9]|$)",
+            running=SessionState.RUNNING.value,
+        )
+    )
+
+
+def requeueable(conn: Connection, idea: dict[str, Any], session_active: bool) -> bool:
+    """Whether the admin page offers Re-queue: an escalated idea, a planned one no session is working on (one died
+    before launching), or a running one whose runs all ended with nothing left to record."""
+    escalated = idea["state"] in (IdeaState.APPROVED, IdeaState.PLANNED) and (idea["note"] or "").startswith(ESCALATED)
+    stalled_plan = idea["state"] == IdeaState.PLANNED and not session_active
+    return escalated or stalled_plan or _ended_run(conn, idea)
 
 
 def decline_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[str, str]:
@@ -1304,6 +1327,8 @@ def create_api(services: Services) -> RegisteredApi:
             events = _rows(conn, "SELECT id, at, kind, ref, summary, session_id FROM events ORDER BY id DESC LIMIT 200")
             watcher = _rows(conn, "SELECT * FROM watcher WHERE id = 1")[0]
             registered = registered_comments(conn)
+            session_active = _session_active(conn)
+            offers = {i["id"]: requeueable(conn, i, session_active) for i in ideas}
         for s in sessions:
             s["events"] = [e for e in events if e["session_id"] == s["id"]]
         queued = [e for e in events if e["session_id"] is None]
@@ -1317,7 +1342,7 @@ def create_api(services: Services) -> RegisteredApi:
             "settings": {k: v for k, v in settings.items() if k not in SECRET_SETTINGS},
             "pipeline": _pipeline(ideas),
             "next": _next_step(settings, active, queued, live, len(pending)),
-            "ideas": [{**i, "label": _label(i)} for i in _plain(ideas)],
+            "ideas": [{**i, "label": _label(i), "requeueable": offers[i["id"]]} for i in _plain(ideas)],
             "runs": _plain(runs),
             "activity": _plain(activity),
             "sessions": [{**_plain([s])[0], "events": _plain(s["events"])} for s in sessions],
