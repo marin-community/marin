@@ -4,7 +4,7 @@ name: Separate AttnRes queries for global Q and KV
 category: Depth connections
 summary: 🤖 Posted on behalf of @ClassicLarry.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6933514429
@@ -26,6 +26,13 @@ trials:
     attn_res_global_kv_query: 'true'
   commit: 097b478537
   priority: batch
+  loss:
+  - 3.0409
+  delta:
+  - -0.0035
+  steps: 3030
+  baseline: belay-X0228-control 3.0444 (same commit, seed 0)
+  step_time_change: +2%
 potential:
   score: 5
   rationale: 'No result yet: equal-data control and variant still running (late start) → 5'
