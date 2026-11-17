@@ -184,15 +184,6 @@ def tracks_of_comment(text: str, instructions: str | None = None) -> tuple[tuple
     return (parse_track(match.group(1)),), False
 
 
-# Approved text that asks, in words, to run an entry's ladder: "run its 4 rung scaling ladder", "take X0221 up the
-# ladder". A request needs the verb, so a rationale that merely mentions the ladder does not launch one.
-LADDER_REQUEST = re.compile(r"\b(?:run|launch|take|start)\b[^.\n]{0,60}?\bladder\b", re.IGNORECASE)
-
-
-def asks_for_ladder(text: str) -> bool:
-    return LADDER_REQUEST.search(text) is not None
-
-
 def previous_tracks(entry: dict) -> tuple[Track, ...] | None:
     """The Tracks of an entry's last attempt, for a rerun that names none: every competitive rung when that attempt
     (the trials dated like its last one) ran more than one, else the last trial's Track; with no trial on a current

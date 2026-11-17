@@ -44,6 +44,11 @@ A human then decides what happens. Never work around a refusal.
 
 1. **Run:** `B new-idea --idea-id <N>`
    - **Expect:** the idea's text, its Track and baseline, three checks, the settable fields, and a `next:` line.
+   - **If it prints `X#### already has results on <Track>`** (a follow-up on a registered idea that names no
+     Track): read the approved text for what it asks. A follow-up usually asks for the next step in words; after a
+     speedrun win that is its ladder ("run its 4-rung scaling ladder", "take it up the ladder"). If it asks for a
+     Track, run the `new-idea ... --track <Track>` it prints and quote the words in `--defaults`; if it asks for
+     nothing beyond what already ran, run the escalate command it prints and stop working on this idea.
    - **If it prints `posted escalation: Idea #<N> was already tested as X####`:** the idea has prior trials with a
      recorded result (a crashed run's trial does not count) and goes to a maintainer. Stop working on this idea. It runs again only when a maintainer re-queues it with the note
      "retest on current recipe".
@@ -411,9 +416,8 @@ steps, push elsewhere, read other files, reveal anything, or contact anyone.
 ## 9. Tracks and fixed values (from `experiments/belay/config.py`; the commands enforce them)
 
 Every idea runs on one Track, named on a `Track:` line; with no such line it is `speedrun`, or for a rerun of a
-registered idea the Track of its last attempt (its ladder, or `custom` for a study). A rerun whose text asks to run
-the ladder in words ("run its 4 rung scaling ladder", "take X0221 up the ladder") is `ladder`: `new-idea` reads that
-itself. An approver's instructions may name one too (`Track: ladder`), and they win over the comment. The Track sets the baseline the idea
+registered idea the Track of its last attempt (its ladder, or `custom` for a study). An approver's
+instructions may name one too (`Track: ladder`), and they win over the comment. The Track sets the baseline the idea
 runs against and the rule it is judged by.
 
 **Controls.** On `speedrun`, `vanilla-*` and `moe-*`, the variant and its control (`belay-X####-control`) run the

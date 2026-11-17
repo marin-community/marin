@@ -190,7 +190,6 @@ from experiments.belay.submit import (
     Stage,
     Sweep,
     TrackSource,
-    asks_for_ladder,
     check_ladder_launch,
     check_launch,
     check_variant,
@@ -437,6 +436,13 @@ def track_label(track: Track, defaulted: bool) -> str:
     return f"Track: {track}{' (default)' if defaulted else ''}"
 
 
+TRACK_IN_WORDS = (
+    "If the comment or the maintainer note asks for a Track in words, rerun this command with --track <that Track> and "
+    "quote those words in --defaults: a follow-up on a speedrun win usually asks for the next step, its ladder ('run "
+    "its 4-rung scaling ladder' or 'take it up the ladder' is ladder); 'against the basic MoE at d768' is moe-d768."
+)
+
+
 def print_idea_brief(idea: Idea, tracks: tuple[Track, ...], defaulted: bool) -> None:
     print(f"idea #{idea.id}: {idea.name}\n\n{idea.body.strip()}\n")
     if len(tracks) > 1:
@@ -447,11 +453,7 @@ def print_idea_brief(idea: Idea, tracks: tuple[Track, ...], defaulted: bool) -> 
         print(f"{label}: {baseline.description}; judged on {baseline.metric}, noise {baseline.noise}.")
     print()
     if defaulted:
-        print(
-            'No Track: line names a Track. If the comment or the maintainer note asks for one in words ("run its '
-            '4-rung ladder" is ladder, "against the basic MoE at d768" is moe-d768), rerun this command with '
-            "--track <that Track> and quote those words in --defaults. If it is unclear, keep speedrun.\n"
-        )
+        print(f"No Track: line names a Track. {TRACK_IN_WORDS} If it is unclear, keep speedrun.\n")
     if (idea.note or "").startswith(MAINTAINER_NOTE):
         print(f"MAINTAINER NOTE (follow it; it settles the checks it addresses):\n{idea.note}\n")
     print(
@@ -608,9 +610,6 @@ def new_idea(
     named_tracks, text_defaulted = idea_tracks(idea)
     registry_id = idea.registry_id or (entry_for_intake(idea.url) if idea.url else None) or named(idea, named_entry)
     previous = previous_tracks(load_entry(registry_id)) if text_defaulted and registry_id is not None else None
-    if text_defaulted and inferred_track is None and registry_id is not None and asks_for_ladder(idea_text(idea)):
-        inferred_track = LADDER  # a follow-up on a registered idea that asks for its ladder in words
-        print(f"the approved text asks to run {registry_id}'s ladder; Track: {LADDER}")
     tracks, source = resolve_tracks(named_tracks, not text_defaulted, inferred_track, previous)
     defaulted = source is TrackSource.DEFAULT
     label = LADDER if len(tracks) > 1 else tracks[0]
@@ -626,6 +625,16 @@ def new_idea(
             runnable(idea, track)
     if registry_id is not None:
         held = prior_trials_hold(load_entry(registry_id), idea.note, tracks)
+        if held is not None and source is TrackSource.RERUN:  # no Track named: the session reads what is asked
+            print(f"\n{idea.body.strip()}\n\n{registry_id} already has results on {label}:\n{held}\n\n{TRACK_IN_WORDS}")
+            if (idea.note or "").startswith(MAINTAINER_NOTE):
+                print(f"MAINTAINER NOTE (follow it): {idea.note}")
+            say_next(
+                f"{BELAY} new-idea --idea-id {idea.id} --registry-id {registry_id} --track <Track>   (if it asks for "
+                f'one), else: {BELAY} escalate --idea-id {idea.id} --registry-id {registry_id} --title "Idea '
+                f'#{idea.id} was already tested as {registry_id}" --body "<what it asks, and the trials above>"'
+            )
+            return
         if held is not None:
             escalate(
                 f"Idea #{idea.id} was already tested as {registry_id}",
@@ -742,11 +751,6 @@ def launch_sweep(
             name,
             dry_run=dry_run,
         )
-
-
-def idea_text(idea: Idea) -> str:
-    """The approved text a session reads: the comment and the approver's instructions."""
-    return f"{idea.body}\n{idea.note or ''}"
 
 
 def named(idea: Idea, entry: str | None) -> str | None:
