@@ -1227,6 +1227,14 @@ Before admitting a new or changed source:
    frequency and five occurrences. Global DF samples up to 1,000,000 documents
    per source and drops a feature found in at least 50 documents across at
    least three sources in that retained inventory.
+   Every explicitly referenced source or global DF mask must contain `drop.parquet` with a
+   `hash:uint64` column. A missing file is an error; an existing zero-row file is
+   an explicit empty mask. Before marking, the global row count must match the
+   frozen descriptor's `n_global_dropped`, including an explicitly recorded zero.
+   Datakit serializes paths relative to `MARIN_PREFIX`: an absolute descriptor
+   URI does not restore that prefix. When reusing a frozen DF artifact, load and
+   mark inside `artifact_prefix` with its original producer prefix, and record
+   the resolved mask URIs.
 3. Inspect the per-source measurement table before mass publication. Evidence
    includes the contaminated count/fraction, maximum, mean and p95 of per-task
    maximum overlap over all tasks, and matched eval families. Every task's flags

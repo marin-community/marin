@@ -23,6 +23,7 @@ from marin.datakit.decon import (
     NGramConfig,
     build_all_source_drop_sets,
     decon_to_parquet,
+    drop_set_row_count,
 )
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
@@ -113,15 +114,23 @@ def build_drop_sets(config: DropConfig, *, campaign: CampaignRuntime) -> Lexical
 def mark_population(config: MarkConfig, *, campaign: CampaignRuntime) -> SourceLexicalMarks:
     population = SourceTextPopulation.raw_load(config.population_path)
     drops = read_artifact(config.drop_path, LexicalDropSets).attributes
+    drop_dirs = [
+        prefix_join(str(drops.output_dir), population_key(population.source_id)),
+        str(drops.global_output_dir),
+    ]
+    source_rows, global_rows = (drop_set_row_count(path) for path in drop_dirs)
+    if global_rows != drops.n_global_dropped:
+        raise ValueError(
+            f"Global corpus-common mask count differs from its frozen descriptor: "
+            f"{drop_dirs[1]}: expected {drops.n_global_dropped}, found {global_rows}"
+        )
+    logger.info("Validated corpus-common masks: source=%d global=%d paths=%s", source_rows, global_rows, drop_dirs)
     result = decon_to_parquet(
         normalized_data=NormalizedData(main_output_dir=population.main_output_dir, dup_output_dir="", counters={}),
         prebuilt_bloom_dir=config.bloom_path,
         output_path=config.output_path,
         ngram=NGRAM,
-        drop_set_dirs=[
-            prefix_join(str(drops.output_dir), population_key(population.source_id)),
-            str(drops.global_output_dir),
-        ],
+        drop_set_dirs=drop_dirs,
         flagged_sample_size=0,
         worker_resources=WORKER_RESOURCES,
         max_workers=config.max_workers,

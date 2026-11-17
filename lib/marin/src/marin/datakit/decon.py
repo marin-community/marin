@@ -1435,10 +1435,22 @@ def merge_eval_blooms_step(
 # ---------------------------------------------------------------------------
 
 
-def _load_drop_set(drop_set_dir: str) -> frozenset[int]:
+def drop_set_row_count(drop_set_dir: str) -> int:
+    """Return the size of an explicitly referenced uint64 corpus-common mask."""
     drop_path = StoragePath(f"{drop_set_dir.rstrip('/')}/drop.parquet")
     if not drop_path.exists():
-        return frozenset()
+        raise FileNotFoundError(f"Explicit corpus-common drop set is missing: {drop_path}")
+    with drop_path.open("rb") as fh:
+        parquet = pq.ParquetFile(fh)
+        schema = parquet.schema_arrow
+        if "hash" not in schema.names or schema.field("hash").type != pa.uint64():
+            raise ValueError(f"Corpus-common drop set requires hash:uint64: {drop_path}")
+        return parquet.metadata.num_rows
+
+
+def _load_drop_set(drop_set_dir: str) -> frozenset[int]:
+    drop_set_row_count(drop_set_dir)
+    drop_path = StoragePath(f"{drop_set_dir.rstrip('/')}/drop.parquet")
     with drop_path.open("rb") as fh:
         return frozenset(pq.read_table(fh, columns=["hash"]).column("hash").to_pylist())
 

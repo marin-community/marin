@@ -1555,6 +1555,19 @@ def test_build_all_source_drop_sets_rejects_reserved_global_source_name(tmp_path
         )
 
 
+def test_missing_drop_set_is_not_treated_as_an_empty_filter(tmp_path: Path):
+    directory = tmp_path / "missing-source-mask"
+    with pytest.raises(FileNotFoundError) as error:
+        _load_drop_set(str(directory))
+    assert str(directory / "drop.parquet") in str(error.value)
+
+
+def test_explicit_drop_set_requires_unsigned_hashes(tmp_path: Path):
+    pq.write_table(pa.table({"hash": pa.array([-1], pa.int64())}), tmp_path / "drop.parquet")
+    with pytest.raises(ValueError, match="hash:uint64"):
+        _load_drop_set(str(tmp_path))
+
+
 def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):
     """Nested source names load only their exact local drop set."""
     eval_dir = tmp_path / "eval"

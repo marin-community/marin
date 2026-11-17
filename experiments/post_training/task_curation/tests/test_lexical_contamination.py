@@ -4,6 +4,7 @@
 """Lexical scans use every public conversation and never private grader resources."""
 
 import json
+import re
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -30,13 +31,20 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource
 from zephyr.context import ZephyrContext
 
+from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.lexical_artifacts import (
     LexicalDropSets,
-    SourceLexicalMarks,
     SourceTextPopulation,
 )
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
-from experiments.post_training.task_curation.lexical_scan import ReportConfig, measure_marks
+from experiments.post_training.task_curation.lexical_scan import (
+    WORKER_RESOURCES,
+    MarkConfig,
+    ReportConfig,
+    mark_population,
+    measure_marks,
+    population_key,
+)
 from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.published_census import CensusConfig, ContractCensus, measure_population
 from experiments.post_training.task_curation.published_integrity import measure_integrity
@@ -197,14 +205,6 @@ def test_full_task_text_marks_public_eval_copy_and_excludes_private_reference(tm
         assert refreshed.task_count == 2
         assert refreshed.summary["required_shared_tasks"] == 0
         assert refreshed.summary["absent_contract_tasks"] == 2
-        marks = SourceLexicalMarks(
-            path=str(tmp_path / "marks"), source_id="fixture", population_path=text_population.path, attributes=result
-        )
-        write_record(
-            ArtifactRecord(
-                output_path=marks.path, result_type=result_type_name(type(marks)), result=marks.result_payload()
-            )
-        )
         drops = LexicalDropSets(
             path=str(tmp_path / "df"),
             attributes=AllSourceDropSets(
@@ -220,6 +220,26 @@ def test_full_task_text_marks_public_eval_copy_and_excludes_private_reference(tm
                 output_path=drops.path, result_type=result_type_name(type(drops)), result=drops.result_payload()
             )
         )
+        for directory in (tmp_path / "df/local" / population_key("fixture"), tmp_path / "df/global"):
+            directory.mkdir(parents=True)
+            pq.write_table(pa.table({"hash": pa.array([], pa.uint64())}), directory / "drop.parquet")
+        with ExitStack() as cleanup:
+            client = LocalClient()
+            cleanup.callback(client.shutdown)
+            with ZephyrContext(client=client, max_workers=1, resources=WORKER_RESOURCES) as context:
+                runtime = CampaignRuntime()
+                with runtime.activate(context):
+                    marks = mark_population(
+                        MarkConfig(
+                            text_population.path, drops.path, bloom.bloom_dir, str(tmp_path / "guarded-marks"), 1
+                        ),
+                        campaign=runtime,
+                    )
+        write_record(
+            ArtifactRecord(
+                output_path=marks.path, result_type=result_type_name(type(marks)), result=marks.result_payload()
+            )
+        )
         report = measure_marks(
             ReportConfig([marks.path], drops.path, bloom.bloom_dir, "eval-control-v1", "pilot", str(tmp_path / "report"))
         )
@@ -233,6 +253,69 @@ def test_full_task_text_marks_public_eval_copy_and_excludes_private_reference(tm
         }
         dropped = pq.read_table(next((tmp_path / "report").glob("*/drop_manifest.parquet"))).to_pylist()
         assert [row["id"] for row in dropped] == ["public-copy"]
+
+
+@pytest.mark.parametrize("fault", ["prefix", "global_count"])
+def test_marking_rejects_misbound_corpus_common_masks_before_execution(tmp_path, fault):
+    original = tmp_path / "original-prefix"
+    population = SourceTextPopulation(
+        path=str(tmp_path / "population"),
+        source_id="fixture",
+        dataset_id="fixture/dataset",
+        dataset_revision="pin",
+        source_version="1",
+        converter_revision="converter",
+        text_renderer_version="1",
+        task_count=1,
+        text_sha256="text",
+        task_specs_sha256="specs",
+        main_output_dir=str(tmp_path / "unread-main"),
+        specs_output_dir=str(tmp_path / "unread-specs"),
+        converter_rejections={},
+        admission_rejections={},
+    )
+    write_record(
+        ArtifactRecord(
+            output_path=population.path,
+            result_type=result_type_name(type(population)),
+            result=population.result_payload(),
+        )
+    )
+    source_dir = original / "df/local" / population_key(population.source_id)
+    global_dir = original / "df/global"
+    for directory in (source_dir, global_dir):
+        directory.mkdir(parents=True)
+        values = [] if fault == "global_count" and directory == global_dir else [1]
+        pq.write_table(pa.table({"hash": pa.array(values, pa.uint64())}), directory / "drop.parquet")
+    drops = LexicalDropSets(
+        path=str(original / "df/descriptor"),
+        attributes=AllSourceDropSets(
+            output_dir=str(original / "df/local"),
+            global_output_dir=str(global_dir),
+            num_sources=1,
+            n_global_dropped=1,
+            counters={},
+        ),
+    )
+    with artifact_prefix(str(original)):
+        write_record(
+            ArtifactRecord(
+                output_path=drops.path, result_type=result_type_name(type(drops)), result=drops.result_payload()
+            )
+        )
+    selected = tmp_path / "wrong-prefix" if fault == "prefix" else original
+    expected_path = selected / "df/local" / population_key(population.source_id) / "drop.parquet"
+    error, message = (
+        (FileNotFoundError, re.escape(str(expected_path)))
+        if fault == "prefix"
+        else (ValueError, "Global corpus-common mask count differs from its frozen descriptor")
+    )
+    with artifact_prefix(str(selected)), pytest.raises(error, match=message):
+        mark_population(
+            MarkConfig(population.path, drops.path, "unread-bloom", str(tmp_path / "marks"), 1),
+            campaign=CampaignRuntime(),
+        )
+    assert not (tmp_path / "marks").exists()
 
 
 def test_census_reads_every_partition_and_measures_empty_actor_environments(tmp_path):
