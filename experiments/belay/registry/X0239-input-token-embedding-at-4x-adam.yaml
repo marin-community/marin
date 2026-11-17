@@ -1,0 +1,12 @@
+id: X0239
+slug: input-token-embedding-at-4x-adam
+name: Input token embedding at 4x Adam LR
+category: Optimizers
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6959048333
+  author: armorfaye
+  approved_by: armorfaye (trusted)
