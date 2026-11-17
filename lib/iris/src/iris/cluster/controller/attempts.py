@@ -38,7 +38,7 @@ from iris.cluster.runtime.profile import (
 )
 from iris.cluster.types import JobName, TaskAttempt, WorkerId
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
-from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.auth import FEDERATION_PEER_ROLE, authorize_job_prefix
 from iris.time_proto import duration_from_proto, timestamp_to_proto
 
 Response = TypeVar("Response")
@@ -218,6 +218,7 @@ def mint_endpoint_token(
     if row is None:
         raise ConnectError(Code.NOT_FOUND, f"No endpoint '{request.endpoint_name}'")
     authorize_owner_if_configured(dependencies.auth, row.task_id.user)
+    authorize_job_prefix(row.task_id.to_wire())
 
     if request.HasField("ttl"):
         ttl = max(1, min(int(duration_from_proto(request.ttl).to_seconds()), MAX_ENDPOINT_TOKEN_TTL_SECONDS))
@@ -321,6 +322,7 @@ def _authorize_task_owner(dependencies: AttemptDependencies, task_id: JobName) -
     if identity is not None and identity.role == FEDERATION_PEER_ROLE:
         return
     authorize_owner_if_configured(dependencies.auth, task_id.user)
+    authorize_job_prefix(task_id.to_wire())
 
 
 def _authorize_federated_debug_target(dependencies: AttemptDependencies, root_job: JobName) -> None:

@@ -69,6 +69,8 @@ def _fully_populated_request(job_id: JobName) -> controller_pb2.Controller.Launc
     request.timeout.milliseconds = 3_600_000
     request.termination_grace.milliseconds = 60_000
     request.federation.requester_id = "parent"
+    # Stamped by the controller from the verified identity; persisted verbatim.
+    request.submitting_prefix = "/alice/exp2-"
     return request
 
 

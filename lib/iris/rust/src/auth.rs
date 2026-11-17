@@ -65,6 +65,11 @@ pub struct VerifiedIdentity {
     /// The job_id which owns this token, or None.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
+    /// The job-name prefix a scoped token is bound to, or None. Carried into
+    /// the verified-identity stamp so the Python side keeps enforcing the
+    /// scope on requests that arrive through this listener.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
     #[serde(skip)]
     pub endpoint: Option<String>,
     #[serde(skip)]
@@ -110,6 +115,10 @@ struct Claims {
     endpoint: Option<String>,
     #[serde(default)]
     job_id: Option<String>,
+    // Raw job-name prefix claim; the Python side validates it fail-closed, so
+    // this listener only carries it through into the identity stamp.
+    #[serde(default)]
+    prefix: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -378,6 +387,7 @@ impl NativeVerifier {
                         role: "federation-peer".to_string(),
                         audience: None,
                         job_id: None,
+                        prefix: None,
                         endpoint: None,
                         federation_peer: Some(peer_id.clone()),
                         expires_at: token_data.claims.exp,
@@ -409,6 +419,7 @@ impl NativeVerifier {
             role: claims.role,
             audience: claims.endpoint.clone().filter(|_| proxy_scope),
             job_id: claims.job_id.filter(|_| !proxy_scope),
+            prefix: claims.prefix.filter(|_| !proxy_scope),
             endpoint: claims.endpoint.filter(|_| proxy_scope),
             federation_peer: None,
             expires_at: claims.exp,
@@ -529,6 +540,7 @@ impl IapVerifier {
             },
             audience: None,
             job_id: None,
+            prefix: None,
             endpoint: None,
             federation_peer: None,
             expires_at: claims.exp,
@@ -607,5 +619,77 @@ C/edCMRM78P8eQTBCDUTK1ywSYaszvQZvneiW6gNtWEJndSreEcyyUdVvg==
         assert_eq!(identity.role, "dashboard");
         assert_eq!(identity.audience, None);
         assert!(verifier.verify(&token("wrong-audience"), 0).await.is_err());
+    }
+
+    fn control_verifier() -> NativeVerifier {
+        let config = NativeAuthConfig {
+            mode: NativeAuthMode::Enforcing,
+            issuers: vec!["test".to_string()],
+            jwks: JwkSet { keys: vec![] },
+            leeway_seconds: 0,
+            cache_capacity: 16,
+            cache_ttl_seconds: 60,
+            trusted_cidrs: vec![],
+            control_audience: "iris".to_string(),
+            proxy_audience: "iris-proxy".to_string(),
+            proxy_scope: "proxy".to_string(),
+            federation_audience: "federation".to_string(),
+            session_cookie: "iris_session".to_string(),
+            iap_public_keys_url: "https://unused.example/iap-keys".to_string(),
+            iap_issuer: TEST_IAP_ISSUER.to_string(),
+            iap_audience: None,
+            federation_keys: HashMap::new(),
+            admin_users: vec![],
+            user_roles: HashMap::new(),
+            default_user_role: "user".to_string(),
+        };
+        NativeVerifier::new(config, Arc::new(CacheStats::default())).unwrap()
+    }
+
+    fn control_claims(prefix: Option<&str>, scope: Option<&str>, endpoint: Option<&str>) -> Claims {
+        // A proxy-scoped token names the proxy plane audience; a control token
+        // names "iris".
+        let aud = if scope.is_some() {
+            "iris-proxy"
+        } else {
+            "iris"
+        };
+        Claims {
+            aud: aud.to_string(),
+            exp: unix_time() + 60,
+            sub: "alice".to_string(),
+            role: "user".to_string(),
+            scope: scope.map(str::to_string),
+            endpoint: endpoint.map(str::to_string),
+            job_id: None,
+            prefix: prefix.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn control_identity_carries_the_prefix_claim() {
+        let verifier = control_verifier();
+        let scoped = verifier
+            .identity_from_claims(control_claims(Some("/benfeuer/exp2-"), None, None))
+            .unwrap();
+        assert_eq!(scoped.prefix.as_deref(), Some("/benfeuer/exp2-"));
+        let unscoped = verifier
+            .identity_from_claims(control_claims(None, None, None))
+            .unwrap();
+        assert_eq!(unscoped.prefix, None);
+    }
+
+    #[test]
+    fn proxy_scope_identity_drops_the_prefix_claim() {
+        let verifier = control_verifier();
+        let identity = verifier
+            .identity_from_claims(control_claims(
+                Some("/benfeuer/exp2-"),
+                Some("proxy"),
+                Some("serve/foo"),
+            ))
+            .unwrap();
+        assert_eq!(identity.prefix, None);
+        assert_eq!(identity.audience.as_deref(), Some("serve/foo"));
     }
 }

@@ -181,6 +181,7 @@ def reconstruct_launch_job_request(
         egress_policy=job.egress_policy,
         egress_allow=parse_egress_rules(job.egress_allow_json),
         fail_if_exists=job.fail_if_exists,
+        submitting_prefix=str(job.submitting_prefix),
     )
     req.entrypoint.CopyFrom(proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint))
     for filename, data in workdir_files.items():

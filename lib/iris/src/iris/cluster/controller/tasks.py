@@ -36,7 +36,7 @@ from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, WorkerId, is_federated
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.auth import FEDERATION_PEER_ROLE, authorize_job_prefix
 from iris.rpc.proto_display import task_state_friendly
 from iris.time_proto import timestamp_to_proto
 
@@ -442,6 +442,7 @@ def _resolve_kick_target(
             raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {name.root_job}")
     else:
         authorize_owner_if_configured(dependencies.auth, name.user)
+        authorize_job_prefix(name.to_wire())
     if not name.is_task and task_attempt.attempt_id is not None:
         reject("a job target cannot carry an ':attempt' suffix")
         return

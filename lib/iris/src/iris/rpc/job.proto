@@ -792,4 +792,10 @@ message RunTaskRequest {
   // The job's destinations beyond the cluster allowlist. Workers apply them
   // only under EGRESS_POLICY_ALLOWLIST.
   repeated EgressRule egress_allow = 18;
+
+  // The job-name prefix the submitting token was scoped to ("" when unscoped).
+  // Stamped by the controller from the persisted job row; the worker never
+  // interprets it — the controller reads it back to mint this task's token
+  // with the same prefix claim.
+  string submitting_prefix = 20;
 }

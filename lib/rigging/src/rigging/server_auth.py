@@ -69,6 +69,10 @@ class VerifiedIdentity:
     audience: str | None = None
     # Set only for an Iris task token: the wire name of the job that owns the token.
     job_id: str | None = None
+    # Set only for a job-prefix-scoped Iris token: the job-name prefix every
+    # owner-gated target must sit under. The consuming service enforces it; None
+    # ⇒ an unscoped identity (the default).
+    prefix: str | None = None
 
 
 # Identity granted to a credentialless caller admitted by ambient trust:

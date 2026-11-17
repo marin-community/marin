@@ -61,7 +61,14 @@ from iris.cluster.types import (
 )
 from iris.preemption import TERMINATION_GRACE_ENV, resolve_termination_grace
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
+from iris.rpc.auth import (
+    FEDERATION_PEER_ROLE,
+    AuthzAction,
+    authorize,
+    authorize_job_prefix,
+    authorize_resource_owner,
+    validate_job_prefix,
+)
 from iris.rpc.proto_display import (
     ADMIN_PRIORITY_BAND_VALUES,
     CONTAINER_PROFILE_VALUES,
@@ -388,6 +395,13 @@ def _authorize_federation_handoff(
             )
     elif identity is None or identity.role != ADMIN_ROLE:
         raise ConnectError(Code.PERMISSION_DENIED, "The federation handoff field may only be set by a trusted peer.")
+    # The parent stamps the submitting token's job-name prefix; a malformed one
+    # refuses the handoff rather than silently un-scoping the job's tasks.
+    if request.submitting_prefix:
+        try:
+            validate_job_prefix(request.submitting_prefix)
+        except ValueError as error:
+            raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid submitting prefix: {error}") from error
     if not job_id.is_root:
         raise ConnectError(Code.INVALID_ARGUMENT, "A federation handoff must be a root job.")
 
@@ -404,6 +418,7 @@ def _authorize_job_actor(dependencies: JobDependencies, job_id: JobName) -> None
             return
         raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {job_id}")
     authorize_resource_owner(job_id.user)
+    authorize_job_prefix(job_id.to_wire())
 
 
 def _wait_until_job_drained(dependencies: JobDependencies, job_id: JobName, wait: Duration) -> bool:
@@ -544,6 +559,9 @@ def _launch_job_id(
         job_id = JobName.root(identity.user_id, job_id.name)
     if dependencies.auth.provider and identity is not None and not job_id.is_root:
         authorize_owner_if_configured(dependencies.auth, job_id.user)
+    # A prefix-scoped token submits, cancels, and controls only inside its
+    # prefix — including the resolved root name, which the caller chose.
+    authorize_job_prefix(job_id.to_wire())
     return job_id
 
 
@@ -573,6 +591,13 @@ def _launch_identity(
     identity = get_verified_identity()
     received_handoff = request.HasField("federation")
     _authorize_launch(dependencies, identity, request, context, requested_job_id, received_handoff)
+    if not received_handoff:
+        # Stamp the submitting token's job-name prefix (empty when unscoped).
+        # The client's own value is always overwritten, and the stamped value is
+        # what the job row persists and its task tokens inherit. On a received
+        # handoff the parent's stamped value stands (validated in
+        # _authorize_federation_handoff).
+        request.submitting_prefix = identity.prefix if identity is not None and identity.prefix else ""
     job_id = _launch_job_id(dependencies, identity, requested_job_id, received_handoff)
     submitting_user = _launch_submitting_user(dependencies, identity, request, job_id)
     return LaunchIdentity(
