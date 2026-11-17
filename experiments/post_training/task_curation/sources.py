@@ -102,7 +102,6 @@ PENDING_MEASUREMENT_SOURCES = (
     *lean_proofs.sources(),
     *lean_numina.sources(),
     *prime_swe.sources(),
-    *prime_multiswe.sources(),
     *rst.sources(),
 )
 
@@ -150,6 +149,7 @@ def configured_sources() -> list[RlDataSource]:
         *campaign_releases.sources(),
         *native_releases.sources(),
         *terminus_pivot.sources(),
+        *prime_multiswe.sources(),
     ]
 
 
