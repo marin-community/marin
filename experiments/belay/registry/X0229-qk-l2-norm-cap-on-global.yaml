@@ -26,3 +26,15 @@ trials:
     mla_qk_norm_cap: '22.6'
   commit: 1c6dc139c9
   priority: batch
+- id: t002
+  variant: L2 norm cap replaces MLA q/k RMS norms, mla_qk_norm_cap=15
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0229
+  date: '2026-11-17'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0229
+  wandb: []
+  settings:
+    mla_qk_norm_cap: '15'
+  commit: 95d3fb9b5d
+  priority: batch
