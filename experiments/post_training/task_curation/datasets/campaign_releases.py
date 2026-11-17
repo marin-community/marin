@@ -324,7 +324,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="terminal-agent",
-                tags=("agentic", "license:cc-by-4.0", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "license:cc-by-4.0", "campaign-release", "converted"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=7,
                 daytona_count_basis=(
