@@ -34,8 +34,8 @@ trials:
   baseline: belay-X0239-control 3.0457 (same commit, seed 0)
   step_time_change: 0%
 potential:
-  score: 5
-  rationale: 'No result yet: speedrun control and variant preempted and still running → 5'
+  score: 3
+  rationale: −0.0030 at equal data = equal time (step time within 1%); within ±0.005 noise band → 3
   model: claude-opus-5-5
   date: '2026-11-17'
-  inputs_digest: 0ad13dd85ba4
+  inputs_digest: d7b4e2d0d0b8
