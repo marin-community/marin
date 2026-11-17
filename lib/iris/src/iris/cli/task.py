@@ -58,7 +58,7 @@ def _truncate(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _format_resources(resources: ResourceRequest) -> str:
+def format_resources(resources: ResourceRequest) -> str:
     parts = [
         f"cpu={resources.cpu_millicores / 1000:g}",
         f"memory={humanfriendly.format_size(resources.memory_bytes)}",
@@ -103,7 +103,7 @@ def render_task_description_text(description: TaskDescription) -> str:
         lines.append(f"Worker: {worker}")
     if status.container_id:
         lines.append(f"Backend object (current attempt {status.current_attempt_number}): {status.container_id}")
-    lines.append(f"Resources: {_format_resources(description.resources)}")
+    lines.append(f"Resources: {format_resources(description.resources)}")
     if status.pending_reason:
         lines.append(f"Pending: {status.pending_reason}")
     if status.status_message:
