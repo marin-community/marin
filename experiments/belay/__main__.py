@@ -25,6 +25,7 @@ import argparse
 import dataclasses
 import datetime
 import importlib.util
+import itertools
 import json
 import os
 import re
@@ -178,6 +179,7 @@ from experiments.belay.submit import (
     DEFAULT_TRACK,
     LADDER,
     LADDER_RUNGS,
+    MAX_REPAIRS,
     PROBE_SKIP,
     RUN_PREFIX,
     ExperimentSpec,
@@ -209,6 +211,8 @@ from experiments.belay.submit import (
     refuse_over_cap,
     refuse_reused_names,
     registry_of,
+    repair_key,
+    repairs_used,
     resolve_tracks,
     run_id,
     run_name,
@@ -217,6 +221,7 @@ from experiments.belay.submit import (
     settings_of,
     sharers,
     spec_path,
+    spec_with_repair,
     spec_with_runs,
     stage_runs,
     submit_run,
@@ -1881,13 +1886,23 @@ def score_batch(batch: Path, model: str, *, dry_run: bool) -> None:
 # ---------- 3. run failed ----------
 
 
-def run_failed(experiment: str, run: str, *, dry_run: bool) -> None:
-    """Escalate a failed run with its state and log command; never relaunch it."""
-    state = page_state()
-    registry_id = registry_of(experiment)
+@dataclass(frozen=True)
+class FailedRun:
+    """A failed run as ``run-failed`` and ``repair`` see it: its spec, key, Iris/W&B name and page row."""
+
+    spec: ExperimentSpec
+    key: str
+    name: str
+    row: PageRun
+
+
+def failed_run(experiment: str, run: str, state: PageState) -> FailedRun | None:
+    """The failed run ``run`` of ``experiment``'s spec; None for a study's run. Refuses a run that is unknown, still
+    going, or succeeded."""
     path = spec_path(experiment, repo_root() / SPECS)
     if is_study(path.read_text()):
         names = {key: run_name(experiment, key) for key in parse_study(path.read_text()).runs}
+        spec = None
     else:
         spec = load_spec(experiment)
         names = {key: run_id(spec, r) for key, r in spec.runs.items()}
@@ -1900,12 +1915,160 @@ def run_failed(experiment: str, run: str, *, dry_run: bool) -> None:
     row = rows[0]
     if not row.terminal or row.state == "succeeded":
         raise SystemExit(f"refusing: {name} is {row.state}, not failed.\nnext: {BELAY} run-finished {experiment}")
+    return None if spec is None else FailedRun(spec, run, name, row)
+
+
+def why_not_repairable(failed: FailedRun, state: PageState) -> str | None:
+    """Why a session may not repair this failure (a maintainer decides); None when it may. A repair needs a variant
+    run that crashed (not a stopped or unplaced one) whose control finished, on a Track a session launches from the
+    week's branch, with repair attempts left."""
+    spec, run = failed.spec, failed.spec.runs[failed.key]
+    registry_id = registry_of(spec.experiment)
+    if run.control:
+        return "the control failed, so the fault is outside the idea's flag"
+    if failed.row.state != "failed":
+        return f"the run ended {failed.row.state}, not a crash a code fix can address"
+    if TRACKS[spec.track].code != WEEKLY_BRANCH:
+        return f"{spec.track} runs from its own branch, which a maintainer runs"
+    used = repairs_used(registry_id, repo_root() / SPECS)
+    if used >= MAX_REPAIRS:
+        return f"{registry_id} has used its {MAX_REPAIRS} repair attempts"
+    controls = [c for c, v in stage_pairs(spec, run.stage) if v.name == run.name] or [
+        c for c in stage_runs(spec, Stage.DATA) if c.control
+    ]
+    rows = {r.name: r for r in state.runs}
+    for control in controls:
+        row = rows.get(run_id(spec, control))
+        if row is not None and row.terminal and row.state != "succeeded":
+            return f"its control {run_id(spec, control)} also ended {row.state}"
+    return None
+
+
+def run_failed(experiment: str, run: str, *, dry_run: bool) -> None:
+    """A failed run: hand a variant's crash to a repair (RUNBOOK section 3) while attempts remain, else escalate it
+    with its state and log command."""
+    state = page_state()
+    registry_id = registry_of(experiment)
+    failed = failed_run(experiment, run, state)
+    reason = "a study's run" if failed is None else why_not_repairable(failed, state)
+    row = failed.row if failed is not None else next(r for r in state.runs if r.name == run_name(experiment, run))
+    logs = f"uv run iris --cluster marin job logs {row.job_id}"
+    if reason is None:
+        assert failed is not None
+        used = repairs_used(registry_id, repo_root() / SPECS)
+        print(
+            f"{failed.name} ended failed at step {row.step}; {registry_id} has used {used} of {MAX_REPAIRS} repairs.\n"
+            f"Read its logs: {logs} | tail -300"
+        )
+        say_next(f"{BELAY} repair {experiment} --run {run} --start   (section 3)")
+        return
     body = (
-        f"`{name}` ended `{row.state}` at step {row.step} (job `{row.job_id}`). Nothing was relaunched. "
-        f"Logs: `uv run iris --cluster marin job logs {row.job_id}`."
+        f"`{row.name}` ended `{row.state}` at step {row.step} (job `{row.job_id}`). Not repaired: {reason}. "
+        f"Logs: `{logs}`."
     )
     idea = state.idea_for(registry_id)
-    escalate(f"{name} {row.state}", body, None if idea is None else idea.id, registry_id, dry_run=dry_run)
+    escalate(f"{row.name} {row.state}", body, None if idea is None else idea.id, registry_id, dry_run=dry_run)
+
+
+REPAIR_RULES = """Rules for a repair (repair --finish checks every one; passing them is the only gate):
+  1. Find the cause in the run's logs. Fix only code behind the idea's own flag ({flags}): the fix makes the idea run
+     as it was approved, never a different design, other settings or other code.
+  2. Edit only experiments/grug/fast_track/ and tests/grug/test_fast_track_*.py, and add or extend a test that turns
+     the flag on and exercises the fixed path (reproduce the failure on CPU where it can be, e.g. the same reshape).
+  3. Add no config field and change no default.
+  4. With every flag off, the tiny model's loss and gradients must equal the commit before, bit for bit: so the run's
+     control still stands, and only the failed run reruns.
+  5. With the flag on, changing future tokens must not move past hidden states (no leakage).
+  6. ./infra/pre-commit.py must pass on the changed files.
+If the logs show no fault in the idea's code (a transient error), change nothing: --finish then relaunches the run
+unchanged, which also uses an attempt."""
+
+
+def repair_target(experiment: str, run: str) -> tuple[FailedRun, PageState, int]:
+    """The failed run a repair works on, refusing (with the escalation to run) one a session may not repair."""
+    state = page_state()
+    failed = failed_run(experiment, run, state)
+    reason = "a study's run" if failed is None else why_not_repairable(failed, state)
+    if reason is not None:
+        raise SystemExit(f"refusing to repair: {reason}.\nnext: {BELAY} run-failed {experiment} --run {run}")
+    assert failed is not None
+    return failed, state, repairs_used(registry_of(experiment), repo_root() / SPECS) + 1
+
+
+def repair_start(experiment: str, run: str) -> None:
+    failed, _, attempt = repair_target(experiment, run)
+    repo, branch = code_checkout(registry_of(experiment))
+    require_clean_pushed_head(repo, branch)
+    flags = " ".join(failed.spec.runs[run].flags) or "none"
+    print(f"repair {attempt} of {MAX_REPAIRS} for {failed.name}: edit {repo} on {branch}.")
+    print(REPAIR_RULES.format(flags=flags))
+    say_next(f'{BELAY} repair {experiment} --run {run} --finish --reason "<the cause and the fix, one line>"')
+
+
+def repair_finish(experiment: str, run: str, reason: str, *, dry_run: bool) -> None:
+    """Gate and commit the repair (if any code changed), then relaunch the failed run under a new key with the same
+    seed, flags and stage, and record the attempt on the spec, the registry and the page."""
+    failed, state, attempt = repair_target(experiment, run)
+    if not reason.strip():
+        raise SystemExit("refusing: give --reason, the cause and the fix in one line")
+    registry_id = registry_of(experiment)
+    repo, branch = code_checkout(registry_id)
+    paths = changed_paths(repo)
+    variant = failed.spec.runs[run]
+    if paths:
+        gate_repair(repo, paths, [s for option, s in itertools.pairwise(variant.flags) if option == "--model-set"])
+        run_git(repo, ["add", "--", *paths], dry_run=dry_run)
+        message = f"{registry_id}: repair {attempt} of {failed.name} ({reason})"
+        run_git(repo, ["commit", "--quiet", "-m", message], dry_run=dry_run)
+        run_git(repo, ["push", "--quiet", "origin", branch], dry_run=dry_run)
+        if not dry_run:
+            commit = git(repo, "rev-parse", "HEAD")
+            path = record_code_commit(registry_id, commit, dry_run=False)
+            commit_and_push([path], f"Belay registry: {registry_id} repair commit {commit[:10]}", dry_run=False)
+    else:
+        print("no code changed: relaunching the run unchanged")
+    new_key = repair_key(run, attempt)
+    text = spec_with_repair(spec_path(experiment, repo / SPECS).read_text(), run, new_key, reason)
+    new_spec = write_spec(repo, branch, text, dry_run=dry_run, replace=True)
+    trials = load_entry(registry_id).get("trials") or []
+    trial = next((t["id"] for t in trials if failed.name in (t.get("wandb") or [])), None)
+    launch_stage(repo, branch, new_spec, [new_spec.runs[new_key]], trial, state, dry_run=dry_run)
+    idea = state.idea_for(registry_id)
+    change = "fixed the code behind its flag" if paths else "no code change (a transient fault)"
+    post = Post(
+        "repair",
+        f"{failed.name} repair {attempt}/{MAX_REPAIRS}: {reason}",
+        f"`{failed.name}` ended failed at step {failed.row.step}; {change}, relaunched as "
+        f"`{run_name(experiment, new_key)}`.",
+        registry_id,
+        None if idea is None else idea.id,
+    )
+    post_activity(post, dry_run=dry_run)
+    say_next("stop (the watcher starts a new session when the run finishes)")
+
+
+def gate_repair(repo: Path, paths: list[str], model_settings: list[str]) -> None:
+    """The repair gates (``REPAIR_RULES``): allowed paths with a test, no new or changed config field, flag off
+    bit-identical to HEAD, flag on leaks no future tokens, its tests and pre-commit pass."""
+    refuse_outside_allowed(paths)
+    print(f"1. paths ok: {paths}")
+    python = checkout_python(repo)
+    with temporary_worktree(repo, "HEAD") as before_dir:
+        before = probe(before_dir, [], python)
+    after = probe(repo, [], python)
+    added = new_flags(before.defaults, after.defaults)  # also refuses a changed default
+    if added:
+        raise SystemExit(f"refusing: a repair adds no config field, got {added}; it fixes the idea's own flag only")
+    print("2. no config field added or changed")
+    refuse_flag_off_change(before, after)
+    print("3. flag off: tiny-model loss and gradients bit-identical to HEAD (the control still stands)")
+    if model_settings:
+        refuse_leak(probe(repo, model_settings, python))
+        print(f"4. flag on ({', '.join(model_settings)}): no future leakage")
+    run_tests(repo, paths)
+    print("5. the change's tests pass on CPU")
+    run_precommit(repo, paths)
+    print("6. pre-commit passes")
 
 
 # ---------- 4. weekly rollover ----------
@@ -2262,6 +2425,13 @@ def main(argv: list[str]) -> None:
     p = command("run-failed")
     p.add_argument("registry_id")
     p.add_argument("--run", required=True)
+    p = command("repair")
+    p.add_argument("registry_id", help="the spec's id: a registry id, or a rung's or sweep value's")
+    p.add_argument("--run", required=True, help="the failed run's key in the spec")
+    step = p.add_mutually_exclusive_group(required=True)
+    step.add_argument("--start", action="store_true")
+    step.add_argument("--finish", action="store_true")
+    p.add_argument("--reason", default="", help="with --finish: the cause and the fix, one line")
     p = command("weekly-rollover")
     p.add_argument("--today", type=datetime.date.fromisoformat, help="pretend date (with --dry-run only)")
     step = p.add_mutually_exclusive_group()
@@ -2338,6 +2508,10 @@ def main(argv: list[str]) -> None:
         study(args.registry_id, args.spec, dry_run=args.dry_run)
     elif args.command == "run-failed":
         run_failed(args.registry_id, args.run, dry_run=args.dry_run)
+    elif args.command == "repair" and args.start:
+        repair_start(args.registry_id, args.run)
+    elif args.command == "repair":
+        repair_finish(args.registry_id, args.run, args.reason, dry_run=args.dry_run)
     elif args.command == "weekly-rollover" and args.resume:
         continue_rollover(dry_run=args.dry_run)
     elif args.command == "weekly-rollover" and args.abort:

@@ -318,6 +318,10 @@ def comment_updated_at(url: str) -> datetime.datetime:
     return datetime.datetime.fromisoformat(comment["updated_at"])
 
 
+# What `gh api` prints to stderr for a resource that does not exist (a deleted comment).
+GH_NOT_FOUND = "HTTP 404"
+
+
 def gh_api(args: list[str]) -> str:
     return subprocess.run(["gh", "api", *args], check=True, capture_output=True, text=True).stdout
 
@@ -365,13 +369,19 @@ def mark_reviewed(idea: Idea, *, github_posting: bool, gh: Callable[[list[str]],
         print(f"would react {REVIEWED_REACTION} on {idea.url}")
         return
     comment_id = idea.url.rsplit("issuecomment-", 1)[1]
-    gh(
-        [
-            f"repos/{CONFIG.repository}/issues/comments/{comment_id}/reactions",
-            "-X",
-            "POST",
-            "-f",
-            f"content={REVIEWED_REACTION}",
-        ]
-    )
+    try:
+        gh(
+            [
+                f"repos/{CONFIG.repository}/issues/comments/{comment_id}/reactions",
+                "-X",
+                "POST",
+                "-f",
+                f"content={REVIEWED_REACTION}",
+            ]
+        )
+    except subprocess.CalledProcessError as error:
+        if GH_NOT_FOUND not in (error.stderr or ""):
+            raise
+        print(f"{idea.url} was deleted; no reaction")  # its author removed it after the decision
+        return
     print(f"reacted {REVIEWED_REACTION} on {idea.url}")

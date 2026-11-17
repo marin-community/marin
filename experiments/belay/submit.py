@@ -8,6 +8,7 @@ both launched with the Track's baseline command. Runs are named ``belay-<id>-<ru
 ``CONFIG.output_root``, and run on the Track's cluster at its priority.
 """
 
+import copy
 import dataclasses
 import itertools
 import math
@@ -590,6 +591,40 @@ def latest_stage(spec: ExperimentSpec) -> Stage:
 
 def stage_runs(spec: ExperimentSpec, stage: Stage) -> list[RunSpec]:
     return [r for r in spec.runs.values() if r.stage is stage]
+
+
+MAX_REPAIRS = 4
+"""Repair attempts an idea gets (RUNBOOK section 3): each fixes the code behind its own flag, or relaunches unchanged,
+and reruns the failed run; past this many, the next failure goes to a maintainer."""
+FAILED = "failed"
+"""The spec key holding runs a repair replaced: out of ``runs``, so every stage sees only the replacement."""
+_REPAIR_SUFFIX = re.compile(r"-r\d+$")
+
+
+def repair_key(run_key: str, attempt: int) -> str:
+    """The run key of a repair's relaunch: ``seed0`` -> ``seed0-r1``; a relaunch of a relaunch keeps one suffix."""
+    return f"{_REPAIR_SUFFIX.sub('', run_key)}-r{attempt}"
+
+
+def spec_with_repair(text: str, run_key: str, new_key: str, reason: str) -> str:
+    """The spec ``text`` with ``run_key`` moved under ``failed`` (noting its replacement and why it failed) and a copy
+    added under ``new_key`` with the same seed, variant, flags and stage."""
+    data = yaml.safe_load(text)
+    run = data["runs"].pop(run_key)
+    data.setdefault(FAILED, {})[run_key] = {**run, "replaced_by": new_key, "reason": reason}
+    data["runs"][new_key] = copy.deepcopy(run)  # no shared lists, so the YAML has no aliases
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=120)
+
+
+def repairs_used(registry_id: str, runs_dir: Path = RUNS_DIR) -> int:
+    """How many repairs the idea's specs record (every rung's and sweep value's included)."""
+    used = 0
+    for path in runs_dir.glob(f"{registry_id}*.yaml"):
+        data = yaml.safe_load(path.read_text())
+        tag = data["experiment"].removeprefix(registry_id)
+        if data["experiment"].startswith(registry_id) and not tag[:1].isdigit():  # X0236, X0236d768, X0236v2
+            used += len(data.get(FAILED) or {})
+    return used
 
 
 def spec_with_runs(text: str, runs: dict[str, dict]) -> str:
