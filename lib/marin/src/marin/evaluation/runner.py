@@ -57,6 +57,7 @@ from marin.inference.iris import (
     remote_inference,
 )
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
+from marin.rollouts.evaluation_results import score_curated_record
 
 logger = logging.getLogger(__name__)
 
@@ -721,7 +722,12 @@ def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceS
     )
 
 
-def _print_record(record: EvalRunRecord) -> None:
+def print_record(record: EvalRunRecord) -> None:
+    """Print a run's status, failure context, coverage and metrics.
+
+    Curated records carry no metrics; their scores are derived from the run's raw archive.
+    """
+    record = score_curated_record(record)
     print(f"{record.run_id}  [{record.status.value}]  {record.model.name} / {record.evaluation.name}")
     if record.error:
         print(f"  error: {record.error}")
@@ -733,6 +739,13 @@ def _print_record(record: EvalRunRecord) -> None:
             print(f"  last {min(len(lines), _REPORT_TAIL_LINES)} log lines of the {role} child:")
             for line in lines[-_REPORT_TAIL_LINES:]:
                 print(f"    {line}")
+    print(f"  results: {record.results_path}")
+    for task, coverage in sorted(record.coverage.items()):
+        errors = ", ".join(f"{name}={count}" for name, count in sorted(coverage.errors.items()))
+        print(
+            f"  {task:<40} scored {coverage.n_scored}/{coverage.n_attempted} selected "
+            f"of {coverage.n_benchmark}" + (f"  errors: {errors}" if errors else "")
+        )
     if not record.metrics:
         print("  (no metrics)")
         return
@@ -759,4 +772,4 @@ def wait_and_report(batches: list[SubmittedEvaluationBatch]) -> None:
                 )
                 print(f"{evaluation.run_id}  [no record]  {batch.model_name} / {evaluation.eval_name}")
                 continue
-            _print_record(record)
+            print_record(record)

@@ -4,8 +4,9 @@
 """Command-line entry point for the eval launcher.
 
 ``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``.
-``launch`` submits runs and optionally waits for their object-store records. Fleet-wide archive
-sweeps are administrative and live in :mod:`experiments.evaluation.migrations.cli`.
+``launch`` submits runs and optionally waits for their object-store records; ``scores`` prints the
+records and derived scores of finished runs. Fleet-wide archive sweeps are administrative and live in
+:mod:`experiments.evaluation.migrations.cli`.
 """
 
 from __future__ import annotations
@@ -20,8 +21,11 @@ from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, prio
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.model_config import ModelConfig, load_model_config
-from marin.evaluation.runner import EvaluationBatch, wait_and_report
+from marin.evaluation.records import RECORD_FILE, read_record
+from marin.evaluation.runner import EvaluationBatch, print_record, wait_and_report
 from rigging.config_discovery import find_project_root
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.curated import load_evaluations
 from experiments.evaluation.evals import EvaluationDefinition, HarborDefinition, resolve_evaluations
@@ -349,6 +353,19 @@ def launch(
         if no_wait:
             return
         wait_and_report([group])
+
+
+@cli.command()
+@click.argument("runs", nargs=-1, required=True)
+def scores(runs: tuple[str, ...]) -> None:
+    """Print status, coverage and scores for finished runs.
+
+    Each RUN is a ``record.json`` URI or the run directory that contains it, such as
+    ``gs://marin-eval-metadata/evals/<run_id>``.
+    """
+    configure_coreweave_s3()
+    for run in runs:
+        print_record(read_record(run if run.endswith(RECORD_FILE) else prefix_join(run, RECORD_FILE)))
 
 
 def main() -> None:

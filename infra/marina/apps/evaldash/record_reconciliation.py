@@ -13,10 +13,10 @@ from datetime import UTC, datetime, timedelta
 
 from marin.evaluation.records import RECORD_FILE, EvalRunRecord
 from marin.execution.step_status import STATUS_FAILED, STATUS_RUNNING, StatusFile
+from marin.rollouts.evaluation_results import SUMMARY_REVISION, score_curated_record
 from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath
 
-from .curated import SUMMARY_REVISION, import_curated_record
 from .results_db import ObservationKind, RecordObservation, SourceState
 
 _MAX_RECORD_READERS = 16
@@ -138,7 +138,7 @@ def _read_changed_record(
     try:
         step_status = step_status_for_record(path)
         raw_version = _raw_version(record.results_path) if record.evaluation.curated is not None else None
-        record = import_curated_record(record)
+        record = score_curated_record(record)
     except Exception as exc:
         return _invalid_observation(path, found.version, schedule, f"{type(exc).__name__}: {exc}")
     next_verify_at = _next_verification(path, step_status, schedule, initial)
