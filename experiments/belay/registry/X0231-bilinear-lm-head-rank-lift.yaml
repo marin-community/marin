@@ -26,3 +26,9 @@ trials:
     lm_head_bilinear: 'true'
   commit: 759042a2c7
   priority: batch
+potential:
+  score: 5
+  rationale: 'No result yet: control done, variant preempted mid-run and retrying -> 5'
+  model: claude-opus-5-5
+  date: '2026-11-17'
+  inputs_digest: c6e5b1e73da7
