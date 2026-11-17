@@ -5,6 +5,7 @@
 
 import asyncio
 import os
+import shlex
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
@@ -69,7 +70,20 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
             source.chmod(0o644 if resource.mode is None else int(resource.mode, 8))
             if resource.mtime_ns is not None:
                 os.utime(source, ns=(resource.mtime_ns, resource.mtime_ns))
-            await machine.upload(source, f"/{resource.path}")
+            target = f"/{resource.path}"
+            await machine.upload(source, target)
+            # Single-file uploads on some backends write bytes only; restore the
+            # declared metadata inside the guest so every backend receives the
+            # same state. On archive-transfer backends this re-asserts the
+            # values the upload already preserved.
+            restore = []
+            if resource.mode is not None:
+                restore.append(f"chmod {int(resource.mode, 8):o} {shlex.quote(target)}")
+            if resource.mtime_ns is not None:
+                seconds, nanoseconds = divmod(resource.mtime_ns, 1_000_000_000)
+                restore.append(f"touch -d @{seconds}.{nanoseconds:09d} {shlex.quote(target)}")
+            if restore:
+                await machine.run(Command(("sh", "-c", " && ".join(restore)), user="0"))
 
 
 def _machine_spec(

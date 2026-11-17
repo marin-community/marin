@@ -233,6 +233,12 @@ def _runtime_cell(backend: str, requirement: Requirement) -> RuntimeSupport:
                 "Archive/copy transfer restores timestamps at archive precision; "
                 "a live probe must grade the precision the demand needs.",
             )
+        if backend in {"daytona", "iris"}:
+            return RuntimeSupport(
+                Support.VERIFY,
+                path + ":upload",
+                "Upload now restores the declared mtime via a guest touch; a live probe must grade it.",
+            )
         return RuntimeSupport(
             Support.UNSUPPORTED,
             path + ":upload",
@@ -240,7 +246,9 @@ def _runtime_cell(backend: str, requirement: Requirement) -> RuntimeSupport:
         )
     if requirement == Requirement.FILE_MODE and backend == "iris":
         return RuntimeSupport(
-            Support.UNSUPPORTED, path + ":IrisMachine.upload", "Single-file upload does not restore permission bits."
+            Support.VERIFY,
+            path + ":IrisMachine.upload",
+            "Upload now restores declared permission bits via a guest chmod; a live probe must grade it.",
         )
     if requirement == Requirement.USER:
         if backend in {"qemu", "shellsim"}:
