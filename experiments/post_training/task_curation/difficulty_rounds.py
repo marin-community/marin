@@ -382,8 +382,15 @@ def seal_status(output_root: str, job_id: str | None = None) -> dict[str, Any]:
 def fetch_declarations(applet_id: str) -> dict[str, dict[str, Any]]:
     """The served catalog's declaration map from the Atlas app's current load."""
     applet_table = f"applet_{applet_id.replace('-', '')}"
+    # The full declarations exceed the Marina SQL response limit; the coverage
+    # classifier reads these five fields, so fetch exactly them.
     sql = (
-        f"SELECT id, declaration FROM {applet_table}.atlas_sources "
+        f"SELECT id, jsonb_build_object("
+        f"'id', declaration->'id', 'status', declaration->'status', "
+        f"'current_release', declaration->'current_release', "
+        f"'pipeline', declaration->'pipeline', "
+        f"'actor_census_input', declaration->'actor_census_input') AS declaration "
+        f"FROM {applet_table}.atlas_sources "
         f"WHERE load_id=(SELECT load_id FROM {applet_table}.atlas_current)"
     )
     raw = subprocess.run(
