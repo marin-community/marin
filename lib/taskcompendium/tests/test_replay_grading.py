@@ -147,7 +147,6 @@ Path('outputs').mkdir()
 Path('outputs/first.txt').write_text(Path('input.txt').read_text())
 Path('outputs/second.txt').write_text('43')
 """
-    # Round-trip the task through the public wire format before executing both stages.
     task = TaskSpec.model_validate_json(replay_task.model_dump_json())
     result, machines = run_program(tmp_path, task, program)
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result
