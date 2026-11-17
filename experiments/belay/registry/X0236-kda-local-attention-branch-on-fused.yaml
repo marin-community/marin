@@ -4,7 +4,7 @@ name: KDA local attention branch on fused FA4 path
 category: Linear attention / KDA
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6944916989
@@ -28,6 +28,13 @@ trials:
     kda_local_attn_fused_window: '64'
   commit: a33a14c494
   priority: batch
+  loss:
+  - 3.0401
+  delta:
+  - -0.0048
+  steps: 3030
+  baseline: belay-X0236-control 3.0450 (same commit, seed 0)
+  step_time_change: +10%
 potential:
   score: 5
   rationale: 'No result yet: seed0 variant crashed at compile (fused_heads reshape sharding); repair blocked on gate bug'
