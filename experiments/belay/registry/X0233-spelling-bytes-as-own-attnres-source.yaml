@@ -1,0 +1,12 @@
+id: X0233
+slug: spelling-bytes-as-own-attnres-source
+name: Spelling bytes as own AttnRes source
+category: Embeddings and inputs
+summary: 'Track: speedrun'
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6940571647
+  author: armorfaye
+  approved_by: ClassicLarry
