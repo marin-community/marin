@@ -85,8 +85,11 @@ def backend_schema_sha256() -> str:
 class FitSupport(StrEnum):
     """Fit outcomes for one role (or one task) on one backend.
 
-    The first three carry the capability verdict for roles the backend can host.
-    The last two are applicability outcomes, not failures: ``not_applicable``
+    ``supported``, ``verify`` and ``partial`` carry the capability verdict for
+    roles the backend can host: ``verify`` marks demands the offline survey
+    cannot observe — a live qualification on the real backend must resolve
+    them, and admission gates wait on that evidence instead of blocking. The
+    last two are applicability outcomes, not failures: ``not_applicable``
     marks a backend that is not a candidate for the role's environment kind
     (a HostImage grader environment has no image-based candidate), and
     ``role_absent`` marks a population that declares no environment for the
@@ -94,6 +97,7 @@ class FitSupport(StrEnum):
     """
 
     SUPPORTED = "supported"
+    VERIFY = "verify"
     PARTIAL = "partial"
     UNSUPPORTED = "unsupported"
     NOT_APPLICABLE = "not_applicable"

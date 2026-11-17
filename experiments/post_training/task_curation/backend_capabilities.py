@@ -42,8 +42,8 @@ from taskcompendium.models import EnvironmentRequirements
 from experiments.post_training.task_curation.catalog_identity import canonical_backend_survey, canonical_snapshot_source
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
-SUPPORT_ORDER = (Support.SUPPORTED, Support.PARTIAL, Support.UNSUPPORTED)
-APPLICABLE_ORDER = (FitSupport.SUPPORTED, FitSupport.PARTIAL, FitSupport.UNSUPPORTED)
+SUPPORT_ORDER = (Support.SUPPORTED, Support.VERIFY, Support.PARTIAL, Support.UNSUPPORTED)
+APPLICABLE_ORDER = (FitSupport.SUPPORTED, FitSupport.VERIFY, FitSupport.PARTIAL, FitSupport.UNSUPPORTED)
 RESOURCE_FIELDS = ("cpus", "memory_mb", "storage_mb", "gpus")
 
 
@@ -269,7 +269,10 @@ def source_map(
                     spec = replace(spec, memory_mb=None)
                 status = combined_support(cells[backend, need].support for need in demands[role])
                 for need in demands[role]:
-                    if cells[backend, need].support != Support.SUPPORTED:
+                    # VERIFY demands are pending live evidence, not failures; the
+                    # role's fit carries the VERIFY verdict and admission gates
+                    # wait on the live qualification instead of blocking here.
+                    if cells[backend, need].support not in {Support.SUPPORTED, Support.VERIFY}:
                         blockers[backend][f"{role}:{need.value}"] += 1
                 try:
                     check(requirements, spec)

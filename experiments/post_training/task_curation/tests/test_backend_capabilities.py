@@ -113,10 +113,10 @@ def test_lock_grader_storage_has_no_backend_and_quota_removal_preserves_mixed_de
     assert before.role_backend_assignments == {"agent": {"daytona": 1}, "grader": {"local": 1}}
     document["runtime"]["verifier_machine"]["storage_mb"] = None
     after = source_map("cohort-v2", [document], matrix, checkers, {}, defaults)
-    assert after.backends["local"].roles["grader"] == {Support.PARTIAL: 1}
-    assert after.backends["docker"].roles["agent"] == {Support.PARTIAL: 1}
+    assert after.backends["local"].roles["grader"] == {Support.VERIFY: 1}
+    assert after.backends["docker"].roles["agent"] == {Support.VERIFY: 1}
     assert after.backends["docker"].roles["grader"] == {FitSupport.NOT_APPLICABLE: 1}
-    assert after.backends["docker"].task_counts == {Support.PARTIAL: 1}
+    assert after.backends["docker"].task_counts == {Support.VERIFY: 1}
     assert after.backends["local"].roles["agent"] == {Support.UNSUPPORTED: 1}
 
 
@@ -239,9 +239,8 @@ def test_local_resource_cells_reflect_the_survey_evidence():
     verified = production_matrix(_verified_local_checkers())
     for requirement in (Requirement.CPUS, Requirement.MEMORY, Requirement.STORAGE):
         base = next(cell for cell in unverified if cell.backend == "local" and cell.requirement == requirement)
-        # without a pool the storage probe rejects outright; cpu/memory stay tolerated-partial
-        expected_base = Support.UNSUPPORTED if requirement == Requirement.STORAGE else Support.PARTIAL
-        assert base.support == expected_base, requirement
+        # without verified worker machinery the cells wait for a live probe
+        assert base.support == Support.VERIFY, requirement
         upgraded = next(cell for cell in verified if cell.backend == "local" and cell.requirement == requirement)
         assert upgraded.support == Support.SUPPORTED, requirement
         assert "verified on this worker" in upgraded.note, requirement
@@ -261,7 +260,8 @@ def test_local_orchestrated_requirements_carry_production_evidence():
         assert cell.support == Support.SUPPORTED, requirement
         assert any("_prepare_machine" in path or "taskcompendium" in path for path in cell.evidence), requirement
     docker_setup = next(cell for cell in matrix if cell.backend == "docker" and cell.requirement == Requirement.SETUP)
-    assert docker_setup.support == Support.PARTIAL
+    # the offline survey cannot probe setup on the real image; a live probe grades it
+    assert docker_setup.support == Support.VERIFY
 
 
 def test_pdb_shaped_grader_fits_local_with_verified_enforcement_machinery():
@@ -642,7 +642,8 @@ def test_production_matrix_records_local_runtime_and_startup_evidence():
     cells = {(cell.backend, cell.requirement): cell for cell in production_matrix(checkers)}
     for requirement in (Requirement.FILE_UPLOAD, Requirement.COMMAND_TIMEOUT):
         assert cells["local", requirement].support == Support.SUPPORTED
-        assert cells["docker", requirement].support == Support.PARTIAL
+        # the offline survey cannot execute a runtime probe on docker; a live probe grades it
+        assert cells["docker", requirement].support == Support.VERIFY
     for backend in ("docker", "local"):
         # The validator accepted the probe, so its measured PARTIAL downgrade is replaced.
         assert cells[backend, Requirement.STARTUP_TIMEOUT].support == Support.SUPPORTED, backend
@@ -710,4 +711,4 @@ def test_runtime_column_applies_published_runtime_allocations(tmp_path):
     assert measured.task_count == 1
     assert measured.resource_ranges["agent"]["storage_mb"] == (10240, 10240)
     assert measured.demands["agent"][Requirement.STORAGE] == 1
-    assert measured.backends["docker"].task_counts == {Support.PARTIAL: 1}
+    assert measured.backends["docker"].task_counts == {Support.VERIFY: 1}

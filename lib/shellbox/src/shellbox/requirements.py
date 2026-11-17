@@ -58,6 +58,7 @@ class Requirement(StrEnum):
 
 class Support(StrEnum):
     SUPPORTED = "supported"
+    VERIFY = "verify"
     PARTIAL = "partial"
     UNSUPPORTED = "unsupported"
 

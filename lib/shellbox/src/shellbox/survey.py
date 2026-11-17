@@ -228,9 +228,10 @@ def _runtime_cell(backend: str, requirement: Requirement) -> RuntimeSupport:
     if requirement == Requirement.FILE_MTIME:
         if backend in {"local", "docker", "gvisor"}:
             return RuntimeSupport(
-                Support.PARTIAL,
+                Support.VERIFY,
                 path + ":upload",
-                "Archive/copy transfer preserves timestamp at archive precision; nanoseconds are not guaranteed.",
+                "Archive/copy transfer restores timestamps at archive precision; "
+                "a live probe must grade the precision the demand needs.",
             )
         return RuntimeSupport(
             Support.UNSUPPORTED,
@@ -253,26 +254,27 @@ def _runtime_cell(backend: str, requirement: Requirement) -> RuntimeSupport:
         )
     if requirement in {Requirement.TOOL_PROVIDERS, Requirement.SERVICES, Requirement.HEALTHCHECK, Requirement.SKILLS}:
         return RuntimeSupport(
-            Support.PARTIAL,
+            Support.VERIFY,
             "vendor/harbor/src/harbor/environments/base.py",
-            "Adapter-owned orchestration; not guaranteed by a Shellbox factory check.",
+            "Adapter-owned orchestration; a live probe on the real backend must grade it.",
         )
     if requirement == Requirement.SETUP:
         return RuntimeSupport(
-            Support.PARTIAL,
+            Support.VERIFY,
             "lib/shellbox/src/shellbox/machine.py:Machine.run",
-            "Setup commands require caller orchestration and an execution environment that supports the commands.",
+            "Production orchestration runs declared setup commands; whether the image supports each needs a live probe.",
         )
     if requirement == Requirement.CLEANUP_TIMEOUT:
         return RuntimeSupport(
-            Support.PARTIAL,
+            Support.VERIFY,
             "lib/shellbox/src/shellbox/machine.py:Machine.close",
-            "Cleanup limits require caller orchestration; the machine close contract has no timeout parameter.",
+            "Production orchestration bounds cleanup independently of factory creation; live verification pending.",
         )
     return RuntimeSupport(
-        Support.PARTIAL,
+        Support.VERIFY,
         path,
-        "Implemented by the command/transfer path; factory acceptance does not execute a runtime probe.",
+        "Implemented by the command/transfer path; factory acceptance does not "
+        "execute a runtime probe, so a live probe must grade it.",
     )
 
 
@@ -301,6 +303,16 @@ def survey_backend(backend: str, check: Checker) -> list[CapabilityCell]:
             check(requirements, spec)
         except UnsupportedMachineSpec as error:
             support, note = Support.UNSUPPORTED, str(error)
+            if backend == "local" and requirement in {
+                Requirement.CPUS,
+                Requirement.MEMORY,
+                Requirement.STORAGE,
+            }:
+                # the LOCAL machinery exists in code; this worker just lacks the
+                # delegation or disk pool, so a live probe on a capable worker
+                # must grade the cell instead of a hard unsupported
+                support = Support.VERIFY
+                note += " This worker lacks the enforcement machinery; a live probe on a capable worker grades it."
             if backend == "qemu" and requirement in {
                 Requirement.DOCKER_IMAGE,
                 Requirement.DOCKER_BUILD,
@@ -314,8 +326,11 @@ def survey_backend(backend: str, check: Checker) -> list[CapabilityCell]:
                 "Generated probe accepted by the production validator; no machine acquired.",
             )
             if requirement in {Requirement.CPUS, Requirement.MEMORY, Requirement.STORAGE, Requirement.GPUS}:
-                support = Support.PARTIAL
-                note += " Numeric probe is not a capacity or enforcement measurement."
+                support = Support.VERIFY
+                note += (
+                    " The numeric probe is not a capacity or enforcement measurement;"
+                    " a live probe on the real backend must grade it."
+                )
                 if backend == "iris" and requirement is Requirement.STORAGE:
                     note += (
                         " Enforcement requires one sandbox per task and a direct Kubernetes controller "
@@ -323,17 +338,22 @@ def survey_backend(backend: str, check: Checker) -> list[CapabilityCell]:
                         "current controllers withhold that capability pending a real SANDBOX overflow."
                     )
                 if backend == "docker" or backend == "gvisor":
-                    note += " Disk quotas require a compatible Docker storage driver; GPUs require host/runtime support."
+                    note += " Disk quotas depend on the host storage driver."
                 if backend == "local":
-                    note += " CPU/memory enforcement depends on delegated cgroups; rolloutengine omits local memory."
-                    if requirement == Requirement.STORAGE:
-                        note += " Storage requires an active LocalDiskPool verified on this worker host."
+                    note += (
+                        " LOCAL memory/cpu enforcement is verified per worker when a delegated cgroup hierarchy "
+                        "applies and reads back the demanded limits (see local_resource_evidence); otherwise a "
+                        "live probe must grade it."
+                    )
             if requirement == Requirement.STARTUP_TIMEOUT and backend != "daytona":
-                support = Support.PARTIAL
-                note += " Factory ignores this field; rolloutengine supplies the outer startup deadline."
+                support = Support.VERIFY
+                note += (
+                    " Factory ignores this field; rolloutengine supplies the outer"
+                    " startup deadline and a live probe must grade it."
+                )
             if backend == "iris" and requirement in {Requirement.NETWORK_DENY, Requirement.NETWORK_ALLOW}:
-                support = Support.PARTIAL
-                note += " Iris deny permits DNS on Kubernetes; allow permits public internet only."
+                support = Support.VERIFY
+                note += " Iris deny permits DNS on Kubernetes; live egress and DNS probes must grade it."
         cells.append(
             CapabilityCell(backend=backend, requirement=requirement, support=support, evidence=(evidence,), note=note)
         )
