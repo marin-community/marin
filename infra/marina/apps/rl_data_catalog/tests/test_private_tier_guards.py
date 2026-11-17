@@ -118,7 +118,22 @@ def test_private_declaration_projection_keeps_receipts_and_drops_prose():
 def test_private_declaration_projection_drops_unlisted_prose_fields():
     declaration = restricted_declaration()
     declaration["recipe_qa_history"] = {"campaign": "https://example.test", "prose": f"quotes {PRIVATE_CANARY}"}
-    assert "recipe_qa_history" not in private_declaration_projection(declaration)
+    declaration["quality_result"] = {"issues": [f"Reviewer saw {PRIVATE_CANARY}"], "repair_recommendation": PRIVATE_CANARY}
+    declaration["integrity_contracts"] = {
+        "groups": [],
+        "distinct_groups": 0,
+        "absent_contract_tasks": 0,
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "example": {"task_id": "one", "contract_json": f"contract quoting {PRIVATE_CANARY}"},
+    }
+    declaration["converted_examples"] = {"failure_reason": f"quotes {PRIVATE_CANARY}"}
+    served = private_declaration_projection(declaration)
+    assert "recipe_qa_history" not in served
+    assert "quality_result" not in served
+    assert "integrity_contracts" not in served
+    assert "converted_examples" not in served
+    assert PRIVATE_CANARY not in json.dumps(served)
 
 
 def test_repair_advisory_reasons_are_redacted():

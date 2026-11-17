@@ -68,6 +68,8 @@ from infra.marina.apps.rl_data_catalog.server.restrictions import (
     restriction_overrides,
 )
 from infra.marina.apps.rl_data_catalog.tests.private_tier_fixtures import (
+    FIXTURE_DATASET,
+    FIXTURE_REVISION,
     OPEN_SOURCE_ID,
     PRIVATE_CANARY,
     PRIVATE_SOURCE_ID,
@@ -246,10 +248,44 @@ class CatalogServices:
 def stage_private_catalog(root: str, snapshot_id: str = "private-tier-1") -> dict[str, str]:
     """Stage one catalog with a PRIVATE_ALWAYS and an open synthetic source; return pipeline keys."""
     private_notes = f"Vendor provenance notes quoting {PRIVATE_CANARY}"
+    private_declaration = restricted_declaration(
+        PRIVATE_SOURCE_ID, DataRestriction.PRIVATE_ALWAYS, notes=private_notes
+    )
+    # Reviewer prose, a task-contract example and a conversion failure reason, each
+    # quoting the canary: the served projection must drop them all.
+    private_declaration["quality_result"] = {
+        "reviewed": 3,
+        "issue_count": 1,
+        "issues": [f"Reviewer noted {PRIVATE_CANARY} in the prompt"],
+        "repair_recommendation": f"Drop the task quoting {PRIVATE_CANARY}",
+        "verdict": "some_issues",
+    }
+    private_declaration["integrity_contracts"] = {
+        "groups": [],
+        "distinct_groups": 0,
+        "absent_contract_tasks": 0,
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "example": {"task_id": "one", "contract_json": f"contract quoting {PRIVATE_CANARY}"},
+        "evidence_url": "https://example.test/integrity",
+        "dataset_id": FIXTURE_DATASET,
+        "dataset_revision": FIXTURE_REVISION,
+        "task_specs_sha256": "d" * 64,
+    }
+    private_declaration["converted_examples"] = {
+        "count": 3,
+        "input_rows": 3,
+        "rejections": {},
+        "admission_rejections": {},
+        "source_dataset_id": FIXTURE_DATASET,
+        "source_revision": FIXTURE_REVISION,
+        "converter_revision": "1",
+        "converter_version": "1",
+        "evidence_url": "https://example.test/conversion",
+        "failure_reason": f"Rejected rows quote {PRIVATE_CANARY}",
+    }
     declarations = {
-        PRIVATE_SOURCE_ID: restricted_declaration(
-            PRIVATE_SOURCE_ID, DataRestriction.PRIVATE_ALWAYS, notes=private_notes
-        ),
+        PRIVATE_SOURCE_ID: private_declaration,
         OPEN_SOURCE_ID: restricted_declaration(OPEN_SOURCE_ID, DataRestriction.OPEN, notes=OPEN_NOTES),
     }
     private_packet = {"task": {"prompt": private_canary_text("prompt")}}

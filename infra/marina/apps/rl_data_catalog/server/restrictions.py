@@ -182,7 +182,6 @@ PRIVATE_DECLARATION_FIELDS = frozenset(
         "daytona_unsafe_counts",
         "oracle_validation",
         "oversight",
-        "quality_result",
         "quality_result_finalization",
         "quality_result_waiver",
         "derived_agentic",
@@ -196,19 +195,19 @@ PRIVATE_DECLARATION_FIELDS = frozenset(
         "judge_no_reference_count",
         "grading_environment",
         "actor_census_input",
-        "converted_examples",
         "oracle_filtration",
         "no_oracle_executability_policy",
         "no_oracle_static_retention",
         "lexical_contamination",
         "within_source_dedup",
-        "integrity_contracts",
         "exclusion_claims",
         "updated_at",
     }
 )
 """Declaration fields a PRIVATE_ALWAYS source may still serve: identity, counts,
-statuses, hashes and receipts. Everything else (free text and prose) is dropped."""
+statuses, hashes and receipts. Everything else is dropped, including free-text
+evidence (quality_result issues and repair recommendations, integrity contract
+examples, converted-example failure reasons) that could quote its content."""
 
 
 def private_declaration_projection(declaration: dict[str, Any]) -> dict[str, Any]:
