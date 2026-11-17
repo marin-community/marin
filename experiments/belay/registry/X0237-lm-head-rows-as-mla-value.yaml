@@ -4,7 +4,7 @@ name: lm_head rows as MLA value embeddings
 category: Embeddings and inputs
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6957482861
@@ -26,3 +26,10 @@ trials:
     lm_head_value_embeds: 'true'
   commit: 48cec74348
   priority: batch
+  loss:
+  - 3.037
+  delta:
+  - -0.0104
+  steps: 3030
+  baseline: belay-X0237-control 3.0474 (same commit, seed 0)
+  step_time_change: +1%
