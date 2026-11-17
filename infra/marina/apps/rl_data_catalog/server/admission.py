@@ -33,6 +33,13 @@ MISSING_GRADER_REASON = "No executable grader is declared"
 # the packaged runtime has no taskcompendium.
 RUNNABLE_FIT = frozenset({"supported", "partial"})
 
+# Deployment classes mirrored from shellbox.machine.BACKEND_DEPLOYMENT (marina
+# does not depend on shellbox at runtime). Surveys carry their own
+# deployment_classes map when the producing code defines one; unknown backends
+# fall back to these defaults.
+PRODUCTION_BACKENDS_DEFAULT = frozenset({"iris", "daytona", "local"})
+DEV_ONLY_BACKENDS_DEFAULT = frozenset({"docker", "docker-gvisor", "qemu", "shellsim"})
+
 
 def population_admission_blocker(
     binding: ActorCensusInput | None, retained_tasks: int, grading: GradingEnvironmentEvidence | None
@@ -55,26 +62,43 @@ def population_admission_blocker(
     return None
 
 
-def backend_support_blocker(verdicts: Mapping[str, str], status: str | None) -> str | None:
-    """Require one surveyed backend that can run the source before it is Available.
+def backend_support_blocker(
+    verdicts: Mapping[str, str],
+    status: str | None,
+    deployment_classes: Mapping[str, str] | None = None,
+) -> str | None:
+    """Require one surveyed PRODUCTION backend that can run the source before it is Available.
 
     ``verdicts`` maps backend name to the survey's aggregate support label for
-    one source. ``None`` for every non-Available status: exclusion and hold
-    statuses never need a runnable backend, and a survey row measured before
-    this check may keep its historical verdict. ``role_absent`` marks a
-    population that declares no environment for a role at all, so a source
-    whose every backend cell is ``role_absent`` needs no backend: that
-    applicability outcome keeps its N/A label instead of becoming a failure.
-    ``not_applicable`` and ``unsupported`` are real verdicts on declared roles
-    and still block.
+    one source. ``deployment_classes`` is the survey's per-backend production /
+    dev-only map; when absent or partial, the mirrored defaults apply. Dev-only
+    backends (local Docker, Docker+runsc) are dropped before the runnable check:
+    a DEV_ONLY SUPPORTED cell can never satisfy admission. ``None`` for every
+    non-Available status: exclusion and hold statuses never need a runnable
+    backend, and a survey row measured before this check may keep its historical
+    verdict. ``role_absent`` marks a population that declares no environment for
+    a role at all, so a source whose every production cell is ``role_absent``
+    needs no backend: that applicability outcome keeps its N/A label instead of
+    becoming a failure. ``not_applicable`` and ``unsupported`` are real verdicts
+    on declared roles and still block.
     """
     if status != "Available":
         return None
-    if any(support in RUNNABLE_FIT for support in verdicts.values()):
+    classes = dict.fromkeys(
+        (*PRODUCTION_BACKENDS_DEFAULT, *DEV_ONLY_BACKENDS_DEFAULT),
+        "dev_only",
+    )
+    classes.update({name: "production" for name in PRODUCTION_BACKENDS_DEFAULT})
+    if deployment_classes:
+        classes.update(deployment_classes)
+    production_verdicts = {
+        name: support for name, support in verdicts.items() if classes.get(name, "dev_only") == "production"
+    }
+    if any(support in RUNNABLE_FIT for support in production_verdicts.values()):
         return None
-    if verdicts and all(support == "role_absent" for support in verdicts.values()):
+    if production_verdicts and all(support == "role_absent" for support in production_verdicts.values()):
         return None
-    return "no surveyed backend can run the source: " + ", ".join(
+    return "no surveyed production backend can run the source: " + ", ".join(
         f"{name}={support}" for name, support in sorted(verdicts.items())
     )
 

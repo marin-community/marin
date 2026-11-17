@@ -372,6 +372,7 @@ def load_catalog(
                 for name, fit in next(row for row in backend_map.sources if row.source_id == source.id).backends.items()
             },
             source.declaration.status,
+            backend_map.deployment_classes,
         ):
             raise ValueError(f"Backend admission blocked: {source.id}: {blocker}")
     if len(sources) != snapshot.source_count:

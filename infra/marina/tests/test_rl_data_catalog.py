@@ -6,6 +6,8 @@ import hashlib
 import importlib
 import json
 import shutil
+import subprocess
+import tomllib
 import uuid
 from collections import Counter
 from collections.abc import Iterator
@@ -2002,7 +2004,27 @@ def test_preview_bundles_current_count_evidence_into_the_served_api(
     count_file.write_text(json.dumps({"version": 1, "sources": [observation]}))
     output = tmp_path / "preview"
     prepare_preview(Path(__file__).resolve().parents[3], output, source_counts=count_file)
+    # the sealed preview ships prebuilt assets and omits build_command: the
+    # release's clean_frontend_build would otherwise rename dist away and the
+    # command would regenerate only fragments over the packaged evidence
+    staged_manifest = tomllib.loads((output / "applet.toml").read_text())
+    assert "build_command" not in staged_manifest
+    assert (output / "dist/index.html").exists()
+    extras = json.loads((output / "dist/measurements/source-status-extras.json").read_text())
+    assert extras["stages"], "the source build must have generated the status extras"
+    provenance = json.loads((output / "dist/bundled-model-provenance.json").read_text())["build_command"]
+    assert provenance["prebuilt"] is True and "omits build_command" in provenance["transformation"]
     package = read_applet_package(package_applet(output))
+    # a real release dry-run must accept the staged package: no build_command
+    # means clean_frontend_build never runs, so the prebuilt dist ships verbatim
+    dry_run = subprocess.run(
+        ["uv", "run", "--no-sync", "marina", "release", str(output), "--dry-run"],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[3],
+        check=False,
+    )
+    assert dry_run.returncode == 0, dry_run.stderr[-2000:] or dry_run.stdout[-2000:]
     applet_id = uuid.uuid4()
     try:
         module, factory_name = load_backend_entrypoint(applet_id, 1, package)

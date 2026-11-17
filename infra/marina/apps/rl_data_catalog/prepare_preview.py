@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import shutil
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -112,10 +113,32 @@ def prepare_preview(
     if output.resolve().is_relative_to(checkout.resolve()):
         raise ValueError("Stage the preview outside the source checkout")
     manifest_text = (source / "applet.toml").read_text()
-    if tomllib.loads(manifest_text)["applet_id"] != PRODUCTION_APP_ID:
+    manifest = tomllib.loads(manifest_text)
+    if manifest["applet_id"] != PRODUCTION_APP_ID:
         raise ValueError("The source manifest does not identify the maintained Atlas")
+    original_build_command = manifest.get("build_command")
+    # Run the source build (static assets + generated extras) from the frozen
+    # checkout: the release renames the whole dist away when a build_command is
+    # present, so the staged package must ship prebuilt assets and omit the
+    # command instead of regenerating only fragments.
+    frozen_checkout = checkout.resolve()
+    app_dir = frozen_checkout / APP_SOURCE
+    # marina runs build commands from the app directory, so the command's own
+    # `cd` to the repo root resolves the same way in the frozen checkout
+    prebuild = subprocess.run(original_build_command, shell=True, cwd=app_dir, capture_output=True, check=False)
+    if prebuild.returncode != 0:
+        raise RuntimeError(
+            "The source build command failed while staging the preview: "
+            + prebuild.stderr.decode(errors="replace")[-2000:]
+        )
     shutil.copytree(source, output, ignore=shutil.ignore_patterns("__pycache__", "tests"))
-    (output / "applet.toml").write_text(manifest_text.replace(PRODUCTION_APP_ID, PREVIEW_APP_ID))
+    # Omit build_command on the sealed preview: the dist ships prebuilt from the
+    # frozen checkout (the release's clean_frontend_build would otherwise rename
+    # it away and regenerate only fragments). Record the transformation.
+    staged_manifest_text = "\n".join(
+        line for line in manifest_text.splitlines() if not line.startswith("build_command = ")
+    )
+    (output / "applet.toml").write_text(staged_manifest_text.replace(PRODUCTION_APP_ID, PREVIEW_APP_ID))
     bundled = output / "server/bundled"
     bundled.mkdir()
     (bundled / "__init__.py").write_text("# Copyright The Marin Authors\n# SPDX-License-Identifier: Apache-2.0\n")
@@ -146,6 +169,15 @@ def prepare_preview(
         "source_revision": git_output(["rev-parse", "HEAD"], checkout),
         "modules": modules,
         "preview_only": True,
+        "build_command": {
+            "original": original_build_command,
+            "prebuilt": True,
+            "transformation": (
+                "The source build ran from the frozen checkout before staging; the sealed"
+                " preview omits build_command so the release ships the prebuilt dist"
+                " instead of regenerating fragments over it."
+            ),
+        },
     }
     if observations is not None:
         payload = (json.dumps(observations, indent=2) + "\n").encode()
