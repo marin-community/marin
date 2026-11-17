@@ -33,6 +33,10 @@
 !lib/shellbox/src
 !lib/rolloutengine/pyproject.toml
 !lib/rolloutengine/src
+!lib/skyrlrecipe/pyproject.toml
+!lib/skyrlrecipe/src
+!lib/evalrecords/pyproject.toml
+!lib/evalrecords/src
 !lib/taskcompendium/pyproject.toml
 !lib/taskcompendium/src
 !lib/verifyit/pyproject.toml

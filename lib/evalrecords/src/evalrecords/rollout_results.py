@@ -12,8 +12,8 @@ from finestore.reader import ReadView
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
 from taskcompendium.evaluation.spec import EvaluationProtocol
 
-from marin.evaluation.records import TaskCoverage
-from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT
+from evalrecords.records import TaskCoverage
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 
 SCORED_OUTCOMES = frozenset({"graded", "submission_failure"})
 

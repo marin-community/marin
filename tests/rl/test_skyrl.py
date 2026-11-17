@@ -41,7 +41,7 @@ from marin.execution.artifact import (
 )
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, materialized_config
 from marin.execution.step_runner import StepRunner
-from marin.execution.step_status import STATUS_SUCCESS, StatusFile
+from marin.execution.step_status import StatusFile
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -74,6 +74,7 @@ from marin.rl.skyrl_records import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
+from rigging.filesystem.step_status import STATUS_SUCCESS
 from skyrlrecipe.locality import RoleTopologyMode
 
 from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model

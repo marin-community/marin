@@ -20,6 +20,7 @@ from scripts.ci.pulumi_rollouts import (
     [
         "lib/finestore/src/finestore/reader.py",
         "lib/marin/src/marin/evaluation/archive.py",
+        "lib/evalrecords/src/evalrecords/records.py",
         "lib/iris/src/iris/rpc/controller_connect.py",
         "lib/finelog/src/finelog/rpc/logs_pb2.py",
         "lib/rigging/src/rigging/filesystem/factory.py",
