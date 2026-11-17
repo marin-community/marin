@@ -52,7 +52,7 @@ from levanter.tracker.histogram import SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
 from experiments.grug.fast_track.cplm import CopyHead, bound_case_tables, plus_nll
-from experiments.grug.fast_track.key_offset import partial_key_offset
+from experiments.grug.fast_track.key_offset import partial_key_offset, previous_token
 from experiments.grug.fast_track.qb_balancing import qb_beta_hist
 from experiments.grug.fast_track.router_metrics import (
     local_routing_stats,
@@ -456,6 +456,11 @@ class GrugModelConfig:
     """Spelling-normalised byte embeddings (``spelling_bytes.py``): each input embedding row adds zero-initialised
     rows for its token's first 8 lowercased, space-stripped UTF-8 bytes, its leading space and its case. Input side
     only; the vocabulary is the hero 16k BPE tokenizer's."""
+    mla_dynamic_kv_conv: bool = False
+    """Dynamic short conv on the global (MLA) layers' K and V (Inkling 2 Small): after the up-projection, each adds
+    ``sum_lag a[t, n, lag] * x[t - lag, n]`` over ``sconv_kernel`` lags (document-masked), with per-token, per-head
+    taps ``a`` a linear map of the attention input (separate zero-initialised maps for K and V, Adam). K keeps its
+    static SConv alongside."""
 
     def __post_init__(self) -> None:
         if self.cplm_plus and self.logit_soft_cap is not None:
@@ -466,6 +471,10 @@ class GrugModelConfig:
             raise ValueError("lm_head_grad_clip needs lm_head_grad_probe and a positive threshold")
         if self.lm_head_grad_clip is not None and self.lm_head_grad_probe_site == GradProbeSite.PRE_NORM:
             raise ValueError("lm_head_grad_clip clips at the post-norm probe site")
+        if self.mla_dynamic_kv_conv and not (self.mla and self.local_mixer == LocalMixer.KDA):
+            raise ValueError(
+                "mla_dynamic_kv_conv needs mla with local_mixer=kda (its softmax layers are the global ones)"
+            )
         if unknown := set(self.sconv_sites) - set(SCONV_SITES):
             raise ValueError(f"sconv_sites must be a subset of {SCONV_SITES}, got {sorted(unknown)}")
         if self.moe_implementation not in MOE_IMPLEMENTATIONS:
@@ -613,6 +622,24 @@ class InklingRelPos(eqx.Module):
         )
 
 
+def dynamic_short_conv(
+    x: Float[Array, "B S N H"],
+    source: Float[Array, "B S D"],
+    generator: Float[Array, "D NW"],
+    segment_ids: Int[Array, "B S"] | None,
+) -> Float[Array, "B S N H"]:
+    """Causal per-head conv with per-token taps ``a = source @ generator`` (``[B, S, N, W]``):
+    ``out[t, n] = sum_lag a[t, n, lag] * x[t - lag, n]``; a lag reaching into an earlier document contributes 0."""
+    taps = _proj(source, generator.astype(source.dtype))
+    taps = rearrange(taps, "... (n w) -> ... n w", n=x.shape[2]).astype(x.dtype)
+    out = taps[..., :1] * x
+    shifted = x
+    for lag in range(1, taps.shape[-1]):
+        shifted = previous_token(shifted, segment_ids)
+        out = out + taps[..., lag : lag + 1] * shifted
+    return out
+
+
 def _log_head_gate_off(head_gate: Float[Array, "B S N"], stats: dict[str, jax.Array]) -> None:
     """Log into ``stats`` the fraction of heads whose output gate, normalized to (0, 1), is near off."""
     g = jax.lax.stop_gradient(head_gate.astype(jnp.float32))
@@ -638,6 +665,9 @@ class CausalSelfAttention(eqx.Module):
     ve_lambda: Float[Array, " 2"] | None  # (lambda1 on v, lambda2 on the value embedding)
     ve_gate: Float[Array, "D N"] | None
     qk_mult: Float[Array, ""] | None  # learnable logit scale (cfg.learnable_qk_mult)
+    # cfg.mla_dynamic_kv_conv: per-token, per-head tap generators of the K and V dynamic convs (MLA only).
+    dyn_conv_k: Float[Array, "D NW"] | None
+    dyn_conv_v: Float[Array, "D NW"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -656,6 +686,7 @@ class CausalSelfAttention(eqx.Module):
             k_q, k_dkv, k_uk, k_uv, k_o, k_rel, k_ve = random.split(key, 7)
             kvl = cfg.mla_kv_latent_dim
             use_ve = cfg.value_embeds != ValueEmbeds.NONE
+            dyn_conv = reshard(jnp.zeros((d, n * cfg.sconv_kernel)), P(None, None)) if cfg.mla_dynamic_kv_conv else None
             return CausalSelfAttention(
                 w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
                 w_k=None,
@@ -674,6 +705,8 @@ class CausalSelfAttention(eqx.Module):
                 ve_lambda=_ve_lambda_init(cfg.value_embeds),
                 ve_gate=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.value_embeds in _GATED_VALUE_EMBEDS else None,
                 qk_mult=_qk_mult_init(cfg),
+                dyn_conv_k=dyn_conv,
+                dyn_conv_v=dyn_conv,
                 cfg=cfg,
             )
         # Eight keys (three unused) so every initial weight matches the runs before the cleanup.
@@ -694,6 +727,8 @@ class CausalSelfAttention(eqx.Module):
             ve_lambda=None,
             ve_gate=None,
             qk_mult=_qk_mult_init(cfg),
+            dyn_conv_k=None,
+            dyn_conv_v=None,
             cfg=cfg,
         )
 
@@ -709,14 +744,19 @@ class CausalSelfAttention(eqx.Module):
         assert self.w_dkv is not None and self.kv_latent_norm is not None
         assert self.w_uk is not None and self.w_uv is not None
         head_dim = self.cfg.inferred_head_dim
-        latent = _proj(x if kv_input is None else kv_input, self.w_dkv)
+        kv_source = x if kv_input is None else kv_input
+        latent = _proj(kv_source, self.w_dkv)
         q = rearrange(_proj(x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         kv_latent = self.kv_latent_norm(latent)
-        k_flat = _proj(kv_latent, self.w_uk)
-        if self.sconv_k is not None:
-            k_flat = self.sconv_k(k_flat, sconv_segment_ids)
+        k_up = _proj(kv_latent, self.w_uk)
+        k_flat = k_up if self.sconv_k is None else self.sconv_k(k_up, sconv_segment_ids)
         k = rearrange(k_flat, "... (n d) -> ... n d", d=head_dim)
         v = rearrange(_proj(kv_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
+        if self.dyn_conv_k is not None:
+            assert self.dyn_conv_v is not None
+            k_heads = rearrange(k_up, "... (n d) -> ... n d", d=head_dim)
+            k = k + dynamic_short_conv(k_heads, kv_source, self.dyn_conv_k, sconv_segment_ids)
+            v = v + dynamic_short_conv(v, kv_source, self.dyn_conv_v, sconv_segment_ids)
         if self.value_embed is not None:
             assert self.ve_lambda is not None and token_ids is not None
             ve = _embedding_gather(self.value_embed.astype(x.dtype), token_ids)
