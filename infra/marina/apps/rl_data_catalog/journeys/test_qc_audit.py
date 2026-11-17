@@ -13,6 +13,8 @@ from marina.db import DatabaseSpec, engine_for
 from marina.journeys import Journey
 from sqlalchemy import text
 
+from infra.marina.apps.rl_data_catalog.server.app import migrate
+
 APP_ID = UUID("fb11c931-5861-4878-8bb5-a964d652b45f")
 SOURCE = "Marin:sample-content"
 KEY = "qc-audit"
@@ -82,6 +84,8 @@ def qc_catalog(marina_kernel, marina_database: DatabaseSpec) -> Iterator[None]:
                 {"key": KEY, "task": task_id, "packet": json.dumps(packet)},
             )
     try:
+        with engine.begin() as connection:
+            migrate(connection)
         yield
     finally:
         with engine.begin() as connection:

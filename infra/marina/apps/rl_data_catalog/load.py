@@ -58,6 +58,7 @@ from infra.marina.apps.rl_data_catalog.server.admission import (
     require_content_result,
     require_declaration_admission,
 )
+from infra.marina.apps.rl_data_catalog.server.cohort_summaries import materialize_cohort_summaries
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
 from infra.marina.apps.rl_data_catalog.server.quality import Quality, quality_display, review_completeness
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
@@ -320,6 +321,7 @@ def load_catalog(
         raise ValueError("Source identity map belongs to another catalog snapshot")
     identity_id = canonical_sha256(identity_survey_payload(identities))
     survey_id = canonical_sha256(backend_survey_payload(backend_map))
+    ensure_tables(query, ("atlas_cohort_summaries",))
     current = query(
         """
         SELECT c.load_id, l.catalog_root, l.snapshot_id, l.review_completeness_version, l.display_policy,
@@ -345,10 +347,11 @@ def load_catalog(
         REVIEW_COMPLETENESS_VERSION,
         display_policy,
     ):
+        materialize_cohort_summaries(lambda sql, parameters: query(sql, parameters)["rows"], current[0]["load_id"])
         return {"changed": False, "snapshot_id": snapshot.snapshot_id}
     expected_load_id = current[0]["load_id"] if current else None
     load_id = uuid.uuid4().hex
-    requests = 1
+    requests = 2
 
     def execute(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
         nonlocal requests
@@ -587,6 +590,7 @@ def load_catalog(
     if expected_load_id is not None:
         for table, copied in retain_prior_assessments(execute, TABLE_COLUMNS, expected_load_id, load_id).items():
             counts[table] += copied
+    materialize_cohort_summaries(lambda sql, parameters: execute(sql, parameters)["rows"], load_id)
     packet_sizes = execute(
         """
         SELECT COALESCE(SUM(octet_length(packet)), 0) AS packet_bytes,

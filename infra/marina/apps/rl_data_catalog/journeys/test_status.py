@@ -14,6 +14,37 @@ from playwright.sync_api import expect
 APP_ROOT = "a/fb11c931-5861-4878-8bb5-a964d652b45f"
 
 
+def test_all_pages_share_navigation_labels_order_and_current_view(journey: Journey, readability_catalog: None) -> None:
+    page = journey.page
+    page.goto(f"{journey.origin}/{APP_ROOT}/")
+    base = page.url
+    labels = ["Status", "By source", "By curriculum", "Difficulty", "Getting started", "Review archive"]
+    views = [
+        ("", "By source"),
+        ("status.html", "Status"),
+        ("curriculum.html", "By curriculum"),
+        ("difficulty.html", "Difficulty"),
+        ("guide.html", "Getting started"),
+        ("archive.html", "Review archive"),
+        ("source.html#source_id=Marin%3Aclean", "By source"),
+        ("backends.html#source_id=Marin%3Aclean", "By source"),
+        ("assessment.html?source=Marin%3Aclean", "By source"),
+    ]
+    for path, current in views:
+        page.goto(base + path)
+        navigation = page.get_by_role("navigation", name="Atlas views", exact=True)
+        expect(navigation.get_by_role("link")).to_have_text(labels)
+        expect(navigation.locator('[aria-current="page"]')).to_have_text(current)
+        assert navigation.get_by_role("link").evaluate_all("links => links.map(link => link.getAttribute('href'))") == [
+            "status.html",
+            "./",
+            "curriculum.html",
+            "difficulty.html",
+            "guide.html",
+            "archive.html",
+        ]
+
+
 def extras() -> dict:
     return json.loads((Path(__file__).parents[1] / "dist/measurements/source-status-extras.json").read_text())
 

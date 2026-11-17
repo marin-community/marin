@@ -15,6 +15,7 @@ from sqlalchemy.engine import Connection
 from taskcompendium.source_fingerprints import DuplicateReview
 
 from .audit import register_audit_routes
+from .cohort_summaries import COHORT_SUMMARY_VERSION, materialize_cohort_summaries
 from .contamination import contamination
 from .count_evidence import SOURCE_COUNTS
 from .curriculum import register_curriculum_routes, source_coverage
@@ -62,6 +63,14 @@ def migrate(connection: Connection) -> None:
     """
         )
     )
+
+    def rows(sql: str, parameters: dict[str, Any]) -> list[dict[str, Any]]:
+        result = connection.execute(text(sql), parameters)
+        return [dict(row) for row in result.mappings()] if result.returns_rows else []
+
+    selected = connection.execute(text("SELECT load_id FROM atlas_current WHERE name='latest'")).scalar_one_or_none()
+    if selected is not None:
+        materialize_cohort_summaries(rows, selected)
     connection.execute(
         text(
             """
@@ -174,7 +183,7 @@ def cohort_summaries(connection: Connection, load_id: str, pipeline_key: str) ->
         connection.execute(
             text(
                 """
-            SELECT cohort, (to_jsonb(s) - 'load_id' - 'pipeline_key' - 'cohort') ||
+            SELECT cohort, s.summary ||
                 jsonb_build_object('examples', (
                     SELECT COALESCE(jsonb_agg(to_jsonb(example)), '[]'::jsonb) FROM (
                         SELECT task_id, verdict, explanation, evidence_ids FROM atlas_items i
@@ -183,10 +192,11 @@ def cohort_summaries(connection: Connection, load_id: str, pipeline_key: str) ->
                         ORDER BY task_id LIMIT 5
                     ) example
                 )) AS summary
-        FROM atlas_cohort_summary s WHERE load_id = :load_id AND pipeline_key = :pipeline_key
+        FROM atlas_cohort_summaries s
+        WHERE load_id = :load_id AND pipeline_key = :pipeline_key AND version = :version
     """
             ),
-            {"load_id": load_id, "pipeline_key": pipeline_key},
+            {"load_id": load_id, "pipeline_key": pipeline_key, "version": COHORT_SUMMARY_VERSION},
         )
         .tuples()
         .all()
@@ -293,6 +303,37 @@ def create_api(services: AppletServices) -> FastAPI:
             labels = [{**row, "id": canonical_source_id(row["id"])} for row in rows]
         return {"sources": labels, "snapshot_id": metadata["snapshot_id"]}
 
+    @api.get("/source-statuses")
+    def source_statuses() -> dict[str, Any]:
+        """Serve status-page fields without loading review, backend or difficulty evidence."""
+        with engine.connect() as connection:
+            metadata = loaded_catalog(connection)
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT id,jsonb_build_object(
+                        'id',id,'display_name',declaration->'display_name','name',declaration->'name',
+                        'status',declaration->'status','stage',declaration->'stage',
+                        'exclusion_claims',declaration->'exclusion_claims','notes',declaration->'notes',
+                        'dataset_id',declaration->'dataset_id','license_receipt',declaration->'license_receipt'
+                    ) AS declaration
+                    FROM atlas_sources WHERE load_id=:load_id ORDER BY id
+                    """
+                ),
+                {"load_id": metadata["load_id"]},
+            ).mappings()
+            sources = []
+            for row in rows:
+                declaration = license_projection(canonical_source_record(dict(row))["declaration"])
+                sources.append(
+                    {
+                        key: declaration.get(key)
+                        for key in ("id", "display_name", "name", "status", "stage", "exclusion_claims", "notes")
+                    }
+                    | {"updated_at": metadata["loaded_at"]}
+                )
+        return {"sources": sources, "snapshot_id": metadata["snapshot_id"], "synced_at": metadata["loaded_at"]}
+
     @api.get("/sources")
     def sources() -> dict[str, Any]:
         with engine.connect() as connection:
@@ -317,27 +358,15 @@ def create_api(services: AppletServices) -> FastAPI:
                     {"load_id": metadata["load_id"]},
                 ).mappings()
             ]
-            # The per-source cohort summaries are fetched one pipeline at a
-            # time: a single global aggregation over the whole load exceeded
-            # the SQL gateway's per-statement timeout once the FULL rows
-            # passed ~438k. Per-pipeline evaluation of the same view returns
-            # the identical rows within the bound.
-            pipeline_keys = sorted({row["assessment_key"] for row in rows if row["assessment_key"]})
             cohorts: dict[str, Any] = {}
-            for key in pipeline_keys:
-                aggregated = connection.execute(
-                    text(
-                        """
-                    SELECT jsonb_object_agg(cohort, to_jsonb(v) - 'load_id' - 'pipeline_key' - 'cohort') AS cohorts
-                    FROM atlas_cohort_summary v
-                    WHERE v.load_id = :load_id AND v.pipeline_key = :pipeline_key
-                    GROUP BY v.load_id, v.pipeline_key
-                    """
-                    ),
-                    {"load_id": metadata["load_id"], "pipeline_key": key},
-                ).first()
-                if aggregated is not None:
-                    cohorts[key] = dict(aggregated._mapping)["cohorts"]
+            for summary in connection.execute(
+                text(
+                    "SELECT pipeline_key,cohort,summary FROM atlas_cohort_summaries "
+                    "WHERE load_id=:load_id AND version=:version"
+                ),
+                {"load_id": metadata["load_id"], "version": COHORT_SUMMARY_VERSION},
+            ).mappings():
+                cohorts.setdefault(summary["pipeline_key"], {})[summary["cohort"]] = summary["summary"]
             for retained_row in rows:
                 retained_row["cohorts"] = cohorts.get(retained_row["assessment_key"])
             groups, overlaps = duplicate_projection(connection, metadata["load_id"], [dict(row) for row in rows])

@@ -29,6 +29,7 @@ from infra.marina.apps.rl_data_catalog.release_browser import (
     curriculum_sweep,
     evidence_sweep,
 )
+from infra.marina.apps.rl_data_catalog.server.app import migrate
 from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -1317,6 +1318,8 @@ def full_review_catalog(marina_kernel, marina_database: DatabaseSpec) -> Iterato
                 },
             )
     try:
+        with engine.begin() as connection:
+            migrate(connection)
         yield
     finally:
         with engine.begin() as connection:

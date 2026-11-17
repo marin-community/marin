@@ -10,6 +10,23 @@ non-blocking receipt. Report its findings to the coordinator; see
 
 Synced to preview revision 21 (2026-11-16).
 
+Every page renders the same navigation from `dist/common.js`: Status, By source,
+By curriculum, Difficulty, Getting started and Review archive. `source.html`,
+`assessment.html` and `backends.html` keep By source active. The installed browser
+journey in `journeys/test_status.py` checks every page's labels, destinations and
+current view.
+
+Catalog loading stores the counts and grades from the `atlas_cohort_summary`
+SQL view in `atlas_cohort_summaries` before making the new catalog snapshot
+current. App migration backfills that current snapshot before serving requests.
+Source and assessment requests read the stored summaries, avoiding repeated
+aggregation over whole-population FULL reviews. Increment
+`COHORT_SUMMARY_VERSION` when changing the view's counting or grading rules;
+loading and migration rebuild summaries with a missing or older version.
+Archived reviews and packets stay unchanged. The Status page requests only
+`api/source-statuses`; that endpoint reads source metadata without task,
+difficulty or backend evidence.
+
 The main table's source cell contains only its source-name button and, where
 needed, the fold toggle. No origin/build subtitle, dataset link, overlap note or
 other secondary text belongs in that cell. Put those details in Evidence or the

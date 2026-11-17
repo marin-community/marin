@@ -248,6 +248,59 @@ def catalog_identity_map(catalog: CurationCatalog) -> SourceIdentitySurvey:
     )
 
 
+def test_status_inventory_matches_source_statuses_without_loading_task_evidence(
+    catalog_database, catalog_query, tmp_path
+):
+    root = str(tmp_path / "status-inventory")
+    publish_sample(root, "status-inventory")
+    load_catalog(CurationCatalog(root), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        complete = client.get("/sources").json()
+        compact = client.get("/source-statuses").json()
+    fields = ("id", "display_name", "name", "status", "stage", "exclusion_claims", "notes", "updated_at")
+    assert compact["sources"] == [{key: source.get(key) for key in fields} for source in complete["sources"]]
+    assert compact["snapshot_id"] == complete["snapshot_id"]
+    assert compact["synced_at"] == complete["synced_at"]
+
+
+@pytest.mark.parametrize("obsolete_summary", [False, True])
+def test_catalog_upgrade_materializes_summaries_and_new_load_refreshes_results(
+    catalog_database, catalog_query, tmp_path, obsolete_summary
+):
+    root = str(tmp_path / "summary-upgrade")
+    publish_sample(root, "first", admitted_verdicts=("good", "good"))
+    first = load_catalog(CurationCatalog(root), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        before = client.get("/sources").json()
+        # Both missing summaries and old counting policies must upgrade before serving.
+        with catalog_database.begin() as connection:
+            if obsolete_summary:
+                connection.execute(
+                    text("UPDATE atlas_cohort_summaries SET version=0,summary=jsonb_set(summary,'{grade}','\"bad\"')")
+                )
+            else:
+                connection.execute(text("DELETE FROM atlas_cohort_summaries"))
+            migrate(connection)
+        assert client.get("/sources").json() == before
+        assert before["sources"][0]["result"] == "GOOD"
+        retained = catalog_query(
+            "SELECT cohort,summary FROM atlas_cohort_summaries WHERE load_id=:load_id ORDER BY cohort",
+            {"load_id": first["load_id"]},
+        )["rows"]
+        assert {row["cohort"] for row in retained} == {"admitted", "excluded"}
+        publish_sample(root, "second", admitted_verdicts=("bad", "bad"))
+        load_catalog(CurationCatalog(root), catalog_query)
+        after = client.get("/sources").json()
+        assert after["snapshot_id"] == "second" and after["sources"][0]["result"] == "BAD"
+        assert (
+            catalog_query(
+                "SELECT cohort,summary FROM atlas_cohort_summaries WHERE load_id=:load_id ORDER BY cohort",
+                {"load_id": first["load_id"]},
+            )["rows"]
+            == retained
+        )
+
+
 def test_filtered_zero_is_visible_without_admission_and_positive_output_still_needs_census(
     catalog_database, catalog_query, tmp_path
 ):

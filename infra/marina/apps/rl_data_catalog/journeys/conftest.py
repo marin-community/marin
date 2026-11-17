@@ -476,6 +476,7 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                     ),
                     row,
                 )
+            migrate(connection)
         yield
     finally:
         engine.dispose()
@@ -539,6 +540,8 @@ def readability_catalog(lexical_catalog: None, marina_database: DatabaseSpec) ->
             )
         )
     try:
+        with engine.begin() as connection:
+            migrate(connection)
         yield
     finally:
         with engine.begin() as connection:

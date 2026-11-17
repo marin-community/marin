@@ -132,7 +132,7 @@ function needsRuling(rows) {
 
 async function load() {
   const [catalog, extras] = await Promise.all([
-    json('api/sources'),
+    json('api/source-statuses'),
     json('measurements/source-status-extras.json'),
   ]);
   state.explanations = extras.reason_explanations || {};

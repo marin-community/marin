@@ -12,6 +12,26 @@ async function json(url) {
   return response.json();
 }
 
+const ATLAS_VIEWS = [
+  {label: 'Status', href: 'status.html', pages: ['status.html']},
+  {label: 'By source', href: './', pages: ['', 'index.html', 'source.html', 'assessment.html', 'backends.html']},
+  {label: 'By curriculum', href: 'curriculum.html', pages: ['curriculum.html']},
+  {label: 'Difficulty', href: 'difficulty.html', pages: ['difficulty.html']},
+  {label: 'Getting started', href: 'guide.html', pages: ['guide.html']},
+  {label: 'Review archive', href: 'archive.html', pages: ['archive.html']},
+];
+
+// Deferred common.js runs before each page's script, with the document parsed.
+for (const navigation of document.querySelectorAll('.atlas-tabs')) {
+  const filename = location.pathname.split('/').pop();
+  navigation.replaceChildren(...ATLAS_VIEWS.map(view => {
+    const link = node('a', view.label);
+    link.href = view.href;
+    if (view.pages.includes(filename)) link.setAttribute('aria-current', 'page');
+    return link;
+  }));
+}
+
 // Every stored assessment row is listed; its full packet loads when opened.
 function taskReviews(sourceId, samples) {
   const section = node('section', undefined, 'task-reviews');

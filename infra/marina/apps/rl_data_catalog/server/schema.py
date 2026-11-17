@@ -117,6 +117,13 @@ CREATE TABLE IF NOT EXISTS atlas_populations (
     population BIGINT NOT NULL, sample_count BIGINT NOT NULL,
     PRIMARY KEY (load_id, pipeline_key, cohort)
 );
+CREATE TABLE IF NOT EXISTS atlas_cohort_summaries (
+    load_id TEXT NOT NULL, pipeline_key TEXT NOT NULL, cohort TEXT NOT NULL,
+    version INTEGER NOT NULL, summary JSONB NOT NULL,
+    PRIMARY KEY (load_id,pipeline_key,cohort),
+    FOREIGN KEY (load_id,pipeline_key,cohort)
+        REFERENCES atlas_populations (load_id,pipeline_key,cohort) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS atlas_items (
     load_id TEXT NOT NULL, pipeline_key TEXT NOT NULL, task_id TEXT NOT NULL,
     cohort TEXT NOT NULL, status TEXT NOT NULL, verdict TEXT NOT NULL,
