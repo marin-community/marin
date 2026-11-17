@@ -89,6 +89,7 @@ from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentity
 from experiments.post_training.task_curation import registry, retirement
 from experiments.post_training.task_curation.catalog_identity import backend_survey_payload, canonical_backend_survey
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
+from experiments.post_training.task_curation.review_quality import quality_result
 from experiments.post_training.task_curation.review_quality import quality_result as recompute_review_result
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
 from experiments.post_training.task_curation.tests.admission_fixtures import (
@@ -102,10 +103,11 @@ from experiments.post_training.task_curation.tests.admission_fixtures import (
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from experiments.post_training.task_curation.tests.license_fixtures import isolated_license_bans as isolated_license_bans
 from infra.marina.apps.rl_data_catalog.confidence import confidence_rows
-from experiments.post_training.task_curation.review_quality import quality_result
-from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
 from infra.marina.apps.rl_data_catalog.load import (
+    CatalogDisplayPolicy,
     full_review_pipeline_key,
+)
+from infra.marina.apps.rl_data_catalog.load import (
     load_catalog as load_surveyed_catalog,
 )
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
@@ -1372,7 +1374,7 @@ def test_source_grade_uses_sample_fractions_and_zero_output(catalog_database, ve
             text(
                 """
                 INSERT INTO atlas_assessments VALUES
-                ('load', 'pipeline', 'source', 'full', '{}'::jsonb, 'rubric',
+                ('load', 'pipeline', 'source', 'sample', '{}'::jsonb, 'rubric',
                  :curation, 'curation-uri', '[]'::jsonb)
             """
             ),
@@ -1493,7 +1495,7 @@ def test_migrate_appends_audit_counts_to_the_retained_cohort_view(database_url: 
                 text(
                     """
                     INSERT INTO atlas_assessments VALUES
-                    ('load', 'pipeline', 'source', 'full', '{}'::jsonb, 'rubric',
+                    ('load', 'pipeline', 'source', 'sample', '{}'::jsonb, 'rubric',
                      :curation, 'curation-uri', '[]'::jsonb)
                     """
                 ),
@@ -2843,7 +2845,9 @@ def test_full_review_rows_load_typed_and_browseable(catalog_database, catalog_qu
     assert len(summary) == 1
     row = summary[0]
     assert row["reviewed"] == FULL_QC_POPULATION - result.unavailable_count
-    assert row["missing_evidence"] == 0
+    # missing_evidence keeps its packet semantics unchanged (FULL rows carry no
+    # packets by design); the conclusive/good counts are the policy fix
+    assert row["missing_evidence"] == FULL_QC_POPULATION
     assert row["result_reviewed"] == policy.reviewed
     assert row["issue_count"] == policy.issue_count
     assert row["grade"] == "bad"
@@ -3156,3 +3160,37 @@ def test_admitted_source_stays_available_when_every_production_backend_is_verify
     row = _source_load_row(catalog_query, result["load_id"], "Marin:admitted")
     assert row["status"] == "Available"
     assert row["backend_verification_pending"] == ["daytona", "iris", "local"]
+
+
+def test_new_source_with_a_runnable_production_backend_stays_available(catalog_database, catalog_query, tmp_path):
+    """A runnable production backend admits a new source regardless of sibling VERIFY cells."""
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "mixed-verify", source_id="Marin:mixed")
+    catalog = CurationCatalog(root)
+    survey = catalog_backend_map(catalog)
+    flipped = survey.model_copy(
+        update={
+            "sources": [
+                (
+                    source.model_copy(
+                        update={
+                            "backends": {
+                                **source.backends,
+                                # one runnable production backend + a VERIFY sibling:
+                                # the runnable backend admits the new source
+                                "daytona": source.backends["daytona"].model_copy(update={"support": Support.VERIFY}),
+                                "local": source.backends["local"].model_copy(update={"support": FitSupport.SUPPORTED}),
+                            }
+                        }
+                    )
+                    if source.source_id == "Marin:mixed"
+                    else source
+                )
+                for source in survey.sources
+            ]
+        }
+    )
+    result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    row = _source_load_row(catalog_query, result["load_id"], "Marin:mixed")
+    assert row["status"] == "Available"
+    assert row["backend_verification_pending"] == ["daytona"]
