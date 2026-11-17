@@ -53,7 +53,8 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
         (tmp_path / f"weights-{current_step}").write_text("checkpoint")
 
     trainer = SimpleNamespace(
-        cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path))), save_checkpoints=save_checkpoints
+        cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path), export_path=str(tmp_path / "exports"))),
+        save_checkpoints=save_checkpoints,
     )
     parameters = dict(
         initial_model_uri="base-model",
@@ -98,3 +99,5 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
     assert selected["accuracy"] == 0.7
     assert selected["preservation_baseline"] == {"preservation": 0.9}
     assert selected["model_format"] == "native"
+    (tmp_path / "best_checkpoint.json").unlink()
+    assert json.loads((tmp_path / "exports/best_checkpoint.json").read_text()) == selected

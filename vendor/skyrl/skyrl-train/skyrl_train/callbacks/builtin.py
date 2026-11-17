@@ -295,7 +295,11 @@ class BestCheckpointCallback(TrainerCallback):
             "save_after_fraction": self.save_after_fraction,
         }
         io.makedirs(root, exist_ok=True)
-        io.write_bytes_atomic(best_path, json.dumps(payload).encode())
+        encoded = json.dumps(payload).encode()
+        io.write_bytes_atomic(best_path, encoded)
+        export_root = trainer.cfg.trainer.export_path
+        io.makedirs(export_root, exist_ok=True)
+        io.write_bytes_atomic(join_resource_path(export_root, BEST_CHECKPOINT_FILENAME), encoded)
         self.best_score = score
         return control
 
@@ -1006,6 +1010,16 @@ class InferenceStatsCallback(TrainerCallback):
                 logger.warning(f"InferenceStatsCallback: {type(sink).__name__} failed", exc_info=True)
 
 
+def _add_inference_stats_callback(cfg: DictConfig, callbacks: List[TrainerCallback]) -> None:
+    interval = getattr(cfg.generator, "inference_stats_interval", 1)
+    if (
+        cfg.generator.backend == "vllm"
+        and interval > 0
+        and not any(isinstance(callback, InferenceStatsCallback) for callback in callbacks)
+    ):
+        callbacks.append(InferenceStatsCallback(log_every_steps=interval))
+
+
 def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
     """
     Create the default set of callbacks based on trainer configuration.
@@ -1061,6 +1075,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
             callbacks.append(LoggingCallback())
         if cfg.trainer.get("mismatch_probe", {}).get("enabled", False):
             callbacks.append(MismatchProbeCallback(cfg))
+        _add_inference_stats_callback(cfg, callbacks)
         return callbacks
 
     # Fall back to legacy interval-based configuration
@@ -1118,18 +1133,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
             )
         )
 
-    # Inference stats callback (enabled when using the vLLM backend). This combines
-    # engine and HTTP bridge stats without relying on Ray log-to-driver forwarding.
-    generator_backend = getattr(cfg.generator, "backend", None)
-    inference_stats_interval = getattr(cfg.generator, "inference_stats_interval", 1)
-    if generator_backend == "vllm" and inference_stats_interval > 0:
-        callbacks.append(
-            InferenceStatsCallback(
-                log_every_steps=inference_stats_interval,
-                log_to_console=True,
-                log_to_tracker=True,
-            )
-        )
+    _add_inference_stats_callback(cfg, callbacks)
 
     token_budget = _configured_distillation_token_budget(cfg)
     if token_budget is not None:

@@ -12,6 +12,7 @@ from multiprocessing.context import ForkServerContext
 from finestore.rl.run_records import read_attempts
 import fsspec
 import pytest
+import rolloutengine
 import skyrl_gym
 import skyrl_train
 import torch
@@ -57,6 +58,7 @@ def cat_count_session(monkeypatch):
     repository = Path(__file__).resolve().parents[3]
     assert Path(skyrl_train.__file__).resolve().is_relative_to(repository / "skyrl-train")
     assert Path(skyrl_gym.__file__).resolve().is_relative_to(repository / "skyrl-gym")
+    assert Path(rolloutengine.__file__).resolve().is_relative_to(repository.parents[1] / "lib/rolloutengine/src")
     rows = []
 
     class Sink(BaseHTTPRequestHandler):
@@ -327,6 +329,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         cfg.trainer.micro_train_batch_size_per_gpu = 1
         cfg.trainer.micro_forward_batch_size_per_gpu = 1
         cfg.generator.n_samples_per_prompt = 2
+        cfg.generator.inference_stats_interval = 1
         paths = []
         environment_configs = OmegaConf.to_container(cfg.environment.task_sessions, resolve=True)
         for filename in (cfg.data.train_data[0], *cfg.data.val_data):
@@ -365,7 +368,18 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             },
             {"type": "checkpoint", "save_steps": steps},
         ]
+        if resume:
+            cfg.trainer.callbacks.append({"type": "inference_stats", "poll_interval_seconds": 0})
         records = run_process(forkserver_context, root, cfg, runner=run_cat_count)
+        engine_rows = [
+            row
+            for row in cat_count_session
+            if row["name"] == "num_requests_running" and row["attributes"].get("step") == str(steps)
+        ]
+        assert engine_rows
+        if resume:
+            assert len(engine_rows) == 1
+        assert any(row["name"] == "generation_tokens_total" and row["value"] > 0 for row in cat_count_session)
         attempts = read_attempts(str(root / "exports"))
         if not resume:
             (generated_attempt_id,) = attempts
@@ -416,11 +430,15 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
-def test_cat_count_final_profile_skips_zero_progress(tmp_path, cat_count_policy, cat_count_session, forkserver_context):
+@pytest.mark.parametrize("explicit_callbacks", [False, True])
+def test_cat_count_final_profile_skips_zero_progress(
+    tmp_path, cat_count_policy, cat_count_session, forkserver_context, explicit_callbacks
+):
     root = tmp_path / "zero-progress"
     cfg = cat_count_config(root, cat_count_policy, steps=1)
     cfg.trainer.epochs = 0
-    cfg.trainer.callbacks = [
+    cfg.generator.inference_stats_interval = 1
+    callbacks = [
         {
             "type": "evaluation",
             "eval_steps": 1,
@@ -429,10 +447,13 @@ def test_cat_count_final_profile_skips_zero_progress(tmp_path, cat_count_policy,
             "additional_evaluations": {"final_task_set": {"schedule": "final"}},
         }
     ]
+    if explicit_callbacks:
+        cfg.trainer.callbacks = callbacks
     records = run_process(forkserver_context, root, cfg)
     assert any("eval/all/num_attempted" in row for row in records)
     assert all("policy/raw_grad_norm" not in row for row in records)
     assert all(not any(key.startswith("eval/final_task_set/") for key in row) for row in records)
+    assert any(row["name"] == "generation_tokens_total" for row in cat_count_session)
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
@@ -506,6 +527,15 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         assert all(math.isfinite(metrics[f"eval/all/{raw}/{stat}"]) for stat in ("mean", "p50", "p95", "max"))
     assert metrics["eval/all/timing/grading/mean"] > 0
     assert metrics["eval/all/timing/setup/max"] == 0
+    mirrored = {
+        row["attributes"]["metric"]
+        for row in cat_count_session
+        if row["name"] == "training_metric_value" and row["attributes"].get("payload_kind") == "generate"
+    }
+    assert {"generate/wall_seconds", "generate/response_tokens", "eval/all/num_attempted"} <= mirrored
+    engine_rows = [row for row in cat_count_session if row["name"] == "generation_tokens_total"]
+    assert len(engine_rows) == 2
+    assert sum(row["value"] for row in engine_rows) == generated_tokens
 
 
 @pytest.mark.nightly
