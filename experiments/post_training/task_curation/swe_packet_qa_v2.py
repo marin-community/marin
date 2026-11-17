@@ -98,19 +98,68 @@ def row_phases(family: str) -> tuple[tuple[str, dict], ...]:
     return tuple(phases)
 
 
-def apply_calibrated_budgets(config: dict, row: dict) -> None:
-    """Apply the map's calibrated actor/verifier phase budgets, preserving None.
+# Per-phase budget objects: the nop phase uses the nop-calibrated pair, the
+# oracle phase the passing-original pair.
+PHASE_BUDGET_KEYS = {
+    "nop": ("nop_execution_requirements", "nop_verifier_execution_requirements"),
+    "oracle": ("actor_execution_requirements", "verifier_execution_requirements"),
+}
 
-    Null budgets mean the source declared no deadline for that phase; the
-    config field stays unset so the TaskSpec declaration (including None)
-    rules instead of a driver default.
+
+def fetch_row_runtime(root: Path, row: dict) -> dict:
+    """Download the row's sealed source-runtime binding and verify its exact SHA.
+
+    The binding (TaskSpecRuntimeBinding: task_sha256, runtime_sha256, runtime)
+    is consumed through TaskSpecTrial's supported source_runtime field, which
+    applies the original per-role resource limits and network declarations to
+    the executed machines.
     """
-    actor = row.get("actor_execution_requirements") or {}
-    if actor.get("agent_timeout_sec") is not None:
-        config["agent_timeout_sec"] = actor["agent_timeout_sec"]
-    verifier = row.get("verifier_execution_requirements") or {}
-    if verifier.get("verifier_timeout_sec") is not None:
-        config["verifier_timeout_sec"] = verifier["verifier_timeout_sec"]
+    uri, expected = row["row_runtime_uri"], row["row_runtime_sha256"]
+    path = root / "packets" / f"{PurePosixPath(uri).name}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    copy(uri, str(path), no_clobber=True)
+    digest = sha256_bytes(path.read_bytes())
+    if digest != expected:
+        raise ValueError(f"row runtime hash mismatch for {row['instance_id']}: {digest} != {expected}")
+    binding = json.loads(path.read_text())
+    missing = {"task_sha256", "runtime_sha256", "runtime"} - set(binding)
+    if missing:
+        raise ValueError(f"row runtime binding for {row['instance_id']} lacks {sorted(missing)}")
+    return binding
+
+
+def apply_phase_requirements(config: dict, row: dict, phase: str, binding: dict) -> None:
+    """Apply the phase's maintained requirement fields to the trial config.
+
+    The executor rejects timeout overrides for TaskSpec payloads (deadlines
+    come from the TaskSpec shape), so the maintained application routes are:
+    the source_runtime binding (original per-role resource limits and network
+    declarations) and config.task.verifier_execution_requirements (validated
+    by the executor against the TaskSpec allocation and the source runtime).
+    Actor-side allocations ride the packet's frozen task environment plus the
+    bound runtime; the map's actor budgets are recorded for the resolved-
+    allocation cross-check and any mismatch is flagged, never forced.
+    """
+    config["task"]["source_runtime"] = binding
+    _, verifier_key = PHASE_BUDGET_KEYS[phase]
+    verifier_budgets = row.get(verifier_key)
+    if verifier_budgets is not None:
+        config["task"]["verifier_execution_requirements"] = verifier_budgets
+
+
+def attempt_guard(row: dict) -> float:
+    """Outer QA guard: never below the applied original phase limits.
+
+    The guard caps the QA attempt only; it never loosens an original limit.
+    """
+    deadlines = []
+    for key in (*PHASE_BUDGET_KEYS["nop"], *PHASE_BUDGET_KEYS["oracle"]):
+        budgets = row.get(key) or {}
+        for field in ("agent_timeout_sec", "verifier_timeout_sec"):
+            value = budgets.get(field)
+            if value is not None:
+                deadlines.append(float(value))
+    return max(ATTEMPT_TIMEOUT, max(deadlines, default=0.0) + 1800.0)
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -209,14 +258,14 @@ async def run_trial(config_path: Path) -> dict:
     }
 
 
-def trial_config(packet: Path, trials_dir: Path, agent: dict, name: str) -> dict:
+def trial_config(packet: Path, trials_dir: Path, agent: dict, name: str, attempt_timeout: float) -> dict:
     return {
         "task": {"path": str(packet)},
         "agent": agent,
         "environment": {"type": "daytona", "kwargs": {"provisioning": "declarative"}},
         "trials_dir": str(trials_dir),
         "trial_name": name,
-        "trial_attempt_timeout_sec": ATTEMPT_TIMEOUT,
+        "trial_attempt_timeout_sec": attempt_timeout,
     }
 
 
@@ -230,6 +279,10 @@ def qa_row(root: Path, family: str, row: dict) -> dict:
     LOGGER.info("[%s] consuming frozen packet", name)
     task_spec = fetch_task_spec(root, row)
     packet = packet_from_task_spec(root / "packets" / f"{family}-{name}", task_spec)
+    binding = fetch_row_runtime(root, row) if row.get("row_runtime_uri") else None
+    if binding is not None and binding["task_sha256"] != row["task_spec_sha256"]:
+        raise ValueError(f"row runtime binding does not bind the executed TaskSpec for {name}")
+    guard = attempt_guard(row)
     record = {
         "task_id": row["task_id"],
         "instance_id": name,
@@ -240,20 +293,25 @@ def qa_row(root: Path, family: str, row: dict) -> dict:
         "source_task_sha256": row.get("source_task_sha256") or row.get("sourceTaskSHA"),
         "row_runtime_uri": row.get("row_runtime_uri"),
         "row_runtime_sha256": row.get("row_runtime_sha256") or row.get("runtimeSHA"),
+        "bound_runtime_task_sha256": binding["task_sha256"] if binding else None,
         "actor_execution_requirements": row.get("actor_execution_requirements"),
         "verifier_execution_requirements": row.get("verifier_execution_requirements"),
+        "nop_execution_requirements": row.get("nop_execution_requirements"),
+        "nop_verifier_execution_requirements": row.get("nop_verifier_execution_requirements"),
+        "oracle_trial_config": row.get("oracle_trial_config"),
+        "nop_trial_config": row.get("nop_trial_config"),
+        "attempt_guard_sec": guard,
     }
     for phase, agent in row_phases(family):
         _probe.testbed_python = None
         attempt = root / "trials" / f"{family}-{name}-{phase}"
         attempt.mkdir(parents=True)
-        config = trial_config(packet, attempt / "jobs", agent, f"{family}-{name}-{phase}")
-        apply_calibrated_budgets(config, row)
+        config = trial_config(packet, attempt / "jobs", agent, f"{family}-{name}-{phase}", guard)
+        if binding is not None:
+            apply_phase_requirements(config, row, phase, binding)
         config_path = attempt / "trial.json"
         config_path.write_text(json.dumps(config))
-        summary = asyncio.run(
-            asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log"), timeout=ATTEMPT_TIMEOUT + 900)
-        )
+        summary = asyncio.run(asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log"), timeout=guard + 900))
         if phase == "tamper":
             summary["testbed_python"] = getattr(_probe, "testbed_python", None)
         record[phase] = summary
