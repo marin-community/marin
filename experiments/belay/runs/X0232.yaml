@@ -20,6 +20,15 @@ runs:
     - --num-steps
     - '150'
     stage: probe
+  seed0-t:
+    seed: 0
+    variant: char 1-4-gram spelling as own AttnRes source
+    flags:
+    - --model-set
+    - spelling_ngram_source=true
+    - --num-steps
+    - '2768'
+    stage: time
 launched:
   control: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d512 --num-steps 3030 --seed 0 --run-id
     belay-X0232-control --output-path tmp/ttl=30d/belay/runs/belay-X0232-control --submit --target-cluster cw-us-east-02a
