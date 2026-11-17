@@ -420,8 +420,9 @@ The prefix must be absolute and include a job component after the user segment
 (`/benfeuer/exp2-`). Matching is plain string-prefix on the wire job name, so
 `exp2-` matches `exp2-foo` but not `exp2foo` and not `exp20-foo`; end the
 component with a delimiter and name experiments consistently. The caller must
-own the prefix's user; an admin may mint for any user. Feed the printed token
-to the agent's environment:
+own the prefix's user, and a caller already holding a scoped token can only
+mint tokens inside its own prefix — delegation narrows, never widens. An admin
+may mint for any user. Feed the printed token to the agent's environment:
 
 ```bash
 export MARIN_CLUSTER_TOKEN='<token>'

@@ -131,10 +131,20 @@ def mint_scoped_token(
         raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid prefix: {error}") from error
 
     owner = job_prefix_user(prefix)
-    if identity.role != ADMIN_ROLE and identity.user_id != owner:
+    if identity.role == ADMIN_ROLE:
+        pass  # An admin may mint for any user and any prefix.
+    elif identity.user_id != owner:
         raise ConnectError(
             Code.PERMISSION_DENIED,
             f"User '{identity.user_id}' cannot mint a token scoped to '{prefix}': the prefix's user is '{owner}'",
+        )
+    elif identity.prefix and not prefix.startswith(identity.prefix):
+        # Delegation only narrows: a prefix-scoped token cannot mint a sibling
+        # or wider prefix under the same user, or the scope would be escapable.
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            f"Token is scoped to jobs under '{identity.prefix}'; it cannot mint a token "
+            f"scoped to '{prefix}', which is outside that prefix",
         )
 
     ttl = clamped_mint_ttl(

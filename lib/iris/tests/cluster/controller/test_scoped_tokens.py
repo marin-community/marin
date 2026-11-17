@@ -116,6 +116,34 @@ def test_mint_scoped_token_denies_a_prefix_owned_by_another_user(auth_service):
     assert exc.value.code is Code.PERMISSION_DENIED
 
 
+def test_mint_scoped_token_denies_a_scoped_caller_a_wider_or_sibling_prefix(auth_service):
+    """Delegation only narrows: a scoped token cannot mint outside its own prefix."""
+    with (
+        identity_scope(VerifiedIdentity(user_id=_ALICE, role="user", prefix=_PREFIX)),
+        pytest.raises(ConnectError) as exc,
+    ):
+        auth_service.mint_scoped_token(controller_pb2.Controller.MintScopedTokenRequest(prefix="/alice/other-"), None)
+    assert exc.value.code is Code.PERMISSION_DENIED
+
+
+def test_mint_scoped_token_allows_a_scoped_caller_a_sub_prefix(auth_service, scoped_auth):
+    with identity_scope(VerifiedIdentity(user_id=_ALICE, role="user", prefix=_PREFIX)):
+        resp = auth_service.mint_scoped_token(
+            controller_pb2.Controller.MintScopedTokenRequest(prefix=f"{_PREFIX}train-"), None
+        )
+    identity = scoped_auth.jwt_manager.verify(resp.token)
+    assert identity.prefix == f"{_PREFIX}train-"
+
+
+def test_mint_scoped_token_denies_a_scoped_task_token_a_sibling_prefix(auth_service):
+    with (
+        identity_scope(VerifiedIdentity(user_id=_ALICE, role="task", job_id="/alice/exp2-train", prefix=_PREFIX)),
+        pytest.raises(ConnectError) as exc,
+    ):
+        auth_service.mint_scoped_token(controller_pb2.Controller.MintScopedTokenRequest(prefix="/alice/other-"), None)
+    assert exc.value.code is Code.PERMISSION_DENIED
+
+
 def test_mint_scoped_token_lets_an_admin_mint_for_another_user(auth_service, scoped_auth):
     with identity_scope(VerifiedIdentity(user_id="operator", role="admin")):
         resp = auth_service.mint_scoped_token(controller_pb2.Controller.MintScopedTokenRequest(prefix=_PREFIX), None)
