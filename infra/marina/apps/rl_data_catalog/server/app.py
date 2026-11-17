@@ -300,26 +300,46 @@ def create_api(services: AppletServices) -> FastAPI:
             coverage = source_coverage(connection)
             measurements = difficulty_records(connection)
             contracts = contract_records(connection)
-            rows = connection.execute(
-                text(
-                    """
-                SELECT s.*, a.scope, a.model, summary.cohorts, b.capabilities AS backend_capabilities,
+            rows = [
+                dict(row)
+                for row in connection.execute(
+                    text(
+                        """
+                SELECT s.*, a.scope, a.model, b.capabilities AS backend_capabilities,
                     (s.declaration->'within_source_dedup'->>'unique_count')::bigint AS task_count
                 FROM atlas_sources s
                 LEFT JOIN atlas_backend_sources b ON b.load_id = s.load_id AND b.source_id = s.id
                 LEFT JOIN atlas_assessments a
                     ON a.load_id = s.load_id AND a.pipeline_key = s.assessment_key
-                LEFT JOIN (
-                    SELECT load_id, pipeline_key,
-                        jsonb_object_agg(cohort, to_jsonb(v) - 'load_id' - 'pipeline_key' - 'cohort') AS cohorts
-                    FROM atlas_cohort_summary v WHERE v.load_id = :load_id GROUP BY load_id, pipeline_key
-                ) summary ON summary.load_id = s.load_id AND summary.pipeline_key = s.assessment_key
                 WHERE s.load_id = :load_id ORDER BY s.id
             """
-                ),
-                {"load_id": metadata["load_id"]},
-            ).mappings()
-            rows = list(rows)
+                    ),
+                    {"load_id": metadata["load_id"]},
+                ).mappings()
+            ]
+            # The per-source cohort summaries are fetched one pipeline at a
+            # time: a single global aggregation over the whole load exceeded
+            # the SQL gateway's per-statement timeout once the FULL rows
+            # passed ~438k. Per-pipeline evaluation of the same view returns
+            # the identical rows within the bound.
+            pipeline_keys = sorted({row["assessment_key"] for row in rows if row["assessment_key"]})
+            cohorts: dict[str, Any] = {}
+            for key in pipeline_keys:
+                aggregated = connection.execute(
+                    text(
+                        """
+                    SELECT jsonb_object_agg(cohort, to_jsonb(v) - 'load_id' - 'pipeline_key' - 'cohort') AS cohorts
+                    FROM atlas_cohort_summary v
+                    WHERE v.load_id = :load_id AND v.pipeline_key = :pipeline_key
+                    GROUP BY v.load_id, v.pipeline_key
+                    """
+                    ),
+                    {"load_id": metadata["load_id"], "pipeline_key": key},
+                ).first()
+                if aggregated is not None:
+                    cohorts[key] = dict(aggregated._mapping)["cohorts"]
+            for retained_row in rows:
+                retained_row["cohorts"] = cohorts.get(retained_row["assessment_key"])
             groups, overlaps = duplicate_projection(connection, metadata["load_id"], [dict(row) for row in rows])
             inventory = []
             for retained_row in rows:
