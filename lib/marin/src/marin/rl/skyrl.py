@@ -1150,6 +1150,14 @@ def skyrl_step(
         evaluation_data = tuple(
             (name, tuple(source.resolve(ctx) for source in sources)) for name, sources in spec.evaluation_data
         )
+        data_identities: dict[str, str] = {}
+        for source in (*train_data, *validation_data, *(row for _, sources in evaluation_data for row in sources)):
+            previous = data_identities.setdefault(source.local_path, source.identity)
+            if previous != source.identity:
+                raise ValueError(
+                    f"distinct data artifacts share a staging directory: {previous}, {source.identity}: "
+                    f"{source.local_path}"
+                )
         starting_checkpoint = (
             ResolvedNativeCheckpoint(
                 uri=ctx.artifact_path(spec.starting_checkpoint),

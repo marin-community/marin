@@ -550,6 +550,7 @@ class RayPPOTrainer:
                 trajectory_sink=self.eval_trajectory_sink,
                 val_set_name=val_set_name,
                 evaluation_pool=pool,
+                records_export_root=str(self.cfg.trainer.export_path),
             )
 
     # ------------------------------------------------------------------
