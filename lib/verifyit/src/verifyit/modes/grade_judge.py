@@ -112,6 +112,7 @@ Give at most 25 words of reasoning, then end with a final line of exactly this f
 SCORE: <0|1>
 """
 
+LABEL_FIELDS = frozenset({"question", "reference", "candidate"})
 PAIRWISE_METRIC = "win_rate"
 PAIRWISE_FIELDS = frozenset({"question", "answer_a", "answer_b"})
 
@@ -319,21 +320,7 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
         raise InvalidTask("label_scan must be literal, lines or whole")
     if type(spec.strip_reasoning_blocks) is not bool:
         raise InvalidTask("strip_reasoning_blocks must be boolean")
-    if not isinstance(spec.label_scores, dict):
-        raise InvalidTask("verdict labels must be a label/reward table")
-    for label, score in spec.label_scores.items():
-        if not isinstance(label, str) or not label.strip() or label != label.strip() or "\n" in label:
-            raise InvalidTask("verdict labels must be nonempty single lines")
-        if (
-            isinstance(score, bool)
-            or not isinstance(score, (int, float))
-            or not 0 <= score <= 1
-            or not math.isfinite(score)
-        ):
-            raise InvalidTask("verdict label rewards must be finite unit scalars")
-    normalized_labels = [label.upper() if spec.label_case == "upper" else label for label in spec.label_scores]
-    if len(set(normalized_labels)) != len(normalized_labels):
-        raise InvalidTask("verdict labels collide after case normalization")
+    _validate_verdict_labels(spec)
     if spec.label_metrics and set(spec.label_metrics) != set(spec.label_scores):
         raise InvalidTask("label metrics must cover every declared verdict")
     for metrics in spec.label_metrics.values():
@@ -346,18 +333,7 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
             )
         ):
             raise InvalidTask("label metrics require named finite observations")
-    used = set()
-    for template in (spec.system_prompt, spec.prompt_template):
-        try:
-            for _, name, format_spec, conversion in string.Formatter().parse(template):
-                if name is None:
-                    continue
-                if name not in {"question", "reference", "candidate"} or format_spec or conversion:
-                    raise InvalidTask("judge template has an unsupported field")
-                used.add(name)
-        except ValueError as error:
-            raise InvalidTask("malformed judge template") from error
-    if not {"reference", "candidate"} <= used:
+    if not {"reference", "candidate"} <= _template_fields(spec, LABEL_FIELDS):
         raise InvalidTask("judge template must include reference and candidate")
 
 
@@ -376,33 +352,54 @@ def _validate_pairwise_spec(spec: JudgeSpec) -> None:
             raise InvalidTask(f"malformed verdict pattern {pattern!r}") from error
         if groups != 1:
             raise InvalidTask("each verdict pattern must capture exactly one group")
-    if not isinstance(spec.label_scores, dict) or not spec.label_scores:
+    _validate_verdict_labels(spec)
+    if not spec.label_scores:
         raise InvalidTask("pairwise rubric requires verdict labels")
-    for label, score in spec.label_scores.items():
-        if not isinstance(label, str) or not label or label != label.strip():
-            raise InvalidTask("verdict labels must be nonempty and unpadded")
-        if spec.label_case == "upper" and label != label.upper():
-            raise InvalidTask("upper-case verdict matching requires upper-case labels")
-        if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 1:
-            raise InvalidTask("verdict label rewards must be unit scalars")
     if not isinstance(spec.label_weights, dict) or not set(spec.label_weights) <= set(spec.label_scores):
         raise InvalidTask("label weights must name declared verdicts")
     for weight in spec.label_weights.values():
         if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not 0 < weight < math.inf:
             raise InvalidTask("label weights must be finite and positive")
+    if not {"answer_a", "answer_b"} <= _template_fields(spec, PAIRWISE_FIELDS):
+        raise InvalidTask("pairwise template must include answer_a and answer_b")
+
+
+def _validate_verdict_labels(spec: JudgeSpec) -> None:
+    if not isinstance(spec.label_scores, dict):
+        raise InvalidTask("verdict labels must be a label/reward table")
+    for label, score in spec.label_scores.items():
+        if not isinstance(label, str) or not label.strip() or label != label.strip() or "\n" in label:
+            raise InvalidTask("verdict labels must be nonempty single lines")
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not 0 <= score <= 1
+            or not math.isfinite(score)
+        ):
+            raise InvalidTask("verdict label rewards must be finite unit scalars")
+    normalized_labels = list(_case_normalized(spec, spec.label_scores))
+    if len(set(normalized_labels)) != len(spec.label_scores):
+        raise InvalidTask("verdict labels collide after case normalization")
+
+
+def _case_normalized(spec: JudgeSpec, table: dict[str, Any]) -> dict[str, Any]:
+    return {label.upper() if spec.label_case == "upper" else label: value for label, value in table.items()}
+
+
+def _template_fields(spec: JudgeSpec, allowed: frozenset[str]) -> set[str]:
+    """The fields the judge templates use, each of which must be in ``allowed``."""
     used = set()
     for template in (spec.system_prompt, spec.prompt_template):
         try:
             for _, name, format_spec, conversion in string.Formatter().parse(template):
                 if name is None:
                     continue
-                if name not in PAIRWISE_FIELDS or format_spec or conversion:
+                if name not in allowed or format_spec or conversion:
                     raise InvalidTask("judge template has an unsupported field")
                 used.add(name)
         except ValueError as error:
             raise InvalidTask("malformed judge template") from error
-    if not {"answer_a", "answer_b"} <= used:
-        raise InvalidTask("pairwise template must include answer_a and answer_b")
+    return used
 
 
 def _answer_text(
@@ -426,18 +423,40 @@ def _answer_text(
 
 
 def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: openai.OpenAI, model: str) -> Reward:
-    fields = {"question": spec.question, "reference": reference, "candidate": candidate}
+    messages = _judge_messages(spec, {"question": spec.question, "reference": reference, "candidate": candidate})
+    labels = _case_normalized(spec, spec.label_scores)
+    label_metrics = _case_normalized(spec, spec.label_metrics)
+    answer, detail = _judged_answer(spec, client, model, messages)
+    if spec.label_scan == "whole":
+        final = answer
+        observed = {answer}
+    else:
+        final = answer.rsplit("\n", 1)[-1].strip()
+        completed_lines = {line.strip() for line in answer.splitlines()}
+        observed = {
+            label for label in labels if (label in completed_lines if spec.label_scan == "lines" else label in answer)
+        }
+    if final not in labels or observed != {final}:
+        raise GradingInfraError("judge returned malformed or contradictory verdict labels", **detail)
+    detail.update(verdict=final, reasoning=_reasoning(answer))
+    if label_metrics:
+        detail["metrics"] = label_metrics[final]
+    return scored(float(labels[final]), **detail)
+
+
+def _judge_messages(spec: JudgeSpec, fields: dict[str, str]) -> list[ChatCompletionMessageParam]:
     messages: list[ChatCompletionMessageParam] = []
     if spec.system_prompt:
         messages.append({"role": "system", "content": spec.system_prompt.format(**fields)})
     messages.append({"role": "user", "content": spec.prompt_template.format(**fields)})
+    return messages
+
+
+def _judged_answer(
+    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list[ChatCompletionMessageParam]
+) -> tuple[str, dict[str, Any]]:
+    """The judge's final answer, case-normalized, after retrying incomplete replies with larger budgets."""
     budgets = _completion_budgets(spec)
-    labels = {
-        label.upper() if spec.label_case == "upper" else label: score for label, score in spec.label_scores.items()
-    }
-    label_metrics = {
-        label.upper() if spec.label_case == "upper" else label: values for label, values in spec.label_metrics.items()
-    }
     for index, budget in enumerate(budgets):
         completion = _label_completion(spec, client, model, messages, budget)
         detail: dict[str, Any] = {
@@ -454,40 +473,29 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
             if index + 1 < len(budgets):
                 continue
             raise GradingInfraError("judge completion is incomplete", **detail)
-        content = completion.text
-        answer = _answer_text(content, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning")
-        if spec.label_case == "upper":
-            answer = answer.upper()
-        if spec.label_scan == "whole":
-            final = answer
-            observed = {answer}
-        else:
-            final = answer.rsplit("\n", 1)[-1].strip()
-            completed_lines = {line.strip() for line in answer.splitlines()}
-            observed = {
-                label
-                for label in labels
-                if (label in completed_lines if spec.label_scan == "lines" else label in answer)
-            }
-        if final not in labels or observed != {final}:
-            raise GradingInfraError("judge returned malformed or contradictory verdict labels", **detail)
-        detail.update(verdict=final, reasoning=_reasoning(answer))
-        if label_metrics:
-            detail["metrics"] = label_metrics[final]
-        return scored(float(labels[final]), **detail)
+        answer = _answer_text(
+            completion.text, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning"
+        )
+        return (answer.upper() if spec.label_case == "upper" else answer), detail
     raise RuntimeError("judge exhausted completion budgets")
 
 
 def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: openai.OpenAI, model: str) -> Reward:
     """Judge both orders; the reward is the candidate's weighted share of games won, ties counting half."""
+    labels = _case_normalized(spec, spec.label_scores)
+    weights = _case_normalized(spec, spec.label_weights)
     games = []
     won = 0.0
     weight = 0.0
     for candidate_position, answer_a, answer_b in (("B", baseline, candidate), ("A", candidate, baseline)):
-        verdict, detail = _pairwise_game(spec, client, model, answer_a, answer_b)
-        score_a = float(spec.label_scores[verdict])
+        messages = _judge_messages(spec, {"question": spec.question, "answer_a": answer_a, "answer_b": answer_b})
+        answer, detail = _judged_answer(spec, client, model, messages)
+        verdict = _pairwise_verdict(answer, spec.verdict_patterns)
+        if verdict is None or verdict not in labels:
+            raise GradingInfraError("judge returned no recognized pairwise verdict", verdict=verdict, **detail)
+        score_a = float(labels[verdict])
         candidate_score = score_a if candidate_position == "A" else 1.0 - score_a
-        game_weight = float(spec.label_weights.get(verdict, 1.0))
+        game_weight = float(weights.get(verdict, 1.0))
         won += candidate_score * game_weight
         weight += game_weight
         games.append(
@@ -507,39 +515,6 @@ def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: open
         metrics={PAIRWISE_METRIC: reward},
         metric_weights={PAIRWISE_METRIC: weight},
     )
-
-
-def _pairwise_game(
-    spec: JudgeSpec, client: openai.OpenAI, model: str, answer_a: str, answer_b: str
-) -> tuple[str, dict[str, Any]]:
-    """One judged order: its declared verdict and the completion evidence."""
-    fields = {"question": spec.question, "answer_a": answer_a, "answer_b": answer_b}
-    messages: list[ChatCompletionMessageParam] = []
-    if spec.system_prompt:
-        messages.append({"role": "system", "content": spec.system_prompt.format(**fields)})
-    messages.append({"role": "user", "content": spec.prompt_template.format(**fields)})
-    budgets = _completion_budgets(spec)
-    for index, budget in enumerate(budgets):
-        completion = _label_completion(spec, client, model, messages, budget)
-        detail: dict[str, Any] = {
-            "response_model": completion.response_model,
-            "response_id": completion.response_id,
-            "finish_reason": completion.finish_reason,
-            "transport_attempts": completion.transport_attempts,
-            "completion": completion.text,
-        }
-        if completion.incomplete:
-            if index + 1 < len(budgets):
-                continue
-            raise GradingInfraError("judge completion is incomplete", **detail)
-        answer = _answer_text(
-            completion.text, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning"
-        )
-        verdict = _pairwise_verdict(answer.upper() if spec.label_case == "upper" else answer, spec.verdict_patterns)
-        if verdict is None or verdict not in spec.label_scores:
-            raise GradingInfraError("judge returned no recognized pairwise verdict", verdict=verdict, **detail)
-        return verdict, detail
-    raise RuntimeError("judge exhausted completion budgets")
 
 
 def _pairwise_verdict(reply: str, patterns: tuple[str, ...]) -> str | None:

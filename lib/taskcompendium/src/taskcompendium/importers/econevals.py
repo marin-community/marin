@@ -89,45 +89,55 @@ def read_econevals(
 
     With ``per_category``, keep a fixed random sample of that many questions from each category.
     """
-    with (context.inputs[CATEGORIES_INPUT] / CATEGORIES_FILENAME).open("r") as stream:
-        table = json.load(stream)
-    categories = {int(index): table["subcategory_name"][key] for key, index in table["subcategory_idx"].items()}
-    baselines = {}
-    with (context.inputs[BASELINE_INPUT] / BASELINE_FILENAME).open("r") as stream:
-        for line in stream:
-            if line.strip():
-                answer = json.loads(line)
-                if answer["model"] != baseline_model or answer["uid"] in baselines:
-                    raise ValueError(f"Unexpected baseline answer {answer['ans_id']}")
-                baselines[answer["uid"]] = answer["messages"]
+    categories = _category_names(context.inputs[CATEGORIES_INPUT] / CATEGORIES_FILENAME)
+    baselines = _baseline_answers(context.inputs[BASELINE_INPUT] / BASELINE_FILENAME, baseline_model)
     rows = []
-    with file.open("r") as stream:
-        for line in stream:
-            if not line.strip():
-                continue
-            question = json.loads(line)
-            messages = baselines.pop(question["uid"])
-            if messages[:-1] != question["convo"] or messages[-1]["role"] != "assistant":
-                raise ValueError(f"Baseline answer {question['uid']} does not continue its question")
-            rows.append(
-                {
-                    "uid": question["uid"],
-                    "category": categories[int(question["subcategory"])],
-                    "conversation": question["convo"],
-                    "baseline": messages[-1]["content"],
-                }
-            )
+    for question in _jsonl(file):
+        messages = baselines.pop(question["uid"])
+        if messages[:-1] != question["convo"] or messages[-1]["role"] != "assistant":
+            raise ValueError(f"Baseline answer {question['uid']} does not continue its question")
+        rows.append(
+            {
+                "uid": question["uid"],
+                "category": categories[int(question["subcategory"])],
+                "conversation": question["convo"],
+                "baseline": messages[-1]["content"],
+            }
+        )
     if baselines:
         raise ValueError(f"{len(baselines)} baseline answers have no question")
-    if per_category is None:
-        yield from rows
-        return
+    yield from rows if per_category is None else _sample_per_category(rows, per_category)
+
+
+def _jsonl(path: StoragePath) -> Iterator[dict[str, Any]]:
+    with path.open("r") as stream:
+        yield from (json.loads(line) for line in stream if line.strip())
+
+
+def _category_names(path: StoragePath) -> dict[int, str]:
+    with path.open("r") as stream:
+        table = json.load(stream)
+    return {int(index): table["subcategory_name"][key] for key, index in table["subcategory_idx"].items()}
+
+
+def _baseline_answers(path: StoragePath, baseline_model: str) -> dict[str, list[dict[str, Any]]]:
+    """Each question's baseline conversation, by question uid."""
+    baselines = {}
+    for answer in _jsonl(path):
+        if answer["model"] != baseline_model or answer["uid"] in baselines:
+            raise ValueError(f"Unexpected baseline answer {answer['ans_id']}")
+        baselines[answer["uid"]] = answer["messages"]
+    return baselines
+
+
+def _sample_per_category(rows: list[dict[str, Any]], per_category: int) -> list[dict[str, Any]]:
+    """A fixed random sample of ``per_category`` rows from each category, in the original order."""
     by_category = defaultdict(list)
     for row in rows:
         by_category[row["category"]].append(row["uid"])
     rng = random.Random(0)
     kept = {uid for category in sorted(by_category) for uid in rng.sample(by_category[category], per_category)}
-    yield from (row for row in rows if row["uid"] in kept)
+    return [row for row in rows if row["uid"] in kept]
 
 
 def convert_econevals(row: RawRow, _context: ConversionContext, *, benchmark: str) -> TaskSpec | ImportRejection:
