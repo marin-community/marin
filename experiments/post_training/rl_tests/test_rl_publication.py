@@ -163,7 +163,11 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         write_receipt(source, receipt)
         with pytest.raises(ValueError):
             publication.build_record(
-                str(source), preset, table=table, attempt_id="native-attempt", attempts=read_stored_skyrl_attempts(str(source))
+                str(source),
+                preset,
+                table=table,
+                attempt_id="native-attempt",
+                attempts=read_stored_skyrl_attempts(str(source)),
             )
         return
     row = publication.build_record(
@@ -255,7 +259,9 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
 
     def saved_gate(requirements=()):
         report = run(
-            gate.gate_step(preset, handles, table=table, inputs=GateInputs(preset_name=preset.name, requirements=requirements))
+            gate.gate_step(
+                preset, handles, table=table, inputs=GateInputs(preset_name=preset.name, requirements=requirements)
+            )
         )[0]
         return report, str(report.path)
 
@@ -453,7 +459,9 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     assert historical_row["gate_result"] is None and historical_row["optimizer_steps"] == preset.updates
     for root in controls:
         (root / GATE_INPUTS_FILENAME).unlink()
-    command = CliRunner().invoke(publication.control_command(table), ["--preset", "data-medium", "--url", "http://localhost"])
+    command = CliRunner().invoke(
+        publication.control_command(table), ["--preset", "data-medium", "--url", "http://localhost"]
+    )
     assert command.exit_code == 0, (command.output, command.exception)
     assert json.loads(command.output)["unserved_records"] == []
     served_controls = [
@@ -470,7 +478,9 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     }
     stale_table = replace(
         table,
-        presets=tuple(replace(row, revision="2026.11.12.2") if row.name == preset.name else row for row in table.presets),
+        presets=tuple(
+            replace(row, revision="2026.11.12.2") if row.name == preset.name else row for row in table.presets
+        ),
     )
     with pytest.raises(click.UsageError, match="control"):
         publication.publish_controls(stale_table, preset.name, service_url="http://localhost")

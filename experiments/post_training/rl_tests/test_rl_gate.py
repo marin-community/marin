@@ -40,9 +40,9 @@ from experiments.post_training import rl_scoring as scoring
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_command import EXIT_CODES
 from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInputs, read_gate_inputs
+from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY, append_metrics, write_metrics, write_receipt
 from experiments.post_training.rl_tests.fixtures import answer as _answer
 from experiments.post_training.rl_tests.fixtures import write_json as _json
-from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY, append_metrics, write_metrics, write_receipt
 from experiments.post_training.skyrl_test_support import native_json
 from experiments.post_training.task_curation.selection import TASK_MANIFEST_FILENAME
 
@@ -785,7 +785,9 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     phase["retry"] = True
     arguments[arguments.index("--issue") + 1] = "74"
     repeated = CliRunner().invoke(
-        snowball.command(snowball_model.SNOWBALL, argv=tuple(arguments), entry_module="experiments.post_training.snowball_rl"),
+        snowball.command(
+            snowball_model.SNOWBALL, argv=tuple(arguments), entry_module="experiments.post_training.snowball_rl"
+        ),
         arguments,
     )
     assert repeated.exit_code == (0 if case in {"mixed-native-failed", "control-missing-receipt"} else expected), (
