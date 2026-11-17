@@ -21,6 +21,8 @@ from finestore.rl.run_records import (
     run_records_root,
     update_attempt,
 )
+from finestore.rl.strata import MembershipState, SelectionDefinition, SelectionTaskRow
+from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from iris.cluster.client.job_info import set_job_info
 from iris.rpc import controller_pb2
@@ -30,6 +32,7 @@ from marin.rl.skyrl import SkyRLRun
 from rigging.provenance import Provenance
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.grading_result import Outcome
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Source
 from taskcompendium.pipeline.models import RawRow
 from verifyit.spec import ExactSpec
@@ -135,22 +138,42 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    task = answer_task(
+        RawRow("fixture", Source(dataset="fixture", revision="1", row="fixture", importer_revision="1"), {}),
+        prompt="Return cat.",
+        spec=ExactSpec(("cat",)),
+    )
+
     for binding in {preset.eval_lite for preset in snowball_model.SNOWBALL.by_name.values()}:
         task_set = Path(recipe.selection_artifact(binding).path())
+        tasks = [task.model_copy(update={"id": f"task-{i}"}) for i in range(100)]
+        rows = [
+            SelectionTaskRow(
+                task_id=value.id,
+                task_digest=canonical_sha256(value.model_dump(mode="json")),
+                family="small" if i == 0 else "large",
+                aai_category="format" if i == 0 else "coding",
+                source="fixture",
+                agentic=False,
+                state=MembershipState.ACTIVE,
+            )
+            for i, value in enumerate(tasks)
+        ]
         pq.write_table(
-            pa.Table.from_pylist(
-                [
-                    {
-                        "task_id": f"task-{i}",
-                        "family": "small" if i == 0 else "large",
-                        "aaii_category": "format" if i == 0 else "coding",
-                        "agentic": False,
-                    }
-                    for i in range(100)
-                ]
-            ),
+            pa.table({"task_spec": [value.model_dump_json() for value in tasks]}), task_set / "validation.parquet"
+        )
+        pq.write_table(
+            pa.Table.from_pylist([row.model_dump(mode="json") for row in rows], schema=arrow_schema(SelectionTaskRow)),
             task_set / TASK_MANIFEST_FILENAME,
         )
+        summary = json.loads((task_set / "summary.json").read_text())
+        summary["selection_strata"] = SelectionDefinition(
+            name=recipe.selection_artifact(binding).name,
+            version=recipe.selection_artifact(binding).version,
+            sampling="fixture",
+            task_files=("validation.parquet",),
+        ).model_dump(mode="json")
+        write_json(task_set / "summary.json", summary)
 
     @contextmanager
     def endpoint(**kwargs):
@@ -162,11 +185,6 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
 
     monkeypatch.setattr(adapter, "connect_controller", endpoint)
     monkeypatch.setattr(adapter, "rpc_client", rpc)
-    task = answer_task(
-        RawRow("fixture", Source(dataset="fixture", revision="1", row="fixture", importer_revision="1"), {}),
-        prompt="Return cat.",
-        spec=ExactSpec(("cat",)),
-    )
 
     templates = {}
 

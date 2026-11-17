@@ -14,11 +14,27 @@ from unittest.mock import MagicMock
 
 import click
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pytest
 import yaml
 from click.testing import CliRunner
 from cloud.iris import launch as native_launch
+from finestore.rl.run_records import (
+    EvaluationAnswerRow,
+    EvaluationTaskRow,
+    read_attempt,
+    write_attempt,
+    write_evaluations,
+)
+from finestore.rl.strata import (
+    MembershipState,
+    SelectionDefinition,
+    SelectionParent,
+    SelectionTaskRow,
+    read_selection_strata,
+)
+from finestore.schema import arrow_schema
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
@@ -28,10 +44,11 @@ from marin.execution.lazy import ArtifactStep, materialized_config, run
 from marin.rl import skyrl as skyrl_api
 from marin.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
-from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_launch_config, read_skyrl_metrics
+from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
 from rigging.provenance import Provenance
 from scipy.stats import t
 from taskcompendium.grading_result import Outcome
+from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training import rl as snowball
 from experiments.post_training import rl_gate as gate
@@ -43,7 +60,14 @@ from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInput
 from experiments.post_training.rl_tests.fixtures import answer as _answer
 from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.rl_tests.fixtures import write_metrics, write_receipt
-from experiments.post_training.task_curation.selection import TASK_MANIFEST_FILENAME
+from experiments.post_training.task_curation.selection import (
+    FULL_VALIDATION_FILENAME,
+    TASK_MANIFEST_FILENAME,
+    EvalLiteRecipe,
+    HeldoutSource,
+    PanelFormat,
+    eval_lite_step,
+)
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 KL = "policy/mismatch/staleness0/kl_k3"
@@ -702,22 +726,54 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         _answer("stem", 0),
         _answer("mixed", None, status="error"),
         {key: value for key, value in _answer("mixed", 1).items() if key != "verification"},
+        _answer("general", 1),
     ]
     families = {
-        "mixed": ("structural", "format"),
-        "bounded": ("structural", "format"),
-        "stem": ("stem", "scientific_reasoning"),
+        "mixed": ("structural", "format", "hard"),
+        "bounded": ("structural", "format", "learnable"),
+        "stem": ("stem", "scientific_reasoning", "hard"),
+        "general": ("general", "general", "easy"),
     }
-    manifest = [
-        {"task_id": task, "family": family, "aaii_category": category} for task, (family, category) in families.items()
-    ]
-    (tmp_path / "selection").mkdir()
-    pq.write_table(pa.Table.from_pylist(manifest), tmp_path / "selection" / TASK_MANIFEST_FILENAME)
     root = recorded_runs("learning-medium", "users/test/score-order")
-    launch = read_skyrl_launch_config(str(root))
+    native = json.loads((root / "terminal.json").read_text())
+    launch = native["config"]
+    source = launch["inputs"]["validation_data"][0]
+    base = json.loads(pq.read_table(Path(source["uri"]) / source["relative_path"])["task_spec"][0].as_py())
+    selection = tmp_path / "selection"
+    selection.mkdir()
+    specs = {task_id: {**base, "id": task_id} for task_id in families}
+    manifest = [
+        SelectionTaskRow(
+            task_id=task_id,
+            task_digest=canonical_sha256(specs[task_id]),
+            family=family,
+            aai_category=category,
+            difficulty=difficulty,
+            agentic=False,
+            state=MembershipState.ACTIVE,
+        )
+        for task_id, (family, category, difficulty) in families.items()
+    ]
+    pq.write_table(
+        pa.table({"task_spec": [json.dumps(value) for value in specs.values()]}), selection / "validation.parquet"
+    )
+    pq.write_table(
+        pa.Table.from_pylist([row.model_dump(mode="json") for row in manifest], schema=arrow_schema(SelectionTaskRow)),
+        selection / TASK_MANIFEST_FILENAME,
+    )
+    _json(
+        selection / "summary.json",
+        {
+            "selection_strata": (
+                SelectionDefinition(
+                    name="permuted", version="2026.11.17.1", sampling="all", task_files=("validation.parquet",)
+                ).model_dump(mode="json")
+            )
+        },
+    )
     launch["artifacts"]["export_root"] = str(tmp_path / "configured-export")
-    launch["inputs"]["validation_data"][0]["uri"] = str(tmp_path / "selection")
-    _json(tmp_path / "resolved-launch.yaml", {"config": launch})
+    launch["inputs"]["validation_data"][0]["uri"] = str(selection)
+    write_receipt(tmp_path, native)
     for session in ("global_step_25_evals", "eval_only"):
         directory = tmp_path / "configured-export/dumped_evals" / session
         directory.mkdir(parents=True)
@@ -725,8 +781,9 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
             "\n".join(json.dumps(row, ensure_ascii=False) for row in answers) + "\n"
         )
         (directory / "aggregated_results.jsonl").write_text('{"avg_score": 0.5}\n')
-    scores = scoring.evaluation_scores(snowball_model.EVALUATIONS["eval_lite_100"], str(tmp_path))
-    final = [row for row in scores.to_pylist() if row["step"] == 25]
+    evaluation = snowball_model.EVALUATIONS["eval_lite_100"]
+    historical = scoring.evaluation_scores(evaluation, str(tmp_path))
+    final = [row for row in historical.to_pylist() if row["step"] == 25]
     assert [(row["item"], row["attempt"], row["scored"], row["score"]) for row in final] == [
         ("bounded", 0, True, 0.5),
         ("mixed", 0, True, 0.0),
@@ -735,17 +792,231 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         ("stem", 0, True, 0.0),
         ("mixed", 3, False, 0.0),
         ("mixed", 4, False, 0.0),
+        ("general", 0, True, 1.0),
     ]
-    statistics = scoring.evaluation_statistics(pa.Table.from_pylist(final, schema=scores.schema))
+    export = launch["artifacts"]["export_root"]
+    attempt_id = launch["run"]["attempt_id"]
+    record = read_attempt(export, attempt_id)
+    assert record is not None
+    write_attempt(export, record.model_copy(update={"evaluation_storage_version": 1}))
+    annotations = {row.task_id: row for row in manifest}
+    task_rows = []
+    for step in (-1, 25):
+        for task_id in families:
+            task_answers = []
+            for ordinal, answer in enumerate(answers):
+                if answer["task_id"] != task_id:
+                    continue
+                verification = answer.get("verification")
+                verified = bool(verification and verification["status"] == "verified")
+                score = (
+                    (verification["score"] - verification["score_min"])
+                    / (verification["score_max"] - verification["score_min"])
+                    if verified
+                    else None
+                )
+                task_answers.append(
+                    EvaluationAnswerRow(
+                        ordinal=ordinal,
+                        native_uid=str(ordinal),
+                        optimization_reward=answer.get("score", 0.0),
+                        verifier_score=score,
+                        raw_verifier_score=verification["score"] if verified else None,
+                        score_min=verification["score_min"] if verification else None,
+                        score_max=verification["score_max"] if verification else None,
+                        verification_status=verification["status"] if verification else None,
+                        passed=score == 1,
+                        outcome="graded" if verified else "unavailable",
+                        error_type=answer.get("exception_type"),
+                        error_treatment=answer.get("error_treatment"),
+                    )
+                )
+            task_rows.append(
+                EvaluationTaskRow(
+                    attempt_id=attempt_id,
+                    step=step,
+                    evaluation="eval/",
+                    panel_name="permuted",
+                    panel_version="2026.11.17.1",
+                    task_id=task_id,
+                    data_source="fixture",
+                    strata=annotations[task_id].strata,
+                    agentic=False,
+                    score=None,
+                    outcome="mixed",
+                    error_type=None,
+                    answers=task_answers,
+                )
+            )
+    write_evaluations(export, task_rows)
+    write_evaluations(
+        export,
+        [
+            row.model_copy(
+                update={
+                    "attempt_id": "other-attempt",
+                    "answers": [answer.model_copy(update={"verifier_score": 0.0}) for answer in row.answers],
+                }
+            )
+            for row in task_rows
+        ],
+    )
+    current = scoring.evaluation_scores(evaluation, str(tmp_path))
+    assert current.equals(historical)
+    with pytest.raises(scoring.InvalidComparison, match="dump is missing for attempt"):
+        scoring.evaluation_answers(str(tmp_path))
+    directory = Path(export) / "dumped_evals" / attempt_id / "global_step_25_evals"
+    directory.mkdir(parents=True)
+    current_answers = [dict(row, attempt_id=attempt_id, step=25, is_last_step=True) for row in answers]
+    current_answers.insert(0, dict(current_answers[0], is_last_step=False))
+    (directory / "task_set.jsonl").write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in current_answers) + "\n"
+    )
+    assert [row.answer["task_id"] for row in scoring.evaluation_answers(str(tmp_path))] == [
+        row["task_id"] for row in answers
+    ]
+    statistics = scoring.evaluation_statistics(current.filter(pc.equal(current["step"], 25)))
     expected = {
-        "mean": 0.375,
-        "family_mean": 0.25,
-        "mixed_fraction": 1 / 3,
-        "all_right_fraction": 0,
-        "all_wrong_fraction": 2 / 3,
+        "mean": 0.5,
+        "family_mean": 0.5,
+        "mixed_fraction": 1 / 4,
+        "all_right_fraction": 1 / 4,
+        "all_wrong_fraction": 2 / 4,
+        "scored_fraction": 5 / 8,
+        "aai_category/format/mean": 0.5,
+        "difficulty/hard/mean": 0.25,
+        "aai_weighted_mean": 0.6,
+        "aai_category_weight_coverage": 0.5,
+        "aai_category/scientific_reasoning/weight": 0.4,
+        "aai_category/general/weight": 0.6,
     }
-    expected |= {"scored_fraction": 4 / 7, "aaii_category/format/mean": 0.5}
     assert {key: statistics["eval_lite_100/" + key] for key in expected} == pytest.approx(expected)
+    unavailable = current.set_column(
+        current.schema.get_field_index("scored"),
+        "scored",
+        pa.array([row["scored"] and row["item"] != "stem" for row in current.to_pylist()]),
+    )
+    unavailable = unavailable.filter(pc.equal(unavailable["step"], 25))
+    assert "eval_lite_100/aai_weighted_mean" not in scoring.evaluation_statistics(unavailable)
+
+    (selection / FULL_VALIDATION_FILENAME).write_bytes((selection / "validation.parquet").read_bytes())
+    addition = {
+        **base,
+        "id": "addition",
+        "tags": ["eval"],
+        "context": {**base["context"], "events": [{**base["context"]["events"][0], "content": "Return a new answer."}]},
+    }
+    addition_file, excluded_file = tmp_path / "addition.parquet", tmp_path / "excluded.parquet"
+    pq.write_table(pa.table({"task_spec": [json.dumps(addition)]}), addition_file)
+    pq.write_table(pa.table({"task_spec": [json.dumps({**base, "id": "excluded"})]}), excluded_file)
+    rates_file = tmp_path / "reference.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "task_id": task_id,
+                    "task_digest": canonical_sha256(document),
+                    "model_revision": "reference-model",
+                    "attempted": 8,
+                    "samples": 8,
+                    "passed": 0 if task_id == "bounded" else 4,
+                    "mean_score": 0.0 if task_id == "bounded" else 0.5,
+                }
+                for task_id, document in specs.items()
+            ]
+        ),
+        rates_file,
+    )
+    version = "2026.11.17.2"
+    successor = EvalLiteRecipe(
+        name="permuted",
+        version=version,
+        parent=SelectionParent(root=str(selection), name="permuted", version="2026.11.17.1"),
+        seed=3,
+        sources=(
+            {
+                "source_id": "addition",
+                "rows": 1,
+                "format": PanelFormat.TASK_SPEC,
+                "family": "structural",
+                "aaii_category": "format",
+                "license": "fixture",
+                "count": 1,
+            },
+        ),
+        training=(),
+        development=HeldoutSource(uri=str(excluded_file), version=version, rows=1, format=PanelFormat.TASK_SPEC),
+        fast_counts={"structural": 2, "stem": 1, "general": 1},
+        pass_rates={"uri": str(rates_file), "version": version, "rows": 4, "model_revision": "reference-model"},
+    )
+    successor_root = run(
+        eval_lite_step(
+            {"addition": ArtifactStep.adopt("fixture/version-addition", version, str(addition_file))}, successor
+        )
+    )[0].path
+    before = {
+        json.loads(raw)["id"]: raw
+        for raw in pq.read_table(selection / FULL_VALIDATION_FILENAME)["task_spec"].to_pylist()
+    }
+    after = {
+        json.loads(raw)["id"]: raw
+        for raw in pq.read_table(Path(successor_root) / FULL_VALIDATION_FILENAME)["task_spec"].to_pylist()
+    }
+    assert before.items() <= after.items()
+    child = read_selection_strata(successor_root)
+    assert child is not None and child.tasks["bounded"].state == MembershipState.RETIRED
+    assert child.tasks["addition"].state == MembershipState.ACTIVE
+    updated = [
+        row.model_copy(
+            update={"panel_name": "permuted", "panel_version": version, "strata": child.tasks[row.task_id].strata}
+        )
+        for row in task_rows
+    ]
+    addition_answer = (
+        updated[-1]
+        .answers[0]
+        .model_copy(
+            update={
+                "ordinal": len(answers),
+                "native_uid": "addition",
+                "optimization_reward": 1.0,
+                "verifier_score": 1.0,
+                "raw_verifier_score": 1.0,
+                "score_min": 0.0,
+                "score_max": 1.0,
+                "verification_status": "verified",
+                "passed": True,
+                "outcome": "graded",
+                "error_type": None,
+                "error_treatment": None,
+            }
+        )
+    )
+    updated.append(
+        updated[-1].model_copy(
+            update={"task_id": "addition", "strata": child.tasks["addition"].strata, "answers": [addition_answer]}
+        )
+    )
+    write_evaluations(export, updated)
+    previous = scoring.evaluation_scores(evaluation, str(tmp_path), panel_root=str(selection), step=25)
+    assert previous.equals(current.filter(pc.equal(current["step"], 25)))
+    active_attempt = "active-only"
+    native["config"]["run"]["attempt_id"] = active_attempt
+    native["result"]["attempt_id"] = active_attempt
+    write_receipt(tmp_path, native)
+    active_record = read_attempt(export, active_attempt)
+    assert active_record is not None
+    write_attempt(export, active_record.model_copy(update={"evaluation_storage_version": 1}))
+    write_evaluations(
+        export,
+        [
+            row.model_copy(update={"attempt_id": active_attempt})
+            for row in updated
+            if child.tasks[row.task_id].state == MembershipState.ACTIVE
+        ],
+    )
+    with pytest.raises(scoring.InvalidComparison, match="recomputation is incomplete"):
+        scoring.evaluation_scores(evaluation, str(tmp_path), panel_root=str(selection), step=25)
 
 
 @pytest.mark.parametrize(

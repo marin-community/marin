@@ -19,6 +19,8 @@ import click
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+from finestore.rl.run_records import AttemptRecord, read_evaluations
+from finestore.rl.strata import MembershipState, read_selection_strata
 from marin.rl.rl_progress import Invariant
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
@@ -27,6 +29,7 @@ from marin.rl.skyrl_records import (
     attempt_tracking,
     read_skyrl_launch_config,
     read_skyrl_metrics,
+    read_stored_skyrl_attempt,
     recorded_launch,
 )
 from pydantic import BaseModel
@@ -36,9 +39,10 @@ from taskcompendium.grading_result import Outcome
 
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_recipe as recipe
-from experiments.post_training.task_curation.selection import TASK_MANIFEST_FILENAME, TASK_SPEC_COLUMN
+from experiments.post_training.task_curation.selection import TASK_SPEC_COLUMN
 
-SLICE_COLUMNS = ("family", "aaii_category", "agentic")
+SLICE_COLUMNS = ("family", "aai_category", "source", "topic", "difficulty", "agentic")
+AAII_WEIGHTS = {"scientific_reasoning": 0.2, "coding": 0.2, "general": 0.3, "agents": 0.3}
 
 EVAL_SCORE_SCHEMA = pa.schema(
     [
@@ -58,11 +62,8 @@ class InvalidComparison(ValueError):
 
 
 def task_manifest(root: StoragePath) -> dict[str, dict]:
-    fs, key = filesystem_for(str(root / TASK_MANIFEST_FILENAME))
-    if not fs.exists(key):
-        return {}
-    with fs.open(key, "rb") as stream:
-        return {row["task_id"]: row for row in pq.read_table(stream).to_pylist()}
+    panel = read_selection_strata(str(root))
+    return {task_id: row.model_dump(mode="json") for task_id, row in panel.tasks.items()} if panel is not None else {}
 
 
 def paths(pattern: StoragePath) -> list[StoragePath]:
@@ -95,9 +96,31 @@ def _recorded_config(run_output: str) -> RecordedLaunch:
     return RecordedLaunch.from_document(document, attempt=document["run"]["attempt_id"])
 
 
+def _evaluation_record(run_output: str) -> AttemptRecord:
+    record = read_stored_skyrl_attempt(run_output)
+    if record is None:
+        raise InvalidComparison(f"evaluation attempt receipt is unavailable: {run_output}")
+    return record
+
+
+def _attempt_answers(record: AttemptRecord, root: StoragePath) -> list[EvaluationAnswer]:
+    if record.evaluation_storage_version == 1:
+        root = root / record.attempt_id
+        if not root.exists():
+            raise InvalidComparison(f"evaluation dump is missing for attempt {record.attempt_id}: {root}")
+    answers = _evaluation_answers(root)
+    if record.evaluation_storage_version == 1:
+        if any(
+            row.answer.get("attempt_id") != record.attempt_id or row.answer.get("step") != row.step for row in answers
+        ):
+            raise InvalidComparison(f"evaluation dump attribution differs from attempt {record.attempt_id}")
+        answers = [row for row in answers if row.answer["is_last_step"]]
+    return answers
+
+
 def evaluation_answers(run_output: str, launch: RecordedLaunch | None = None) -> list[EvaluationAnswer]:
     launch = launch or _recorded_config(run_output)
-    return _evaluation_answers(StoragePath(launch.export_root) / "dumped_evals")
+    return _attempt_answers(_evaluation_record(run_output), StoragePath(launch.export_root) / "dumped_evals")
 
 
 def recorded_sources(launch: RecordedLaunch, name: str) -> list[RecordedSource]:
@@ -166,11 +189,69 @@ def evaluation_scores(
     primary_answers: list[EvaluationAnswer] | None = None,
     *,
     launch: RecordedLaunch | None = None,
+    panel_root: str | None = None,
+    step: int | None = None,
+) -> pa.Table:
+    """Read one recorded attempt, optionally joining an earlier panel's active membership."""
+    launch = launch or _recorded_config(run_output)
+    record = _evaluation_record(run_output)
+    if record.evaluation_storage_version != 1:
+        if panel_root is not None:
+            raise InvalidComparison("version recomputation requires per-task evaluation records")
+        scores = _legacy_evaluation_scores(evaluation, run_output, primary_answers, launch=launch)
+        return scores.filter(pc.equal(scores["step"], step)) if step is not None else scores
+    tasks = read_evaluations(
+        launch.export_root, attempt_id=record.attempt_id, evaluation=native_prefix(launch, evaluation.name), step=step
+    )
+    if not tasks:
+        raise InvalidComparison(f"per-task evaluation records are missing for attempt {record.attempt_id}")
+    panel = read_selection_strata(panel_root) if panel_root is not None else None
+    if panel_root is not None and panel is None:
+        raise InvalidComparison(f"selection strata are unavailable: {panel_root}")
+    if panel is not None:
+        expected = {task_id for task_id, row in panel.tasks.items() if row.state == MembershipState.ACTIVE}
+        for measured_step in {row.step for row in tasks}:
+            missing = expected - {row.task_id for row in tasks if row.step == measured_step}
+            if missing:
+                raise InvalidComparison(f"panel recomputation is incomplete at step {measured_step}: {sorted(missing)}")
+        tasks = [row for row in tasks if row.task_id in expected]
+    rows = []
+    attempts = Counter()
+    for task, answer in sorted(
+        ((row, value) for row in tasks for value in row.answers), key=lambda pair: (pair[0].step, pair[1].ordinal)
+    ):
+        identity = panel.tasks[task.task_id] if panel is not None else task
+        strata = identity.strata
+        verified = answer.verification_status == "verified" and answer.verifier_score is not None
+        rows.append(
+            {
+                "evaluation": evaluation.name,
+                "step": task.step,
+                "item": task.task_id,
+                "attempt": attempts[task.step, task.task_id],
+                **strata.model_dump(),
+                "agentic": identity.agentic,
+                "score": answer.verifier_score if verified else 0.0,
+                "scored": verified and not answer.error_type and not answer.error_treatment,
+            }
+        )
+        attempts[task.step, task.task_id] += 1
+    return pa.Table.from_pylist(rows, schema=EVAL_SCORE_SCHEMA)
+
+
+def _legacy_evaluation_scores(
+    evaluation: presets.Evaluation,
+    run_output: str,
+    primary_answers: list[EvaluationAnswer] | None = None,
+    *,
+    launch: RecordedLaunch | None = None,
 ) -> pa.Table:
     launch = launch or _recorded_config(run_output)
     sources = recorded_sources(launch, evaluation.name)
     answers = (
-        _evaluation_answers(StoragePath(launch.export_root) / evaluation.name / "dumped_evals")
+        _attempt_answers(
+            _evaluation_record(run_output), StoragePath(launch.export_root) / evaluation.name / "dumped_evals"
+        )
         if native_prefix(launch, evaluation.name) != "eval/"
         else evaluation_answers(run_output, launch) if primary_answers is None else primary_answers
     )
@@ -180,6 +261,8 @@ def evaluation_scores(
     attempts = Counter()
     rows = []
     for step, path, row in answers:
+        if not row.get("is_last_step", True):
+            continue
         item = row.get("task_id")
         if not item:
             raise InvalidComparison(f"evaluation answer lacks a TaskSpec id: {path}")
@@ -251,6 +334,20 @@ def evaluation_statistics(scores: pa.Table) -> dict[str, float]:
             raise ValueError(f"select one weight step before aggregating {evaluation}")
         scored = [row for row in rows if row["scored"]]
         result[f"{evaluation}/scored_fraction"] = len(scored) / len(rows)
+        represented = {
+            category: weight
+            for category, weight in AAII_WEIGHTS.items()
+            if any(row["aai_category"] == category for row in rows)
+        }
+        weight_sum = math.fsum(represented.values())
+        result[f"{evaluation}/aai_category_weight_coverage"] = weight_sum
+        if weight_sum:
+            result.update(
+                {
+                    f"{evaluation}/aai_category/{category}/weight": weight / weight_sum
+                    for category, weight in represented.items()
+                }
+            )
         if not scored:
             continue
         tasks = defaultdict(list)
@@ -271,6 +368,14 @@ def evaluation_statistics(scores: pa.Table) -> dict[str, float]:
         ]
         if families:
             result[f"{evaluation}/family_mean"] = math.fsum(families) / len(families)
+        if weight_sum and all(f"{evaluation}/aai_category/{category}/mean" in result for category in represented):
+            result[f"{evaluation}/aai_weighted_mean"] = (
+                math.fsum(
+                    weight * result[f"{evaluation}/aai_category/{category}/mean"]
+                    for category, weight in represented.items()
+                )
+                / weight_sum
+            )
     return result
 
 

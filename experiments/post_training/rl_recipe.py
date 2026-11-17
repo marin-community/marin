@@ -15,6 +15,8 @@ import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
+from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_strata
+from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact, is_mutable_version, read_record, result_type_name
 from marin.execution.fingerprint import fingerprint_hash
@@ -43,6 +45,7 @@ from skyrlrecipe.declared import (
 )
 from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
 from skyrlrecipe.settings import parse_setting as typed_setting_value
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
 from experiments.post_training import rl_presets as presets
@@ -123,11 +126,38 @@ def _write_sample(selection: str, filename: str, count: int, seed: int, output: 
     fs.makedirs(str(PurePosixPath(key).parent), exist_ok=True)
     with fs.open(key, "wb") as stream:
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), stream)
-    source_fs, source_key = filesystem_for(prefix_join(selection, TASK_MANIFEST_FILENAME))
-    if source_fs.exists(source_key):
-        fs, key = filesystem_for(prefix_join(output, TASK_MANIFEST_FILENAME))
-        with source_fs.open(source_key, "rb") as source, fs.open(key, "wb") as target:
-            target.write(source.read())
+    panel = read_selection_strata(selection)
+    if panel is not None:
+        annotations = []
+        for row in rows:
+            document = json.loads(row[TASK_SPEC_COLUMN])
+            task_id = document["id"]
+            annotation = panel.tasks.get(task_id)
+            if annotation is None:
+                identity = panel.identity(task_id)
+                annotation = SelectionTaskRow(task_id=task_id, **identity.strata.model_dump(), agentic=identity.agentic)
+            annotations.append(
+                annotation.model_copy(
+                    update={"task_digest": canonical_sha256(document), "state": MembershipState.ACTIVE}
+                )
+            )
+        destination = StoragePath(output)
+        with (destination / TASK_MANIFEST_FILENAME).open("wb") as stream:
+            pq.write_table(
+                pa.Table.from_pylist(
+                    [row.model_dump(mode="json") for row in annotations], schema=arrow_schema(SelectionTaskRow)
+                ),
+                stream,
+            )
+        definition = panel.definition.model_copy(
+            update={
+                "task_files": (f"{filename}.parquet",),
+                "active_files": (f"{filename}.parquet",),
+                "family_quotas": {},
+                "sampling": f"seeded sample of {filename}",
+            }
+        )
+        (destination / SUMMARY_FILENAME).write_text(json.dumps({"selection_strata": definition.model_dump(mode="json")}))
 
 
 def sampled_tasks_step(
