@@ -364,13 +364,21 @@ The `old-iris-jobs` watch runs the `ops-report` profile
 ([prompt](watches/old-iris-jobs.md)). The profile runs Claude: a strict Codex
 profile cannot run `uv run`, because its commands cannot write the uv cache. The watch runs
 [`scripts/ops/old_iris_jobs.py`](../../scripts/ops/old_iris_jobs.py) against the
-`marin` hub and posts the Iris root jobs older than the prompt's
-`--min-age-days` to `#marin-alerts`, once per job while the job keeps running.
-The report leaves out the jobs of the owners that the prompt's `--exclude-owner`
-options name.
-Loom has no CoreWeave kubeconfig, so the report has the jobs the hub federates
-to CoreWeave but not the jobs submitted directly to a CoreWeave controller. The
-watch does not cancel jobs.
+`marin` hub. The script keeps a Google Sheet with one tab per job owner and one
+row per Iris root job older than the prompt's `--min-age-days`. An owner sets
+the Decision cell of a row. `Kill` makes the next run cancel the job. `Keep 30
+days` leaves the job alone until the Keep until date, then the run clears the
+decision. A job with no decision stays in the sheet, and a job that stops
+running leaves it. The watch posts nothing to Slack. It needs:
+
+- the sheet shared with `loom-vm@hai-gcp-models.iam.gserviceaccount.com` as an
+  editor. Every person with edit access to the sheet can make the watch cancel
+  a job, so share it only with job owners and operators;
+- the `marin` IAM stack applied, for the `loom-vm` token-creator grant on
+  itself that mints a spreadsheets-scoped token.
+
+Loom has no CoreWeave kubeconfig, so the sheet has the jobs the hub federates
+to CoreWeave but not the jobs submitted directly to a CoreWeave controller.
 
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
 before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)

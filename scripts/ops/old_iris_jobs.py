@@ -2,22 +2,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Report Iris root jobs that keep running past an age threshold.
+"""Keep a Google Sheet of the Iris root jobs that run past an age threshold, and act on owner decisions.
 
 The ``old-iris-jobs`` Loom watch (``infra/loom/watches/old-iris-jobs.md``) runs this
-script, posts the messages it writes to Slack, and keeps its state for the next run.
-Children count toward their root, because the owner cancels the root. A job is
-posted once while it keeps running, including while a preemption leaves every task
-pending; a job that stops running leaves the state.
+script. Each owner has a tab with one row per old job. Children count toward their
+root, because a cancel applies to the root. The owner sets the Decision cell of a
+row: ``Kill`` makes the next run cancel the job, and the keep decision hides the
+question until the Keep until date. A job that stops running leaves the sheet.
+
+The sheet is the only state. A run reads every owner tab, then writes it again, so
+an edit that an owner makes during a run can be lost.
 """
 
-import json
+import datetime
 from collections import Counter, defaultdict
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, replace
 
 import click
+import google.auth
+from google.auth import impersonated_credentials
+from google.auth.transport.requests import AuthorizedSession
 from iris.cli.connect import open_iris_client
 from iris.cli.task import format_resources
 from iris.client.workload import JobStatus, ResourceRequest
@@ -27,9 +32,18 @@ from rigging.timing import Timestamp
 
 ACTIVE_TASK_STATES = (TaskState.ASSIGNED, TaskState.BUILDING, TaskState.RUNNING)
 MS_PER_DAY = 86_400_000
-# Loom's Slack post accepts at most 4,000 bytes; a longer report continues in the next message.
-MAX_MESSAGE_BYTES = 3_500
-REPORTED_KEY = "reported"
+KEEP_DAYS = 30
+KILL_DECISION = "Kill"
+KEEP_DECISION = f"Keep {KEEP_DAYS} days"
+DECISIONS = (KILL_DECISION, KEEP_DECISION)
+CANCEL_REQUESTED_STATUS = "Cancel requested"
+UNKNOWN_DECISION_STATUS = "Unknown decision"
+HEADER = ("Cluster", "Job", "Started", "Age (days)", "Resources", "Listed", "Decision", "Keep until", "Status")
+DECISION_COLUMN = HEADER.index("Decision")
+LAST_COLUMN = chr(ord("A") + len(HEADER) - 1)
+SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
+SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 
 
 @dataclass(frozen=True)
@@ -44,12 +58,41 @@ class OldJob:
     occupied: Mapping[ResourceRequest, int]
 
     @property
-    def key(self) -> str:
-        return f"{self.cluster}:{self.root}"
-
-    @property
     def holds_accelerator(self) -> bool:
         return any(resources.device is not None for resources in self.occupied)
+
+
+@dataclass(frozen=True)
+class SheetRow:
+    """One job row of an owner tab. The owner edits ``decision``; the script writes the other cells."""
+
+    cluster: str
+    job: str
+    started: str = ""
+    age_days: str = ""
+    resources: str = ""
+    listed: str = ""
+    decision: str = ""
+    keep_until: str = ""
+    status: str = ""
+
+    @classmethod
+    def from_cells(cls, cells: Sequence[str]) -> "SheetRow":
+        # The Sheets API omits the empty cells at the end of a row.
+        return cls(*cells, *[""] * (len(HEADER) - len(cells)))
+
+    def cells(self) -> list[str]:
+        return [
+            self.cluster,
+            self.job,
+            self.started,
+            self.age_days,
+            self.resources,
+            self.listed,
+            self.decision,
+            self.keep_until,
+            self.status,
+        ]
 
 
 def active_task_count(job: JobStatus) -> int:
@@ -89,53 +132,170 @@ def find_old_jobs(
     return old_jobs
 
 
-def _job_line(job: OldJob, now_ms: int) -> str:
-    age_days = (now_ms - job.started_at_ms) / MS_PER_DAY
-    resources = "; ".join(sorted(f"{count}x ({format_resources(request)})" for request, count in job.occupied.items()))
-    return f"• {job.cluster} `{job.root}`: owner {job.root.user}, {age_days:.1f} days, {resources}"
+def tab_title(owner: str) -> str:
+    """Return the tab of an owner; an email owner uses the part before the ``@``."""
+    return owner.split("@")[0]
 
 
-def _compose_messages(new_jobs: Sequence[OldJob], scanned_cluster: str, now_ms: int, min_age_days: float) -> list[str]:
-    """Return the Slack messages that list every new job: accelerator holders first, then oldest first."""
-    if not new_jobs:
-        return []
-    # The cancel command names the scanned cluster: the hub routes a cancel to the peer
-    # that runs a federated job, and an owner may lack CoreWeave port-forward access.
-    header = [
-        f"*Iris jobs active for more than {min_age_days:g} days*",
-        "Each job is listed once while it keeps running. Cancel a job you no longer need with "
-        f"`iris --cluster={scanned_cluster} job cancel <job>`.",
-        "",
-    ]
-    messages = ["\n".join(header)]
-    for job in sorted(new_jobs, key=lambda job: (not job.holds_accelerator, job.started_at_ms)):
-        line = _job_line(job, now_ms)
-        if len(messages[-1].encode()) + len(line.encode()) + 1 > MAX_MESSAGE_BYTES:
-            messages.append(line)
-        else:
-            messages[-1] += "\n" + line
-    return messages
+def _decided_row(row: SheetRow, today: datetime.date) -> SheetRow:
+    """Apply the owner's decision to the cells that the script owns."""
+    if row.decision == KILL_DECISION:
+        # The date of the first request stays while the job shuts down.
+        status = row.status if row.status.startswith(CANCEL_REQUESTED_STATUS) else f"{CANCEL_REQUESTED_STATUS} {today}"
+        return replace(row, keep_until="", status=status)
+    if row.decision == KEEP_DECISION:
+        try:
+            keep_until = datetime.date.fromisoformat(row.keep_until)
+        except ValueError:
+            keep_until = today + datetime.timedelta(days=KEEP_DAYS)
+        if keep_until <= today:
+            return replace(row, decision="", keep_until="", status="")
+        return replace(row, keep_until=str(keep_until), status="")
+    return replace(row, keep_until="", status=UNKNOWN_DECISION_STATUS if row.decision else "")
 
 
-def report(
-    old_jobs: Sequence[OldJob], reported: set[str], scanned_cluster: str, now_ms: int, min_age_days: float
-) -> tuple[list[str], set[str]]:
-    """Return the Slack messages for the jobs not yet reported, and the reported keys for the next run.
+def plan_tabs(
+    old_jobs: Sequence[OldJob], tabs: Mapping[str, Sequence[SheetRow]], now_ms: int
+) -> tuple[dict[str, list[SheetRow]], list[JobName]]:
+    """Return the rows that each owner tab must hold, and the jobs to cancel.
 
-    A job with no active task is not posted but keeps its key. There are no
-    messages when no job is new. The next keys drop jobs that no longer run.
+    ``tabs`` holds the current rows of each owner tab. A job gets a row when it has
+    an active task; the row stays through a preemption that leaves every task
+    pending, and goes when the job stops running. Rows list accelerator holders
+    first, then oldest first. Every tab in ``tabs`` is in the result, so a tab
+    whose jobs all stopped is written empty.
     """
-    new_jobs = [job for job in old_jobs if job.occupied and job.key not in reported]
-    messages = _compose_messages(new_jobs, scanned_cluster, now_ms, min_age_days)
-    current = {job.key for job in old_jobs}
-    return messages, (reported & current) | {job.key for job in new_jobs}
+    today = Timestamp.from_ms(now_ms).as_naive_utc().date()
+    current = {(row.cluster, row.job): row for rows in tabs.values() for row in rows}
+    planned: dict[str, list[SheetRow]] = {title: [] for title in tabs}
+    cancels = []
+    for job in sorted(old_jobs, key=lambda job: (not job.holds_accelerator, job.started_at_ms)):
+        row = current.get((job.cluster, str(job.root)))
+        if row is None:
+            if not job.occupied:
+                continue
+            row = SheetRow(job.cluster, str(job.root), listed=str(today))
+        row = _decided_row(row, today)
+        if row.decision == KILL_DECISION:
+            cancels.append(job.root)
+        resources = "; ".join(
+            sorted(f"{count}x ({format_resources(request)})" for request, count in job.occupied.items())
+        )
+        row = replace(
+            row,
+            started=str(Timestamp.from_ms(job.started_at_ms).as_naive_utc().date()),
+            age_days=f"{(now_ms - job.started_at_ms) / MS_PER_DAY:.1f}",
+            resources=resources,
+        )
+        planned.setdefault(tab_title(job.root.user), []).append(row)
+    return planned, cancels
 
 
-def read_reported(state_path: Path) -> set[str]:
-    if not state_path.exists():
-        return set()
-    # A Loom watch that has not stored a state yet holds {}.
-    return set(json.loads(state_path.read_text()).get(REPORTED_KEY, []))
+def sheets_session(service_account: str) -> AuthorizedSession:
+    """Return a session that calls the Sheets API as ``service_account``.
+
+    The Loom VM's metadata token lacks the spreadsheets scope, so the VM account impersonates itself.
+    """
+    source, _ = google.auth.default(scopes=[CLOUD_PLATFORM_SCOPE])
+    return AuthorizedSession(
+        impersonated_credentials.Credentials(
+            source_credentials=source, target_principal=service_account, target_scopes=[SHEETS_SCOPE]
+        )
+    )
+
+
+def _call(session: AuthorizedSession, method: str, url: str, **kwargs) -> dict:
+    response = session.request(method, url, timeout=60, **kwargs)
+    if not response.ok:
+        raise RuntimeError(f"{method} {url} failed with {response.status_code}: {response.text}")
+    return response.json()
+
+
+def _rows_range(title: str, first_row: int) -> str:
+    quoted = title.replace("'", "''")
+    return f"'{quoted}'!A{first_row}:{LAST_COLUMN}"
+
+
+def read_owner_tabs(session: AuthorizedSession, sheet_id: str) -> dict[str, list[SheetRow]]:
+    """Return the job rows of each owner tab. A tab is an owner tab when its first row is the header."""
+    sheets = _call(session, "GET", f"{SHEETS_API}/{sheet_id}", params={"fields": "sheets.properties.title"})["sheets"]
+    titles = [sheet["properties"]["title"] for sheet in sheets]
+    ranges = _call(
+        session,
+        "GET",
+        f"{SHEETS_API}/{sheet_id}/values:batchGet",
+        params={"ranges": [_rows_range(title, 1) for title in titles]},
+    )["valueRanges"]
+    tabs = {}
+    for title, value_range in zip(titles, ranges, strict=True):
+        values = value_range.get("values", [])
+        if values and tuple(values[0]) == HEADER:
+            tabs[title] = [SheetRow.from_cells(cells) for cells in values[1:] if cells]
+    return tabs
+
+
+def add_owner_tabs(session: AuthorizedSession, sheet_id: str, titles: Sequence[str]) -> None:
+    """Add a tab for each title, with a frozen header row and a dropdown in the Decision column."""
+    if not titles:
+        return
+    added = _call(
+        session,
+        "POST",
+        f"{SHEETS_API}/{sheet_id}:batchUpdate",
+        json={
+            "requests": [
+                {"addSheet": {"properties": {"title": title, "gridProperties": {"frozenRowCount": 1}}}}
+                for title in titles
+            ]
+        },
+    )["replies"]
+    validations = [
+        {
+            "setDataValidation": {
+                "range": {
+                    "sheetId": reply["addSheet"]["properties"]["sheetId"],
+                    "startRowIndex": 1,
+                    "startColumnIndex": DECISION_COLUMN,
+                    "endColumnIndex": DECISION_COLUMN + 1,
+                },
+                "rule": {
+                    "condition": {
+                        "type": "ONE_OF_LIST",
+                        "values": [{"userEnteredValue": decision} for decision in DECISIONS],
+                    },
+                    "strict": True,
+                    "showCustomUi": True,
+                },
+            }
+        }
+        for reply in added
+    ]
+    _call(session, "POST", f"{SHEETS_API}/{sheet_id}:batchUpdate", json={"requests": validations})
+
+
+def write_owner_tabs(session: AuthorizedSession, sheet_id: str, tabs: Mapping[str, Sequence[SheetRow]]) -> None:
+    """Replace the content of each tab in ``tabs`` with the header and its rows."""
+    if not tabs:
+        return
+    _call(
+        session,
+        "POST",
+        f"{SHEETS_API}/{sheet_id}/values:batchClear",
+        json={"ranges": [_rows_range(title, 1) for title in tabs]},
+    )
+    _call(
+        session,
+        "POST",
+        f"{SHEETS_API}/{sheet_id}/values:batchUpdate",
+        json={
+            # RAW keeps dates and ages as the text that the next run reads.
+            "valueInputOption": "RAW",
+            "data": [
+                {"range": _rows_range(title, 1), "values": [list(HEADER), *(row.cells() for row in rows)]}
+                for title, rows in tabs.items()
+            ],
+        },
+    )
 
 
 @click.command()
@@ -148,35 +308,34 @@ def read_reported(state_path: Path) -> set[str]:
     "--min-age-days",
     type=click.FloatRange(min=0, min_open=True),
     required=True,
-    help="Report root jobs whose running tree started more than this many days ago.",
+    help="List root jobs whose running tree started more than this many days ago.",
 )
 @click.option(
     "--exclude-owner",
     "excluded_owners",
     multiple=True,
-    help="Owner whose jobs the report leaves out. Repeat for each owner.",
+    help="Owner whose jobs the sheet leaves out. Repeat for each owner.",
 )
+@click.option("--sheet-id", required=True, help="ID of the Google Sheet that holds one tab per owner.")
 @click.option(
-    "--state",
-    "state_path",
-    type=click.Path(dir_okay=False, path_type=Path),
+    "--impersonate",
+    "service_account",
     required=True,
-    help='Reported-job state, {"reported": [...]} or {}; read when it exists, then replaced.',
+    help="Service account with edit access to the sheet.",
 )
-@click.option(
-    "--messages-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    required=True,
-    help="Slack messages output, one file per message, to post in name order; "
-    "must not exist yet. Stays empty when no job is new.",
-)
+@click.option("--dry-run", is_flag=True, help="Print the planned rows and cancels; change no sheet and no job.")
 def main(
-    cluster: str, min_age_days: float, excluded_owners: tuple[str, ...], state_path: Path, messages_dir: Path
+    cluster: str,
+    min_age_days: float,
+    excluded_owners: tuple[str, ...],
+    sheet_id: str,
+    service_account: str,
+    dry_run: bool,
 ) -> None:
-    # A message left by an earlier run must not be posted again.
-    messages_dir.mkdir(parents=True)
     now_ms = Timestamp.now().epoch_ms()
     cutoff_ms = now_ms - int(min_age_days * MS_PER_DAY)
+    session = sheets_session(service_account)
+    tabs = read_owner_tabs(session, sheet_id)
     with open_iris_client(cluster_name=cluster, workspace=None) as client:
         # ListJobs omits resources; the per-job status carries them.
         old_jobs = find_old_jobs(
@@ -186,13 +345,24 @@ def main(
             lambda job_id: client.job_status(job_id).resources,
             excluded_owners,
         )
-
-    reported = read_reported(state_path)
-    messages, next_reported = report(old_jobs, reported, cluster, now_ms, min_age_days)
-    for index, message in enumerate(messages, start=1):
-        (messages_dir / f"{index:02d}.md").write_text(message)
-    state_path.write_text(json.dumps({REPORTED_KEY: sorted(next_reported)}, indent=2) + "\n")
-    click.echo(f"{len(old_jobs)} old running jobs; {len(next_reported - reported)} new in {len(messages)} messages")
+        planned, cancels = plan_tabs(old_jobs, tabs, now_ms)
+        if dry_run:
+            for title, rows in planned.items():
+                for row in rows:
+                    click.echo("\t".join([title, *row.cells()]))
+        else:
+            # The hub routes a cancel to the peer that runs a federated job.
+            for root in cancels:
+                client.cancel_job(root)
+    if not dry_run:
+        add_owner_tabs(session, sheet_id, [title for title in planned if title not in tabs])
+        write_owner_tabs(session, sheet_id, planned)
+    listed = sum(len(rows) for rows in planned.values())
+    undecided = sum(not row.decision for rows in planned.values() for row in rows)
+    click.echo(
+        f"{listed} old running jobs in {len(planned)} owner tabs; {undecided} without a decision; "
+        f"{len(cancels)} cancels requested" + ("; dry run, nothing changed" if dry_run else "")
+    )
 
 
 if __name__ == "__main__":
