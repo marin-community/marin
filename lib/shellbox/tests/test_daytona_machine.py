@@ -700,6 +700,9 @@ def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_
 
         async def get_session_command(self, *args, **kwargs):
             if self.fail:
+                async with asyncio.timeout(5):
+                    while not (tmp_path / "child.pid").exists() or not (tmp_path / "child.pid").read_text().strip():
+                        await asyncio.sleep(0)
                 raise provider_error
             return await super().get_session_command(*args, **kwargs)
 
@@ -719,7 +722,7 @@ def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_
         process.fail = True
         try:
             with pytest.raises(RuntimeError) as caught:
-                await machine.run(Command(("printf", "do-not-replay")))
+                await machine.run(Command(("sh", "-c", "sleep 3600 & echo $! > child.pid; wait")))
             assert caught.value.__cause__ is provider_error
             assert process.executions == before + 1
             assert not process.sessions
@@ -728,10 +731,29 @@ def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_
             else:
                 assert not client.deleted
                 process.fail = False
+                child = int((tmp_path / "child.pid").read_text())
+                stopped = await machine.run(
+                    Command(
+                        (
+                            "sh",
+                            "-c",
+                            'if [ -f "/proc/$1/stat" ]; then read -r pid comm state rest < "/proc/$1/stat"; '
+                            'test "$state" = Z; fi',
+                            "child-state",
+                            str(child),
+                        )
+                    )
+                )
+                assert stopped.exit_code == 0
                 result = await machine.run(Command(("printf", "following")))
                 assert (result.exit_code, result.stdout) == (0, b"following")
         finally:
             await machine.close()
+            if (tmp_path / "child.pid").exists():
+                try:
+                    os.kill(int((tmp_path / "child.pid").read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     asyncio.run(scenario())
 

@@ -310,8 +310,8 @@ class DaytonaMachine:
             if removed.exit_code:
                 raise RuntimeError("Cannot remove Daytona command files")
 
-    async def _cleanup_cancelled_command(
-        self, prefix: str, pidfile: str, completed_path: str, started: bool, cancellation: asyncio.CancelledError
+    async def _cleanup_failed_command(
+        self, prefix: str, pidfile: str, completed_path: str, started: bool, failure: BaseException
     ) -> None:
         try:
             if started:
@@ -320,11 +320,11 @@ class DaytonaMachine:
             else:
                 await finish_owned(own_cleanup(self.close()))
         except BaseException as cleanup_error:
-            cancellation.add_note(f"Daytona command cancellation cleanup failed ({type(cleanup_error).__name__})")
+            failure.add_note(f"Daytona command failure cleanup failed ({type(cleanup_error).__name__})")
             try:
                 await finish_owned(own_cleanup(self.close()))
             except BaseException as close_error:
-                cancellation.add_note(f"Daytona machine cleanup failed ({type(close_error).__name__})")
+                failure.add_note(f"Daytona machine cleanup failed ({type(close_error).__name__})")
 
     async def open_process_scope(self) -> ProcessScope:
         raise UnsupportedMachineSpec("Daytona does not provide confirmed scoped descendant teardown")
@@ -433,6 +433,7 @@ class DaytonaMachine:
         started = False
         primary_error = None
         completed = False
+        command_files_removed = False
         environment = {**self.spec.env, **command.env}
         try:
             async with asyncio.timeout(command.timeout) as deadline:
@@ -511,6 +512,9 @@ class DaytonaMachine:
                 raise primary_error from error
             if not deadline.expired():
                 primary_error = error
+                if self.command_polling and started and not self._closed:
+                    await self._cleanup_failed_command(prefix, pidfile, completed_path, started, error)
+                    command_files_removed = True
                 raise
             if not started:
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
@@ -518,7 +522,7 @@ class DaytonaMachine:
                 await self._stop_command(pidfile, completed_path)
             except asyncio.CancelledError as cancellation:
                 primary_error = cancellation
-                await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
+                await self._cleanup_failed_command(prefix, pidfile, completed_path, started, cancellation)
                 raise
             except Exception as error:
                 await self.close()
@@ -526,13 +530,16 @@ class DaytonaMachine:
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         except asyncio.CancelledError as cancellation:
             primary_error = cancellation
-            await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
+            await self._cleanup_failed_command(prefix, pidfile, completed_path, started, cancellation)
             raise
         except BaseException as error:
             primary_error = error
+            if self.command_polling and started and not completed and not self._closed:
+                await self._cleanup_failed_command(prefix, pidfile, completed_path, started, error)
+                command_files_removed = True
             raise
         finally:
-            if not self._closed and not isinstance(primary_error, asyncio.CancelledError):
+            if not self._closed and not command_files_removed and not isinstance(primary_error, asyncio.CancelledError):
                 try:
                     await self._remove_command_files(prefix)
                 except asyncio.CancelledError:
