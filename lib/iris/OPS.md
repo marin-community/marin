@@ -532,6 +532,54 @@ Kueue to account for transient overlap during rollout. Verify a separately
 authorized CPU SANDBOX canary receives an `iris-cpu` assignment, starts its
 process and exits successfully; admission alone does not verify the runtime.
 
+### 02a sandbox runtime rollout
+
+The 02a sandbox RuntimeClass requests CoreWeave's `cw-gvisor-cpu` handler and
+selects gVisor-labelled `cpu-genoa` nodes. It does not install the handler.
+First apply [the CPU topology resources](https://github.com/marin-community/marin/pull/11515)
+for 02a so Kueue can admit CPU work through `iris-cpu`. Apply the RuntimeClass
+before deploying an Iris controller that selects it.
+
+Review a targeted Pulumi preview for the RuntimeClass alone. Require one create
+or update, with no NodePool, ClusterQueue, controller, or unrelated resource
+change. After approval for that exact preview, run the same command with `up`:
+
+```bash
+runtime_urn='urn:pulumi:cw-us-east-02a::marin-iac::kubernetes:node.k8s.io/v1:RuntimeClass::sandbox-runtime-class'
+PULUMI_PYTHON_CMD="$PWD/.venv/bin/python" KUBECONFIG="$HOME/.kube/coreweave-iris" \
+  pulumi -C infra/pulumi preview --stack cw-us-east-02a --target "$runtime_urn"
+```
+
+Check the installed handler and eligible nodes with the configured 02a context:
+
+```bash
+kubectl --kubeconfig "$HOME/.kube/coreweave-iris" --context marin-gpu_US-EAST-02A \
+  get runtimeclass iris-gvisor-cpu \
+  -o jsonpath='{.handler}{"\n"}{.scheduling.nodeSelector}{"\n"}'
+kubectl --kubeconfig "$HOME/.kube/coreweave-iris" --context marin-gpu_US-EAST-02A \
+  get nodes -l 'iris-cw-use02a-scale-group=cpu-genoa,node.coreweave.cloud/gvisor=true' \
+  -o custom-columns='NODE:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status,CPU:.status.allocatable.cpu,MEMORY:.status.allocatable.memory'
+```
+
+Before changing the Iris controller, start one bounded public-image sandbox Pod
+with `runtimeClassName: iris-gvisor-cpu` and a hostname selector on each eligible
+CPU node. Require each Pod to reach Running within 600 seconds. Read Pod events
+and the kubelet, containerd, `cw-gvisor-cpu`, and `runsc` logs on any failed node;
+the `FailedCreatePodSandBox` event alone does not identify the cause. If the
+direct handler fails, repair it with CoreWeave before routing Iris sandbox work.
+
+After every node passes, deploy the Iris controller through its normal rollout
+procedure. Run an Iris CPU `SANDBOX` canary and confirm its Kueue assignment,
+RuntimeClass, selected node, and process exit. Check a 1 GiB sandbox disk limit
+with a 1152 MiB write: require eviction and Iris `RESOURCE_LIMIT_DISK` rather
+than a generic process failure. Then run a bounded batch at expected Taskforge
+concurrency. Require every admitted Pod to reach Running within 600 seconds,
+without `FailedCreatePodSandBox` events, and runtime shim and cgroup counts to
+return to baseline after teardown. Record allocatable CPU and memory, Kueue
+quota, and each result in [#10090](https://github.com/marin-community/marin/issues/10090)
+and [#11343](https://github.com/marin-community/marin/issues/11343) before
+resuming normal 02a sandbox traffic.
+
 ### Public LoadBalancer reachability
 
 A working port-forward does not prove federation ingress works. Test controller,
