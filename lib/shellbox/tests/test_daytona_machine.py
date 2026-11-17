@@ -317,13 +317,9 @@ def test_snapshot_preflight_builds_without_starting_sandbox_and_reuses_image():
 
 
 @pytest.mark.parametrize("policy", [None, DaytonaNetworkPolicy(DaytonaNetworkMode.DOMAIN_ALLOW_LIST, "example.org")])
-<<<<<<< HEAD
 @pytest.mark.requires_host_setsid
-def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
-=======
 @pytest.mark.parametrize("command_polling", [False, True])
 def test_daytona_binary_command_and_files(tmp_path: Path, policy, command_polling) -> None:
->>>>>>> bb60a34311 (Add opt-in Daytona command execution with status polling)
     async def scenario() -> None:
         client = LocalDaytona()
         workdir = tmp_path / "work"
@@ -468,7 +464,7 @@ def test_daytona_output_collection_uses_its_own_deadline(collection_timeout: flo
     asyncio.run(scenario())
 
 
-@pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
+@pytest.mark.requires_host_setsid
 @pytest.mark.parametrize("interruption", ["timeout", "cancel", "cancel_twice", "cancel_during_timeout_stop"])
 @pytest.mark.parametrize("command_polling", [False, True])
 def test_daytona_command_interruption_stops_descendants_and_preserves_next_command(
@@ -680,9 +676,7 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
     asyncio.run(scenario())
 
 
-<<<<<<< HEAD
 @pytest.mark.requires_host_setsid
-=======
 @pytest.mark.parametrize("cleanup_fails", [False, True])
 def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_path, cleanup_fails):
     provider_error = TimeoutError("Provider status request timed out")
@@ -735,7 +729,7 @@ def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_
     asyncio.run(scenario())
 
 
->>>>>>> bb60a34311 (Add opt-in Daytona command execution with status polling)
+@pytest.mark.requires_host_setsid
 def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation():
     entered = asyncio.Event()
 
@@ -793,7 +787,8 @@ def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error():
 
 @pytest.mark.parametrize("path_source", ["image", "task"])
 @pytest.mark.requires_host_setsid
-def test_daytona_root_cleanup_does_not_execute_candidate_path_programs(tmp_path, path_source):
+@pytest.mark.parametrize("command_polling", [False, True])
+def test_daytona_root_cleanup_does_not_execute_candidate_path_programs(tmp_path, path_source, command_polling):
     binary = tmp_path / "bin"
     binary.mkdir()
     marker = tmp_path / "root-cleanup-executed"
@@ -815,7 +810,7 @@ def test_daytona_root_cleanup_does_not_execute_candidate_path_programs(tmp_path,
     async def scenario():
         client = LocalDaytona()
         client.sandbox.process = ImageProcess()
-        machine = await DaytonaMachineFactory(lambda: client).create(
+        machine = await DaytonaMachineFactory(lambda: client, command_polling=command_polling).create(
             MachineSpec(
                 RegistryImage("ubuntu:24.04"),
                 workdir=str(tmp_path),

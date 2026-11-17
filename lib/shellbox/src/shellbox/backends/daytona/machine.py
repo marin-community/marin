@@ -169,16 +169,13 @@ class DaytonaMachine:
     """One Daytona sandbox. Each command gets a fresh process and shared files."""
 
     def __init__(
-<<<<<<< HEAD
         self,
         sandbox: AsyncSandbox,
         spec: MachineSpec,
         resources: AsyncExitStack,
         *,
         output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
-=======
-        self, sandbox: AsyncSandbox, spec: MachineSpec, resources: AsyncExitStack, *, command_polling: bool = False
->>>>>>> bb60a34311 (Add opt-in Daytona command execution with status polling)
+        command_polling: bool = False,
     ):
         self.sandbox = sandbox
         self.spec = spec
@@ -429,15 +426,6 @@ class DaytonaMachine:
                     lines.append(_control_command(script))
                     await self.sandbox.fs.upload_file_stream(("\n".join(lines) + "\n").encode(), command_path)
                 started = True
-<<<<<<< HEAD
-                response = await self.sandbox.process.exec(
-                    _control_command(script),
-                    cwd=command.cwd or self.spec.workdir or None,
-                    env=environment,
-                    timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,
-                )
-            async with asyncio.timeout(self.output_collection_timeout):
-=======
                 if self.command_polling:
                     exit_code = await self._poll_command(command_path)
                 else:
@@ -449,8 +437,7 @@ class DaytonaMachine:
                     )
                     exit_code = response.exit_code
                 completed = True
-            async with asyncio.timeout(INTERRUPT_TIMEOUT):
->>>>>>> bb60a34311 (Add opt-in Daytona command execution with status polling)
+            async with asyncio.timeout(self.output_collection_timeout):
                 limit = command.output_limit_bytes
                 stdout, stdout_truncated = await self._read_output(stdout_path, limit)
                 stderr, stderr_truncated = await self._read_output(stderr_path, limit)
@@ -600,22 +587,16 @@ class DaytonaMachineFactory:
         create_timeout: float = 600,
         output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
         network_policy: DaytonaNetworkPolicy | None = None,
-<<<<<<< HEAD
         image_build: DaytonaImageBuild = DaytonaImageBuild.SNAPSHOT,
-=======
         command_polling: bool = False,
->>>>>>> bb60a34311 (Add opt-in Daytona command execution with status polling)
     ):
         self.client_factory = client_factory
         self.ttl_minutes = ttl_minutes
         self.create_timeout = create_timeout
         self.output_collection_timeout = output_collection_timeout
         self.network_policy = network_policy
-<<<<<<< HEAD
         self.image_build = image_build
-=======
         self.command_polling = command_polling
->>>>>>> bb60a34311 (Add opt-in Daytona command execution with status polling)
 
     def _clients(self) -> Callable[[], AsyncDaytona]:
         """Resolve the configured client factory for one provider session."""
@@ -696,11 +677,7 @@ class DaytonaMachineFactory:
             )
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
-<<<<<<< HEAD
-            machine = DaytonaMachine(sandbox, spec, lifetime, output_collection_timeout=self.output_collection_timeout)
-=======
-            machine = DaytonaMachine(sandbox, spec, lifetime, command_polling=self.command_polling)
->>>>>>> bb60a34311 (Add opt-in Daytona command execution with status polling)
+            machine = DaytonaMachine(sandbox, spec, lifetime, output_collection_timeout=self.output_collection_timeout, command_polling=self.command_polling)
             if spec.workdir:
                 result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/", env={"PATH": CONTROL_PATH}))
                 if result.exit_code:

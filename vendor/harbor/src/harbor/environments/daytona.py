@@ -101,12 +101,9 @@ class DaytonaEnvironment(BaseEnvironment):
         network_policy: dict[str, str] | None = None,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
-<<<<<<< HEAD
         image_build: str = DaytonaImageBuild.SNAPSHOT,
         output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
-=======
         command_polling: bool = False,
->>>>>>> bb60a34311 (Add opt-in Daytona command execution with status polling)
         model_endpoint: str | None = None,
         model_name: str | None = None,
         judge_access: JudgeAccess = JudgeAccess.VERIFIER,
@@ -139,11 +136,8 @@ class DaytonaEnvironment(BaseEnvironment):
             create_timeout=create_timeout,
             output_collection_timeout=output_collection_timeout,
             network_policy=policy,
-<<<<<<< HEAD
             image_build=DaytonaImageBuild(image_build),
-=======
             command_polling=command_polling,
->>>>>>> bb60a34311 (Add opt-in Daytona command execution with status polling)
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
         self.judge_access = JudgeAccess(judge_access)
