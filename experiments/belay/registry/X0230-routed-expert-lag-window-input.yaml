@@ -4,7 +4,7 @@ name: Routed-expert lag window input
 category: MoE and routing
 summary: 'Track: speedrun'
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6940793257
@@ -28,6 +28,13 @@ trials:
     moe_lag_window: 'true'
   commit: 7d0973a1e7
   priority: batch
+  loss:
+  - 3.0401
+  delta:
+  - -0.0041
+  steps: 3030
+  baseline: belay-X0230-control 3.0443 (same commit, seed 0)
+  step_time_change: +3%
 potential:
   score: 5
   rationale: 'No result yet: seed0 variant crashed in eval at step 3029 (lag-window sharding); repair blocked on gate bug'
