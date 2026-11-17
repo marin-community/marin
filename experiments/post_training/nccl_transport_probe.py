@@ -182,9 +182,11 @@ def allocate_port_block(count: int) -> int:
     return base
 
 
-def wait_for_rendezvous(resolver: Resolver, endpoint_name: str) -> tuple[str, int]:
+def wait_for_rendezvous(
+    resolver: Resolver, endpoint_name: str, timeout: int = RENDEZVOUS_TIMEOUT_SECONDS
+) -> tuple[str, int]:
     """Poll the Iris endpoint registry until task 0's master address appears."""
-    deadline = time.time() + RENDEZVOUS_TIMEOUT_SECONDS
+    deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             resolved = resolver.resolve(endpoint_name)
@@ -198,7 +200,7 @@ def wait_for_rendezvous(resolver: Resolver, endpoint_name: str) -> tuple[str, in
             if error.code not in _RENDEZVOUS_PENDING_CODES:
                 raise
         time.sleep(2)
-    raise TimeoutError(f"No rendezvous endpoint {endpoint_name!r} after {RENDEZVOUS_TIMEOUT_SECONDS}s")
+    raise TimeoutError(f"No rendezvous endpoint {endpoint_name!r} after {timeout}s")
 
 
 def spawn_worker(
@@ -338,7 +340,8 @@ def run_launcher(args: argparse.Namespace) -> None:
     ctx = iris_ctx()
     if args.endpoint_name:
         # An absolute name bypasses the job namespace, so two separate jobs can
-        # share one rendezvous; the low ranks register it as public.
+        # share one rendezvous; the low ranks register it with link access so
+        # the peer job may resolve it.
         endpoint_name = args.endpoint_name
         coordinator = rank_offset == 0
     else:
@@ -347,11 +350,16 @@ def run_launcher(args: argparse.Namespace) -> None:
     if coordinator:
         base_port = allocate_port_block(len(build_variants()) + 1)
         master_host = job_info.advertise_host
-        access = EndpointAccess.ENDPOINT_ACCESS_PUBLIC if args.endpoint_name else EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+        access = EndpointAccess.ENDPOINT_ACCESS_LINK if args.endpoint_name else EndpointAccess.ENDPOINT_ACCESS_PRIVATE
         endpoint_id = ctx.registry.register(endpoint_name, f"{master_host}:{base_port}", access=access)
         logger.info("Registered rendezvous %s at %s:%d", endpoint_name, master_host, base_port)
     else:
-        master_host, base_port = wait_for_rendezvous(ctx.resolver, endpoint_name)
+        rendezvous_timeout = (
+            args.rendezvous_timeout_seconds
+            if args.rendezvous_timeout_seconds
+            else (args.init_timeout_seconds or RENDEZVOUS_TIMEOUT_SECONDS)
+        )
+        master_host, base_port = wait_for_rendezvous(ctx.resolver, endpoint_name, timeout=rendezvous_timeout)
         logger.info("Resolved rendezvous at %s:%d", master_host, base_port)
 
     log_dir = RESULT_DIR / f"task{task_index}"
@@ -457,6 +465,11 @@ def main() -> None:
         "--init-timeout-seconds",
         type=int,
         help="Launcher: process-group init timeout for the workers (default 300)",
+    )
+    parser.add_argument(
+        "--rendezvous-timeout-seconds",
+        type=int,
+        help="Launcher: how long a peer waits for the coordinator's registry entry (default: init timeout)",
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
