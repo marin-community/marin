@@ -203,10 +203,13 @@ These files have a `task_spec` JSON column. `summary.json` records the recipe,
 source paths, eligible/overlap/duplicate/selected counts, evaluation IDs and
 grader-kind counts for each file.
 
-`task_manifest.parquet` records every heldout task's `task_id`, `family`,
-`aaii_category`, `agentic` flag, `grader_kind` and `upstream_pass_rate` (NVIDIA's
-eight-sample rate where available). The evaluation sample is a subset of this
-complete heldout manifest. Historical Nemotron panel tasks use the package
+Every training row carries `family`, `aai_category`, `source`, `topic` and
+`difficulty` beside `task_spec`; unknown tags are `untagged`.
+`task_manifest.parquet` uses the shared `finestore.rl.strata.SelectionTaskRow`
+schema for the complete training and heldout pool: task digest, strata, active
+membership, grader metadata and measured difficulty. `summary.json` stores the
+versioned `SelectionDefinition` with its pool and active files. Historical
+upstream pass rates remain measured difficulty values; they are not inferred tags. Historical Nemotron panel tasks use the package
 environment from an admitted task in their matching training component; their
 private grader resources and command stay attached to each task. The historical
 structural heldout tasks use the shared closure converter. SkyRL chooses rollout
@@ -261,8 +264,14 @@ To change the panel:
    greedy evaluation must score at least 99% of tasks with zero grading errors.
 
 The artifact contains `full_validation.parquet` (all tasks), `validation.parquet`
-(fast subset), `task_manifest.parquet` (family, category, grader kind, source,
-license and difficulty per task) and `summary.json`.
+(active subset), `task_manifest.parquet` (the same typed strata and task digests,
+reference-model measurements, membership and retirement reason) and `summary.json`.
+Each version retains its parent's complete TaskSpec pool and adds new tasks;
+retirement changes active membership. The definition records its parent and the
+explicit difficulty bands. Active sampling uses proportional joint source, topic
+and difficulty cells inside the fixed family quotas, with largest remainders and
+seeded ties. Tasks measured as saturated for every declared reference model are
+retired; missing reference evidence does not establish saturation.
 
 ### Rebuild a Snowball training selection
 
