@@ -257,7 +257,7 @@ executors receive their resolved roots. Catalog publication remains in the curat
 workflow. Native generation menus publish
 raw and chat variants separately; no runtime task registry is loaded.
 
-`score_curated_record` in `marin.rollouts.evaluation_results` selects one latest
+`score_curated_record` in `evalrecords.rollout_results` selects one latest
 finished retry per logical trial and applies these reductions. Evaldash uses it to
 import raw FineStore stores; `experiments.evaluation.cli scores` prints the same
 result for a run. Its sample browser uses the same trial selection.

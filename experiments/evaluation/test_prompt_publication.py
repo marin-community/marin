@@ -9,9 +9,9 @@ from dataclasses import replace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from evalrecords.records import PromptFormat
 from finestore.rl.curation import CurationCatalog
 from fray.local_backend import LocalClient
-from marin.evaluation.records import PromptFormat
 from shellbox.machine import PackageSpec
 from taskcompendium.evaluation.corpus import evaluation_cases, evaluation_protocol
 from taskcompendium.evaluation.selection import select_cases

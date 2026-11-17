@@ -339,7 +339,7 @@ Validate with the strongest reference available:
    `datasets` 3.6 still runs dataset loading scripts, which some lm-eval tasks
    need. Expect agreement on nearly every item; numerical differences between
    vLLM and Hugging Face flip only near-ties, so examine every disagreement.
-   Read Marin's per-item results with `marin.rollouts.evaluation_results.logical_samples`
+   Read Marin's per-item results with `evalrecords.rollout_results.logical_samples`
    over a `finestore.reader.ReadView` of the run's results path.
 2. **Published scores.** Compare with the model card or paper under the same
    protocol. Agreement within about two standard errors is consistent. A larger

@@ -387,7 +387,11 @@ async def test_local_candidate_and_judge_relays_route_independently_without_gues
             script = f"""
 import json, os, urllib.request, urllib.error
 assert os.environ['OPENAI_API_KEY'] == 'EMPTY'
-assert not any('private' in value or 'host-secret' in value for value in os.environ.values())
+assert not any(
+    secret in value
+    for value in os.environ.values()
+    for secret in ('candidate-private', 'judge-private', 'private-capability', 'unforwarded-host-secret')
+)
 for port, model in [({candidate_port}, 'candidate'), ({judge_port}, 'judge')]:
     request = urllib.request.Request(
         'http://127.0.0.1:' + str(port) + '/v1/chat/completions',

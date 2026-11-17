@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import Literal
 
-from marin.evaluation.records import PromptFormat
+from evalrecords.records import PromptFormat
 from taskcompendium.evaluation.corpus import ItemBuilder
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,

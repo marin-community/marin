@@ -14,7 +14,7 @@ from taskcompendium.evaluation.selection import SELECTIONS_TABLE
 from taskcompendium.evaluation.spec import EvaluationProtocol, SummaryKind
 from taskcompendium.identity import canonical_sha256
 
-from marin.evaluation.records import (
+from evalrecords.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
     EvalRunRecord,
@@ -24,7 +24,7 @@ from marin.evaluation.records import (
     ResolvedEvaluationSelection,
     TaskCoverage,
 )
-from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 
 SCORED_OUTCOMES = frozenset({"graded", "submission_failure"})
 SUMMARY_REVISION = "2026.11.08.1"

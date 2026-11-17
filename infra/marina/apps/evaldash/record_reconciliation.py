@@ -11,10 +11,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from marin.evaluation.records import RECORD_FILE, EvalRunRecord
-from marin.execution.step_status import STATUS_FAILED, STATUS_RUNNING, StatusFile
-from marin.rollouts.evaluation_results import SUMMARY_REVISION, score_curated_record
+from evalrecords.records import RECORD_FILE, EvalRunRecord
+from evalrecords.rollout_results import SUMMARY_REVISION, score_curated_record
 from rigging.filesystem.conditional_object import conditional_object
+from rigging.filesystem.step_status import STATUS_FAILED, STATUS_RUNNING, read_step_status
 from rigging.filesystem.storage_path import StoragePath
 
 from .results_db import ObservationKind, RecordObservation, SourceState
@@ -54,7 +54,7 @@ def _record_run_id(path: str) -> str:
 
 def step_status_for_record(path: str) -> str | None:
     """Read the StepSpec state adjacent to a run record, when one exists."""
-    return StatusFile(str(StoragePath(path).parent), worker_id="evaldash").status
+    return read_step_status(str(StoragePath(path).parent))
 
 
 def _source_version(record_version: str, step_status: str | None, raw: dict | None = None) -> str:

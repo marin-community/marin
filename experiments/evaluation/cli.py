@@ -15,13 +15,13 @@ import logging
 from pathlib import Path
 
 import click
+from evalrecords.records import RECORD_FILE, read_record
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.model_config import ModelConfig, load_model_config
-from marin.evaluation.records import RECORD_FILE, read_record
 from marin.evaluation.runner import EvaluationBatch, print_record, wait_and_report
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3

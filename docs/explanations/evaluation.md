@@ -50,7 +50,7 @@ samples, rollouts and raw evidence. The driver computes no benchmark summaries.
 
 ## Score computation
 
-`marin.rollouts.evaluation_results.score_curated_record` reduces each raw store
+`evalrecords.rollout_results.score_curated_record` reduces each raw store
 from a single committed snapshot; Evaldash ingestion and the evaluation CLI's
 `scores` command share it. It chooses the latest finished attempt per dataset,
 source row and trial, so retries do not inflate scores or sample counts. Unfinished attempts and infrastructure failures contribute
