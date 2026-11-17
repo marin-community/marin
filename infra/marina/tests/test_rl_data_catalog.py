@@ -2854,10 +2854,14 @@ def test_full_review_rows_load_typed_and_browseable(catalog_database, catalog_qu
         assert [row["task_id"] for row in first["items"]] == ["t01", "t02", "t03"] and first[
             "total"
         ] == FULL_QC_POPULATION
-        last = client.get("/assessment", params={"source_id": FULL_QC_SOURCE, "limit": 3, "offset": 197}).json()[
-            "report"
-        ]["evidence"]
-        assert [row["task_id"] for row in last["items"]] == ["t198", "t199", "t200"]
+        served_total = first["total"]
+        last = client.get(
+            "/assessment", params={"source_id": FULL_QC_SOURCE, "limit": 3, "offset": served_total - 3}
+        ).json()["report"]["evidence"]
+        # the endpoint orders by (cohort, task_id) as text, so past 99 rows the
+        # three-digit ids sort before the two-digit ones
+        expected_last = sorted(f"t{index:02d}" for index in range(1, served_total + 1))[-3:]
+        assert [row["task_id"] for row in last["items"]] == expected_last
         ambiguous = sum(
             1 for record in records if record.verdict and "ambiguity" in [str(d) for d in record.verdict.defects]
         )
