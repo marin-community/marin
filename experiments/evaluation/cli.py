@@ -26,6 +26,7 @@ from marin.evaluation.runner import EvaluationBatch, print_record, wait_and_repo
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
+from rigging.secrets import COREWEAVE_SECRET_NAMES, get_secret
 
 from experiments.evaluation.curated import load_evaluations
 from experiments.evaluation.evals import EvaluationDefinition, HarborDefinition, resolve_evaluations
@@ -105,6 +106,19 @@ def resolve_judge_model_config(model_key: str | None, config_path: Path | None) 
         config_hint="--judge-model-config",
         label="judge model",
     )
+
+
+def _require_coreweave_credentials(batch: EvaluationBatch) -> None:
+    """Fail before submission when a CoreWeave target would reject the job for missing storage keys."""
+    if batch.accelerator.target_cluster is None:
+        return
+    missing = [name for name in COREWEAVE_SECRET_NAMES if not get_secret(name)]
+    if missing:
+        raise click.UsageError(
+            f"Target cluster {batch.accelerator.target_cluster} runs on CoreWeave, which requires your own "
+            f"object-storage credentials. Missing: {', '.join(missing)}. Export CW_KEY_ID and CW_KEY_SECRET "
+            "(see lib/iris/docs/secrets.md), or launch on GCP TPU with --platform tpu."
+        )
 
 
 def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
@@ -339,6 +353,7 @@ def launch(
         else:
             param_hint = "--evaluation-config/--harbor-config" if evaluation_config or harbor_config else "--evals"
         raise click.BadParameter(str(exc), param_hint=param_hint) from exc
+    _require_coreweave_credentials(batch)
     if dry_run:
         _print_plan(spec, batch)
         return

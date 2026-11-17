@@ -37,6 +37,8 @@ def submitted_batches(monkeypatch):
     monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "local-test-key")
     monkeypatch.setenv("DAYTONA_TARGET", "test-target")
+    monkeypatch.setenv("CW_KEY_ID", "local-test-id")
+    monkeypatch.setenv("CW_KEY_SECRET", "local-test-secret")
     batches: list[EvaluationBatch] = []
 
     class Client:
@@ -147,6 +149,21 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
     assert batch.judge.api_model == "qwen3-0.6b"
 
 
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_coreweave_launch_without_storage_credentials_fails_before_submission(
+    tmp_path, submitted_batches, monkeypatch, dry_run
+):
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path / "no-secrets"))
+    monkeypatch.delenv("CW_KEY_ID")
+    command = [*_command(tmp_path), "--federated_cluster", "cw-rno2a", *(["--dry-run"] if dry_run else [])]
+
+    result = CliRunner().invoke(cli, command)
+
+    assert result.exit_code != 0
+    assert "Missing: CW_KEY_ID" in result.output
+    assert submitted_batches == []
+
+
 def test_launch_selects_across_documents_and_adds_harbor_configs(
     tmp_path, submitted_batches, monkeypatch, harbor_task_workspace
 ):
@@ -198,6 +215,8 @@ def test_daytona_launch_uses_the_eval_org_key_not_an_exported_daytona_key(tmp_pa
     monkeypatch.setenv("DAYTONA_API_KEY", "rl-org-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "eval-org-key")
     monkeypatch.setenv("DAYTONA_TARGET", "test-target")
+    monkeypatch.setenv("CW_KEY_ID", "local-test-id")
+    monkeypatch.setenv("CW_KEY_SECRET", "local-test-secret")
     monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
     submitted_env = []
 
