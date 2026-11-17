@@ -614,9 +614,8 @@ fn column_bounds_of(catalog: &Catalog, namespace: &str, path: &str) -> Option<St
 
 #[test]
 fn recommitting_a_segment_path_clears_its_column_bounds() {
-    // A release that writes `column_bounds` can be rolled back to this one,
-    // which never writes them. Bounds recorded for an earlier object must not
-    // outlive a commit that points the row at another object.
+    // Ranges recorded for one object must not outlive a commit that points the
+    // row at another object.
     let catalog = Catalog::open(None).unwrap();
     catalog.upsert("a", &worker_stored()).unwrap();
     let spec = table_spec(1, 128);
