@@ -19,8 +19,8 @@ import pytest
 import yaml
 from click.testing import CliRunner
 from cloud.iris import launch as native_launch
-from iris.client.client import IrisClient
-from iris.cluster.client.job_info import set_job_info
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
 from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
@@ -364,6 +364,7 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
         ("candidate-compose", 4),
         ("train-candidate-compose", 4),
         ("train-pass", 0),
+        ("train-entry-override", 0),
         ("train-failed", 3),
         ("malformed-control", 4),
         ("malformed-status", 4),
@@ -380,7 +381,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     preset = snowball_model.SNOWBALL.by_name["train-long" if case.startswith("train-") else "speed-medium"]
     roots = controls(recorded_runs, preset.name) if preset.gated else []
-    if case == "train-pass":
+    if case in ("train-pass", "train-entry-override"):
         preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_disk="3TB")))
         monkeypatch.setattr(
             snowball_model,
@@ -402,7 +403,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
             "python-tokenizer-revision",
             relative_path="",
         )
-        if case == "train-pass"
+        if case in ("train-pass", "train-entry-override")
         else None
     )
     if initializer is not None:
@@ -499,10 +500,12 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         *(("--require", "typo>=0") if case == "missing-requirement" else ()),
         *(() if case.endswith("no-wait") or case == "unexpected" else ("--wait",)),
     ]
-    if case == "train-pass":
+    if case in ("train-pass", "train-entry-override"):
         monkeypatch.setenv("HF_TEST_KEY", "test-initializer-credential")
         monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
         module_name = "second_model_rl"
+        entry_module = "override_model_rl" if case == "train-entry-override" else None
+        coordinator_module = entry_module or module_name
         module = tmp_path / (module_name + ".py")
         module.write_text(
             "from dataclasses import replace\n"
@@ -517,8 +520,10 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
             f"step = ArtifactStep.adopt('tests/python-init', '2026.11.17', {initializer.step.path()!r}, "
             "kind=preset.model.step.artifact_type)\n"
             "init = ArtifactHfModel(step, 'tests/python-tokenizer', 'python-tokenizer-revision', relative_path='')\n"
-            "raise SystemExit(rl.main(table, init=init, forward_env=('HF_TEST_KEY',)))\n"
+            f"raise SystemExit(rl.main(table, init=init, forward_env=('HF_TEST_KEY',), entry_module={entry_module!r}))\n"
         )
+        if entry_module is not None:
+            (tmp_path / (entry_module + ".py")).write_text(module.read_text())
         monkeypatch.syspath_prepend(str(tmp_path))
         arguments += ["--max-concurrent", "3"]
         staged = source.with_name("native-fixture-before-execution")
@@ -545,15 +550,17 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         monkeypatch.setattr(skyrl_api, "_run_launcher", launch_native)
 
         def submit(**kwargs):
-            assert kwargs["entrypoint"].command == ["python", "-m", module_name, *arguments]
+            assert kwargs["entrypoint"].command == ["python", "-m", coordinator_module, *arguments]
             environment = kwargs["environment"].env_vars
             assert environment["HF_TEST_KEY"] == "test-initializer-credential"
             assert "UNRELATED_SECRET" not in environment
             with monkeypatch.context() as child:
                 child.setenv("IRIS_TASK_ID", "/test-user/coordinator/0")
                 child.setattr(sys, "argv", [module_name, *arguments])
-                with pytest.raises(SystemExit) as finished:
-                    runpy.run_module(module_name, run_name="__main__", alter_sys=True)
+                info = JobInfo(task_id=JobName.from_wire("/test-user/coordinator/0"))
+                with iris_ctx_scope(IrisContext.from_job_info(info)):
+                    with pytest.raises(SystemExit) as finished:
+                        runpy.run_module(coordinator_module, run_name="__main__", alter_sys=True)
                 assert finished.value.code == 0
             return SimpleNamespace(job_id=job)
 
@@ -562,7 +569,10 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         @click.command()
         def entry():
             with pytest.raises(SystemExit) as finished:
-                runpy.run_module(module_name, run_name="__main__", alter_sys=True)
+                if entry_module is not None:
+                    runpy.run_path(str(module), run_name="__main__")
+                else:
+                    runpy.run_module(module_name, run_name="__main__", alter_sys=True)
             raise click.exceptions.Exit(finished.value.code)
 
         monkeypatch.setattr(sys, "argv", [module_name, *arguments])
@@ -591,7 +601,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
-    if case == "train-pass":
+    if case in ("train-pass", "train-entry-override"):
         restored_config = yaml.safe_load(materialized_config(built.runs[0], str(source.parent)).launch_config_yaml)
         assert restored_config["inputs"]["model"]["tokenizer_uri"] == "tests/python-tokenizer"
         assert "test-initializer-credential" not in result.output

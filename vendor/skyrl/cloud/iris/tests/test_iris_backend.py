@@ -4,6 +4,7 @@
 import json
 
 import pytest
+from iris.client.client import IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
 from iris.cluster.types import JobName
@@ -115,9 +116,11 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
         config = checkpoint_export_launch_config(config, request, spec)
         OmegaConf.save(config, path)
     previous = get_job_info()
-    set_job_info(JobInfo(task_id=JobName.from_wire("/alice/coordinator/0")))
+    info = JobInfo(task_id=JobName.from_wire("/alice/coordinator/0"))
+    set_job_info(info)
     try:
-        assert launch.main(["iris", "launch", "--config", str(path), "--forward-env", "HF_TEST_KEY"]) == 0
+        with iris_ctx_scope(IrisContext.from_job_info(info)):
+            assert launch.main(["iris", "launch", "--config", str(path), "--forward-env", "HF_TEST_KEY"]) == 0
     finally:
         set_job_info(previous)
 
