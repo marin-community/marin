@@ -19,6 +19,8 @@ import time
 from bisect import bisect_left
 from collections import Counter
 
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from marin.datakit.decon import DeconAttributes, NGramConfig
 from marin.execution.artifact import read_artifact
@@ -99,17 +101,19 @@ def _wait_for_marks(all_marks: dict[str, StepSpec], minimum_sources: int, timeou
 def _hash_to_evals(index_path: str, needed_hashes: set[int]) -> dict[int, set[str]]:
     mapping: dict[int, set[str]] = {}
     with StoragePath(index_path).open("rb") as fh:
-        for batch in pq.ParquetFile(fh).iter_batches(
+        index = pq.ParquetFile(fh)
+        wanted = pa.array(sorted(needed_hashes), type=index.schema_arrow.field("hash").type)
+        for batch in index.iter_batches(
             batch_size=INDEX_BATCH_ROWS,
             columns=["hash", "eval_id"],
         ):
+            batch = batch.filter(pc.is_in(batch.column("hash"), value_set=wanted))
             for feature_hash, eval_id in zip(
                 batch.column("hash").to_pylist(),
                 batch.column("eval_id").to_pylist(),
                 strict=True,
             ):
-                if feature_hash in needed_hashes:
-                    mapping.setdefault(feature_hash, set()).add(str(eval_id))
+                mapping.setdefault(feature_hash, set()).add(str(eval_id))
     return mapping
 
 
