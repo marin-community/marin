@@ -53,6 +53,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 from experiments.grug.fast_track.cplm import CopyHead, bound_case_tables, plus_nll
 from experiments.grug.fast_track.key_offset import partial_key_offset
+from experiments.grug.fast_track.pointer import PointerHead, pointer_candidates, pointer_mixture_nll
 from experiments.grug.fast_track.qb_balancing import qb_beta_hist
 from experiments.grug.fast_track.router_metrics import (
     local_routing_stats,
@@ -475,6 +476,11 @@ class GrugModelConfig:
     all on Adam without decay. ``e`` fills the value's heads x head_dim channels, the leading ones of the row
     (all of it at the recipe rungs, where that equals ``hidden_dim``). Needs ``mla`` and ``attn_res``; excludes
     ``value_embeds`` and ``lm_head_bilinear``."""
+    pointer_mixture: bool = False
+    """Exact-match pointer mixture on the output (``pointer.py``): each position mixes the vocabulary softmax with
+    up to 8 candidate next tokens copied from after the most recent earlier unigram and bigram matches in its
+    document, trained and evaluated on the mixture loss. Its zero-initialised ``w`` ``[D, 8]``, ``b`` ``[8, 8]`` and
+    ``o`` are on Adam without decay. Excludes ``cplm_plus`` and ``lm_head_bilinear``."""
 
     def __post_init__(self) -> None:
         if self.lm_head_value_embeds and (
@@ -487,6 +493,8 @@ class GrugModelConfig:
             raise ValueError("spelling_ngram_source is an AttnRes source; it needs attn_res")
         if self.lm_head_bilinear and self.cplm_plus:
             raise ValueError("lm_head_bilinear widens the vocabulary head that cplm_plus reads at hidden_dim")
+        if self.pointer_mixture and (self.cplm_plus or self.lm_head_bilinear):
+            raise ValueError("pointer_mixture reads the hidden_dim lm_head input; no cplm_plus or lm_head_bilinear")
         if self.cplm_plus and self.logit_soft_cap is not None:
             raise ValueError("cplm_plus mixes uncapped vocabulary logits; set logit_soft_cap=None")
         if self.lm_head_grad_dump_every and not self.lm_head_grad_probe:
@@ -1933,6 +1941,7 @@ class Transformer(eqx.Module):
     skip_router: Float[Array, " D"] | None  # cfg.skip_router_layers: the skip router's score
     skip_router_bias: Float[Array, ""] | None
     copy_head: CopyHead | None  # cfg.cplm_plus
+    pointer_head: PointerHead | None  # cfg.pointer_mixture
     # cfg.spelling_byte_embeds: one 256-row table per byte position, the leading-space row and the case rows.
     token_embed_bytes: Float[Array, "P 256 D"] | None
     token_embed_space: Float[Array, " D"] | None
@@ -2016,6 +2025,7 @@ class Transformer(eqx.Module):
             ),
             skip_router_bias=jnp.zeros((), jnp.float32) if cfg.skip_router_layers else None,
             copy_head=CopyHead.init(cfg.hidden_dim, key=key) if cfg.cplm_plus else None,
+            pointer_head=PointerHead.init(cfg.hidden_dim) if cfg.pointer_mixture else None,
             token_embed_bytes=(
                 reshard(jnp.zeros((BYTE_POSITIONS, 256, cfg.hidden_dim), jnp.float32), P(None, None, None))
                 if cfg.spelling_byte_embeds
@@ -2437,7 +2447,15 @@ class Transformer(eqx.Module):
             head_in = lm_head_grad_probe(hidden, head_grad_probe, jnp.asarray(raw_clip, jnp.float32))
         head_in = self._head_input(head_in)
         copy_metrics: dict[str, jax.Array] = {}
-        if self.copy_head is None:
+        if self.copy_head is not None:
+            cross_entropy_loss, copy_metrics = self._copy_mixture_loss(
+                head_in, token_ids, labels, loss_weight, mask, reduction, logsumexp_weight, loss_dtype
+            )
+        elif self.pointer_head is not None:
+            cross_entropy_loss, copy_metrics = self._pointer_mixture_loss(
+                head_in, token_ids, labels, loss_weight, mask, reduction, logsumexp_weight, loss_dtype
+            )
+        else:
             cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
                 head_in,
                 self.output_proj,
@@ -2449,10 +2467,6 @@ class Transformer(eqx.Module):
                 implementation="xla_fast_bwd",
                 block_sizes=_CE_BLOCK_SIZES,
                 logit_soft_cap=self.config.logit_soft_cap,
-            )
-        else:
-            cross_entropy_loss, copy_metrics = self._copy_mixture_loss(
-                head_in, token_ids, labels, loss_weight, mask, reduction, logsumexp_weight, loss_dtype
             )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
@@ -2549,23 +2563,78 @@ class Transformer(eqx.Module):
         )
         if logsumexp_weight:
             nll = nll + logsumexp_weight * jnp.square(log_partition)
-        weight = loss_weight.astype(jnp.float32)
-        weighted = nll * weight
-        total, denom = jnp.sum(weighted), jnp.sum(weight)
-        if reduction == "none":
-            loss = weighted
-        elif reduction == "sum":
-            loss = total
-        elif reduction == "mean":
-            loss = jnp.where(denom != 0, total / denom, jnp.zeros_like(denom))
-        else:
-            raise ValueError(f"Unknown reduction: {reduction}")
-        count = jnp.maximum(denom, 1.0)
-        metrics = {
-            f"train/aux/cplm/{name}": jax.lax.stop_gradient(jnp.sum(value * weight) / count)
-            for name, value in (("native_head_nll", native_nll), ("copy_gate", gate), ("effective_copy", effective))
-        }
+        loss, metrics = _reduce_mixture_loss(
+            nll,
+            loss_weight,
+            reduction,
+            "cplm",
+            {"native_head_nll": native_nll, "copy_gate": gate, "effective_copy": effective},
+        )
         return loss.astype(loss_dtype), metrics
+
+    def _pointer_mixture_loss(
+        self,
+        head_in: Float[Array, "B S D"],
+        token_ids: Int[Array, "B S"],
+        labels: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        mask: AttentionMask | jax.Array | None,
+        reduction: str,
+        logsumexp_weight: float | None,
+        loss_dtype: jnp.dtype,
+    ) -> tuple[jax.Array, dict[str, jax.Array]]:
+        """``pointer_mixture``: the exact-match pointer mixture NLL on the fused kernel's per-token loss (with the
+        z-loss when ``logsumexp_weight`` is set); reduced like ``fused_linear_softmax_cross_entropy_loss``."""
+        head = self.pointer_head
+        assert head is not None
+        segment_ids = _sconv_segment_ids(mask) if mask is not None else None
+        segments = jnp.zeros_like(token_ids) if segment_ids is None else jnp.broadcast_to(segment_ids, token_ids.shape)
+        ce = fused_linear_softmax_cross_entropy_loss(
+            head_in,
+            self.output_proj,
+            labels,
+            reduction="none",
+            logsumexp_weight=logsumexp_weight,
+            dtype=jnp.float32,
+            implementation="xla_fast_bwd",
+            block_sizes=_CE_BLOCK_SIZES,
+            logit_soft_cap=self.config.logit_soft_cap,
+        )
+        slot_logits = _proj(head_in, reshard(head.pointer_w.astype(head_in.dtype), P(None, None)))
+        candidates = pointer_candidates(token_ids, segments, _BATCH_AXES)
+        nll, gate, label_mass = pointer_mixture_nll(head, slot_logits, candidates, labels, ce)
+        loss, metrics = _reduce_mixture_loss(
+            nll, loss_weight, reduction, "pointer", {"head_nll": ce, "gate": gate, "label_mass": label_mass}
+        )
+        return loss.astype(loss_dtype), metrics
+
+
+def _reduce_mixture_loss(
+    nll: Float[Array, "B S"],
+    loss_weight: Float[Array, "B S"],
+    reduction: str,
+    metric_prefix: str,
+    logged: dict[str, Float[Array, "B S"]],
+) -> tuple[jax.Array, dict[str, jax.Array]]:
+    """A mixture head's per-token NLL reduced like ``fused_linear_softmax_cross_entropy_loss``, and the
+    loss-weighted means of ``logged`` as ``train/aux/<metric_prefix>/<name>``."""
+    weight = loss_weight.astype(jnp.float32)
+    weighted = nll * weight
+    total, denom = jnp.sum(weighted), jnp.sum(weight)
+    if reduction == "none":
+        loss = weighted
+    elif reduction == "sum":
+        loss = total
+    elif reduction == "mean":
+        loss = jnp.where(denom != 0, total / denom, jnp.zeros_like(denom))
+    else:
+        raise ValueError(f"Unknown reduction: {reduction}")
+    count = jnp.maximum(denom, 1.0)
+    metrics = {
+        f"train/aux/{metric_prefix}/{name}": jax.lax.stop_gradient(jnp.sum(value * weight) / count)
+        for name, value in logged.items()
+    }
+    return loss, metrics
 
 
 @jax.custom_vjp
