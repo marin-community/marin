@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 from click.testing import CliRunner
+from finestore.rl.curation import OversightEvidence, OversightLevel
 from finestore.rl.licenses import LicenseClass, LicenseDecision, LicenseDecisionKind, LicenseReceipt, require_license
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
@@ -196,6 +197,17 @@ def test_catalog_publishes_licensed_unavailable_metadata_without_admitting_popul
 def test_user_ban_blocks_ingestion_and_counts_but_preserves_archived_evidence(tmp_path, monkeypatch):
 
     source = with_admission_census(number_source(tmp_path / "input.txt"))
+    # the archived state is an ADMITTED source: QUICK oversight evidence clears
+    # the oversight-missing claim, so the pre-ban population admits
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            oversight=OversightEvidence(
+                level=OversightLevel.QUICK, campaign="fixture", verification="Fixture conversion executed."
+            ),
+        ),
+    )
     archived = source.declaration.model_dump(mode="json")
     before_bytes = json.dumps(archived, sort_keys=True)
     counts = count_evidence(source.declaration, 0, 0)
