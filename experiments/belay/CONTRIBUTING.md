@@ -20,7 +20,8 @@ Every experiment is compared to the official recipe unless its Track says otherw
 
 2. **Post it on #9514**, one idea per comment, with a `Track:` line (default `speedrun`). Plain-text ideas are
    preferred. You can also link a paper, a GitHub repo, or a branch that applies the idea directly to the Belay
-   architecture.
+   architecture. Ideas for the scaling ladder should say how they scale with model size (e.g. "width 0.5·d", "every
+   4th layer"), so each rung gets a consistent version rather than a constant tuned at one size.
 
    ```
    Track: speedrun
