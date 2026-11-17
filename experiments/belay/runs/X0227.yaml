@@ -1,0 +1,13 @@
+experiment: X0227
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: dynamic per-head kernel-4 conv on MLA K and V
+    flags:
+    - --model-set
+    - mla_dynamic_kv_conv=true
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
