@@ -5,14 +5,33 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from rigging.filesystem.storage_path import StoragePath
+from shellbox.machine import DockerImage, MachineSpec
 
+from taskcompendium.grader import GraderPackage
+from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.scienceagentbench import (
     KnowledgeCondition,
     VerifiedAnnotation,
     actor_context,
     read_verified_annotations,
+    scienceagentbench_task,
+)
+from taskcompendium.models import (
+    ArtifactKind,
+    CommandSemantics,
+    EnvironmentRequirements,
+    GradingAttempt,
+    ReplayStage,
+    ScriptGrader,
+    TaskSpec,
+    VerifierArtifact,
 )
 from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.task_grading import grade_task
+
+from .test_replay_grading import GRADER_IMAGE, REPLAY_IMAGE, ReplayMachines
+from .test_runtime import finished
 
 
 @pytest.fixture
@@ -86,3 +105,69 @@ def test_incomplete_panel_yields_nothing(tmp_path, annotation, corruption):
     reader = read_verified_annotations(StoragePath(str(path)), ConversionContext({}, None))
     with pytest.raises(ValueError, match="each instance ID"):
         next(reader)
+
+
+@pytest.mark.parametrize("condition", list(KnowledgeCondition))
+def test_converted_task_grades_replayed_program_and_keeps_reference_private(tmp_path, annotation, condition):
+    environment = EnvironmentRequirements(
+        docker_image=REPLAY_IMAGE,
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        working_directory="/testbed",
+        capabilities=("shell", "filesystem"),
+    )
+    grader = ScriptGrader(
+        environment=EnvironmentRequirements(
+            docker_image=GRADER_IMAGE,
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            working_directory="/testbed",
+        ),
+        argv=("python3", "/tests/grade.py"),
+        cwd="/testbed",
+        answer_path=None,
+        timeout=30,
+        replay=ReplayStage(
+            environment=environment,
+            argv=("python3", "/testbed/solution.py"),
+            cwd="/testbed",
+            timeout=10,
+            artifacts=(
+                VerifierArtifact(
+                    source="/testbed/pred_results", target="/testbed/pred_results", kind=ArtifactKind.DIRECTORY
+                ),
+            ),
+        ),
+    )
+    script = b"""
+from pathlib import Path
+assert not Path('../controls/reference.py').exists()
+assert not Path('solution.py').exists()
+print(float(Path('pred_results/output.csv').read_text() == Path('../tests/gold.csv').read_text()))
+"""
+    reference = b"PRIVATE_REFERENCE_PROGRAM"
+    task = scienceagentbench_task(
+        annotation,
+        condition,
+        environment=environment,
+        package=GraderPackage(grader, (inline_resource("grade.py", script), inline_resource("gold.csv", b"42"))),
+        reference_program=reference,
+        importer_revision="test-converter",
+    )
+    task = TaskSpec.model_validate_json(task.model_dump_json())
+    assert reference.decode() not in task.context.model_dump_json()
+    machines = ReplayMachines(tmp_path / "machines")
+    for prediction, expected in (("42", 1.0), ("wrong", 0.0)):
+        program = f"""
+from pathlib import Path
+assert not Path('../controls/reference.py').exists()
+assert not Path('../tests/gold.csv').exists()
+Path('pred_results').mkdir()
+Path('pred_results/output.csv').write_text({prediction!r})
+""".encode()
+        result = grade_task(
+            task,
+            GradingAttempt(finished(task), {"/testbed/solution.py": program}),
+            machine_factory=machines,
+            machine_spec=MachineSpec(DockerImage(GRADER_IMAGE)),
+        )
+        assert (result.status, result.reward) == (Outcome.GRADED, expected), result
+    assert all(machine.closed for machine in machines.machines)

@@ -432,7 +432,7 @@ restored = TaskSpec.model_validate_json(serialized)
 
 The serialized spec includes the grader configuration and verifier resources. Store it where trusted grading code can read it; build model requests with `chat_request(task)` or `render_instruction(task)`, which read only the public context, final tools, and answer format.
 
-### ScienceAgentBench Verified source preparation
+### ScienceAgentBench Verified conversion
 
 `taskcompendium.importers.scienceagentbench.VERIFIED_SOURCE` pins the released
 Verified annotation Parquet and rejects missing, duplicated, or unexpected task
@@ -441,9 +441,15 @@ from explicit public fields, preserving complete instructions and previews.
 Raw annotations contain reference metadata and must not be mounted for actors;
 image preparation must also check knowledge-off isolation.
 
-This module prepares inputs only. It is not registered as a runnable evaluation:
-private artifact auditing, TaskSpec conversion, clean replay and grading, and
-official Pi/EvalDash integration remain tracked in
+`scienceagentbench_task` combines one annotation with a prepared actor environment,
+a replay-enabled `GraderPackage`, and the private reference program. It captures
+only `/testbed/solution.py` and requires the same environment for actor and replay.
+An oracle control can copy `/controls/reference.py` to `/testbed/solution.py` and
+then use ordinary grading. The reference is staged only for oracle controls.
+
+This module is not registered as a runnable evaluation. Preparing the real image
+and grader packages, validating references, and official Pi/EvalDash integration
+remain tracked in
 [issue #11592](https://github.com/marin-community/marin/issues/11592).
 
 ## Development

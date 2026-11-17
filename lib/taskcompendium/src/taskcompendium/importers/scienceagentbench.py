@@ -3,8 +3,8 @@
 
 """Pinned ScienceAgentBench Verified annotations and paired actor inputs.
 
-This prepares source inputs only. Registration requires the audited private
-artifact bundle, isolated replay/grading, and the official Pi evaluation route.
+Conversion requires prepared images and an audited replay/grader package.
+Registration additionally requires the official Pi evaluation route.
 """
 
 from collections.abc import Iterator
@@ -15,15 +15,28 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 
+from taskcompendium.grader import GraderPackage
 from taskcompendium.importers.fewshot import parquet_documents
-from taskcompendium.models import ConversationInput, TextMessage
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    PlainText,
+    ResourceGroups,
+    ScriptGrader,
+    Source,
+    TaskSpec,
+    TextMessage,
+)
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
+from taskcompendium.runtime.resources import inline_resource
 
 ANNOTATION_REVISION = "9c6e96c9e74572e979b0930ee735041cef528cb7"
 ANNOTATION_FILE = "data/verified-00000-of-00001.parquet"
 VERIFIED_INSTANCE_IDS = frozenset(range(1, 103))
 WORKING_DIRECTORY = "/testbed"
 SUBMISSION_PATH = "/testbed/solution.py"
+REFERENCE_PATH = "/controls/reference.py"
 
 
 class KnowledgeCondition(StrEnum):
@@ -111,3 +124,48 @@ def actor_context(annotation: VerifiedAnnotation, condition: KnowledgeCondition)
         "Create required output directories. The submitted program will be run again in a clean environment."
     )
     return ConversationInput(events=(TextMessage(role="user", content="\n\n".join(parts)),))
+
+
+def scienceagentbench_task(
+    annotation: VerifiedAnnotation,
+    condition: KnowledgeCondition,
+    *,
+    environment: EnvironmentRequirements,
+    package: GraderPackage,
+    reference_program: bytes,
+    importer_revision: str,
+) -> TaskSpec:
+    """Convert a Verified row with prepared task-specific data and grading assets.
+
+    The actor image contains scientific dependencies and input data only. Replay
+    uses the same environment, and the package owns the evaluator, gold assets,
+    output decoding, and judge contract. Reference validation can copy
+    ``REFERENCE_PATH`` to ``SUBMISSION_PATH`` before using ordinary grading.
+    """
+    grader = package.grader
+    if not isinstance(grader, ScriptGrader) or grader.replay is None:
+        raise ValueError("ScienceAgentBench requires isolated replay before script grading")
+    if environment.docker_image is None or environment.working_directory != WORKING_DIRECTORY:
+        raise ValueError("ScienceAgentBench requires a prepared image with /testbed as its working directory")
+    if grader.replay.environment != environment:
+        raise ValueError("ScienceAgentBench actor and replay environments must match")
+    return TaskSpec(
+        id=f"scienceagentbench-verified/{condition.value}/{annotation.instance_id}",
+        source=Source(
+            dataset=VERIFIED_SOURCE.dataset,
+            revision=ANNOTATION_REVISION,
+            row=str(annotation.instance_id),
+            importer_revision=importer_revision,
+        ),
+        context=actor_context(annotation, condition),
+        environment_requirements=environment,
+        answer_type=AnswerType.FILE,
+        answer_format=PlainText(),
+        output_paths=(SUBMISSION_PATH,),
+        grader=grader,
+        resources=ResourceGroups(
+            oracle=(inline_resource(REFERENCE_PATH.lstrip("/"), reference_program),),
+            verifier=package.resources,
+        ),
+        labels={"knowledge_condition": condition.value, "domain": annotation.domain},
+    )
