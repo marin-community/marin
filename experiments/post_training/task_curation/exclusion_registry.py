@@ -178,19 +178,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             ),
         ),
     ),
-    "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": (
-        ExclusionClaim(
-            reason=ExclusionReason.UNSPECIFIED_LEGACY,
-            evidence=_note(
-                "13,973 competitive-coding tasks converted to run in the environment their "
-                "archives specify, measured at the pinned upstream revision with zero "
-                "substitutions; 1,739 rows are refused for gold leaked into the instruction. "
-                "No explicit exclusion ruling is recorded for the tag. User ruling 2026-11-16: "
-                "no recoverable reason; queued for readmission at P1 — an ingest agent runs the "
-                "admission procedure and removes the bare tag only when every check clears."
-            ),
-        ),
-    ),
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": (
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
@@ -273,16 +260,14 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
     ),
 }
 
-NEEDS_RULING_SOURCES: frozenset[str] = frozenset(
-    {
-        "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
-    }
-)
+NEEDS_RULING_SOURCES: frozenset[str] = frozenset()
 """Sources whose legacy exclusion reason stays unknown while they wait for readmission.
 
-The user ruled (2026-11-16) that both join the readmission list as P1s and stay
-visibly Excluded until an ingest agent's admission procedure clears every
-check; only then does the bare tag (and this entry) go away.
+The user ruled (2026-11-16) that the tagged sources join the readmission list as
+P1s and stay visibly Excluded until an ingest agent's admission procedure
+clears every check; only then does the bare tag (and this entry) go away.
+Empty since 2026-11-17: codeforces and competitive-coding both cleared the
+procedure and readmitted.
 """
 
 
