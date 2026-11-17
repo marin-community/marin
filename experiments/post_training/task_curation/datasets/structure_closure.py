@@ -13,6 +13,7 @@ from verifyit.json_objects import unique_object
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 REPOSITORY = "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data"
 REVISION = "cb728a7636caad3fc6fa6b6ba85a49194d9d69a3"
@@ -44,6 +45,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="OpenAthena:structure-closure" + ("/validation" if intended_use == IntendedUse.EVAL else ""),
                 upstream_dataset="structure-closure",
                 upstream_name="structure-closure",

@@ -15,6 +15,7 @@ from verifyit.spec import DEFAULT_OUTPUT
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 REVISION = "05bbaf03bac608e804efc86c5f8bf99844f2d197"
@@ -66,6 +67,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 origin=SourceOrigin.NEMOTRON,
                 upstream_dataset="Nemotron-Cascade-2-RL-data",
                 upstream_name="Nemotron Cascade-2 RL data",

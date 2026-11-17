@@ -19,6 +19,7 @@ from finestore.rl.curation import (
 )
 
 from experiments.post_training.task_curation.source import SourceInfo, SourceReference
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
@@ -28,6 +29,7 @@ from lib.taskcompendium.tests.deduplication_fixtures import deduplication_eviden
 def test_generated_identity_and_title_survive_catalog_serialization(tmp_path):
     source = number_source(tmp_path / "input", "math")
     info = SourceInfo(
+        data_restriction=DataRestriction.OPEN,
         within_source_dedup=source.info.within_source_dedup,
         origin=SourceOrigin.MARIN,
         upstream_dataset="math",

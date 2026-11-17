@@ -19,6 +19,7 @@ from experiments.post_training.task_curation.datasets.evalchemy.environments imp
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 MATH500_REVISION = "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be"
 MARIN_SOURCE_REVISION = "623134de90723e7f189036da005067f36817b6e7"
@@ -57,6 +58,7 @@ def math_dataset(
     )
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="Evalchemy:" + name,
             upstream_dataset=name,
             upstream_name=name,
@@ -104,6 +106,7 @@ def olympiad_source(protocol: OlympiadProtocol) -> RlDataSource[EvalDataset]:
     count = 10 if judged else 1
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="Evalchemy:" + benchmark.lower(),
             upstream_dataset=benchmark.lower(),
             upstream_name=benchmark.lower(),

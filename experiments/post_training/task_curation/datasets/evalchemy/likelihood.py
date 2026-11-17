@@ -28,6 +28,7 @@ from taskcompendium.pipeline.models import IntendedUse
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 
 def choice_source(
@@ -62,6 +63,7 @@ def choice_source(
     )
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="Evalchemy:" + name,
             upstream_dataset=name,
             upstream_name=name,

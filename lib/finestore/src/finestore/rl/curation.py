@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from finestore.layout import BlobTables, OnConflict, parse_uri
 from finestore.reader import ReadView
 from finestore.rl.licenses import LicenseReceipt
-from finestore.rl.status_taxonomy import ExclusionClaim
+from finestore.rl.status_taxonomy import DataRestriction, ExclusionClaim
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 
@@ -854,6 +854,15 @@ class SourceDeclaration(CatalogRecord):
     turns: str
     is_benchmark: bool
     intended_use: SourceUse | None = None
+    data_restriction: DataRestriction = DataRestriction.OPEN
+    """Typed restriction tier of the source (see ``finestore.rl.status_taxonomy``).
+
+    ``PRIVATE_ALWAYS`` sources never expose task text, prompts, answers, resources,
+    samples or transcripts outside their private store, whatever else changes. The
+    tier is set explicitly per source in code; ``Open`` is only the tolerated default
+    for archived declarations written before the tier existed, and a private source
+    can never lose its tag because its authoring record requires it.
+    """
     kind: str
     status: str
     pipeline: PipelineReference | None

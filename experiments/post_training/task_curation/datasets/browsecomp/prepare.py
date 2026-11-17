@@ -30,6 +30,7 @@ from experiments.post_training.task_curation.license_binding import licensed_sou
 from experiments.post_training.task_curation.local import run_local_steps
 from experiments.post_training.task_curation.pipeline import HfSource, download_step, input_file_overrides
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 from .tasks import POPULATION, QUERY_REPO, QUERY_REVISION, STATE, VERSION, convert_query
 
@@ -203,6 +204,7 @@ def curate(source: RlDataSource[BrowseCompDataset], options: PipelineOptions) ->
 def source(actor_image: str, receipt: LicenseReceipt) -> RlDataSource[BrowseCompDataset]:
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             origin=SourceOrigin.TEVATRON,
             upstream_dataset="browsecomp-plus",
             upstream_name="BrowseComp-Plus",

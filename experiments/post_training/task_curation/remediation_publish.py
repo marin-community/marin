@@ -16,6 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import ActorCensusInput, DatasetRelease, LexicalUse
 from finestore.rl.licenses import LicenseReceipt, require_license
+from finestore.rl.status_taxonomy import DataRestriction
 from huggingface_hub import HfApi, hf_hub_download
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -34,6 +35,7 @@ from experiments.post_training.task_curation.license_publication import (
     prepare_license_publication,
 )
 from experiments.post_training.task_curation.native_quick import source_slug
+from experiments.post_training.task_curation.publication_gate import configured_restriction, require_public_data
 from experiments.post_training.task_curation.receipt_shards import read_receipt_shards
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
@@ -244,8 +246,14 @@ def publish_plan(
     raw_archive: RawSourceArchive | None,
     *,
     measurement_receipt: LexicalMeasurementReceipt | None = None,
+    data_restriction: DataRestriction,
 ) -> dict:
-    """Publish one approved selection and its immutable regional readback receipt."""
+    """Publish one approved selection and its immutable regional readback receipt.
+
+    The caller passes the configured source's tier: a decontaminated release is
+    derived content, so a PRIVATE_ALWAYS source is refused here.
+    """
+    require_public_data(data_restriction, plan.source_id, plan.lexical_use.value + " release")
     require_license(
         license_receipt, plan.source_id, plan.source_dataset_id, plan.source_revision, plan.lexical_use.value
     )
@@ -354,7 +362,11 @@ def publish_plan(
             )
             original_repo = repo.replace("-retained-", "-original-")
             original_revision = publish(
-                original, card, original_repo, evidence_files=(manifest, *publication.notice_files)
+                original,
+                card,
+                original_repo,
+                data_restriction=data_restriction,
+                evidence_files=(manifest, *publication.notice_files),
             )
             original_license = check_publication(plan.source_id, original_repo, original_revision)
             (output / "converted-original-pin.json").write_text(
@@ -378,6 +390,7 @@ def publish_plan(
             tasks,
             card,
             repo,
+            data_restriction=data_restriction,
             evidence_files=(manifest, duplicate_manifest, combined_manifest, *publication.notice_files),
         )
         final_license = check_publication(plan.source_id, repo, revision)
@@ -461,6 +474,7 @@ def main() -> None:
                 receipts[plan.source_id],
                 raw_archives.get(plan.source_id),
                 measurement_receipt=None if staged_measurements is None else staged_measurements[plan.source_id],
+                data_restriction=configured_restriction(plan.source_id),
             )
             for plan in plans
         ]

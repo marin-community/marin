@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from finestore.rl.curation import DatasetRelease, OversightEvidence, OversightLevel
-from finestore.rl.status_taxonomy import SourceStatus
+from finestore.rl.status_taxonomy import DataRestriction, SourceStatus
 
 from experiments.post_training.task_curation import sources as source_catalog
 from experiments.post_training.task_curation.datasets import native_releases
@@ -44,6 +44,7 @@ def test_new_lean_sources_wait_for_measurement_before_entering_the_atlas_catalog
 def _agentic(task_format: TaskFormat | None, source_id: str = "Marin:agentic") -> RlDataSource:
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id=source_id,
             upstream_dataset=(source_id).partition(":")[2],
             upstream_name=(source_id).partition(":")[2],

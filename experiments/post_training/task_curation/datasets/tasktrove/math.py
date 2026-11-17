@@ -48,6 +48,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     archive_files,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.source import (
     RecipeQAHistoricalNotes,
     RlDataSource,
@@ -242,6 +243,7 @@ SOURCES = (
         convert_tasktrove_math,
         GYM_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:laion__nemotron-gym-math-v5",
             upstream_dataset="laion__nemotron-gym-math-v5",
             upstream_name="laion__nemotron-gym-math-v5",
@@ -284,6 +286,7 @@ SOURCES = (
         convert_openreasoning,
         OPENREASONING_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:laion__nemotron-gym-math-openmathreasoning-v2",
             upstream_dataset="laion__nemotron-gym-math-openmathreasoning-v2",
             upstream_name="laion__nemotron-gym-math-openmathreasoning-v2",
@@ -325,6 +328,7 @@ SOURCES = (
         convert_tasktrove_math,
         ORACLE_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:SankalpKJ__nemotron-math-oracle-filtered-v2",
             upstream_dataset="SankalpKJ__nemotron-math-oracle-filtered-v2",
             upstream_name="SankalpKJ__nemotron-math-oracle-filtered-v2",
@@ -364,6 +368,7 @@ SOURCES = (
         convert_tasktrove_math,
         PRISM_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:laion__nemo-prism-math-v3",
             upstream_dataset="laion__nemo-prism-math-v3",
             upstream_name="laion__nemo-prism-math-v3",
@@ -409,6 +414,7 @@ SOURCES = (
         convert_tasktrove_math,
         STACK_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:laion__nemotron-gym-math-stack-overflow-v3",
             upstream_dataset="laion__nemotron-gym-math-stack-overflow-v3",
             upstream_name="laion__nemotron-gym-math-stack-overflow-v3",

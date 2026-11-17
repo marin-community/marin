@@ -37,6 +37,60 @@ flowchart LR
   CA --> A
 ```
 
+## Private data tier
+
+Every source carries a typed `DataRestriction` on its declaration — `open` or
+`private_always` — set explicitly in the source's code definition
+(`SourceInfo.data_restriction`); there are no string flags or per-request switches.
+The tier is orthogonal to the license gate, TRAIN/EVAL use and catalog status: an
+open source can be license-restricted and a private source can be Available.
+
+A `private_always` source's content never leaves its private store, whatever else
+changes. The served catalog keeps counts, statuses, hashes and receipts for it, and
+replaces every content-bearing value — task text, prompts, answers, resources,
+curriculum samples and previews, review excerpts and reviewer explanations, rollout
+traces, difficulty reasons and audit notes — with the visible marker text
+`Private data: content is not displayed.` The loader also never copies a private
+source's task packets into the served database, so the marker response is served from
+absence. New human audit samples for a private source are refused (HTTP 403), because
+auditing would quote its content to reviewers; legacy audit rows serve redacted text.
+
+Enforcement is fail closed and centralized:
+
+- **Serving.** `server/restrictions.py` resolves each source's effective tier — a
+  versioned override registry (`server/restriction_registry.py`, user rulings with an
+  issue link) wins over the stored declaration tag, a malformed stored tag counts as
+  private, and a declaration that predates the tier reads as open. Every content
+  surface (evidence packets, assessment report, source evidence, catalog table,
+  status page, archive collections and artifacts, curriculum tasks and task detail,
+  audit tasks, difficulty summaries and coverage) applies the projection; the
+  registry version participates in the served-cache key so an override takes effect
+  immediately. The shared `declaration_restriction` helper is the single place that
+  decides, and pages or new views must call it rather than re-deriving privacy.
+- **Publication.** The shared publish helpers
+  (`calibforge_publish.publish`, `raw_source_publish.publish_raw_source`,
+  `native_quick.publish_quick`, `remediation_publish.publish_plan`, the curriculum
+  release builder) take the source's typed tier and refuse a `private_always`
+  payload at the helper, not per caller: a private source is never uploaded,
+  re-archived or written into a release.
+- **Derived artifacts.** Any artifact derived from a private source inherits the
+  restriction: derived source populations keep it through the oracle-release and
+  selection bindings, training-selection summaries record the strongest tier of
+  their sources, and curriculum loaders refuse a release that contains a private
+  source or whose stored tag was flipped or dropped relative to the authoritative
+  tier. A downgrade or a missing tag on a derived artifact is refused, never
+  silently accepted.
+- **Training selection.** A private source may be selected for private training
+  only; its selection artifacts carry `private_always` in their summaries and stay
+  in the private artifact store.
+
+Tests build a synthetic `private_always` fixture with unique canary strings in every
+content field and sweep the loader, the API surfaces, the curriculum load, the
+publish helpers and captured logs end to end, asserting the canary appears nowhere;
+tamper tests refuse flipped and dropped tags on derived artifacts
+(`infra/marina/tests/test_private_tier.py`,
+`apps/rl_data_catalog/tests/test_private_tier.py`).
+
 ## Reading grades
 
 FULL campaigns grade automatically; SAMPLE opts in with `--assess`.

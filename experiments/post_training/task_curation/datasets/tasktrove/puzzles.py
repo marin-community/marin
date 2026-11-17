@@ -25,6 +25,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 PUZZLES_CONFIG = "laion__all-puzzles-v2"
 
@@ -79,6 +80,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id=f"TaskTrove:{PUZZLES_CONFIG}",
                 upstream_dataset=PUZZLES_CONFIG,
                 upstream_name=PUZZLES_CONFIG,

@@ -24,15 +24,23 @@ import tempfile
 from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
+from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
+
+from experiments.post_training.task_curation.publication_gate import require_public_data
 
 TASKS_FILENAME = "tasks.parquet"
 CARD_FILENAME = "README.md"
 
 
-def publish(tasks: Path, card: Path, repo: str, *, evidence_files: tuple[Path, ...] = ()) -> str:
-    """Upload ``tasks`` and ``card`` to a private ``repo`` and return the commit revision."""
+def publish(tasks: Path, card: Path, repo: str, *, data_restriction: DataRestriction, evidence_files: tuple[Path, ...] = ()) -> str:
+    """Upload ``tasks`` and ``card`` to a private ``repo`` and return the commit revision.
+
+    The caller passes the source population's tier: a PRIVATE_ALWAYS payload is
+    refused here at the shared helper, never published anywhere.
+    """
+    require_public_data(data_restriction, destination=repo)
     api = HfApi()
     with tempfile.TemporaryDirectory(prefix="calibforge-publish-") as directory:
         staging = Path(directory)

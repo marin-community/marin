@@ -27,6 +27,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.source import (
     RecipeQAHistoricalNotes,
     RlDataSource,
@@ -252,6 +253,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "knowledge-openqa",
             "laion__nemotron-gym-knowledge-openqa-v4",
             SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:laion__nemotron-gym-knowledge-openqa-v4",
                 upstream_dataset="laion__nemotron-gym-knowledge-openqa-v4",
                 upstream_name="laion__nemotron-gym-knowledge-openqa-v4",
@@ -289,6 +291,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "science-openqa",
             "laion__nemotron-gym-science-so-openq-v3",
             SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:laion__nemotron-gym-science-so-openq-v3",
                 upstream_dataset="laion__nemotron-gym-science-so-openq-v3",
                 upstream_name="laion__nemotron-gym-science-so-openq-v3",
@@ -342,6 +345,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id=f"TaskTrove:{MCQA_CONFIG}",
                 upstream_dataset=MCQA_CONFIG,
                 upstream_name=MCQA_CONFIG,

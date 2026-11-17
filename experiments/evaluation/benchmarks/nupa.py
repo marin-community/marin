@@ -24,6 +24,7 @@ from experiments.evaluation.benchmarks.environments import BASIC_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 NUPA_REVISION = "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
 PANEL_SHA256 = "27f122972d76dc2a1170a3d105a9856b55beedabe037f697c1a1aa2baeb67036"
@@ -52,6 +53,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         result.append(
             RlDataSource(
                 info=SourceInfo(
+                    data_restriction=DataRestriction.OPEN,
                     id="Evalchemy:" + name,
                     upstream_dataset=name,
                     upstream_name=name,

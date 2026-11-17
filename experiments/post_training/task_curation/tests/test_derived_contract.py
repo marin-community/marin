@@ -29,6 +29,7 @@ from experiments.post_training.task_curation.derived_contract_tags import bind_d
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, SourceReference
+from finestore.rl.status_taxonomy import DataRestriction
 
 IMAGE = "private/grader@sha256:" + "a" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS)
@@ -93,6 +94,7 @@ def population_fixture(tmp_path, tasks: tuple[TaskSpec, ...]) -> DerivedContract
 def source_with(dataset: SourceReference, **info_updates) -> RlDataSource:
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:fixture",
             origin=SourceOrigin.TASKTROVE,
             upstream_dataset="fixture",

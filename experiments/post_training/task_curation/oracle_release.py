@@ -24,6 +24,7 @@ from taskcompendium.pipeline.oracle_filter import MechanicalOracleTaskReceipt, O
 
 from experiments.post_training.task_curation.census_binding import bind_actor_census
 from experiments.post_training.task_curation.oracle_filter import row_runtime, row_runtime_hash, row_task
+from experiments.post_training.task_curation.publication_gate import require_no_restriction_downgrade
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.retained_release import (
     RETAINED_IMPORT_VERSION,
@@ -196,7 +197,10 @@ def bind_oracle_filtered_release(
             + source.info.notes
         ),
     )
-    return bind_actor_census(RlDataSource(info=info, config=config, pipeline=import_retained), None)
+    bound = bind_actor_census(RlDataSource(info=info, config=config, pipeline=import_retained), None)
+    require_no_restriction_downgrade(source.info, bound.info, "oracle-filtered release")
+    return bound
+
 
 
 class OracleReleaseInput(BaseModel):

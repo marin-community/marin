@@ -44,6 +44,7 @@ from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.driver import _write_corpus
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.static_retention import collect_static_retention
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
@@ -78,6 +79,7 @@ def test_static_prebuilt_consumer_preserves_tasks_and_rejects_a_foreign_source_c
             config=_cohort(1),
             pipeline=prebuilt.import_taskcompendium_prebuilt,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="Marin:static",
                 origin=SourceOrigin.MARIN,
                 upstream_dataset="static",
@@ -218,6 +220,7 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
         config=_cohort(2),
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:fixture",
             upstream_dataset="fixture",
@@ -320,6 +323,7 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
             config=_cohort(1),
             pipeline=prebuilt.import_harbor_prebuilt,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
                 id="Marin:native",
                 upstream_dataset="native",
@@ -386,6 +390,7 @@ def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tm
         config=config,
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:unsafe",
             upstream_dataset=("Marin:unsafe").partition(":")[2],
@@ -475,6 +480,7 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
         config=_cohort(1),
         pipeline=prebuilt.import_taskcompendium_prebuilt,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:reply",
             upstream_dataset="reply",
@@ -517,6 +523,7 @@ def test_prebuilt_rejects_calibration_only_success_without_strong_model_executab
         config=_cohort(1),
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:calibration",
             upstream_dataset="calibration",
@@ -604,6 +611,7 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
         config=_cohort(1),
         pipeline=pipeline,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:oracle",
             upstream_dataset=("Marin:oracle").partition(":")[2],
@@ -661,6 +669,7 @@ def test_atlas_private_release_policy_blocks_prebuilt_download(monkeypatch, poli
         config=config,
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:policy",
             upstream_dataset="policy",
@@ -693,6 +702,7 @@ def test_quick_pass_writes_the_validated_cohort_as_converted_tasks(tmp_path, mon
         config=_cohort(2),
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:quick",
             upstream_dataset="quick",

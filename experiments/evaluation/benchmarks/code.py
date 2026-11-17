@@ -33,6 +33,7 @@ from experiments.evaluation.benchmarks.environments import PYTHON_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 HUMANEVAL_FEWSHOT_VERSION = "2026.11.05.3"
 
@@ -48,6 +49,7 @@ def python_source(
     completion = suite == "humaneval"
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="Evalchemy:" + suite,
             upstream_dataset=suite,
             upstream_name=suite,

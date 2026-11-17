@@ -50,6 +50,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 INDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-python-inductive-v2"
 TRANSDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-transductive-v3"
@@ -252,6 +253,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=replace(
                 SourceInfo(
+                    data_restriction=DataRestriction.OPEN,
                     id="TaskTrove:laion__nemotron-gym-arc-agi-python-inductive-v2",
                     upstream_dataset=INDUCTIVE_CONFIG,
                     upstream_name=INDUCTIVE_CONFIG,
@@ -280,6 +282,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=replace(
                 SourceInfo(
+                    data_restriction=DataRestriction.OPEN,
                     id="TaskTrove:laion__nemotron-gym-arc-agi-transductive-v3",
                     upstream_dataset="laion__nemotron-gym-arc-agi-transductive-v3",
                     upstream_name="laion__nemotron-gym-arc-agi-transductive-v3",

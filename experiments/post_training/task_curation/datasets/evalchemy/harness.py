@@ -39,6 +39,7 @@ from experiments.post_training.task_curation.datasets.evalchemy.likelihood impor
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 
 def sources() -> list[RlDataSource[EvalDataset]]:
@@ -135,6 +136,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
     result.append(
         RlDataSource(
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="Evalchemy:lambada_openai",
                 upstream_dataset="lambada_openai",
                 upstream_name="lambada_openai",
@@ -254,6 +256,7 @@ def generation_sources() -> list[RlDataSource[EvalDataset]]:
         result.append(
             RlDataSource(
                 info=SourceInfo(
+                    data_restriction=DataRestriction.OPEN,
                     id="Evalchemy:" + name,
                     upstream_dataset=name,
                     upstream_name=name,

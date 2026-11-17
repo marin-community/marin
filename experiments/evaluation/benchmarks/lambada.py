@@ -25,11 +25,13 @@ from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmar
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 
 def benchmarks() -> list[EvaluationBenchmark]:
     source = RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             upstream_dataset="lambada_openai",
             upstream_name="lambada_openai",
             build_path="Evalchemy",

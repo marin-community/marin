@@ -38,6 +38,7 @@ from experiments.post_training.task_curation.embedding import (
 )
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.numbers_pipeline import (
     NUMBERS_DATASET,
     NumbersConfig,
@@ -149,6 +150,7 @@ def frozen_source(tmp_path):
         config=NumbersConfig("source", tmp_path / "unused"),
         pipeline=numbers_pipeline,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             origin=SourceOrigin.MARIN,
             upstream_dataset="source",
             upstream_name="source",

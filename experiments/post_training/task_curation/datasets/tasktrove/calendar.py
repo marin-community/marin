@@ -50,6 +50,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 WITNESS_PATH = "solution/answer.json"
 GRADER_FILES = ("tests/verifier.py", VERIFIER_DATA)
@@ -170,6 +171,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__nemotron-gym-agent-calendar-v2",
             CALENDAR_RUBRIC,
             SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:laion__nemotron-gym-agent-calendar-v2",
                 upstream_dataset="laion__nemotron-gym-agent-calendar-v2",
                 upstream_name="laion__nemotron-gym-agent-calendar-v2",
@@ -187,6 +189,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__nemotron-gym-instruction-following-calendar-v3",
             IF_CALENDAR_RUBRIC,
             SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3",
                 upstream_dataset="laion__nemotron-gym-instruction-following-calendar-v3",
                 upstream_name="laion__nemotron-gym-instruction-following-calendar-v3",

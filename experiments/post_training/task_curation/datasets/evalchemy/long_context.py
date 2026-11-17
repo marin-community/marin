@@ -46,6 +46,7 @@ from experiments.post_training.task_curation.datasets.evalchemy.environments imp
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 MRCR_REVISION = "f4c69fae7cf81f7ca26b9fee34b392a50f6b8a1d"
 LONG_CONTEXT_RESOURCE_BYTES = 64 * 1024 * 1024
@@ -91,6 +92,7 @@ GRAPHWALKS_CONTEXT_POLICY = ContextPolicy(
 def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataset]:
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="Evalchemy:" + name.lower(),
             upstream_dataset=name.lower(),
             upstream_name=name.lower(),
@@ -147,6 +149,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
         mrcr_source("MRCR-65k", 65472),
         RlDataSource(
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="Evalchemy:graphwalks",
                 upstream_dataset="graphwalks",
                 upstream_name="graphwalks",

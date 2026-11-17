@@ -63,6 +63,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 GENERATE = HERE / "generate.py"
@@ -348,6 +349,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="Reasoning Gym:reasoning_gym",
                 upstream_dataset="reasoning_gym",
                 upstream_name="reasoning_gym",
@@ -377,6 +379,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:laion__nemotron-gym-reasoning-gym-v2",
                 upstream_dataset="laion__nemotron-gym-reasoning-gym-v2",
                 upstream_name="laion__nemotron-gym-reasoning-gym-v2",

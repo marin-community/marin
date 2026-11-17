@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.embedding import COVERAGE_VERSION, 
 from experiments.post_training.task_curation.lexical_policy import LexicalInputUse
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.source_duplicate_ci import fingerprint_input
+from finestore.rl.status_taxonomy import DataRestriction
 from infra.marina.apps.rl_data_catalog.role_projection import (
     CurriculumManifests,
     ManifestReference,
@@ -49,6 +50,7 @@ ASSIGNMENT_BATCH_SIZE = 65536
 PROJECTION_VERSION = "2026.11.13.1"
 METADATA_FIELDS = frozenset(
     {
+        "data_restriction",
         "grading_environment",
         "lexical_contamination",
         "quality_result",
@@ -349,6 +351,16 @@ def project_curriculum(
         canonical_declaration(SourceDeclaration.model_validate(row))
         for row in json.loads(manifest_bytes(inputs.live_inventory))
     ]
+    private = sorted(
+        row.id
+        for row in inventory
+        if declaration_restriction(row.model_dump(mode="json")) is DataRestriction.PRIVATE_ALWAYS
+    )
+    if private:
+        # A release carries task previews and details for every source: a
+        # PRIVATE_ALWAYS source is refused at this shared export path, and the
+        # refusal also catches a flipped or dropped tag on the release input.
+        raise ValueError(f"Curriculum release contains a PRIVATE_ALWAYS source: {private}")
     ledger = json.loads(manifest_bytes(inputs.retirements))
     retired = frozenset(
         canonical_source_id(row["id"])

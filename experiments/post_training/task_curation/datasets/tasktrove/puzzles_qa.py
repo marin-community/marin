@@ -47,6 +47,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.puzzles import (
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, IntendedUse, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 PUZZLES_QA_CONFIG = PUZZLES_CONFIG
 
@@ -143,6 +144,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-puzzles-qa",
                 upstream_dataset="tasktrove-puzzles-qa",
                 upstream_name="tasktrove-puzzles-qa",

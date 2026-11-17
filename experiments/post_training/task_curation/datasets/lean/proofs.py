@@ -47,6 +47,7 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).resolve().parent
 LEAN_GRADE = grade_script(HERE / "lean_grade.py")
@@ -179,6 +180,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 origin=SourceOrigin.MARCUSM117,
                 upstream_dataset="ProofNet-Verified",
                 upstream_name="ProofNet-Verified",

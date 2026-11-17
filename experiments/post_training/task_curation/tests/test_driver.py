@@ -43,6 +43,7 @@ from experiments.post_training.task_curation.pipeline import (
     process_rows,
 )
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,
@@ -110,6 +111,7 @@ def catalog(monkeypatch, tmp_path):
                 name: RlDataSource(
                     pipeline=process_rows,
                     info=SourceInfo(
+                        data_restriction=DataRestriction.OPEN,
                         within_source_dedup=deduplication_evidence(
                             pipeline.dataset.name, pipeline.dataset.revision, pipeline.version
                         ),

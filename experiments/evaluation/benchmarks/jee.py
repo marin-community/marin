@@ -22,6 +22,7 @@ from experiments.evaluation.benchmarks.environments import BASIC_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 JEE_REVISION = "d070d1113ce365df05903763a2017ec2d0d56118"
 
@@ -30,6 +31,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="Evalchemy:JEEBench",
                 upstream_dataset="JEEBench",
                 upstream_name="JEEBench",

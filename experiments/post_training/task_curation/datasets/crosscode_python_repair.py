@@ -12,6 +12,7 @@ from experiments.post_training.task_curation.census_binding import ActorCensusRe
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
 from experiments.post_training.task_curation.reference_data import load_referenced_document
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_REASON
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup
 
@@ -37,6 +38,7 @@ def bind_source(source: RlDataSource) -> RlDataSource:
         intended_use=IntendedUse.EVAL,
     )
     info = SourceInfo(
+        data_restriction=DataRestriction.OPEN,
         id=SOURCE_ID,
         origin=source.info.origin,
         upstream_dataset=source.info.upstream_dataset,

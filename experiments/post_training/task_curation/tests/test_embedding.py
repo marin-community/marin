@@ -32,6 +32,7 @@ from experiments.post_training.task_curation.embedding import DescriptionEndpoin
 from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.license_fixtures import with_license
 from experiments.post_training.task_curation.tests.numbers_pipeline import (
     NUMBERS_DATASET,
@@ -246,6 +247,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
                             config=NumbersConfig("source", tmp_path / "unused"),
                             pipeline=numbers_pipeline,
                             info=SourceInfo(
+                                data_restriction=DataRestriction.OPEN,
                                 within_source_dedup=deduplication_evidence(
                                     NUMBERS_DATASET.name, NUMBERS_DATASET.revision, "1"
                                 ),
@@ -401,6 +403,7 @@ def test_publication_retains_registered_sources_without_placement(tmp_path, desc
                     config=NumbersConfig("source", tmp_path / "unused"),
                     pipeline=numbers_pipeline,
                     info=SourceInfo(
+                        data_restriction=DataRestriction.OPEN,
                         within_source_dedup=deduplication_evidence(NUMBERS_DATASET.name, NUMBERS_DATASET.revision, "1"),
                         id="Marin:source",
                         upstream_dataset="source",
@@ -417,6 +420,7 @@ def test_publication_retains_registered_sources_without_placement(tmp_path, desc
                     config=NumbersConfig("source", tmp_path / "unused"),
                     pipeline=numbers_pipeline,
                     info=SourceInfo(
+                        data_restriction=DataRestriction.OPEN,
                         within_source_dedup=deduplication_evidence(
                             NUMBERS_DATASET.name, NUMBERS_DATASET.revision, "1", 7
                         ),
@@ -436,6 +440,7 @@ def test_publication_retains_registered_sources_without_placement(tmp_path, desc
                     config=NumbersConfig("source", tmp_path / "unused"),
                     pipeline=numbers_pipeline,
                     info=SourceInfo(
+                        data_restriction=DataRestriction.OPEN,
                         within_source_dedup=deduplication_evidence(NUMBERS_DATASET.name, NUMBERS_DATASET.revision, "1"),
                         id="Marin:no-count",
                         upstream_dataset=("Marin:no-count").partition(":")[2],

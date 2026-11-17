@@ -27,6 +27,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.json_schemas import is_trivial
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 IFEVAL_CONFIG = "laion__nemotron-gym-instruction-following-v3"
 STRUCTURED_CONFIG = "laion__nemotron-gym-instruction-following-structured-v3"
@@ -216,6 +217,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id=f"TaskTrove:{IFEVAL_CONFIG}",
                 upstream_dataset=IFEVAL_CONFIG,
                 upstream_name=IFEVAL_CONFIG,
@@ -243,6 +245,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id=f"TaskTrove:{STRUCTURED_CONFIG}",
                 upstream_dataset=STRUCTURED_CONFIG,
                 upstream_name=STRUCTURED_CONFIG,

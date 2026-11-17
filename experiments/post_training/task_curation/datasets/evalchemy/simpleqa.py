@@ -22,6 +22,7 @@ from experiments.post_training.task_curation.evaluation import EvalDataset, cura
 from experiments.post_training.task_curation.judges import JUDGE_TIERS
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 SIMPLEQA_REVISION = "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94"
 # The private remediation version re-pins the historical gpt-4o-mini judge to
@@ -35,6 +36,7 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvalDataset]:
     rows = 500 if mini else 4326
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="Evalchemy:" + name,
             upstream_dataset=name,
             upstream_name=name,

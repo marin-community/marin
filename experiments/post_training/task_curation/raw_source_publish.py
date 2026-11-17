@@ -17,19 +17,34 @@ from rigging.filesystem.transfer import copy
 from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
+from experiments.post_training.task_curation.publication_gate import configured_restriction
 from experiments.post_training.task_curation.license_publication import (
     check_publication,
     licensed_dataset_card,
     prepare_license_publication,
 )
 from experiments.post_training.task_curation.native_quick import source_slug
+from experiments.post_training.task_curation.publication_gate import require_public_data
 from experiments.post_training.task_curation.remediation_publish import RawSourceArchive
+from finestore.rl.status_taxonomy import DataRestriction
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 
 
 def publish_raw_source(
-    stage: dict, receipt: LicenseReceipt, *, version: str, evidence_root: str, use: str
+    stage: dict,
+    receipt: LicenseReceipt,
+    *,
+    version: str,
+    evidence_root: str,
+    use: str,
+    data_restriction: DataRestriction,
 ) -> RawSourceArchive:
+    """Archive one raw snapshot; refused outright for a PRIVATE_ALWAYS source.
+
+    The caller passes the configured source's tier: an exact re-publish of its
+    content is an export, and the private store never exports.
+    """
+    require_public_data(data_restriction, stage["source_id"], "raw source archive")
     require_license(receipt, stage["source_id"], stage["dataset_id"], stage["revision"], use)
     require_unbanned(stage["source_id"], stage["dataset_id"], receipt)
     identity = hashlib.sha256(stage["source_id"].encode()).hexdigest()[:8]
@@ -124,7 +139,12 @@ def main() -> None:
     receipts = read_license_receipts(args.license_receipts)
     results = [
         publish_raw_source(
-            stage, receipts[stage["source_id"]], version=args.version, evidence_root=args.evidence_root, use=args.use
+            stage,
+            receipts[stage["source_id"]],
+            version=args.version,
+            evidence_root=args.evidence_root,
+            use=args.use,
+            data_restriction=configured_restriction(stage["source_id"]),
         )
         for stage in stages
     ]

@@ -28,6 +28,24 @@ class SourceStatus(StrEnum):
     DEPRECATED = "Deprecated"
 
 
+class DataRestriction(StrEnum):
+    """Typed restriction tier of a source population.
+
+    The tier is orthogonal to license, intended use and catalog status: an
+    ``Open`` source can be license-restricted and a ``PRIVATE_ALWAYS`` source
+    can be ``Available``. Every source declares the tier explicitly in code on
+    its ``SourceInfo``; the declaration, every derived artifact and every
+    published record carry it, and a downgrade or a missing tag on a derived
+    artifact is refused. A ``PRIVATE_ALWAYS`` source's task text, prompts,
+    answers, resources, samples and transcripts never leave its private store:
+    the Atlas shows counts, statuses, hashes, receipts and a visible private
+    data marker instead of content, no matter what else changes.
+    """
+
+    OPEN = "open"
+    PRIVATE_ALWAYS = "private_always"
+
+
 class PendingStage(StrEnum):
     """Intake stage of a queued source that is not configured for the catalog yet."""
 

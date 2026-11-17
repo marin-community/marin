@@ -32,10 +32,12 @@ from finestore.rl.difficulty import (
     Solver,
     difficulty_gaps,
 )
+from finestore.rl.status_taxonomy import DataRestriction
 from pydantic import BaseModel, ConfigDict
 from taskcompendium.identity import canonical_sha256
 
-from .difficulty import difficulty_summary
+from .difficulty import raw_current_models
+from .restrictions import PRIVATE_TEXT_MARKER, declaration_restriction
 from .source_identity import canonical_source_id
 
 COVERED_STATUSES = ("Available", "Pending")
@@ -98,7 +100,7 @@ class DifficultyCoverage(BaseModel):
         return sorted(source_id for source_id, source in self.sources.items() if source.measurable)
 
 
-def _solver_coverage(model: dict[str, Any]) -> SolverCoverage:
+def _solver_coverage(model: dict[str, Any], private: bool = False) -> SolverCoverage:
     status = MeasurementStatus(model["status"])
     gaps: tuple[DifficultyGap, ...] = ()
     reason = model.get("reason")
@@ -111,6 +113,8 @@ def _solver_coverage(model: dict[str, Any]) -> SolverCoverage:
         except ValueError as error:
             raise ValueError(f"Difficulty observation carries an unmapped reason: {reason!r}") from error
     measurement_id = model.get("measurement_id")
+    if private:
+        reason = PRIVATE_TEXT_MARKER if gaps else None
     return SolverCoverage(
         solver=Solver(model["solver"]),
         status=status,
@@ -123,9 +127,14 @@ def _solver_coverage(model: dict[str, Any]) -> SolverCoverage:
 
 
 def source_coverage(declaration: dict[str, Any], records: list[DifficultyObservation]) -> SourceCoverage:
-    """Classify one source from its current declaration and stored observations."""
-    summary = difficulty_summary(declaration, records)
-    solvers = tuple(_solver_coverage(model) for model in summary["models"])
+    """Classify one source from its current declaration and stored observations.
+
+    Classification reads the typed reasons verbatim; a PRIVATE_ALWAYS source's
+    served reason text is still replaced by the private marker, so its content
+    can never travel through the coverage document.
+    """
+    private = declaration_restriction(declaration) is DataRestriction.PRIVATE_ALWAYS
+    solvers = tuple(_solver_coverage(model, private=private) for model in raw_current_models(declaration, records))
     measured = [model for model in solvers if model.status is MeasurementStatus.MEASURED]
     gaps = tuple(gap for model in solvers for gap in model.gaps)
     evidence = tuple(model.reason for model in solvers if model.reason and model.gaps)

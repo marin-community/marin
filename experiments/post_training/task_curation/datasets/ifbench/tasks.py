@@ -19,6 +19,7 @@ from verifyit.spec import DEFAULT_OUTPUT
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 SCORER_REVISION = "28c1816664491493242d453c2c7280ee56e6c20a"
@@ -88,6 +89,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 origin=SourceOrigin.ALLENAI,
                 upstream_dataset="IF_multi_constraints_upto5",
                 upstream_name="IFBench training split",

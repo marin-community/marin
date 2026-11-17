@@ -13,6 +13,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.licenses import LicenseReceipt, require_license
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from huggingface_hub import HfApi, hf_hub_download
@@ -32,6 +33,7 @@ from experiments.post_training.task_curation.license_publication import (
     licensed_dataset_card,
     prepare_license_publication,
 )
+from experiments.post_training.task_curation.publication_gate import configured_restriction, require_public_data
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_SOURCE_IDS
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
@@ -62,9 +64,16 @@ def source_slug(source_id: str) -> str:
 
 
 def publish_quick(
-    entry: dict, output: Path, repo: str, license_receipt: LicenseReceipt, *, intended_use: IntendedUse
+    entry: dict,
+    output: Path,
+    repo: str,
+    license_receipt: LicenseReceipt,
+    *,
+    intended_use: IntendedUse,
+    data_restriction: DataRestriction,
 ) -> dict:
     """Publish conversion evidence and validate every TaskSpec and uploaded byte stream."""
+    require_public_data(data_restriction, entry["id"], repo)
     require_license(license_receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], intended_use.value)
     require_unbanned(entry["id"], entry["dataset_id"], license_receipt)
     manifest = json.loads((output / "manifest.json").read_text())
@@ -137,7 +146,15 @@ def publish_quick(
     }
 
 
-def run_entry(entry: dict, root: Path, hub_input: str | None, license_receipt: LicenseReceipt, version: str) -> dict:
+def run_entry(
+    entry: dict,
+    root: Path,
+    hub_input: str | None,
+    license_receipt: LicenseReceipt,
+    version: str,
+    *,
+    data_restriction: DataRestriction,
+) -> dict:
     intended_use = IntendedUse.EVAL if entry["id"] in CROSSCODE_EVAL_SOURCE_IDS else IntendedUse.TRAIN
     require_license(license_receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], intended_use.value)
     require_unbanned(entry["id"], entry["dataset_id"], license_receipt)
@@ -203,7 +220,12 @@ def run_entry(entry: dict, root: Path, hub_input: str | None, license_receipt: L
         + hashlib.sha256(original_source_id(entry["id"]).encode()).hexdigest()[:8]
     )
     return publish_quick(
-        entry, output, f"open-athena/{repo_slug}-taskcompendium-{version}", license_receipt, intended_use=intended_use
+        entry,
+        output,
+        f"open-athena/{repo_slug}-taskcompendium-{version}",
+        license_receipt,
+        intended_use=intended_use,
+        data_restriction=data_restriction,
     )
 
 
@@ -227,7 +249,9 @@ def main() -> None:
         intended_use = IntendedUse.EVAL if entry["id"] in CROSSCODE_EVAL_SOURCE_IDS else IntendedUse.TRAIN
         require_license(receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], intended_use.value)
         assert receipt is not None
-        result = run_entry(entry, args.root, args.hub_input, receipt, args.version)
+        result = run_entry(
+            entry, args.root, args.hub_input, receipt, args.version, data_restriction=configured_restriction(source_id)
+        )
         slug = source_slug(source_id)
         artifact_root = StoragePath(args.evidence_root).parent / "artifacts" / slug
         if result["status"] == "quick_converted":

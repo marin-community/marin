@@ -27,6 +27,7 @@ from experiments.post_training.task_curation.datasets.evalchemy.environments imp
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 IFEVAL_REVISION = "966cd89545d6b6acfd7638bc708b98261ca58e84"
 IFBENCH_REVISION = "2e8a48de45ff3bf41242f927254ca81b59ca3ae2"
@@ -55,6 +56,7 @@ def instruction_source(
     names = IFEVAL_METRICS if profile is InstructionProfile.HARNESS else IFBENCH_METRICS
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="Evalchemy:" + name,
             upstream_dataset=name,
             upstream_name=name,

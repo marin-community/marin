@@ -12,6 +12,7 @@ from typing import Any
 
 import click
 import pyarrow.parquet as pq
+from finestore.rl.status_taxonomy import DataRestriction
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -28,6 +29,7 @@ from infra.marina.apps.rl_data_catalog.role_projection import (
     manifest_documents,
     validated_role_projection,
 )
+from infra.marina.apps.rl_data_catalog.server.restrictions import declaration_restriction
 from infra.marina.apps.rl_data_catalog.server.source_areas import materialize_source_areas
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
@@ -131,6 +133,30 @@ def load_curriculum(
     ) & retired_admission_source_ids()
     if retired:
         raise ValueError(f"Retired sources cannot enter the selected curriculum: {sorted(retired)}")
+    atlas_current = query("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"]
+    atlas_declarations: dict[str, dict[str, Any]] = {}
+    if atlas_current:
+        atlas_declarations = {
+            row["id"]: row["declaration"]
+            for row in query(
+                "SELECT id, declaration FROM atlas_sources WHERE load_id=:load_id",
+                {"load_id": atlas_current[0]["load_id"]},
+            )["rows"]
+        }
+    private = sorted(
+        {
+            row.id
+            for row in release.inventory
+            if declaration_restriction(row.model_dump(mode="json")) is DataRestriction.PRIVATE_ALWAYS
+            or declaration_restriction(atlas_declarations.get(row.id, {})) is DataRestriction.PRIVATE_ALWAYS
+        }
+    )
+    if private:
+        # A release carries each source's task previews and details: a PRIVATE_ALWAYS
+        # source must never enter one. The catalog's authoritative tier (registry
+        # override included) also refuses a release row whose stored tag was
+        # flipped or dropped.
+        raise ValueError(f"Curriculum release contains a PRIVATE_ALWAYS source: {private}")
     coverage = CurriculumCoverage.model_validate_json(StoragePath(coverage_uri).read_text())
     if (coverage.alignment_release_id, coverage.curriculum_key, coverage.task_count) != (
         release.release_id,

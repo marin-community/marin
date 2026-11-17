@@ -48,7 +48,9 @@ from zephyr.writers import write_parquet_file
 
 from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
+from experiments.post_training.task_curation.publication_gate import configured_restriction
 from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_SOURCE_IDS
+from finestore.rl.status_taxonomy import DataRestriction
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_map, original_source_id
 
 SELECTION_PREFIX = "rl-data/task-selection"
@@ -528,6 +530,7 @@ def prepare(config: SelectionConfig) -> None:
         )
         summary = {
             "recipe": config.recipe.model_dump(mode="json"),
+            "data_restriction": selection_restriction(config.sources),
             "sources": [asdict(source) for source in config.sources],
             "source_counts": {source: asdict(count) for source, count in counts.items()},
             "training_rows": sum(count.selected for count in counts.values()),
@@ -542,6 +545,18 @@ def prepare(config: SelectionConfig) -> None:
         }
         task_files = (TRAIN_FILENAME, VALIDATION_FILENAME, FULL_VALIDATION_FILENAME)
         _publish_selection(directory, config.output_path, task_files, summary)
+
+
+def selection_restriction(sources: tuple[SelectionInput, ...]) -> str:
+    """The training selection's tier: the strongest restriction among its sources.
+
+    A selection containing a PRIVATE_ALWAYS source is itself private, so every
+    derived artifact inherits the tag and a private-training-only selection can
+    never be re-labeled open downstream.
+    """
+    if any(configured_restriction(source.source_id) is DataRestriction.PRIVATE_ALWAYS for source in sources):
+        return DataRestriction.PRIVATE_ALWAYS.value
+    return DataRestriction.OPEN.value
 
 
 def _publish_selection(directory: Path, output_path: str, task_files: tuple[str, ...], summary: dict[str, Any]) -> None:
@@ -760,6 +775,7 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
         write_parquet_file(manifest, str(directory / TASK_MANIFEST_FILENAME), schema=EVAL_LITE_MANIFEST_SCHEMA)
         summary = {
             "recipe": recipe.model_dump(mode="json"),
+            "data_restriction": selection_restriction(()),
             "full_validation_rows": len(selection.tasks),
             "validation_rows": len(selection.fast),
             "family_counts": dict(Counter(part.family for _, part in selection.tasks)),

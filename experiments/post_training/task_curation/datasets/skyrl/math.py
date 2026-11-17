@@ -24,6 +24,7 @@ from verifyit.modes.grade_math import parses_reference
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 MATH_CONTROLS = Controls(golden=reference_reply)
 SOLUTION_FIELDS = ("solution", "answer_type", "extracted_answer", "source")
@@ -298,6 +299,7 @@ SOURCES = (
         AIME24_RUBRIC,
         controls=None,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="HuggingFaceH4:aime24",
             upstream_dataset="aime24",
             upstream_name="aime24",
@@ -320,6 +322,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         AIME_1983_2024_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="di-zhang-fdu:aime_1983_2024",
             upstream_dataset="aime_1983_2024",
             upstream_name="aime_1983_2024",
@@ -343,6 +346,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         ASDIV_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="ASDiv:asdiv",
             upstream_dataset="asdiv",
             upstream_name="asdiv",
@@ -365,6 +369,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         DAPO_MATH_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="BytedTsinghua-SIA:dapo_math",
             upstream_dataset="dapo_math",
             upstream_name="dapo_math",
@@ -387,6 +392,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         DEEPSCALER_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="agentica-org:deepscaler",
             upstream_dataset="deepscaler",
             upstream_name="deepscaler",
@@ -409,6 +415,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         GSM8K_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="OpenAI:gsm8k",
             upstream_dataset="gsm8k",
             upstream_name="gsm8k",
@@ -431,6 +438,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         HARDMATH_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="pafitis:hardmath",
             upstream_dataset="hardmath",
             upstream_name="hardmath",
@@ -453,6 +461,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         HENDRYCKS_MATH_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="EleutherAI:hendrycks_math",
             upstream_dataset="hendrycks_math",
             upstream_name="hendrycks_math",
@@ -472,6 +481,7 @@ SOURCES = (
         IntendedUse.EVAL,
         MATH500_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="HuggingFaceH4:math500",
             upstream_dataset="math500",
             upstream_name="math500",
@@ -494,6 +504,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         NUMINA_MATH_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="AI-MO:numina_math",
             upstream_dataset="numina_math",
             upstream_name="numina_math",
@@ -516,6 +527,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         RLVR_MATH_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="AllenAI:rlvr_math",
             upstream_dataset="rlvr_math",
             upstream_name="rlvr_math",
@@ -536,6 +548,7 @@ SOURCES = (
         SVAMP_RUBRIC,
         controls=None,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="ChilleD:svamp",
             upstream_dataset="svamp",
             upstream_name="svamp",

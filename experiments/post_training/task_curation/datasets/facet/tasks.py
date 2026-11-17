@@ -46,6 +46,7 @@ from experiments.post_training.task_curation.datasets.facet.images import (
 from experiments.post_training.task_curation.datasets.native_harbor import native_task, unpack_native
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 VERSION = "2026.11.17.1"
 PREFIX = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/fweindel-facet/2026.11.17.1"
@@ -243,6 +244,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 origin=SourceOrigin.FWEINDEL,
                 upstream_dataset="validated-tasks",
                 upstream_name="FACET terminal tasks",

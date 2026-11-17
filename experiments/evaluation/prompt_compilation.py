@@ -42,6 +42,7 @@ from experiments.evaluation.preparation import EvaluationCorpusRecipe, chat_sour
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 EXPLICIT_TEMPLATE_VERSION = "2026.11.05.3"
 
@@ -60,6 +61,7 @@ def multiple_choice_evaluation(
     policy = template.fewshot
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             upstream_dataset=name,
             upstream_name=name,
             build_path="Checkpoint",
@@ -136,6 +138,7 @@ def lm_eval_multiple_choice(
     )
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             upstream_dataset=name,
             upstream_name=name,
             build_path="Evalchemy",
@@ -203,6 +206,7 @@ def text_generation_evaluation(
     """Bind a family's compiled demonstrations, scorer and sampling protocol."""
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             upstream_dataset=name,
             upstream_name=name,
             build_path="Checkpoint",
@@ -261,6 +265,7 @@ def _compile_lm_eval_text_generation(
     template = HarnessTemplate(name=dataset.name, num_fewshot=shots, fewshot_file=dataset.pool_file)
     source = RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             upstream_dataset=dataset.name,
             upstream_name=dataset.name,
             build_path="Evalchemy",

@@ -12,6 +12,7 @@ from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 
 def convert(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -28,6 +29,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 upstream_dataset=DATASET,
                 upstream_name="Nemotron conversational tool use",
                 subset="predicted-action",

@@ -32,6 +32,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import require_oracle_filter
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
+from experiments.post_training.task_curation.publication_gate import require_no_restriction_downgrade
 from experiments.post_training.task_curation.full_content_binding import (
     RetainedLineageProof,
     bind_full_content_result,
@@ -253,7 +254,9 @@ def bind_oracle_admitted_release(
         import_oracle_harbor_prebuilt if receipt.task_format is TaskFormat.HARBOR else import_taskcompendium_prebuilt
     )
     bound = bind_actor_census(RlDataSource(info=info, config=config, pipeline=pipeline), receipt.actor)
-    return bind_full_content_result(bind_sample_result(bound, receipt.sample), receipt.full_content)
+    bound = bind_full_content_result(bind_sample_result(bound, receipt.sample), receipt.full_content)
+    require_no_restriction_downgrade(source.info, bound.info, "oracle-admitted release")
+    return bound
 
 
 def bind_selected_source_content(
@@ -289,6 +292,7 @@ def bind_selected_source_content(
             bind_full_content_result(original, full_content)
     else:
         selected = bind_full_content_result(selected, full_content)
+    require_no_restriction_downgrade(original.info, selected.info, "selected source content")
     return selected
 
 

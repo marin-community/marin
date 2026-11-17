@@ -33,6 +33,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.source import (
     RecipeQAHistoricalNotes,
     RlDataSource,
@@ -359,6 +360,7 @@ SOURCES = (
         "laion__stackexchange-codereview-sandboxes-verified-v2",
         CODEREVIEW_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
             upstream_dataset="laion__stackexchange-codereview-sandboxes-verified-v2",
             upstream_name="laion__stackexchange-codereview-sandboxes-verified-v2",
@@ -381,6 +383,7 @@ SOURCES = (
         "laion__glaive-code-assistant-sandboxes-verified-v2",
         GLAIVE_CODE_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2",
             upstream_dataset="laion__glaive-code-assistant-sandboxes-verified-v2",
             upstream_name="laion__glaive-code-assistant-sandboxes-verified-v2",
@@ -402,6 +405,7 @@ SOURCES = (
         "laion__nemotron-gym-safety-v3",
         SAFETY_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:laion__nemotron-gym-safety-v3",
             upstream_dataset="laion__nemotron-gym-safety-v3",
             upstream_name="laion__nemotron-gym-safety-v3",
@@ -445,6 +449,7 @@ SOURCES = (
         "laion__stackexchange-overflow-sandboxes-verified-v2",
         STACK_OVERFLOW_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
             upstream_dataset="laion__stackexchange-overflow-sandboxes-verified-v2",
             upstream_name="laion__stackexchange-overflow-sandboxes-verified-v2",
@@ -466,6 +471,7 @@ SOURCES = (
         "laion__stackexchange-superuser-sandboxes-verified-v2",
         SUPERUSER_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2",
             upstream_dataset="laion__stackexchange-superuser-sandboxes-verified-v2",
             upstream_name="laion__stackexchange-superuser-sandboxes-verified-v2",
@@ -487,6 +493,7 @@ SOURCES = (
         "laion__stackexchange-tezos-sandboxes-verified-v2",
         TEZOS_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:laion__stackexchange-tezos-sandboxes-verified-v2",
             upstream_dataset="laion__stackexchange-tezos-sandboxes-verified-v2",
             upstream_name="laion__stackexchange-tezos-sandboxes-verified-v2",
@@ -508,6 +515,7 @@ SOURCES = (
         "laion__stackexchange-unix-sandboxes-verified-v2",
         UNIX_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2",
             upstream_dataset="laion__stackexchange-unix-sandboxes-verified-v2",
             upstream_name="laion__stackexchange-unix-sandboxes-verified-v2",
@@ -529,6 +537,7 @@ SOURCES = (
         "laion__wizardlm-orca-v4",
         WIZARD_ORCA_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:laion__wizardlm-orca-v4",
             upstream_dataset="laion__wizardlm-orca-v4",
             upstream_name="laion__wizardlm-orca-v4",

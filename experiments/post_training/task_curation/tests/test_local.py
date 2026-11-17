@@ -35,6 +35,7 @@ from experiments.post_training.task_curation.images.build import MissingEnvironm
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, planned_lock_url, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
 from experiments.post_training.task_curation.tests.license_fixtures import with_license
 
@@ -50,6 +51,7 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, cach
         name: RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id=f"Marin:{name}",
                 upstream_dataset=name,
                 upstream_name=name,

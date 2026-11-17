@@ -30,6 +30,7 @@ from experiments.post_training.task_curation.prebuilt import (
     import_prebuilt,
     import_taskcompendium_prebuilt,
 )
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.source import (
     RlDataSource,
     SourceInfo,
@@ -92,6 +93,7 @@ def _tasktrove_qa_release(
     return _qa_cohort(
         config,
         SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id=f"TaskTrove:tasktrove-{name}-qa",
             upstream_dataset=f"tasktrove-{name}-qa",
             upstream_name=name,
@@ -162,6 +164,7 @@ def _puzzles_qa_release() -> RlDataSource[PrebuiltCohort]:
     return _qa_cohort(
         PUZZLES_QA_PIN,
         SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:tasktrove-puzzles-qa",
             upstream_dataset="tasktrove-puzzles-qa",
             upstream_name="tasktrove-puzzles-qa",
@@ -200,6 +203,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=8222,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-code-contests-built-image",
                 upstream_dataset="tasktrove-code-contests-built-image",
                 upstream_name="tasktrove-code-contests-built-image",
@@ -258,6 +262,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=5116,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-taco-built-image",
                 upstream_dataset="tasktrove-taco-built-image",
                 upstream_name="tasktrove-taco-built-image",
@@ -316,6 +321,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=1357,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:smartie-calibforge-rebuilt-v1",
                 upstream_dataset="smartie-calibforge-rebuilt-v1",
                 upstream_name="smartie-calibforge-rebuilt-v1",
@@ -368,6 +374,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=1498,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-nl2bash-rebuilt-v1",
                 upstream_dataset="tasktrove-nl2bash-rebuilt-v1",
                 upstream_name="tasktrove-nl2bash-rebuilt-v1",
@@ -421,6 +428,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=9690,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-codeforces-rebuilt-v1",
                 upstream_dataset="tasktrove-codeforces-rebuilt-v1",
                 upstream_name="tasktrove-codeforces-rebuilt-v1",
@@ -469,6 +477,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=13973,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
                 upstream_dataset="tasktrove-competitive-coding-rebuilt-v1",
                 upstream_name="tasktrove-competitive-coding-rebuilt-v1",
@@ -524,6 +533,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=505,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-curriculum-easy-rebuilt-v1",
                 upstream_dataset="tasktrove-curriculum-easy-rebuilt-v1",
                 upstream_name="tasktrove-curriculum-easy-rebuilt-v1",
@@ -575,6 +585,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=488,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-curriculum-medium-rebuilt-v1",
                 upstream_dataset="tasktrove-curriculum-medium-rebuilt-v1",
                 upstream_name="tasktrove-curriculum-medium-rebuilt-v1",
@@ -626,6 +637,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=477,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-e2egit-v2-rebuilt",
                 upstream_dataset="tasktrove-e2egit-v2-rebuilt",
                 upstream_name="tasktrove-e2egit-v2-rebuilt",
@@ -679,6 +691,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=4993,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-e2egit-large-rebuilt-v1",
                 upstream_dataset="tasktrove-e2egit-large-rebuilt-v1",
                 upstream_name="tasktrove-e2egit-large-rebuilt-v1",
@@ -729,6 +742,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=4842,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-multifile-rebuilt-v1",
                 upstream_dataset="tasktrove-multifile-rebuilt-v1",
                 upstream_name="tasktrove-multifile-rebuilt-v1",
@@ -779,6 +793,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=500,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
                 upstream_dataset="tasktrove-pymethods2test-rebuilt-v1",
                 upstream_name="tasktrove-pymethods2test-rebuilt-v1",
@@ -830,6 +845,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=4990,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
                 upstream_dataset="tasktrove-pymethods2test-large-rebuilt-v1",
                 upstream_name="tasktrove-pymethods2test-large-rebuilt-v1",
@@ -881,6 +897,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=492,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-stack-pytest-rebuilt-v1",
                 upstream_dataset="tasktrove-stack-pytest-rebuilt-v1",
                 upstream_name="tasktrove-stack-pytest-rebuilt-v1",
@@ -932,6 +949,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=4991,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
                 upstream_dataset="tasktrove-unitsyn-python-rebuilt-v1",
                 upstream_name="tasktrove-unitsyn-python-rebuilt-v1",
@@ -984,6 +1002,7 @@ def sources() -> list[RlDataSource]:
                 expected_rows=4991,
             ),
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
                 upstream_dataset="tasktrove-unitsyn-python-large-rebuilt-v1",
                 upstream_name="tasktrove-unitsyn-python-large-rebuilt-v1",
@@ -1029,6 +1048,7 @@ def sources() -> list[RlDataSource]:
             pipeline=import_harbor_prebuilt,
             config=swesmith_repaired,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:swesmith-verifier-repaired-v5",
                 upstream_dataset="swesmith-verifier-repaired-v5",
                 upstream_name="swesmith-verifier-repaired-v5",

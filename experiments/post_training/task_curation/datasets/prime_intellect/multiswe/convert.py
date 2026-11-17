@@ -55,6 +55,7 @@ from experiments.post_training.task_curation.datasets.prime_intellect.multiswe.s
 from experiments.post_training.task_curation.datasets.prime_intellect.native_scripts import SOLVER_SYSTEM_PROMPT
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 DATASET = "PrimeIntellect/Multi-SWE-RL-Verified"
@@ -265,6 +266,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 origin=SourceOrigin.PRIME_INTELLECT,
                 upstream_dataset=DATASET,
                 upstream_name="Multi-SWE-RL-Verified",

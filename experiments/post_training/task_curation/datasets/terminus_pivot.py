@@ -17,6 +17,7 @@ from taskcompendium.runtime.resources import inline_resource
 from experiments.post_training.task_curation.datasets.environments import TERMINUS_GRADER_PACKAGES
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 DATASET = "nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1"
@@ -74,6 +75,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 origin=SourceOrigin.NEMOTRON,
                 upstream_dataset=DATASET,
                 upstream_name="Nemotron-RL-Agentic-Terminal-Pivot-v1",

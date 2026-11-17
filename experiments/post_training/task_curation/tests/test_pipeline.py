@@ -66,6 +66,7 @@ from experiments.post_training.task_curation.pipeline import (
     source_recipe,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.image_builds import (
     COMPILED_LOCK,
     DATA_PATH,
@@ -140,6 +141,7 @@ def source_step(recipe: CurationRecipe, options: PipelineOptions, receipt_root: 
         )
     source = RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id=f"Marin:{recipe.name}",
             upstream_dataset=recipe.name,
             upstream_name=recipe.name,

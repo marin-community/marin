@@ -55,6 +55,7 @@ from experiments.post_training.task_curation.pipeline import (
     process_rows,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 EXECUTABLE_CONTROLS = Controls(golden=solve_script)
 SOURCE_VERIFIER_CONFIG = "taskcompendium-verifier.toml"
@@ -246,6 +247,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             version="4",
             grader=None,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:DCAgent__code-contests-noblock",
                 upstream_dataset="DCAgent__code-contests-noblock",
                 upstream_name="DCAgent__code-contests-noblock",
@@ -268,6 +270,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert_codeforces_task,
             CODEFORCES_RUBRIC,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:laion__codeforces-v3",
                 upstream_dataset="laion__codeforces-v3",
                 upstream_name="laion__codeforces-v3",
@@ -291,6 +294,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             COMPETITIVE_CODING_RUBRIC,
             version="2",
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:laion__nemotron-gym-competitive-coding-v2",
                 upstream_dataset="laion__nemotron-gym-competitive-coding-v2",
                 upstream_name="laion__nemotron-gym-competitive-coding-v2",
@@ -312,6 +316,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             version="5",
             grader=None,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:laion__exp_rpt_taco-v2",
                 upstream_dataset="laion__exp_rpt_taco-v2",
                 upstream_name="laion__exp_rpt_taco-v2",

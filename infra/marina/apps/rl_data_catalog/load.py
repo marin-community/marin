@@ -63,6 +63,7 @@ from infra.marina.apps.rl_data_catalog.server.admission import (
 from infra.marina.apps.rl_data_catalog.server.cohort_summaries import materialize_cohort_summaries
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
 from infra.marina.apps.rl_data_catalog.server.quality import Quality, quality_display, review_completeness
+from infra.marina.apps.rl_data_catalog.server.restrictions import is_private
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
 MAX_BATCH_BYTES = 1_000_000
@@ -514,6 +515,11 @@ def load_catalog(
     }
     all_items = []
     full_counts: dict[str, dict[str, int]] = {}
+    private_pipelines = {
+        source.assessment_key
+        for source in sources
+        if source.assessment_key is not None and is_private(source.declaration.model_dump(mode="json"))
+    }
     for source, record in zip(sources, metadata["sources"], strict=True):
         key = source.assessment_key
         record["review_completeness"] = review_completeness(source.declaration, [], [])
@@ -591,6 +597,10 @@ def load_catalog(
             for item, packet in catalog.packets(all_items[offset : offset + PACKET_READ_BATCH]):
                 if ("task" in packet) != item.has_task:
                     raise ValueError(f"Packet evidence disagrees with catalog item: {item.task_id}")
+                if item.pipeline_key in private_pipelines:
+                    # A PRIVATE_ALWAYS source's packets stay in its private store:
+                    # the served database holds the marker response, never the bytes.
+                    continue
                 yield {
                     "pipeline_key": item.pipeline_key,
                     "task_id": item.task_id,

@@ -31,6 +31,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.struc
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
 FILE_DELIVERY = (
@@ -115,6 +116,7 @@ def candidate_sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=None,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:laion__nemotron-gym-structured-outputs-v4",
                 upstream_dataset="laion__nemotron-gym-structured-outputs-v4",
                 upstream_name="laion__nemotron-gym-structured-outputs-v4",

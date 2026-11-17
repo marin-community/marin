@@ -17,6 +17,7 @@ from taskcompendium.pipeline.models import Controls, IntendedUse, Reply
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 REPOSITORY = "open-athena/Marin-Thoughtcrime"
 REVISION = "5ebd362eec2a6beab7898ea7a717a32a55d164bd"
@@ -43,6 +44,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id=SOURCE_ID,
                 upstream_dataset="thoughtcrime",
                 upstream_name="thoughtcrime",

@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.repository_pytes
 from experiments.post_training.task_curation.datasets.tasktrove.swe_rebench import convert_swe_rebench_task
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 REPOSITORY_CRITERIA = """
 The public repository and checkout identify necessary context; unavailable local checkout is a runtime
@@ -129,6 +130,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert=convert_swe_rebench_task,
             version="4",
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2",
                 upstream_dataset="DCAgent__swe_rebench_v2_patched_oracle-v2",
                 upstream_name="DCAgent__swe_rebench_v2_patched_oracle-v2",
@@ -179,6 +181,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert=convert_swesmith_task,
             version="4",
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:laion__swesmith-oracle-filtered-v2",
                 upstream_dataset="laion__swesmith-oracle-filtered-v2",
                 upstream_name="laion__swesmith-oracle-filtered-v2",

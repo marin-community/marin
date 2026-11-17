@@ -72,6 +72,7 @@ from experiments.post_training.task_curation.retained_release import (
     run_retained_import,
 )
 from experiments.post_training.task_curation.source import SourceInfo, SourceReference
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license, with_license
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_source, prebuilt_task
 from infra.marina.apps.rl_data_catalog.server.admission import require_private_release
@@ -178,6 +179,7 @@ def retained_receipt(frozen_population):
     plan, _, _ = frozen_population
     source = prebuilt_source(
         SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             origin=SourceOrigin.MARIN,
             upstream_dataset="fixture",
             upstream_name="Fixture",

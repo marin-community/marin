@@ -29,6 +29,7 @@ from experiments.post_training.task_curation.datasets import native_releases
 from experiments.post_training.task_curation.datasets.native_harbor import native_task, unpack_native
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.license_fixtures import with_license
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -129,6 +130,7 @@ def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
     source = RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             origin=SourceOrigin.MARIN,
             upstream_dataset="native",
             upstream_name="Native",

@@ -13,9 +13,15 @@ from functools import partial
 from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from finestore.rl.status_taxonomy import DataRestriction
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
+from .restrictions import (
+    PRIVATE_TEXT_MARKER,
+    declaration_restriction,
+    private_content_marker,
+)
 from .source_areas import SOURCE_AREA_VERSION
 from .source_identity import canonical_source_id, original_source_id
 
@@ -226,6 +232,7 @@ TASKS_SQL = (
                 ORDER BY sample_rank,source_id,task_id LIMIT :limit
                 )
                 SELECT p.source_id,p.task_id,p.content_hash,LEFT(d.detail->>'task_preview',600) AS task_preview,
+                    s.declaration AS source_declaration,
                     (SELECT jsonb_agg(jsonb_build_object(
                         'subject_id',m->>'subject_id','membership_similarity',m->'membership_similarity',
                         'candidates',jsonb_build_array(jsonb_build_object(
@@ -234,6 +241,7 @@ TASKS_SQL = (
                         FROM jsonb_array_elements(d.detail->'matches'->'subjects') m) AS matches,
                     p.description_status,p.outcome,p.sample_rank
                 FROM selected_page p JOIN curriculum_tasks d USING (load_id,source_id,task_id)
+                JOIN curriculum_sources s ON s.load_id=p.load_id AND s.source_id=p.source_id
                 ORDER BY p.sample_rank,p.source_id,p.task_id
             """
 )
@@ -291,18 +299,46 @@ def task_parameters(
     return params
 
 
-def task_response(metadata: dict[str, Any], rows: list[dict[str, Any]], limit: int) -> dict[str, Any]:
+def task_response(
+    metadata: dict[str, Any], rows: list[dict[str, Any]], limit: int, restrictions: dict[str, DataRestriction]
+) -> dict[str, Any]:
     next_cursor = ""
     if len(rows) > limit:
         last = rows[limit - 1]
         next_cursor = base64.urlsafe_b64encode(
             json.dumps([last["sample_rank"], last["source_id"], last["task_id"]]).encode()
         ).decode()
+    tasks = []
+    for row in rows[:limit]:
+        source = canonical_source_id(row["source_id"])
+        restriction = restrictions.get(source)
+        private = restriction is DataRestriction.PRIVATE_ALWAYS
+        served = {key: value for key, value in row.items() if key != "source_declaration"}
+        if restriction is not None:
+            served["data_restriction"] = restriction.value
+        if private:
+            served["task_preview"] = PRIVATE_TEXT_MARKER
+        tasks.append({**served, "source_id": source})
     return {
         "release_id": metadata["release_id"],
-        "tasks": [{**row, "source_id": canonical_source_id(row["source_id"])} for row in rows[:limit]],
+        "tasks": tasks,
         "next_cursor": next_cursor,
     }
+
+
+def source_restrictions(rows: list[dict[str, Any]]) -> dict[str, DataRestriction]:
+    """The effective tier of every source appearing in served curriculum rows.
+
+    The declaration carries the tier, so the versioned override registry stays
+    authoritative even when a release predates it or a stored row was tampered with.
+    """
+    resolved = {}
+    for row in rows:
+        declaration = row.get("source_declaration")
+        if declaration is None:
+            continue
+        resolved[canonical_source_id(row["source_id"])] = declaration_restriction(declaration)
+    return resolved
 
 
 CONFIDENCE_SQL = """
@@ -551,7 +587,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             metadata = loaded_release(connection, filters.release)
             params = task_parameters(metadata, filters, subject_id, node_id, scope, outcome, cursor, limit, sample_pool)
             rows = [dict(row) for row in connection.execute(text(TASKS_SQL), params).mappings()]
-        return task_response(metadata, rows, limit)
+        return task_response(metadata, rows, limit, source_restrictions(rows))
 
     @api.get("/curriculum/task")
     def task(source_id: str, task_id: str, release: str = "") -> dict[str, Any]:
@@ -561,7 +597,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                 connection.execute(
                     text(
                         """
-                SELECT t.detail, s.alignment->>'intended_use' AS intended_use
+                SELECT t.detail, s.alignment->>'intended_use' AS intended_use, s.declaration AS source_declaration
                 FROM curriculum_tasks t JOIN curriculum_sources s USING(load_id, source_id)
                 WHERE t.load_id=:load_id AND t.source_id IN (:source_id, :original_source_id) AND t.task_id=:task_id
             """
@@ -578,6 +614,8 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             )
         if detail is None:
             raise HTTPException(404, "Task is outside the loaded alignment population")
+        if declaration_restriction(detail["source_declaration"]) is DataRestriction.PRIVATE_ALWAYS:
+            return {"release_id": metadata["release_id"], "task": private_content_marker()}
         return {
             "release_id": metadata["release_id"],
             "task": {

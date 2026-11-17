@@ -51,6 +51,7 @@ from experiments.post_training.task_curation.license_binding import licensed_sou
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 INITIAL_REQUIREMENTS = ExecutionRequirements(
     cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=300, verifier_timeout_sec=60
@@ -315,6 +316,7 @@ def curate(source: RlDataSource[ResearchDataset], options: PipelineOptions) -> A
 def source(config: PreparationConfig) -> RlDataSource[ResearchDataset]:
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             origin=SourceOrigin.OPENRESEARCHER,
             upstream_dataset="OpenResearcher-Dataset",
             upstream_name="OpenResearcher TRAIN",

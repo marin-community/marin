@@ -41,6 +41,7 @@ from experiments.post_training.task_curation.driver import _conversion_steps
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.license_fixtures import with_license
 
 
@@ -70,6 +71,7 @@ def grouped_item(task):
 def fixture_source() -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="Marin:eval-identity",
             upstream_dataset="eval-identity",
             upstream_name="eval-identity",

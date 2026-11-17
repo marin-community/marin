@@ -21,6 +21,7 @@ from experiments.post_training.task_curation.datasets.evalchemy.environments imp
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 JEE_REVISION = "d070d1113ce365df05903763a2017ec2d0d56118"
 
@@ -29,6 +30,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
     return [
         RlDataSource(
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="Evalchemy:JEEBench",
                 upstream_dataset="JEEBench",
                 upstream_name="JEEBench",

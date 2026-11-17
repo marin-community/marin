@@ -33,6 +33,7 @@ from experiments.post_training.task_curation.datasets.native_harbor import unpac
 from experiments.post_training.task_curation.environment_fidelity import archive_environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 DATASET = "open-athena/pdbthink-coordinate-tasks"
 REVISION = "3734406cb97b1702844319f9a5d860cbbf8fe660"
@@ -141,6 +142,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 origin=SourceOrigin.OPENATHENA,
                 upstream_dataset="pdbthink-coordinate-tasks",
                 upstream_name="PDBThink v1.3.0 coordinate tasks",

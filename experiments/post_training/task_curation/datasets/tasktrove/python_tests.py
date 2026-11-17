@@ -29,6 +29,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.pytho
 from experiments.post_training.task_curation.environment_fidelity import archive_environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 PYTHON_TESTS_CONTROLS = Controls(golden=solve_script)
 
@@ -199,6 +200,7 @@ SOURCES = {
         convert_python_tests,
         CURRICULUM_EASY_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:DCAgent__exp_rpt_curriculum-easy",
             upstream_dataset="DCAgent__exp_rpt_curriculum-easy",
             upstream_name="DCAgent__exp_rpt_curriculum-easy",
@@ -221,6 +223,7 @@ SOURCES = {
         CURRICULUM_MEDIUM_RUBRIC,
         version="6",
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:DCAgent__exp_rpt_curriculum-medium-v2",
             upstream_dataset="DCAgent__exp_rpt_curriculum-medium-v2",
             upstream_name="DCAgent__exp_rpt_curriculum-medium-v2",
@@ -243,6 +246,7 @@ SOURCES = {
         E2EGIT_RUBRIC,
         version="8",
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:DCAgent__exp_rpt_e2egit-v2",
             upstream_dataset="DCAgent__exp_rpt_e2egit-v2",
             upstream_name="DCAgent__exp_rpt_e2egit-v2",
@@ -264,6 +268,7 @@ SOURCES = {
         convert_python_tests,
         E2EGIT_LARGE_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:DCAgent__exp_rpt_e2egit-large",
             upstream_dataset="DCAgent__exp_rpt_e2egit-large",
             upstream_name="DCAgent__exp_rpt_e2egit-large",
@@ -285,6 +290,7 @@ SOURCES = {
         convert_python_tests,
         MULTIFILE_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:DCAgent__exp_rpt_multifile-v3",
             upstream_dataset="DCAgent__exp_rpt_multifile-v3",
             upstream_name="DCAgent__exp_rpt_multifile-v3",
@@ -306,6 +312,7 @@ SOURCES = {
         convert_python_tests,
         PYMETHODS_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:DCAgent__exp_rpt_pymethods2test-v3",
             upstream_dataset="DCAgent__exp_rpt_pymethods2test-v3",
             upstream_name="DCAgent__exp_rpt_pymethods2test-v3",
@@ -327,6 +334,7 @@ SOURCES = {
         convert_python_tests,
         PYMETHODS_LARGE_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2",
             upstream_dataset="DCAgent__exp_rpt_pymethods2test-large-v2",
             upstream_name="DCAgent__exp_rpt_pymethods2test-large-v2",
@@ -348,6 +356,7 @@ SOURCES = {
         convert_unitsyn,
         UNITSYN_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4",
             upstream_dataset="DCAgent__exp_rpt_unitsyn-python-v4",
             upstream_name="DCAgent__exp_rpt_unitsyn-python-v4",
@@ -369,6 +378,7 @@ SOURCES = {
         convert_python_tests,
         UNITSYN_LARGE_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2",
             upstream_dataset="DCAgent__exp_rpt_unitsyn-python-large-v2",
             upstream_name="DCAgent__exp_rpt_unitsyn-python-large-v2",
@@ -390,6 +400,7 @@ SOURCES = {
         convert_python_tests,
         STACK_PYTEST_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TaskTrove:DCAgent__exp_rpt_stack-pytest-v2",
             upstream_dataset="DCAgent__exp_rpt_stack-pytest-v2",
             upstream_name="DCAgent__exp_rpt_stack-pytest-v2",

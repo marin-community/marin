@@ -8,9 +8,11 @@ from datetime import datetime
 from typing import Any
 
 from finestore.rl.difficulty import PROTOCOL_ID, DifficultyObservation, MeasurementStatus, Solver
+from finestore.rl.status_taxonomy import DataRestriction
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .restrictions import PRIVATE_TEXT_MARKER, declaration_restriction
 from .source_identity import canonical_source_id, original_source_id
 
 
@@ -76,14 +78,29 @@ def current_observations(
     return split_observations(declaration, records)[0]
 
 
+def raw_current_models(declaration: dict[str, Any], records: Iterable[DifficultyObservation]) -> list[dict[str, Any]]:
+    """The un-redacted current-solver summaries, for classification that must read typed reasons."""
+    current, _ = split_observations(declaration, records)
+    return model_summaries(current)
+
+
 def difficulty_summary(declaration: dict[str, Any], records: Iterable[DifficultyObservation]) -> dict[str, Any]:
-    """Choose the latest observation per solver for this exact release and converter."""
+    """Choose the latest observation per solver for this exact release and converter.
+
+    A PRIVATE_ALWAYS source's served reasons are replaced by the private marker:
+    its measurements stay counts and hashes, and a tampered or repurposed
+    free-text reason can never carry its content.
+    """
     current, historical = split_observations(declaration, records)
     models = model_summaries(current)
+    historical = [record.model_dump(mode="json", exclude={"sample": {"tasks"}}) for record in historical]
+    if declaration_restriction(declaration) is DataRestriction.PRIVATE_ALWAYS:
+        models = [{**model, "reason": PRIVATE_TEXT_MARKER} for model in models]
+        historical = [{**record, "reason": PRIVATE_TEXT_MARKER} for record in historical]
     return {
         "protocol_id": PROTOCOL_ID,
         "models": models,
-        "historical": [record.model_dump(mode="json", exclude={"sample": {"tasks"}}) for record in historical],
+        "historical": historical,
     }
 
 
@@ -112,9 +129,7 @@ def model_summaries(current: dict[Solver, DifficultyObservation]) -> list[dict[s
 
 def difficulty_table_summary(declaration: dict[str, Any], records: Iterable[DifficultyObservation]) -> dict[str, Any]:
     """Keep current solver bars and their complete tooltip values; history stays in Evidence."""
-    return table_difficulty(
-        {"protocol_id": PROTOCOL_ID, "models": model_summaries(current_observations(declaration, records))}
-    )
+    return table_difficulty(difficulty_summary(declaration, records))
 
 
 def table_difficulty(summary: dict[str, Any]) -> dict[str, Any]:

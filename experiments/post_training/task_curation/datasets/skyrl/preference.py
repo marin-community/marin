@@ -29,6 +29,7 @@ from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, I
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 HH_REPO = "Anthropic/hh-rlhf"
 HH_REVISION = "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa"
@@ -45,6 +46,7 @@ KTO_COMPONENTS = {
     "kto_component_capybara": (
         "argilla/distilabel-capybara-dpo-7k-binarized",
         SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
             upstream_dataset="kto_mix",
             upstream_name="kto_mix",
@@ -62,6 +64,7 @@ KTO_COMPONENTS = {
     "kto_component_intel_orca": (
         "argilla/distilabel-intel-orca-dpo-pairs",
         SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
             upstream_dataset="kto_mix",
             upstream_name="kto_mix",
@@ -79,6 +82,7 @@ KTO_COMPONENTS = {
     "kto_component_ultrafeedback": (
         "argilla/ultrafeedback-binarized-preferences-cleaned",
         SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="TRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
             upstream_dataset="kto_mix",
             upstream_name="kto_mix",
@@ -158,6 +162,7 @@ HH_SUBSETS = (
         "harmless-base",
         HH_HARMLESS_BASE_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="Anthropic:hh_rlhf/harmless-base",
             upstream_dataset="hh_rlhf",
             upstream_name="hh_rlhf",
@@ -177,6 +182,7 @@ HH_SUBSETS = (
         "helpful-base",
         HH_HELPFUL_BASE_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="Anthropic:hh_rlhf/helpful-base",
             upstream_dataset="hh_rlhf",
             upstream_name="hh_rlhf",
@@ -196,6 +202,7 @@ HH_SUBSETS = (
         "helpful-online",
         HH_HELPFUL_ONLINE_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="Anthropic:hh_rlhf/helpful-online",
             upstream_dataset="hh_rlhf",
             upstream_name="hh_rlhf",
@@ -215,6 +222,7 @@ HH_SUBSETS = (
         "helpful-rejection-sampled",
         HH_HELPFUL_REJECTION_SAMPLED_RUBRIC,
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             id="Anthropic:hh_rlhf/helpful-rejection-sampled",
             upstream_dataset="hh_rlhf",
             upstream_name="hh_rlhf",

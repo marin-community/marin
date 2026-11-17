@@ -24,6 +24,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2ba
 from experiments.post_training.task_curation.environment_fidelity import archive_environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from finestore.rl.status_taxonomy import DataRestriction
 
 CONFIG = "DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
 
@@ -57,6 +58,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
                 upstream_dataset="DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
                 upstream_name="DCAgent2__nl2bash-tasks-cleaned-oracle-v2",

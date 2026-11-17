@@ -32,6 +32,7 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -297,6 +298,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="CodeParrot:apps",
                 upstream_dataset="apps",
                 upstream_name="apps",
@@ -322,6 +324,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="PRIME-RL:eurus2_code",
                 upstream_dataset="eurus2_code",
                 upstream_name="eurus2_code",
@@ -351,6 +354,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="Open-R1:verifiable_code",
                 upstream_dataset="verifiable_code",
                 upstream_name="verifiable_code",
@@ -379,6 +383,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id="Gretel:gretel_text_to_sql",
                 upstream_dataset="gretel_text_to_sql",
                 upstream_name="gretel_text_to_sql",

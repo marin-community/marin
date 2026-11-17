@@ -39,6 +39,7 @@ from finestore.rl.curation import (
 )
 from finestore.rl.licenses import LicenseReceipt, require_license
 from finestore.rl.status_taxonomy import (
+    DataRestriction,
     ExclusionClaim,
     ExclusionEvidence,
     ExclusionEvidenceKind,
@@ -193,6 +194,15 @@ class SourceInfo:
     upstream_dataset: str
     upstream_name: str
     build_path: str
+    data_restriction: DataRestriction = DataRestriction.OPEN
+    """The source's typed restriction tier, set explicitly on every configured source.
+
+    ``PRIVATE_ALWAYS`` keeps the source's content in its private store no matter
+    what else changes; the declaration and every derived artifact inherit it and
+    a downgrade is refused. Every source definition passes the tier explicitly;
+    the ``Open`` default exists only so archived receipts and other historical
+    records that embed a ``SourceInfo`` copy from before the tier still validate.
+    """
     subset: str | None = None
     variant: str | None = None
     title: str | None = None
@@ -745,6 +755,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             ),
             is_benchmark="benchmark" in tags,
             intended_use=self.intended_use,
+            data_restriction=info.data_restriction,
             kind="Generator" if "generator" in tags else "Dataset",
             status=self.status,
             exclusion_claims=list(self.exclusion_claims),
