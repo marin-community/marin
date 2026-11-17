@@ -26,3 +26,9 @@ trials:
     kda_local_attn_window: '64'
   commit: f5b5844c74
   priority: batch
+potential:
+  score: 5
+  rationale: 'No result yet: equal-data speedrun pair (belay-X0234-seed0 vs belay-X0234-control) running → 5'
+  model: claude-opus-5-5
+  date: '2026-11-17'
+  inputs_digest: be86daacd52d
