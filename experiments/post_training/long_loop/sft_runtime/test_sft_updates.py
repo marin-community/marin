@@ -20,7 +20,11 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 from levanter.testing.devices import use_cpu_devices
 
-from experiments.post_training.long_loop.sft_runtime.model import GrugModelConfig, Transformer
+from experiments.post_training.long_loop.sft_runtime.model import (
+    GrugModelConfig,
+    Transformer,
+    resolve_attention_implementation,
+)
 from experiments.post_training.long_loop.sft_runtime.train import (
     GrugTrainerConfig,
     _loss_and_grads,
@@ -172,3 +176,17 @@ def test_splash_mixed_layer_windows_match_reference(monkeypatch):
             without_local_window = np.asarray(jax.jit(lambda x: full_causal.logits(x, mask))(tokens))
     assert np.max(np.abs(actual - expected)) <= 1e-6
     assert np.max(np.abs(expected - without_local_window)) > 1e-4
+
+
+@pytest.mark.parametrize(
+    ("configured", "backend", "expected"),
+    [
+        (None, "tpu", "tpu_splash"),
+        (None, "gpu", None),
+        ("tpu_splash", "cpu", "tpu_splash"),
+        ("reference", "tpu", "reference"),
+    ],
+)
+def test_unset_attention_implementation_resolves_to_splash_on_tpu(configured, backend, expected):
+    # An unset implementation reaches Splash on TPU, so it must get Splash's static window selection.
+    assert resolve_attention_implementation(configured, backend) == expected

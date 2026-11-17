@@ -257,6 +257,18 @@ class QbEstimator(StrEnum):
     HIST = "hist"
 
 
+def resolve_attention_implementation(
+    implementation: GrugAttentionImplementation | None, backend: str
+) -> GrugAttentionImplementation | None:
+    """Name the kernel an unset implementation reaches: Grug attention defaults to Splash on TPU.
+
+    Resolving it here lets the Splash-only window selection apply whether or not the config names Splash.
+    """
+    if implementation is None and backend == "tpu":
+        return "tpu_splash"
+    return implementation
+
+
 @dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
@@ -694,11 +706,8 @@ class CausalSelfAttention(eqx.Module):
             q = _reshard_sequence_axis(q, seq_axis)
             k = _reshard_sequence_axis(k, None)
             v = _reshard_sequence_axis(v, None)
-        if (
-            self.cfg.attention_implementation == "tpu_splash"
-            and isinstance(mask, AttentionMask)
-            and mask.fa4_bounds is not None
-        ):
+        implementation = resolve_attention_implementation(self.cfg.attention_implementation, jax.default_backend())
+        if implementation == "tpu_splash" and isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
             # Splash masks are static, so select the local/global kernel inside the layer scan.
             global_mask = dataclasses.replace(mask, sliding_window=None, fa4_bounds=None)
             local_mask = dataclasses.replace(mask, sliding_window=self.cfg.sliding_window, fa4_bounds=None)
@@ -708,7 +717,7 @@ class CausalSelfAttention(eqx.Module):
                 lambda: attention(q, k, v, local_mask, implementation="tpu_splash"),
             )
         else:
-            attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+            attn_out = attention(q, k, v, mask, implementation=implementation)
         if seq_axis is not None:
             attn_out = _reshard_sequence_axis(attn_out, residual_seq_axis)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
