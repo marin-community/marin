@@ -121,7 +121,7 @@ def exclusion_index(micro_rows: list[dict], policies: list[dict], legacy_heldout
 
 
 def question_anchors(records: list[dict]) -> dict[tuple[str, ...], list[str]]:
-    """Index exact upstream questions by eight-word prefixes for bounded scans."""
+    """Return upstream questions grouped by their shared opening words."""
     anchors = {}
     for record in records:
         for text in record.get("texts", {}).values():

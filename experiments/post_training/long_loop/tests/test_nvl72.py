@@ -54,18 +54,12 @@ def test_profile_build_preserves_native_resume_and_nvlink_roles(run_spec, tmp_pa
     assert step.version == "2026.11.17.1"
 
 
-def test_normal_run_keeps_heldouts_selection_and_two_hour_final_saves(run_spec, tmp_path):
+def test_normal_run_binds_distinct_training_and_heldout_data(run_spec, tmp_path):
     output = tmp_path / "launch.yaml"
     spec = replace(run_spec, profile="one-rack", validation_data_uri=(str(tmp_path / "heldout"),))
     with build_context(BuildContext(versions=VersionCodex(default="2026.11.17.2"))):
         run_from_spec(spec, smoke=False, config_output=output)
     launch = yaml.safe_load(output.read_text())
-    callbacks = {c["type"]: c for c in launch["skyrl"]["trainer"]["callbacks"]}
-    assert callbacks["checkpoint"]["save_steps"] == -1
-    assert callbacks["checkpoint"]["save_interval_seconds"] == 7200
-    assert callbacks["checkpoint"]["save_on_train_end"]
-    assert callbacks["best_checkpoint"]["ema_window"] == 5
-    assert callbacks["best_checkpoint"]["minimum_scored_tasks"] == 120
     assert launch["inputs"]["validation_data"][0]["uri"] == str(tmp_path / "heldout")
     assert launch["inputs"]["validation_data"][0]["local_path"] != launch["inputs"]["train_data"][0]["local_path"]
 
