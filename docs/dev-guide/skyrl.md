@@ -172,6 +172,117 @@ before enabling this mode. Explicit groups lose the default preference
 for nearby racks on InfiniBand. Cross-rack transport between trainer and
 inference still needs validation. Omitting the option keeps existing placement.
 
+## Mochi inference on GB200
+
+Use this configuration with a BF16 Mochi (535B-A23B) recipe that already validates
+on main, retained schema-3 model and data handles, and a 64-GPU Megatron trainer
+at TP1/PP16/CP4/EP4. It uses eight
+TP1/PP1/DP16/EP16 inference engines on another 128 GPUs. Required NVLink placement
+packs the trainer into one 16-host domain and four inference engines into each of
+two further domains: 48 four-GPU hosts in total.
+
+Keep the existing context limit, optimizer, n=8, staleness three, trainer batch,
+task setup, evaluation and recovery settings. The base recipe must use local
+vLLM engines, Triton MoE and NCCL expert-block weight sync. Commit the following
+fragment as `mochi-inference.yaml` beside your experiment:
+
+```yaml
+trainer:
+  rollout_buffer:
+    max_in_flight: 128
+generator:
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASHINFER
+  max_num_seqs: 128
+  max_num_batched_tokens: 2048
+  gpu_memory_utilization: 0.90
+  enable_prefix_caching: false
+  expert_block_sync:
+    verify: true
+    timeout_seconds: 1800
+  engine_init_kwargs:
+    enable_return_routed_experts: true
+    compilation_config:
+      mode: 3
+      cudagraph_mode: PIECEWISE
+      splitting_ops:
+        - vllm::unified_attention_with_output
+        - vllm::unified_kv_cache_update
+        - vllm::grug_moe_short_conv
+      inductor_compile_config:
+        enable_auto_functionalized_v2: false
+        combo_kernels: true
+        benchmark_combo_kernel: true
+```
+
+In your artifact main, apply it to the existing `SkyRLSpec` named `spec` and
+`IrisSkyRLExecution` named `execution` before calling `skyrl_step`. These public
+interfaces are described in [RL launching](../references/rl-launching.md).
+The file stays in the submitted checkout so the coordinator reads the same recipe.
+
+```python
+from dataclasses import replace
+from pathlib import Path
+
+import yaml
+from skyrlrecipe import RecipePatch, SkyRLRecipe
+from skyrlrecipe.locality import RoleTopologyMode
+
+recipe = SkyRLRecipe.from_document(yaml.safe_load(spec.config_yaml))
+inference = RecipePatch.from_document(
+    yaml.safe_load(Path(__file__).with_name("mochi-inference.yaml").read_text())
+)
+role_plan = replace(
+    spec.topology.role_plan,
+    num_inference_engines=8,
+    inference_engine_tensor_parallel_size=1,
+    inference_engine_pipeline_parallel_size=1,
+    inference_engine_data_parallel_size=16,
+    inference_engine_expert_parallel_size=16,
+)
+spec = replace(
+    spec,
+    config_yaml=yaml.safe_dump(recipe.merge(inference).to_skyrl(), sort_keys=False),
+    topology=replace(spec.topology, num_nodes=role_plan.num_nodes, role_plan=role_plan),
+)
+execution = replace(execution, role_topology=RoleTopologyMode.NVLINK_DOMAIN)
+```
+
+The 128-group admission limit is separate from the trainer batch. The native
+buffer also bounds untrained groups by `(staleness + 1) * batch_size`: at
+staleness three, a six-group batch admits at most 24 groups. To keep a smoke
+run's admission cap at two groups, use
+`inference = inference.with_settings(("trainer.rollout_buffer.max_in_flight=2",))`
+before updating `spec`. Use a new artifact version for the changed
+inference layout and inspect the rendered launch document before submitting it.
+
+The tested build is `marin-vllm-gpu-20261113-0ac9dcb157ee`, in BF16 on GB200.
+A matched 64-GPU serving comparison on November 17, 2026 used the same nodes,
+prompts, seeds, 256-token outputs and 2,048 concurrent requests:
+
+| Configuration | Output tokens/s per allocated inference GPU |
+| --- | ---: |
+| EP64, graphs NONE | 126 |
+| EP64, PIECEWISE | 293 |
+| Four EP16 groups, PIECEWISE | 416 |
+| Four EP16 groups with this serving bundle | 464 |
+
+The 3.68x gain measures serving throughput. Several settings changed together;
+it does not isolate FlashInfer's contribution or measure RL speedup. The raw
+matched-run receipts are not public. [Issue #11430](https://github.com/marin-community/marin/issues/11430)
+provides the public serving context. The measured gain uses the published build
+and requires neither [vLLM #130](https://github.com/marin-community/vllm/pull/130)
+nor [#11492](https://github.com/marin-community/marin/pull/11492).
+
+A separate RL integration completed three fresh nonzero updates at a
+102,400-token cap, verified updated weights and later generation in all eight
+engines, two evaluations with scores for all 120 tasks each, and a native checkpoint. Its first batch
+reached 56,196 attended tokens. That integration also changed task setup and
+cadence, which this fragment preserves from the caller. Separate EP16 serving
+reached 262,024 total tokens; near-262K trainer backward used the earlier inference
+layout. Sustained runs, same-version recovery and integrated near-262K training
+with all eight engines still need qualification.
+
 ## Expert-block weight sync placement
 
 Expert-block sync publishes each Grug expert from the Megatron rank that owns it to the
