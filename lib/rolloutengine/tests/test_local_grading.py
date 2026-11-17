@@ -10,10 +10,13 @@ from pathlib import Path
 
 import pytest
 from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable
-from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec
+from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec, PackageSpec
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ResourceGroups, ScriptGrader
+from taskcompendium.importers.evalchemy.code import convert_python
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ResourceGroups, ScriptGrader, Source
+from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource
 
 from rolloutengine.test_support import TWELVE, ReplayModel, arithmetic_task, engine, machine_runtime, rollout_spec
@@ -69,19 +72,50 @@ def lock_environment(tmp_path):
 
 
 @pytest.mark.timeout(180)
-@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
-@pytest.mark.parametrize("grader_kind", ["script", "verifyit"])
+@pytest.mark.parametrize(
+    "grader_kind,answer,reward",
+    [
+        ("script", "12", 1.0),
+        ("script", "13", 0.0),
+        ("verifyit", "12", 1.0),
+        ("verifyit", "13", 0.0),
+        ("humanevalplus", "def identity(value):\n    return value", 1.0),
+        ("humanevalplus", "def identity(value):\n    return 0", 0.0),
+        ("mbppplus", "def identity(value):\n    return value", 1.0),
+        ("mbppplus", "def identity(value):\n    return 0", 0.0),
+    ],
+)
 async def test_rollout_grades_answer_in_lock_environment(
     local_grading_factory, lock_environment, grader_kind, answer, reward
 ):
     if grader_kind == "script":
         grader = ScriptGrader(environment=lock_environment, argv=("python3", "/tests/grade.py"))
         resources = ResourceGroups(verifier=(inline_resource("grade.py", SCRIPT),))
-    else:
+        task = arithmetic_task(grader=grader, resources=resources)
+    elif grader_kind == "verifyit":
         package = verifyit_package(TWELVE)
         grader = package.grader.model_copy(update={"environment": lock_environment})
         resources = ResourceGroups(verifier=package.resources)
-    task = arithmetic_task(grader=grader, resources=resources)
+        task = arithmetic_task(grader=grader, resources=resources)
+    else:
+        problem = {
+            "prompt": "def identity(value):\n    ",
+            "evaluation_prompt": "Return the input unchanged in a function named identity.",
+            "test": (
+                "def check(candidate):\n    assert candidate(7) == 7\n    assert candidate(-3) == -3"
+                if grader_kind == "humanevalplus"
+                else "assert identity(7) == 7\nassert identity(-3) == -3"
+            ),
+            "entry_point": "identity",
+        }
+        row = RawRow(
+            "identity", Source(dataset=grader_kind, revision="fixture", row="0", importer_revision="1"), problem
+        )
+        environment = EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            package_spec=PackageSpec(pypi_packages=("numpy==2.3.5",)),
+        )
+        task = convert_python(row, ConversionContext(inputs={}, grader_environment=environment), suite=grader_kind)
     model = ReplayModel([{"role": "assistant", "content": answer}])
     result = await engine(model, {"local": local_grading_factory}).run_task(
         rollout_spec(task, verifier_machine=machine_runtime(startup_timeout=120), verifier_timeout=150)
