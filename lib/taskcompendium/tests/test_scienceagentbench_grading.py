@@ -191,7 +191,7 @@ def test_visual_judge_preserves_wire_protocol_and_official_zero_rule(texts, expe
                 "id": "test-visual",
                 "created": 0,
                 "object": "chat.completion",
-                "model": "gpt-4o-2024-05-13",
+                "model": "MiniMaxAI/MiniMax-M3-MXFP8",
                 "choices": [
                     {
                         "index": 0,
@@ -209,7 +209,7 @@ def test_visual_judge_preserves_wire_protocol_and_official_zero_rule(texts, expe
         requests
         == [
             {
-                "model": "gpt-4o-2024-05-13",
+                "model": "MiniMaxAI/MiniMax-M3-MXFP8",
                 "messages": [
                     {
                         "role": "user",
@@ -241,7 +241,7 @@ def test_visual_judge_invalid_completions_remain_ungraded(indices, texts):
                 "id": "test-incomplete",
                 "created": 0,
                 "object": "chat.completion",
-                "model": "gpt-4o-2024-05-13",
+                "model": "MiniMaxAI/MiniMax-M3-MXFP8",
                 "choices": [
                     {"index": index, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
                     for index, text in zip(indices, texts, strict=True)
@@ -263,7 +263,7 @@ def test_visual_judge_malformed_api_response_is_not_a_candidate_failure(choices)
                 "id": "test-malformed",
                 "created": 0,
                 "object": "chat.completion",
-                "model": "gpt-4o-2024-05-13",
+                "model": "MiniMaxAI/MiniMax-M3-MXFP8",
                 "choices": choices,
             },
         )
@@ -288,7 +288,7 @@ def test_visual_judge_service_failure_propagates_without_hidden_retries(failed_r
                 "id": "test-partial",
                 "created": 0,
                 "object": "chat.completion",
-                "model": "gpt-4o-2024-05-13",
+                "model": "MiniMaxAI/MiniMax-M3-MXFP8",
                 "choices": [
                     {
                         "index": 0,

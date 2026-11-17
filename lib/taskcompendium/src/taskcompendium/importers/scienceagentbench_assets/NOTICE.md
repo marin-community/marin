@@ -11,3 +11,7 @@ comparison. Benchmark data and reference programs are not distributed here.
 The visual-judge request and score extraction follow `gpt4_visual_judge.py` at
 the same pinned source revision. Missing score markers retain their official
 zero score; transport failures and missing completions propagate separately.
+
+Marin uses a vision-enabled MiniMax-M3-MXFP8 judge for figure comparisons.
+The upstream evaluator uses GPT-4o. Marin sends three single-completion requests
+per figure and retains the original prompt, image order, and task thresholds.

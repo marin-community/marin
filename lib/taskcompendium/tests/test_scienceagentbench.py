@@ -234,8 +234,8 @@ Path('pred_results/two.png').write_bytes(b'candidate two')
     assert len(judge_server.requests) == (1 if expected is None else 6)
     for request in judge_server.requests:
         assert request["n"] == 1
-        assert request["model"] == "openai/gpt-4o-2024-05-13"
-        assert request["provider"] == {"order": ["Azure"], "allow_fallbacks": False, "require_parameters": True}
+        assert request["model"] == "MiniMaxAI/MiniMax-M3-MXFP8"
+        assert "provider" not in request
     assert len(machines.machines) == 2 and all(machine.closed for machine in machines.machines)
     assert "VERIFYIT_JUDGE_API_KEY" not in machines.machines[0].env
     assert machines.machines[1].env["VERIFYIT_JUDGE_API_KEY"] == "judge-fixture-key"

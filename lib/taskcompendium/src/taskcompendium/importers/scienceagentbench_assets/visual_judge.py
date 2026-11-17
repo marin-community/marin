@@ -24,7 +24,7 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletion
 from pydantic import ValidationError
 
-MODEL = "gpt-4o-2024-05-13"
+MODEL = "MiniMaxAI/MiniMax-M3-MXFP8"
 COMPLETIONS = 3
 REQUEST_TIMEOUT = 120.0
 MAX_OUTPUT_TOKENS = 1000
@@ -51,8 +51,8 @@ def score_figure(
     All three separate single-completion requests must succeed before returning
     an average. Retries belong to the caller.
     """
-    if model not in (MODEL, f"openai/{MODEL}"):
-        raise RuntimeError("ScienceAgentBench requires the pinned visual judge snapshot")
+    if model != MODEL:
+        raise RuntimeError("ScienceAgentBench requires the configured MiniMax visual judge")
     texts = []
     scores = []
     for _ in range(COMPLETIONS):
@@ -74,11 +74,6 @@ def score_figure(
             top_p=0.95,
             frequency_penalty=0,
             presence_penalty=0,
-            extra_body=(
-                {"provider": {"order": ["Azure"], "allow_fallbacks": False, "require_parameters": True}}
-                if model == f"openai/{MODEL}"
-                else None
-            ),
         )
         # The SDK constructs responses without validating the provider's JSON schema.
         # Keep protocol errors distinct from candidate-output ValueError failures.

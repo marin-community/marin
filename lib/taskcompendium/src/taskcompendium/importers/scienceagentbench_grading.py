@@ -37,7 +37,6 @@ PAPYRUS_GOLD = "gold_rows.jsonl"
 PAPYRUS_DECODER = "decode_papyrus.py"
 VISUAL_JUDGE = "visual_judge.py"
 VISUAL_PROMPT = "visual_prompt.txt"
-VISUAL_MODEL = f"openai/{MODEL}"
 
 
 def deterministic_grader(
@@ -74,7 +73,7 @@ def visual_grader(
     replay_timeout: float,
     verifier_timeout: float,
 ) -> GraderPackage:
-    """Package a pinned figure evaluator with the three-call Azure/OpenRouter judge."""
+    """Package a pinned figure evaluator with the three-call Marin-hosted MiniMax judge."""
     if SOURCE_JUDGE_MODULE.encode() not in evaluator_program:
         raise ValueError("A visual grader requires an upstream figure evaluator")
     package = _source_grader(
@@ -97,7 +96,7 @@ def visual_grader(
                 *package.grader.argv[2:],
             ),
             "judge": JudgeSpec(
-                model=VISUAL_MODEL,
+                model=MODEL,
                 rubric="checklist",
                 criteria=(judge_prompt,),
                 exact_gate=False,
