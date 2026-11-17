@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import functools
 import tempfile
 
 import equinox as eqx
@@ -11,12 +12,19 @@ import jmp
 import numpy as np
 import optax
 import pytest
-from jax.sharding import AxisType, Mesh
+from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
+from jax.sharding import AxisType, Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import save_checkpoint
 from levanter.data.text.examples import GrugLmExample
+from levanter.grug.attention import AttentionMask
 from levanter.testing.devices import use_cpu_devices
 
-from experiments.post_training.long_loop.sft_runtime.model import GrugModelConfig
+from experiments.post_training.long_loop.sft_runtime.model import (
+    GrugModelConfig,
+    Transformer,
+    resolve_attention_implementation,
+)
 from experiments.post_training.long_loop.sft_runtime.train import (
     GrugTrainerConfig,
     _loss_and_grads,
@@ -115,3 +123,70 @@ def test_sft_update_preserves_router_and_scales_selected_rows():
             np.testing.assert_allclose(result.params.output_proj[:, 30:], expected_head, rtol=1e-06, atol=1e-07)
             np.testing.assert_array_equal(result.params.stacked_blocks.stacked.mlp.router_bias, expected_router)
             np.testing.assert_array_equal(result.pending_qb_betas, expected_pending)
+
+
+@pytest.mark.timeout(180)
+def test_splash_mixed_layer_windows_match_reference(monkeypatch):
+    # Run the actual Splash kernel on CPU, preserving the model's scanned mask selection.
+    monkeypatch.setattr(
+        splash_attention_kernel,
+        "make_splash_mha",
+        functools.partial(splash_attention_kernel.make_splash_mha, interpret=True),
+    )
+    config = GrugModelConfig(
+        vocab_size=256,
+        hidden_dim=128,
+        intermediate_dim=128,
+        shared_expert_intermediate_dim=128,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        local_kv_heads=1,
+        global_kv_heads=1,
+        head_dim=128,
+        max_seq_len=512,
+        sliding_window=128,
+        global_every=2,
+        attention_implementation="reference",
+        moe_implementation="fixed_all_to_all",
+        capacity_factor=4.0,
+    )
+    with use_cpu_devices(1):
+        mesh = Mesh(
+            np.asarray(jax.devices("cpu")[:1]).reshape(1, 1, 1, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        with jax.set_mesh(mesh):
+            reference = Transformer.init(config, key=jax.random.key(29))
+            splash = Transformer.init(
+                dataclasses.replace(config, attention_implementation="tpu_splash"), key=jax.random.key(29)
+            )
+            full_causal = Transformer.init(dataclasses.replace(config, sliding_window=512), key=jax.random.key(29))
+            for actual, expected in zip(jax.tree.leaves(splash), jax.tree.leaves(reference), strict=True):
+                np.testing.assert_array_equal(actual, expected)
+            sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None))
+            tokens = jax.device_put(np.random.default_rng(4).integers(0, 256, (1, 512), dtype=np.int32), sharding)
+            segments = jax.device_put(np.asarray([[0] * 256 + [1] * 256], dtype=np.int32), sharding)
+            mask = AttentionMask(is_causal=True, segment_ids=(segments, segments))
+            actual = np.asarray(jax.jit(lambda x: splash.logits(x, mask))(tokens))
+            expected = np.asarray(jax.jit(lambda x: reference.logits(x, mask))(tokens))
+            without_local_window = np.asarray(jax.jit(lambda x: full_causal.logits(x, mask))(tokens))
+    assert np.max(np.abs(actual - expected)) <= 1e-6
+    assert np.max(np.abs(expected - without_local_window)) > 1e-4
+
+
+@pytest.mark.parametrize(
+    ("configured", "backend", "expected"),
+    [
+        (None, "tpu", "tpu_splash"),
+        (None, "gpu", None),
+        ("tpu_splash", "cpu", "tpu_splash"),
+        ("reference", "tpu", "reference"),
+    ],
+)
+def test_unset_attention_implementation_resolves_to_splash_on_tpu(configured, backend, expected):
+    # An unset implementation reaches Splash on TPU, so it must get Splash's static window selection.
+    assert resolve_attention_implementation(configured, backend) == expected
