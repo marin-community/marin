@@ -403,6 +403,29 @@ def iris_jobs() -> list[IrisJob]:
     return jobs
 
 
+# `iris job describe`'s task summary: "Tasks: 0/1 completed  building=1" (a task waiting for a node) or "running=1".
+_TASKS_LINE = re.compile(r"^Tasks:\s+(\d+)/\d+ completed(.*)$", re.MULTILINE)
+
+
+def tasks_started(describe: str) -> bool:
+    """Whether ``iris job describe`` output shows a task that has started: one running or completed. A task still
+    building, held by the cluster's scheduler while it waits for a node, has not."""
+    match = _TASKS_LINE.search(describe)
+    if match is None:
+        raise ValueError(f"no task summary in iris job describe output:\n{describe}")
+    return int(match.group(1)) > 0 or re.search(r"\brunning=[1-9]", match.group(2)) is not None
+
+
+def job_started(job_id: str) -> bool:
+    out = subprocess.run(
+        ["uv", "run", "iris", "--cluster", "marin", "job", "describe", job_id],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return tasks_started(out)
+
+
 def nodes_in_use(jobs: list[IrisJob], runs_dir: Path = RUNS_DIR) -> int:
     """Nodes held by active Belay runs: each coordinator job counts its Track's nodes (1 without a spec here)."""
     total = 0
