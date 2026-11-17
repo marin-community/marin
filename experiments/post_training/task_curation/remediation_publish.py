@@ -56,10 +56,11 @@ TASK_SCHEMA = pa.schema(
 class ReleasePlan(RetentionPlan):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    data_restriction: DataRestriction
+    data_restriction: DataRestriction | None = None
     """The source population's typed tier, authored with the staged plan from its
-    configured declaration: ``publish_plan`` refuses a PRIVATE_ALWAYS release here,
-    at the shared publish helper."""
+    configured declaration. ``None`` only on archived plans written before the
+    tier: ``publish_plan`` refuses both ``None`` (a staged plan that declares no
+    tier) and ``PRIVATE_ALWAYS`` here, at the shared publish helper."""
     unique_count: int
     within_source_duplicates: int
     raw_lexical_count: int
@@ -255,8 +256,11 @@ def publish_plan(
 
     The staged plan carries the source's typed tier: a decontaminated release is
     derived content, so a PRIVATE_ALWAYS source is refused here, at the shared
-    publish helper.
+    publish helper. A staged plan that declares no tier is refused too: a missing
+    tag never publishes.
     """
+    if plan.data_restriction is None:
+        raise ValueError(f"Staged release plan declares no restriction tier: {plan.source_id}")
     require_public_data(plan.data_restriction, plan.source_id, plan.lexical_use.value + " release")
     require_license(
         license_receipt, plan.source_id, plan.source_dataset_id, plan.source_revision, plan.lexical_use.value

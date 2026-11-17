@@ -7,7 +7,6 @@ import json
 
 import pytest
 from finestore.rl.status_taxonomy import DataRestriction
-from pydantic import ValidationError
 
 from experiments.post_training.task_curation import calibforge_publish, publication_gate
 from experiments.post_training.task_curation.audit_harness import freeze_sample
@@ -262,7 +261,9 @@ def test_staged_raw_snapshot_without_a_tier_is_refused(tmp_path):
 
 
 def test_staged_private_plan_and_snapshot_are_refused(tmp_path):
-    """The publish guards refuse staged records that declare PRIVATE_ALWAYS."""
+    """The publish guards refuse staged records that declare PRIVATE_ALWAYS or no tier."""
+    from experiments.post_training.task_curation import remediation_publish  # noqa: PLC0415
+
     private_snapshot = {
         "source_id": "Test:private",
         "dataset_id": "upstream/fixture",
@@ -279,30 +280,50 @@ def test_staged_private_plan_and_snapshot_are_refused(tmp_path):
             evidence_root=str(tmp_path),
             use="train",
         )
-    with pytest.raises(ValidationError):
-        ReleasePlan.model_validate(
-            {
-                "source_id": "Test:private",
-                "source_dataset_id": "upstream/fixture",
-                "source_revision": "a" * 40,
-                "converter_revision": "b" * 40,
-                "converter_version": "1",
-                "input_artifact": "fixture",
-                "task_specs_sha256": "c" * 64,
-                "raw_count": 1,
-                "combined_drop_count": 0,
-                "retained_count": 1,
-                "combined_drop_manifest_uri": "finestore://fixture/drops",
-                "lexical_use": "train",
-                "unique_count": 1,
-                "within_source_duplicates": 0,
-                "raw_lexical_count": 0,
-                "unique_lexical_count": 0,
-                "multiplicities": {},
-                "drop_manifest_uri": "finestore://fixture/drops",
-                "evidence_url": "https://example.test/plan",
-                "census_evidence_url": "https://example.test/census",
-            }
+    # A staged plan without a tier validates (archived plans predate the field)
+    # but the publish guard refuses it: a missing tag never publishes.
+    untagged = ReleasePlan.model_validate(
+        {
+            "source_id": "Test:private",
+            "source_dataset_id": "upstream/fixture",
+            "source_revision": "a" * 40,
+            "converter_revision": "b" * 40,
+            "converter_version": "1",
+            "input_artifact": "fixture",
+            "task_specs_sha256": "c" * 64,
+            "raw_count": 1,
+            "combined_drop_count": 0,
+            "retained_count": 1,
+            "combined_drop_manifest_uri": "finestore://fixture/drops",
+            "lexical_use": "train",
+            "unique_count": 1,
+            "within_source_duplicates": 0,
+            "raw_lexical_count": 0,
+            "unique_lexical_count": 0,
+            "multiplicities": {},
+            "drop_manifest_uri": "finestore://fixture/drops",
+            "evidence_url": "https://example.test/plan",
+            "census_evidence_url": "https://example.test/census",
+        }
+    )
+    assert untagged.data_restriction is None
+    with pytest.raises(ValueError, match="declares no restriction tier"):
+        remediation_publish.publish_plan(
+            untagged,
+            "v",
+            str(tmp_path / "evidence"),
+            fixture_license("Test:private", "upstream/fixture", "a" * 40),
+            None,
+        )
+    # A private staged plan is refused outright.
+    private_plan = untagged.model_copy(update={"data_restriction": DataRestriction.PRIVATE_ALWAYS})
+    with pytest.raises(ValueError, match="PRIVATE_ALWAYS"):
+        remediation_publish.publish_plan(
+            private_plan,
+            "v",
+            str(tmp_path / "evidence"),
+            fixture_license("Test:private", "upstream/fixture", "a" * 40),
+            None,
         )
 
 
