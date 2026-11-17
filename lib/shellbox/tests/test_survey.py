@@ -6,7 +6,12 @@
 from pathlib import Path
 
 from shellbox.machine import Backend
-from shellbox.survey import LocalResourceEvidence, cgroup_limits_applied, local_resource_evidence
+from shellbox.survey import (
+    LocalResourceEvidence,
+    cgroup_limits_applied,
+    local_resource_evidence,
+    production_checkers,
+)
 
 
 def _fake_cgroup(path: Path, *, quota: str, period: int, memory: int) -> Path:
@@ -42,8 +47,6 @@ def test_local_resource_evidence_without_machinery_stays_unverified():
 
 def test_production_checkers_imports_every_backend_module():
     """The rename guard: every checker's backend module must import by its label."""
-    from shellbox.survey import production_checkers
-
     checkers = production_checkers()
     expected = {backend.value for backend in Backend}
     assert set(checkers) == expected
