@@ -212,7 +212,12 @@ def crosscheck_allocations(root: Path, family: str, row: dict, phase: str) -> di
     for name in ("cpus", "memory_mb", "storage_mb", "agent_timeout_sec", "verifier_timeout_sec"):
         expected, resolved = verifier_budget.get(name), (resolved_verifier or {}).get(name)
         checks[f"verifier_{name}"] = {"expected": expected, "resolved": resolved, "ok": expected == resolved}
-    return {"ok": all(check["ok"] for check in checks.values()), "checks": checks}
+    baseline = checks.pop("baseline_spec_execution_requirements")
+    return {
+        "ok": all(check["ok"] for check in checks.values()),
+        "checks": checks,
+        "baseline_spec_execution_requirements": baseline,
+    }
 
 
 def sha256_bytes(data: bytes) -> str:
