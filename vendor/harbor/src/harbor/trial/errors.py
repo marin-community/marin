@@ -41,6 +41,10 @@ class RuntimeLogCollectionError(RuntimeError):
     """Required runtime logs could not be collected before grading."""
 
 
+class EnvironmentSetupError(RuntimeError):
+    """Declared public-fixture initialization failed before agent access."""
+
+
 class EnvironmentStopError(RuntimeError):
     """Environment teardown failed or exceeded its deadline."""
 

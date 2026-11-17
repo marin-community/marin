@@ -79,6 +79,10 @@ class SolutionConfig(BaseModel):
 
 class AgentConfig(BaseModel):
     timeout_sec: float | None = None
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Environment overrides for agent processes only; never passed to the verifier.",
+    )
     user: str | int | None = Field(
         default=None,
         description="Username or UID to run the agent as. None uses the environment's default USER (e.g., root).",
@@ -159,6 +163,15 @@ class TpuSpec(BaseModel):
         return math.prod(int(axis) for axis in self.topology.split("x"))
 
 
+class EnvironmentSetupConfig(BaseModel):
+    """Bounded public-fixture initialization before any agent access."""
+
+    model_config = {"extra": "forbid"}
+
+    command: str = Field(min_length=1)
+    timeout_sec: float = Field(gt=0)
+
+
 class EnvironmentConfig(BaseModel):
     build_timeout_sec: float = 600.0  # 10 minutes default
     docker_image: str | None = Field(
@@ -207,6 +220,7 @@ class EnvironmentConfig(BaseModel):
         description="Healthcheck to run after environment start to verify readiness. "
         "Mirrors Docker HEALTHCHECK semantics.",
     )
+    setup: EnvironmentSetupConfig | None = None
     workdir: str | None = Field(
         default=None,
         description="Default working directory for command execution. "
