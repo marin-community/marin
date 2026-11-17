@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Importable ledger helpers shared by Taskforge tests."""
-
 from taskforge.ledger.records import LedgerEntry
 
 
