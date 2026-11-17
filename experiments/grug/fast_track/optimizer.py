@@ -287,7 +287,7 @@ ATTN_RES_QUERY_LR_SCALE = 0.1
 """Adam LR of the AttnRes pseudo-queries as a multiple of ``adam_lr``."""
 KDA_BETA_LR_MULT = 2.0
 """MuonH LR multiple of the ``kda_beta`` group (the KDA write-strength projection)."""
-_ADAM_LEAVES = re.compile(r"(?:^|\.)(value_embed|ve_lambda|ve_gate|qk_mult|dyn_conv_k|dyn_conv_v)$")
+_ADAM_LEAVES = re.compile(r"(?:^|\.)(value_embed|ve_lambda|ve_gate|qk_mult|dyn_conv_k|dyn_conv_v|lag_gain)$")
 
 
 @OptimizerConfig.register_subclass("grug_fast_track_muonh_v1")
@@ -440,7 +440,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if "attn_res_query" in path_lower:
                 return "attn_res_query"
             # Inkling rel-pos weights; value embeddings and their mixing weights; small per-layer gates; the dynamic
-            # K/V conv tap generators (zero-initialised).
+            # K/V conv tap generators and the MoE lag-window gain (zero-initialised).
             if ".rel_pos." in path_lower or _ADAM_LEAVES.search(path_lower):
                 return "adam"
             if _TOKEN_EMBED.search(path_lower) and self.embed_optimizer != EmbedOptimizer.ADAM_GROUP:

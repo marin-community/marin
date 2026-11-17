@@ -104,6 +104,8 @@ _HEAD_GATE_OFF = 0.1
 FINAL_NORM_INPUT_RMS_KEY = "_final_norm_input_rms"
 # Branch output SConv sites (``sconv_sites``).
 SCONV_SITES = ("k", "attn", "mlp")
+# Lags 1..3 of the routed experts' input window (``moe_lag_window``).
+MOE_LAG_WINDOW = 3
 
 
 class GradProbeSite(StrEnum):
@@ -468,8 +470,15 @@ class GrugModelConfig:
     mla_qk_norm_cap: float | None = None
     """L2 norm cap on the MLA layers' per-head queries and keys, in place of ``mla_q_norm``/``mla_k_norm``: a head
     vector longer than the cap is rescaled to the cap, a shorter one passes through. None: off."""
+    moe_lag_window: bool = False
+    """Short causal window on the routed experts' latent input: every MoE layer adds
+    ``g * rms_norm(concat_{lag=1..3}(shift_lag(x @ W_down)) @ W_up)`` to the normed latent, with ``W_down``
+    ``[D, D/4]`` (fused into the router/latent GEMM) and ``W_up`` ``[3D/4, latent]`` on MuonH and a zero-init
+    ``[latent]`` gain ``g`` on Adam. Shifts are document-masked; the router and shared experts are unchanged."""
 
     def __post_init__(self) -> None:
+        if self.moe_lag_window and (self.dense_mlp or self.latent_dim is None):
+            raise ValueError("moe_lag_window needs the routed MoE with a latent_dim")
         if self.cplm_plus and self.logit_soft_cap is not None:
             raise ValueError("cplm_plus mixes uncapped vocabulary logits; set logit_soft_cap=None")
         if self.lm_head_grad_dump_every and not self.lm_head_grad_probe:
@@ -1191,11 +1200,28 @@ class MoEMLP(eqx.Module):
     w_latent_down: jax.Array | None
     latent_norm: RMSNorm | None
     w_latent_up: jax.Array | None
+    # cfg.moe_lag_window: the window's down/up projections and its zero-init latent gain.
+    lag_down: jax.Array | None
+    lag_up: jax.Array | None
+    lag_gain: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
         k_router, k_expert, k_down, k_up = random.split(key, 4)
+        lag_down = lag_up = lag_gain = None
+        if cfg.moe_lag_window:
+            assert cfg.latent_dim is not None
+            k_lag_down, k_lag_up = random.split(random.fold_in(key, 1), 2)
+            narrow = cfg.hidden_dim // 4
+            lag_down = reshard(
+                _init_weight(k_lag_down, (cfg.hidden_dim, narrow), cfg.initializer_std), P(_FSDP_AXES, None)
+            )
+            lag_up = reshard(
+                _init_weight(k_lag_up, (MOE_LAG_WINDOW * narrow, cfg.latent_dim), cfg.initializer_std),
+                P(_FSDP_AXES, None),
+            )
+            lag_gain = jnp.zeros((cfg.latent_dim,))
         expert_axis_size = _mesh_axis_size(get_abstract_mesh(), "expert")
         if cfg.num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
@@ -1219,15 +1245,35 @@ class MoEMLP(eqx.Module):
                 else reshard(_init_weight(k_up, (width, d), cfg.initializer_std), P("model", _FSDP_AXES))
             ),
             expert_mlp=_expert_mlp_init(cfg, width, k_expert),
+            lag_down=lag_down,
+            lag_up=lag_up,
+            lag_gain=lag_gain,
             cfg=cfg,
         )
 
     def input_projection_weights(self, dtype: jnp.dtype) -> list[jax.Array]:
-        """The ``[D, *]`` projections this MLP applies to its input: the router, then the latent down."""
+        """The ``[D, *]`` projections this MLP applies to its input: the router, the latent down, then the lag
+        window's down."""
         weights = [reshard(self.router, P(None, None))]
         if self.w_latent_down is not None:
             weights.append(reshard(self.w_latent_down.astype(dtype), P(None, None)))
+        if self.lag_down is not None:
+            weights.append(reshard(self.lag_down.astype(dtype), P(None, None)))
         return weights
+
+    def _lag_window(
+        self, narrow_flat: Float[Array, "T N"], b: int, segment_ids: Int[Array, "B S"] | None
+    ) -> Float[Array, "T L"]:
+        """``g * rms_norm(concat_lag(shift_lag(x W_down)) W_up)`` from ``narrow_flat = x W_down``."""
+        assert self.lag_up is not None and self.lag_gain is not None
+        shifted = rearrange(narrow_flat, "(b s) n -> b s n", b=b)
+        lags = []
+        for _ in range(MOE_LAG_WINDOW):
+            shifted = previous_token(shifted, segment_ids)
+            lags.append(shifted)
+        window = rearrange(jnp.concatenate(lags, axis=-1), "b s n -> (b s) n")
+        up = _proj(window, reshard(self.lag_up.astype(window.dtype), P(None, None)), out_sharding=_batch_spec())
+        return self.lag_gain.astype(up.dtype) * rms_norm(up)
 
     def _combine_weights(self, unbiased_topk: Float[Array, "T K"]) -> Float[Array, "T K"]:
         """The K selected experts' float32 combine weights from their unbiased logits (``RouterCombine``)."""
@@ -1251,10 +1297,13 @@ class MoEMLP(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: Float[Array, "B S D"], projected: list[jax.Array] | None = None
+        self,
+        x: Float[Array, "B S D"],
+        projected: list[jax.Array] | None = None,
+        segment_ids: Int[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``projected`` holds ``x_flat @ w`` for each of ``input_projection_weights`` when the caller computed them
-        already (fused with other projections of the same input)."""
+        already (fused with other projections of the same input). ``segment_ids`` mask ``moe_lag_window``'s shifts."""
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         if projected is None:
@@ -1299,6 +1348,8 @@ class MoEMLP(eqx.Module):
         if self.w_latent_down is not None and self.latent_norm is not None:
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(reshard(projected[1], _batch_spec()))
+        if self.lag_down is not None:
+            routed_input = routed_input + self._lag_window(projected[2], b, segment_ids)
         routed_flat, overflow = _run_expert_bank(
             self.expert_mlp, self.cfg, routed_input, selected_experts, combine_weights
         )
@@ -1335,7 +1386,10 @@ def _shared_experts_tail(
 
 
 def moe_and_shared_fused(
-    mlp: MoEMLP, shared: tuple[DenseMLP, ...], x: Float[Array, "B S D"]
+    mlp: MoEMLP,
+    shared: tuple[DenseMLP, ...],
+    x: Float[Array, "B S D"],
+    segment_ids: Int[Array, "B S"] | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -1355,7 +1409,7 @@ def moe_and_shared_fused(
     ]
     w_down = jnp.concatenate([reshard(e.w_down, replicated) for e in shared], axis=0)
     parts = list(_fused_projection(x_flat, tuple(moe_weights + shared_weights)))
-    routed, stats = mlp(x, projected=parts[: len(moe_weights)])
+    routed, stats = mlp(x, projected=parts[: len(moe_weights)], segment_ids=segment_ids)
     shared_out = _shared_experts_tail(mlp.cfg, parts[len(moe_weights) :], len(shared), gated, w_down, _batch_spec())
     shared_out = _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s))
     return routed + shared_out, stats
@@ -1473,9 +1527,9 @@ class Block(eqx.Module):
         if isinstance(self.mlp, DenseMLP):
             out = self.mlp(mlp_in)
         elif self.shared is not None:
-            out, stats = moe_and_shared_fused(self.mlp, self.shared, mlp_in)
+            out, stats = moe_and_shared_fused(self.mlp, self.shared, mlp_in, _sconv_segment_ids(mask))
         else:
-            out, stats = self.mlp(mlp_in)
+            out, stats = self.mlp(mlp_in, segment_ids=_sconv_segment_ids(mask))
         if self.sconv_mlp is not None:
             out = self.sconv_mlp(out, _sconv_segment_ids(mask))
         return out, stats
