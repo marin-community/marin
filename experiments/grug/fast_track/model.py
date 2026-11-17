@@ -1136,8 +1136,9 @@ class KdaLocalAttention(eqx.Module):
         n, h = self.logit_scale.shape[0], KDA_LOCAL_ATTN_HEAD_DIM
         replicated = P(None, None)
         weights = tuple(reshard(w.astype(x.dtype), replicated) for w in (self.w_q, self.w_k, self.w_v))
+        # The unsharded reshape cannot split the batch-sharded token axis and the head axis at once.
         q, k, v = (
-            rearrange(t, "(b s) (n d) -> b s n d", b=b, d=h)
+            jnp.reshape(t, (b, s, n, h), out_sharding=P(_BATCH_AXES, None, None, None))
             for t in _fused_projection(rearrange(x, "b s d -> (b s) d"), weights)
         )
         q = rms_norm(q) * self.logit_scale[:, None].astype(q.dtype)

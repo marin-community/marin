@@ -3,9 +3,13 @@
 
 """fast_track ``kda_local_attn_fused_window``: the fused branch (one q/k/v GEMM, the attention kernel's bounds and
 banded bias, one output GEMM) computes the same model as ``kda_local_attn_window``'s blocked softmax, over packed
-documents and with a trained bias and gain."""
+documents and with a trained bias and gain, and runs with several heads on a batch-sharded mesh."""
 
 import dataclasses
+import os
+import subprocess
+import sys
+import textwrap
 
 import equinox as eqx
 import jax
@@ -60,3 +64,55 @@ def test_fused_branch_matches_the_blocked_branch():
         np.testing.assert_allclose(
             getattr(fused_attn, leaf), getattr(blocked_attn, leaf), rtol=1e-4, atol=1e-6, err_msg=leaf
         )
+
+
+_SHARDED_SCRIPT = """
+import dataclasses
+
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import AxisType, Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
+from levanter.grug.attention import AttentionMask
+
+from experiments.belay.model_probe import tiny_config
+from experiments.grug.fast_track.model import Transformer
+
+batch_axes = ("replica_dcn", "data", "expert")
+# hidden 512 gives the branch four heads, so the q/k/v reshape splits the head axis too.
+config = dataclasses.replace(tiny_config(), hidden_dim=512)
+tokens = np.asarray(jax.random.randint(jax.random.key(1), (4, config.max_seq_len), 0, config.vocab_size))
+segments = np.zeros_like(tokens)
+mesh = Mesh(
+    np.array(jax.devices()[:4], dtype=object).reshape((1, 2, 2, 1)),
+    ("replica_dcn", "data", "expert", "model"),
+    axis_types=(AxisType.Explicit,) * 4,
+)
+
+
+def forward(model_config):
+    model = Transformer.init(model_config, key=jax.random.key(0))
+    gain = model.kda_blocks.stacked.attn.local_attn.out_gain
+    model = eqx.tree_at(lambda m: m.kda_blocks.stacked.attn.local_attn.out_gain, model, jnp.ones_like(gain))
+    t, s = (jax.device_put(a, NamedSharding(mesh, P(batch_axes, None))) for a in (tokens, segments))
+    out = jax.jit(lambda m, t, s: m(t, AttentionMask.causal().with_segment_ids(s))[0])(model, t, s)
+    return float(jnp.mean(out.astype(jnp.float32) ** 2))
+
+
+with jax.set_mesh(mesh):
+    fused = forward(dataclasses.replace(config, kda_local_attn_fused_window=4))
+    blocked = forward(dataclasses.replace(config, kda_local_attn_window=4))
+np.testing.assert_allclose(fused, blocked, rtol=1e-5)
+"""
+
+
+def test_fused_branch_runs_with_several_heads_on_a_batch_sharded_mesh():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(_SHARDED_SCRIPT)], env=env, text=True, capture_output=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
