@@ -82,7 +82,8 @@ trials:
   batch: X0235
   date: '2026-11-17'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0235
-  wandb: []
+  wandb:
+  - belay-X0235d1280-seed0
   settings:
     spelling_ngram_embeds: 'true'
   commit: 9802df1d46
