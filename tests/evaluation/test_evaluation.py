@@ -1372,7 +1372,13 @@ def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
         execution = replace(batch, records_prefix=str(tmp_path / "records"), evaluations=(evaluation,))
         _evaluate_with_session(execution, _remote_session(), orchestrator_job_id="/test")
         submitted.append(evaluation.identity)
-        return SimpleNamespace(group_id=batch.group_id, model_name=batch.model.name, evaluations=())
+        return SimpleNamespace(
+            group_id=batch.group_id,
+            job=SimpleNamespace(job_id="/test/eval"),
+            records_prefix=batch.records_prefix,
+            model_name=batch.model.name,
+            evaluations=(),
+        )
 
     monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", lambda **_kwargs: nullcontext(object()))
     monkeypatch.setattr("experiments.evaluation.cli.launch_group", launch)

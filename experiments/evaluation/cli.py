@@ -363,11 +363,14 @@ def launch(
             f"submitted group {group.group_id} ({len(group.evaluations)} evals sharing inference) "
             f"through cluster {EVALUATION_CONTROLLER_CLUSTER!r}"
         )
+        click.echo(f"  job: {group.job.job_id}")
+        click.echo(f"  records: {group.records_prefix}")
         for evaluation in group.evaluations:
             click.echo(f"  {evaluation.run_id}  ({group.model_name} / {evaluation.eval_name})")
         if no_wait:
             return
-        wait_and_report([group])
+        if not wait_and_report([group]):
+            raise click.ClickException("one or more evaluations wrote no record")
 
 
 @cli.command()

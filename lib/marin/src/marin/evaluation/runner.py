@@ -15,6 +15,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from fray.client import JobHandle
 from iris.client.client import Job, iris_ctx
+from iris.rpc.proto_display import job_state_friendly
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import SecretSpec
@@ -754,22 +755,27 @@ def print_record(record: EvalRunRecord) -> None:
             print(f"  {task:<40} {metric:<24} {record.metrics[task][metric]:.4f}")
 
 
-def wait_and_report(batches: list[SubmittedEvaluationBatch]) -> None:
-    """Wait for submitted batches and print their durable records."""
+def wait_and_report(batches: list[SubmittedEvaluationBatch]) -> bool:
+    """Wait for submitted batches and print their durable records.
+
+    Returns whether every evaluation wrote a readable record. For one that did not, prints the
+    orchestrator job's terminal state and error, which explain rejections before any record exists.
+    """
     configure_coreweave_s3()
+    complete = True
     for batch in batches:
-        batch.job.wait(timeout=float("inf"), raise_on_failure=False)
+        status = batch.job.wait(timeout=float("inf"), raise_on_failure=False)
         for evaluation in batch.evaluations:
             path = record_path(batch.records_prefix, evaluation.run_id)
             try:
                 record = read_record(path)
-            except Exception:
-                logger.warning(
-                    "no readable record.json for run %s at %s",
-                    evaluation.run_id,
-                    path,
-                    exc_info=True,
-                )
+            except Exception as error:
+                complete = False
                 print(f"{evaluation.run_id}  [no record]  {batch.model_name} / {evaluation.eval_name}")
+                print(f"  job {batch.job.job_id}: {job_state_friendly(status.state)}")
+                if status.error:
+                    print(f"  error: {status.error}")
+                print(f"  record {path} is unreadable: {type(error).__name__}: {error}")
                 continue
             print_record(record)
+    return complete

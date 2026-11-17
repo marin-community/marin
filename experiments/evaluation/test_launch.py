@@ -37,8 +37,6 @@ def submitted_batches(monkeypatch):
     monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "local-test-key")
     monkeypatch.setenv("DAYTONA_TARGET", "test-target")
-    monkeypatch.setenv("CW_KEY_ID", "local-test-id")
-    monkeypatch.setenv("CW_KEY_SECRET", "local-test-secret")
     batches: list[EvaluationBatch] = []
 
     class Client:
@@ -215,8 +213,6 @@ def test_daytona_launch_uses_the_eval_org_key_not_an_exported_daytona_key(tmp_pa
     monkeypatch.setenv("DAYTONA_API_KEY", "rl-org-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "eval-org-key")
     monkeypatch.setenv("DAYTONA_TARGET", "test-target")
-    monkeypatch.setenv("CW_KEY_ID", "local-test-id")
-    monkeypatch.setenv("CW_KEY_SECRET", "local-test-secret")
     monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
     submitted_env = []
 
