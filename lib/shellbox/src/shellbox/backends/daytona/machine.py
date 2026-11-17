@@ -6,7 +6,6 @@
 import asyncio
 import json
 import logging
-import math
 import re
 import shlex
 import stat
@@ -28,6 +27,7 @@ from daytona import (
     DaytonaConflictError,
     DaytonaNotFoundError,
     DaytonaRateLimitError,
+    ExecuteResponse,
 )
 from rigging.timing import ExponentialBackoff
 
@@ -37,7 +37,7 @@ from shellbox.backends.daytona.snapshot import (
     ensure_snapshot,
     snapshot_request_for_spec,
 )
-from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
+from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
@@ -62,8 +62,29 @@ CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 CONTROL_CWD = "/"
 COUNT_PREFIX = "SHELLBOX_COUNT="
 PROVIDER_DIAGNOSTIC_CHAR_LIMIT = 4096
+COMMAND_STATUS = re.compile(r"(?m)^SHELLBOX_(EXIT=([0-9]+)|RUNNING)$")
+# Network paths drop idle provider requests after about ten minutes, so no
+# request waits on a command for longer than this.
+COMMAND_WAIT_WINDOW = 60
+COMMAND_STARTUP_TIMEOUT = 10
+WAIT_REQUEST_TIMEOUT = COMMAND_STARTUP_TIMEOUT + COMMAND_WAIT_WINDOW + 30
+# The exit trap records the status before removing the PID file, so a missing
+# PID file without a status means the command shell was killed.
 RUN_COMMAND = (
-    'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; trap \': > "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
+    'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; '
+    'trap \'status=$?; echo "$status" > "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
+)
+WAIT_COMMAND = (
+    "pidfile=$1; completed=$2; window=$3; startup=$4; "
+    'pause() { sleep "$1" 2>/dev/null || sleep 1; }; '
+    'check() { if [ -s "$completed" ]; then read -r status < "$completed"; '
+    'printf "SHELLBOX_EXIT=%s\\n" "$status"; exit 0; fi; '
+    '[ -f "$pidfile" ] || [ -s "$completed" ] || { echo "Command has no PID and no exit status" >&2; exit 1; }; }; '
+    'n=0; until [ -f "$pidfile" ] || [ -s "$completed" ]; do '
+    'n=$((n + 1)); [ "$n" -le $((startup * 20)) ] || check; pause 0.05; done; '
+    "for step in 0.01 0.02 0.05 0.1 0.2 0.5; do check; pause $step; done; "
+    'waited=0; while [ "$waited" -lt "$window" ]; do check; pause 1; waited=$((waited + 1)); done; '
+    "check; echo SHELLBOX_RUNNING"
 )
 STOP_COMMAND = (
     "pidfile=$1; completed=$2; "
@@ -83,6 +104,41 @@ def _control_command(script: str) -> str:
             f"PATH={CONTROL_PATH}; export PATH; {script}",
         )
     )
+
+
+def _wait_command(pidfile: str, completed_path: str, startup: int) -> str:
+    return shlex.join(
+        (
+            "/bin/sh",
+            "-c",
+            WAIT_COMMAND,
+            "wait-command",
+            pidfile,
+            completed_path,
+            str(COMMAND_WAIT_WINDOW),
+            str(startup),
+        )
+    )
+
+
+def _command_status(response: ExecuteResponse) -> int | None:
+    """Return a detached command's exit status, or None while it still runs."""
+    diagnostic = response.result or ""
+    match = None if response.exit_code else COMMAND_STATUS.search(diagnostic)
+    if match is None:
+        error = RuntimeError("Daytona command reported no exit status")
+        error.add_note(
+            "Daytona exec response: "
+            + json.dumps(
+                {
+                    "exit_code": response.exit_code,
+                    "diagnostic": diagnostic[:PROVIDER_DIAGNOSTIC_CHAR_LIMIT],
+                    "diagnostic_truncated": len(diagnostic) > PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
+                }
+            )
+        )
+        raise error
+    return None if match.group(2) is None else int(match.group(2))
 
 
 async def _create_sandbox(
@@ -331,7 +387,7 @@ class DaytonaMachine:
         pidfile, completed_path = f"{prefix}/pid", f"{prefix}/completed"
         started = False
         primary_error = None
-        response = None
+        exit_code = None
         environment = {**self.spec.env, **command.env}
         try:
             async with asyncio.timeout(command.timeout) as deadline:
@@ -344,10 +400,7 @@ class DaytonaMachine:
                 )
                 argv = await self._user_argv(argv, command.user)
                 argv = (
-                    "/bin/sh",
-                    "-c",
-                    START_COMMAND,
-                    "shellbox-start",
+                    "setsid",
                     "/bin/sh",
                     "-c",
                     RUN_COMMAND,
@@ -356,9 +409,12 @@ class DaytonaMachine:
                     completed_path,
                     *argv,
                 )
+                # The command runs detached so each provider request only waits
+                # for a bounded window; later requests resume the wait.
                 script = (
                     f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
-                    f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
+                    f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)} &\n"
+                    + _wait_command(pidfile, completed_path, COMMAND_STARTUP_TIMEOUT)
                 )
                 prepared = await self.sandbox.process.exec(
                     _control_command(f"umask 077; mkdir {shlex.quote(prefix)}"), cwd=CONTROL_CWD
@@ -375,28 +431,21 @@ class DaytonaMachine:
                     _control_command(shlex.join(("/bin/sh", script_path))),
                     cwd=command.cwd or self.spec.workdir or None,
                     env=environment,
-                    timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,
+                    timeout=WAIT_REQUEST_TIMEOUT,
                 )
+                while (status := _command_status(response)) is None:
+                    response = await self.sandbox.process.exec(
+                        _control_command(_wait_command(pidfile, completed_path, 0)),
+                        cwd=CONTROL_CWD,
+                        timeout=WAIT_REQUEST_TIMEOUT,
+                    )
+                exit_code = status
             async with asyncio.timeout(self.output_collection_timeout):
                 limit = command.output_limit_bytes
-                try:
-                    stdout, stdout_truncated = await self._read_output(stdout_path, limit)
-                    stderr, stderr_truncated = await self._read_output(stderr_path, limit)
-                except Exception as error:
-                    diagnostic = response.result or ""
-                    error.add_note(
-                        "Daytona exec response: "
-                        + json.dumps(
-                            {
-                                "exit_code": response.exit_code,
-                                "diagnostic": diagnostic[:PROVIDER_DIAGNOSTIC_CHAR_LIMIT],
-                                "diagnostic_truncated": len(diagnostic) > PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
-                            }
-                        )
-                    )
-                    raise
+                stdout, stdout_truncated = await self._read_output(stdout_path, limit)
+                stderr, stderr_truncated = await self._read_output(stderr_path, limit)
             return Result(
-                response.exit_code,
+                exit_code,
                 stdout,
                 stderr,
                 stdout_truncated,
@@ -404,7 +453,7 @@ class DaytonaMachine:
                 ExitReason.EXITED,
             )
         except TimeoutError as error:
-            if response is not None:
+            if exit_code is not None:
                 primary_error = RuntimeError("Cannot collect Daytona command output")
                 raise primary_error from error
             if not deadline.expired():

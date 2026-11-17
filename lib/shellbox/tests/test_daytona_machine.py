@@ -37,6 +37,7 @@ from daytona import (
     Resources,
 )
 from daytona_api_client_async import SnapshotState
+from shellbox.backends.daytona import machine as daytona_machine
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
@@ -501,8 +502,41 @@ def test_daytona_output_collection_uses_its_own_deadline(collection_timeout: flo
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_host_setsid
+def test_daytona_command_outliving_the_wait_window_reports_its_status(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(daytona_machine, "COMMAND_WAIT_WINDOW", 1)
+
+    class TimedProcess(LocalProcess):
+        def __init__(self):
+            super().__init__()
+            self.durations = []
+
+        async def exec(self, command, **kwargs):
+            start = asyncio.get_running_loop().time()
+            try:
+                return await super().exec(command, **kwargs)
+            finally:
+                self.durations.append(asyncio.get_running_loop().time() - start)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = TimedProcess()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            result = await machine.run(Command(("sh", "-c", "sleep 6; printf done; exit 7"), timeout=30))
+            assert (result.exit_code, result.stdout, result.reason) == (7, b"done", ExitReason.EXITED)
+            # Each request returns within the window plus the short initial checks.
+            assert max(client.sandbox.process.durations) < 4
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("oversized", [False, True])
-def test_daytona_output_capture_preserves_provider_startup_failure(tmp_path: Path, oversized: bool) -> None:
+def test_daytona_provider_rejection_preserves_its_diagnostic(tmp_path: Path, oversized: bool) -> None:
     diagnostic = "Provider rejected the command before opening its output files"
     if oversized:
         diagnostic += "x" * (2 * PROVIDER_DIAGNOSTIC_CHAR_LIMIT)
@@ -520,7 +554,7 @@ def test_daytona_output_capture_preserves_provider_startup_failure(tmp_path: Pat
             client.sandbox, MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path)), AsyncExitStack()
         )
         try:
-            with pytest.raises(RuntimeError, match="Failed to measure command output") as caught:
+            with pytest.raises(RuntimeError, match="reported no exit status") as caught:
                 await machine.run(Command(("printf", "not executed")))
             note = next(note for note in caught.value.__notes__ if note.startswith("Daytona exec response: "))
             response = json.loads(note.removeprefix("Daytona exec response: "))
