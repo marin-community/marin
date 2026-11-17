@@ -16,6 +16,7 @@ async function render(sourceId) {
     const item = node('li');
     item.append(/^(https|s3|gs):/.test(uri) ? receiptLink(uri, uri) : node('code', uri), ' · ', node('code', digest)); inputs.append(item);
   }
+  $('verification-pending-card').hidden = !source.backend_verification_pending;
   const sections = {
     'daytona-evidence': daytonaEvidenceRows(source, source.daytona_snapshot_limit),
     census: [

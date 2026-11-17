@@ -74,7 +74,8 @@ TABLE_COLUMNS = {
     "sources": (
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
         "latest_attempt_status TEXT, reason TEXT, curation JSONB, diagnostics JSONB, "
-        "source_fingerprint JSONB, duplicate_group JSONB, review_completeness JSONB"
+        "source_fingerprint JSONB, duplicate_group JSONB, review_completeness JSONB, "
+        "backend_verification_pending JSONB"
     ),
     "assessments": (
         "pipeline_key TEXT, source_id TEXT, scope TEXT, model JSONB, rubric TEXT, "

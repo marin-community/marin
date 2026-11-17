@@ -116,7 +116,7 @@ from infra.marina.apps.rl_data_catalog.release_evidence import (
     verify_preservation,
 )
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
-from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
+from infra.marina.apps.rl_data_catalog.server.app import canonical_source_record, create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.quality import result
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
@@ -3025,3 +3025,47 @@ def test_manual_audit_sample_judgments_and_agreement(catalog_database, catalog_q
     with TestClient(create_api(services)) as client:
         assert client.post("/audit/samples", json=request).status_code == 401
         assert client.get(f"/audit/samples/{sample_id}/tasks").status_code == 401
+
+
+def test_backend_verification_pending_persists_and_projects(catalog_database, catalog_query, tmp_path):
+    """The pending marker is persisted in the source row and survives the API projection."""
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "pending-verify", source_id="Marin:pending")
+    catalog = CurationCatalog(root)
+    load_catalog(catalog, catalog_query)
+    survey = catalog_backend_map(catalog)
+    flipped = survey.model_copy(
+        update={
+            "sources": [
+                (
+                    source.model_copy(
+                        update={
+                            "backends": {
+                                **source.backends,
+                                "daytona": source.backends["daytona"].model_copy(update={"support": Support.VERIFY}),
+                            }
+                        }
+                    )
+                    if source.source_id == "Marin:pending"
+                    else source
+                )
+                for source in survey.sources
+            ]
+        }
+    )
+    result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    rows = catalog_query(
+        "SELECT id, backend_verification_pending FROM atlas_sources WHERE load_id=:load_id",
+        {"load_id": result["load_id"]},
+    )["rows"]
+    pending_rows = {row["id"]: row["backend_verification_pending"] for row in rows}
+    assert pending_rows["Marin:pending"] == ["daytona"]
+    # the API projection passes the marker through without rewriting it
+    projected = canonical_source_record(
+        {
+            "id": "Marin:pending",
+            "declaration": {"id": "Marin:pending"},
+            "backend_verification_pending": pending_rows["Marin:pending"],
+        }
+    )
+    assert projected["backend_verification_pending"] == ["daytona"]
