@@ -1078,21 +1078,26 @@ class Job:
             job_uid=self._id,
             job_name=self.config.job_name,
         )
-        if telemetry is not None:
-            hook = trial_hook(telemetry)
-            for event in TrialEvent:
-                self._trial_queue.add_hook(event, hook)
-        archive = open_archive(self.config.archive, trials_dir=self.job_dir)
-        if archive is not None:
-            self._trial_queue.add_hook(TrialEvent.END, archive.on_trial_end)
+        archive = None
         try:
-            with bind_telemetry(telemetry):
-                result = await self._run_job()
-                # Rebuild canonical archive rows from the selected final results,
-                # including resumed trials; native retry attempts stay preserved.
+            try:
+                if telemetry is not None:
+                    hook = trial_hook(telemetry)
+                    for event in TrialEvent:
+                        self._trial_queue.add_hook(event, hook)
+                archive = open_archive(self.config.archive, trials_dir=self.job_dir)
                 if archive is not None:
-                    await archive.finalize(result.trial_results)
-                    await asyncio.to_thread(archive.seal)
+                    self._trial_queue.add_hook(TrialEvent.END, archive.on_trial_end)
+                with bind_telemetry(telemetry):
+                    result = await self._run_job()
+                    # Rebuild canonical archive rows from the selected final results,
+                    # including resumed trials; native retry attempts stay preserved.
+                    if archive is not None:
+                        await archive.finalize(result.trial_results)
+                        await asyncio.to_thread(archive.seal)
+            finally:
+                if archive is not None:
+                    await asyncio.to_thread(archive.close)
         except BaseException as error:
             record_job_terminal(telemetry, error)
             raise
@@ -1100,9 +1105,18 @@ class Job:
             record_job_terminal(telemetry)
             return result
         finally:
-            if archive is not None:
-                await asyncio.to_thread(archive.close)
-            await asyncio.to_thread(shutdown_telemetry, telemetry)
+            release = asyncio.create_task(
+                asyncio.to_thread(shutdown_telemetry, telemetry)
+            )
+            cancellation: asyncio.CancelledError | None = None
+            while not release.done():
+                try:
+                    await asyncio.shield(release)
+                except asyncio.CancelledError as error:
+                    cancellation = error
+            release.result()
+            if cancellation is not None:
+                raise cancellation
 
     async def _run_job(self) -> JobResult:
         try:
