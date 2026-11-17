@@ -50,7 +50,7 @@ from skyrlrecipe.sampling import EvalSamplingParams
 from skyrlrecipe.settings import parse_setting as typed_setting_value
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
-from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_ROOT
+from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     SELECTION_PREFIX,

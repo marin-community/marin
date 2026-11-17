@@ -149,8 +149,12 @@ def test_rl_entrypoint_can_spawn_workers(tmp_path: Path) -> None:
         textwrap.dedent(
             """\
         import multiprocessing
+        import sys
         import click
         from marin.rl.cli import rl_build_options
+        from experiments.post_training import rl
+
+        assert "marin.processing.embeddings.harrier" not in sys.modules
 
         @click.command()
         @rl_build_options
