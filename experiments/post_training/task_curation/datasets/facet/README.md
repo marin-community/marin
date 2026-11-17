@@ -41,8 +41,14 @@ bundles; each result points to its own `preservation.json` and SHA.
 
 A failed conversion retains its partial regional outputs. Use a new artifact
 version for that retry. No failed image falls back to a Dockerfile rebuild.
-Registry publication is a separate step: require verified private visibility,
-preserve the OCI manifest digest, then bind the resulting digest into each
+Registry publication is a separate step: require verified internal or private visibility,
+preserve the OCI manifest digest, then bind that preserved digest into each
 native task package before original-oracle and no-operation controls. Follow
 the [environment repair procedure](../../../../../docs/references/task-curation.md#environment-fidelity-and-repair)
 for that publication and qualification.
+
+`registry.publish_image` checks package visibility before transferring an image
+and again afterward, then verifies the pushed manifest against the preserved
+digest. It refuses public packages. Record the actual internal or private
+visibility in the publication receipt. Use one GHCR package for FACET; do not
+share it with other sources.
