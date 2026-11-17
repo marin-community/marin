@@ -206,13 +206,14 @@ Python/current source under `/opt`, so a task workdir at `/app` does not hide
 them. It runs as 1000:1000 and retains PG17, Bao, OpenFGA, Node and Git tools.
 
 Authenticated callback changes are in [Loom PR420](https://github.com/marin-community/loom/pull/420).
-The proof source is [53e9ef1](https://github.com/marin-community/loom/commit/53e9ef10850952effaa8ba8ade68f9db35d67cae).
+The Loom binaries were built from [e0f63c7](https://github.com/marin-community/loom/commit/e0f63c77d8225afd48183793190b348a49affa2a).
+The published image uses Marin source [968957f](https://github.com/marin-community/marin/commit/968957fafbaa8bab8fb98b8bdbbfc0de173e2d2c).
 Reuse the matching checkout and shared build cache:
 
 ```bash
 export AUTH_LOOM_SOURCE=/home/power/.codex/worktrees/loom-shared-auth/loom
 export CARGO_TARGET_DIR=/home/power/.cache/cargo-build
-test "$(git -C "$AUTH_LOOM_SOURCE" rev-parse HEAD)" = 53e9ef10850952effaa8ba8ade68f9db35d67cae
+test "$(git -C "$AUTH_LOOM_SOURCE" rev-parse HEAD)" = e0f63c77d8225afd48183793190b348a49affa2a
 cargo build --manifest-path "$AUTH_LOOM_SOURCE/Cargo.toml" --locked -p loom -p tapestry
 mkdir -p artifacts/auth-execution-tools
 install -m 755 "$CARGO_TARGET_DIR/debug/loom" artifacts/auth-execution-tools/loom
@@ -251,9 +252,10 @@ Released Iris binaries do not contain this branch's shared-grant ingress.
 
 ## Run the execution proof
 
-The pinned image passed real CPU task completion and cancellation on 2026-11-07.
+The pinned image passed real CPU task completion and cancellation on 2026-11-17.
 Both tasks read the approved canary, rejected wider access, and lost authority
-before their tokens expired.
+with more than 50 seconds remaining before token expiry. The completion signal
+uses `/tmp`, which remains writable when the image's `/app` is preserved.
 
 Run only while the prior proof is idle. Save its evidence before removing its
 driver. Keep the Bao0 localhost:18200 tunnel running; root credentials, unseal
@@ -262,7 +264,7 @@ shares and userpass passwords never enter the driver.
 ```bash
 export KUBECONFIG=/home/power/.kube/coreweave-iris
 export STAGING_PRIVATE=/home/power/.local/state/marin-auth-staging
-export PROOF_IMAGE_DIGEST=ghcr.io/marin-community/iris-worker@sha256:f6bccc1c1d8813d5f84fcad2ab08c45cb2d37eb91021e1dd6a984efe62d1186e
+export PROOF_IMAGE_DIGEST=ghcr.io/marin-community/iris-worker@sha256:512fcf98254cd8498cffa8ddd34278f31eed0b9ace582c28e58d852bf3c895ab
 umask 077
 kubectl --context marin_US-WEST-04A -n marin-auth-staging delete pod auth-flow-proof-10950 --ignore-not-found --wait=true
 uv run --no-sync -m infra.auth.staging --directory "$STAGING_PRIVATE" issue-proof --ttl 900 \
