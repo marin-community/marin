@@ -22,7 +22,10 @@ logger = logging.getLogger(__name__)
 _PREPARE_TIMEOUT = Duration.from_hours(4)
 _PREPARE_CPU = 4
 _PREPARE_RAM = "8g"
-_PREPARE_DISK = "40g"
+# The streaming populate downloads one repo file at a time into scratch before
+# uploading, so the disk must hold the largest single file in the served repos:
+# openai/gpt-oss-120b ships a 65 GB metal/model.bin alongside its safetensors.
+_PREPARE_DISK = "96g"
 
 
 @dataclass(frozen=True)
