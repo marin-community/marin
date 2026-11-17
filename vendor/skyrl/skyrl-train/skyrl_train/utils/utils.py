@@ -406,12 +406,6 @@ def validate_batch_sizes(cfg: DictConfig):
     )
 
 
-def validate_megatron_cfg(cfg: DictConfig):
-    validate_megatron_config(cfg)
-    if cfg.trainer.flash_attn:
-        importlib.import_module("flash_attn")
-
-
 def validate_cfg(cfg: DictConfig):
     validate_training_settings(cfg)
     validate_mismatch_probe_config(cfg)
@@ -533,7 +527,7 @@ def validate_generator_cfg(cfg: DictConfig):
 
     validate_generation_logprobs(cfg)
 
-    validate_megatron_cfg(cfg)
+    validate_megatron_config(cfg)
 
     # Validate inference engine parallelism.
     ep_size = cfg.generator.inference_engine_expert_parallel_size
