@@ -181,14 +181,14 @@ def sources() -> list[RlDataSource]:
                     level=OversightLevel.NONE,
                 ),
                 notes=(
-                    "Excluded until each grader-base task's controls are replayed through the production grading "
-                    "path in its declared image. 4,000 synthetic tasks written by forge from a 1,999-skill, "
-                    "45-subject catalog (1,598 skills covered), selected coverage first from 4,378 accepts after "
-                    "dropping 244 that carried a reviewer note or missing evidence. 955 in band, 3,021 too easy and 24 too hard for GLM-5.3 "
-                    "over eight trials; 2,978 answer-only, 670 Linux and 352 simulated-shell tasks. Machines that "
-                    "forge's local sandbox recorded without an image are restored to the image their authors "
-                    "declared. Not re-executed through the Atlas rollout path. The repository is private pending "
-                    "release."
+                    "Excluded until each grader-base task's controls are replayed through the production grading path"
+                    " in its declared image. 4,000 synthetic tasks written by forge from a 1,999-skill, 45-subject "
+                    "catalog (1,598 skills covered), selected coverage first from 4,378 accepts after dropping 244 "
+                    "that carried a reviewer note or missing evidence. 955 in band, 3,021 too easy and 24 too hard "
+                    "for GLM-5.3 over eight trials; 2,978 answer-only, 670 Linux and 352 simulated-shell tasks. "
+                    "Machines that forge's local sandbox recorded without an image are restored to the image their "
+                    "authors declared. Not re-executed through the Atlas rollout path. The repository is private "
+                    "pending release."
                 ),
             ),
         ),
