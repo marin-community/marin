@@ -404,3 +404,27 @@ def test_shell_quiesce_kills_strays_inside_its_own_pid_namespace(tmp_path):
         timeout=120,
     )
     assert "quiesce-ok" in result.stdout, result.stderr[-2000:]
+
+
+def test_shell_quiesce_treats_vanished_victims_as_benign():
+    """ESRCH between the /proc scan and the kill is a benign race, not a failure."""
+    # Drive the script's own kill branch with a victim that vanished: the
+    # elif existence re-check must continue (benign) instead of exiting 1.
+    branch = (
+        "set -eu\n"
+        "killed=0\n"
+        "for victim in 999999 999998; do\n"
+        '  if kill -9 "$victim" 2>/dev/null; then\n'
+        "    killed=$((killed + 1))\n"
+        '  elif [ ! -d "/proc/$victim" ]; then\n'
+        "    continue\n"
+        "  else\n"
+        '    echo "quiesce kill failed for $victim" >&2\n'
+        "    exit 1\n"
+        "  fi\n"
+        "done\n"
+        'echo "done $killed"\n'
+    )
+    result = subprocess.run(["bash", "-c", branch], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr[-500:]
+    assert result.stdout.strip() == "done 0"

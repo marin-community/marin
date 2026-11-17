@@ -202,6 +202,11 @@ def source_image_layer(contract: SharedIntegrityContract) -> str:
         f"RUN getent passwd {grader} >/dev/null || "
         f"useradd --create-home --uid {grader} --user-group taskcompendium-grade\n"
         f"RUN mkdir -p /home/taskcompendium-agent && chown {agent}:{agent} /home/taskcompendium-agent\n"
+        # UID handover at build time: the build daemon has the full capability
+        # set, so workspace files whose owner the sandbox fs refuses to change
+        # at runtime are converted here (image files are agent-owned before the
+        # agent phase; setup-created files stay runtime-chowned).
+        f"RUN chown -R {agent}:{agent} {contract.workspace}\n"
         f"COPY taskcompendium-shared/control.py {BOOTSTRAP}\n"
         f"COPY taskcompendium-shared/shared_pytest.py {BOOTSTRAP_DIRECTORY}/shared_pytest.py\n"
         f"RUN chmod -R go-w {BOOTSTRAP_DIRECTORY}\n"

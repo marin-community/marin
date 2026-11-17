@@ -25,6 +25,7 @@ import signal
 import stat
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
 REPORT_FILES = ("verdict.json", "reward.txt", "reward.json", "test_output.log")
@@ -73,11 +74,10 @@ def entry(workspace: Path, name: str) -> dict:
     """Record one workspace path's kind, mode and content without following symlinks."""
     path = workspace / name
     if path.is_symlink():
-        target = os.readlink(path)
-        resolved = Path(target) if os.path.isabs(target) else (path.parent / target)
-        if not resolved.resolve().is_relative_to(workspace.resolve()):
-            raise ValueError(f"Captured symlink escapes the workspace: {name} -> {target}")
-        return {"kind": "symlink", "target": target}
+        # Pre-agent image state is preserved verbatim, including symlinks whose
+        # targets sit outside the workspace. Agent-created redirects are still
+        # refused at restore time by the ancestor repair checks.
+        return {"kind": "symlink", "target": os.readlink(path)}
     if path.is_dir():
         return {"kind": "dir", "mode": stat.S_IMODE(path.lstat().st_mode)}
     if path.is_file():
@@ -182,21 +182,43 @@ def repair_ancestors(common, workspace: Path, name: str, reference: dict[str, di
             parent.mkdir(parents=True, exist_ok=True)
 
 
-def restore_entries(common, workspace: Path, entries: dict[str, dict], reference: dict[str, dict]) -> None:
+def quarantine_remove(common, path: Path, quarantine_root: str | None) -> None:
+    """Remove a workspace path, quarantining it when the sandbox fs refuses.
+
+    Daytona sandboxes were observed returning EOVERFLOW for ``unlink`` of
+    specific image inodes. ``rename`` moves the whole tree without touching the
+    refused inode, so the quarantine preserves the workspace semantics (the
+    member is gone) and keeps the refused inode for post-mortem inside the
+    protected root. A failed quarantine re-raises: the restore cannot proceed
+    faithfully.
+    """
+    try:
+        common.remove_path(path)
+    except OSError:
+        if quarantine_root is None:
+            raise
+        destination = Path(quarantine_root) / datetime.now(UTC).strftime("quarantine-%Y%m%d%H%M%S%f")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(path, destination)
+
+
+def restore_entries(
+    common, workspace: Path, entries: dict[str, dict], reference: dict[str, dict], quarantine_root: str | None = None
+) -> None:
     """Recreate recorded workspace paths exactly, including modes and symlinks."""
     directories = [name for name, record in entries.items() if record["kind"] == "dir"]
     files = [name for name, record in entries.items() if record["kind"] != "dir"]
     for name in sorted(directories, key=lambda item: item.count("/")):
         repair_ancestors(common, workspace, name, reference)
         target = workspace / name
-        common.remove_path(target)
+        quarantine_remove(common, target, quarantine_root)
         target.mkdir(parents=True, exist_ok=True)
         target.chmod(entries[name]["mode"])
     for name in sorted(files, key=lambda item: item.count("/"), reverse=True):
         repair_ancestors(common, workspace, name, reference)
         record = entries[name]
         target = workspace / name
-        common.remove_path(target)
+        quarantine_remove(common, target, quarantine_root)
         if record["kind"] == "symlink":
             os.symlink(record["target"], target)
             continue
@@ -204,13 +226,15 @@ def restore_entries(common, workspace: Path, entries: dict[str, dict], reference
         target.chmod(record["mode"])
 
 
-def remove_entries(common, workspace: Path, entries: dict[str, dict], keep: dict[str, dict]) -> None:
+def remove_entries(
+    common, workspace: Path, entries: dict[str, dict], keep: dict[str, dict], quarantine_root: str | None = None
+) -> None:
     """Remove recorded paths absent from ``keep``, cleaning up empty parents."""
     for name in sorted(entries, key=lambda item: item.count("/"), reverse=True):
         if name in keep:
             continue
         repair_ancestors(common, workspace, name, keep)
-        common.remove_path(workspace / name)
+        quarantine_remove(common, workspace / name, quarantine_root)
     for name in sorted(entries, key=lambda item: item.count("/")):
         if name in keep:
             continue
@@ -321,8 +345,9 @@ def bootstrap(input_path: Path) -> None:
     # Preserve the exact pre-bootstrap state for the agent, including untracked
     # files, modes and symlinks; only the frozen reference keeps restored bytes.
     keep = {name: record for name, record in before.items()}
-    remove_entries(common, workspace, after, keep)
-    restore_entries(common, workspace, keep, keep)
+    quarantine = str(root / "quarantine")
+    remove_entries(common, workspace, after, keep, quarantine)
+    restore_entries(common, workspace, keep, keep, quarantine)
 
     dependencies = [path for path in runner["dependency_paths"] if Path(path).exists()]
     home = os.environ.get("HOME", "/root")
@@ -362,13 +387,14 @@ def prepare_grading(contract: dict, payload: dict) -> None:
         common.inventory_diff(common.hook_inventory(baseline), common.hook_inventory(inventory)),
     )
     restore_git(common, root, workspace)
+    quarantine = str(root / "quarantine")
     reference = json.loads((root / "reference-paths.json").read_text())
     runner, config = contract["native"], json.loads((root / "tests/config.json").read_text())
     # Agent-created files inside the declared capture scope cannot alter grading.
     for name in capture_scope(workspace, runner, config):
         if name not in reference:
             repair_ancestors(common, workspace, name, reference)
-            common.remove_path(workspace / name)
+            quarantine_remove(common, workspace / name, quarantine)
     # A patch path may not exist yet; its ancestors still must not redirect the
     # source's own patch application outside the workspace.
     for key in runner["patch_config_keys"]:
@@ -378,7 +404,7 @@ def prepare_grading(contract: dict, payload: dict) -> None:
             repair_ancestors(common, workspace, name, reference)
             if name not in reference:
                 common.remove_path(workspace / name)
-    restore_entries(common, workspace, reference, reference)
+    restore_entries(common, workspace, reference, reference, quarantine)
     restore_tests(common, contract, payload)
     common.checked(
         ["chown", "-R", f"{contract['grader_uid']}:{contract['agent_uid']}", str(workspace)], cwd=root, timeout=120

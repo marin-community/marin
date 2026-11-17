@@ -3,6 +3,8 @@
 
 """Typed root-delivery contract and its grading-environment assessment surface."""
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -37,6 +39,7 @@ from taskcompendium.models import (
     TextMessage,
     VerifierArtifact,
 )
+from taskcompendium.runtime import shared_source
 from taskcompendium.runtime.resources import inline_resource
 
 
@@ -289,3 +292,40 @@ def test_multi_swe_delivery_contract_declares_the_shared_boundary(tmp_path) -> N
     write_harbor_task(task, tmp_path / "packet", REQUIREMENTS)
     exported = TaskSpec.model_validate_json((tmp_path / "packet" / "task-spec.json").read_text())
     assert exported.integrity_contract == contract
+
+
+def test_capture_preserves_pre_agent_symlinks_whose_targets_leave_the_workspace(tmp_path):
+    """Pre-agent image symlinks are preserved verbatim, including escaping targets."""
+    workspace = tmp_path / "workspace"
+    (workspace / "tests" / "packages" / "symlinks").mkdir(parents=True)
+    link = workspace / "tests" / "packages" / "symlinks" / "baz.py"
+    link.symlink_to("/__init__.py")
+    entry = shared_source.entry(workspace, "tests/packages/symlinks/baz.py")
+    assert entry == {"kind": "symlink", "target": "/__init__.py"}
+
+
+def test_quarantine_remove_moves_refused_inodes_out_of_the_workspace(tmp_path, monkeypatch):
+    """A sandbox fs that refuses unlink still loses the member via rename."""
+    common = type("Common", (), {})()
+    refused = {"count": 0}
+
+    def remove_path(path: Path) -> None:
+        refused["count"] += 1
+        raise OSError(75, "Value too large for defined data type", str(path))
+
+    common.remove_path = remove_path
+    quarantine = tmp_path / "protected" / "quarantine"
+    quarantine.mkdir(parents=True)
+    victim = tmp_path / "workspace" / "tests" / ".eslintrc.json"
+    victim.parent.mkdir(parents=True)
+    victim.write_text("config\n")
+
+    shared_source.quarantine_remove(common, victim, str(quarantine))
+    assert not victim.exists()
+    quarantined = list(quarantine.iterdir())
+    assert len(quarantined) == 1
+    assert quarantined[0].name.startswith("quarantine-")
+
+    # Without a quarantine root the refusal propagates (fail closed).
+    with pytest.raises(OSError):
+        shared_source.quarantine_remove(common, victim, None)

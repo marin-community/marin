@@ -330,11 +330,14 @@ for entry in /proc/[0-9]*; do
   line=$(cat "/proc/$victim/stat" 2>/dev/null) || continue
   rest=${line##*) }
   case ${rest%% *} in Z*) continue;; esac
-  kill -9 "$victim" 2>/dev/null || {
+  if kill -9 "$victim" 2>/dev/null; then
+    killed=$((killed + 1))
+  elif [ ! -d "/proc/$victim" ]; then
+    continue
+  else
     echo "quiesce kill failed for $victim" >&2
     exit 1
-  }
-  killed=$((killed + 1))
+  fi
 done
 echo "$killed"
 """

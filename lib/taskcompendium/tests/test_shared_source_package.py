@@ -87,6 +87,8 @@ def test_scale_package_keeps_body_and_hides_all_tests_material():
     assert "taskcompendium-source-input.json" in setup
     assert files["environment/taskcompendium-shared/control.py"]
     assert "taskcompendium-grade" in files["environment/Dockerfile"].decode()
+    # UID handover happens at build time: sandbox fs may deny runtime uid changes.
+    assert "RUN chown -R 10001:10001 /repo" in files["environment/Dockerfile"].decode()
     assert files["task.toml"].decode().count("agent_mutable_v2") == 1
 
 
@@ -109,6 +111,7 @@ def test_lego_contract_captures_patch_paths_and_declares_its_policy():
         "Agent-installed pytest plugins and imports in the shared interpreter environments",
         "Candidate-produced test-output injection",
     )
+    assert "RUN chown -R 10001:10001 /testbed" in files["environment/Dockerfile"].decode()
     payload = json.loads(zlib.decompress(files["setup_files/taskcompendium-source-input.zlib"]))
     assert sorted(payload["tests"]) == ["config.json", "grade.py", "native_scripts.py", "test.sh"]
     task_toml = files["task.toml"].decode()
