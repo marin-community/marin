@@ -127,6 +127,12 @@ def materialize(common, root: Path, workspace: Path, runner: dict, config: dict,
     Any temporary patch material lives inside the protected root and is removed
     before the agent phase; the agent can neither read nor keep it.
     """
+    if runner["family"] == "swe-rebench":
+        # The declared per-task setup (clone + checkout of the pinned base)
+        # already reproduces the base state on the shared base image, and the
+        # source restores test_files itself inside its own test.sh at grading
+        # time - there is no image-side test drift for this family to undo.
+        return
     module = load_source_module(tests, NATIVE_SCRIPTS)
     # The original snippets read the shell variable $base, exactly as grade.py sets it.
     environment = {**os.environ, **module.ENV, "base": config["base_commit"]}
@@ -434,6 +440,13 @@ def grade(contract_path: Path) -> None:
     environment = {**os.environ, "HOME": "/home/taskcompendium-grade"}
     output = reports / "test_output.log"
     with output.open("wb") as stream:
+        # The capture stream is opened by root before the setuid child starts;
+        # hand the file to the grader group so a source test script that writes
+        # its own command log to the same path (the upstream SWE-rebench
+        # rendered test.sh redirects test_cmd there) can reopen and truncate it
+        # under the declared trust model (the source scorer owns its verdict).
+        os.fchown(stream.fileno(), 0, contract["grader_uid"])
+        os.fchmod(stream.fileno(), 0o660)
         process = subprocess.Popen(
             [str(script)],
             cwd=contract["workspace"],

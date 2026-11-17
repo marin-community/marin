@@ -409,9 +409,13 @@ def package_files(family: str, base: str) -> tuple[dict[str, bytes], object]:
         }
         files = {
             "instruction.md": b"Fix add so the tests pass.\n",
+            # The declared per-task setup reproduces the clone+checkout state:
+            # tracked files land exactly on the pinned base before bootstrap.
             "task.toml": (
                 b"[environment]\ncpus = 4\nmemory_mb = 4096\nstorage_mb = 10240\n"
                 b'[verifier]\nenvironment_mode = "shared"\n'
+                b"\n[environment.setup]\n"
+                b"command = 'git -C " + str(WORKSPACE).encode() + b" checkout " + base.encode() + b" -f -- .'\n"
             ),
             "environment/Dockerfile": b"FROM fixture.test/source@sha256:" + b"a" * 64 + b"\n",
             "tests/test.sh": SWE_REBENCH_TEST_SH.encode(),
@@ -802,27 +806,29 @@ def test_agent_symlinked_tests_directory_cannot_reach_protected_state(source_ima
 @pytest.mark.parametrize("source_image", ["swe-rebench"], indirect=True)
 def test_swe_rebench_reward_channel_and_test_files_scope(source_image):
     """The SWE-rebench flow: verbatim-style test.sh writes the reward file; the
-    declared test_files list joins the protected grading scope."""
-    workspace = Path(contract_workspace_of(source_image.files))
-    # NoP: the restored base + the test patch fails on the buggy source.
-    assert run_grade(source_image.files)["reward"] == 0.0
-    # The agent tampers with a declared test_files path and shadows the
-    # patch-created test; grading must neutralize both.
+    declared test_files list joins the protected grading scope. The agent-phase
+    tampering happens before the single grading, exactly as production runs."""
+    # Agent phase: tamper with a declared test_files path and shadow the
+    # patch-created test, on the unpatched buggy source.
     tamper = run_as_agent(
         "import pathlib\n"
-        f"base = pathlib.Path({str(workspace)!r})\n"
+        "base = pathlib.Path('/testbed')\n"
         "(base / 'tests' / 'test_app.py').write_text('def test_resolved():\\n    assert True\\n')\n"
         "(base / 'tests' / 'test_new.py').write_text('def test_resolved():\\n    assert True\\n')\n"
     )
     assert tamper.returncode == 0, tamper.stderr
+    # Grading neutralizes both: the declared test_files path is restored to the
+    # frozen reference bytes and the shadowing patch-path file is removed
+    # before the source's test.sh reapplies the real patch. The unpatched
+    # source fails the F2P test, so the reward stays 0.
     assert run_grade(source_image.files)["reward"] == 0.0
-    # The declared test_files path was restored to the frozen reference bytes
-    # and the shadowing patch-path file was removed before the patch reapplied.
-    assert (workspace / "tests" / "test_app.py").read_text() == SCALE_TEST
-    assert "assert add(1, 2) == 3" in (workspace / "tests" / "test_new.py").read_text()
-    # Oracle: the fixed source passes the F2P test -> reward 1.0.
+    assert (WORKSPACE / "tests" / "test_app.py").read_text() == SCALE_TEST
+    assert "assert add(1, 2) == 3" in (WORKSPACE / "tests" / "test_new.py").read_text()
+    # Oracle phase: the agent applies the fix (app.py is outside the capture
+    # scope, so grading never rewrote or re-owned it); the patched F2P test
+    # passes and the upstream-shaped test.sh flips the reward file to 1.
     fix = run_as_agent(
-        "import pathlib\n" f"base = pathlib.Path({str(workspace)!r})\n" f"(base / 'app.py').write_text({APP_FIXED!r})\n"
+        "import pathlib\n" "pathlib.Path('/testbed/app.py').write_text('def add(a, b):\\n    return a + b\\n')\n"
     )
     assert fix.returncode == 0, fix.stderr
     assert run_grade(source_image.files)["reward"] == 1.0
