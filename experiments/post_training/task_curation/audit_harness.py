@@ -220,7 +220,11 @@ def main() -> None:
     print(
         json.dumps(
             freeze_sample(
-                args.reviews, args.specs, args.contract, args.output, args.seed,
+                args.reviews,
+                args.specs,
+                args.contract,
+                args.output,
+                args.seed,
                 data_restriction=DataRestriction(args.data_restriction),
             ),
             indent=2,

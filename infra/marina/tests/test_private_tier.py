@@ -248,9 +248,7 @@ class CatalogServices:
 def stage_private_catalog(root: str, snapshot_id: str = "private-tier-1") -> dict[str, str]:
     """Stage one catalog with a PRIVATE_ALWAYS and an open synthetic source; return pipeline keys."""
     private_notes = f"Vendor provenance notes quoting {PRIVATE_CANARY}"
-    private_declaration = restricted_declaration(
-        PRIVATE_SOURCE_ID, DataRestriction.PRIVATE_ALWAYS, notes=private_notes
-    )
+    private_declaration = restricted_declaration(PRIVATE_SOURCE_ID, DataRestriction.PRIVATE_ALWAYS, notes=private_notes)
     # Reviewer prose, a task-contract example and a conversion failure reason, each
     # quoting the canary: the served projection must drop them all.
     private_declaration["quality_result"] = {

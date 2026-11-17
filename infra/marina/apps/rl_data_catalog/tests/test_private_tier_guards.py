@@ -4,16 +4,19 @@
 """Behavior tests for the private-data restriction tier's shared helpers and publish guards."""
 
 import json
-from pathlib import Path
 
 import pytest
 from finestore.rl.status_taxonomy import DataRestriction
 
 from experiments.post_training.task_curation import calibforge_publish, publication_gate
+from experiments.post_training.task_curation.audit_harness import freeze_sample
+from experiments.post_training.task_curation.environment import Environment
+from experiments.post_training.task_curation.images.build import EnvironmentBuild, build_environment
 from experiments.post_training.task_curation.publication_gate import (
     configured_restriction,
     require_no_restriction_downgrade,
 )
+from experiments.post_training.task_curation.source import SourceInfo, SourceOrigin
 from infra.marina.apps.rl_data_catalog.server import restriction_registry
 from infra.marina.apps.rl_data_catalog.server.restrictions import (
     PRIVATE_TEXT_MARKER,
@@ -118,7 +121,10 @@ def test_private_declaration_projection_keeps_receipts_and_drops_prose():
 def test_private_declaration_projection_drops_unlisted_prose_fields():
     declaration = restricted_declaration()
     declaration["recipe_qa_history"] = {"campaign": "https://example.test", "prose": f"quotes {PRIVATE_CANARY}"}
-    declaration["quality_result"] = {"issues": [f"Reviewer saw {PRIVATE_CANARY}"], "repair_recommendation": PRIVATE_CANARY}
+    declaration["quality_result"] = {
+        "issues": [f"Reviewer saw {PRIVATE_CANARY}"],
+        "repair_recommendation": PRIVATE_CANARY,
+    }
     declaration["integrity_contracts"] = {
         "groups": [],
         "distinct_groups": 0,
@@ -165,8 +171,6 @@ def test_no_restriction_downgrade_allows_matching_tiers():
 
 
 def test_source_info_requires_an_explicit_tier():
-    from experiments.post_training.task_curation.source import SourceInfo, SourceOrigin  # noqa: PLC0415
-
     # Every configured source passes the tier explicitly; the Open default only
     # tolerates archived receipts that embed a pre-tier SourceInfo copy.
     info = SourceInfo(
@@ -192,15 +196,12 @@ def test_configured_restriction_resolves_from_the_source_graph(monkeypatch):
 
 def test_rollout_image_push_refuses_a_public_namespace(tmp_path):
     """The shared GHCR push helper only ships to the internal marin-community namespace."""
-    from experiments.post_training.task_curation.environment import Environment
-    from experiments.post_training.task_curation.images.build import EnvironmentBuild, build_environment
-
     dockerfile = tmp_path / "Dockerfile"
     dockerfile.write_text("RUN true\n")
     build = EnvironmentBuild(
         identity="a" * 64, repository="ghcr.io/public-registry/rollout-images", output_path=str(tmp_path / "out")
     )
-    with pytest.raises(ValueError, match="internal ghcr.io/marin-community/"):
+    with pytest.raises(ValueError, match=r"internal ghcr\.io/marin-community/"):
         build_environment(Environment(dockerfile=dockerfile), build)
     assert not (tmp_path / "out").exists()
 
@@ -229,8 +230,6 @@ class FakeHub:
 
 def test_reviewer_packet_freeze_refuses_a_private_source(tmp_path):
     """Reviewer packets quote exact task text, so the freeze refuses a private source."""
-    from experiments.post_training.task_curation.audit_harness import freeze_sample
-
     output = tmp_path / "packet"
     with pytest.raises(ValueError, match="PRIVATE_ALWAYS"):
         freeze_sample(
