@@ -773,6 +773,10 @@ class WithinSourceDedupEvidence(CatalogRecord):
     converter_version: str
     drop_manifest_uri: str
     evidence_url: str
+    # Provenance when the counts were not measured at this identity: the row was carried
+    # forward from an earlier converter version after a scorer-only change, with the
+    # reason and invariance evidence. None means the census was measured at this identity.
+    carry_forward: str | None = None
 
     @model_validator(mode="after")
     def _population_ledger(self) -> "WithinSourceDedupEvidence":
