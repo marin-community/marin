@@ -343,7 +343,9 @@ def qa_task(root: Path, family: str, row: dict, kind: str, limits: dict) -> dict
         config_path = attempt / "trial.json"
         config_path.write_text(json.dumps(config))
         summary = asyncio.run(
-            asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log", probe_state), timeout=ATTEMPT_TIMEOUT + 900)
+            asyncio.wait_for(
+                _run_logged(config_path, attempt / "harbor.log", probe_state), timeout=ATTEMPT_TIMEOUT + 900
+            )
         )
         if phase == "tamper":
             summary["testbed_python"] = probe_state.get("testbed_python")
