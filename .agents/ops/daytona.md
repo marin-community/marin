@@ -247,12 +247,10 @@ added a bounded, instance-label-scoped orphan sweep on
 that cancellation path. Check the installed revision rather than assuming that
 finalized trials imply successful teardown. See [the incident and fix](https://marina.oa.dev/echo/wiki/320).
 
-Delete only sandboxes your own run created, proven by the exact sandbox IDs in
-your own logs. Never select deletions by name pattern, label, state, age or an
-account-wide listing, and never convert a local time window to UTC by hand: an
-unverified window once deleted 33 stopped sandboxes owned by other runs
-([incident](https://marina.oa.dev/echo/wiki/1008)). If you cannot quote the IDs
-from your own logs, delete nothing and report the candidates.
+Delete only sandboxes that your own run created. Use the exact sandbox IDs from
+your own logs. Do not select sandboxes by name pattern, label, state, age or an
+account-wide list. Do not convert a local time window to UTC by hand. If you
+cannot get the IDs from your own logs, do not delete. Report the candidates.
 
 Sandbox-not-found errors during queued work can indicate an overly aggressive
 idle-reap policy. Uniform setup failures point toward image, dependency, account,
