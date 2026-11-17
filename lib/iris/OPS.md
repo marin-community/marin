@@ -463,24 +463,24 @@ iris --cluster=<name> rpc controller list-backends
 
 ### CPU topology admission
 
-For gVisor CPU Pods blocked on `cw-us-east-08a` topology admission, use the
-configured `iris-cpu` flavor and hostname-only `iris-cpu-hostname` Topology.
-CoreWeave's `node-metadata-controller.compute.coreweave.com` owns the fabric,
+IaC gives each CoreWeave cluster's physical CPU pool a hostname-only TAS
+admission path: the `iris-cpu` ResourceFlavor and `iris-cpu-hostname` Topology,
+placed first in `iris-cq` with zero GPU/RDMA quota. CoreWeave's
+`node-metadata-controller.compute.coreweave.com` owns the fabric,
 superpod and leafgroup labels; their live values on CPU Nodes are empty.
 Kueue v0.18.3 accepts empty topology label values;
 missing keys exclude a Node. Do not patch those provider-owned labels.
 
-`provisioning.coreweave.kueue.cpu_scale_group: cpu-erapids` enables this path
-only on 08a. IaC creates the hostname Topology and CPU ResourceFlavor, then
-adds that flavor first in the existing ClusterQueue. The CPU flavor has zero
-GPU/RDMA quota and selects only the Iris CPU scale group. CPU NodePool
-metadata and `spec.nodeLabels` stop declaring the four synthetic physical
+`provisioning.coreweave.kueue.cpu_scale_group` names the CPU pool per cluster:
+`cpu-erapids` on 08a, `cpu-genoa` on 02a and `cpu-turin` on rno2a. That cluster's
+CPU NodePool stops declaring the four synthetic physical
 labels; capacity, instance type and taints are unchanged.
 
-With approval for the named cluster, review a targeted Pulumi preview and apply
+With approval for a cluster, review a targeted Pulumi preview and apply
 only these four resources: `topology-cpu`, `resource-flavor-cpu`,
-`cluster-queue`, and `nodepool-cw-use08a-cpu-erapids`. Use their exact URNs
-from the stack and the new resource declarations. Require no replacement,
+`cluster-queue`, and that cluster's CPU NodePool: `nodepool-cw-use08a-cpu-erapids`
+on 08a, `nodepool-cw-use02a-cpu-genoa` on 02a, `nodepool-cw-rno2a-cpu-turin`
+on rno2a. Require no replacement,
 deletion, capacity, Helm-release or GPU-flavor change. The ClusterQueue update
 can admit existing queued work and changes the preferred pool for new CPU-only
 admissions. It does not rewrite admitted Workloads. This procedure requires no
@@ -503,12 +503,17 @@ PULUMI_PYTHON_CMD="$PWD/.venv/bin/python" KUBECONFIG="$HOME/.kube/coreweave-iris
 
 After approval of that exact preview, run the same command with `up` in place
 of `preview`. Do not use an untargeted stack update: other changes may be pending.
+The stack name and NodePool URN change per cluster; the four targets do not.
+
+Roll out one cluster at a time, starting with 08a, and apply the next cluster
+only after the previous cluster's admission canary passes. rno2a has a single
+CPU node, so check its capacity headroom before applying there.
 
 After applying, confirm `iris-cpu` references `iris-cpu-hostname`, that this
 Topology has only the hostname level, that `iris-cq` is Active, and that GPU
 and RDMA quotas on `cw-tas` retain their prior values. Keep
 `TASHandleOverlappingFlavors` enabled: both topologies end at hostname, allowing
-Kueue to account for transient overlap during migration. Verify a separately
+Kueue to account for transient overlap during rollout. Verify a separately
 authorized CPU SANDBOX canary receives an `iris-cpu` assignment, starts its
 process and exits successfully; admission alone does not verify the runtime.
 

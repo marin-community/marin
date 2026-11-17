@@ -393,8 +393,10 @@ def build_cluster_queue(
             0,
             {
                 "name": CPU_RESOURCE_FLAVOR_NAME,
+                # Kueue validates that every flavor's resources list coveredResources
+                # in the same order; order by COVERED_RESOURCES, not the caller's mapping.
                 "resources": [
-                    {"name": resource, "nominalQuota": quota} for resource, quota in cpu_nominal_quotas.items()
+                    {"name": resource, "nominalQuota": cpu_nominal_quotas[resource]} for resource in COVERED_RESOURCES
                 ],
             },
         )

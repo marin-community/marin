@@ -710,7 +710,9 @@ def test_constraints_to_node_selector_pool():
     assert manifest["spec"]["nodeSelector"] == {"iris.pool": "h100-8x"}
 
 
-def test_constraints_to_node_selector_region():
+def test_region_constraint_does_not_become_node_selector():
+    # Region dispatch is validated against the backend's advertised regions and is
+    # never translated to a Node selector: no CoreWeave Node carries `iris.region`.
     req = make_run_req("/my-job/task-0")
     add_eq_constraint(req, "region", "US-WEST-04A")
 
@@ -720,6 +722,9 @@ def test_constraints_to_node_selector_region():
 
 @pytest.mark.parametrize("regions", [("US-EAST-08A",), ()])
 def test_region_mismatch_rejects_dispatch_before_creating_a_pod(regions):
+    # Pins the dispatch path, not nodeSelector propagation: a required region the
+    # backend cannot serve fails the task before any Pod is created. The empty
+    # regions case mirrors a backend that advertises no regions.
     req = make_run_req("/my-job/task-0")
     add_eq_constraint(req, "region", "US-WEST-04A")
     updates, resources = _dispatch(req, pod_config(), regions=regions)

@@ -257,27 +257,26 @@ and NVLink-domain labels on accelerator Nodes. Its node metadata controller
 owns the `backend.coreweave.cloud/*` labels and can overwrite synthetic values.
 Do not repair CPU placement by patching those provider-owned labels.
 
-On `cw-us-east-08a`, `provisioning.coreweave.kueue.cpu_scale_group` selects
-`cpu-erapids` for the `iris-cpu` ResourceFlavor. That flavor uses the existing
+`provisioning.coreweave.kueue.cpu_scale_group` selects the physical CPU pool for
+the `iris-cpu` ResourceFlavor: `cpu-erapids` on `cw-us-east-08a`, `cpu-genoa` on
+`cw-us-east-02a` and `cpu-turin` on `cw-rno2a`. That flavor uses the existing
 Iris scale-group selector and a separate `iris-cpu-hostname` Topology containing
 only `kubernetes.io/hostname`. Its GPU and RDMA quotas are zero. It is first in
-`iris-cq`'s resource group, so CPU-only work can use the physical CPU pool;
+`iris-cq`'s resource group, so CPU-only work uses the physical CPU pool;
 requests that do not fit can still use `cw-tas`. All resources of a PodSet stay
 in one resource group and use one flavor. GPU and RDMA work retains the shared
-flavor and its binding quotas. CPU pool declarations on this cluster no longer
-set synthetic physical-topology labels. Other clusters retain their existing
-flavor configuration until explicitly migrated.
+flavor and its binding quotas. CPU pool declarations on these clusters no
+longer set synthetic physical-topology labels.
 
-The original selectorless, non-TAS `cw-cpu` flavor caused
-[#7916](https://github.com/marin-community/marin/issues/7916): CPU Pods on GPU
-Nodes could not be reclaimed during GPU TAS fit. The new CPU flavor is TAS and
-selects only the CPU pool, while CPU spillover onto GPU Nodes remains in
-`cw-tas`. Both topologies end at hostname. Kueue v0.18.3's default-enabled
-`TASHandleOverlappingFlavors` accounts for any Node temporarily selected by both
-flavors; keep that gate enabled during migration.
+The CPU flavor is TAS and selects only the CPU pool. CPU spillover onto GPU
+Nodes stays in `cw-tas` so GPU TAS fit can reclaim it
+([#7916](https://github.com/marin-community/marin/issues/7916)). Both topologies
+end at hostname. Kueue v0.18.3's default-enabled `TASHandleOverlappingFlavors`
+accounts for any Node temporarily selected by both flavors; keep that gate
+enabled during rollout.
 
 See [CPU topology admission](../OPS.md#cpu-topology-admission) for the staged
-apply and cleanup procedure. No controller deployment is required for this
+per-cluster apply procedure. No controller deployment is required for this
 Kueue admission change.
 
 Iris `region` constraints match the backend's advertised region. They do not

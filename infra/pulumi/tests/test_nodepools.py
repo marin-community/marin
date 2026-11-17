@@ -85,6 +85,28 @@ def test_derive_nodepools_assigns_unified_tas_labels():
         assert topology_label not in gb200.node_labels
 
 
+@pytest.mark.parametrize(
+    ("cluster", "cpu_pool", "scale_group_label"),
+    [
+        ("cw-us-east-08a", "cw-use08a-cpu-erapids", "iris-cw-use08a-scale-group"),
+        ("cw-us-east-02a", "cw-use02a-cpu-genoa", "iris-cw-use02a-scale-group"),
+        ("cw-rno2a", "cw-rno2a-cpu-turin", "iris-cw-rno2a-scale-group"),
+    ],
+)
+def test_derive_nodepools_drop_synthetic_labels_on_each_configured_cpu_pool(cluster, cpu_pool, scale_group_label):
+    config = load_iris_config(cluster)
+    provisioning = load_provisioning(cluster).coreweave
+    assert provisioning is not None
+    cpu_scale_group = provisioning.kueue.cpu_scale_group
+    pools = {p.name: p for p in derive_nodepools(config, cpu_scale_group=cpu_scale_group)}
+    cpu = pools[cpu_pool]
+
+    # The flavor's selector must match a label the CPU NodePool actually declares.
+    assert cpu.node_labels[scale_group_label] == cpu_scale_group
+    for topology_label in (CW_LABEL_FABRIC, CW_LABEL_SUPERPOD, CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN):
+        assert topology_label not in cpu.node_labels
+
+
 def test_derive_rejects_rack_pool_with_partial_rack():
     config = load_iris_config("cw-us-east-08a")
     # 70 is not a whole number of 18-node racks.

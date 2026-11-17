@@ -50,6 +50,7 @@ provisioning:
   coreweave:
     cluster: { name: marin-gpu, zone: US-EAST-02A }
     kueue:
+      cpu_scale_group: cpu-genoa
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
     ingress:
       ingress_class: traefik
