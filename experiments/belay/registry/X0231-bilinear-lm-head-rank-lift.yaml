@@ -34,8 +34,8 @@ trials:
   baseline: belay-X0231-control 3.0454 (same commit, seed 0)
   step_time_change: +2%
 potential:
-  score: 5
-  rationale: 'No result yet: control done, variant preempted mid-run and retrying -> 5'
+  score: 3
+  rationale: 'Noise: -0.0038 at equal data, +2% step time so equal time not run -> 3'
   model: claude-opus-5-5
   date: '2026-11-17'
-  inputs_digest: c6e5b1e73da7
+  inputs_digest: 768ea2ff93ce
