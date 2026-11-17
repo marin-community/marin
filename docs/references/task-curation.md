@@ -175,6 +175,11 @@ grading assessment are unchanged.
 - The whole contract (actor, tool providers, shared executor, environment and
   grader) must run on a production backend through the path Atlas consumers use.
   A task that cannot is filtered with a typed reason and its evidence.
+- Backends carry typed deployment classes (`shellbox.machine.BACKEND_DEPLOYMENT`):
+  Iris gVisor, Daytona and LOCAL-on-cluster-workers are **production**; local
+  Docker, Docker+runsc, QEMU and shellsim are **dev only**. Admission counts
+  production backends only — a dev-only SUPPORTED cell never satisfies it — and
+  the Atlas marks dev-only backends accordingly.
 - Each task's declared network policy (ALLOW or DENY) is honored. A backend that
   cannot provide it records `network_policy_unsupported`; the task is filtered
   unless another backend can run it.
