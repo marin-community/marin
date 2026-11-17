@@ -336,20 +336,8 @@ class HarborEvaluationCallback(TrainerCallback):
             raise ValueError("Harbor validation requires generator.enable_http_endpoint")
         cohorts = deepcopy(self.cohorts)
         runtime = resolve_telemetry(run_id=trainer.cfg.get("runtime", {}).get("run_id"))
-        telemetry = (
-            {
-                "endpoint": runtime.resolver(runtime.endpoint).rstrip("/") + TELEMETRY_ENDPOINT_PATH,
-                "root_run_uid": runtime.attributes["run_id"],
-                "execution_uid": runtime.attributes["execution_uid"],
-                "serving_job_id": runtime.attributes["job_id"],
-            }
-            if runtime is not None
-            else None
-        )
         for cohort in cohorts:
             job = cohort["job"]
-            if telemetry is not None:
-                job["telemetry"] = telemetry
             job["job_name"] = f"step-{state.global_step}-{cohort['name']}"
             job["jobs_dir"] = join_resource_path(trainer.cfg.trainer.export_path, "inline_harbor")
             for agent in job["agents"]:
@@ -362,6 +350,20 @@ class HarborEvaluationCallback(TrainerCallback):
         environment["DAYTONA_API_KEY"] = environment[self.daytona_api_key_env]
         environment["OPENAI_API_KEY"] = "unused-local-inference"
         async with asyncio.timeout(self.timeout):
+            if runtime is not None:
+                try:
+                    endpoint = await asyncio.to_thread(runtime.resolver, runtime.endpoint)
+                except Exception as error:
+                    logger.warning("Harbor telemetry endpoint lookup failed ({})", type(error).__name__)
+                else:
+                    telemetry = {
+                        "endpoint": endpoint.rstrip("/") + TELEMETRY_ENDPOINT_PATH,
+                        "root_run_uid": runtime.attributes["run_id"],
+                        "execution_uid": runtime.attributes["execution_uid"],
+                        "serving_job_id": runtime.attributes["job_id"],
+                    }
+                    for cohort in cohorts:
+                        cohort["job"]["telemetry"] = telemetry
             results = await collect_harbor(cohorts, pool, environment)
         return {f"eval/harbor/{name}/{key}": value for name, result in results.items() for key, value in result.items()}
 

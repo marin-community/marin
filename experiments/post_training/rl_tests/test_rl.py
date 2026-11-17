@@ -248,6 +248,8 @@ for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)
     selected.append((directory / "best_checkpoint.json").exists())
 
 from contextlib import nullcontext
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from iris.client.client import IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH
@@ -297,8 +299,13 @@ with connection.makefile("rwb") as stream:
 '''
 
 class EndpointClient:
+    def __init__(self, missing):
+        self.missing = missing
+
     def resolve_endpoint(self, name):
         assert name == LOG_SERVER_ENDPOINT_NAME
+        if self.missing:
+            raise ConnectError(Code.NOT_FOUND, "endpoint unavailable")
         return "http://127.0.0.1:4318/iris-capability/"
 
 async def check_runtime_handoff():
@@ -319,7 +326,7 @@ async def check_runtime_handoff():
 
     asyncio.create_subprocess_exec = start_worker
     try:
-        for attempt in (1, 2, None):
+        for attempt in (1, 2, None, "missing"):
             trainer.cfg = native_configs[0] if attempt is not None else config.skyrl
             info = JobInfo(task_id=JobName.from_wire(f"/test/native-{attempt}/0"), attempt_uid=f"uid-{attempt}")
             set_job_info(info if attempt is not None else None)
@@ -328,8 +335,9 @@ async def check_runtime_handoff():
                 "root_run_uid": str(config.run.id),
                 "execution_uid": f"iris:uid-{attempt}",
                 "serving_job_id": f"/test/native-{attempt}",
-            } if attempt is not None else None
-            context = IrisContext(job_id=info.job_id, task_attempt=info.task_attempt, client=EndpointClient())
+            } if attempt not in (None, "missing") else None
+            context = IrisContext(job_id=info.job_id, task_attempt=info.task_attempt,
+                                  client=EndpointClient(missing=attempt == "missing"))
             scope = iris_ctx_scope(context) if attempt is not None else nullcontext()
             with scope:
                 async with EvaluationPool(3) as pool:
