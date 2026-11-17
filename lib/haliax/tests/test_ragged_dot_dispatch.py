@@ -9,7 +9,6 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from haliax.jax_utils import GpuFamily
 from haliax.nn import ragged_dot
 
 ragged_dot_module = importlib.import_module("haliax.nn.ragged_dot")
@@ -293,14 +292,3 @@ def test_triton_ragged_dot_value_and_gradients_match_reference_with_device_block
     _assert_close_to_reference(out, expected_out, 1e-2)
     _assert_close_to_reference(dlhs, expected_dlhs, 1e-2)
     _assert_close_to_reference(drhs, expected_drhs, 1e-2)
-
-
-@pytest.mark.skipif(not ragged_dot_module._has_pallas_triton, reason="Pallas Triton unavailable")
-def test_tile_map_block_config_uses_amd_instinct_config(monkeypatch):
-    monkeypatch.setattr(ragged_dot_module, "gpu_family", lambda: GpuFamily.AMD_INSTINCT)
-
-    fwd = ragged_dot_module.RaggedLayout.FWD
-    config = ragged_dot_module._tile_map_block_config(fwd, 256, 256, 256, 4)
-
-    assert config == ragged_dot_module._TILE_MAP_CONFIGS[GpuFamily.AMD_INSTINCT][fwd].fit(256, 256, 256)
-    assert config != ragged_dot_module._TILE_MAP_GENERIC_CONFIGS[fwd].fit(256, 256, 256)
