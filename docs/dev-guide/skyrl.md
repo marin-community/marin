@@ -170,13 +170,14 @@ Iris admits the job together; Ray confines each role to its group. Deploy an Iri
 controller with [grouped coscheduling](https://github.com/marin-community/marin/pull/11449)
 before enabling this mode. Explicit groups lose the default preference
 for nearby racks on InfiniBand. Cross-rack transport between trainer and
-inference still needs validation. Omitting the option keeps existing placement.
+inference still needs validation on main. Omitting the option keeps existing placement.
 
 ## Mochi inference on GB200
 
-Use this configuration with a BF16 Mochi (535B-A23B) recipe that already validates
-on main, retained schema-3 model and data handles, and a 64-GPU Megatron trainer
-at TP1/PP16/CP4/EP4. It uses eight
+Use a retained BF16 Mochi (535B-A23B) export with
+`grugmoe_artifact_schema_version: 3` in its `config.json`, retained data handles,
+and a recipe that already validates on main with a 64-GPU Megatron trainer
+at TP1/PP16/CP4/EP4. This configuration uses eight
 TP1/PP1/DP16/EP16 inference engines on another 128 GPUs. Required NVLink placement
 packs the trainer into one 16-host domain and four inference engines into each of
 two further domains: 48 four-GPU hosts in total.
@@ -250,7 +251,8 @@ execution = replace(execution, role_topology=RoleTopologyMode.NVLINK_DOMAIN)
 
 The 128-group admission limit is separate from the trainer batch. The native
 buffer also bounds untrained groups by `(staleness + 1) * batch_size`: at
-staleness three, a six-group batch admits at most 24 groups. To keep a smoke
+staleness three, a six-group batch admits at most 24 groups. The 128-sequence
+limit applies to each vLLM DP worker, which uses one GPU in this layout. To keep a smoke
 run's admission cap at two groups, use
 `inference = inference.with_settings(("trainer.rollout_buffer.max_in_flight=2",))`
 before updating `spec`. Use a new artifact version for the changed
@@ -274,11 +276,13 @@ provides the public serving context. The measured gain uses the published build
 and requires neither [vLLM #130](https://github.com/marin-community/vllm/pull/130)
 nor [#11492](https://github.com/marin-community/marin/pull/11492).
 
-A separate RL integration completed three fresh nonzero updates at a
-102,400-token context limit. It verified updated weights and generated with them
+This configuration has CPU validation on main. On a separate experimental
+runtime, RL completed three fresh nonzero updates at a 102,400-token context
+limit. It verified updated weights and generated with them
 in all eight engines. Each of two evaluations produced scores for all 120 tasks,
-and a native checkpoint completed. Its first batch reached 56,196 attended tokens. That integration also
-changed task setup and cadence, which this fragment preserves from the caller.
+and a native checkpoint completed. Its first batch reached 56,196 attended tokens.
+That integration used separate task-setup/runtime repairs and cadence; this
+fragment keeps the caller's settings.
 Separate EP16 serving completed one request with 262,024 prompt-plus-output tokens.
 Near-262K trainer backward used the earlier inference layout. Sustained runs,
 same-version recovery and integrated near-262K training
