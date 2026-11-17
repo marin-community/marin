@@ -1,0 +1,12 @@
+id: X0237
+slug: lm-head-rows-as-mla-value
+name: lm_head rows as MLA value embeddings
+category: Embeddings and inputs
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6957482861
+  author: armorfaye
+  approved_by: armorfaye (trusted)
