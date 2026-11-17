@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 import tomlkit
+from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.harbor.root_delivery import home_restore_commands, multiswe_run_command, shell_quiesce_command
@@ -55,7 +56,6 @@ from experiments.post_training.task_curation.datasets.prime_intellect.multiswe.s
 from experiments.post_training.task_curation.datasets.prime_intellect.native_scripts import SOLVER_SYSTEM_PROMPT
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 DATASET = "PrimeIntellect/Multi-SWE-RL-Verified"

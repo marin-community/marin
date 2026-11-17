@@ -10,6 +10,7 @@ reasoning markup is well formed. The rows, one per benchmark task, were mined an
 on marin-logbooks branch ``codex/25-thoughtcrime`` (marin-community/marin-logbooks#25).
 """
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.pi_trajectory import prefix_row_task
 from taskcompendium.models import AssistantToolCalls, ConversationToolCall, TaskSpec
 from taskcompendium.pipeline.inputs import SourceFormat
@@ -17,7 +18,6 @@ from taskcompendium.pipeline.models import Controls, IntendedUse, Reply
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 
 REPOSITORY = "open-athena/Marin-Thoughtcrime"
 REVISION = "5ebd362eec2a6beab7898ea7a717a32a55d164bd"

@@ -306,7 +306,8 @@ def redact_cohort_summaries(summaries: dict[str, Any], private: bool) -> dict[st
     }
 
 
-def cohort_summaries(connection: Connection, load_id: str, pipeline_key: str) -> dict[str, Any]:    return dict(
+def cohort_summaries(connection: Connection, load_id: str, pipeline_key: str) -> dict[str, Any]:
+    return dict(
         connection.execute(
             text(
                 """
@@ -530,7 +531,9 @@ def create_api(services: AppletServices) -> FastAPI:
                 row["declaration"] = license_projection(
                     contract_projection(row["declaration"], contracts.get(row["id"], []))
                 )
-                served_declaration = private_declaration_projection(row["declaration"]) if private else row["declaration"]
+                served_declaration = (
+                    private_declaration_projection(row["declaration"]) if private else row["declaration"]
+                )
                 display = quality_display(row["declaration"], row["curation"], row["assessment_key"])
                 inventory.append(
                     {

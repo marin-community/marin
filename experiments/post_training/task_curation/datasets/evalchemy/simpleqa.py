@@ -5,6 +5,7 @@
 
 from functools import partial
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     Metrics,
@@ -22,7 +23,6 @@ from experiments.post_training.task_curation.evaluation import EvalDataset, cura
 from experiments.post_training.task_curation.judges import JUDGE_TIERS
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 
 SIMPLEQA_REVISION = "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94"
 # The private remediation version re-pins the historical gpt-4o-mini judge to

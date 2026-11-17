@@ -17,9 +17,9 @@ from finestore.rl.curation import (
     SourceOrigin,
     SourceQualityResult,
 )
+from finestore.rl.status_taxonomy import DataRestriction
 
 from experiments.post_training.task_curation.source import SourceInfo, SourceReference
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence

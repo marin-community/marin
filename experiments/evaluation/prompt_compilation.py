@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import Literal
 
+from finestore.rl.status_taxonomy import DataRestriction
 from marin.evaluation.records import PromptFormat
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
@@ -42,7 +43,6 @@ from experiments.evaluation.preparation import EvaluationCorpusRecipe, chat_sour
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 
 EXPLICIT_TEMPLATE_VERSION = "2026.11.05.3"
 

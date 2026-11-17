@@ -45,17 +45,25 @@ from marina.applets import AppletServices, validate_query
 from marina.client import AppletQuery
 from marina.testing import test_database
 from rigging.server_auth import VerifiedIdentity, identity_scope
+from shellbox.machine import Backend
+from shellbox.requirements import Requirement, Support
+from shellbox.survey import CapabilityCell
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
+from taskcompendium.backend_requirements import (
+    BackendFit,
+    BackendSourceMap,
+    BackendSurvey,
+    FitSupport,
+    backend_schema_sha256,
+)
+from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
-from infra.marina.apps.rl_data_catalog.server import restriction_registry, restrictions
+from infra.marina.apps.rl_data_catalog.server import restriction_registry
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.restrictions import (
-    PRIVATE_TEXT_MARKER,
-    declaration_restriction,
-    private_content_marker,
     require_public_data,
     restriction_overrides,
 )
@@ -68,17 +76,6 @@ from infra.marina.apps.rl_data_catalog.tests.private_tier_fixtures import (
     restricted_declaration,
     write_review_rows,
 )
-from shellbox.machine import Backend
-from shellbox.requirements import Requirement, Support
-from shellbox.survey import CapabilityCell
-from taskcompendium.backend_requirements import (
-    BackendFit,
-    BackendSourceMap,
-    BackendSurvey,
-    FitSupport,
-    backend_schema_sha256,
-)
-from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
 OPEN_NOTES = "open-source-notes-served-while-open"
 OPEN_PROMPT = "Count public objects and report the total."

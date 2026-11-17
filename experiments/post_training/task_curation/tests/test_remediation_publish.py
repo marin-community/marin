@@ -26,6 +26,7 @@ from finestore.rl.curation import (
     SourceQualityResult,
     WithinSourceDedupEvidence,
 )
+from finestore.rl.status_taxonomy import DataRestriction
 from huggingface_hub.hf_api import RepoFile
 from marin.execution.lazy import StepContext
 from rigging.filesystem.storage_path import StoragePath
@@ -72,7 +73,6 @@ from experiments.post_training.task_curation.retained_release import (
     run_retained_import,
 )
 from experiments.post_training.task_curation.source import SourceInfo, SourceReference
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license, with_license
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_source, prebuilt_task
 from infra.marina.apps.rl_data_catalog.server.admission import require_private_release

@@ -31,6 +31,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import EVIDENCE_PATH, source_defect, unsupported
 from taskcompendium.models import TaskSpec
@@ -50,7 +51,6 @@ from experiments.post_training.task_curation.datasets.lean.proofs import (
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
 from experiments.post_training.task_curation.reference_data import load_referenced_document
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 
 NUMINA_REVISION = "51fa67f1f647ae1ecd81eef9f19306aa8a7b3a94"
 NUMINA_FILE = "data/train-00000-of-00001.parquet"

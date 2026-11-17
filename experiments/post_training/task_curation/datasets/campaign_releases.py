@@ -22,6 +22,7 @@ from finestore.rl.curation import (
     RecipeQAHistoricalNotes,
     Verdict,
 )
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.prebuilt import (
@@ -30,7 +31,6 @@ from experiments.post_training.task_curation.prebuilt import (
     import_prebuilt,
     import_taskcompendium_prebuilt,
 )
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.source import (
     RlDataSource,
     SourceInfo,

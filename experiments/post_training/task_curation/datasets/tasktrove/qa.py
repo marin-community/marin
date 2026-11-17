@@ -12,6 +12,7 @@ multiple-choice source grades the option letter in process.
 import re
 from dataclasses import replace
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import mcq_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.tasks import conversation_task
@@ -27,7 +28,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.source import (
     RecipeQAHistoricalNotes,
     RlDataSource,

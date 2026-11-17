@@ -15,6 +15,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.licenses import LicenseReceipt, require_license
+from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -51,7 +52,6 @@ from experiments.post_training.task_curation.license_binding import licensed_sou
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 INITIAL_REQUIREMENTS = ExecutionRequirements(
     cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=300, verifier_timeout_sec=60

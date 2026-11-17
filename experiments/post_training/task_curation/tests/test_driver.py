@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finestore.rl.curation import CurationCatalog, OversightEvidence, OversightLevel
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
@@ -43,7 +44,6 @@ from experiments.post_training.task_curation.pipeline import (
     process_rows,
 )
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,

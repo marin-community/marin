@@ -5,6 +5,7 @@
 
 import json
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
@@ -13,7 +14,6 @@ from verifyit.json_objects import unique_object
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 
 REPOSITORY = "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data"
 REVISION = "cb728a7636caad3fc6fa6b6ba85a49194d9d69a3"

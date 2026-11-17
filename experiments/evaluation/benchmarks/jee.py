@@ -3,6 +3,7 @@
 
 """Pinned JEEBench source, exact type prompts, and three greedy source repetitions."""
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.evaluation_jee import convert_jee, jee_item
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
@@ -22,7 +23,6 @@ from experiments.evaluation.benchmarks.environments import BASIC_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 
 JEE_REVISION = "d070d1113ce365df05903763a2017ec2d0d56118"
 

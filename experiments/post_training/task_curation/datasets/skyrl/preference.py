@@ -20,6 +20,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import pyarrow.parquet as pq
+from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.convert.preference import binary_preference_task, pairwise_preference_task
@@ -29,7 +30,6 @@ from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, I
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 
 HH_REPO = "Anthropic/hh-rlhf"
 HH_REVISION = "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa"

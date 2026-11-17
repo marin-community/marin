@@ -5,6 +5,7 @@
 
 from pathlib import Path
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
 from taskcompendium.convert.tasks import conversation_task
@@ -16,7 +17,6 @@ from verifyit.spec import DEFAULT_OUTPUT
 from experiments.post_training.task_curation.datasets.environments import POLARIS_GRADER_PACKAGES
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 REVISION = "296f8e34132e63f4a1d70e0dcc8bddebb43f03e4"

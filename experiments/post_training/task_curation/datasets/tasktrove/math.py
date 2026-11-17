@@ -13,6 +13,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.grader import verifyit_package
@@ -48,7 +49,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     archive_files,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.source import (
     RecipeQAHistoricalNotes,
     RlDataSource,

@@ -17,6 +17,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.code import CODE_GRADER_MEMORY_MB, THREAD_ENVIRONMENT, python_reply
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
@@ -32,7 +33,6 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"

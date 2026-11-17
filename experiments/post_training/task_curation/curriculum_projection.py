@@ -16,6 +16,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from finestore.rl.curation import LexicalUse, SourceDeclaration
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.types import ResourceConfig
 from marin.execution.lazy import OUT, ArtifactStep, apply, run
 from pydantic import BaseModel, ConfigDict, Field
@@ -36,13 +37,13 @@ from experiments.post_training.task_curation.embedding import COVERAGE_VERSION, 
 from experiments.post_training.task_curation.lexical_policy import LexicalInputUse
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.source_duplicate_ci import fingerprint_input
-from finestore.rl.status_taxonomy import DataRestriction
 from infra.marina.apps.rl_data_catalog.role_projection import (
     CurriculumManifests,
     ManifestReference,
     manifest_bytes,
     manifest_documents,
 )
+from infra.marina.apps.rl_data_catalog.server.restrictions import declaration_restriction
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
 
 LOGGER = logging.getLogger(__name__)

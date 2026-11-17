@@ -12,6 +12,7 @@ from functools import cache
 from pathlib import Path
 
 import tomlkit
+from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.harbor.shared_source import SCALE_SWE_PROFILE, SWE_LEGO_PROFILE, harden_shared_source
@@ -30,7 +31,6 @@ from experiments.post_training.task_curation.datasets.prime_intellect.native_scr
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 VERSION = "2026.11.16.3"

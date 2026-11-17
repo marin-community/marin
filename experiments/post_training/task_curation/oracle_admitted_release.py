@@ -32,7 +32,6 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import require_oracle_filter
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
-from experiments.post_training.task_curation.publication_gate import require_no_restriction_downgrade
 from experiments.post_training.task_curation.full_content_binding import (
     RetainedLineageProof,
     bind_full_content_result,
@@ -49,6 +48,7 @@ from experiments.post_training.task_curation.prebuilt import (
     import_taskcompendium_prebuilt,
     require_runnable_grader,
 )
+from experiments.post_training.task_curation.publication_gate import require_no_restriction_downgrade
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.remediation_binding import (
     ArchivedRetainedBinding,

@@ -5,6 +5,7 @@
 
 from functools import partial
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     Metric,
@@ -28,7 +29,6 @@ from experiments.evaluation.benchmarks.environments import (
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, chat_source, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 
 IFEVAL_REVISION = "966cd89545d6b6acfd7638bc708b98261ca58e84"
 IFBENCH_REVISION = "2e8a48de45ff3bf41242f927254ca81b59ca3ae2"

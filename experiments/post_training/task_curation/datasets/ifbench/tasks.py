@@ -7,6 +7,7 @@ import ast
 import json
 from pathlib import Path
 
+from finestore.rl.status_taxonomy import DataRestriction
 from pydantic import ValidationError
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
@@ -19,7 +20,6 @@ from verifyit.spec import DEFAULT_OUTPUT
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 SCORER_REVISION = "28c1816664491493242d453c2c7280ee56e6c20a"

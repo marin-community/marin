@@ -9,6 +9,7 @@ import shutil
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.status_taxonomy import DataRestriction
 from finestore.schema import arrow_schema
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from marin.execution.lazy import ArtifactStep, run
@@ -38,7 +39,6 @@ from experiments.post_training.task_curation.embedding import (
 )
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.numbers_pipeline import (
     NUMBERS_DATASET,
     NumbersConfig,

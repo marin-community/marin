@@ -6,13 +6,13 @@
 from pathlib import Path
 
 from finestore.rl.curation import DatasetRelease, OracleValidation, WithinSourceDedupEvidence
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
 from experiments.post_training.task_curation.reference_data import load_referenced_document
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_REASON
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup
 

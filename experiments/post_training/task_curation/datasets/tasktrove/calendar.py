@@ -16,6 +16,7 @@ import json
 from dataclasses import replace
 from typing import Any
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.models import (
@@ -50,7 +51,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 WITNESS_PATH = "solution/answer.json"
 GRADER_FILES = ("tests/verifier.py", VERIFIER_DATA)

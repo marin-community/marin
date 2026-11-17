@@ -17,6 +17,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import CurationMode
+from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from pydantic import BaseModel, ConfigDict, PositiveInt, field_validator
@@ -50,7 +51,6 @@ from experiments.post_training.task_curation.curation_catalog import MANIFEST_FI
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
 from experiments.post_training.task_curation.publication_gate import configured_restriction
 from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_SOURCE_IDS
-from finestore.rl.status_taxonomy import DataRestriction
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_map, original_source_id
 
 SELECTION_PREFIX = "rl-data/task-selection"

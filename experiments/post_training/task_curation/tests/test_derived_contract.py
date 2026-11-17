@@ -5,6 +5,7 @@
 
 import pytest
 from finestore.rl.curation import ActorCensusInput
+from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import verifyit_package
@@ -29,7 +30,6 @@ from experiments.post_training.task_curation.derived_contract_tags import bind_d
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, SourceReference
-from finestore.rl.status_taxonomy import DataRestriction
 
 IMAGE = "private/grader@sha256:" + "a" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS)

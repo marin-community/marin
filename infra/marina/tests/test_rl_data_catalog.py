@@ -308,7 +308,17 @@ def test_status_inventory_matches_source_statuses_without_loading_task_evidence(
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         complete = client.get("/sources").json()
         compact = client.get("/source-statuses").json()
-    fields = ("id", "display_name", "name", "status", "stage", "exclusion_claims", "notes", "data_restriction", "updated_at")
+    fields = (
+        "id",
+        "display_name",
+        "name",
+        "status",
+        "stage",
+        "exclusion_claims",
+        "notes",
+        "data_restriction",
+        "updated_at",
+    )
     assert compact["sources"] == [{key: source.get(key) for key in fields} for source in complete["sources"]]
     assert compact["snapshot_id"] == complete["snapshot_id"]
     assert compact["synced_at"] == complete["synced_at"]

@@ -11,6 +11,7 @@ vacuous or contradictory schemas and conflicting public language requirements.
 import json
 import re
 
+from finestore.rl.status_taxonomy import DataRestriction
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 from taskcompendium.convert.answers import ifeval_task, json_schema_task, source_defect, unsupported
@@ -27,7 +28,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.json_schemas import is_trivial
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 IFEVAL_CONFIG = "laion__nemotron-gym-instruction-following-v3"
 STRUCTURED_CONFIG = "laion__nemotron-gym-instruction-following-structured-v3"

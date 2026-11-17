@@ -13,7 +13,7 @@ from experiments.post_training.task_curation.publication_gate import (
     configured_restriction,
     require_no_restriction_downgrade,
 )
-from infra.marina.apps.rl_data_catalog.server import restriction_registry, restrictions
+from infra.marina.apps.rl_data_catalog.server import restriction_registry
 from infra.marina.apps.rl_data_catalog.server.restrictions import (
     PRIVATE_TEXT_MARKER,
     declaration_restriction,
@@ -69,7 +69,8 @@ def test_missing_tag_on_a_pre_tier_declaration_stays_open():
 
 def test_malformed_tag_fails_closed_to_private():
     assert (
-        declaration_restriction({"id": "Broken:x", "data_restriction": "public-someday"}) is DataRestriction.PRIVATE_ALWAYS
+        declaration_restriction({"id": "Broken:x", "data_restriction": "public-someday"})
+        is DataRestriction.PRIVATE_ALWAYS
     )
 
 
@@ -121,7 +122,8 @@ def test_private_declaration_projection_drops_unlisted_prose_fields():
 
 def test_repair_advisory_reasons_are_redacted():
     advisories = [{"signal": "drift", "candidate_source_id": "Other:x", "reason": f"dropped: {PRIVATE_CANARY}"}]
-    assert redact_advisories(advisories)[0]["reason"] == PRIVATE_TEXT_MARKER
+    redacted = redact_advisories(advisories)
+    assert redacted is not None and redacted[0]["reason"] == PRIVATE_TEXT_MARKER
     assert redact_advisories(None) is None
 
 
@@ -147,7 +149,7 @@ def test_no_restriction_downgrade_allows_matching_tiers():
 
 
 def test_source_info_requires_an_explicit_tier():
-    from experiments.post_training.task_curation.source import SourceInfo, SourceOrigin
+    from experiments.post_training.task_curation.source import SourceInfo, SourceOrigin  # noqa: PLC0415
 
     # Every configured source passes the tier explicitly; the Open default only
     # tolerates archived receipts that embed a pre-tier SourceInfo copy.
@@ -192,6 +194,23 @@ class FakeHub:
     def upload_folder(self, **_kwargs):
         self.calls.append("upload_folder")
         return type("Commit", (), {"oid": "f" * 40})()
+
+
+def test_reviewer_packet_freeze_refuses_a_private_source(tmp_path):
+    """Reviewer packets quote exact task text, so the freeze refuses a private source."""
+    from experiments.post_training.task_curation.audit_harness import freeze_sample
+
+    output = tmp_path / "packet"
+    with pytest.raises(ValueError, match="PRIVATE_ALWAYS"):
+        freeze_sample(
+            tmp_path / "reviews.parquet",
+            tmp_path / "specs",
+            tmp_path / "contract.json",
+            output,
+            7,
+            data_restriction=DataRestriction.PRIVATE_ALWAYS,
+        )
+    assert not output.exists()
 
 
 def test_publish_helper_refuses_a_private_payload_before_any_upload(tmp_path, monkeypatch):

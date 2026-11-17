@@ -10,6 +10,7 @@ source's ``solution/solve.sh``.
 """
 
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
@@ -24,7 +25,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2ba
 from experiments.post_training.task_curation.environment_fidelity import archive_environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 CONFIG = "DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
 

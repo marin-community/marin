@@ -13,6 +13,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.licenses import LicenseReceipt, require_license
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -30,7 +31,6 @@ from experiments.post_training.task_curation.license_binding import licensed_sou
 from experiments.post_training.task_curation.local import run_local_steps
 from experiments.post_training.task_curation.pipeline import HfSource, download_step, input_file_overrides
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 from .tasks import POPULATION, QUERY_REPO, QUERY_REVISION, STATE, VERSION, convert_query
 

@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 from finestore.rl.licenses import LicenseReceipt, require_license
+from finestore.rl.status_taxonomy import DataRestriction
 from huggingface_hub import HfApi, hf_hub_download
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -17,16 +18,14 @@ from rigging.filesystem.transfer import copy
 from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
-from experiments.post_training.task_curation.publication_gate import configured_restriction
 from experiments.post_training.task_curation.license_publication import (
     check_publication,
     licensed_dataset_card,
     prepare_license_publication,
 )
 from experiments.post_training.task_curation.native_quick import source_slug
-from experiments.post_training.task_curation.publication_gate import require_public_data
+from experiments.post_training.task_curation.publication_gate import configured_restriction, require_public_data
 from experiments.post_training.task_curation.remediation_publish import RawSourceArchive
-from finestore.rl.status_taxonomy import DataRestriction
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 
 

@@ -89,7 +89,7 @@ content field and sweep the loader, the API surfaces, the curriculum load, the
 publish helpers and captured logs end to end, asserting the canary appears nowhere;
 tamper tests refuse flipped and dropped tags on derived artifacts
 (`infra/marina/tests/test_private_tier.py`,
-`apps/rl_data_catalog/tests/test_private_tier.py`).
+`apps/rl_data_catalog/tests/test_private_tier_guards.py`).
 
 ## Reading grades
 

@@ -6,6 +6,7 @@
 import json
 from pathlib import Path
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.nemotron_ultra import blend_task, text_request
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
@@ -17,7 +18,6 @@ from taskcompendium.runtime.resources import inline_resource
 from experiments.post_training.task_curation.datasets.environments import TERMINUS_GRADER_PACKAGES
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 DATASET = "nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1"

@@ -25,6 +25,7 @@ import hashlib
 import json
 import re
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import answer_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.identity import canonical_sha256
@@ -47,7 +48,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.puzzles import (
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, IntendedUse, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 PUZZLES_QA_CONFIG = PUZZLES_CONFIG
 

@@ -20,6 +20,7 @@ from finestore.rl.curation import (
     OversightEvidence,
     OversightLevel,
 )
+from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.lazy import StepContext, run
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import verifyit_package
@@ -44,7 +45,6 @@ from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.driver import _write_corpus
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.static_retention import collect_static_retention
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence

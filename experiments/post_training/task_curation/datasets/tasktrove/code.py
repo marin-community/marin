@@ -11,6 +11,7 @@ an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an
 import json
 import shlex
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.models import ScriptGrader
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
@@ -55,7 +56,6 @@ from experiments.post_training.task_curation.pipeline import (
     process_rows,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 EXECUTABLE_CONTROLS = Controls(golden=solve_script)
 SOURCE_VERIFIER_CONFIG = "taskcompendium-verifier.toml"

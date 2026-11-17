@@ -13,6 +13,7 @@ from typing import cast
 
 import click
 import pytest
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
@@ -66,7 +67,6 @@ from experiments.post_training.task_curation.pipeline import (
     source_recipe,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.image_builds import (
     COMPILED_LOCK,
     DATA_PATH,

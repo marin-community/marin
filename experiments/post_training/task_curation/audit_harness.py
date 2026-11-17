@@ -11,11 +11,13 @@ from collections import Counter
 from pathlib import Path
 
 import pyarrow.parquet as pq
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import Confidence, Defect, ReviewRecord, ReviewStatus
 from taskcompendium.pipeline.review import review_payload
 
+from experiments.post_training.task_curation.publication_gate import require_public_data
 from experiments.post_training.task_curation.review_quality import has_review_issues
 
 ISSUE_POPULATION = 663
@@ -77,8 +79,15 @@ else:
 """
 
 
-def freeze_sample(reviews: Path, specs: Path, contract: Path, output: Path, seed: int) -> dict:
-    """Freeze exact tasks, original-label keys and differently ordered blind review packets."""
+def freeze_sample(
+    reviews: Path, specs: Path, contract: Path, output: Path, seed: int, *, data_restriction: DataRestriction
+) -> dict:
+    """Freeze exact tasks, original-label keys and differently ordered blind review packets.
+
+    The caller passes the source's tier: reviewer packets quote exact task text, so a
+    PRIVATE_ALWAYS source is refused here before any packet file is written.
+    """
+    require_public_data(data_restriction, destination="reviewer packet")
     output.mkdir(parents=True, exist_ok=False)
     contract_bytes = contract.read_bytes()
     frozen_contract = json.loads(contract_bytes)
@@ -201,8 +210,22 @@ def main() -> None:
     parser.add_argument("--contract", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument(
+        "--data-restriction",
+        choices=(restriction.value for restriction in DataRestriction),
+        required=True,
+        help="The source population's typed tier; private_always refuses the freeze",
+    )
     args = parser.parse_args()
-    print(json.dumps(freeze_sample(args.reviews, args.specs, args.contract, args.output, args.seed), indent=2))
+    print(
+        json.dumps(
+            freeze_sample(
+                args.reviews, args.specs, args.contract, args.output, args.seed,
+                data_restriction=DataRestriction(args.data_restriction),
+            ),
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

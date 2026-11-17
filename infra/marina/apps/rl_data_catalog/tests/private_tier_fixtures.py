@@ -26,8 +26,8 @@ from experiments.post_training.task_curation.tests.admission_fixtures import (
     grading_evidence,
 )
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
-from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 PRIVATE_SOURCE_ID = "Marin:synthetic-private-v1"
 OPEN_SOURCE_ID = "Marin:synthetic-open-v1"
@@ -77,8 +77,8 @@ def restricted_declaration(
         "family": source_id,
         "tags": [],
         "task_count": count,
-        "within_source_dedup": deduplication_evidence(FIXTURE_DATASET, FIXTURE_REVISION, "1", count).model_dump(
-            mode="json"
+        "within_source_dedup": (
+            deduplication_evidence(FIXTURE_DATASET, FIXTURE_REVISION, "1", count).model_dump(mode="json")
         ),
         "notes": notes,
         "dataset_id": FIXTURE_DATASET,
@@ -252,9 +252,7 @@ def curriculum_release_fixture(
                 dict(source_id=declaration["id"], metric=metric, subject_id="D01", node_id=node_id, instances=instances)
             )
         statistics.append(
-            dict(
-                source_id=declaration["id"], metric="capability", subject_id="D01", node_id="subject:D01", instances=2
-            )
+            dict(source_id=declaration["id"], metric="capability", subject_id="D01", node_id="subject:D01", instances=2)
         )
     statistics_path = directory / "statistics.parquet"
     pq.write_table(pa.Table.from_pylist(statistics), statistics_path)

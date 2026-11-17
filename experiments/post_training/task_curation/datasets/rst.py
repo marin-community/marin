@@ -6,6 +6,7 @@
 import hashlib
 import tomllib
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.harbor.adapter import ARCHIVED_SOURCE_CONFIG
 from taskcompendium.harbor.root_delivery import REWARD_PATH, DeliveredVerifier, delivery_commands, shell_quiesce_command
 from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
@@ -26,7 +27,6 @@ from taskcompendium.runtime.resources import resource_bytes
 from experiments.post_training.task_curation.datasets.native_harbor import native_task, unpack_native
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 DATASET = "laion/rts-1k-rootless-apptainer"
 REVISION = "6dbb24eedc0d7ffe5431e1b052b0de8e19eaf6fe"

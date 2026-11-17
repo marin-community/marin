@@ -24,6 +24,7 @@ from functools import lru_cache, partial
 from typing import Any
 
 import pyarrow as pa
+from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.nemotron_ultra import PLACEHOLDER_FIELD, blend_component
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
@@ -81,7 +82,6 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 ULTRA_REPO = "nvidia/Nemotron-RL-Ultra-Training-Blends"
 ULTRA_REVISION = "482392c14c6418e26804ea2e5d10359df9877df4"

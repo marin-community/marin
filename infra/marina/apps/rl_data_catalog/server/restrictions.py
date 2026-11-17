@@ -119,8 +119,7 @@ def redact_text(text: Any) -> Any:
 def redact_mapping(payload: dict[str, Any], fields: frozenset[str] = CONTENT_TEXT_FIELDS) -> dict[str, Any]:
     """Redact the named free-text fields of one payload; counts, hashes and statuses stay."""
     return {
-        key: (redact_text(value) if key in fields and isinstance(value, str) else value)
-        for key, value in payload.items()
+        key: redact_text(value) if key in fields and isinstance(value, str) else value for key, value in payload.items()
     }
 
 

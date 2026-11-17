@@ -6,6 +6,7 @@
 from dataclasses import replace
 from functools import partial
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import EvaluationProtocol, Metrics, OperationKind, Sampling, SummaryKind, TrialPolicy
 from taskcompendium.importers.evalchemy.grader import scorer_revision
@@ -25,7 +26,6 @@ from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_e
 from experiments.evaluation.prompt_compilation import text_generation_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 
 MATH500_REVISION = "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be"
 MARIN_SOURCE_REVISION = "623134de90723e7f189036da005067f36817b6e7"

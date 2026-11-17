@@ -15,6 +15,7 @@ from tempfile import TemporaryDirectory
 
 import pyarrow.parquet as pq
 from finestore.rl.curation import ContentEvidenceReference
+from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.harbor.root_delivery import REWARD_PATH, home_restore_commands, shell_quiesce_command
 from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
@@ -46,7 +47,6 @@ from experiments.post_training.task_curation.datasets.facet.images import (
 from experiments.post_training.task_curation.datasets.native_harbor import native_task, unpack_native
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 VERSION = "2026.11.17.1"
 PREFIX = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/fweindel-facet/2026.11.17.1"

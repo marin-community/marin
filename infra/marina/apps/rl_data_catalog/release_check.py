@@ -69,6 +69,7 @@ from .server.curriculum import (
     area_response,
     coverage_document,
     invariant_document,
+    source_restrictions,
     task_parameters,
     task_response,
 )
@@ -247,7 +248,8 @@ class CatalogReader:
                         limit,
                         params.get("sample_pool") == "true",
                     )
-                    data = task_response(metadata, self.query(TASKS_SQL, bound)["rows"], limit)
+                    rows = self.query(TASKS_SQL, bound)["rows"]
+                    data = task_response(metadata, rows, limit, source_restrictions(rows))
             else:
                 data = marina_request(self.root, "GET", "/" + key, session=self.session, token_provider=self.provider)
             self.cache[key] = data

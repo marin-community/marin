@@ -11,9 +11,9 @@ inputs: ``require_no_restriction_downgrade`` refuses a flipped or weakened tag.
 """
 
 from finestore.rl.status_taxonomy import DataRestriction
-from infra.marina.apps.rl_data_catalog.server.restrictions import require_public_data
 
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from infra.marina.apps.rl_data_catalog.server.restrictions import require_public_data
 
 
 def require_public_source(source: RlDataSource, destination: str = "") -> None:

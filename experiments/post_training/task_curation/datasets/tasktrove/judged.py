@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 
 from finestore.rl.curation import DatasetRelease, OracleValidation, SourceQualityResult
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasks import conversation_task
@@ -33,7 +34,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.source import (
     RecipeQAHistoricalNotes,
     RlDataSource,

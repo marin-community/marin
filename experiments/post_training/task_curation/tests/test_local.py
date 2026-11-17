@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finestore.reader import ReadView
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from taskcompendium.convert.answers import answer_task, exact_answer_task
@@ -35,7 +36,6 @@ from experiments.post_training.task_curation.images.build import MissingEnvironm
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, planned_lock_url, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
 from experiments.post_training.task_curation.tests.license_fixtures import with_license
 

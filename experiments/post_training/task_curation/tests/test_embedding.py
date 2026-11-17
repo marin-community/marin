@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.lazy import ArtifactStep, run
 from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.models import Source
@@ -32,7 +33,6 @@ from experiments.post_training.task_curation.embedding import DescriptionEndpoin
 from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.tests.license_fixtures import with_license
 from experiments.post_training.task_curation.tests.numbers_pipeline import (
     NUMBERS_DATASET,

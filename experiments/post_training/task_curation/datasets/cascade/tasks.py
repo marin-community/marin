@@ -5,6 +5,7 @@
 
 from pathlib import Path
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.convert.nemotron_ultra import blend_task, text_request
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
@@ -15,7 +16,6 @@ from verifyit.spec import DEFAULT_OUTPUT
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 REVISION = "05bbaf03bac608e804efc86c5f8bf99844f2d197"

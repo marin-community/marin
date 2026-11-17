@@ -13,6 +13,7 @@ source has no controls and its kept rows are admitted without them.
 
 import tomllib
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasks import conversation_task
@@ -29,7 +30,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
 from experiments.post_training.task_curation.datasets.tasktrove.judged import REWRITE_REASON, response_instruction
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
 CONTEXT_FILE = "conversation.txt"

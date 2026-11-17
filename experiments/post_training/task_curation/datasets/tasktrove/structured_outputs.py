@@ -5,6 +5,7 @@
 
 import json
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts
@@ -31,7 +32,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.struc
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
 FILE_DELIVERY = (

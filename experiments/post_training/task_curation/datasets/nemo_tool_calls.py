@@ -3,6 +3,7 @@
 
 """Evaluation-only NeMo next actions graded by exact function names and JSON arguments."""
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.importers.nemo_predicted_action import DATASET, REVISION, import_row
@@ -12,7 +13,6 @@ from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 
 def convert(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:

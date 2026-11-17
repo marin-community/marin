@@ -26,6 +26,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 from typing import Any
 
+from finestore.rl.status_taxonomy import DataRestriction
 from pydantic import BaseModel, ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_defect, unsupported
@@ -63,7 +64,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from finestore.rl.status_taxonomy import DataRestriction
 
 HERE = Path(__file__).parent
 GENERATE = HERE / "generate.py"

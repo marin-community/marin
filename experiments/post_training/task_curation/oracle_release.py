@@ -202,7 +202,6 @@ def bind_oracle_filtered_release(
     return bound
 
 
-
 class OracleReleaseInput(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
