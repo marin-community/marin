@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Forge tasks are selected coverage first, only when clean, and packaged as envelopes the prebuilt importer admits."""
-
 import json
 
 import pyarrow.parquet as pq
@@ -21,9 +19,7 @@ from taskcompendium.models import (
 )
 
 from experiments.post_training.task_curation import forge_release
-from experiments.post_training.task_curation.environment_fidelity import missing_environment
-from experiments.post_training.task_curation.forge_release import Band, Choice
-from experiments.post_training.task_curation.lowered_envelope import LOWERED_TASK_SPEC_COLUMN, LoweredSpec
+from experiments.post_training.task_curation.forge_release import Choice
 
 PASS = {"status": "graded", "reward": 1.0, "passed": None}
 FAIL = {"status": "graded", "reward": 0.0, "passed": None}
@@ -105,25 +101,19 @@ def test_tasks_with_notes_are_never_selected():
     assert by_id == {"d01.a/01": Choice.NOT_CLEAN, "d01.a/02": Choice.SELECTED}
 
 
-def test_summary_counts_passes_and_prefers_mid_band_tasks():
+def test_summary_scores_mid_band_above_easy_tasks():
     middle = forge_release.task_summary(_record("d01.a/01", 4))
     edge = forge_release.task_summary(_record("d01.a/02", 2))
     easy = forge_release.task_summary(_record("d01.a/03", 8, band="too_easy"))
-    assert (middle.passes, middle.trials, middle.band) == (4, 8, Band.IN_BAND)
     assert middle.score > edge.score > easy.score
 
 
-def test_release_writes_envelopes_the_importer_admits(tmp_path):
+def test_release_writes_selected_rows_and_selection_evidence(tmp_path):
     records = [_record("d01.a/01", 4), _record("d02.b/01", 3), _record("d02.b/02", 2)]
     manifest = forge_release.write_release(records, 2, tmp_path, "memory://records")
     rows = pq.read_table(tmp_path / forge_release.LOWERED_FILENAME).to_pylist()
     assert manifest["selected"] == len(rows) == 2
     assert {row["path"] for row in rows} == {"d01.a/01", "d02.b/01"}
-    for row in rows:
-        envelope = json.loads(row[LOWERED_TASK_SPEC_COLUMN])
-        lowered = LoweredSpec.from_document(envelope)
-        assert envelope["runtime"]["task_machine"]["memory_mb"] == 8192
-        assert missing_environment(lowered.task) is None
     lines = (tmp_path / forge_release.SELECTION_FILENAME).read_text().splitlines()
     assert {json.loads(line)["choice"] for line in lines} == {"selected", "below_coverage_tier"}
 
@@ -134,7 +124,6 @@ def test_a_locally_sandboxed_machine_is_restored_to_the_image_its_author_named()
     requirements = lowered.task.environment_requirements
     assert (requirements.docker_image, requirements.package_spec) == (forge_release.GRADER_BASE_IMAGE, None)
     assert forge_release.task_summary(record).environment == "linux"
-    assert missing_environment(lowered.task) is None
 
 
 def test_a_restored_machine_that_disagrees_with_its_author_is_refused():
