@@ -39,8 +39,8 @@ from rigging.secrets import get_secret
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOGGER = logging.getLogger("packet-qa-v2")
 
-MAP_URI = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.16.1/swe-v3-qa-freeze-v1/qa-map.json"
-MAP_SHA256 = "9bf3e1f034ef6d3d940c160730491600694bf396c720aea604c6a0df7bda19b9"
+DEFAULT_MAP_URI = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.16.1/swe-v3-qa-freeze-v1/qa-map.json"
+DEFAULT_MAP_SHA256 = "9bf3e1f034ef6d3d940c160730491600694bf396c720aea604c6a0df7bda19b9"
 OUTPUT_ROOT = "s3://marin-us-east-02a/marin/rl-data/atlas/shared-grader-adapters/2026.11.16.1"
 ATTEMPT_TIMEOUT = 4 * 3600.0
 
@@ -80,15 +80,48 @@ exit 0
 _probe = threading.local()
 
 
+TAMPER_FAMILIES = frozenset({"scale", "lego"})
+
+
+def row_phases(family: str) -> tuple[tuple[str, dict], ...]:
+    """Functional QA contract per family.
+
+    RST/Multi rows run nop + the original TaskSpec oracle through TaskSpecTrial
+    (no family tamper tooling); Scale/Lego keep the declared three-phase probe.
+    """
+    oracle_agent = {"name": "oracle"}
+    if family not in ("rst", "multi"):
+        oracle_agent["kwargs"] = {"resource_usage_filename": "resource-usage.json"}
+    phases: list[tuple[str, dict]] = [("nop", {"name": "nop"}), ("oracle", oracle_agent)]
+    if family in TAMPER_FAMILIES:
+        phases.append(("tamper", {"name": "tamper"}))
+    return tuple(phases)
+
+
+def apply_calibrated_budgets(config: dict, row: dict) -> None:
+    """Apply the map's calibrated actor/verifier phase budgets, preserving None.
+
+    Null budgets mean the source declared no deadline for that phase; the
+    config field stays unset so the TaskSpec declaration (including None)
+    rules instead of a driver default.
+    """
+    actor = row.get("actor_execution_requirements") or {}
+    if actor.get("agent_timeout_sec") is not None:
+        config["agent_timeout_sec"] = actor["agent_timeout_sec"]
+    verifier = row.get("verifier_execution_requirements") or {}
+    if verifier.get("verifier_timeout_sec") is not None:
+        config["verifier_timeout_sec"] = verifier["verifier_timeout_sec"]
+
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def read_map(root: Path) -> dict:
+def read_map(root: Path, map_uri: str, map_sha256: str) -> dict:
     path = root / "qa-map.json"
-    copy(MAP_URI, str(path), no_clobber=True)
+    copy(map_uri, str(path), no_clobber=True)
     digest = sha256_bytes(path.read_bytes())
-    if digest != MAP_SHA256:
+    if digest != map_sha256:
         raise ValueError(f"qa map hash mismatch: {digest}")
     return json.loads(path.read_text())
 
@@ -201,19 +234,21 @@ def qa_row(root: Path, family: str, row: dict) -> dict:
         "task_id": row["task_id"],
         "instance_id": name,
         "family": family,
-        "failure_class": row["failure_class"],
-        "pinned_reference": row["pinned_reference"],
+        "failure_class": row.get("failure_class"),
+        "pinned_reference": row.get("pinned_reference"),
         "task_spec_sha256": row["task_spec_sha256"],
+        "source_task_sha256": row.get("source_task_sha256") or row.get("sourceTaskSHA"),
+        "row_runtime_uri": row.get("row_runtime_uri"),
+        "row_runtime_sha256": row.get("row_runtime_sha256") or row.get("runtimeSHA"),
+        "actor_execution_requirements": row.get("actor_execution_requirements"),
+        "verifier_execution_requirements": row.get("verifier_execution_requirements"),
     }
-    for phase, agent in (
-        ("nop", {"name": "nop"}),
-        ("oracle", {"name": "oracle", "kwargs": {"resource_usage_filename": "resource-usage.json"}}),
-        ("tamper", {"name": "tamper"}),
-    ):
+    for phase, agent in row_phases(family):
         _probe.testbed_python = None
         attempt = root / "trials" / f"{family}-{name}-{phase}"
         attempt.mkdir(parents=True)
         config = trial_config(packet, attempt / "jobs", agent, f"{family}-{name}-{phase}")
+        apply_calibrated_budgets(config, row)
         config_path = attempt / "trial.json"
         config_path.write_text(json.dumps(config))
         summary = asyncio.run(
@@ -226,17 +261,19 @@ def qa_row(root: Path, family: str, row: dict) -> dict:
     return record
 
 
-def seal(run_name: str, root: Path, records: list, blocked: list) -> None:
+def seal(run_name: str, root: Path, records: list, blocked: list, map_uri: str, map_sha256: str) -> None:
     """Write verdicts and upload the evidence bundle before any exit."""
     verdicts = {}
     for record in records:
-        verdicts[record["instance_id"]] = {
-            "failure_class": record["failure_class"],
+        verdict = {
+            "failure_class": record.get("failure_class"),
             "nop_reward_0": record["nop"]["rewards"].get("reward") == 0.0,
             "oracle_reward_1": record["oracle"]["rewards"].get("reward") == 1.0,
-            "tamper_reward_0": record["tamper"]["rewards"].get("reward") == 0.0,
-            "testbed_python": record["tamper"].get("testbed_python"),
+            "testbed_python": record.get("tamper", {}).get("testbed_python"),
         }
+        if "tamper" in record:
+            verdict["tamper_reward_0"] = record["tamper"]["rewards"].get("reward") == 0.0
+        verdicts[record["instance_id"]] = verdict
     for entry in blocked:
         verdicts[entry["instance_id"]] = {"failure_class": entry["failure_class"], "blocked": entry["error"]}
     (root / "qa-verdicts.json").write_text(json.dumps(verdicts, indent=2) + "\n")
@@ -249,25 +286,40 @@ def seal(run_name: str, root: Path, records: list, blocked: list) -> None:
     LOGGER.info("verdicts: %s", json.dumps(verdicts, indent=2))
 
 
+def row_qualified(record: dict) -> bool:
+    qualified = record["nop"]["rewards"].get("reward") == 0.0 and record["oracle"]["rewards"].get("reward") == 1.0
+    if "tamper" in record:
+        qualified = qualified and record["tamper"]["rewards"].get("reward") == 0.0
+    return qualified
+
+
 def main() -> None:
     run_name = os.environ.get("QA_RUN_NAME", "swe-v3-packet-qa-v1")
+    map_uri = os.environ.get("QA_MAP_URI", DEFAULT_MAP_URI)
+    map_sha256 = os.environ.get("QA_MAP_SHA256", DEFAULT_MAP_SHA256)
     root = Path(os.environ["IRIS_OUTPUT_DIR"]) / run_name
     root.mkdir(parents=True)
     configure_coreweave_s3()
-    mapping = read_map(root)
+    mapping = read_map(root, map_uri, map_sha256)
     revision = os.environ.get("QA_GIT_REVISION") or "bundle"
     (root / "qa-scope.json").write_text(
         json.dumps(
             {
                 "git_revision": revision,
-                "map_uri": MAP_URI,
-                "map_sha256": MAP_SHA256,
-                "converter_revision": mapping["converter_revision"],
-                "converter_version": mapping["converter_version"],
+                "map_uri": map_uri,
+                "map_sha256": map_sha256,
+                "converter_revision": mapping.get("converter_revision"),
+                "converter_version": mapping.get("converter_version"),
                 "executor": "daytona-eval declarative (target=us, eval key as secret, no snapshots)",
                 "packet_source": "frozen TaskSpec packet bytes consumed verbatim (no reconstruction)",
+                "trial_contract": (
+                    "TaskSpecTrial on frozen packet bytes; nop + original TaskSpec oracle for rst/multi (functional, no family tamper tooling); nop/oracle/tamper for scale/lego"
+                ),
+                "budgets": (
+                    "map-calibrated actor/verifier phase deadlines applied when present; None declarations preserved (field unset)"
+                ),
                 "peak_physical_sandboxes": 2,
-                "scope": "six failure-class/PyBaMM rows only; not qualification",
+                "scope": "QA rows per sealed map only; not qualification authority",
             },
             indent=2,
         )
@@ -301,16 +353,9 @@ def main() -> None:
             (root / "qa-records.json").write_text(json.dumps(records, indent=2) + "\n")
             # Durable incremental evidence: survive a mid-run abort.
             copy(str(root / "qa-records.json"), str(StoragePath(OUTPUT_ROOT) / run_name / "qa-records.json"))
-    seal(run_name, root, records, blocked)
-    failed = [
-        record["instance_id"]
-        for record in records
-        if not (
-            record["nop"]["rewards"].get("reward") == 0.0
-            and record["oracle"]["rewards"].get("reward") == 1.0
-            and record["tamper"]["rewards"].get("reward") == 0.0
-        )
-    ] + [entry["instance_id"] for entry in blocked]
+    seal(run_name, root, records, blocked, map_uri, map_sha256)
+    failed = [record["instance_id"] for record in records if not row_qualified(record)]
+    failed += [entry["instance_id"] for entry in blocked]
     if failed:
         raise SystemExit(f"QA failures: {failed}")
     LOGGER.info("QA PASSED for all %d rows", len(records))
