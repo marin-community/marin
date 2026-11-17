@@ -8,6 +8,7 @@ import subprocess
 import sys
 from contextlib import nullcontext
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -1486,12 +1487,26 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
     preset = snowball_model.SNOWBALL.by_name[preset_name]
     model = tmp_path / "model"
     model.mkdir()
+    model_uri = f"s3://marin-test/models/{tmp_path.name}"
+
+    def local_model_path(path):
+        return model / str(path).removeprefix("s3://").removeprefix(model_uri.removeprefix("s3://")).lstrip("/")
+
+    monkeypatch.setattr(
+        "s3fs.S3FileSystem.glob",
+        lambda self, path, **kwargs: [f"{model_uri}/{value.relative_to(model)}" for value in model.rglob("config.json")],
+    )
+    monkeypatch.setattr(
+        "s3fs.S3FileSystem.modified",
+        lambda self, path: datetime.fromtimestamp(local_model_path(path).stat().st_mtime, UTC),
+    )
+    monkeypatch.setattr("s3fs.S3FileSystem.exists", lambda self, path, **kwargs: local_model_path(path).exists())
     local = replace(
         preset.model,
         step=ArtifactStep.adopt(
             preset.model.step.name,
             preset.model.step.version,
-            str(model),
+            model_uri,
             kind=preset.model.step.artifact_type,
         ),
     )
@@ -1521,7 +1536,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
             ArtifactStep.adopt(
                 "tests/noncanonical-initializer",
                 "2026.11.17",
-                str(model),
+                model_uri,
                 kind=local.step.artifact_type,
                 config={"tokenizer_uri": "tests/own-tokenizer"},
             ),
@@ -1576,7 +1591,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
             recorded.init.relative_path,
             recorded.init.tokenizer_uri,
             recorded.init.tokenizer_revision,
-        ) == (str(model), None, "tests/own-tokenizer", "own-tokenizer-revision")
+        ) == (model_uri, None, "tests/own-tokenizer", "own-tokenizer-revision")
         assert json.loads(recorded.init.fingerprint_payload)["config"]["tokenizer_uri"] == "tests/own-tokenizer"
         newer = model / "newer-hf"
         newer.mkdir()
