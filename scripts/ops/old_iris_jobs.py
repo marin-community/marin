@@ -28,6 +28,7 @@ ACTIVE_TASK_STATES = (TaskState.ASSIGNED, TaskState.BUILDING, TaskState.RUNNING)
 MS_PER_DAY = 86_400_000
 # Loom's Slack post accepts at most 4,000 bytes; a longer report continues in the next message.
 MAX_MESSAGE_BYTES = 3_500
+REPORTED_KEY = "reported"
 
 
 @dataclass(frozen=True)
@@ -106,13 +107,11 @@ def _job_line(job: OldJob, now_ms: int) -> str:
 
 
 def _compose_messages(new_jobs: Sequence[OldJob], scanned_cluster: str, now_ms: int, min_age_days: float) -> list[str]:
-    """Return the Slack messages that list every new job: accelerator holders first, then oldest first.
-
-    The cancel command names the scanned cluster: the hub routes a cancel to the
-    peer that runs a federated job, and an owner may lack CoreWeave port-forward access.
-    """
+    """Return the Slack messages that list every new job: accelerator holders first, then oldest first."""
     if not new_jobs:
         return []
+    # The cancel command names the scanned cluster: the hub routes a cancel to the peer
+    # that runs a federated job, and an owner may lack CoreWeave port-forward access.
     header = [
         f"*Iris jobs active for more than {min_age_days:g} days*",
         "Each job is listed once while it keeps running. Cancel a job you no longer need with "
@@ -146,7 +145,7 @@ def report(
 def read_reported(state_path: Path) -> set[str]:
     if not state_path.exists():
         return set()
-    return set(json.loads(state_path.read_text())["reported"])
+    return set(json.loads(state_path.read_text())[REPORTED_KEY])
 
 
 @click.command()
@@ -193,7 +192,7 @@ def main(cluster: str, min_age_days: float, state_path: Path, messages_dir: Path
     messages, next_reported = report(old_jobs, reported, cluster, now_ms, min_age_days)
     for index, message in enumerate(messages, start=1):
         (messages_dir / f"{index:02d}.md").write_text(message)
-    state_path.write_text(json.dumps({"reported": sorted(next_reported)}, indent=2) + "\n")
+    state_path.write_text(json.dumps({REPORTED_KEY: sorted(next_reported)}, indent=2) + "\n")
     click.echo(f"{len(old_jobs)} old running jobs; {len(next_reported - reported)} new in {len(messages)} messages")
 
 

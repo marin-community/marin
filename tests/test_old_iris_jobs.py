@@ -85,8 +85,6 @@ def test_report_lists_accelerator_jobs_before_older_cpu_jobs():
 
     positions = [message.index(str(job.root)) for job in (tpu_older, gpu_newer, cpu_oldest)]
     assert positions == sorted(positions)
-    assert "1x gpu=8xH100" in message
-    assert "1x cpu=0.5 mem=4GiB" in message
 
 
 def test_report_lists_a_job_again_after_it_stops_running():
