@@ -48,7 +48,7 @@ trials:
   priority: batch
 potential:
   score: 7
-  rationale: −0.0123 at equal data (one validation); equal time pending, ladder and MFU not run → 7
+  rationale: −0.0123 at equal data (one validation); equal-time run launched, ladder and MFU not run → 7
   model: claude-opus-5-5
   date: '2026-11-17'
-  inputs_digest: 5387d279a5db
+  inputs_digest: 9b833857cf6e
