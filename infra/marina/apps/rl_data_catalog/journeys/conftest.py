@@ -60,7 +60,9 @@ def marina_kernel(marina_database: DatabaseSpec, tmp_path_factory: pytest.TempPa
                 "sources": [
                     {
                         "source_id": source_id,
-                        "input": ACTOR_INPUT,
+                        # Bind the census through the model so the measurement serializes
+                        # the exact identity the declarations carry, including carry_forward.
+                        "input": ActorCensusInput.model_validate(ACTOR_INPUT).model_dump(mode="json"),
                         "oracle_tasks": 0,
                         "execution_qualification": "not_assessed",
                         "evidence_url": "https://example.org/oracle-inventory.json",
