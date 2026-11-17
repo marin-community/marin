@@ -223,14 +223,14 @@ def test_harbor_coverage_controls_best_checkpoint(selection, tmp_path):
     ]
     path = tmp_path / "harbor.yaml"
     path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
-    selected = native_json()(
+    selected = native_json("--isolated", "--group", "harbor-test")(
         """
 import asyncio, json, sys
 from pathlib import Path
 from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
 from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
-from skyrl_train.callbacks.builtin import create_callbacks_from_config
+from skyrl_train.callbacks.builtin import HarborEvaluationCallback, create_callbacks_from_config
 config = load_launch_config(sys.argv[1])
 selected = []
 for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)), (100, (26, 30, 30)))):
@@ -246,6 +246,102 @@ for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)
     asyncio.run(handler.call_event_async("on_evaluate", state, TrainerControl(), metrics=metrics,
                                        trainer=SimpleNamespace(cfg=config.skyrl)))
     selected.append((directory / "best_checkpoint.json").exists())
+
+from contextlib import nullcontext
+from iris.client.client import IrisContext, iris_ctx_scope
+from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH
+from iris.cluster.types import JobName
+from cloud.iris.skyrl_entrypoint import run_config
+from cloud.iris.rl_config_translation import registered_rl_entrypoint_module
+from skyrl_train.evaluation_pool import EvaluationPool
+
+native_configs = []
+module_name = registered_rl_entrypoint_module(str(config.runtime.entrypoint))
+original_module = sys.modules.get(module_name)
+sys.modules[module_name] = SimpleNamespace(run=native_configs.append)
+try:
+    run_config(Path(sys.argv[1]))
+finally:
+    if original_module is None:
+        del sys.modules[module_name]
+    else:
+        sys.modules[module_name] = original_module
+
+worker = r'''
+import json, socket, sys, traceback
+from harbor.models.job.config import JobConfig
+expected = json.loads(sys.argv[2])
+connection = socket.socket(fileno=int(sys.argv[1]))
+with connection.makefile("rwb") as stream:
+    for line in stream:
+        message = json.loads(line)
+        try:
+            job = JobConfig.model_validate(message["cohort"]["job"])
+            if expected is None:
+                assert job.telemetry is None
+            else:
+                assert job.telemetry is not None
+                actual = {
+                    "endpoint": job.telemetry.endpoint.get_secret_value(),
+                    "root_run_uid": job.telemetry.root_run_uid,
+                    "execution_uid": job.telemetry.execution_uid,
+                    "serving_job_id": job.telemetry.serving_job_id,
+                }
+                assert actual == expected, (actual, expected)
+            response = {"id": message["id"], "metrics": {"num_attempted": 1, "num_scored": 1, "reward_sum": 1}}
+        except Exception:
+            response = {"id": message["id"], "error": traceback.format_exc()}
+        stream.write((json.dumps(response) + "\\n").encode())
+        stream.flush()
+'''
+
+class EndpointClient:
+    def resolve_endpoint(self, name):
+        assert name == LOG_SERVER_ENDPOINT_NAME
+        return "http://127.0.0.1:4318/iris-capability/"
+
+async def check_runtime_handoff():
+    callback = next(item for item in create_callbacks_from_config(config.skyrl)
+                    if isinstance(item, HarborEvaluationCallback))
+    trainer = SimpleNamespace(
+        cfg=native_configs[0],
+        inference_engine_client=SimpleNamespace(
+            enable_http_endpoint=True, model_name="policy", http_endpoint_host="127.0.0.1", http_endpoint_port=8000,
+        ),
+    )
+    original_exec = asyncio.create_subprocess_exec
+    previous = get_job_info()
+    expected = None
+
+    async def start_worker(*args, **kwargs):
+        return await original_exec(sys.executable, "-c", worker, args[-1], json.dumps(expected), **kwargs)
+
+    asyncio.create_subprocess_exec = start_worker
+    try:
+        for attempt in (1, 2, None):
+            info = JobInfo(task_id=JobName.from_wire(f"/test/native-{attempt}/0"), attempt_uid=f"uid-{attempt}")
+            set_job_info(info if attempt is not None else None)
+            expected = {
+                "endpoint": "http://127.0.0.1:4318/iris-capability" + TELEMETRY_ENDPOINT_PATH,
+                "root_run_uid": str(config.run.id),
+                "execution_uid": f"iris:uid-{attempt}",
+                "serving_job_id": f"/test/native-{attempt}",
+            } if attempt is not None else None
+            context = IrisContext(job_id=info.job_id, task_attempt=info.task_attempt, client=EndpointClient())
+            scope = iris_ctx_scope(context) if attempt is not None else nullcontext()
+            with scope:
+                async with EvaluationPool(3) as pool:
+                    metrics = await callback.collect_evaluation(state, trainer=trainer, pool=pool)
+                assert all(metrics[f"eval/harbor/{cohort['name']}/num_scored"] == len(cohort["job"]["tasks"])
+                           for cohort in callback.cohorts)
+    finally:
+        asyncio.create_subprocess_exec = original_exec
+        set_job_info(previous)
+
+import os
+os.environ["DAYTONA_EVAL_API_KEY"] = "test-eval-credential"
+asyncio.run(check_runtime_handoff())
 print(json.dumps(selected))
 """,
         [str(path)],

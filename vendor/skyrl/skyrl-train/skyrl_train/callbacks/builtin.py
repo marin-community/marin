@@ -27,6 +27,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
 
+from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
+from iris.runtime.telemetry import resolve as resolve_telemetry
 from loguru import logger
 from shellbox.backends.daytona.machine import DaytonaImageBuild
 from omegaconf import DictConfig, OmegaConf
@@ -333,16 +335,29 @@ class HarborEvaluationCallback(TrainerCallback):
         if not client.enable_http_endpoint:
             raise ValueError("Harbor validation requires generator.enable_http_endpoint")
         cohorts = deepcopy(self.cohorts)
+        runtime = resolve_telemetry(run_id=trainer.cfg.runtime.run_id)
+        telemetry = (
+            {
+                "endpoint": runtime.resolver(runtime.endpoint).rstrip("/") + TELEMETRY_ENDPOINT_PATH,
+                "root_run_uid": runtime.attributes["run_id"],
+                "execution_uid": runtime.attributes["execution_uid"],
+                "serving_job_id": runtime.attributes["job_id"],
+            }
+            if runtime is not None
+            else None
+        )
         for cohort in cohorts:
             job = cohort["job"]
+            if telemetry is not None:
+                job["telemetry"] = telemetry
             job["job_name"] = f"step-{state.global_step}-{cohort['name']}"
             job["jobs_dir"] = join_resource_path(trainer.cfg.trainer.export_path, "inline_harbor")
             for agent in job["agents"]:
                 agent["model_name"] = f"openai/{trainer.cfg.trainer.export_path}/step-{state.global_step}"
                 agent["model_alias"] = f"openai/{client.model_name}"
-                agent.setdefault("kwargs", {})["api_base"] = (
-                    f"http://{client.http_endpoint_host}:{client.http_endpoint_port}/v1"
-                )
+                agent.setdefault("kwargs", {})[
+                    "api_base"
+                ] = f"http://{client.http_endpoint_host}:{client.http_endpoint_port}/v1"
         environment = os.environ.copy()
         environment["DAYTONA_API_KEY"] = environment[self.daytona_api_key_env]
         environment["OPENAI_API_KEY"] = "unused-local-inference"

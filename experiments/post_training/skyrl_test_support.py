@@ -36,7 +36,7 @@ def selection_summary(full_rows: int) -> dict:
     }
 
 
-def native_json():
+def native_json(*uv_options: str):
     def execute(script, paths):
         source = str(find_project_root(Path(__file__)) / "vendor/skyrl")
         program = (
@@ -47,7 +47,10 @@ def native_json():
             "print('SNOWBALL_NATIVE_SOURCE_ORIGINS_PASS')\n" + script
         )
         result = subprocess.run(
-            skyrl_cpu_command("python", "-c", program, *paths), capture_output=True, text=True, timeout=170
+            skyrl_cpu_command(*uv_options, "python", "-c", program, *paths),
+            capture_output=True,
+            text=True,
+            timeout=170,
         )
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout.splitlines()[-1])
