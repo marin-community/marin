@@ -11,9 +11,11 @@ import pytest
 from marina.applets import applet_schema
 from marina.db import DatabaseSpec, engine_for
 from marina.journeys import Journey
+from playwright.sync_api import expect
 from sqlalchemy import text
 
 from infra.marina.apps.rl_data_catalog.server.app import migrate
+from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
 
 APP_ID = UUID("fb11c931-5861-4878-8bb5-a964d652b45f")
 SOURCE = "Marin:sample-content"
@@ -83,6 +85,25 @@ def qc_catalog(marina_kernel, marina_database: DatabaseSpec) -> Iterator[None]:
                 text("INSERT INTO atlas_packets VALUES ('lexical',:key,:task,CAST(:packet AS JSONB))"),
                 {"key": KEY, "task": task_id, "packet": json.dumps(packet)},
             )
+            connection.execute(
+                text(
+                    "INSERT INTO atlas_raw_reviews (load_id,pipeline_key,task_id,record) "
+                    "VALUES ('lexical',:key,:task,CAST(:record AS JSONB))"
+                ),
+                {
+                    "key": KEY,
+                    "task": task_id,
+                    "record": json.dumps(
+                        pack_content(
+                            {
+                                "input": packet,
+                                "output": {"verdict": verdict, "explanation": f"Recorded finding for {task_id}."},
+                                "provenance": {"uri": "s3://fixture/review.json", "sha256": "a" * 64},
+                            }
+                        )
+                    ),
+                },
+            )
     try:
         with engine.begin() as connection:
             migrate(connection)
@@ -93,7 +114,7 @@ def qc_catalog(marina_kernel, marina_database: DatabaseSpec) -> Iterator[None]:
                 text("UPDATE atlas_sources SET assessment_key=NULL WHERE load_id='lexical' AND id=:source"),
                 {"source": SOURCE},
             )
-            for table in ["atlas_packets", "atlas_items", "atlas_populations", "atlas_assessments"]:
+            for table in ["atlas_raw_reviews", "atlas_packets", "atlas_items", "atlas_populations", "atlas_assessments"]:
                 connection.execute(
                     text(f"DELETE FROM {table} WHERE load_id='lexical' AND pipeline_key=:key"), {"key": KEY}
                 )
@@ -142,3 +163,40 @@ def test_browse_filter_and_manual_audit(journey: Journey, qc_catalog: None) -> N
     journey.sees("Judged 1 tasks · agreement 0%")
     journey.sees("Judged 1 tasks · agreement 0%")
     journey.shoot("qc-audit-judged")
+
+
+@pytest.mark.parametrize("width,theme", [(1440, "light"), (1440, "dark"), (390, "light"), (390, "dark")])
+def test_quality_chip_reaches_review_list_and_raw_review(
+    journey: Journey, qc_catalog: None, width: int, theme: str
+) -> None:
+    page = journey.page
+    page.set_viewport_size({"width": width, "height": 1000})
+    page.emulate_media(color_scheme=theme)
+    page.goto(f"{journey.origin}/a/{APP_ID}/")
+    row = page.locator(f'tr[data-source-id="{SOURCE}"]')
+    page.get_by_role("button", name="Show everything", exact=True).click()
+    row.get_by_role("link", name="SAMPLE: browse task reviews", exact=True).click()
+    expect(page.get_by_role("heading", name="Browse reviews", exact=True)).to_be_visible()
+    page.get_by_role("link", name="Open raw review →").first.click()
+    expect(page.get_by_role("heading", name="Reviewer output", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Evidence the reviewer saw", exact=True)).to_be_visible()
+    expect(page.locator("#content")).to_contain_text("Solve the sampled problem.")
+    page.screenshot(path=str(journey.shots / f"qc-raw-{theme}-{width}.png"))
+
+
+@pytest.mark.parametrize("width,theme", [(1440, "light"), (1440, "dark"), (390, "light"), (390, "dark")])
+def test_source_solver_links_reach_attempt_and_rollout(journey: Journey, width: int, theme: str) -> None:
+    page = journey.page
+    page.set_viewport_size({"width": width, "height": 1000})
+    page.emulate_media(color_scheme=theme)
+    page.goto(f"{journey.origin}/a/{APP_ID}/")
+    page.goto(page.url + "source.html#source_id=Marin%3Aclean")
+    page.get_by_role("link", name="Browse task attempts and rollouts →").first.click(timeout=5000)
+    expect(page.get_by_role("heading", name="Difficulty attempts · clean")).to_be_visible()
+    page.get_by_role("link", name="0", exact=True).click()
+    expect(page.get_by_role("heading", name="Transcript and tool calls")).to_be_visible()
+    expect(page.locator("#content")).to_contain_text("Recorded solver reasoning")
+    expect(page.locator("#content")).to_contain_text("terminal")
+    expect(page.get_by_role("heading", name="Verifier output")).to_be_visible()
+    expect(page.get_by_role("link", name="Open in Filer ↗")).to_have_count(2)
+    page.screenshot(path=str(journey.shots / f"rollout-{theme}-{width}.png"))

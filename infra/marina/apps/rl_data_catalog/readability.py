@@ -219,6 +219,18 @@ def readability_layout(
         page.locator("details").evaluate_all("es => es.forEach(e => e.open = true)")
         capture(label, focus=True)
         if label == "assessment":
+            raw_link = page.locator('#reviews a[href^="review.html"]').first
+            if raw_link.count():
+                raw_path = raw_link.get_attribute("href")
+                assert raw_path is not None
+                visit(raw_path, "#message")
+                expect(page.locator("#message")).not_to_contain_text("Loading", timeout=60000)
+                expect(page.locator("#content h2").first).to_be_visible()
+                capture("raw-qc-review", focus=True)
+                visit(path, "#filter-count")
+            visit("defects.html", "#content h2")
+            capture("defect-legend", focus=True)
+            visit(path, "#filter-count")
             boxes = page.locator(".review-defect input:not(:disabled)")
             if boxes.count():
                 boxes.first.check()
@@ -233,6 +245,35 @@ def readability_layout(
             page.locator("#reviews a").first.click()
             expect(page.locator("#selected")).not_to_be_empty()
             capture("archive-record")
+    measured = next(
+        (
+            row
+            for row in sources
+            if any(
+                model.get("measurement_id") and model["status"] == "measured" for model in row["difficulty"]["models"]
+            )
+        ),
+        None,
+    )
+    if measured is not None:
+        model = next(
+            model
+            for model in measured["difficulty"]["models"]
+            if model.get("measurement_id") and model["status"] == "measured"
+        )
+        visit(
+            "attempts.html?" + urlencode({"source": measured["id"], "measurement": model["measurement_id"]}), "#message"
+        )
+        expect(page.locator("#message")).not_to_contain_text("Loading", timeout=60000)
+        expect(page.locator("#message")).not_to_contain_text("not been loaded", timeout=60000)
+        expect(page.locator("#message")).not_to_have_class("error")
+        capture("difficulty-attempt-list", focus=True)
+        rollout_link = page.locator('a[href^="rollout.html"]').first
+        if rollout_link.count():
+            rollout_path = rollout_link.get_attribute("href")
+            assert rollout_path is not None
+            visit(rollout_path, "#content h2")
+            capture("difficulty-rollout", focus=True)
     cases = evidence_cases(sources, pending_ids) if scope is BrowserScope.FULL else []
     for index, candidate in enumerate(cases):
         if candidate["id"] == source["id"]:

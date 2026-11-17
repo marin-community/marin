@@ -116,6 +116,8 @@ from infra.marina.apps.rl_data_catalog.load import (
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.load_difficulty import load_measurements, read_measurements
 from infra.marina.apps.rl_data_catalog.load_identity import load_identity
+from infra.marina.apps.rl_data_catalog.load_reviews import load_content_reviews
+from infra.marina.apps.rl_data_catalog.load_rollouts import load_rollouts
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, PRODUCTION_APP_ID, prepare_preview
 from infra.marina.apps.rl_data_catalog.release_curriculum import check_curriculum_document
 from infra.marina.apps.rl_data_catalog.release_evidence import (
@@ -126,6 +128,7 @@ from infra.marina.apps.rl_data_catalog.release_evidence import (
     stored_duplicate_groups,
     verify_preservation,
 )
+from infra.marina.apps.rl_data_catalog.release_gateway import CandidateApi
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import canonical_source_record, create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.quality import result
@@ -3703,3 +3706,185 @@ def test_archived_lineage_panel_grandfathered_with_marker(catalog_database, cata
         }
     )
     assert projected["sample_pin_stale"] is True
+
+
+def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "sample-browse")
+    publish_sample(root, "sample-browse")
+    load_catalog(CurationCatalog(root), catalog_query)
+    catalog_query(
+        "UPDATE atlas_sources SET declaration=jsonb_set(declaration,'{independent_qc}',"
+        "jsonb_build_object('evidence_url',CAST(:uri AS TEXT),'reviewed',3,'admitted',3,"
+        "'method','llm','verdict','good'),true) "
+        "WHERE id='Marin:math'",
+        {"uri": "s3://fixture/panel/.artifact.json"},
+    )
+    before = catalog_query("SELECT load_id,declaration,assessment_key FROM atlas_sources WHERE id='Marin:math'", {})[
+        "rows"
+    ][0]
+    old_key = before["assessment_key"]
+    load_id = before["load_id"]
+    key = "qc:" + "b" * 64
+    assessment = catalog_query(
+        "SELECT * FROM atlas_assessments WHERE load_id=:load AND pipeline_key=:key", {"load": load_id, "key": old_key}
+    )["rows"][0]
+    assessment.pop("load_id")
+    assessment["pipeline_key"] = key
+    populations = catalog_query(
+        "SELECT pipeline_key,cohort,population,sample_count FROM atlas_populations "
+        "WHERE load_id=:load AND pipeline_key=:key",
+        {"load": load_id, "key": old_key},
+    )["rows"]
+    items = catalog_query(
+        "SELECT * FROM atlas_items WHERE load_id=:load AND pipeline_key=:key ORDER BY task_id",
+        {"load": load_id, "key": old_key},
+    )["rows"]
+    for row in [*populations, *items]:
+        row.pop("load_id", None)
+        row["pipeline_key"] = key
+    items[0]["defects"] = ["ambiguity"]
+    raw = [
+        {
+            "pipeline_key": key,
+            "task_id": row["task_id"],
+            "record": {
+                "input": [{"messages": [{"role": "user", "content": "exact reviewer input"}]}],
+                "output": [{"body": "unabridged reviewer output"}],
+                "provenance": {"sha256": "a" * 64},
+            },
+        }
+        for row in items
+    ]
+    receipt = {
+        "artifact": {"uri": "s3://fixture/panel/.artifact.json", "sha256": "b" * 64},
+        "panel": {"dataset_id": "original", "dataset_revision": "old-pin"},
+        "current_pin": False,
+    }
+    staged = {
+        "data_restriction": "open",
+        "assessment": assessment,
+        "populations": populations,
+        "items": items,
+        "raw": raw,
+        "receipt": receipt,
+    }
+    # Another regional panel may have populations inserted while its task rows are still loading.
+    catalog_query(
+        "INSERT INTO atlas_populations VALUES (:load,'incomplete-sibling','admitted',2,2)",
+        {"load": load_id},
+    )
+    assert load_content_reviews(staged, load_id, "Marin:math", catalog_query)["atlas_items"] == 3
+    assert (
+        catalog_query(
+            "SELECT summary FROM atlas_cohort_summaries WHERE load_id=:load AND pipeline_key='incomplete-sibling'",
+            {"load": load_id},
+        )["rows"]
+        == []
+    )
+    assert not any(load_content_reviews(staged, load_id, "Marin:math", catalog_query).values())
+    after = catalog_query("SELECT load_id,declaration,assessment_key FROM atlas_sources WHERE id='Marin:math'", {})[
+        "rows"
+    ][0]
+    assert after == before
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        page = client.get("/assessment", params={"source_id": "Marin:math", "defect": "ambiguity"}).json()
+        assert page["report"]["evidence"]["total"] == 1
+        assert page["report"]["evidence"]["items"][0]["task_id"] == items[0]["task_id"]
+        assert page["review_input"] == receipt
+        candidate = CandidateApi(catalog_query)
+        try:
+            assert candidate.get("api/assessment?source_id=Marin%3Amath&defect=ambiguity") == page
+            assert (
+                candidate.get("api/source?source_id=Marin%3Amath")
+                == client.get("/source", params={"source_id": "Marin:math"}).json()
+            )
+        finally:
+            candidate.close()
+        detail = client.get("/evidence", params={"source_id": "Marin:math", "task_id": items[0]["task_id"]}).json()
+        assert detail["raw_review"] == raw[0]["record"]
+        inventory = client.get("/qc/inventory").json()
+        panel = next(row for row in inventory["panels"] if row["source_id"] == "Marin:math")
+        assert panel["task_count"] == panel["raw_count"] == 3
+        legend = client.get("/qc/defects").json()
+        ambiguity = next(row for row in legend["defects"] if row["id"] == "ambiguity")
+        assert ambiguity["count"] == 1
+        assert ambiguity["sources"] == [{"id": "Marin:math", "name": before["declaration"]["display_name"], "count": 1}]
+
+
+def test_staged_rollout_pages_keep_attempt_identity_and_exact_content(catalog_database, catalog_query):
+    declaration = with_declaration_admission_census(contamination_declarations()[0][1])
+    measured = difficulty_measurement(declaration, Solver.SMALL)
+    load_measurements([measured], catalog_query)
+    with catalog_database.begin() as connection:
+        connection.execute(text("INSERT INTO atlas_loads VALUES ('rollouts','fixture','rollouts',NOW(),NOW())"))
+        connection.execute(text("UPDATE atlas_current SET load_id='rollouts' WHERE name='latest'"))
+        connection.execute(
+            text(
+                "INSERT INTO atlas_sources (load_id,id,declaration,latest_attempt_status,diagnostics) "
+                "VALUES ('rollouts',:source,CAST(:declaration AS JSONB),'skipped','{}')"
+            ),
+            {"source": declaration.id, "declaration": declaration.model_dump_json()},
+        )
+    records = []
+    for index in range(2):
+        records.append(
+            {
+                "attempt_id": f"attempt-{index}",
+                "task_id": measured.sample.tasks[index].task_id,
+                "summary": {
+                    "attempt_id": f"attempt-{index}",
+                    "task_id": measured.sample.tasks[index].task_id,
+                    "solver": "small",
+                    "score": float(index),
+                    "duration": 2.5,
+                    "status": "scored",
+                    "exception": None,
+                    "has_rollout": True,
+                },
+                "detail": {
+                    "conversation": [
+                        {
+                            "role": "assistant",
+                            "content": f"Exact π response {index}\nNext line",
+                            "tool_calls": [{"name": "terminal", "arguments": "check.py"}],
+                        }
+                    ],
+                    "verifier": {"reward": index},
+                },
+            }
+        )
+    metadata = {
+        "data_restriction": "open",
+        "attempt_count": 2,
+        "recorded_attempt_count": 2,
+        "attempts_receipt": measured.attempts_receipt.model_dump(mode="json"),
+    }
+    measurement = measured.model_dump(mode="json")
+    assert load_rollouts(measurement, metadata, records, catalog_query)["inserted"] == 2
+    assert load_rollouts(measurement, metadata, records, catalog_query)["inserted"] == 0
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        parameters = {"source_id": declaration.id, "measurement_id": measured.measurement_id, "limit": 1}
+        first = client.get("/difficulty-attempts", params=parameters).json()
+        assert first["current_pin"] is True
+        assert first["total"] == 2 and first["items"] == [records[0]["summary"]]
+        second = client.get("/difficulty-attempts", params={**parameters, "offset": 1}).json()
+        assert second["items"] == [records[1]["summary"]]
+        detail = client.get(
+            "/difficulty-rollout",
+            params={"source_id": declaration.id, "measurement_id": measured.measurement_id, "attempt_id": "attempt-0"},
+        ).json()
+        assert detail == {"summary": records[0]["summary"], "detail": records[0]["detail"]}
+        assert (
+            client.get(
+                "/difficulty-rollout",
+                params={
+                    "source_id": "Fixture:another-source",
+                    "measurement_id": measured.measurement_id,
+                    "attempt_id": "attempt-0",
+                },
+            ).status_code
+            == 404
+        )
+    assert catalog_query(
+        "SELECT measurement FROM atlas_difficulty WHERE measurement_id=:id", {"id": measured.measurement_id}
+    )["rows"] == [{"measurement": measurement}]

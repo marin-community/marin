@@ -4,6 +4,24 @@
 """Postgres storage for one staged curation catalog load."""
 
 SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS atlas_rollout_sets (
+    measurement_id TEXT PRIMARY KEY, metadata JSONB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS atlas_rollout_attempts (
+    measurement_id TEXT NOT NULL, attempt_id TEXT NOT NULL, task_id TEXT NOT NULL,
+    summary JSONB NOT NULL, detail JSONB NOT NULL,
+    PRIMARY KEY (measurement_id,attempt_id)
+);
+CREATE INDEX IF NOT EXISTS atlas_rollout_task_order
+    ON atlas_rollout_attempts (measurement_id,task_id,attempt_id);
+CREATE TABLE IF NOT EXISTS atlas_review_current (
+    load_id TEXT NOT NULL, source_id TEXT NOT NULL, pipeline_key TEXT NOT NULL,
+    receipt JSONB NOT NULL, PRIMARY KEY (load_id,source_id)
+);
+CREATE TABLE IF NOT EXISTS atlas_raw_reviews (
+    load_id TEXT NOT NULL, pipeline_key TEXT NOT NULL, task_id TEXT NOT NULL,
+    record JSONB NOT NULL, reviewer JSONB, PRIMARY KEY (load_id,pipeline_key,task_id)
+);
 CREATE TABLE IF NOT EXISTS atlas_derived_contracts (
     source_id TEXT NOT NULL,receipt_id TEXT NOT NULL,receipt JSONB NOT NULL,
     PRIMARY KEY (source_id,receipt_id)

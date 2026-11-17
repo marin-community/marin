@@ -16,7 +16,7 @@ import threading
 import time
 import tomllib
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -37,6 +37,7 @@ from .prepare_preview import (
     oracle_inventory_payload,
 )
 from .readability import readability_smoke, readability_sweep
+from .release_browse import browse_invariants
 from .release_browser import curriculum_full_sweep, curriculum_sweep, evidence_smoke, evidence_sweep, source_sweep
 from .release_curriculum import curriculum_invariants
 from .release_evidence import (
@@ -49,6 +50,7 @@ from .release_evidence import (
     stored_duplicate_groups,
     verify_preservation,
 )
+from .release_gateway import CandidateApi
 from .release_receipts import (
     BrowserScope,
     CommandResult,
@@ -188,6 +190,7 @@ class CatalogReader:
         self.provider = marina_token_provider()
         self.cache: dict[str, Any] = {}
         self.releases: dict[str, Any] = {}
+        self.candidate_api = CandidateApi(query) if query is not None else None
 
     def get(self, path: str) -> Any:
         url = urlsplit(path)
@@ -195,7 +198,17 @@ class CatalogReader:
         key = url.path + ("?" + query if query else "")
         if key not in self.cache:
             params = dict(parse_qsl(url.query))
-            if self.query is not None and url.path == "api/source-labels":
+            if self.candidate_api is not None and url.path in {
+                "api/source",
+                "api/assessment",
+                "api/evidence",
+                "api/qc/defects",
+                "api/qc/inventory",
+                "api/difficulty-attempts",
+                "api/difficulty-rollout",
+            }:
+                data = self.candidate_api.get(key)
+            elif self.query is not None and url.path == "api/source-labels":
                 catalog = self.get("api/sources")
                 data = {
                     "sources": [
@@ -510,7 +523,7 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
             artifacts,
             receipt,
         )
-    with requests.Session() as session:
+    with requests.Session() as session, ExitStack() as resources:
         receipt.gate = "production-version"
         production = app_details(args.service_url, PRODUCTION_APP_ID, session)
         if production["current_version"] != args.production_version:
@@ -524,6 +537,8 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
         reader = CatalogReader(
             f"{args.app_origin.rstrip('/')}/a/{PREVIEW_APP_ID}/v/{revision}/", session, query if package else None
         )
+        if reader.candidate_api is not None:
+            resources.callback(reader.candidate_api.close)
         receipt.gate = "catalog-history-baseline"
         before = catalog_state(query)
         if args.identity_measurement:
@@ -547,6 +562,7 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
         receipt.expected_sources = expected
         receipt.gate = "curriculum-api-invariants"
         receipt.api_invariants = curriculum_invariants(reader.get, reader.get("api/curriculum/releases")["releases"])
+        receipt.api_invariants["evidence_browsers"] = browse_invariants(reader.get, expected["sources"])
         stored_groups = stored_duplicate_groups(query, before["selected"]["load_id"])
         if baseline:
             verify_preservation(baseline.evidence_before, before, refresh_snapshot=args.refresh_snapshot)

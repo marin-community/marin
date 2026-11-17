@@ -336,3 +336,59 @@ app's candidate manifest and check every card, including sources with the same
 Quality, Result or admission state as another source. Check the displayed
 candidate pin and filtered task count against its linked receipt. A private
 publication alone does not qualify Atlas admission.
+
+## Review and rollout evidence
+
+Review/rollout browsing loads evidence independently of source admission. Resolve
+panels from each frozen declaration's selected receipt, not the latest registry
+entry. Keep the original input pin visible for archived lineage. Never replace
+an old verdict with a retry because a mutable batch pointer advanced. The loader
+checks each task/runtime contract and typed observation against the hashed records
+Parquet and seals the original batch bytes. Provenance distinguishes a surviving
+publisher-pointer hash from a hash captured by the staging readback. For FULL
+assemblies, `map_original_batches` follows their recorded batch/overlay origins and
+requires exact task, runtime and typed-judgment equality. Multiple matches and
+missing matches stay “not mapped” with a reason. Keep the immutable mapping URI
+and SHA; never choose a later judgment to fill a missing original.
+
+Stage bulk content in the artifact's S3 region with
+`python -m infra.marina.apps.rl_data_catalog.stage_browse_evidence` and an explicit
+manifest URI/SHA, shard and output root. The manifest pins frozen declarations,
+review artifacts or complete difficulty observations and the producer code hashes.
+Keep the generated shard indexes and readback hashes. PRIVATE_ALWAYS content is
+refused before artifact reads; derived staging records carry the restriction.
+
+For a single selected panel or observation, the maintained loader commands are:
+
+```bash
+uv run python -m infra.marina.apps.rl_data_catalog.load_reviews \
+  --artifact "$REVIEW_URI" "$REVIEW_SHA256" --source-id "$SOURCE_ID" \
+  --app-id "$PREVIEW_APP_ID" --receipt "$ARTIFACTS/review-load.json"
+uv run python -m infra.marina.apps.rl_data_catalog.load_rollouts \
+  --measurement-id "$MEASUREMENT_ID" --app-id "$PREVIEW_APP_ID" \
+  --receipt "$ARTIFACTS/rollout-load.json"
+```
+
+For FULL assemblies, pass the sealed mapping with `--mapping URI SHA256`.
+Bulk imports use `python -m infra.marina.apps.rl_data_catalog.load_browse_evidence`
+with each shard's `--index URI SHA256`, the frozen `--load-id`, service URL,
+`--auth-token-secret` (an Iris-delivered secret file name), worker count and an
+immutable receipt URI. The bulk loader is restricted to the private preview app.
+
+Large imports run regionally. Review panels use an additive selection table;
+stored declarations, old assessment keys and packet bytes remain intact. Rollout
+references come from each measurement's hashed aggregate, including ancestor
+attempt receipts; never derive opaque trial paths from source names. Only named
+transcript and verifier files are staged from trial archives. Trial configuration
+and environment values are not served. Compressed SQL content is size/hash checked
+when read, and runtimes need no new object-store credentials.
+
+The blocking journeys exercise Quality chip → list → raw review and solver →
+attempt → rollout, both themes at 1440/390. Readability also visits the raw review,
+defect legend, attempt list and rollout. The blocking API coverage check requires every open FULL/SAMPLE source panel,
+matching task/raw-row counts, every recorded difficulty observation with attempts,
+and reconciled defect totals. Explicit not-mapped rows remain visible in provenance.
+Candidate checks execute these API routes
+through the existing read-only SQL gateway before publication; hosted checks use
+the published routes. Verify cold and warm timings for the new pages and retain
+source/Status warm performance. Keep all old evidence and production on HOLD.

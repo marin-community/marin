@@ -61,6 +61,10 @@ def test_all_pages_share_navigation_labels_order_and_current_view(journey: Journ
         ("source.html#source_id=Marin%3Aclean", "By source"),
         ("backends.html#source_id=Marin%3Aclean", "By source"),
         ("assessment.html?source=Marin%3Aclean", "By source"),
+        ("review.html?source=Marin%3Aclean&task=0", "By source"),
+        ("defects.html", "By source"),
+        ("attempts.html?source=Marin%3Aclean", "Difficulty"),
+        ("rollout.html?source=Marin%3Aclean", "Difficulty"),
     ]
     for path, current in views:
         page.goto(base + path)

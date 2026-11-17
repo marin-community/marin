@@ -638,3 +638,35 @@ def test_publication_guard_refuses_the_private_fixture():
     """The publication guard refuses the PRIVATE_ALWAYS fixture outright."""
     with pytest.raises(ValueError, match="PRIVATE_ALWAYS"):
         require_public_data(DataRestriction.PRIVATE_ALWAYS, PRIVATE_SOURCE_ID, "hf-dataset")
+
+
+def test_private_rollout_routes_never_read_attempt_content(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "private-rollout")
+    stage_private_catalog(root)
+    load_tier_catalog(CurationCatalog(root), catalog_query)
+
+    def reject_content_read(connection, cursor, statement, parameters, context, executemany):
+        if "atlas_rollout" in statement or "FROM atlas_difficulty" in statement:
+            raise AssertionError("Private rollout route read task-level content")
+
+    event.listen(catalog_database, "before_cursor_execute", reject_content_read)
+    try:
+        with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+            for endpoint, parameters in [
+                ("/difficulty-attempts", {"source_id": PRIVATE_SOURCE_ID, "measurement_id": "unknown"}),
+                (
+                    "/difficulty-rollout",
+                    {"source_id": PRIVATE_SOURCE_ID, "measurement_id": "unknown", "attempt_id": "unknown"},
+                ),
+            ]:
+                response = client.get(endpoint, params=parameters)
+                assert response.status_code == 200
+                assert response.json() == {
+                    "data_restriction": "private_always",
+                    "private": True,
+                    "content": None,
+                    "marker": "Private data: content is not displayed.",
+                }
+                assert not canary_in_payload(response.json())
+    finally:
+        event.remove(catalog_database, "before_cursor_execute", reject_content_read)

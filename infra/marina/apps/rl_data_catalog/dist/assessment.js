@@ -1,14 +1,7 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
 const source = new URLSearchParams(location.search).get("source");
 const labels = {good: "Good", some_issues: "Some issues", bad: "Bad", unknown: "Unknown"};
-const defectLabels = {
-  missing_context: "Missing context",
-  ambiguity: "Ambiguity",
-  wrong_reference: "Wrong reference",
-  answer_leakage: "Answer leakage",
-  malformed: "Malformed",
-  rubric_mismatch: "Rubric mismatch",
-};
+const defectLabels = QC_DEFECT_LABELS;
 const confidenceLabels = {high: "High", medium: "Medium", low: "Low"};
 const referenceLabels = {consistent: "Reference consistent", conflict: "Reference conflict", unknown: "Reference unknown"};
 const PAGE_SIZE = 100;
@@ -18,7 +11,7 @@ const state = {
   confidence: "all",
   reference: "all",
   status: "all",
-  defects: new Set(),
+  defects: new Set(new URLSearchParams(location.search).getAll('defect')),
   search: "",
   offset: 0,
   counts: null,
@@ -43,7 +36,7 @@ function defectChips(defectCounts, reviewed) {
   for (const [defect, count] of Object.entries(defectCounts)) {
     if (!count) continue;
     const rate = reviewed ? ` · ${(100 * count / reviewed).toFixed(1)}%` : "";
-    group.append(node("span", `${defectLabels[defect]} ${count}${rate}`, `chip quality-some_issues defect-chip`));
+    group.append(defectChip(defect, ` ${count}${rate}`));
   }
   return group;
 }
@@ -58,6 +51,10 @@ function confidenceLine(counts) {
 // The scope line states whether the numbers are SAMPLE or FULL and the FULL coverage.
 function scopeLine(data) {
   const parts = [`Review scope: ${data.scope}`];
+  if (data.review_input) {
+    const panel = data.review_input.panel;
+    parts.push(`${data.review_input.current_pin ? 'Current input' : 'Archived input panel'}: ${panel.dataset_id} @ ${panel.dataset_revision}`);
+  }
   const completeness = data.review_completeness;
   if (completeness && completeness.required != null) {
     parts.push(`${(completeness.reviewed ?? 0).toLocaleString()} / ${completeness.required.toLocaleString()} conclusive reviewed`);
@@ -108,14 +105,22 @@ function summary(data) {
   target.append(section);
 }
 
-function taskCard(sample) {
+function taskCard(sample, reviewer) {
+  reviewer = sample.reviewer || reviewer;
   const details = node("details", undefined, "assessment-card"), content = node("div");
   const unavailable = sample.status === "unavailable";
-  const badges = (sample.defects || []).map(defect => node("span", defectLabels[defect], "chip quality-some_issues"));
+  const badges = (sample.defects || []).map(defect => defectChip(defect));
   if (sample.confidence) badges.push(node("span", `Confidence: ${confidenceLabels[sample.confidence] || sample.confidence}`, "chip quality-unassessed"));
   if (sample.reference_status) badges.push(node("span", referenceLabels[sample.reference_status] || sample.reference_status, "chip quality-unassessed"));
   if (unavailable) badges.push(node("span", "Judgment unavailable", "chip quality-unassessed"));
-  details.append(node("summary", `${labels[sample.verdict] || sample.verdict} · ${sample.task_id}`), content);
+  const metadata = node('div', undefined, 'review-metadata');
+  metadata.append(...badges, node('span', `Reviewer: ${reviewer.model} @ ${reviewer.revision || 'unrecorded'}`));
+  const raw = node('a', 'Open raw review →');
+  raw.href = `review.html?${new URLSearchParams({source, task: sample.task_id})}`;
+  metadata.append(raw);
+  const heading = node('summary', `${labels[sample.verdict] || sample.verdict} · ${sample.task_id}`);
+  heading.append(metadata);
+  details.append(heading, content);
   details.addEventListener("toggle", async () => {
     if (!details.open || content.childNodes.length) return;
     content.append(node("p", unavailable ? "The reviewer never returned a usable judgment for this task." : "Loading full review and packet…"));
@@ -194,6 +199,7 @@ function browser(report, initialPage) {
     const box = node("input");
     box.type = "checkbox";
     box.dataset.defect = defect;
+    box.checked = state.defects.has(defect);
     if (!count) box.disabled = true;
     box.addEventListener("change", () => {
       if (box.checked) state.defects.add(defect); else state.defects.delete(defect);
@@ -238,7 +244,7 @@ function browser(report, initialPage) {
     previous.disabled = state.offset <= 0;
     next.disabled = state.offset + PAGE_SIZE >= total;
     if (!items.length) reviews.replaceChildren(node("p", "No stored reviews match these filters."));
-    else reviews.replaceChildren(...items.map(taskCard));
+    else reviews.replaceChildren(...items.map(item => taskCard(item, report.model)));
   }
   previous.addEventListener("click", () => { state.offset = Math.max(0, state.offset - PAGE_SIZE); render(); });
   next.addEventListener("click", () => { state.offset += PAGE_SIZE; render(); });
@@ -450,10 +456,19 @@ function auditPanel() {
 
 (async () => {
   try {
-    const data = await json(`api/assessment?source_id=${encodeURIComponent(source)}`);
+    const info = await json(`api/source?${new URLSearchParams({source_id: source})}`);
+    if (info.data_restriction === 'private_always' || info.declaration.data_restriction === 'private_always') {
+      $('title').textContent = `QC reviews · ${info.declaration.display_name}`;
+      $('message').textContent = 'Private data: content is not displayed.';
+      return;
+    }
+    const data = await json(`api/assessment?${browseQuery(0)}`);
     $("title").textContent = data.source;
     $("message").textContent = scopeLine(data);
     summary(data);
+    const legend = node('a', 'Defect-type legend and catalog counts');
+    legend.href = 'defects.html';
+    $('summary').prepend(legend);
     browser(data.report, data);
     auditPanel();
     $("report").textContent = JSON.stringify(data.report, null, 2);

@@ -89,7 +89,8 @@ function renderMeasured(sources) {
     id.append(sourceLink(source.source_id));
     const rates = document.createElement('td');
     for (const model of source.solvers) {
-      const cell = document.createElement('span');
+      const cell = document.createElement('a');
+      cell.href = `attempts.html?${new URLSearchParams({source: source.source_id, ...(model.measurement_id ? {measurement: model.measurement_id} : {})})}`;
       cell.className = 'coverage-solver';
       cell.textContent = `${SOLVER_TITLES[model.solver] || model.solver}: ${(100 * model.solved / Math.max(model.n, 1)).toFixed(1)}% (${model.solved}/${model.n})`;
       rates.append(cell);

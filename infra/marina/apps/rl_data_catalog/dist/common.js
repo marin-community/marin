@@ -14,9 +14,9 @@ async function json(url) {
 
 const ATLAS_VIEWS = [
   {label: 'Status', href: 'status.html', pages: ['status.html']},
-  {label: 'By source', href: './', pages: ['', 'index.html', 'source.html', 'assessment.html', 'backends.html']},
+  {label: 'By source', href: './', pages: ['', 'index.html', 'source.html', 'assessment.html', 'review.html', 'defects.html', 'backends.html']},
   {label: 'By curriculum', href: 'curriculum.html', pages: ['curriculum.html']},
-  {label: 'Difficulty', href: 'difficulty.html', pages: ['difficulty.html']},
+  {label: 'Difficulty', href: 'difficulty.html', pages: ['difficulty.html', 'attempts.html', 'rollout.html']},
   {label: 'Getting started', href: 'guide.html', pages: ['guide.html']},
   {label: 'Review archive', href: 'archive.html', pages: ['archive.html']},
 ];
@@ -30,6 +30,26 @@ for (const navigation of document.querySelectorAll('.atlas-tabs')) {
     if (view.pages.includes(filename)) link.setAttribute('aria-current', 'page');
     return link;
   }));
+}
+
+function qualityChip(quality, sourceId, prefix = '') {
+  const chip = node(['FULL', 'SAMPLE'].includes(quality) ? 'a' : 'span', `${prefix}${quality}`, `chip level level-${quality.toLowerCase()}`);
+  if (chip.tagName === 'A') {
+    chip.href = `assessment.html?source=${encodeURIComponent(sourceId)}`;
+    chip.setAttribute('aria-label', `${prefix}${quality}: browse task reviews`);
+  }
+  return chip;
+}
+
+const QC_DEFECT_LABELS = {
+  missing_context: 'Missing context', ambiguity: 'Ambiguity', wrong_reference: 'Wrong reference',
+  answer_leakage: 'Answer leakage', malformed: 'Malformed', rubric_mismatch: 'Rubric mismatch',
+};
+function defectChip(defect, suffix = '') {
+  const chip = node('a', `${QC_DEFECT_LABELS[defect] || defect}${suffix}`, 'chip quality-some_issues defect-chip');
+  chip.href = `defects.html#${encodeURIComponent(defect)}`;
+  chip.dataset.defect = defect;
+  return chip;
 }
 
 // Every stored assessment row is listed; its full packet loads when opened.

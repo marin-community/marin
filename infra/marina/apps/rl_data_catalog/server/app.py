@@ -32,6 +32,7 @@ from .duplicate_folding import (
     fold_groups,
     partial_overlap_notes,
 )
+from .evidence_content import unpack_content
 from .filtration import filtration
 from .identity_measurements import IDENTITY_REVIEWS_SQL, IDENTITY_SURVEY_SQL
 from .inventory_state import CachedInventory, inventory_input_key
@@ -48,6 +49,8 @@ from .restrictions import (
     restriction_projection,
     restriction_registry_key,
 )
+from .reviews import register_review_routes
+from .rollouts import register_rollout_routes
 from .schema import SCHEMA_SQL
 from .source_areas import materialize_source_areas
 from .source_counts import SourceCounts
@@ -290,6 +293,17 @@ def source_record(connection: Connection, source_id: str) -> dict[str, Any]:
     if row is None:
         raise HTTPException(404, "Source not found")
     result = canonical_source_record(dict(row))
+    review_panel = (
+        connection.execute(
+            text("SELECT pipeline_key,receipt FROM atlas_review_current WHERE load_id=:load AND source_id=:source"),
+            {"load": result["load_id"], "source": result["id"]},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if review_panel is not None:
+        result["assessment_key"] = review_panel["pipeline_key"]
+        result["review_input"] = review_panel["receipt"]
     result["declaration"] = contract_projection(
         result["declaration"], contract_records(connection).get(result["id"], [])
     )
@@ -416,6 +430,8 @@ def create_api(services: AppletServices) -> FastAPI:
     inventory_responses: dict[SourceProjection, CachedInventory] = {}
     register_curriculum_routes(api, engine)
     register_audit_routes(api, engine)
+    register_review_routes(api, engine)
+    register_rollout_routes(api, engine)
 
     def inventory_cache_key(connection: Connection, load_id: str) -> str:
         """SQL row versions plus the restriction registry version: either change rebuilds."""
@@ -738,9 +754,12 @@ def create_api(services: AppletServices) -> FastAPI:
                 for item in connection.execute(
                     text(
                         f"""
-                SELECT task_id, cohort, verdict, status, confidence, reference_status, defects,
-                    explanation, provenance, replaced_task_sha256, repair_advisories, exclusion_reason
-                FROM atlas_items i WHERE i.load_id = :load_id AND i.pipeline_key = :pipeline_key{filter_sql}
+                SELECT i.task_id, i.cohort, i.verdict, i.status, i.confidence, i.reference_status, i.defects,
+                    i.explanation, i.provenance, i.replaced_task_sha256,
+                    i.repair_advisories, i.exclusion_reason,r.reviewer
+                FROM atlas_items i LEFT JOIN atlas_raw_reviews r
+                    ON r.load_id=i.load_id AND r.pipeline_key=i.pipeline_key AND r.task_id=i.task_id
+                WHERE i.load_id = :load_id AND i.pipeline_key = :pipeline_key{filter_sql}
                 ORDER BY i.cohort, i.task_id
                 LIMIT :limit OFFSET :offset
             """
@@ -775,6 +794,7 @@ def create_api(services: AppletServices) -> FastAPI:
             "source": declaration["display_name"],
             "scope": display.quality.value,
             "review_completeness": source["review_completeness"],
+            "review_input": source.get("review_input"),
             "result": result(declaration, summaries.get("admitted")),
             "issue_rate": issue_rate(declaration, summaries.get("admitted")),
             "waiver": declaration.get("quality_result_waiver"),
@@ -802,11 +822,16 @@ def create_api(services: AppletServices) -> FastAPI:
                 SELECT i.task_id, i.cohort, i.verdict, i.status, i.confidence, i.reference_status,
                     i.defects, i.provenance, i.replaced_task_sha256, i.repair_advisories,
                     i.explanation, i.evidence_ids,
-                    i.omissions, i.exclusion_reason, p.packet, s.declaration AS source_declaration
+                    i.omissions, i.exclusion_reason, p.packet, s.declaration AS source_declaration,
+                    r.record AS raw_review
                 FROM atlas_sources s JOIN atlas_current c USING (load_id)
-                JOIN atlas_items i ON i.load_id = s.load_id AND i.pipeline_key = s.assessment_key
+                LEFT JOIN atlas_review_current q ON q.load_id=s.load_id AND q.source_id=s.id
+                JOIN atlas_items i ON i.load_id = s.load_id
+                    AND i.pipeline_key = COALESCE(q.pipeline_key,s.assessment_key)
                 LEFT JOIN atlas_packets p ON p.load_id = i.load_id
                     AND p.pipeline_key = i.pipeline_key AND p.task_id = i.task_id
+                LEFT JOIN atlas_raw_reviews r ON r.load_id=i.load_id
+                    AND r.pipeline_key=i.pipeline_key AND r.task_id=i.task_id
                 WHERE c.name = 'latest' AND s.id IN (:source_id, :original_source_id) AND i.task_id = :task_id
             """
                     ),
@@ -850,6 +875,11 @@ def create_api(services: AppletServices) -> FastAPI:
         return {
             "judgment": judgment,
             "packet": packet,
+            "raw_review": (
+                private_content_marker()
+                if private
+                else (unpack_content(row["raw_review"]) if row["raw_review"] is not None else None)
+            ),
             "omissions": row["omissions"],
             "exclusion_reason": row["exclusion_reason"],
         }

@@ -21,6 +21,7 @@ from sqlalchemy import text
 
 from experiments.post_training.task_curation.tests.admission_fixtures import with_declaration_admission_census
 from infra.marina.apps.rl_data_catalog.server.app import migrate
+from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
 from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
 from infra.marina.apps.rl_data_catalog.tests.backend_fixtures import backend_source_maps
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
@@ -230,6 +231,55 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                             "value": measurement.model_dump_json(),
                         },
                     )
+        with engine.begin() as connection:
+            for measurement in connection.execute(text("SELECT measurement FROM atlas_difficulty")).scalars():
+                identity = measurement["measurement_id"]
+                for index in range(3):
+                    summary = {
+                        "attempt_id": str(index),
+                        "task_id": str(index),
+                        "solver": measurement["solver"],
+                        "attempt": "00",
+                        "trial_id": f"trial-{index}",
+                        "score": 1.0 if index == 0 else 0.0,
+                        "status": "scored",
+                        "duration": 2.5,
+                        "exception": None,
+                        "reason": None,
+                        "has_rollout": True,
+                    }
+                    detail = {
+                        "conversation": [
+                            {
+                                "role": "assistant",
+                                "content": "Recorded solver reasoning",
+                                "tool_calls": [{"name": "terminal", "arguments": "check answer"}],
+                            }
+                        ],
+                        "model_input": {"messages": [{"role": "user", "content": "Solve the frozen task."}]},
+                        "verifier": {"reward": summary["score"]},
+                        "exception": None,
+                        "exception_info": None,
+                        "receipt": {"uri": "s3://fixture/attempt.json", "sha256": "a" * 64},
+                        "archive": {"uri": "s3://fixture/trial.tar.gz", "sha256": "b" * 64},
+                    }
+                    connection.execute(
+                        text(
+                            "INSERT INTO atlas_rollout_attempts VALUES (:id,:attempt,:task,"
+                            "CAST(:summary AS JSONB),CAST(:detail AS JSONB))"
+                        ),
+                        {
+                            "id": identity,
+                            "attempt": str(index),
+                            "task": str(index),
+                            "summary": json.dumps(summary),
+                            "detail": json.dumps(pack_content(detail)),
+                        },
+                    )
+                connection.execute(
+                    text("INSERT INTO atlas_rollout_sets VALUES (:id,CAST(:metadata AS JSONB))"),
+                    {"id": identity, "metadata": json.dumps({"attempt_count": 3, "recorded_attempt_count": 3})},
+                )
         with engine.begin() as connection:
             nodes = [
                 ("D05", "subject:D05", None, "subject", "Earth, Atmospheric, Ocean & Environmental Sciences", 7088),

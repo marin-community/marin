@@ -39,6 +39,7 @@ IMPORT_RELOCATIONS = {
 
 RELOCATED_SERVER_FILES = (
     "server/app.py",
+    "server/rollouts.py",
     "server/licensing.py",
     "server/admission.py",
     "server/duplicate_folding.py",

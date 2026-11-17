@@ -60,3 +60,10 @@
 .assessment-page { overflow-wrap: anywhere; }
 
 .evidence-labels .chip { white-space: normal; max-width: 100%; overflow-wrap: anywhere; }
+
+.review-metadata { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; font-size: var(--type-min); }
+.review-metadata > span { overflow-wrap: anywhere; }
+.review-metadata .chip { white-space: normal; }
+.review-metadata a { text-decoration: underline; }
+#content { min-width: 0; }
+#content pre { white-space: pre-wrap; overflow-wrap: anywhere; }

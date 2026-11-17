@@ -68,7 +68,7 @@ async function render(data, sourceId) {
   $('title').textContent = d.display_name;
   $('message').textContent = `${d.origin} · ${d.id} · catalog snapshot ${data.catalog.snapshot_id}`;
   const result = data.result;
-  const qualityBadge = node('span', `Quality ${data.quality}`, `chip level level-${data.quality.toLowerCase()}`);
+  const qualityBadge = qualityChip(data.quality, sourceId, 'Quality ');
   if (data.quality_review_status) qualityBadge.title = data.quality_review_status;
   $('labels').replaceChildren(
     qualityBadge,
@@ -81,6 +81,10 @@ async function render(data, sourceId) {
     $('labels').append(node('span', 'SAMPLE pin-stale', 'chip quality-unassessed'));
   }
   const sections = [];
+  if (data.data_restriction === 'private_always' || d.data_restriction === 'private_always') {
+    $('sections').replaceChildren(card('Private data', [], 'Private data: content is not displayed.'));
+    return;
+  }
   const difficulty = card('Difficulty', [
     ['Protocol', data.difficulty.protocol_id],
     ...data.difficulty.models.flatMap(model => [
@@ -88,7 +92,7 @@ async function render(data, sourceId) {
       [`${AtlasDifficulty.titles[model.solver]} sample`, model.sample_receipt && pointer(model.sample_receipt.uri)],
       [`${AtlasDifficulty.titles[model.solver]} population`, model.sample && `${number.format(model.sample.population_count)} retained tasks; seed ${model.sample.seed}${model.sample.pre_oracle_filter ? '; pre-oracle-filter; resampling required after filtering' : ''}`],
       [`${AtlasDifficulty.titles[model.solver]} model`, model.model && `${model.model.model} @ ${model.model.revision}`],
-      [`${AtlasDifficulty.titles[model.solver]} attempts`, model.attempts_receipt && pointer(model.attempts_receipt.uri)],
+      [`${AtlasDifficulty.titles[model.solver]} attempts`, model.measurement_id && link('Browse task attempts and rollouts →', `attempts.html?${new URLSearchParams({source: sourceId, measurement: model.measurement_id})}`)],
       [`${AtlasDifficulty.titles[model.solver]} infrastructure`, model.infrastructure_attempts == null ? null : `${model.infrastructure_attempts} failed attempts preserved; ${model.pending_tasks} pending tasks; ${model.blocked_tasks ?? 0} blocked tasks`],
     ]),
     ['Historical observations', data.difficulty.historical.length ? list(data.difficulty.historical.map(model => {
@@ -142,7 +146,7 @@ async function render(data, sourceId) {
     admitted: d.oversight_evidence.admitted,
   });
   sections.push(card('Oversight evidence', [
-    ['Level', node('span', `Quality ${data.quality}`, `chip level level-${data.quality.toLowerCase()}`)],
+    ['Level', qualityChip(data.quality, sourceId, 'Quality ')],
     ['Basis', data.quality === 'FULL' ? 'Whole-source QA for the current input' : data.quality === 'SAMPLE' ? 'Sampled content review for the current input' : 'Current-input conversion only'],
     ...(receiptRow ? [receiptRow] : []),
     ['Reviewed', data.quality === 'QUICK' ? null : d.quality_result?.reviewed ?? d.independent_qc?.reviewed],
@@ -161,8 +165,8 @@ async function render(data, sourceId) {
     ['Latest attempt', data.latest_attempt.key && `${data.latest_attempt.status}: ${data.latest_attempt.key}`], ['Attempt note', data.latest_attempt.reason],
   ], 'Golden answers must score 1 and empty or wrong answers 0 before tasks are admitted.'));
   const admitted = data.cohorts.admitted, excluded = data.cohorts.excluded;
-  sections.push(card('Sampled LLM-judge review', assessment ? [
-    ['Review page', link(`Open the ${number.format(assessment.sample_items)} frozen sample items and their packets →`, `assessment.html?source=${encodeURIComponent(sourceId)}`)],
+  sections.push(card('QC task reviews', assessment ? [
+    ['Review page', link(`Open the ${number.format(assessment.sample_items)} task reviews →`, `assessment.html?source=${encodeURIComponent(sourceId)}`)],
     ['Retained cohort', admitted && `${admitted.grade}: ${admitted.grade_reason} (${number.format(admitted.reviewed)} reviewed of ${number.format(admitted.population)})`],
     ['Excluded cohort', excluded && `${excluded.grade}: ${excluded.grade_reason}`],
     ['Judge model', `${assessment.model.model} @ ${assessment.model.revision}`], ['Scope', assessment.scope],
@@ -269,8 +273,8 @@ async function render(data, sourceId) {
       const record = node('details');
       record.append(node('summary', 'Complete assessment report'), node('pre', JSON.stringify(report.report, null, 2)));
       section.replaceChildren(node('h2', 'All stored assessment reviews'),
-        node('p', `${number.format(report.report.evidence.samples.length)} stored assessment records. Open each review for its verdict and packet. This sampled evidence is separate from complete content-review coverage and execution qualification.`, 'card-intro'),
-        repairRecommendations(report.report), taskReviews(sourceId, report.report.evidence.samples), record);
+        node('p', `${number.format(report.report.evidence.total)} stored task reviews. The first page is shown below; open QC task reviews for paging and defect filters.`, 'card-intro'),
+        repairRecommendations(report.report), taskReviews(sourceId, report.report.evidence.items), record);
     } catch (error) { section.append(node('p', error.message, 'error')); }
   }
   for (const summary of data.archived_reviews) {

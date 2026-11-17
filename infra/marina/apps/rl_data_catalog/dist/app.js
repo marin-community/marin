@@ -172,7 +172,7 @@ function sourceRow(row, others, canonical) {
     examples.title = row.filtration.reason;
     const filtration = node('td', undefined, 'filtration-cell'); filtration.append(filtrationChip(row.filtration));
     const use = node('td', useLabels[value(row, 'use')], 'use-cell');
-    const quality = node('td'); quality.append(node('span', row.quality, `chip level level-${row.quality.toLowerCase()}`));
+    const quality = node('td'); quality.append(qualityChip(row.quality, row.id));
     if (row.quality_review_status) quality.firstElementChild.title = row.quality_review_status;
     const result = node('td'), key = resultKey(row);
     const provisional = row.result && row.result_provisional;

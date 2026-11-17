@@ -180,10 +180,11 @@ def assessment_header(connection: Connection, source_id: str) -> dict[str, Any] 
         connection.execute(
             text(
                 """
-            SELECT s.load_id, s.assessment_key AS pipeline_key FROM atlas_sources s
+            SELECT s.load_id, COALESCE(r.pipeline_key,s.assessment_key) AS pipeline_key FROM atlas_sources s
             JOIN atlas_current c USING (load_id)
+            LEFT JOIN atlas_review_current r ON r.load_id=s.load_id AND r.source_id=s.id
             WHERE c.name = 'latest' AND s.id IN (:source_id, :original_source_id)
-                AND s.assessment_key IS NOT NULL
+                AND COALESCE(r.pipeline_key,s.assessment_key) IS NOT NULL
         """
             ),
             {"source_id": source_id, "original_source_id": original_source_id(source_id)},

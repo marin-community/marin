@@ -12,9 +12,25 @@ Synced to preview revision 21 (2026-11-16).
 
 Every page renders the same navigation from `dist/common.js`: Status, By source,
 By curriculum, Difficulty, Getting started and Review archive. `source.html`,
-`assessment.html` and `backends.html` keep By source active. The installed browser
+`assessment.html`, `review.html`, `defects.html` and `backends.html` keep By source active.
+`attempts.html` and `rollout.html` keep Difficulty active. The installed browser
 journey in `journeys/test_status.py` checks every page's labels, destinations and
 current view.
+
+FULL and SAMPLE Quality chips link directly to a source's paged task-review list.
+The Evidence page links to the same list. Each row shows the verdict, typed defect
+chips, reviewer identity and confidence; verdict and defect filters select the
+stored reviews. A raw-review link opens the recorded reviewer requests, responses
+and their provenance. Defect chips link to the catalog-wide defect legend and
+counts. Archived panels display their original input pins and never assert a new
+current-pin qualification.
+
+The Difficulty page and source Evidence solver rows link to paged attempts and
+individual rollout viewers. Attempts retain score, solver, trial identity,
+duration and exception metadata. Transcripts include tool calls and verifier
+output; Filer links retain the raw receipt/archive references. Outcomes without
+a recorded attempt artifact remain explicitly unavailable. PRIVATE_ALWAYS sources
+show a marker; the browser does not request their task/review/rollout content.
 
 Catalog loading stores the counts and grades from the `atlas_cohort_summary`
 SQL view in `atlas_cohort_summaries` before making the new catalog snapshot
