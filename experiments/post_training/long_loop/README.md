@@ -626,7 +626,7 @@ all required fields.
 
 This path uses SkyRL's generation entrypoint with no training dataset. The
 policy uses one EP12 inference pool on three four-GPU GB200 hosts. The shared
-judge uses TP4/PP2 on two further hosts. Both use production priority in 08a;
+judge uses TP4 on one further host. Both use production priority in 08a;
 compilation and CUDA graphs stay enabled. The ordinary GB200 gang placement
 binds each pool to an NVLink domain. Keep the same context, sampling, task
 selection and judge pins when comparing two policies. The result has no RL

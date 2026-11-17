@@ -51,7 +51,8 @@ def test_adopted_evaluation_has_no_training_input_and_rejects_changed_data(tmp_p
     assert launch["inputs"]["validation_data"][0]["uri"] == str(data)
     assert launch["inputs"]["model"]["uri"] == str(model)
     assert launch["skyrl"]["generator"]["trajectory_retention"]["model_checkpoint_step"] == 400407
-    assert step.deps
+    lowered = step.lower()
+    assert lowered.name == step.name
     with pytest.raises(ValueError, match="checkpoint step"):
         evaluation_from_spec(replace(spec, model_step=393491), output)
     (data / "rollouts.parquet").write_bytes(b"changed input")

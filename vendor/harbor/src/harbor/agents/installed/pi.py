@@ -568,6 +568,14 @@ export default function (pi) {
             f"{shlex.quote(self._SETTINGS_CONFIG_RELATIVE_PATH)}"
         )
 
+    async def _stage_agent_file(self, environment: BaseEnvironment, source: Path, target: str) -> None:
+        await environment.upload_file(source, target)
+        target_arg = shlex.quote(target)
+        owner = environment.default_user
+        if owner is not None:
+            await self.exec_as_root(environment, f"chown -- {shlex.quote(str(owner))} {target_arg}")
+        await self.exec_as_root(environment, f"chmod 600 {target_arg}")
+
     async def _stage_endpoint_env(self, environment: BaseEnvironment) -> None:
         """Upload the endpoint variables without placing their values in a command."""
         if self._api_base is None:
@@ -580,7 +588,7 @@ export default function (pi) {
         with tempfile.TemporaryDirectory() as temp_dir:
             local_path = Path(temp_dir) / "endpoint.env"
             local_path.write_text(contents)
-            await environment.upload_file(local_path, self._ENDPOINT_ENV_PATH)
+            await self._stage_agent_file(environment, local_path, self._ENDPOINT_ENV_PATH)
 
     async def _stage_context_budget_extension(
         self, environment: BaseEnvironment
@@ -599,9 +607,7 @@ export default function (pi) {
         with tempfile.TemporaryDirectory() as temp_dir:
             local_path = Path(temp_dir) / "harbor-pi-context-budget.js"
             local_path.write_text(extension)
-            await environment.upload_file(
-                local_path, self._CONTEXT_BUDGET_EXTENSION_PATH
-            )
+            await self._stage_agent_file(environment, local_path, self._CONTEXT_BUDGET_EXTENSION_PATH)
 
     @with_prompt_template
     async def run(

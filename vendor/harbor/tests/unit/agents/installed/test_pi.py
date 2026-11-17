@@ -6,6 +6,8 @@ import shlex
 import shutil
 import subprocess
 import threading
+import tempfile
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -59,6 +61,8 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
         path.write_text(contents)
         path.chmod(0o755)
     class LocalShellEnvironment:
+        default_user = None
+
         async def upload_file(self, source_path, target_path):
             shutil.copyfile(source_path, target_path)
 
@@ -153,6 +157,8 @@ class TestPiAgent:
             logs_dir=temp_dir, model_name=f"{provider}/model", extra_env={key: "EMPTY"}
         )
         environment = AsyncMock()
+        environment.default_user = None
+        environment.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
         environment.exec.return_value = SimpleNamespace(
             return_code=0, stdout="", stderr=""
         )
@@ -422,6 +428,8 @@ async def test_hosted_vllm_request_budget_uses_exact_server_token_count(
         thinking_format="chat-template",
     )
     environment = AsyncMock()
+    environment.default_user = None
+    environment.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
 
     async def copy_extension(source_path, target_path):
         assert target_path == str(extension_path)
@@ -496,6 +504,8 @@ async def test_hosted_vllm_request_budget_truncates_token_dense_tool_output(
         thinking_format="chat-template",
     )
     environment = AsyncMock()
+    environment.default_user = None
+    environment.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
 
     async def copy_extension(source_path, target_path):
         assert target_path == str(extension_path)
@@ -1537,3 +1547,51 @@ class TestPiTrajectoryConversion:
         assert not (temp_dir / "trajectory.json").exists()
         assert context.n_input_tokens == 0
         assert context.n_output_tokens == 0
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="Requires distinct root and guest Unix users")
+@pytest.mark.asyncio
+async def test_hosted_files_are_readable_and_removable_by_the_task_user(monkeypatch):
+    with tempfile.TemporaryDirectory(prefix="pi-task-user-") as directory:
+        root = Path(directory)
+        root.chmod(0o1777)
+        endpoint = root / "endpoint.env"
+        extension = root / "context.js"
+        monkeypatch.setattr(Pi, "_ENDPOINT_ENV_PATH", str(endpoint))
+        monkeypatch.setattr(Pi, "_CONTEXT_BUDGET_EXTENSION_PATH", str(extension))
+
+        class GuestProcesses:
+            default_user = 65534
+
+            async def upload_file(self, source, target):
+                shutil.copyfile(source, target)
+
+            async def exec(self, command, *, user=None, **kwargs):
+                completed = subprocess.run(
+                    ["/bin/bash", "-c", command],
+                    user=0 if user == "root" else self.default_user,
+                    capture_output=True,
+                    text=True,
+                )
+                return SimpleNamespace(
+                    return_code=completed.returncode, stdout=completed.stdout, stderr=completed.stderr
+                )
+
+        environment = GuestProcesses()
+        agent = Pi(
+            logs_dir=root / "logs",
+            model_alias="hosted_vllm/fixture",
+            api_base="https://fixture.invalid/v1",
+            thinking_format="chat-template",
+        )
+        await agent._stage_endpoint_env(environment)
+        await agent._stage_context_budget_extension(environment)
+        for path in (endpoint, extension):
+            assert path.stat().st_uid == 65534
+            assert path.stat().st_mode & 0o777 == 0o600
+        result = await environment.exec(
+            f"set -e; . {shlex.quote(str(endpoint))}; test -r {shlex.quote(str(extension))}; "
+            f"rm -- {shlex.quote(str(endpoint))} {shlex.quote(str(extension))}"
+        )
+        assert result.return_code == 0, result.stderr
+        assert not endpoint.exists() and not extension.exists()

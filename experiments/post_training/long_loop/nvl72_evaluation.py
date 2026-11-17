@@ -124,7 +124,12 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
             model=model,
             train_data=(),
             validation_data=(ArtifactDataSource(dataset, relative_path="rollouts.parquet"),),
-            topology=SkyRLTopology(num_nodes=3, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
+            topology=SkyRLTopology(
+                num_nodes=plan.num_nodes,
+                gpus_per_node=plan.policy_num_gpus_per_node,
+                gpu_variant="GB200",
+                role_plan=plan,
+            ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=-1, temporary_storage_ttl_days=14),
             seed=SEED,
         ),
@@ -135,7 +140,7 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     judge = replace(
         judge,
         resource_hint=replace(judge.resource_hint, gpu={"GB200": 4}),
-        serve=replace(judge.serve, tensor_parallel_size=4, pipeline_parallel_size=2),
+        serve=replace(judge.serve, tensor_parallel_size=4, pipeline_parallel_size=1),
     )
     original = step.build_config
 
@@ -150,5 +155,6 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
         return JudgedEvaluation(run, judge, "https://iris.oa.dev", 4, "GB200", "cw-us-east-08a")
 
     step = replace(step, build_config=build_config, run=run_judged)
+    step = replace(step, expected_fingerprint=step.fingerprint())
     config_output.write_text(materialized_config(step, spec.output_prefix).skyrl.launch_config_yaml)
     return step
