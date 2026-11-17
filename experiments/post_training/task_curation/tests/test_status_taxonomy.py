@@ -236,6 +236,14 @@ def test_every_reason_has_one_canonical_explanation():
         assert explanation.clears.strip()
 
 
+def test_oversight_missing_explanation_carries_the_quick_receipt_path():
+    # QUICK oversight admits a source: the explanation cannot read as if only
+    # SAMPLE or FULL evidence could clear the reason.
+    explanation = REASON_EXPLANATIONS[ExclusionReason.OVERSIGHT_MISSING]
+    assert "QUICK" in explanation.clears
+    assert "QUICK" in explanation.meaning
+
+
 def test_difficulty_gap_mapping_targets_defined_reasons():
     for reason in DIFFICULTY_GAP_EXCLUSION_REASONS.values():
         assert reason in ExclusionReason

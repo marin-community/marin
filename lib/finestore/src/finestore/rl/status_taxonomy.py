@@ -179,8 +179,9 @@ REASON_EXPLANATIONS: dict[ExclusionReason, ReasonExplanation] = {
     ),
     ExclusionReason.OVERSIGHT_MISSING: ReasonExplanation(
         label="Oversight missing",
-        meaning="No evidence-derived SAMPLE or FULL oversight with verification exists.",
-        clears="A SAMPLE or FULL review receipt with recorded verification.",
+        meaning="No oversight evidence exists at all: neither a QUICK conversion receipt "
+        "nor a SAMPLE or FULL review receipt with recorded verification.",
+        clears="A QUICK conversion receipt, or a SAMPLE or FULL review receipt with recorded verification.",
     ),
     ExclusionReason.AGENTIC_TASK_FORMAT_MISSING: ReasonExplanation(
         label="Agentic task format missing",

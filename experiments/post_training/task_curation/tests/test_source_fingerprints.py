@@ -162,6 +162,22 @@ def test_measured_review_acknowledgement_is_bound_to_content_evidence(tmp_path):
     assert reviewed.acknowledgement is None
 
 
+def test_measured_pair_receipt_is_sealed_against_retry_outcomes(tmp_path):
+    """A pair's outcome is its first complete sealed receipt; a retry cannot replace it."""
+    rows = [task_document(str(index), f"Compute the square of {index}.") for index in range(25)]
+    populations = {key: PopulationIndex(list(content_rows(rows)), {}) for key in ("left", "right")}
+    fingerprints = {key: fingerprint_source(rows, {}) for key in populations}
+    pairs = candidate_pairs(fingerprints, {"left"}, 1)
+    receipts = StoragePath(str(tmp_path / "responses"))
+    first = next(review_pairs(pairs, populations, {}, receipts))
+    sealed = receipts / f"{first.prompt_sha256}.json"
+    assert sealed.exists()
+    with sealed.open("wb") as stream:
+        stream.write(b'{"outcome": "a different retry result"}')
+    with pytest.raises(ValueError, match="Measured receipt already differs"):
+        next(review_pairs(pairs, populations, {}, receipts))
+
+
 def test_source_change_detection_includes_added_and_modified_declarations():
     before = {
         "same": source_input_declaration("same", "a"),

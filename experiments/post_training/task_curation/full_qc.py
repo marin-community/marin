@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 MODEL_CONFIG = Path("experiments/evaluation/serve/models/zai-org/GLM-5.3.yaml")
 V3_MODEL_CONFIG = Path("experiments/evaluation/serve/models/zai-org/GLM-5.3-full-qc-v3.yaml")
 WORKER_IMAGE = "vllm/vllm-openai@sha256:61fc8a896b0a4fbbbdc063bc4b0dbc25ce98e02b5050c24aeb7830ac02039b14"
+# Standing policy: data jobs default to a three-day timeout.
+FULL_QC_JOB_TIMEOUT = Duration.from_hours(72)
 REVIEW_RUBRIC = ReviewRubric(
     id="atlas-retained-full-qc",
     version="2026.11.13.1",
@@ -115,7 +117,7 @@ def _local_endpoint(model_config: Path, context_window_tokens: int) -> LocalJudg
         worker_setup_scripts=(
             "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends git",
         ),
-        worker_timeout=Duration.from_hours(72),
+        worker_timeout=FULL_QC_JOB_TIMEOUT,
     )
 
 

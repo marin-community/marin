@@ -67,6 +67,19 @@ def test_pending_intake_requires_explicit_selection(monkeypatch):
     assert driver._selected_sources((source.name,), SourceProcessingMode.QUICK) == {source.name: source}
 
 
+def test_default_selection_is_training_and_drops_eval_tagged_sources(monkeypatch, tmp_path):
+    """TRAIN data is the goal: the default selection carries no eval-tagged source."""
+    train = number_source(tmp_path / "train", name="train-source")
+    eval_source = replace(
+        number_source(tmp_path / "eval-input", name="eval-tagged"),
+        info=replace(number_source(tmp_path / "eval-input", name="eval-tagged").info, tags=("eval",)),
+    )
+    monkeypatch.setattr(driver, "runnable_sources", lambda: {"train-source": train, "eval-tagged": eval_source})
+    monkeypatch.setattr(driver, "all_sources", lambda: {"Marin:train-source": train, "Marin:eval-tagged": eval_source})
+    assert driver._selected_sources((), SourceProcessingMode.FULL) == {"train-source": train}
+    assert driver._selected_sources(("eval-tagged",), SourceProcessingMode.FULL) == {"eval-tagged": eval_source}
+
+
 def math500() -> CurationRecipe:
     recipe = cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
     return resource_recipe(replace(recipe, source=replace(recipe.source, repo="open-athena/math500-fixture")))
