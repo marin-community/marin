@@ -52,3 +52,24 @@ and again afterward, then verifies the pushed manifest against the preserved
 digest. It refuses public packages. Record the actual internal or private
 visibility in the publication receipt. Use one GHCR package for FACET; do not
 share it with other sources.
+
+## Native tasks
+
+`tasks.sources()` declares the separate kept FACET v2 and v3 populations as
+Pending sources. Its reader preserves the Parquet `ot.images.v1` metadata and
+checks every task against the frozen image index and the registry publication
+receipt. The resulting TaskSpecs use immutable OCI digests in place of the
+original mutable Dockerfile builds.
+
+Public `setup_files/` resources are uploaded at `/setup_files/`; the converter
+does not invent an additional setup command. Original instructions, solutions,
+verifier contents, modes, timestamps and declared role budgets are retained,
+including the v3 task with a larger allocation. Private tests are restored at
+`/tests/` after the root actor stops. `bash /tests/test.sh` runs with working
+directory `/task_file`; the script's reward file and exit status are collected
+separately. The typed root-delivery contract records that the shared machine's
+runtime dependencies remain writable by the actor.
+
+These declarations do not admit tasks. Run the documented conversion, census,
+decontamination, original-oracle and no-operation controls, SAMPLE and admission
+steps against each pinned private TaskCompendium release before making it selectable.

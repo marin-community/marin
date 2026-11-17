@@ -157,6 +157,7 @@ class SourceOrigin(StrEnum):
     CODEPARROT = "CodeParrot"
     ELEUTHERAI = "EleutherAI"
     EVALCHEMY = "Evalchemy"
+    FWEINDEL = "FWeindel"
     GPQA = "GPQA"
     GRETEL = "Gretel"
     HARBOR_HUB = "Harbor Hub"
