@@ -593,7 +593,7 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",
-        revision="2026.11.17.1",
+        revision="2026.11.17.2",
         harbor=_harbor_evaluation(),
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
         recipe=replace(

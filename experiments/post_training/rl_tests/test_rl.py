@@ -359,7 +359,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         "data-medium": {"2026.11.12.1": "ba638a12"},
         "speed-long": {"2026.11.11.1": "cd0a5f4e"},
         "train-long": {"2026.11.11.1": "4945b701"},
-        "train-long-harbor": {"2026.11.17.1": "97f23c40"},
+        "train-long-harbor": {"2026.11.17.2": "f0fddfb4"},
     }
     configs = assert_revisioned_native_configs(
         snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch
