@@ -1,6 +1,8 @@
 """Installed-agent runtime admission through the real Harbor trial boundary."""
 
 import asyncio
+import json
+import shutil
 from contextlib import asynccontextmanager
 
 import pytest
@@ -19,6 +21,7 @@ from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 from skyrl_train.rollouts.agent_environment import BorrowedMachineEnvironment
 from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
+from skyrl_train.rollouts.harbor_trial_session import run_task_setup
 from tests.cpu.task_specs import lowered_task
 
 
@@ -33,6 +36,26 @@ async def unexpected_model_request(*args):
 class UnusedDecoder:
     def decode(self, token_ids):
         pytest.fail("Provider startup failure must precede token decoding")
+
+
+class ProcessTransport:
+    def __init__(self):
+        self.users = []
+
+    async def run(self, command):
+        self.users.append(command.user)
+        executable = shutil.which(command.argv[0])
+        assert executable is not None
+        process = await asyncio.create_subprocess_exec(
+            executable,
+            *command.argv[1:],
+            env=command.env,
+            cwd=command.cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
 
 
 @pytest.mark.asyncio
@@ -119,18 +142,6 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
 
 @pytest.mark.asyncio
 async def test_borrowed_machine_commands_use_explicit_environment_and_reject_host_values(tmp_path, monkeypatch):
-    class ProcessTransport:
-        async def run(self, command):
-            process = await asyncio.create_subprocess_exec(
-                *command.argv,
-                env=command.env,
-                cwd=command.cwd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await process.communicate()
-            return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
-
     monkeypatch.setenv("AMBIENT_ONLY", "must-not-enter-command")
     environment = BorrowedMachineEnvironment(
         ProcessTransport(),
@@ -144,3 +155,39 @@ async def test_borrowed_machine_commands_use_explicit_environment_and_reject_hos
     assert result.stdout == "task-value:unset"
     with pytest.raises(ValueError, match="host credential material"):
         await environment.exec("true", env={"DISGUISED": "host-secret"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_code", [0, 23])
+async def test_declared_setup_preserves_order_and_rejects_execution_failure(tmp_path, exit_code):
+    machine = ProcessTransport()
+    environment = BorrowedMachineEnvironment(
+        machine,
+        tmp_path,
+        "declared-setup",
+        EnvironmentConfig(env={"VISIBLE": "task-value"}),
+        host_capabilities=HostCapabilities(),
+    )
+    commands = (
+        f'printf "%s" "$VISIBLE" > prepared; printf first; printf diagnostic >&2; exit {exit_code}',
+        'test "$(< prepared)" = task-value && printf second',
+    )
+    evidence = tmp_path / "setup-evidence"
+    with environment.with_default_user("agent-user"):
+        if exit_code:
+            with pytest.raises(RuntimeError, match="setup command 0 exited 23"):
+                await run_task_setup(environment, commands, cwd=str(tmp_path), timeout=5, evidence_dir=evidence)
+        else:
+            await run_task_setup(environment, commands, cwd=str(tmp_path), timeout=5, evidence_dir=evidence)
+        assert environment.default_user == "agent-user"
+    assert (tmp_path / "prepared").read_text() == "task-value"
+    assert (evidence / "0.stdout").read_text() == "first"
+    assert (evidence / "0.stderr").read_text() == "diagnostic"
+    receipt = json.loads((evidence / "receipt.json").read_text())
+    assert receipt["completed"] is (exit_code == 0)
+    if exit_code:
+        assert not (evidence / "1.stdout").exists()
+        assert machine.users == ["root"]
+    else:
+        assert (evidence / "1.stdout").read_text() == "second"
+        assert machine.users == ["root", "root"]
