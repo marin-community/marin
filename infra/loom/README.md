@@ -367,8 +367,8 @@ profile cannot run `uv run`, because its commands cannot write the uv cache. The
 `marin` hub. The script keeps a Google Sheet with one tab per job owner and one
 row per Iris root job older than the prompt's `--min-age-days`. An owner sets
 the Decision cell of a row. `Kill` makes the next run cancel the job. `Keep 30
-days` leaves the job alone until the Keep until date, then the run clears the
-decision. A job with no decision stays in the sheet, and a job that stops
+days` or `Keep 365 days` leaves the job alone until the Keep until date, then
+the run clears the decision. A job with no decision stays in the sheet, and a job that stops
 running leaves it. The watch posts nothing to Slack. It needs:
 
 - the sheet shared with `loom-vm@hai-gcp-models.iam.gserviceaccount.com` as an

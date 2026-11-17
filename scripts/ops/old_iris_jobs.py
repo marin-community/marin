@@ -7,8 +7,8 @@
 The ``old-iris-jobs`` Loom watch (``infra/loom/watches/old-iris-jobs.md``) runs this
 script. Each owner has a tab with one row per old job. Children count toward their
 root, because a cancel applies to the root. The owner sets the Decision cell of a
-row: ``Kill`` makes the next run cancel the job, and the keep decision hides the
-question until the Keep until date. A job that stops running leaves the sheet.
+row: ``Kill`` makes the next run cancel the job, and a keep decision leaves the job
+alone until the Keep until date. A job that stops running leaves the sheet.
 
 The sheet is the only state. A run reads every owner tab, then writes it again, so
 an edit that an owner makes during a run can be lost.
@@ -32,10 +32,9 @@ from rigging.timing import Timestamp
 
 ACTIVE_TASK_STATES = (TaskState.ASSIGNED, TaskState.BUILDING, TaskState.RUNNING)
 MS_PER_DAY = 86_400_000
-KEEP_DAYS = 30
 KILL_DECISION = "Kill"
-KEEP_DECISION = f"Keep {KEEP_DAYS} days"
-DECISIONS = (KILL_DECISION, KEEP_DECISION)
+KEEP_DAYS_BY_DECISION = {"Keep 30 days": 30, "Keep 365 days": 365}
+DECISIONS = (KILL_DECISION, *KEEP_DAYS_BY_DECISION)
 CANCEL_REQUESTED_STATUS = "Cancel requested"
 UNKNOWN_DECISION_STATUS = "Unknown decision"
 HEADER = ("Cluster", "Job", "Started", "Age (days)", "Resources", "Listed", "Decision", "Keep until", "Status")
@@ -143,15 +142,17 @@ def _decided_row(row: SheetRow, today: datetime.date) -> SheetRow:
         # The date of the first request stays while the job shuts down.
         status = row.status if row.status.startswith(CANCEL_REQUESTED_STATUS) else f"{CANCEL_REQUESTED_STATUS} {today}"
         return replace(row, keep_until="", status=status)
-    if row.decision == KEEP_DECISION:
+    if row.decision in KEEP_DAYS_BY_DECISION:
+        # The status names the decision and its date, so a changed decision starts a new period.
+        prefix = f"{row.decision} from "
         try:
-            keep_until = datetime.date.fromisoformat(row.keep_until)
+            decided = datetime.date.fromisoformat(row.status.removeprefix(prefix))
         except ValueError:
-            # The cell is empty for a new decision. An owner's edit that is not an ISO date starts the period again.
-            keep_until = today + datetime.timedelta(days=KEEP_DAYS)
+            decided = today
+        keep_until = decided + datetime.timedelta(days=KEEP_DAYS_BY_DECISION[row.decision])
         if keep_until <= today:
             return replace(row, decision="", keep_until="", status="")
-        return replace(row, keep_until=str(keep_until), status="")
+        return replace(row, keep_until=str(keep_until), status=f"{prefix}{decided}")
     return replace(row, keep_until="", status=UNKNOWN_DECISION_STATUS if row.decision else "")
 
 
