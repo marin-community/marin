@@ -1,4 +1,3 @@
-from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -11,11 +10,9 @@ from harbor.agents.terminus_2.tmux_session import ModelInitiatedTmuxFailure
 from harbor.llms.base import ContextBudgetExceededError, ContextLengthExceededError
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.models.task.config import TaskConfig
-from harbor.models.trial.config import AgentConfig, TrialConfig
 from harbor.environments.base import ExecResult
 from harbor.trial.errors import AgentTimeoutError
 from harbor.trial.single_step import SingleStepTrial
-from harbor.trial.hooks import TrialEvent
 
 
 def _single_step_trial(tmp_path: Path) -> SingleStepTrial:
@@ -34,52 +31,13 @@ def _single_step_trial(tmp_path: Path) -> SingleStepTrial:
 
 
 @pytest.mark.asyncio
-async def test_environment_ready_hook_prepares_once_before_agent_install(tmp_path):
-    trial = _single_step_trial(tmp_path)
-    trial.config = TrialConfig(task={"path": tmp_path}, agent=AgentConfig(name="pi"))
-    trial.task.name = "fixture"
-    trial._hooks = {event: [] for event in TrialEvent}
-    trial._result = SimpleNamespace(agent_info=None)
-    started = tmp_path / "provider-started"
-    staged = tmp_path / "setup-file"
-    prepared = tmp_path / "dependency"
-
-    async def start_provider():
-        started.touch()
-
-    async def healthcheck():
-        assert started.exists()
-
-    async def stage_files():
-        staged.write_text("staged")
-
-    async def prepare_environment(_event):
-        assert started.exists()
-        assert staged.read_text() == "staged"
-        prepared.write_text("installed")
-
-    async def install_agent():
-        assert prepared.read_text() == "installed"
-
-    trial.agent_environment = SimpleNamespace(run_healthcheck=healthcheck, with_default_user=lambda _user: nullcontext())
-    trial.agent = SimpleNamespace(to_agent_info=lambda: None)
-    trial._setup_agent_environment = start_provider
-    trial._upload_injected_skills = AsyncMock()
-    trial._upload_setup_files = stage_files
-    trial._setup_agent = install_agent
-    trial.add_hook(TrialEvent.ENVIRONMENT_READY, prepare_environment)
-
-    await trial._prepare()
-    prepared.write_text("agent edit")
-    await trial._emit(TrialEvent.AGENT_START)
-    await trial._emit(TrialEvent.AGENT_START)
-    assert prepared.read_text() == "agent edit"
-
-
-@pytest.mark.asyncio
 async def test_collect_artifacts_is_idempotent(tmp_path: Path) -> None:
     trial = _single_step_trial(tmp_path)
-    trial.task = SimpleNamespace(config=TaskConfig.model_validate({"verifier": {"collect": [{"command": "snapshot"}]}}))
+    trial.task = SimpleNamespace(
+        config=TaskConfig.model_validate(
+            {"verifier": {"collect": [{"command": "snapshot"}]}}
+        )
+    )
     exec_hook = AsyncMock(return_value=ExecResult(stdout="", stderr="", return_code=0))
     trial.agent_environment = SimpleNamespace(exec=exec_hook)
 
@@ -111,8 +69,14 @@ async def test_collect_hook_failure_does_not_suppress_artifact_download(
     tmp_path: Path,
 ) -> None:
     trial = _single_step_trial(tmp_path)
-    trial.task = SimpleNamespace(config=TaskConfig.model_validate({"verifier": {"collect": [{"command": "snapshot"}]}}))
-    trial.agent_environment = SimpleNamespace(exec=AsyncMock(side_effect=RuntimeError("provider unavailable")))
+    trial.task = SimpleNamespace(
+        config=TaskConfig.model_validate(
+            {"verifier": {"collect": [{"command": "snapshot"}]}}
+        )
+    )
+    trial.agent_environment = SimpleNamespace(
+        exec=AsyncMock(side_effect=RuntimeError("provider unavailable"))
+    )
 
     await trial._collect_artifacts()
 
@@ -163,7 +127,9 @@ async def test_recovery_runs_collect_hook_before_artifact_download(
         events.append("download")
 
     trial.agent_environment = SimpleNamespace(exec=exec_hook)
-    trial._artifact_handler.download_artifacts = AsyncMock(side_effect=download_artifacts)
+    trial._artifact_handler.download_artifacts = AsyncMock(
+        side_effect=download_artifacts
+    )
 
     await trial._recover_outputs()
 

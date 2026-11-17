@@ -114,7 +114,8 @@ Machine setup commands run as trusted root before task operations.
 Original Harbor trials also run explicitly declared task setup commands after
 environment staging and before agent installation. They use the installed-agent
 setup timeout, retain setup outputs separately from model traces, and report a
-failed command as execution failure. Task-specific setup can invoke the task's
+failed command as execution failure. Task setup also counts toward the trial's
+overall attempt deadline. Task-specific setup can invoke the task's
 declared agent user.
 `MachineRuntimeSpec.user` supplies the default user for harness commands.
 When the execution user is set, the task machine runs an execution-user probe after root setup and before model inference.

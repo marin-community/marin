@@ -57,7 +57,11 @@ async def emit_trial_hooks(
         trial_id=trial_id,
         task_name=task_name,
         config=config,
-        result=(result if event in {TrialEvent.RESULT_PERSISTENCE_START, TrialEvent.END} else None),
+        result=(
+            result
+            if event in {TrialEvent.RESULT_PERSISTENCE_START, TrialEvent.END}
+            else None
+        ),
     )
     for hook in hooks:
         await hook(hook_event)

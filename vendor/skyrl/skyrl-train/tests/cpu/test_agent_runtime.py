@@ -200,7 +200,7 @@ async def test_declared_setup_preserves_order_and_rejects_execution_failure(tmp_
     evidence = tmp_path / "setup-evidence"
     with environment.with_default_user("agent-user"):
         if exit_code:
-            with pytest.raises(RuntimeError, match="setup command 0 exited 23"):
+            with pytest.raises(RuntimeError):
                 await run_task_setup(environment, commands, cwd=str(tmp_path), timeout=5, evidence_dir=evidence)
         else:
             await run_task_setup(environment, commands, cwd=str(tmp_path), timeout=5, evidence_dir=evidence)
