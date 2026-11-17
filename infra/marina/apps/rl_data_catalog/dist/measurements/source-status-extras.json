@@ -9,7 +9,7 @@
       "upstream_dataset": "pdbthink-coordinate-tasks",
       "upstream_url": "https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks",
       "notes": "Original train split only; exact native budgets and provider status required; original verifiers and oracles preserved.",
-      "stage": "Intake queued",
+      "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
       "reasons": []
