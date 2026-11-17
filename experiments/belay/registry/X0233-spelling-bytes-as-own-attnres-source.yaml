@@ -54,8 +54,8 @@ trials:
   baseline: belay-X0233-control 3.0450 (same commit, seed 0)
   step_time_change: 0%
 potential:
-  score: 6
-  rationale: −0.0058 at equal data (+3% step time); equal-time run (2959 steps) running; ladder and MFU not run → 6
+  score: 4
+  rationale: −0.0058 at equal data (+3% step time) but −0.0033 at equal time (noise, same sign); final noise → 4
   model: claude-opus-5-5
   date: '2026-11-17'
-  inputs_digest: 1429131232bc
+  inputs_digest: f154af166826
