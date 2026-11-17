@@ -49,6 +49,11 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import IO
+
+from iris.actor.resolver import Resolver
+from iris.client.client import iris_ctx
+from iris.cluster.client.job_info import get_job_info
 
 logger = logging.getLogger("nccl_transport_probe")
 
@@ -85,6 +90,20 @@ class NcclCensus:
 
     nccl_version: str
     transports: list[str]
+
+
+@dataclass
+class WorkerProcess:
+    """A spawned worker process waiting to be collected."""
+
+    process: subprocess.Popen
+    variant_name: str
+    rank: int
+    started: float
+    log_path: Path
+    output_path: Path
+    log_file: IO[bytes]
+    output_file: IO[bytes]
 
 
 @dataclass(frozen=True)
@@ -153,7 +172,7 @@ def allocate_port_block(count: int) -> int:
     return base
 
 
-def wait_for_rendezvous(resolver, endpoint_name: str) -> tuple[str, int]:
+def wait_for_rendezvous(resolver: Resolver, endpoint_name: str) -> tuple[str, int]:
     """Poll the Iris endpoint registry until task 0's master address appears."""
     deadline = time.time() + RENDEZVOUS_TIMEOUT_SECONDS
     last_error = ""
@@ -170,11 +189,22 @@ def wait_for_rendezvous(resolver, endpoint_name: str) -> tuple[str, int]:
     raise TimeoutError(f"No rendezvous endpoint {endpoint_name!r} after {RENDEZVOUS_TIMEOUT_SECONDS}s ({last_error})")
 
 
-def run_worker(
-    variant: Variant, index: int, local_rank: int, master: str, port: int, world_size: int, log_dir: Path
-) -> RankResult:
-    """Spawn one benchmark worker process and return its parsed result."""
+def spawn_worker(
+    variant: Variant,
+    index: int,
+    local_rank: int,
+    master: str,
+    port: int,
+    world_size: int,
+    log_dir: Path,
+) -> WorkerProcess:
+    """Start one benchmark worker process without waiting for it.
+
+    Ranks must all start before any of them can pass ``init_process_group``,
+    so the caller spawns every local rank first and collects afterwards.
+    """
     log_path = log_dir / f"{variant.name}-rank{index}.log"
+    output_path = log_dir / f"{variant.name}-rank{index}.out"
     env = dict(os.environ)
     env.update(
         {
@@ -188,34 +218,44 @@ def run_worker(
         }
     )
     cmd = [sys.executable, str(Path(__file__).resolve()), "--mode", "worker", "--variant", variant.name]
-    started = time.time()
-    with open(log_path, "wb") as log_file:
-        try:
-            process = subprocess.run(
-                cmd,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=log_file,
-                text=True,
-                check=False,
-                timeout=VARIANT_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired:
-            process = subprocess.CompletedProcess(cmd, returncode=124, stdout="")
-    duration = time.time() - started
-    lines = log_path.read_text(errors="replace").splitlines()
+    log_file: IO[bytes] = open(log_path, "wb")  # noqa: SIM115 - closed in collect_worker after the child exits
+    output_file: IO[bytes] = open(output_path, "wb")  # noqa: SIM115 - closed in collect_worker after the child exits
+    process = subprocess.Popen(cmd, env=env, stdout=output_file, stderr=log_file)
+    return WorkerProcess(
+        process=process,
+        variant_name=variant.name,
+        rank=index,
+        started=time.time(),
+        log_path=log_path,
+        output_path=output_path,
+        log_file=log_file,
+        output_file=output_file,
+    )
+
+
+def collect_worker(handle: WorkerProcess) -> RankResult:
+    """Wait for one spawned worker and parse its logs and result payload."""
+    try:
+        returncode = handle.process.wait(timeout=VARIANT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        handle.process.kill()
+        returncode = handle.process.wait()
+    handle.log_file.close()
+    handle.output_file.close()
+    duration = time.time() - handle.started
+    lines = handle.log_path.read_text(errors="replace").splitlines()
     census = parse_nccl_census(lines)
     payload = None
-    for line in process.stdout.splitlines():
+    for line in handle.output_path.read_text(errors="replace").splitlines():
         stripped = line.strip()
         if stripped.startswith("{"):
             payload = json.loads(stripped)
             break
     return RankResult(
-        variant=variant.name,
-        rank=index,
-        passed=process.returncode == 0 and payload is not None,
-        returncode=process.returncode,
+        variant=handle.variant_name,
+        rank=handle.rank,
+        passed=returncode == 0 and payload is not None,
+        returncode=returncode,
         duration=round(duration, 2),
         error_tail=lines[-ERROR_TAIL_LINES:],
         worker=payload,
@@ -233,10 +273,11 @@ def run_variant(
     log_dir: Path,
 ) -> dict:
     """Run one variant on this task's local GPUs and summarize the ranks."""
-    ranks = [
-        run_worker(variant, task_index * local_gpus + local, local, master, port, world_size, log_dir)
+    handles = [
+        spawn_worker(variant, task_index * local_gpus + local, local, master, port, world_size, log_dir)
         for local in range(local_gpus)
     ]
+    ranks = [collect_worker(handle) for handle in handles]
     return {
         "variant": variant.name,
         "env_overlay": variant.env,
@@ -264,9 +305,7 @@ def asdict_without_worker_noise(rank: RankResult) -> dict:
 
 def run_launcher(args: argparse.Namespace) -> None:
     """Run every variant on this task and print the aggregate JSON report."""
-    import torch  # noqa: PLC0415 - GPU probe needs torch; keep startup fast otherwise
-    from iris.client.client import iris_ctx  # noqa: PLC0415
-    from iris.cluster.client.job_info import get_job_info  # noqa: PLC0415
+    import torch  # noqa: PLC0415 - torch is an optional dependency outside the vendor runtime env
 
     job_info = get_job_info()
     if job_info is None:
