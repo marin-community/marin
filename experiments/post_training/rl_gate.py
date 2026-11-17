@@ -44,6 +44,7 @@ from experiments.post_training import rl_recipe as recipe
 from experiments.post_training.rl_command import EXIT_CODES, RLCommand
 from experiments.post_training.rl_presets import ControlPin, ModelPresets
 from experiments.post_training.rl_scoring import (
+    AAII_WEIGHTS,
     GateInputs,
     InvalidComparison,
     RunData,
@@ -321,7 +322,14 @@ def _compare(
 
 
 def _render_markdown(report: GateReport) -> str:
-    lines = [f"# {report.preset}"]
+    lines = [
+        f"# {report.preset}",
+        "",
+        "AAII v4.3.2 category weights: "
+        + ", ".join(f"{category} {weight:.0%}" for category, weight in AAII_WEIGHTS.items())
+        + ". Weights are normalized over represented categories; format has weight zero. "
+        "A represented category without scored tasks has no weighted mean.",
+    ]
     tables = (
         (
             "Objectives",

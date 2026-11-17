@@ -12,6 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.rl.strata import DifficultyBands, MembershipState, SelectionParent, TaskStrata, read_selection_strata
 from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, run
 from taskcompendium.convert.answers import source_evidence
@@ -40,6 +41,7 @@ from zephyr.context import ZephyrContext
 
 from experiments.evaluation.benchmarks.code import sources as code_sources
 from experiments.evaluation.benchmarks.reasoning import sources as reasoning_sources
+from experiments.post_training.rl_recipe import sampled_tasks_step
 from experiments.post_training.task_curation.campaign import error_chain
 from experiments.post_training.task_curation.datasets.nemo_tool_calls import sources as tool_call_sources
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
@@ -58,7 +60,9 @@ from experiments.post_training.task_curation.selection import (
     VALIDATION_FILENAME,
     EvalLiteRecipe,
     HeldoutSource,
+    PanelFormat,
     SelectionRecipe,
+    eval_lite_step,
     task_selection_step,
     validation_task,
 )
@@ -191,13 +195,40 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
     first = admitted_source(tmp_path / "first", [original, source_task("training-b"), *leaked], mode=mode)
     second = admitted_source(tmp_path / "second", [duplicate, source_task("training-c")], mode=mode)
     curated = {"fixture:first": first, "fixture:second": second}
-    artifact = run(task_selection_step(curated, settings))[0]
+    selection_step = task_selection_step(curated, settings)
+    artifact = run(selection_step)[0]
     output = Path(artifact.path)
     tasks = read_tasks(output / TRAIN_FILENAME)
     assert len(tasks) == 2
     assert {task.id for task in tasks} <= {"training-a", "training-b", "training-c"}
     for task in tasks:
         assert task == source_task(task.id)
+    panel = read_selection_strata(str(output))
+    assert panel is not None
+    carried = pq.read_table(output / TRAIN_FILENAME).to_pylist()
+    assert {row["family"] for row in carried} == {"calendar"}
+    assert {row["aai_category"] for row in carried} == {AAII_CATEGORIES["calendar"]}
+    assert all(
+        row["source"] == json.loads(row["task_spec"])["source"]["dataset"]
+        and row["topic"] == row["difficulty"] == "untagged"
+        for row in carried
+    )
+    assert all(
+        TaskStrata.model_validate({key: row[key] for key in TaskStrata.model_fields})
+        == panel.identity(json.loads(row["task_spec"])["id"]).strata
+        for row in carried
+    )
+
+    derived = Path(
+        run(sampled_tasks_step(selection_step, "train", 1, 1, revision="2026.11.17.1", namespace="fixture"))[0].path
+    )
+    sampled = read_tasks(derived / TRAIN_FILENAME)
+    assert len(sampled) == 1 and sampled[0] in tasks
+    subset = read_selection_strata(str(derived))
+    assert subset is not None
+    assert set(subset.tasks) == {sampled[0].id}
+    assert subset.identity(sampled[0].id) == panel.identity(sampled[0].id)
+
     full = read_tasks(output / FULL_VALIDATION_FILENAME)
     sample = read_tasks(output / VALIDATION_FILENAME)
     families = {f"heldout-{family}-{index}": family for family in FAMILIES for index in range(21)}
@@ -265,19 +296,24 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     output = Path(run(task_selection_step(curated, settings))[0].path)
     full = read_tasks(output / FULL_VALIDATION_FILENAME)
     manifest = pq.read_table(output / TASK_MANIFEST_FILENAME).to_pylist()
-    assert {row["task_id"] for row in manifest} == {task.id for task in full}
+    assert {row["task_id"] for row in manifest} == {task.id for task in (*full, *read_tasks(output / TRAIN_FILENAME))}
     by_id = {task.id: task for task in full}
     for row in manifest:
+        if row["task_id"] not in by_id:
+            continue
         task = by_id[row["task_id"]]
         original = originals[task.id]
         family = next(family for family in FAMILIES if task.id.startswith(f"heldout-{family}-"))
-        assert row == {
+        assert {
+            key: row[key]
+            for key in ("task_id", "family", "aai_category", "agentic", "grader_kind", "measured_difficulty")
+        } == {
             "task_id": task.id,
             "family": family,
-            "aaii_category": AAII_CATEGORIES[family],
+            "aai_category": AAII_CATEGORIES[family],
             "agentic": "agentic" in original["tags"],
             "grader_kind": "in_process" if family == STRUCTURAL_FAMILY else "package",
-            "upstream_pass_rate": None if family == STRUCTURAL_FAMILY else 0.625,
+            "measured_difficulty": None if family == STRUCTURAL_FAMILY else 0.375,
         }
         if family == STRUCTURAL_FAMILY:
             continue
@@ -670,41 +706,96 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
             assert evidence["prompt"] in prompt
             assert all(public_test in prompt for public_test in evidence["test_list"])
             assert "isinstance" not in prompt
-    annotations = pq.read_table(provisional / TASK_MANIFEST_FILENAME).to_pylist()
-    for row, task in zip(annotations, full, strict=True):
+    panel = read_selection_strata(str(provisional))
+    assert panel is not None
+    annotations = panel.tasks
+    assert list(annotations) == [task.id for task in full]
+    for task in full:
+        row = annotations[task.id]
         agent = task.id in agents
-        assert row == {
-            "task_id": task.id,
-            "family": "agents" if agent else questions.family,
-            "aaii_category": "agents" if agent else questions.aaii_category,
-            "agentic": agent,
-            "grader_kind": "in_process" if agent else "package",
-            "part": "nemo-predicted-action" if agent else "evalchemy-questions",
-            "source": (agents[task.id] if agent else originals[task.id]).source.model_dump_json(),
-            "license": "fixture-agents" if agent else "fixture-general",
-            "difficulty": None,
-        }
-    assert Counter(row["part"] for row in annotations) == {"evalchemy-questions": 5, "nemo-predicted-action": 3}
-    families = {row["task_id"]: row["family"] for row in annotations}
+        assert (row.family, row.aai_category, row.grader_kind, row.source, row.raw_source, row.license) == (
+            "agents" if agent else questions.family,
+            "agents" if agent else questions.aaii_category,
+            "in_process" if agent else "package",
+            task.source.dataset,
+            task.source.model_dump_json(),
+            "fixture-agents" if agent else "fixture-general",
+        )
+        assert row.agentic == agent and row.topic == row.difficulty == "untagged"
+    families = {task_id: row.family for task_id, row in annotations.items()}
     assert Counter(families[task.id] for task in fast) == {questions.family: 3, "agents": 1}
     counts = json.loads((provisional / "summary.json").read_text())["source_counts"]
     assert counts["Evalchemy:questions"]["overlap"] == counts["NeMo:predicted-action"]["overlap"] == 1
     assert counts["NeMo:predicted-action"].get("duplicate", 0) == 1 + (benchmark == "mmlu")
     assert {next(iter(originals)), "agent-0", "agent-2-copy"}.isdisjoint(families)
-    measured = measured_eval_lite_recipe(settings, tmp_path, full)
+    saturated = fast[-1]
+    measured_tasks = [task for task in full if task.id != saturated.id] + [saturated]
+    measured = measured_eval_lite_recipe(settings, tmp_path, measured_tasks)
     final = publish_eval_lite(measured, tmp_path)
     assert read_tasks(final / FULL_VALIDATION_FILENAME) == full
-    assert read_tasks(final / VALIDATION_FILENAME) == fast
-    final_rows = pq.read_table(final / TASK_MANIFEST_FILENAME).to_pylist()
-    assert [row | {"difficulty": None} for row in final_rows] == annotations
-    difficulty = [row["difficulty"] for row in final_rows]
-    assert difficulty == [1 - (index + 1) / PASS_RATE_ATTEMPTS for index in range(len(full))]
-    subset = measured.model_copy(
-        update={"version": "2026.11.04.2", "sources": (questions,), "fast_counts": {questions.family: 4}}
+    final_panel = read_selection_strata(str(final))
+    assert final_panel is not None
+    for index, task in enumerate(measured_tasks):
+        row = final_panel.tasks[task.id]
+        assert row.measured_difficulty == 1 - (index + 1) / PASS_RATE_ATTEMPTS
+        assert [
+            (ref.task_digest, ref.model_revision, ref.attempted, ref.scored, ref.passed, ref.mean_score)
+            for ref in row.references
+        ] == [(canonical_sha256(task.model_dump(mode="json")), "fixture-model", 8, 8, index + 1, (index + 1) / 8)]
+    assert final_panel.tasks[saturated.id].state == MembershipState.RETIRED
+    assert saturated.id not in {task.id for task in read_tasks(final / VALIDATION_FILENAME)}
+    addition = next(task for task in full if task.id in originals)
+    addition = addition.model_copy(
+        update={
+            "id": "addition",
+            "context": chat(("user", "An additional untouched question.")),
+            "source": addition.source.model_copy(update={"row": "addition"}),
+        }
     )
-    subset_output = publish_eval_lite(subset, tmp_path)
-    assert read_tasks(subset_output / FULL_VALIDATION_FILENAME) == [task for task in full if task.id in originals]
-    assert len(read_tasks(subset_output / VALIDATION_FILENAME)) == 4
+    addition_input = task_file(tmp_path / "addition.parquet", [addition])
+    successor = measured.model_copy(
+        update={
+            "version": "2026.11.04.2",
+            "parent": SelectionParent(root=str(final), name=measured.name, version=measured.version),
+            "pass_rates": None,
+            "difficulty_bands": DifficultyBands(hard_below=0.1, easy_above=0.7),
+            "sources": (
+                questions.model_copy(
+                    update={"source_id": "fixture:addition", "format": PanelFormat.TASK_SPEC, "rows": 1, "count": 1}
+                ),
+            ),
+        }
+    )
+    successor_output = Path(
+        run(
+            eval_lite_step(
+                {"fixture:addition": ArtifactStep.adopt("fixture/addition", addition_input.version, addition_input.uri)},
+                successor,
+            )
+        )[0].path
+    )
+    successor_panel = read_selection_strata(str(successor_output))
+    assert successor_panel is not None and successor_panel.definition.parent == successor.parent
+
+    def retained_tasks(path):
+        return {
+            json.loads(value)["id"]: value
+            for value in pq.read_table(path / FULL_VALIDATION_FILENAME)["task_spec"].to_pylist()
+        }
+
+    parent_tasks, successor_tasks = retained_tasks(final), retained_tasks(successor_output)
+    assert successor_tasks.keys() == parent_tasks.keys() | {"addition"}
+    assert all(successor_tasks[task_id] == value for task_id, value in parent_tasks.items())
+    assert successor_panel.tasks[saturated.id].state == MembershipState.RETIRED
+    assert successor_panel.tasks[saturated.id].references == final_panel.tasks[saturated.id].references
+    assert (
+        successor_panel.tasks["addition"].references == []
+        and successor_panel.tasks["addition"].state != MembershipState.RETIRED
+    )
+    assert (
+        Counter(row.family for row in successor_panel.tasks.values() if row.state == MembershipState.ACTIVE)
+        == settings.fast_counts
+    )
 
     def other_user(task: TaskSpec) -> TaskSpec:
         calls = json.loads(json.dumps(task.grader.parameters["expected_calls"]))
