@@ -20,6 +20,7 @@ test = [
     "pytest-asyncio",
     "pytest-timeout",
     "marin-shellbox[daytona,shellsim]",
+    "marin-taskcompendium[pipeline]",
 ]
 
 [tool.hatch.build.targets.wheel]
