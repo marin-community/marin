@@ -425,6 +425,55 @@ def test_source_fingerprint_is_stored_separately_and_failed_refresh_keeps_previo
         assert client.get("/source-duplicates").json()["generated_at"] == identities.generated_at
 
 
+def test_source_inventory_transfers_only_fingerprint_summary_and_keeps_full_evidence(
+    catalog_database, catalog_query, tmp_path
+):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "graded", source_id="Marin:a")
+    catalog = CurationCatalog(root)
+    fixture = Path(__file__).resolve().parents[3] / (
+        "experiments/post_training/task_curation/tests/fixtures/source-overlap-fingerprints.json"
+    )
+    fingerprint = SourceFingerprint.model_validate(next(iter(json.loads(fixture.read_text()).values())))
+    identities = catalog_identity_map(catalog).model_copy(update={"fingerprints": {"Marin:a": fingerprint}})
+    load_surveyed_catalog(catalog, catalog_query, catalog_backend_map(catalog), identities)
+    expected = fingerprint.model_dump(
+        mode="json", include={"version", "seed", "task_count", "within_source_duplicates", "sample_sha256", "lineage"}
+    )
+    transferred = []
+
+    def decode_json(payload):
+        value = json.loads(payload)
+        if isinstance(value, dict) and "sample_sha256" in value and "within_source_duplicates" in value:
+            transferred.append(value)
+        return value
+
+    with catalog_database.connect() as connection:
+        schema = connection.execute(text("SELECT current_schema()")).scalar_one()
+    observed_engine = create_engine(catalog_database.url, json_deserializer=decode_json)
+
+    @event.listens_for(observed_engine, "connect")
+    def select_schema(connection, _record):
+        with connection.cursor() as cursor:
+            cursor.execute(f"SET search_path TO {schema}, public")
+        connection.commit()
+
+    try:
+        with TestClient(create_api(cast(AppletServices, CatalogServices(observed_engine)))) as client:
+            sources = {row["id"]: row for row in client.get("/sources").json()["sources"]}
+            assert sources["Marin:a"]["source_fingerprint"] == expected
+            assert transferred == [expected]
+            transferred.clear()
+            evidence = client.get("/source-fingerprint", params={"source_id": "Marin:a"}).json()["fingerprint"]
+            assert evidence == fingerprint.model_dump(mode="json")
+            assert transferred == [evidence]
+            with catalog_database.begin() as connection:
+                connection.execute(text("UPDATE atlas_sources SET source_fingerprint=NULL WHERE id='Marin:a'"))
+            assert client.get("/sources").json()["sources"][0]["source_fingerprint"] is None
+    finally:
+        observed_engine.dispose()
+
+
 @pytest.fixture
 def catalog_database(database_url: str) -> Iterator[Engine]:
     admin = create_engine(database_url)

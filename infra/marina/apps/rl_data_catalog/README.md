@@ -27,6 +27,11 @@ Archived reviews and packets stay unchanged. The Status page requests only
 `api/source-statuses`; that endpoint reads source metadata without task,
 difficulty or backend evidence.
 
+The By source query selects fingerprint version, seed, task count, duplicate
+count, sample hash and lineage in PostgreSQL. It leaves fingerprint samples and
+hash arrays in storage; `api/source-fingerprint` returns the full evidence on
+request. Keep the list query compact when adding new fingerprint fields.
+
 The main table's source cell contains only its source-name button and, where
 needed, the fold toggle. No origin/build subtitle, dataset link, overlap note or
 other secondary text belongs in that cell. Put those details in Evidence or the

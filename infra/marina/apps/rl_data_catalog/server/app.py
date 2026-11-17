@@ -346,7 +346,17 @@ def create_api(services: AppletServices) -> FastAPI:
                 for row in connection.execute(
                     text(
                         """
-                SELECT s.*, a.scope, a.model, b.capabilities AS backend_capabilities,
+                SELECT s.id, s.declaration, s.assessment_key, s.latest_attempt_key,
+                    s.latest_attempt_status, s.reason, s.curation, s.review_completeness,
+                    CASE WHEN s.source_fingerprint IS NULL THEN NULL ELSE jsonb_build_object(
+                        'version', s.source_fingerprint->'version',
+                        'seed', s.source_fingerprint->'seed',
+                        'task_count', s.source_fingerprint->'task_count',
+                        'within_source_duplicates', s.source_fingerprint->'within_source_duplicates',
+                        'sample_sha256', s.source_fingerprint->'sample_sha256',
+                        'lineage', s.source_fingerprint->'lineage'
+                    ) END AS source_fingerprint,
+                    a.scope, a.model, b.capabilities AS backend_capabilities,
                     (s.declaration->'within_source_dedup'->>'unique_count')::bigint AS task_count
                 FROM atlas_sources s
                 LEFT JOIN atlas_backend_sources b ON b.load_id = s.load_id AND b.source_id = s.id
@@ -399,23 +409,7 @@ def create_api(services: AppletServices) -> FastAPI:
                         "intended_use": intended_use(row["declaration"]),
                         "backend_capabilities": row["backend_capabilities"],
                         "partial_overlaps": overlaps.get(row["id"], []),
-                        "source_fingerprint": (
-                            {
-                                key: value
-                                for key, value in row["source_fingerprint"].items()
-                                if key
-                                in {
-                                    "version",
-                                    "seed",
-                                    "task_count",
-                                    "within_source_duplicates",
-                                    "sample_sha256",
-                                    "lineage",
-                                }
-                            }
-                            if row["source_fingerprint"] is not None
-                            else None
-                        ),
+                        "source_fingerprint": row["source_fingerprint"],
                         "duplicate_group": groups.get(row["id"]),
                         "assessment": {
                             "status": "complete" if row["assessment_key"] else row["latest_attempt_status"],
