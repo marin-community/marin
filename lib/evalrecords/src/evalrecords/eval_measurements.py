@@ -25,7 +25,7 @@ from evalrecords.eval_stats import (
     Measurement,
     ResultFlag,
 )
-from evalrecords.lm_eval_samples import eval_task_directory, is_scratch_artifact
+from evalrecords.lm_eval_samples import is_scratch_artifact
 from evalrecords.metric_selection import (
     LM_EVAL_STDERR_SUFFIX,
     PUBLICATION_METRICS,
@@ -35,7 +35,7 @@ from evalrecords.metric_selection import (
     canonical_metric_name,
     declared_metric,
 )
-from evalrecords.records import BenchmarkMetricRef, EvalRunRecord, EvalTaskRef, MetricKind
+from evalrecords.records import BenchmarkMetricRef, EvalRunRecord, EvalTaskRef, MetricKind, eval_task_directory
 from evalrecords.records import TaskCoverage as RecordTaskCoverage
 
 # A value derived from n items is integral in k to within this tolerance when it really is k/n.

@@ -11,7 +11,7 @@ from functools import partial
 from typing import Any
 
 from evalrecords.records import DEFAULT_EVALUATION_CONCURRENCY, JudgeIdentity, scoring_settings
-from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase, RunModel
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
@@ -28,7 +28,7 @@ from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from openai import APIError, APIStatusError
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
 from rolloutengine.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
@@ -81,6 +81,10 @@ class EvaluationInfrastructureError(RuntimeError):
 
 def _permanent_api_error(error: BaseException | None) -> bool:
     return isinstance(error, APIStatusError) and error.status_code < 500 and error.status_code not in (408, 409, 429)
+
+
+class RunModel(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
 
 class ModelIdentity(RunModel):

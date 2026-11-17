@@ -12,16 +12,14 @@ ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"
 
 
-class RunModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
-
-
 class AttemptPhase(StrEnum):
     STARTED = "started"
     FINISHED = "finished"
 
 
-class Attempt(RunModel):
+class Attempt(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
     dataset: str
     task_id: str
     source_row: str
