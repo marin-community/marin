@@ -33,6 +33,19 @@ from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
+CATALOG_APP = "fb11c931-5861-4878-8bb5-a964d652b45f"
+
+
+def served_source_ids(journey: Journey) -> list[str]:
+    """The served source inventory, in API order.
+
+    Geometry expectations derive from this inventory instead of a hardcoded
+    row count, so fixture additions change the expectation with the data.
+    """
+    response = journey.page.request.get(f"{journey.origin}/a/{CATALOG_APP}/api/sources")
+    assert response.ok, f"{response.status}: {response.text()[:200]}"
+    return [source["id"] for source in response.json()["sources"]]
+
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
 @pytest.mark.parametrize("width", [1440, 390, 320])
@@ -204,7 +217,8 @@ def test_column_drag_keyboard_persistence_and_reset_preserve_table_geometry(
     page.set_viewport_size({"width": width, "height": 1000})
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-everything").click()
-    expect(page.locator("#rows tr")).to_have_count(28)
+    expected_ids = served_source_ids(journey)
+    expect(page.locator("#rows tr")).to_have_count(len(expected_ids))
     header = page.locator("#headers th").first
     before = header.evaluate("e=>e.getBoundingClientRect().width")
     rows = page.locator("#rows tr").evaluate_all("rows=>rows.map(r=>r.dataset.sourceId)")
@@ -225,7 +239,8 @@ def test_column_drag_keyboard_persistence_and_reset_preserve_table_geometry(
     expect(header).to_have_attribute("aria-sort", "ascending")
     assert page.locator("#rows tr").evaluate_all("rows=>rows.map(r=>r.dataset.sourceId)") == rows
     page.reload()
-    expect(page.locator("#rows tr")).to_have_count(28)
+    expected_ids = served_source_ids(journey)
+    expect(page.locator("#rows tr")).to_have_count(len(expected_ids))
     assert abs(header.evaluate("e=>e.getBoundingClientRect().width") - changed) < 2
     handle.press("ArrowLeft")
     assert abs(header.evaluate("e=>e.getBoundingClientRect().width") - changed + 16) < 2
@@ -235,7 +250,8 @@ def test_column_drag_keyboard_persistence_and_reset_preserve_table_geometry(
         assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
     page.locator("#reset-column-widths").click()
     page.reload()
-    expect(page.locator("#rows tr")).to_have_count(28)
+    expected_ids = served_source_ids(journey)
+    expect(page.locator("#rows tr")).to_have_count(len(expected_ids))
     assert abs(header.evaluate("e=>e.getBoundingClientRect().width") - before) < 2
 
 
@@ -329,7 +345,8 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     page.emulate_media(color_scheme=theme)
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(28)
+    expected_ids = served_source_ids(journey)
+    expect(page.locator("#rows tr")).to_have_count(len(expected_ids))
     expected = {
         "clean": "NO ISSUES",
         "stale-clean": "NOT MEASURED",
@@ -508,7 +525,8 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(28)
+    expected_ids = served_source_ids(journey)
+    expect(page.locator("#rows tr")).to_have_count(len(expected_ids))
     tooltip = page.locator('tr[data-source-id="Marin:clean"] .backends-link').get_attribute("title")
     assert tooltip is not None and "UNSAFE: too_many_snapshots, unbuilt_image" in tooltip
     assert "Unique actor snapshot identities: 11" in tooltip and "Snapshot cap: 10" in tooltip
@@ -673,7 +691,7 @@ def test_backend_link_opens_role_fit_and_survey_provenance(journey: Journey, the
     expect(page.locator("#fit .backend-table tbody tr")).to_have_count(5)
     expect(page.locator("#fit")).to_contain_text("docker image")
     expect(page.locator("#fit")).to_contain_text("packages lock")
-    for backend in ["gVisor", "QEMU"]:
+    for backend in ["Docker + runsc (local dev)", "QEMU"]:
         binary = page.locator("#fit tbody tr").filter(has=page.get_by_role("cell", name=backend, exact=True))
         expect(binary.locator(".chip")).to_have_text("UNSUPPORTED")
         expect(binary.locator("td").nth(2)).to_have_text("unsupported: 3")

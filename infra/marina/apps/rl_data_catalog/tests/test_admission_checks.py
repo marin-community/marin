@@ -117,7 +117,9 @@ def test_role_absent_everywhere_needs_no_backend_and_keeps_its_labels():
     """A source that declares no machine role on any backend is not blocked."""
     assert (
         backend_admission_review(
-            backend_verdicts({name: FitSupport.ROLE_ABSENT for name in ("daytona", "gvisor", "iris", "local", "qemu")}),
+            backend_verdicts(
+                {name: FitSupport.ROLE_ABSENT for name in ("daytona", "docker-gvisor", "iris", "local", "qemu")}
+            ),
             "Available",
         )[0]
         is None

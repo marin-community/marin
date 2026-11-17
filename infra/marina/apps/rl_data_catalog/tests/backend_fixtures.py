@@ -29,7 +29,7 @@ def backend_source_maps() -> list[BackendSourceMap]:
                     "blockers": {},
                     "validation_errors": {},
                 },
-                "gvisor": {
+                "docker-gvisor": {
                     "support": "partial",
                     "task_counts": {"partial": 3},
                     "roles": {"agent": {"partial": 3}, "grader": {"supported": 3}},
