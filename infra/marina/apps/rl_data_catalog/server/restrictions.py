@@ -171,7 +171,6 @@ PRIVATE_DECLARATION_FIELDS = frozenset(
         "stage",
         "pipeline",
         "license_receipt",
-        "independent_qc",
         "daytona_safety",
         "daytona_snapshot_count",
         "daytona_snapshot_threshold",
@@ -206,8 +205,9 @@ PRIVATE_DECLARATION_FIELDS = frozenset(
 )
 """Declaration fields a PRIVATE_ALWAYS source may still serve: identity, counts,
 statuses, hashes and receipts. Everything else is dropped, including free-text
-evidence (quality_result issues and repair recommendations, integrity contract
-examples, converted-example failure reasons) that could quote its content."""
+evidence (quality_result issues and repair recommendations, independent-QC method
+prose, integrity contract examples, converted-example failure reasons) that could
+quote its content."""
 
 
 def private_declaration_projection(declaration: dict[str, Any]) -> dict[str, Any]:
