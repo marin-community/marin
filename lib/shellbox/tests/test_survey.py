@@ -45,5 +45,5 @@ def test_production_checkers_imports_every_backend_module():
     from shellbox.survey import production_checkers
 
     checkers = production_checkers()
-    expected = {backend.value for backend in Backend} - {"local"}
+    expected = {backend.value for backend in Backend}
     assert set(checkers) == expected
