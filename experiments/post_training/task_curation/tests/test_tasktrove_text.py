@@ -14,6 +14,7 @@ import pytest
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     ConversationTrace,
+    EnvironmentRequirements,
     GradingAttempt,
     ScriptGrader,
     TaskSpec,
@@ -501,6 +502,7 @@ def test_tasktrove_retains_source_recipe_and_oracle_without_changing_text_execut
     assert oracle["environment/Dockerfile"] == recipe
     assert oracle["solution/solve.sh"] == solution
     assert task.resources.all == task.resources.worker == ()
+    assert task.environment_requirements == EnvironmentRequirements()
     assert grade_reply(task, answer_reply(task, "B")) == 1.0
 
 

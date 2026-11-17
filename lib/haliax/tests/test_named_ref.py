@@ -141,14 +141,6 @@ def test_dslice_combination_branches():
     assert jnp.array_equal(strided_named_value.array, jnp.array([1, 3]))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason=(
-        "NamedRef passes a Python list index straight to jax.Ref indexing, which treats the list as "
-        "several indices and fails with 'too many values to unpack'; even base_ref[{'x': [2, 4]}] fails."
-    ),
-)
 @pytest.mark.parametrize("use_stride", [False, True], ids=["dslice", "strided"])
 def test_dslice_combination_list_index_reads(use_stride):
     X = hax.Axis("x", 10)
@@ -162,6 +154,33 @@ def test_dslice_combination_list_index_reads(use_stride):
 
     assert value.axes == (X.resize(2),)
     assert jnp.array_equal(value.array, jnp.array(expected))
+
+
+def test_list_index_reads_and_writes_selected_positions():
+    X = hax.Axis("x", 6)
+    ref = hax.new_ref(hax.arange(X))
+
+    read = ref[{"x": [4, -1]}]
+    assert read.axes == (X.resize(2),)
+    assert jnp.array_equal(read.array, jnp.array([4, 5]))
+
+    ref[{"x": [0, 2]}] = hax.named(jnp.array([10, 20], dtype=ref.dtype), (X.resize(2),))
+    assert jnp.array_equal(ref.value().array, jnp.array([10, 1, 20, 3, 4, 5]))
+
+
+def test_list_index_matches_named_array_when_length_equals_another_axis():
+    X, Y = hax.Axis("x", 6), hax.Axis("y", 2)
+    array = hax.arange(X) * 10 + hax.arange(Y).broadcast_axis(X)
+    ref = hax.new_ref(array)
+
+    read = ref[{"x": [0, 2]}]
+    expected = array[{"x": [0, 2]}]
+    assert read.axes == expected.axes
+    assert jnp.array_equal(read.array, expected.array)
+
+    ref[{"x": [1, 3]}] = hax.zeros((X.resize(2), Y), dtype=ref.dtype)
+    assert jnp.array_equal(ref.value()[{"x": [1, 3]}].array, jnp.zeros((2, 2), dtype=ref.dtype))
+    assert jnp.array_equal(ref.value()[{"x": [0, 2]}].array, expected.array)
 
 
 def test_slice_value_and_unsliced():

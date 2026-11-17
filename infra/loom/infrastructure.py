@@ -530,6 +530,7 @@ class ProfileConfig:
     turn_budget: int | None
     prelude: str
     instructions: str
+    doc_artifact: str
     restricted: bool
     github_repositories: tuple[str, ...]
     allowed_tools: tuple[str, ...]
@@ -566,6 +567,7 @@ class ProfileConfig:
             instructions=_instruction_text(
                 value.get("instructions"), value.get("instructionsFile"), f"profile {name!r}"
             ),
+            doc_artifact=str(value.get("docArtifact", "")),
             restricted=bool(value.get("restricted", False)),
             github_repositories=_string_tuple(
                 value.get("githubRepositories", []), "githubRepositories", f"profile {name!r}"
@@ -593,6 +595,7 @@ class ProfileConfig:
             "turn_budget": self.turn_budget,
             "prelude": self.prelude,
             "instructions": self.instructions,
+            "doc_artifact": self.doc_artifact,
             "restricted": self.restricted,
             "github_repositories": list(self.github_repositories),
             "allowed_tools": list(self.allowed_tools),
@@ -887,9 +890,8 @@ def _enable_apis(project: str) -> list[gcp.projects.Service]:
     services = (
         "artifactregistry.googleapis.com",
         "compute.googleapis.com",
-        # Google Doc sessions read and edit docs and their comments; see profiles/gdoc.
+        # The pm profile reads and edits the goals Google Doc; see scripts/pm/goals_doc.py.
         "docs.googleapis.com",
-        "drive.googleapis.com",
         "iam.googleapis.com",
         "iamcredentials.googleapis.com",
         "secretmanager.googleapis.com",

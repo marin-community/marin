@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider
-from iris.cluster.composer import make_task_backend
+from iris.cluster.composer import make_backend, make_task_backend
 from iris.cluster.config import (
     ControllerVmConfig,
     CoreweavePlatformConfig,
@@ -40,8 +40,10 @@ from iris.cluster.config import (
     validate_config,
 )
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
-from iris.cluster.controller.backend import DirectReconcileRequest
+from iris.cluster.controller.backend import DirectReconcileRequest, dashboard_backend_descriptor
+from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
@@ -1988,3 +1990,34 @@ def test_configured_sandbox_runtime_reaches_only_sandbox_pods(monkeypatch, profi
             assert pod["spec"]["automountServiceAccountToken"] is False
     finally:
         backend.close()
+
+
+@pytest.mark.parametrize("kubernetes", [False, True])
+def test_composed_backend_advertises_image_workdir_only_for_kubernetes(kubernetes, embedded_log_server, tmp_path):
+    config = (
+        IrisClusterConfig(kubernetes_provider=KubernetesProviderConfig(kueue=KueueConfig(cluster_queue="iris-cq")))
+        if kubernetes
+        else IrisClusterConfig(worker_provider=WorkerProviderConfig())
+    )
+    log_stack = build_log_stack(
+        log_service_address=embedded_log_server.address,
+        local_log_dir=tmp_path / "logs",
+        host="127.0.0.1",
+        worker_token_provider=None,
+    )
+    try:
+        backend = make_backend(
+            config,
+            auth=ControllerAuth(),
+            remote_state_dir=str(tmp_path),
+            dry_run=True,
+            log_stack=log_stack,
+        )
+        try:
+            advertised = dashboard_backend_descriptor(backend).capabilities
+            assert ("sandbox-image-workdir" in advertised) is kubernetes
+            assert "sandbox-storage-limit" not in advertised
+        finally:
+            backend.close()
+    finally:
+        log_stack.close()

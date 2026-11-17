@@ -43,7 +43,7 @@ from typing import Protocol
 import google.auth
 from fastapi import APIRouter, FastAPI
 from google.auth.transport.requests import AuthorizedSession
-from marin.evaluation.eval_policy import SEPTEMBER_24_VERSION, record_policy_violations
+from marin.evaluation.eval_policy import record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_MIN_COVERAGE,
     Completeness,
@@ -55,12 +55,14 @@ from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
     RecordParseFailure,
+    RepeatAggregate,
     list_record_paths,
     scan_records,
 )
+from marin.evaluation.repeat_aggregates import normalize_repeat_record
 from marina.apps import RegisteredApi, Services, registered_api
 from marina.mcp import OperationRisk, operation_extension
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.server_auth import get_verified_identity
 from sqlalchemy.engine import Connection, Engine
@@ -69,8 +71,10 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import review, samples
+from .curated import import_curated_record
 from .db_migrations import apply_migrations
 from .metrics import (
+    ALL_COHORTS,
     RUN_FACETS,
     build_comparison,
     build_meta,
@@ -80,6 +84,7 @@ from .metrics import (
     display_status,
     panel_request,
     record_headline,
+    run_metric_rows,
 )
 from .record_reconciliation import VerificationSchedule, inspect_record_paths, step_status_for_record
 from .results_db import (
@@ -133,6 +138,7 @@ class PanelCellResponse(BaseModel):
     interval_kind: str
     metric: str
     metric_kind: str
+    repeat_aggregation: RepeatAggregate | None = None
     declared: bool
     n_scored: int
     n_benchmark: int | None
@@ -221,10 +227,22 @@ class PanelResponse(BaseModel):
     request: PanelRequestResponse
 
 
+class RunMetricRowResponse(BaseModel):
+    """One row of a run's top metrics table: a declared protocol metric or an undeclared raw one."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    task: str
+    metric: str
+    value: float
+    declared: bool
+
+
 class RunDetailResponse(EvalRunRecord):
     headline: PanelCellResponse | None
     comparison_model: str
     policy_violations: list[str]
+    metric_rows: list[RunMetricRowResponse]
 
 
 class LogEntryResponse(BaseModel):
@@ -416,7 +434,7 @@ class RecordStore:
 
     def refresh(self, records: list[EvalRunRecord]) -> None:
         """Replace the direct-scan snapshot used by the local store."""
-        records = _deduplicate_records(records)
+        records = [normalize_repeat_record(record) for record in _deduplicate_records(records)]
         self._set_snapshot(records)
         logger.info("memory store refreshed: %d records", len(records))
 
@@ -476,8 +494,6 @@ class RecordStore:
         ``archived: true`` so the UI can style them apart.
         """
         records, _by_id = self._snapshot()
-        if request.cohort_version is not None:
-            records = [record for record in records if record.version == request.cohort_version]
         archived = self.archived_models()
         if archived and not include_archived:
             records = [record for record in records if record.model.name not in archived]
@@ -812,7 +828,7 @@ class Ingestor:
                 try:
                     scan = await asyncio.to_thread(scan_records, prefix, self._record_cache[prefix])
                     found = [
-                        record.model_copy(update={"step_status": step_status_for_record(path)})
+                        import_curated_record(record.model_copy(update={"step_status": step_status_for_record(path)}))
                         for path, record in scan.records_by_path.items()
                     ]
                     failures = list(scan.failures)
@@ -1155,7 +1171,12 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
         parsed = EvalRunRecord.model_validate(record)
         return RunDetailResponse.model_validate(
-            {**record, "headline": _run_headline(parsed), "policy_violations": list(record_policy_violations(parsed))}
+            {
+                **record,
+                "headline": _run_headline(parsed),
+                "policy_violations": list(record_policy_violations(parsed)),
+                "metric_rows": run_metric_rows(parsed),
+            }
         )
 
     @router.get("/runs/{run_id}/jobs")
@@ -1302,10 +1323,9 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
 
 def _selection(params: Mapping[str, str]) -> SelectionRequest:
     """Return the panel selection requested by panel or comparison query parameters."""
-    cohort = params.get("cohort") or SEPTEMBER_24_VERSION
     return panel_request(
         benchmarks=_parse_names(params.get("benchmarks")),
-        cohort_version=None if cohort == "all" else cohort,
+        cohort=params.get("cohort") or ALL_COHORTS,
         completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
         min_coverage=_parse_coverage(params.get("min_coverage")),
         min_benchmark_coverage=_parse_coverage(params.get("min_benchmark_coverage"), "min_benchmark_coverage"),
@@ -1393,8 +1413,6 @@ def _analysis_router(store: RecordStore) -> APIRouter:
             selection = _selection(params)
         except BadRequest as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        if selection.cohort_version is None:
-            return JSONResponse({"error": "Choose one cohort before comparing models."}, status_code=400)
         payload = await asyncio.to_thread(store.comparison, selection, models)
         return JSONResponse(payload)
 

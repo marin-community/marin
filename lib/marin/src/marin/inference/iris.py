@@ -12,6 +12,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
@@ -21,16 +22,18 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from fray.client import JobHandle
 from fray.current_client import current_client
-from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus, TpuConfig
+from fray.types import ActorConfig, Entrypoint, EnvironmentConfig, JobRequest, JobStatus, TpuConfig, create_environment
 from iris.client.client import iris_ctx
 from iris.client.workload import TaskStatus
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
 from iris.resources.state import TaskState, is_job_finished
 from rigging import telemetry
 from rigging.connect import capability_path, proxy_path
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
+from rigging.secrets import SecretBehavior, forwarded_secrets
 from rigging.timing import Deadline, Duration
 
 from marin.inference.auxiliary import build_auxiliary_app
@@ -61,6 +64,7 @@ from marin.inference.iris_vllm import (
     notify_iris_vllm_stopped,
     wait_for_iris_vllm_shutdown,
 )
+from marin.inference.model_cache import ModelPreparationError, prepare_hf_models
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import LocalInferenceSession, local_inference
 from marin.inference.types import (
@@ -72,6 +76,7 @@ from marin.inference.types import (
     OpenAIEndpoint,
     RunningModel,
 )
+from marin.inference.web_search import PARALLEL_API_KEY_SECRET, parallel_web_search_from_secret
 from marin.inference.worker import InferenceWorker, run_inference_worker
 
 logger = logging.getLogger(__name__)
@@ -98,12 +103,20 @@ _CAPABILITY_TTL = Duration.from_hours(24 * 7)
 _BROKER_ACTOR_MAX_CONCURRENCY = 32
 
 
+class InferenceStartupPhase(StrEnum):
+    PREPARATION = "preparation"
+    SERVING = "serving"
+
+
 class RemoteInferenceStartupError(RuntimeError):
     """Remote inference failed before yielding a usable endpoint."""
 
-    def __init__(self, message: str, jobs: tuple[JobHandle, ...]):
+    def __init__(
+        self, message: str, jobs: tuple[JobHandle, ...], *, phase: InferenceStartupPhase = InferenceStartupPhase.SERVING
+    ):
         super().__init__(message)
         self.jobs = jobs
+        self.phase = phase
 
 
 @dataclass(frozen=True)
@@ -463,6 +476,7 @@ def _register_dashboard(
         model_id=model.endpoint.model,
         info=info,
         request_timeout_seconds=service.controller_proxy_timeout_seconds,
+        web_search=parallel_web_search_from_secret(),
     )
     with serve_app_background(app, serving_socket):
         address = f"http://{job_info.advertise_host}:{serving_port}"
@@ -727,6 +741,7 @@ def remote_inference(
 
     if get_job_info() is None:
         raise RuntimeError("remote_inference must run inside an Iris job")
+    config = _prepared_inference_config(config)
     resolved_broker = _broker_config(config.instances, config.broker)
     if resolved_broker is None:
         with _start_direct_inference(config) as session:
@@ -734,6 +749,23 @@ def remote_inference(
         return
     with _start_brokered_inference(config, resolved_broker) as session:
         yield session
+
+
+def _prepared_inference_config(config: RemoteInferenceConfig) -> RemoteInferenceConfig:
+    """Mirror uncached Hugging Face weights from CPU jobs before any accelerator job starts."""
+    environment = create_environment(
+        setup_scripts=[default_setup_script(packages=["marin-core"])],
+        env_vars=dict(config.iris.worker_environment.env_vars),
+        secrets=dict(config.iris.worker_environment.secrets),
+        secret_behavior=config.iris.worker_environment.secret_behavior,
+    )
+    try:
+        model, engine = prepare_hf_models(
+            config.model, config.engine, config.iris, client=current_client(), environment=environment
+        )
+    except ModelPreparationError as exc:
+        raise RemoteInferenceStartupError(str(exc), jobs=exc.jobs, phase=InferenceStartupPhase.PREPARATION) from exc
+    return replace(config, model=model, engine=engine)
 
 
 @contextlib.contextmanager
@@ -759,7 +791,7 @@ def _start_direct_inference(
             entrypoint=Entrypoint.from_callable(run_iris_service, args=(service,)),
             ports=ports,
             resources=iris.worker_resources,
-            environment=iris.worker_environment,
+            environment=_child_worker_environment(iris.worker_environment),
             max_retries_failure=iris.max_retries_failure,
             max_retries_preemption=iris.max_retries_preemption,
             max_task_failures=iris.max_retries_failure,
@@ -863,6 +895,23 @@ def _run_broker_worker(
                 time.sleep(_TIMEOUT_POLL_SECONDS)
 
 
+def _child_worker_environment(environment: EnvironmentConfig) -> EnvironmentConfig:
+    """Return the environment for an inference job submitted from this task.
+
+    Inherited secrets become an explicit map without ``PARALLEL_API_KEY``, because the child job runs
+    model code that may come from the model repository. A dashboard in that child job has no web search.
+    """
+    if environment.secret_behavior is SecretBehavior.ISOLATE:
+        return environment
+    supplied = {*environment.secrets, *environment.env_vars}
+    inherited = forwarded_secrets(exclude={*supplied, PARALLEL_API_KEY_SECRET})
+    return replace(
+        environment,
+        secrets={**inherited, **environment.secrets},
+        secret_behavior=SecretBehavior.ISOLATE,
+    )
+
+
 def _submit_broker_workers(
     run_id: str,
     config: RemoteInferenceConfig,
@@ -883,7 +932,7 @@ def _submit_broker_workers(
                         args=(worker_id, config.model, config.engine, iris, broker, request_provider),
                     ),
                     resources=iris.worker_resources,
-                    environment=iris.worker_environment,
+                    environment=_child_worker_environment(iris.worker_environment),
                     max_retries_failure=broker.max_retries_failure,
                     max_retries_preemption=broker.max_retries_preemption,
                     max_task_failures=broker.max_retries_failure,

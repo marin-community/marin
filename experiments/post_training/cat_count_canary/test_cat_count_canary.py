@@ -96,12 +96,11 @@ def test_both_lanes_render_megatron_launch_with_complete_custom_eval_mix():
     "setting",
     (
         "trainer.policy={megatron_config: {tensor_model_parallel_size: 2}}",
-        "trainer.seed=23",
-        "trainer.max_ckpts_to_keep=2",
+        "generator.engine_init_kwargs.user_option=1",
         "generator.chat_template={source: name, name_or_path: other}",
     ),
 )
-def test_owned_settings_reject_parent_and_canonical_overrides(setting):
+def test_settings_reject_protected_and_unknown_overrides(setting):
     with pytest.raises(click.BadParameter):
         training_config(settings=(setting,))
 

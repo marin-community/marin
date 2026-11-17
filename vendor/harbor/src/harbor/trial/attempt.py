@@ -114,7 +114,7 @@ def _fallback_result(
     started_at: datetime,
 ) -> TrialResult:
     task_id = trial_config.task.get_task_id()
-    agent_name = trial_config.agent.name or trial_config.agent.import_path or "unknown"
+    agent_name = trial_config.agent.name or "unknown"
     version = str(trial_config.agent.kwargs.get("version", "unknown"))
     paths = trial_paths(trial_config, attempt)
     return TrialResult(

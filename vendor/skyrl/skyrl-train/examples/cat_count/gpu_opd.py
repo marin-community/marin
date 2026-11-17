@@ -19,7 +19,18 @@ import random
 from pathlib import Path
 
 from omegaconf import DictConfig, OmegaConf
-from skyrl_train.config.utils import get_default_config
+from skyrlrecipe import ContextBudget, SkyRLRecipe, sections
+from skyrlrecipe.declared import (
+    EvaluationCallback,
+    EvaluationSampling,
+    Teacher,
+    TeacherEndpoint,
+    TeacherModel,
+    TeacherRoute,
+    TeacherRouting,
+)
+from skyrlrecipe.sampling import EvalSamplingParams
+from examples.recipe import compose_recipe
 from skyrl_train.entrypoints.main_base import run
 from skyrl_train.inference_engines.vllm_teacher_oracle import tokenizer_vocabulary_fingerprint
 from skyrl_train.tokenizer import create_tokenizer
@@ -107,7 +118,7 @@ def write_data(directory: Path, words: tuple[str, ...], steps: int, seed: int) -
     return train, validation
 
 
-def metric_groups(words: tuple[str, ...]) -> dict[str, list[str]]:
+def metric_groups(words: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
     """Group per-count scores by split over all words and, for MOPD, by split for each word."""
     groups = {}
     scopes = [("", words)] + ([(f"{word}_", (word,)) for word in words] if len(words) > 1 else [])
@@ -115,10 +126,12 @@ def metric_groups(words: tuple[str, ...]) -> dict[str, list[str]]:
         for prefix, scope in scopes:
             for split, counts in (("train", TRAIN_NS), ("heldout", HELDOUT_NS), ("extrapolation", EXTRAPOLATION_NS)):
                 sources = [data_source(word, n) for word in scope for n in counts]
-                groups[f"{profile}/{prefix}{split}/avg_score"] = [f"{profile}/{source}/avg_score" for source in sources]
-                groups[f"{profile}/{prefix}{split}/environment/exact"] = [
+                groups[f"{profile}/{prefix}{split}/avg_score"] = tuple(
+                    f"{profile}/{source}/avg_score" for source in sources
+                )
+                groups[f"{profile}/{prefix}{split}/environment/exact"] = tuple(
                     f"{profile}/{data_source(word, n)}/{exact_metric(word)}" for word in scope for n in counts
-                ]
+                )
     return groups
 
 
@@ -128,10 +141,10 @@ def opd_config(args: argparse.Namespace) -> DictConfig:
     if len(words) == 1:
         if args.swap_routes:
             raise ValueError("swapping routes needs at least two teachers")
-        routes = {"default": {"teacher": words[0], "weight": 1.0}}
+        routes = {"default": TeacherRoute(teacher=words[0], weight=1.0)}
     else:
         experts = words[1:] + words[:1] if args.swap_routes else words
-        routes = {word: {"teacher": expert, "weight": 1.0} for word, expert in zip(words, experts, strict=True)}
+        routes = {word: TeacherRoute(teacher=expert, weight=1.0) for word, expert in zip(words, experts, strict=True)}
     train, validation = write_data(args.output / "data", words, args.steps, args.seed)
     # Evens answers for the extrapolation counts (24 and 28) take 68 and 80 tokens with EOS; training counts fit 64.
     eval_generate = 96 if EVENS_ROUTE in words else 64
@@ -144,128 +157,124 @@ def opd_config(args: argparse.Namespace) -> DictConfig:
         "expert_model_parallel_size": 1,
         "expert_tensor_parallel_size": 1,
     }
-    cfg = get_default_config()
-    OmegaConf.set_struct(cfg, False)
-    return OmegaConf.merge(
-        cfg,
-        {
-            "data": {"train_data": [str(train)], "val_data": [str(validation)], "shuffle": False},
-            "environment": {"env_class": "cat_count"},
-            "trainer": {
-                "strategy": "megatron",
-                "flash_attn": False,
-                "use_sample_packing": False,
-                "gradient_checkpointing": False,
-                "placement": {"colocate_all": False, "policy_num_nodes": 1, "policy_num_gpus_per_node": GPUS},
-                "epochs": 1,
-                "max_steps": args.steps,
-                "train_batch_size": BATCH_SIZE,
-                "policy_mini_batch_size": BATCH_SIZE,
-                "micro_train_batch_size_per_gpu": MICRO_BATCH_SIZE,
-                "micro_forward_batch_size_per_gpu": MICRO_BATCH_SIZE,
-                "update_epochs_per_batch": 2,
-                "max_prompt_length": 64,
-                "eval_batch_size": len(EVAL_NS) * len(words),
-                "eval_interval": EVAL_INTERVAL,
-                "eval_before_train": True,
-                "ckpt_interval": -1,
-                "hf_save_interval": -1,
-                "resume_mode": "none",
-                "seed": args.seed,
-                "logger": "console",
-                "project_name": "marin-cat-count-opd",
-                "run_name": args.output.name,
-                "export_path": str(args.output / "exports"),
-                "ckpt_path": str(args.output / "ckpts"),
-                "training_metrics": True,
-                "algorithm": {
-                    "advantage_estimator": "uniform",
-                    "policy_loss_type": "behavior_clip",
-                    "eps_clip_low": 0.2,
-                    "eps_clip_high": 0.2,
-                    "use_kl_loss": False,
-                    "use_kl_in_reward": False,
-                    "off_policy_correction": "none",
-                    "dynamic_sampling": {"type": None},
-                    "distillation": {
-                        "objective": "sampled_reverse_kl",
-                        "routing_plan": "opd",
-                        "coefficient": 1.0,
-                        "reward_mode": "replace",
-                        "advantage_clip": args.advantage_clip,
+    recipe = SkyRLRecipe(
+        context_budget=ContextBudget(
+            request_window_tokens=128,
+            serving_window_tokens=max_model_len,
+            max_new_tokens_per_turn=64,
+            max_turns=1,
+            overlong_cache_fraction=0,
+        ),
+        data=sections.Data(train_data=(str(train),), val_data=(str(validation),), shuffle=False),
+        environment=sections.Environment(env_class="cat_count"),
+        trainer=sections.Trainer(
+            strategy="megatron",
+            flash_attn=False,
+            use_sample_packing=False,
+            gradient_checkpointing=False,
+            placement=sections.Placement(colocate_all=False, policy_num_nodes=1, policy_num_gpus_per_node=GPUS),
+            epochs=1,
+            max_steps=args.steps,
+            train_batch_size=BATCH_SIZE,
+            policy_mini_batch_size=BATCH_SIZE,
+            micro_train_batch_size_per_gpu=MICRO_BATCH_SIZE,
+            micro_forward_batch_size_per_gpu=MICRO_BATCH_SIZE,
+            update_epochs_per_batch=2,
+            eval_batch_size=len(EVAL_NS) * len(words),
+            eval_interval=EVAL_INTERVAL,
+            eval_before_train=True,
+            ckpt_interval=-1,
+            hf_save_interval=-1,
+            resume_mode="none",
+            logger="console",
+            project_name="marin-cat-count-opd",
+            run_name=args.output.name,
+            training_metrics=True,
+            algorithm=sections.Algorithm(
+                advantage_estimator="uniform",
+                policy_loss_type="behavior_clip",
+                eps_clip_low=0.2,
+                eps_clip_high=0.2,
+                use_kl_loss=False,
+                use_kl_in_reward=False,
+                off_policy_correction="none",
+                dynamic_sampling=sections.DynamicSampling(type=None),
+                distillation=sections.Distillation(
+                    objective="sampled_reverse_kl",
+                    routing_plan="opd",
+                    coefficient=1.0,
+                    reward_mode="replace",
+                    advantage_clip=args.advantage_clip,
+                ),
+            ),
+            policy=sections.Policy(
+                optimizer_config=sections.PolicyOptimizerConfig(
+                    optimizer="AdamW", lr=args.lr, weight_decay=0.01, max_grad_norm=1.0
+                ),
+                megatron_config=sections.PolicyMegatronConfig(**geometry, check_dp_weight_consistency=True),
+            ),
+            ref=sections.Ref(megatron_config=sections.RefMegatronConfig(**geometry)),
+            rollout_buffer=sections.RolloutBuffer(
+                max_staleness_steps=STALENESS,
+                batch_policy="full_batch",
+                max_in_flight=BATCH_SIZE,
+                object_store_root=None,
+            ),
+            callbacks=(
+                EvaluationCallback(
+                    type="evaluation",
+                    eval_steps=EVAL_INTERVAL,
+                    eval_before_train=True,
+                    additional_evaluations={
+                        "sampled": EvaluationSampling(
+                            sampling_params=EvalSamplingParams(temperature=1.0),
+                            n_samples_per_prompt=SAMPLED_EVAL_SAMPLES,
+                        )
                     },
-                },
-                "policy": {
-                    "model": {"path": args.model},
-                    "optimizer_config": {
-                        "optimizer": "AdamW",
-                        "lr": args.lr,
-                        "weight_decay": 0.01,
-                        "max_grad_norm": 1.0,
-                    },
-                    "megatron_config": {**geometry, "check_dp_weight_consistency": True},
-                },
-                "ref": {"megatron_config": geometry},
-                "rollout_buffer": {
-                    "max_staleness_steps": STALENESS,
-                    "batch_policy": "full_batch",
-                    "max_in_flight": BATCH_SIZE,
-                    "object_store_root": None,
-                },
-                "callbacks": [
-                    {
-                        "type": "evaluation",
-                        "eval_steps": EVAL_INTERVAL,
-                        "eval_before_train": True,
-                        "additional_evaluations": {
-                            "sampled": {
-                                "sampling_params": {"temperature": 1.0},
-                                "n_samples_per_prompt": SAMPLED_EVAL_SAMPLES,
-                            }
-                        },
-                        "metric_groups": metric_groups(words),
-                    }
-                ],
-            },
-            "generator": {
-                "backend": "vllm",
-                "model_dtype": "bfloat16",
-                "vllm_attention_backend": "FLASH_ATTN",
-                "run_engines_locally": True,
-                "enable_http_endpoint": False,
-                "weight_sync_backend": "nccl",
-                "use_conversation_multi_turn": False,
-                "require_exact_chat_transport": False,
-                "num_inference_engines": GPUS,
-                "inference_engine_tensor_parallel_size": 1,
-                "n_samples_per_prompt": GROUP_SIZE,
-                "max_turns": 1,
-                "gpu_memory_utilization": 0.7,
-                "chat_template": {"source": "name", "name_or_path": "qwen2_5_with_generation_tag_simplified"},
-                "sampling_params": {"temperature": 1.0, "top_p": 1.0, "logprobs": 0, "max_generate_length": 64},
-                "eval_sampling_params": {"temperature": 0.0, "max_generate_length": eval_generate},
-                "eval_n_samples_per_prompt": 1,
-                "engine_init_kwargs": {"max_model_len": max_model_len},
-            },
-            "teachers": {
-                word: {
-                    "source": "openai_compatible",
-                    "placement": "external",
-                    "model": {
-                        "path": f"synthetic/{word}" if word == EVENS_ROUTE else f"synthetic/{word}-count",
-                        "revision": args.teacher_revision,
-                    },
-                    "endpoints": [{"url": url, "max_concurrency": 8}],
-                    "tokenizer_fingerprint": fingerprint,
-                    "max_sequence_length": 128,
-                    "request_timeout_seconds": 120,
-                    "evidence": "chosen_token",
-                }
-                for word, url in teacher_urls.items()
-            },
-            "teacher_routing": {"opd": {"revision": "cat-count-v1", "routes": routes}},
+                    metric_groups=metric_groups(words),
+                ),
+            ),
+        ),
+        generator=sections.Generator(
+            backend="vllm",
+            model_dtype="bfloat16",
+            vllm_attention_backend="FLASH_ATTN",
+            run_engines_locally=True,
+            enable_http_endpoint=False,
+            weight_sync_backend="nccl",
+            num_inference_engines=GPUS,
+            inference_engine_tensor_parallel_size=1,
+            n_samples_per_prompt=GROUP_SIZE,
+            gpu_memory_utilization=0.7,
+            chat_template=sections.ChatTemplate(source="name", name_or_path="qwen2_5_with_generation_tag_simplified"),
+            sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
+            eval_sampling_params=EvalSamplingParams(temperature=0.0, max_generate_length=eval_generate),
+            eval_n_samples_per_prompt=1,
+        ),
+        teachers={
+            word: Teacher(
+                source="openai_compatible",
+                placement="external",
+                model=TeacherModel(
+                    path=f"synthetic/{word}" if word == EVENS_ROUTE else f"synthetic/{word}-count",
+                    revision=args.teacher_revision,
+                ),
+                endpoints=(TeacherEndpoint(url=url, max_concurrency=8),),
+                tokenizer_fingerprint=fingerprint,
+                max_sequence_length=128,
+                request_timeout_seconds=120,
+                evidence="chosen_token",
+            )
+            for word, url in teacher_urls.items()
         },
+        teacher_routing={"opd": TeacherRouting(revision="cat-count-v1", routes=routes)},
     )
+    cfg = compose_recipe(recipe)
+    cfg.trainer.policy.model.path = args.model
+    cfg.trainer.seed = args.seed
+    cfg.trainer.export_path = str(args.output / "exports")
+    cfg.trainer.ckpt_path = str(args.output / "ckpts")
+    return cfg
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

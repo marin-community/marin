@@ -133,7 +133,23 @@ Model = Callable[[ModelRequest], Awaitable[ModelTurn]]
 
 
 class ContextWindowExceeded(RuntimeError):
-    """Reject one request while allowing the harness to compact and send another."""
+    """The session rejected one request; the harness may compact and send another."""
+
+
+class ContextRecovery(StrEnum):
+    """When a session lets the harness recover from a transport's context rejection."""
+
+    NEVER = "never"
+    ALWAYS = "always"
+    AFTER_TURN = "after_turn"
+
+
+class ContextRejected(Exception):
+    """A transport context rejection whose original error applies when the harness cannot recover."""
+
+    def __init__(self, error: Exception, message: str):
+        self.error = error
+        super().__init__(message)
 
 
 class GenerationLimitReached(Exception):

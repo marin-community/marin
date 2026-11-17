@@ -15,12 +15,27 @@ from iris.cluster.platforms.k8s.types import K8sResource, KubectlError
 
 
 class _FakeExecStream:
-    def __init__(self, *, returncode: int, stdout: str = "", stderr: str = "", stream_open: bool = False):
-        self.returncode = returncode
+    def __init__(
+        self,
+        *,
+        returncode: int,
+        stdout: str = "",
+        stderr: str = "",
+        stream_open: bool = False,
+        exit_error: ValueError | None = None,
+    ):
+        self._returncode = returncode
+        self.exit_error = exit_error
         self.stdout = stdout
         self.stderr = stderr
         self.open = stream_open
         self.closed = False
+
+    @property
+    def returncode(self) -> int:
+        if self.exit_error is not None:
+            raise self.exit_error
+        return self._returncode
 
     def run_forever(self, timeout: float | None = None) -> None:
         pass
@@ -72,6 +87,20 @@ def test_exec_timeout_reads_open_stream_without_blocking(monkeypatch):
 
     assert result.returncode == 124
     assert result.stderr == "Command timed out after 1 seconds"
+    assert stream.closed
+
+
+def test_exec_malformed_runtime_exit_code_reports_failure(monkeypatch):
+    stream = _FakeExecStream(
+        returncode=0,
+        exit_error=ValueError("invalid literal for int() with base 10: 'OCI runtime exec failed'"),
+    )
+    svc = _service_with_exec_stream(monkeypatch, stream)
+
+    result = svc.exec("task-pod", ["touch", "/tmp/release"], container="output-uploader")
+
+    assert result.returncode != 0
+    assert "OCI runtime exec failed" in result.stderr
     assert stream.closed
 
 

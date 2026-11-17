@@ -86,7 +86,7 @@ jobs:
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
-            -e FERRY_TEST_MAX_FILES "1000" \
+            -e FERRY_TEST_MAX_FILES "1600" \
             -- python -m experiments.ferries.datakit_nemotron_ferry)
           if [ -z "$JOB_ID" ]; then
             echo "iris job run produced no job id" >&2

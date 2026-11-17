@@ -1,5 +1,6 @@
 """Contract checks for the three-teacher Snowball MOPD smoke on the Nemotron Ultra blend."""
 
+from omegaconf import OmegaConf
 from pathlib import Path
 
 import yaml
@@ -26,7 +27,7 @@ class _HPCStub:
 
 def test_snowball_distillation_smoke_pins_one_expert_parallel_teacher_per_route():
     expected_routes = {"math": "math", "swe": "swe", "terminal": "terminal"}
-    parsed = parse_rl_config(str(CONFIG), model_override=STUDENT)
+    parsed = parse_rl_config(OmegaConf.load(CONFIG))
     plan = parsed.distillation_plan
 
     assert plan is not None
@@ -65,9 +66,11 @@ def test_snowball_mopd_smoke_sampler_weights_match_the_hardcoded_routes():
 
 def test_snowball_mopd_smoke_route_weights_survive_config_composition():
     """The base config declares domain_weights as an empty map, so route keys must be allowed in."""
-    parsed = parse_rl_config(str(CONFIG), model_override=STUDENT)
+    parsed = parse_rl_config(OmegaConf.load(CONFIG))
     cfg = compose_skyrl_config(
-        parsed, {"job_name": "mopd-smoke-test", "experiments_dir": "/tmp/exp", "num_nodes": 8}, _HPCStub()
+        parsed,
+        {"job_name": "mopd-smoke-test", "experiments_dir": "/tmp/exp", "num_nodes": 8, "model_path": STUDENT},
+        _HPCStub(),
     ).config
 
     assert cfg.data.sampling.kind == "domain-weighted"

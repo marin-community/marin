@@ -18,8 +18,10 @@ Direct sessions preserve server-sent events end to end; brokered sessions return
 buffered JSON and reject streaming.
 ``/tools`` returns model-facing JSON schemas for dashboard-authored Python,
 ``/tools/{name}`` validates and runs one function, and ``/shell`` executes a
-command in a reconstructed ShellSim agent workspace. ``/chat-shares`` stores
-bounded, process-local snapshots for short chat links.
+command in a reconstructed ShellSim agent workspace. ``/web-search`` runs the
+optional Parallel web search tool when the server holds a Parallel API key; ``/info``
+reports whether it does. ``/chat-shares`` stores bounded, process-local snapshots
+for short chat links.
 """
 
 import dataclasses
@@ -52,6 +54,7 @@ from marin.inference.python_tool_routes import (
 )
 from marin.inference.repository_snapshot import repository_snapshot_response
 from marin.inference.shellsim_runtime import ToolRuntime
+from marin.inference.web_search import ParallelWebSearch, web_search_response
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +120,7 @@ def build_dashboard_app(
     info: ServingInfo,
     request_timeout_seconds: float = 600.0,
     shellsim_catalog: str = shellsim.DEFAULT_PYPI_CATALOG,
+    web_search: ParallelWebSearch | None = None,
 ) -> Starlette:
     """Build the dashboard and reverse proxy for a local serving backend.
 
@@ -126,26 +130,29 @@ def build_dashboard_app(
         info: Static serving metadata returned from ``/info``.
         request_timeout_seconds: Per-request timeout for upstream proxying.
         shellsim_catalog: Host-selected ports catalog for CPython and NumPy tools.
+        web_search: Parallel credentials for the optional ``web_search`` tool; None disables it.
     """
     state: dict[str, httpx.AsyncClient] = {}
     chat_shares = _ChatShareStore()
 
     @asynccontextmanager
-    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
         state["client"] = httpx.AsyncClient(
             base_url=upstream_base_url,
             timeout=httpx.Timeout(request_timeout_seconds, connect=10.0),
         )
-        try:
-            yield
-        finally:
-            await state.pop("client").aclose()
+        async with httpx.AsyncClient() as web_search_client:
+            app.state.web_search_client = web_search_client
+            try:
+                yield
+            finally:
+                await state.pop("client").aclose()
 
     async def index(_request: Request) -> Response:
         return HTMLResponse(DASHBOARD_HTML)
 
     async def serving_info(_request: Request) -> Response:
-        return JSONResponse(dataclasses.asdict(info))
+        return JSONResponse({**dataclasses.asdict(info), "web_search": web_search is not None})
 
     async def health(_request: Request) -> Response:
         client = state["client"]
@@ -203,6 +210,7 @@ def build_dashboard_app(
             Route("/tools/{name}", invoke_tool_response, methods=["POST"]),
             Route("/shell", shell_workspace_response, methods=["POST"]),
             Route("/shell/repository", repository_snapshot_response, methods=["POST"]),
+            Route("/web-search", web_search_response, methods=["POST"]),
             Route("/metrics", proxy, methods=["GET"]),
             Route("/tokenize", proxy, methods=["POST"]),
             Route("/v1/{path:path}", proxy, methods=["GET", "POST", "OPTIONS"]),
@@ -210,6 +218,7 @@ def build_dashboard_app(
         lifespan=lifespan,
     )
     app.state.tool_runtime = ToolRuntime(shellsim_catalog)
+    app.state.web_search = web_search
     return app
 
 

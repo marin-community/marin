@@ -14,7 +14,6 @@ from urllib.request import url2pathname
 
 from pydantic import BaseModel, Field, field_validator
 
-from harbor.bridges.base import bridge_input_files
 from harbor.models.job.config import JobConfig, RetryConfig
 from harbor.models.task.id import GitTaskId, LocalTaskId, PackageTaskId
 from harbor.models.trial.config import (
@@ -23,7 +22,6 @@ from harbor.models.trial.config import (
     EnvironmentConfig,
     TaskConfig,
     TrialConfig,
-    UserAgentConfig,
     VerifierConfig,
 )
 from harbor.tasks.packager import Packager
@@ -160,11 +158,6 @@ class TrialLock(BaseModel):
     trial_cleanup_grace_sec: float = DEFAULT_TRIAL_CLEANUP_GRACE_SEC
     extra_instructions: list[ExtraInstructionLock] | None = None
     agent: AgentConfig
-    user_agent: UserAgentConfig | None = None
-    user_persona: ExtraInstructionLock | None = None
-    user_prompt_template: ExtraInstructionLock | None = None
-    bridge_prompt: ExtraInstructionLock | None = None
-    bridge_inputs: dict[str, ExtraInstructionLock] = Field(default_factory=dict)
     skills: list[AgentSkillLock] = Field(default_factory=list)
     environment: EnvironmentConfig
     verifier: VerifierConfig
@@ -186,22 +179,6 @@ class TrialLock(BaseModel):
             self.trial_cleanup_grace_sec,
             _lock_list_equality_key(self.extra_instructions),
             _agent_equality_key(self.agent),
-            _user_agent_equality_key(
-                self.user_agent, bridge_input_names=set(self.bridge_inputs)
-            ),
-            self.user_persona._equality_key() if self.user_persona else None,
-            (
-                self.user_prompt_template._equality_key()
-                if self.user_prompt_template
-                else None
-            ),
-            self.bridge_prompt._equality_key() if self.bridge_prompt else None,
-            tuple(
-                sorted(
-                    (name, lock._equality_key())
-                    for name, lock in self.bridge_inputs.items()
-                )
-            ),
             tuple(skill._equality_key() for skill in self.skills),
             _environment_equality_key(
                 self.environment,
@@ -293,26 +270,6 @@ def _environment_equality_key(
     return _frozen_value(fingerprint)
 
 
-def _user_agent_equality_key(
-    user_agent: UserAgentConfig | None,
-    *,
-    bridge_input_names: set[str],
-) -> Any:
-    if user_agent is None:
-        return None
-    value = user_agent.identity_fingerprint()
-    for key in ("skills", "user_persona_path", "user_prompt_template_path"):
-        value.pop(key, None)
-    bridge = value.get("bridge")
-    if isinstance(bridge, dict):
-        bridge.pop("prompt_path", None)
-        kwargs = bridge.get("kwargs")
-        if isinstance(kwargs, dict):
-            for name in bridge_input_names:
-                kwargs.pop(name, None)
-    return _frozen_value(value)
-
-
 def build_job_lock(
     *,
     config: JobConfig,
@@ -360,37 +317,6 @@ def _build_lock_trial(
             else None
         ),
         agent=trial_config.agent,
-        user_agent=trial_config.user_agent,
-        user_persona=(
-            ExtraInstructionLock(
-                path=trial_config.user_agent.user_persona_path,
-                digest=_file_sha256_digest(trial_config.user_agent.user_persona_path),
-            )
-            if trial_config.user_agent is not None
-            and trial_config.user_agent.user_persona_path is not None
-            else None
-        ),
-        user_prompt_template=(
-            ExtraInstructionLock(
-                path=trial_config.user_agent.user_prompt_template_path,
-                digest=_file_sha256_digest(
-                    trial_config.user_agent.user_prompt_template_path
-                ),
-            )
-            if trial_config.user_agent is not None
-            and trial_config.user_agent.user_prompt_template_path is not None
-            else None
-        ),
-        bridge_prompt=(
-            ExtraInstructionLock(
-                path=trial_config.user_agent.bridge.prompt_path,
-                digest=_file_sha256_digest(trial_config.user_agent.bridge.prompt_path),
-            )
-            if trial_config.user_agent is not None
-            and trial_config.user_agent.bridge.prompt_path is not None
-            else None
-        ),
-        bridge_inputs=_build_bridge_input_locks(trial_config),
         skills=_build_agent_skill_locks(trial_config.agent.skills),
         environment=trial_config.environment,
         verifier=trial_config.verifier,
@@ -406,17 +332,6 @@ def _build_agent_skill_locks(skills: list[Path]) -> list[AgentSkillLock]:
         )
         for skill in resolve_skills(skills)
     ]
-
-
-def _build_bridge_input_locks(
-    trial_config: TrialConfig,
-) -> dict[str, ExtraInstructionLock]:
-    if trial_config.user_agent is None:
-        return {}
-    return {
-        name: ExtraInstructionLock(path=path, digest=_file_sha256_digest(path))
-        for name, path in bridge_input_files(trial_config.user_agent.bridge).items()
-    }
 
 
 def _file_sha256_digest(path: Path) -> str:

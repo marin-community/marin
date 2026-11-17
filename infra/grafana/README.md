@@ -46,6 +46,7 @@ GET /finelog/marin/alerts/training_telemetry     watched hero runs + silent-tele
 GET /finelog/marin/alerts/training_optimizer     watched hero runs + optimizer-fault value(0|1)
 GET /finelog/marin/alerts/training_health        watched hero runs + degraded-signal value(0|1)
 GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
+GET /finelog/marin/alerts/b200_utilization       GB200 clusters + state + idle value(0|1)
 GET /iris/{cluster}/job_counts | jobs | workers | health
                                                     live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
@@ -209,6 +210,16 @@ recent matching Kubernetes Warning events.
 the hub every 30 seconds. It does not travel through the row-forwarding path. The alert
 fires when a regional heartbeat is two minutes old, the required node-agent namespace
 is absent, or a nonzero publication/forwarding lag has made no progress for ten minutes.
+
+`NodeRuntimeFilesystemAlmostFull` pages critical ops when a node's `/` or
+separately mounted `/tmp` stays below 5% free space for five minutes. It reads
+the node-agent `node_filesystem_available_bytes` and `node_filesystem_total_bytes`
+gauges, preserving cluster, node UID, and mountpoint identity. Only the latest
+samples from the last five minutes participate. Missing data stays normal while
+node agents are upgraded; Finelog fleet and relay alerts cover query outages.
+Deploy the updated Iris node agents along with Grafana. The existing NVMe
+`node_disk_*` metrics do not measure the root RAM disk; see the
+[root-filesystem runbook](../../lib/iris/OPS.md#coreweave-root-filesystem-full).
 
 Iris: the bridge owns each query behind a fixed endpoint and returns flat rows, so the
 dashboard never sends raw admin SQL. `jobs` (root jobs by state — in-flight plus 24h
@@ -600,6 +611,10 @@ recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 The CoreWeave storage-telemetry freshness warning and `TrainingRunHealthDegraded`
 carry the explicit `notification=slack` exception, so they announce in Slack
 and open a session on the default `operator` channel.
+`B200ClusterUnderutilized` uses the same route when a cluster's Ready GB200
+GPUs stay idle for 30 minutes; the thresholds are the constants in
+`src/b200_utilization_alert.py`. A cluster with incomplete telemetry or an
+unreadable node inventory does not fire, and its `state` label says why.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard panels rather than alert rules because they have expected benign
 causes. `severity=critical` routes to `ops-critical` (email

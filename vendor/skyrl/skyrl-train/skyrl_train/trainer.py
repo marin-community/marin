@@ -576,7 +576,7 @@ class RayPPOTrainer:
         """Kill all managed Ray actors (models + inference engines).
 
         Terminates policy, critic, and ref-model actor groups as well as
-        inference engine actors (vLLM / SGLang workers) that would otherwise
+        inference engine actors (vLLM workers) that would otherwise
         keep running until the node dies.
         """
         for model_name, model in [
@@ -1205,9 +1205,21 @@ class RayPPOTrainer:
             if self.colocate_all:
                 await asyncio.to_thread(self.policy_model.offload_to_cpu, offload_optimizer=True, offload_model=False)
                 await self.inference_engine_client.wake_up(tags=["weights"])
-                await self.sync_policy_weights_to_inference_engines()
+                if self._expert_block_sync is not None:
+                    if not self.inference_engine_client.generation_paused_event.is_set():
+                        await self.inference_engine_client.pause_generation()
+                    try:
+                        for phase, seconds in (await self._expert_block_sync.prepare()).items():
+                            timings[f"expert_block_sync/{phase}"] = seconds
+                        await self.sync_policy_weights_to_inference_engines()
+                    finally:
+                        await self._expert_block_sync.close()
+                else:
+                    await self.sync_policy_weights_to_inference_engines()
                 await asyncio.to_thread(self.policy_model.offload_to_cpu, offload_optimizer=False, offload_model=True)
                 await self.inference_engine_client.wake_up(tags=["kv_cache"])
+                if self._expert_block_sync is not None:
+                    await self.inference_engine_client.resume_generation(policy_step=self.global_step + 1)
             else:
                 await self.inference_engine_client.pause_generation()
                 # Training backloads the optimizer before every step. Offload it after every update, including
@@ -1448,9 +1460,11 @@ class RayPPOTrainer:
                 policy_model=self.policy_model,
                 inference_engine_client=self.inference_engine_client,
                 timeout_seconds=self.cfg.generator.expert_block_sync.timeout_seconds,
+                colocated=self.colocate_all,
             )
-            for phase, seconds in (await self._expert_block_sync.prepare()).items():
-                self.all_startup_timings[f"expert_block_sync/{phase}"] = seconds
+            if not self.colocate_all:
+                for phase, seconds in (await self._expert_block_sync.prepare()).items():
+                    self.all_startup_timings[f"expert_block_sync/{phase}"] = seconds
 
     def _record_run_configuration(self) -> None:
         if not self._training_metrics_enabled:
@@ -1532,6 +1546,8 @@ class RayPPOTrainer:
         await self._start_speculator_update()
         if self.colocate_all:
             # Colocation runs at staleness 0, where no rollout is in flight once the batch is complete.
+            if self._expert_block_sync is not None:
+                await self.inference_engine_client.pause_generation()
             await self.inference_engine_client.sleep()
 
         scored_distillation = None
@@ -1630,7 +1646,9 @@ class RayPPOTrainer:
             async with asyncio.TaskGroup() as tasks:
                 native = tasks.create_task(self.eval(evaluation_pool=pool))
                 additional = [
-                    tasks.create_task(callback.collect_evaluation(state, trainer=self, pool=pool))
+                    tasks.create_task(
+                        self.callback_handler.collect_evaluation(callback, state, trainer=self, pool=pool)
+                    )
                     for callback in self.callback_handler.callbacks
                 ]
             eval_metrics = native.result()
@@ -3288,6 +3306,7 @@ class RayPPOTrainer:
             checkpoint_path: The path to the checkpoint.
         """
         checkpoint_path = None
+        recovering_own_checkpoint = False
         # Check if resumption is enabled
         if self.resume_mode == ResumeMode.NONE:
             logger.info("Checkpoint resumption disabled, starting training from scratch")
@@ -3295,24 +3314,26 @@ class RayPPOTrainer:
         # first, let's get resume_path
         elif self.resume_mode == ResumeMode.LATEST:
             latest_checkpoint_file = os.path.join(self.cfg.trainer.ckpt_path, LATEST_CHECKPOINT_FILE)
-            if not io.exists(latest_checkpoint_file):
+            if io.exists(latest_checkpoint_file):
+                recovering_own_checkpoint = True
+                with io.open_file(latest_checkpoint_file, "r") as f:
+                    ckpt_iteration = int(f.read().strip())
+                checkpoint_path = os.path.join(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{ckpt_iteration}")
+                # A corrupt or incomplete current-run checkpoint must still fail validation.
+                validate_consistency_for_latest_checkpoint(
+                    self.cfg.trainer.ckpt_path,
+                    ckpt_iteration,
+                    checkpoint_path,
+                    latest_checkpoint_file,
+                    self.cfg.trainer.ckpt_interval,
+                )
+            elif not self.cfg.trainer.get("resume_path"):
                 logger.warning(
                     f"resume_mode=latest found no checkpoint marker at {latest_checkpoint_file}; "
                     "starting training from global_step 0"
                 )
                 return 0, None
-            with io.open_file(latest_checkpoint_file, "r") as f:
-                ckpt_iteration = int(f.read().strip())
-            checkpoint_path = os.path.join(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{ckpt_iteration}")
-            # Run validation: Make sure ckpt folder is consistent with latest_ckpt_global_step.txt
-            validate_consistency_for_latest_checkpoint(
-                self.cfg.trainer.ckpt_path,
-                ckpt_iteration,
-                checkpoint_path,
-                latest_checkpoint_file,
-                self.cfg.trainer.ckpt_interval,
-            )
-        else:
+        if checkpoint_path is None:
             # Get and validate resume path
             checkpoint_path = self.cfg.trainer.resume_path
             if not checkpoint_path:
@@ -3352,7 +3373,7 @@ class RayPPOTrainer:
             trainer_state = torch.load(f, map_location="cpu", weights_only=False)
         saved_global_step = trainer_state.get("global_step", global_step)
         self._ftpo_stopped = bool(trainer_state.get("ftpo_stopped", False))
-        if self.cfg.trainer.get("reset_distillation_token_count_on_resume", False):
+        if not recovering_own_checkpoint and self.cfg.trainer.get("reset_distillation_token_count_on_resume", False):
             self.distillation_scored_tokens_total = 0
         else:
             self.distillation_scored_tokens_total = int(trainer_state.get("distillation_scored_tokens_total", 0))
@@ -3366,7 +3387,9 @@ class RayPPOTrainer:
             logger.warning(f"Global step mismatch: path={global_step}, saved={saved_global_step}. Using path value.")
 
         # 2. Load rollout state if requested and available
-        if not self.cfg.trainer.restore_dataloader_state:
+        if self.resume_mode == ResumeMode.LATEST and not recovering_own_checkpoint:
+            logger.info("Starting checkpoint imported; starting the configured dataset from the beginning")
+        elif not self.cfg.trainer.restore_dataloader_state:
             logger.info("Rollout state restoration disabled; starting the configured dataset from the beginning")
         elif io.exists(rollout_state_path):
             with io.open_file(rollout_state_path, "rb") as f:
@@ -3410,7 +3433,7 @@ class RayPPOTrainer:
             logger.info("Successfully loaded critic checkpoint")
 
         logger.info(f"Successfully loaded complete checkpoint state from global_step_{global_step}")
-        if self.cfg.trainer.get("reset_global_step_on_resume", False):
+        if not recovering_own_checkpoint and self.cfg.trainer.get("reset_global_step_on_resume", False):
             logger.info("Resetting the trainer step to 0 at the explicit stage boundary")
             global_step = 0
         return global_step, str(checkpoint_path)

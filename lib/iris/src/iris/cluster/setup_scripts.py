@@ -29,6 +29,11 @@ DEFAULT_UV_LINK_MODE = "copy"
 # The worker selects symlink mode on TPU hosts. Copy is the default for direct
 # callers and for Kubernetes, where the node agent can clean the shared cache.
 _UV_LINK_MODE_FLAG = f'--link-mode "${{{UV_LINK_MODE_ENV}:-{DEFAULT_UV_LINK_MODE}}}"'
+# By default uv picks any managed Python already in the node's shared cache, and
+# older managed builds lack APIs such as os.pidfd_open. Prefer the image's Python
+# so every node runs the same interpreter; uv falls back to a managed build when
+# the image has no match. uv documents this variable but hides its CLI flag.
+_UV_PYTHON_PREFERENCE_ENV = "UV_PYTHON_PREFERENCE=system"
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:
@@ -87,6 +92,7 @@ def default_setup_script(
     sync_cmd = " ".join(
         part
         for part in [
+            _UV_PYTHON_PREFERENCE_ENV,
             "uv sync",
             frozen_flag,
             _UV_LINK_MODE_FLAG,

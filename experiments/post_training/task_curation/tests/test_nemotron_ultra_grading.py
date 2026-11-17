@@ -21,7 +21,7 @@ from experiments.post_training.task_curation.tests.local_grader import (
     grade,
     with_verifier_file,
 )
-from experiments.post_training.task_curation.tests.ultra_rows import COMPONENT_ROWS, RECIPES
+from experiments.post_training.task_curation.tests.ultra_rows import COMPONENT_ROWS, RECIPES, ultra_row
 
 pytestmark = [pytest.mark.docker, pytest.mark.timeout(600)]
 
@@ -76,6 +76,21 @@ def task(path: str) -> TaskSpec:
 def test_grade_script_scores_the_reply(path, submission, reward, machines):
     result = grade(task(path), submission, machines, CODE_GRADER_MEMORY_MB)
     assert (result.status, result.reward) == (Outcome.GRADED, reward), result
+
+
+def test_reasoning_gym_prime_factorization_prose_scores_zero(machines):
+    row = ultra_row(
+        "ultra_sft_step3200_reasoning_gym",
+        "reasoning_gym_simple_agent",
+        "Find the prime factorization of 835.",
+        question="Find the prime factorization of 835.",
+        answer="5 \u00d7 167",
+        metadata={"source_dataset": "prime_factorization"},
+    )
+    pipeline = RECIPES[pipeline_name("rlvr2", "ultra_sft_step3200_reasoning_gym")]
+    converted = converted_task(pipeline, row)
+    result = grade(converted, reply("I need to find the prime factorization of 835."), machines, CODE_GRADER_MEMORY_MB)
+    assert (result.status, result.reward) == (Outcome.GRADED, 0.0), result
 
 
 @pytest.mark.parametrize(

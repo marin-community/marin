@@ -101,7 +101,7 @@ _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
-GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 2
+GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 3
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -241,17 +241,16 @@ def _sequence_axis_of(x: jax.Array) -> str | None:
     return spec[1] if spec is not None and len(spec) > 1 else None
 
 
-LOG_SCALING_ALPHA = 0.1
-
-
-def log_scaling_factor(visible_keys: Int[Array, "B S"], n_floor: int) -> Float[Array, "B S"]:
-    """Return the fixed Q multiplier ``1 + LOG_SCALING_ALPHA * ln(max(n / n_floor, 1))``.
+def log_scaling_factor(visible_keys: Int[Array, "B S"], n_floor: int, alpha: float, power: float) -> Float[Array, "B S"]:
+    """Return the fixed Q multiplier ``(1 + alpha * ln(max(n / n_floor, 1))) ** power``.
 
     This is Inkling's log scaling, except that ``n`` counts the keys in the query's own document, not its
     absolute position, because a packed row holds several documents. The floor keeps every query within
     ``n_floor`` keys at the temperature the model trained with up to that context.
     """
-    return 1.0 + LOG_SCALING_ALPHA * jnp.log(jnp.maximum(visible_keys.astype(jnp.float32) / n_floor, 1.0))
+    factor = 1.0 + alpha * jnp.log(jnp.maximum(visible_keys.astype(jnp.float32) / n_floor, 1.0))
+    # Skip the pow at 1 so the program, and with it every float, stays as it was without a power.
+    return factor if power == 1.0 else factor**power
 
 
 def _visible_full_causal_keys(lower_bounds: Int[Array, "B S"], valid: Bool[Array, "B S"]) -> Int[Array, "B S"]:
@@ -269,7 +268,9 @@ def _global_query_scale(
     """Return the per-query scale for the global layers, or None with log scaling off."""
     if cfg.log_scaling_n_floor is None:
         return None
-    return log_scaling_factor(_visible_full_causal_keys(long_lower_bounds, valid), cfg.log_scaling_n_floor)
+    assert cfg.log_scaling_alpha is not None and cfg.log_scaling_power is not None
+    visible_keys = _visible_full_causal_keys(long_lower_bounds, valid)
+    return log_scaling_factor(visible_keys, cfg.log_scaling_n_floor, cfg.log_scaling_alpha, cfg.log_scaling_power)
 
 
 def _reshard_sequence_axis(x: Float[Array, "B S ..."], axis: str | None) -> jax.Array:
@@ -342,6 +343,10 @@ class GrugModelConfig:
     """Fixed log scaling of queries on the global layers, on top of ``qk_mult`` and ``qk_mult_long_scale``.
     A query that sees ``n`` keys in its document is multiplied by ``log_scaling_factor``, which is 1 up to
     this many keys. None disables it."""
+    log_scaling_alpha: float | None = None
+    """Slope of ``log_scaling_factor``, required exactly when ``log_scaling_n_floor`` is set."""
+    log_scaling_power: float | None = None
+    """Exponent of ``log_scaling_factor``, required exactly when ``log_scaling_n_floor`` is set."""
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
@@ -385,6 +390,13 @@ class GrugModelConfig:
             raise ValueError("global_every must be positive")
         if self.log_scaling_n_floor is not None and self.log_scaling_n_floor <= 0:
             raise ValueError("log_scaling_n_floor must be positive")
+        log_scaling_fields = (self.log_scaling_n_floor, self.log_scaling_alpha, self.log_scaling_power)
+        if len({field is None for field in log_scaling_fields}) != 1:
+            raise ValueError("log_scaling_n_floor, log_scaling_alpha and log_scaling_power must be set together")
+        if self.log_scaling_alpha is not None and self.log_scaling_alpha <= 0:
+            raise ValueError("log_scaling_alpha must be positive")
+        if self.log_scaling_power is not None and self.log_scaling_power <= 0:
+            raise ValueError("log_scaling_power must be positive")
         if self.vocab_size <= 0:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
@@ -499,14 +511,12 @@ class GrugModelConfig:
             sconv=bool(_hf_config_attr(hf_config, ("sconv",), False)),
             sconv_kernel=int(_hf_config_attr(hf_config, ("sconv_kernel",), 4)),
             sconv_sites=tuple(_hf_config_attr(hf_config, ("sconv_sites",), ("k", "attn", "mlp"))),
+            log_scaling_n_floor=_hf_config_attr(hf_config, ("log_scaling_n_floor",)),
+            log_scaling_alpha=_hf_config_attr(hf_config, ("log_scaling_alpha",)),
+            log_scaling_power=_hf_config_attr(hf_config, ("log_scaling_power",)),
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
-        if self.log_scaling_n_floor is not None:
-            raise ValueError(
-                "log_scaling_n_floor is set, but the vLLM and SkyRL Grug models apply only a fixed query scale per "
-                "layer; this model would be served at the wrong temperature past the floor"
-            )
         # One name per field: core fields take the universal transformers spelling, MoE fields the
         # most common public spelling, and grug-specific extras keep their bare names. from_hf_config
         # stays tolerant of the older spellings so existing artifacts keep loading.
@@ -542,6 +552,9 @@ class GrugModelConfig:
             "sconv": self.sconv,
             "sconv_kernel": self.sconv_kernel,
             "sconv_sites": list(self.sconv_sites),
+            "log_scaling_n_floor": self.log_scaling_n_floor,
+            "log_scaling_alpha": self.log_scaling_alpha,
+            "log_scaling_power": self.log_scaling_power,
             "grugmoe_attention_mode": "production",
             GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
         }
