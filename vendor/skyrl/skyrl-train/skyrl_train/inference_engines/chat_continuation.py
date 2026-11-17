@@ -29,13 +29,14 @@ async def render_exact_chat_continuation(
     tokenize: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
     request_payload: dict[str, Any],
     *,
+    decode: Callable[[list[int]], str],
     assistant_message_index: int,
     served_prefix_token_ids: list[int],
 ) -> list[int] | None:
     """Append the renderer's boundary without re-tokenizing sampled content.
 
-    Return None when the renderer does not preserve the structural prefix needed
-    to splice the sampled tokens safely.
+    Return None if structural prefixes differ, the assistant boundary is absent,
+    or decode finds non-whitespace after it.
     """
     body = request_payload["json"]
     messages = body["messages"]
@@ -69,7 +70,18 @@ async def render_exact_chat_continuation(
 
     assistant_boundary = boundary_ids[len(continued_ids) :]
     if assistant_boundary and prefix_ids[-len(assistant_boundary) :] != assistant_boundary:
-        return None
+        # The placeholder shares the history and header; search only this turn so earlier text cannot supply the boundary.
+        turn_start = next(
+            (i for i, (left, right) in enumerate(zip(prefix_ids, boundary_ids)) if left != right), len(prefix_ids)
+        )
+        boundary_starts = [
+            index
+            for index in range(turn_start, len(prefix_ids) - len(assistant_boundary))
+            if prefix_ids[index : index + len(assistant_boundary)] == assistant_boundary
+        ]
+        if not boundary_starts or not decode(prefix_ids[boundary_starts[-1] + len(assistant_boundary) :]).isspace():
+            return None
+        assistant_boundary = prefix_ids[boundary_starts[-1] :]
     suffix_ids = full_ids[len(prefix_ids) :]
     if full_ids[: len(prefix_ids)] != prefix_ids:
         # Some templates remove reasoning from earlier assistant turns. Render the new
