@@ -118,16 +118,15 @@ def local_resource_evidence(disk_pool: LocalDiskPool | None) -> LocalResourceEvi
 def production_checkers(*, local_disk_pool: LocalDiskPool | None = None) -> dict[str, Checker]:
     """Return all production validators without acquiring machines or provider clients."""
     checkers = {}
-    for backend, class_name in (
-        ("docker", "DockerMachineFactory"),
-        ("docker-gvisor", "DockerGvisorMachineFactory"),
-        ("iris", "IrisMachineFactory"),
-        ("qemu", "QemuMachineFactory"),
-        ("shellsim", "ShellSimMachineFactory"),
-        ("daytona", "DaytonaMachineFactory"),
-        ("iris", "IrisMachineFactory"),
+    for backend, class_name, module_name in (
+        ("docker", "DockerMachineFactory", "docker"),
+        ("docker-gvisor", "DockerGvisorMachineFactory", "docker_gvisor"),
+        ("iris", "IrisMachineFactory", "iris"),
+        ("qemu", "QemuMachineFactory", "qemu"),
+        ("shellsim", "ShellSimMachineFactory", "shellsim"),
+        ("daytona", "DaytonaMachineFactory", "daytona"),
     ):
-        module = importlib.import_module(f"shellbox.backends.{backend}.machine")
+        module = importlib.import_module(f"shellbox.backends.{module_name}.machine")
         factory_type = getattr(module, class_name)
         factory = factory_type(controller_url="http://survey.invalid") if backend == "iris" else factory_type()
         checkers[backend] = factory.check_environment

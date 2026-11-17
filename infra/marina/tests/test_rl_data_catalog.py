@@ -177,7 +177,7 @@ def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
                 evidence=("test fixture",),
                 note="Unmeasured test environment",
             )
-            for backend in [*(backend.value for backend in Backend), "iris"]
+            for backend in (backend.value for backend in Backend)
             for need in Requirement
         ],
         sources=[
@@ -204,7 +204,7 @@ def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
                             not_applicable={},
                             validation_errors={},
                         )
-                        for backend in [*(backend.value for backend in Backend), "iris"]
+                        for backend in (backend.value for backend in Backend)
                     }
                     if source.declaration.task_count
                     else {}
