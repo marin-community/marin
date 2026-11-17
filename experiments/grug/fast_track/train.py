@@ -1098,7 +1098,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         bind_case_tables(tables)
         shared = int(np.sum(tables.members[:, 1] >= 0))
         logger.info("cplm_plus case classes: %d tokens in shared classes, width %d", shared, tables.members.shape[1])
-    if config.model.spelling_byte_embeds:
+    if config.model.spelling_byte_embeds or config.model.spelling_ngram_source:
         check_token_bytes(config.data.the_tokenizer, config.model.vocab_size)
 
     run_id = trainer.id
