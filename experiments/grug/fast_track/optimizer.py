@@ -338,6 +338,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     embed_weight_decay: float = 0.0
     """Fixed (not annealed) decoupled decay of ``token_embed``, ``p <- p (1 - adam_lr_t wd) - adam_lr_t u``; needs
     ``embed_optimizer`` ``ademamix`` or ``adam``."""
+    embed_lr_mult: float | None = None
+    """``token_embed`` (the input table alone) in its own ``embed_lr`` group, identical to the ``adam`` group it
+    otherwise shares (schedule, moments, decoupled decay) at ``embed_lr_mult`` x ``adam_lr``. None: off. Needs
+    ``embed_optimizer`` ``adam_group``."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -415,6 +419,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "router": adam_at(adam_lr * self.router_lr_mult, decay=True),
                 "embed": embed_at(adam_lr),
             }
+            # Only when on, so the optimizer state of runs without it keeps its groups.
+            if self.embed_lr_mult is not None:
+                transforms["embed_lr"] = adam_at(adam_lr * self.embed_lr_mult, decay=True)
             return optax.multi_transform(
                 {name: _named_scope_transform(f"opt_{name}", tx) for name, tx in transforms.items()}, self.create_mask
             )
@@ -426,6 +433,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError(f"kda_beta_group must be kda_beta or adam, got {self.kda_beta_group!r}")
         if self.embed_weight_decay and self.embed_optimizer not in (EmbedOptimizer.ADEMAMIX, EmbedOptimizer.ADAM):
             raise ValueError("embed_weight_decay needs embed_optimizer ademamix or adam")
+        if self.embed_lr_mult is not None and (
+            self.embed_lr_mult <= 0 or self.embed_optimizer != EmbedOptimizer.ADAM_GROUP
+        ):
+            raise ValueError("embed_lr_mult needs a positive multiplier and embed_optimizer adam_group")
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
@@ -446,6 +457,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # mixture's weights (zero-initialised).
             if ".rel_pos." in path_lower or _ADAM_LEAVES.search(path_lower):
                 return "adam"
+            if _TOKEN_EMBED.search(path_lower) and self.embed_lr_mult is not None:
+                return "embed_lr"
             if _TOKEN_EMBED.search(path_lower) and self.embed_optimizer != EmbedOptimizer.ADAM_GROUP:
                 return "embed"
             if "token_embed" in path_lower:
