@@ -415,10 +415,10 @@ def sources() -> list[RlDataSource]:
             config=PrebuiltCohort(
                 intended_use=IntendedUse.TRAIN,
                 name="codeforces-v1-rebuilt",
-                version="2026.11.12.1",
-                repo="open-athena/tasktrove-codeforces-v1-taskcompendium-20261112",
-                revision="05167566303b67a1adea08743d26c39101c5c30a",
-                expected_rows=9745,
+                version="2026.11.16.lock-repair.1",
+                repo="open-athena/tasktrove-codeforces-lock-repair-20261116-b-v2",
+                revision="c11e504b01247cb68dd1e1aebc586ac48c72829e",
+                expected_rows=9690,
             ),
             info=SourceInfo(
                 id="TaskTrove:tasktrove-codeforces-rebuilt-v1",
@@ -429,15 +429,8 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "language:python", "campaign-release", "converted", "single-turn"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
-                daytona_snapshot_count=1,
-                daytona_count_basis=(
-                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
-                    "Offline Daytona factory validation refuses all 9,745 declared package-lock graders. The declared "
-                    "grader environments require local execution; this cohort is Daytona-unsafe."
-                ),
-                daytona_execution_failures=9745,
                 oracle_validation=OracleValidation.SKIPPED,
                 recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
@@ -453,15 +446,16 @@ def sources() -> list[RlDataSource]:
                     admitted=9745,
                 ),
                 notes=(
-                    "9,745 codeforces tasks converted to run in the environment their archives specify: "
-                    "the ubuntu:24.04 recipe each task ships is lowered onto the digest-pinned base and "
-                    "its RUN steps replay as setup commands, one distinct environment across the cohort, "
-                    "measured at the pinned upstream revision laion__codeforces-v3 @ "
-                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. 240 rows are "
-                    "refused as null graders and 15 for gold leaked into the instruction; refused rows "
-                    "are the conversion's own reviewed outcome classes. Withdrawn reward-only claim: setup "
-                    "fidelity matches on every converted row and 20 of 20 sampled verifiers return a "
-                    "negative verdict on an empty submission. The repository is private pending release."
+                    "Repair of the prior 9,690-task Codeforces release changes only its grader's package-lock "
+                    "reference. The requirements lock was reconstructed from the pinned environment recipe; the "
+                    "historical lock bytes were unavailable. The original grader implementation, task payloads and "
+                    "stored runtime configurations remain unchanged. Lexical decontamination excluded 17 tasks, leaving "
+                    "9,673. Complete actor, grading and derived-contract censuses cover all retained tasks. Static "
+                    "checks for missing artifacts and unsupported contract features excluded none. The pinned "
+                    "policy for sources without original oracle solutions suspends per-task executability proof; "
+                    "execution remains unmeasured. Environment provenance: "
+                    "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/codeforces-readmission/"
+                    "2026.11.16.5/lock-repair-v2/publication.json."
                 ),
             ),
         ),

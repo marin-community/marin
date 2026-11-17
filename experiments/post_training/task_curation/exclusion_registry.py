@@ -178,19 +178,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             ),
         ),
     ),
-    "TaskTrove:tasktrove-codeforces-rebuilt-v1": (
-        ExclusionClaim(
-            reason=ExclusionReason.UNSPECIFIED_LEGACY,
-            evidence=_note(
-                "9,745 codeforces tasks converted to run in the environment their archives "
-                "specify, measured at the pinned upstream revision with zero substitutions; 240 "
-                "rows are refused as null graders and 15 for gold leaked into the instruction. "
-                "No explicit exclusion ruling is recorded for the tag. User ruling 2026-11-16: "
-                "no recoverable reason; queued for readmission at P1 — an ingest agent runs the "
-                "admission procedure and removes the bare tag only when every check clears."
-            ),
-        ),
-    ),
     "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": (
         ExclusionClaim(
             reason=ExclusionReason.UNSPECIFIED_LEGACY,
@@ -288,7 +275,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
 
 NEEDS_RULING_SOURCES: frozenset[str] = frozenset(
     {
-        "TaskTrove:tasktrove-codeforces-rebuilt-v1",
         "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
     }
 )

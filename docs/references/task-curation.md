@@ -3780,6 +3780,11 @@ assessments into exact-input SHARED/SEPARATE evidence before declaration binding
 It reads only the assessment column and preserves unavailable and mismatched
 assessments; it does not filter tasks.
 
+At retained-pin adoption, replace the source's canonical `grading_census_receipts`
+row with the complete census at the selected pin. Source assembly binds this row
+after selecting the retained release; a stale raw-input row clears the retained
+grading evidence and blocks admission. Keep the raw census archived.
+
 For frozen populations without a stored census, `grading_census` applies the same
 `assess_grading_environment`, `count_grading_environment` and
 `grading_environment_census` functions to every serialized TaskSpec:
