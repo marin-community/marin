@@ -47,7 +47,6 @@ from verifyit.json_objects import unique_object
 from zephyr.writers import write_parquet_file
 
 from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
-from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
 
 SELECTION_PREFIX = "rl-data/task-selection"
 SELECTION_INPUT_PREFIX = "rl-data/selection-inputs"
@@ -279,6 +278,10 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
     if isinstance(task.grader, ScriptGrader) and _grader_kind(task) == GraderKind.IMAGE:
         dataset = _grader_contract(task)["dataset"]
         if dataset not in grader_environments:
+            from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (  # noqa: PLC0415 - curation-only dependency
+                BLENDS,
+            )
+
             raise ValueError(f"No admitted grader environment for {BLENDS[HELDOUT_BLEND][dataset].id}")
         task = task.model_copy(
             update={"grader": task.grader.model_copy(update={"environment": grader_environments[dataset]})}
@@ -388,6 +391,10 @@ def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
 
 
 def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
+    from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (  # noqa: PLC0415 - curation-only dependency
+        BLENDS,
+    )
+
     components = {BLENDS[HELDOUT_BLEND][dataset].id: dataset for dataset in HELDOUT_FAMILIES}
     environments = {}
     for source in sources:
