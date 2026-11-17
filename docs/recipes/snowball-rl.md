@@ -69,7 +69,7 @@ Errors identify the affected native attempt; missing credentials suggest `iris l
 Publication errors preserve the experiment verdict and exit code. A current successful gated attempt
 requires a report for exactly the current native attempts.
 
-Publish a preset's controls from their stored paths with one command:
+Publish learning-medium or data-medium controls from their stored paths:
 
 ```bash
 python -m experiments.post_training.snowball_rl_publication --preset learning-medium

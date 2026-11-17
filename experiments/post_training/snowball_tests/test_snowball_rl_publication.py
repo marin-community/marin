@@ -185,6 +185,23 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         assert row["engine"]["vllm_version"] == "fixture-vllm"
 
 
+def test_control_publication_rejects_presets_without_dashboard_controls(monkeypatch):
+    def fail_storage_setup():
+        pytest.fail("Control publication configured storage for an unsupported preset")
+
+    monkeypatch.setattr(publication, "configure_coreweave_s3", fail_storage_setup)
+    runner = CliRunner()
+    help_result = runner.invoke(publication.main, ["--help"])
+    assert help_result.exit_code == 0
+    assert "learning-medium" in help_result.output and "data-medium" in help_result.output
+    assert "train-long" not in help_result.output
+
+    for name in ("train-long", "speed-medium"):
+        assert runner.invoke(publication.main, ["--preset", name]).exit_code == 2
+        with pytest.raises(click.BadParameter):
+            publication.publish_controls(name)
+
+
 @pytest.mark.integration
 @pytest.mark.timeout(180)
 def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progress_client, recorded_runs, monkeypatch):
@@ -429,10 +446,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     assert historical_row["gate_result"] is None and historical_row["optimizer_steps"] == preset.updates
     for root in controls:
         (root / GATE_INPUTS_FILENAME).unlink()
-    invalid_command = CliRunner().invoke(publication.main, ["--preset", "train-long"])
-    assert invalid_command.exit_code == 2
-    with pytest.raises(click.UsageError):
-        publication.publish_controls("train-long", service_url="http://localhost")
     command = CliRunner().invoke(publication.main, ["--preset", "data-medium", "--url", "http://localhost"])
     assert command.exit_code == 0, (command.output, command.exception)
     assert json.loads(command.output)["unserved_records"] == []

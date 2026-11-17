@@ -27,6 +27,8 @@ from experiments.post_training.snowball_rl_scoring import (
     training_invariants,
 )
 
+CONTROL_PRESETS = tuple(name for name, preset in presets.PRESETS.items() if preset.publishes and preset.gated)
+
 
 @dataclass
 class PublicationOutcome:
@@ -239,11 +241,14 @@ def publish_runs(
 
 def publish_controls(preset_name: str, *, service_url: str | None = None) -> PublicationOutcome:
     """Publish the exact pinned controls from their stored native outputs."""
+    if preset_name not in CONTROL_PRESETS:
+        raise click.BadParameter("Choose a dashboard preset with controls", param_hint="--preset")
     preset = presets.PRESETS[preset_name]
     try:
         pin = gate.control_pin(preset)
     except InvalidComparison as error:
         raise click.UsageError(str(error)) from error
+    configure_coreweave_s3()
     result = publish_runs(
         [gate.control_path(preset, pin, index) for index in range(pin.runs)],
         presets.PRESETS[pin.preset],
@@ -258,13 +263,12 @@ def publish_controls(preset_name: str, *, service_url: str | None = None) -> Pub
 @click.option(
     "--preset",
     "preset_name",
-    type=click.Choice([name for name, preset in presets.PRESETS.items() if preset.publishes]),
+    type=click.Choice(CONTROL_PRESETS),
     required=True,
 )
 @click.option("--url", help="Marina origin (defaults to the Marina service).")
 def main(preset_name: str, url: str | None) -> None:
     """Publish a preset's pinned controls from their stored native outputs."""
-    configure_coreweave_s3()
     result = publish_controls(preset_name, service_url=url)
     click.echo(json.dumps(result.to_dict()))
     if result.unserved_records:
