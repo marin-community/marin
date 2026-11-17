@@ -5,9 +5,19 @@
 
 import pytest
 
+from experiments.post_training.task_curation.tests.admission_fixtures import (
+    with_declaration_admission_census,
+)
 from infra.marina.apps.rl_data_catalog.server.admission import (
     backend_admission_review,
     has_runnable_production_support,
+    require_available_lexical_clearance,
+)
+from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import (
+    contamination_declarations,
+)
+from lib.taskcompendium.tests.decontamination_fixtures import (
+    decontamination_evidence,
 )
 
 
@@ -114,8 +124,6 @@ REV = "b" * 40
 
 def _lexical_declaration(use, evidence=None, *, dataset_id="fixture"):
     """An admitted-census declaration with an explicit use and optional lexical evidence."""
-    from experiments.post_training.task_curation.tests.admission_fixtures import with_declaration_admission_census
-    from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 
     source = contamination_declarations()[0][1]
     base = source.model_copy(
@@ -134,7 +142,6 @@ def _lexical_declaration(use, evidence=None, *, dataset_id="fixture"):
 
 def _eval_receipt_evidence():
     """A benchmark-measured lexical receipt bound to the fixture pin."""
-    from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
     evidence = decontamination_evidence("fixture", REV, 3)
     payload = evidence.model_dump(mode="json")
@@ -145,35 +152,24 @@ def _eval_receipt_evidence():
 
 
 def test_new_train_admission_requires_the_private_release_receipt():
-    from infra.marina.apps.rl_data_catalog.server.admission import require_available_lexical_clearance
-
     with pytest.raises(ValueError, match="Decontamination"):
         require_available_lexical_clearance(_lexical_declaration("train"))
 
 
 def test_new_train_admission_passes_with_private_release_evidence():
-    from infra.marina.apps.rl_data_catalog.server.admission import require_available_lexical_clearance
-    from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
-
     evidence = decontamination_evidence("open-athena/fixture", REV, 3)
     require_available_lexical_clearance(_lexical_declaration("train", evidence, dataset_id="open-athena/fixture"))
 
 
 def test_new_evaluation_admission_requires_a_measured_receipt():
-    from infra.marina.apps.rl_data_catalog.server.admission import require_available_lexical_clearance
-
     with pytest.raises(ValueError, match="measured lexical receipt"):
         require_available_lexical_clearance(_lexical_declaration("eval"))
 
 
 def test_new_evaluation_admission_passes_with_a_benchmark_measured_receipt():
-    from infra.marina.apps.rl_data_catalog.server.admission import require_available_lexical_clearance
-
     require_available_lexical_clearance(_lexical_declaration("eval", _eval_receipt_evidence()))
 
 
 def test_null_intended_use_is_refused_before_any_lexical_check():
-    from infra.marina.apps.rl_data_catalog.server.admission import require_available_lexical_clearance
-
     with pytest.raises(ValueError, match="explicit intended_use"):
         require_available_lexical_clearance(_lexical_declaration(None))
