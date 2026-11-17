@@ -2567,7 +2567,7 @@ def test_typed_review_fields_load_and_serve(catalog_database, catalog_query, tmp
 
 
 FULL_QC_SOURCE = "Marin:fullqc"
-FULL_QC_POPULATION = 60
+FULL_QC_POPULATION = 200
 
 
 def full_qc_review_records(reviews: list[ReviewRecord], path: Path) -> tuple[str, str]:
@@ -2802,7 +2802,7 @@ def test_full_review_rows_load_typed_and_browseable(catalog_database, catalog_qu
     records = full_qc_review_records_fixture()
     result = recompute_review_result(records)
     assert result.unavailable_count == 1 and 0 < result.unavailable_count / len(records) <= 0.02
-    assert len(records) == FULL_QC_POPULATION == 60
+    assert len(records) == FULL_QC_POPULATION == 200
     expected_defects = Counter(
         defect.value for record in records if record.verdict is not None for defect in record.verdict.defects
     )
@@ -2851,11 +2851,13 @@ def test_full_review_rows_load_typed_and_browseable(catalog_database, catalog_qu
         assert counts["confidence_counts"]["unrecorded"] == 1
         # Pagination and the defect filter narrow the same population.
         first = client.get("/assessment", params={"source_id": FULL_QC_SOURCE, "limit": 3}).json()["report"]["evidence"]
-        assert [row["task_id"] for row in first["items"]] == ["t01", "t02", "t03"] and first["total"] == 60
-        last = client.get("/assessment", params={"source_id": FULL_QC_SOURCE, "limit": 3, "offset": 57}).json()[
+        assert [row["task_id"] for row in first["items"]] == ["t01", "t02", "t03"] and first[
+            "total"
+        ] == FULL_QC_POPULATION
+        last = client.get("/assessment", params={"source_id": FULL_QC_SOURCE, "limit": 3, "offset": 197}).json()[
             "report"
         ]["evidence"]
-        assert [row["task_id"] for row in last["items"]] == ["t58", "t59", "t60"]
+        assert [row["task_id"] for row in last["items"]] == ["t198", "t199", "t200"]
         ambiguous = sum(
             1 for record in records if record.verdict and "ambiguity" in [str(d) for d in record.verdict.defects]
         )

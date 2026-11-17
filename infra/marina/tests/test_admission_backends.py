@@ -83,7 +83,6 @@ def test_all_production_unsupported_still_blocks_with_exact_verdicts():
     verdicts = {"daytona": "unsupported", "iris": "unsupported", "local": "unsupported"}
     blocker, pending = backend_admission_review(verdicts, "Available", previously_admitted=True)
     assert blocker == (
-        "no surveyed production backend can run the source: "
-        "daytona=unsupported, iris=unsupported, local=unsupported"
+        "no surveyed production backend can run the source: " "daytona=unsupported, iris=unsupported, local=unsupported"
     )
     assert pending == []

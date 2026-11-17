@@ -94,9 +94,7 @@ def backend_admission_review(
     if deployment_classes:
         classes.update(deployment_classes)
     production_verdicts = {
-        name: support
-        for name, support in verdicts.items()
-        if classes.get(name, "dev_only") == "production"
+        name: support for name, support in verdicts.items() if classes.get(name, "dev_only") == "production"
     }
     pending = sorted(name for name, support in production_verdicts.items() if support == "verify")
     if any(support in RUNNABLE_FIT for support in production_verdicts.values()):
@@ -111,9 +109,11 @@ def backend_admission_review(
         ), pending
     if production_verdicts and all(support == "role_absent" for support in production_verdicts.values()):
         return None, []
-    return "no surveyed production backend can run the source: " + ", ".join(
-        f"{name}={support}" for name, support in sorted(verdicts.items())
-    ), pending
+    return (
+        "no surveyed production backend can run the source: "
+        + ", ".join(f"{name}={support}" for name, support in sorted(verdicts.items())),
+        pending,
+    )
 
 
 def _require_declaration_license(declaration: SourceDeclaration) -> None:
