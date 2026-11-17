@@ -1,0 +1,13 @@
+experiment: X0229v1
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: L2 norm cap replaces MLA q/k RMS norms, mla_qk_norm_cap=22.6
+    flags:
+    - --model-set
+    - mla_qk_norm_cap=22.6
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
