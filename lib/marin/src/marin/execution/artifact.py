@@ -289,14 +289,15 @@ def read_record(output_path: str) -> ArtifactRecord | None:
     """The record at ``{output_path}/.artifact.json``, else ``None``.
 
     Falls back to a genuine legacy Ray executor ``.executor_info`` sidecar when no record file is
-    present, so caches built before the record file existed still resolve their config. A
+    present, or when it holds the bare ``null`` an older executor wrote for a step that returned
+    ``None``, so caches built before the record file existed still resolve their config. A
     schedule-time ``StepRunner`` stub (see :data:`STEP_RUNNER_EXECUTOR_VERSION`) is *not* honored:
     it carries no materialized config, so such an output reads back as having no record. A
     corrupt/partial file raises :class:`pydantic.ValidationError`.
     """
     output_path = _resolved(output_path)
     text = _read_text(output_path, RECORD_FILENAME)
-    if text is not None:
+    if text is not None and text.strip() != "null":
         return _parse_record(text)
     executor_info = _read_text(output_path, _LEGACY_EXECUTOR_INFO_FILENAME)
     if executor_info is not None:
@@ -377,28 +378,11 @@ def write_step_record(identity: StepRecordIdentity, *, output_path: str, result:
     )
 
 
-def _has_null_record(output_path: str) -> bool:
-    """True when ``.artifact.json`` is the bare ``null`` an older executor wrote for a step returning None."""
-    text = _read_text(_resolved(output_path), RECORD_FILENAME)
-    return text is not None and json.loads(text) is None
-
-
-def forces_rebuild(step: StepSpec) -> bool:
-    """True for a lazy step that rebuilds whatever its status says.
-
-    That is a mutable (``dev``) version, or an output whose record is a legacy bare ``null``: such a
-    record says nothing about how the output was built, so it is rebuilt rather than trusted.
-    """
-    if step.hash_attrs.get(FINGERPRINT_KEY) is None:
-        return False
-    return is_mutable_version(step.hash_attrs.get(VERSION_KEY, "")) or _has_null_record(step.output_path)
-
-
 def check_drift(step: StepSpec) -> bool:
     """Advisory recipe-drift guard, run before serving a cached SUCCESS.
 
-    Returns ``False`` for a non-lazy step (no fingerprint). Returns ``True`` when
-    :func:`forces_rebuild` holds, so the caller rebuilds. Otherwise, if a record exists whose fingerprint
+    Returns ``False`` for a non-lazy step (no fingerprint). Returns ``True`` for a mutable
+    (``dev``) version so the caller rebuilds. Otherwise, if a record exists whose fingerprint
     differs from the step's: raises :class:`FingerprintMismatchError` if the step carries an
     ``expected_fingerprint`` pin, else logs a field-level warning and returns ``False`` (the
     cached output is served).
@@ -407,13 +391,7 @@ def check_drift(step: StepSpec) -> bool:
     if fingerprint is None:
         return False
     version = step.hash_attrs.get(VERSION_KEY, "")
-    if forces_rebuild(step):
-        if not is_mutable_version(version):
-            logger.warning(
-                "%s@%s: .artifact.json is a bare null from an older executor; rebuilding instead of serving it.",
-                step.name,
-                version,
-            )
+    if is_mutable_version(version):
         return True
     record = read_record(step.output_path)
     if record is None or record.fingerprint == fingerprint:
