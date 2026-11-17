@@ -30,7 +30,7 @@ Every experiment is compared to the official recipe unless its Track says otherw
 
    | Track | Use it for |
    |---|---|
-   | `speedrun` (default) | First test: a short run of the recipe at the smallest size. Is it compatible, is there signal? |
+   | `speedrun` (default) | First test: a short run of the recipe at the smallest size. It needn't win: it checks the idea integrates cleanly and shows promise. |
    | `vanilla-<rung>` / `moe-<rung>` | Radical ideas: look for signs of life against a plain dense model or a basic MoE first. The rung is the model width, `d512`, `d768`, `d1024` or `d1280` (e.g. `moe-d768`). |
    | `hero-mfu` | Ideas that change speed or memory: step time at hero scale. Run by a maintainer. |
    | `ladder` | After a promising speedrun: every recipe rung, to see whether the gain holds with scale. |
@@ -42,7 +42,7 @@ Every experiment is compared to the official recipe unless its Track says otherw
 
 4. **Run the ladder only after a promising speedrun.** The ladder trains at every rung, up to the largest, and
    costs many times the compute of a speedrun, so it is reserved for ideas with initial evidence. Once the speedrun
-   shows a win (or a near-win worth confirming), post a new comment with `Track: ladder` that names the idea's
+   looks promising (a win isn't required), post a new comment with `Track: ladder` that names the idea's
    registry id, so the ladder reuses the same implementation. A ladder without a `hero-mfu` result is provisional;
    ask for `hero-mfu` too if the idea changes step time.
 
