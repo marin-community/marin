@@ -26,3 +26,9 @@ trials:
     embed_lr_mult: '4.0'
   commit: e71120947b
   priority: batch
+potential:
+  score: 5
+  rationale: 'No result yet: speedrun control and variant preempted and still running → 5'
+  model: claude-opus-5-5
+  date: '2026-11-17'
+  inputs_digest: 0ad13dd85ba4
