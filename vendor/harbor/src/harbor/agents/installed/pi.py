@@ -564,7 +564,7 @@ export default function (pi) {
         )
 
     def _build_register_settings_command(self) -> str | None:
-        settings = {}
+        settings: dict[str, Any] = {}
         if self._configure_compaction:
             settings["compaction"] = {
                 "enabled": True,
