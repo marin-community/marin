@@ -20,7 +20,8 @@ trials:
   batch: X0228
   date: '2026-11-17'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0228
-  wandb: []
+  wandb:
+  - belay-X0228-seed0
   settings:
     attn_res_global_kv_query: 'true'
   commit: 097b478537
