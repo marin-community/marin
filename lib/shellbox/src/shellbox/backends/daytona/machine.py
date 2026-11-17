@@ -677,7 +677,13 @@ class DaytonaMachineFactory:
             )
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
-            machine = DaytonaMachine(sandbox, spec, lifetime, output_collection_timeout=self.output_collection_timeout, command_polling=self.command_polling)
+            machine = DaytonaMachine(
+                sandbox,
+                spec,
+                lifetime,
+                output_collection_timeout=self.output_collection_timeout,
+                command_polling=self.command_polling,
+            )
             if spec.workdir:
                 result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/", env={"PATH": CONTROL_PATH}))
                 if result.exit_code:
