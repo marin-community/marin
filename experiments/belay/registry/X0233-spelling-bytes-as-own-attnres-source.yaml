@@ -4,7 +4,7 @@ name: Spelling bytes as own AttnRes source
 category: Embeddings and inputs
 summary: 'Track: speedrun'
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6940571647
@@ -26,6 +26,13 @@ trials:
     spelling_byte_source: 'true'
   commit: 8b0faf8728
   priority: batch
+  loss:
+  - 3.0392
+  delta:
+  - -0.0058
+  steps: 3030
+  baseline: belay-X0233-control 3.0450 (same commit, seed 0)
+  step_time_change: +3%
 potential:
   score: 5
   rationale: 'No result yet: variant preempted at ~step 268, restarted from step 0 and still running -> 5'
