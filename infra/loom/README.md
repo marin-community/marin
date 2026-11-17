@@ -359,6 +359,15 @@ The `belay` watch runs the `belay` profile every 10 minutes
 runbook session that drains the queue only when events wait. Turning dispatch off in the
 Belay app's admin page pauses it without a Loom deploy.
 
+The `old-iris-jobs` watch runs the `ops` profile at 09:00 Pacific on weekdays
+([prompt](watches/old-iris-jobs.md)). It runs
+[`scripts/ops/old_iris_jobs.py`](../../scripts/ops/old_iris_jobs.py) against the
+`marin` hub and posts the Iris root jobs older than the prompt's
+`--min-age-days` to `#marin-alerts`, once per job while the job keeps running.
+Loom has no CoreWeave kubeconfig, so the report has the jobs the hub federates
+to CoreWeave but not the jobs submitted directly to a CoreWeave controller. The
+watch does not cancel jobs.
+
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
 before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)
 for scheduling and execution behavior, and [WatchConfig](infrastructure.py) for

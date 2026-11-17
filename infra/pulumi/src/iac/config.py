@@ -76,6 +76,8 @@ class KueueProvisioningSpec(BaseModel):
     # Which topology the ResourceFlavor binds (spec.topologyName). NVL72 clusters bind
     # `multinode-nvlink-ib` to expose the nvlink.domain level; IB clusters bind `infiniband`.
     flavor_topology: str = "infiniband"
+    # Optional physical CPU pool with a separate hostname-only TAS flavor.
+    cpu_scale_group: str | None = None
     # controllerManager.manager.resources memory request and limit. Kueue retains
     # every watched Pod and Workload during restart resync, so the chart's 512Mi
     # default is too small for Marin clusters.
