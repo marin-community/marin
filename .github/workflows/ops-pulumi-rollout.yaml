@@ -82,6 +82,13 @@ jobs:
             "$RUNNER_TEMP/docker-daemon.json" | sudo tee "$config" > /dev/null
           sudo systemctl restart docker
 
+      - name: Pull Marina test database image
+        if: matrix.name == 'marina'
+        working-directory: ${{ matrix.test_path }}
+        run: >-
+          uv run python -c 'import subprocess; from marina.local_postgres import POSTGRES_IMAGE;
+          subprocess.run(["docker", "pull", POSTGRES_IMAGE], check=True)'
+
       - name: Test the service
         working-directory: ${{ matrix.test_path }}
         run: uv run pytest
