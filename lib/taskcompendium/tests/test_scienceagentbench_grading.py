@@ -1,11 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
+import httpx
 import pytest
+from openai import InternalServerError, OpenAI
 from shellbox.machine import DockerImage, MachineSpec
 
 from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.scienceagentbench_assets.evaluate import evaluate_output
+from taskcompendium.importers.scienceagentbench_assets.visual_judge import score_figure
 from taskcompendium.importers.scienceagentbench_grading import papyrus_grader
 from taskcompendium.models import (
     AnswerType,
@@ -21,8 +26,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.task_grading import grade_task
 
-from .test_replay_grading import GRADER_IMAGE, REPLAY_IMAGE, ReplayMachines
-from .test_runtime import finished
+from .grading_machines import GRADER_IMAGE, REPLAY_IMAGE, ReplayMachines, finished
 
 GOLD_ROWS = b'["1", "1.235", "a"]\n["2", "2.346", "b"]\n'
 
@@ -166,3 +170,93 @@ def test_missing_evaluator_dependency_is_ungraded(tmp_path):
     primary.write_text("present")
     with pytest.raises(ModuleNotFoundError):
         evaluate_output(evaluator, primary, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "texts,expected",
+    [
+        (["[FINAL SCORE]: 90", "no score marker", "[FINAL SCORE]: 90"], 60.0),
+        (["", "[FINAL SCORE]: 59", "[FINAL SCORE]: 100"], 53.0),
+        (["[FINAL SCORE]: 999", "[FINAL SCORE]: 30 then [FINAL SCORE]: 90", "[FINAL SCORE]: 0"], 343.0),
+    ],
+)
+def test_visual_judge_preserves_wire_protocol_and_official_zero_rule(texts, expected):
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "test-visual",
+                "created": 0,
+                "object": "chat.completion",
+                "model": "gpt-4o-2024-05-13",
+                "choices": [
+                    {"index": index, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
+                    for index, text in enumerate(texts)
+                ],
+            },
+        )
+
+    with OpenAI(api_key="fixture", http_client=httpx.Client(transport=httpx.MockTransport(respond))) as client:
+        responses, score = score_figure(client, "pinned prompt fixture", "cHJlZA==", "Z29sZA==")
+    assert (responses, score) == (texts, expected)
+    assert requests == [
+        {
+            "model": "gpt-4o-2024-05-13",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "pinned prompt fixture"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,cHJlZA=="}},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,Z29sZA=="}},
+                    ],
+                }
+            ],
+            "temperature": 0.2,
+            "max_tokens": 1000,
+            "n": 3,
+            "top_p": 0.95,
+            "frequency_penalty": 0,
+            "presence_penalty": 0,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "indices,texts", [([], []), ([0, 1], ["", ""]), ([0, 0, 2], ["", "", ""]), ([0, 1, 2], ["", None, ""])]
+)
+def test_visual_judge_missing_completions_remain_ungraded(indices, texts):
+    def respond(request):
+        return httpx.Response(
+            200,
+            json={
+                "id": "test-incomplete",
+                "created": 0,
+                "object": "chat.completion",
+                "model": "gpt-4o-2024-05-13",
+                "choices": [
+                    {"index": index, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
+                    for index, text in zip(indices, texts, strict=True)
+                ],
+            },
+        )
+
+    with OpenAI(api_key="fixture", http_client=httpx.Client(transport=httpx.MockTransport(respond))) as client:
+        with pytest.raises(RuntimeError, match="Visual judge"):
+            score_figure(client, "prompt fixture", "cHJlZA==", "Z29sZA==")
+
+
+def test_visual_judge_service_failure_propagates_without_hidden_retries():
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(503, json={"error": {"message": "unavailable", "type": "server_error"}})
+
+    with OpenAI(api_key="fixture", http_client=httpx.Client(transport=httpx.MockTransport(respond))) as client:
+        with pytest.raises(InternalServerError):
+            score_figure(client, "prompt fixture", "cHJlZA==", "Z29sZA==")
+    assert len(requests) == 1

@@ -23,7 +23,7 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.task_grading import grade_task
 
-from .test_runtime import LocalGradingMachines
+from .grading_machines import LocalGradingMachines
 
 IMAGE = "grader@sha256:" + "c" * 64
 ROW = RawRow("task", Source(dataset="fixture", revision="1", row="0", importer_revision="1"), {})

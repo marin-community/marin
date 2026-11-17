@@ -7,3 +7,7 @@ Its MIT license is retained in `ScienceAgentBench.LICENSE`.
 The adaptation separates candidate pickle decoding from gold-data access. The
 grader receives normalized JSON rows and preserves the original gold-prefix
 comparison. Benchmark data and reference programs are not distributed here.
+
+The visual-judge request and score extraction follow `gpt4_visual_judge.py` at
+the same pinned source revision. Missing score markers retain their official
+zero score; transport failures and missing completions propagate separately.

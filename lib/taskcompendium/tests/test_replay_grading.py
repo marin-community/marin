@@ -3,11 +3,9 @@
 
 """Submitted code runs without private assets; only replay outputs reach grading."""
 
-import asyncio
-from dataclasses import dataclass
 
 import pytest
-from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec, Result
+from shellbox.machine import DockerImage, MachineSpec
 
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import (
@@ -29,42 +27,9 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.task_grading import grade_task
 
-from .test_runtime import LocalGradingMachine, LocalGradingMachines, finished
+from .grading_machines import GRADER_IMAGE, REPLAY_IMAGE, ReplayMachines, finished
 
-GRADER_IMAGE = "grader@sha256:" + "a" * 64
-REPLAY_IMAGE = "replay@sha256:" + "b" * 64
 FORBIDDEN_VARIABLE = "REPLAY_FORBIDDEN_SECRET"
-
-
-@dataclass(kw_only=True)
-class ReplayMachine(LocalGradingMachine):
-    hang: bool = False
-
-    async def run(self, command: Command):
-        if self.hang and command.argv == ("python3", "/app/solution.py"):
-            await asyncio.Event().wait()
-        if command.argv[:2] not in {("tar", "-cf"), ("rm", "-rf")}:
-            return await super().run(command)
-        process = await asyncio.create_subprocess_exec(
-            *self.local_arguments(command.argv),
-            cwd=self.root,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-        return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
-
-
-@dataclass
-class ReplayMachines(LocalGradingMachines):
-    hang: bool = False
-
-    async def create(self, spec):
-        root = self.root / str(len(self.machines))
-        (root / spec.workdir.lstrip("/")).mkdir(parents=True, exist_ok=True)
-        machine = ReplayMachine(root=root, workdir=spec.workdir, env=dict(spec.env), hang=self.hang)
-        self.machines.append(machine)
-        return machine
 
 
 @pytest.fixture

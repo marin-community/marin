@@ -27,8 +27,7 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.task_grading import grade_task
 
-from .test_replay_grading import GRADER_IMAGE, REPLAY_IMAGE, ReplayMachines
-from .test_runtime import finished
+from .grading_machines import GRADER_IMAGE, REPLAY_IMAGE, ReplayMachines, finished
 
 
 @pytest.fixture
