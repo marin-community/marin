@@ -4,7 +4,7 @@ name: Dynamic short conv on global K and V
 category: Attention variants
 summary: 🤖 Posted on behalf of @ClassicLarry.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6933607780
@@ -12,3 +12,16 @@ intake:
   approved_by: ClassicLarry
 code_commits:
 - 540803a5762aaedaf86ac559e9a38d0068fefef9
+trials:
+- id: t001
+  variant: dynamic per-head kernel-4 conv on MLA K and V
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0227
+  date: '2026-11-17'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0227
+  wandb: []
+  settings:
+    mla_dynamic_kv_conv: 'true'
+  commit: a23dfd1458
+  priority: batch
