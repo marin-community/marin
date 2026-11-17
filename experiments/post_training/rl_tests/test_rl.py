@@ -219,13 +219,13 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
 
 def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch):
     revisions = {
-        "speed-short": {"2026.11.13.1": "a608b2a7"},
-        "data-short": {"2026.11.13.1": "a3fd45b6"},
-        "speed-medium": {"2026.11.12.1": "99f423fc"},
-        "learning-medium": {"2026.11.12.1": "45612c96"},
-        "data-medium": {"2026.11.12.1": "45612c96"},
-        "speed-long": {"2026.11.11.1": "45b7228f"},
-        "train-long": {"2026.11.11.1": "81da52f9"},
+        "speed-short": {"2026.11.13.1": "96e0d088"},
+        "data-short": {"2026.11.13.1": "7d9a590f"},
+        "speed-medium": {"2026.11.12.1": "e75349ff"},
+        "learning-medium": {"2026.11.12.1": "ba638a12"},
+        "data-medium": {"2026.11.12.1": "ba638a12"},
+        "speed-long": {"2026.11.11.1": "cd0a5f4e"},
+        "train-long": {"2026.11.11.1": "4945b701"},
     }
     configs = assert_revisioned_native_configs(
         snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch
