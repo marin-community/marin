@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 import yaml
+from evalrecords.eval_policy import SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
+from evalrecords.records import EvaluationSelection
 from iris.rpc import job_pb2
-from marin.evaluation.eval_policy import SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
 from marin.evaluation.hardware import Platform
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvaluationSelection
 from marin.evaluation.runner import LaunchProvenance
 
 from eval_policy.launch import _harbor_config, launch_policy

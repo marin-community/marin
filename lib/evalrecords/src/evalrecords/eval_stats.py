@@ -21,7 +21,7 @@ Coverage has two denominators. ``n_attempted / n_benchmark`` says how much of th
 set out to grade and gates admission; ``n_scored / n_attempted`` says how much of that it graded and
 widens the interval. A one-item run of a 1319-item benchmark passes the second and fails the first.
 
-Nothing here knows what a harness writes: :mod:`marin.evaluation.eval_measurements` turns records into
+Nothing here knows what a harness writes: :mod:`evalrecords.eval_measurements` turns records into
 measurements, and this module takes them from there. It depends only on the evaluation record and
 archive contracts, with no training, Levanter, or Iris imports.
 """
@@ -33,8 +33,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from marin.evaluation.metric_selection import canonical_metric_name
-from marin.evaluation.records import MetricKind, RepeatAggregate, RunStatus
+from evalrecords.metric_selection import canonical_metric_name
+from evalrecords.records import MetricKind, RepeatAggregate, RunStatus
 
 ALPHA = 0.05
 
