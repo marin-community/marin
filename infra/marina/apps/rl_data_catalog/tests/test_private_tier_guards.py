@@ -4,6 +4,7 @@
 """Behavior tests for the private-data restriction tier's shared helpers and publish guards."""
 
 import json
+from pathlib import Path
 
 import pytest
 from finestore.rl.status_taxonomy import DataRestriction
@@ -172,6 +173,21 @@ def test_configured_restriction_resolves_from_the_source_graph(monkeypatch):
     monkeypatch.setattr(publication_gate, "_configured_source", lambda source_id: None)
     with pytest.raises(ValueError, match="no restriction tier"):
         configured_restriction("Unknown:none")
+
+
+def test_rollout_image_push_refuses_a_public_namespace(tmp_path):
+    """The shared GHCR push helper only ships to the internal marin-community namespace."""
+    from experiments.post_training.task_curation.environment import Environment
+    from experiments.post_training.task_curation.images.build import EnvironmentBuild, build_environment
+
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("RUN true\n")
+    build = EnvironmentBuild(
+        identity="a" * 64, repository="ghcr.io/public-registry/rollout-images", output_path=str(tmp_path / "out")
+    )
+    with pytest.raises(ValueError, match="internal ghcr.io/marin-community/"):
+        build_environment(Environment(dockerfile=dockerfile), build)
+    assert not (tmp_path / "out").exists()
 
 
 def test_canary_text_fields():

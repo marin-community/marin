@@ -302,6 +302,16 @@ def _docker_config() -> dict[str, Any]:
     return json.loads(path.read_text()) if path.exists() else {}
 
 
+INTERNAL_IMAGE_NAMESPACE = "ghcr.io/marin-community/"
+"""Rollout images push only to the internal marin-community package namespace, never a public one."""
+
+
+def _require_internal_repository(repository: str) -> None:
+    """Refuse any image push outside the internal namespace: a public image is an export."""
+    if not repository.startswith(INTERNAL_IMAGE_NAMESPACE):
+        raise ValueError(f"Rollout images push only to the internal {INTERNAL_IMAGE_NAMESPACE} namespace: {repository}")
+
+
 def _require_docker(repository: str) -> None:
     if shutil.which("docker") is None:
         raise RuntimeError("Building an image requires the docker CLI with buildx")
@@ -353,6 +363,10 @@ def _push_image(context: Path, tag: str) -> str:
 
 def build_environment(environment: Environment, build: EnvironmentBuild) -> EnvironmentArtifact:
     """Store ``environment``'s lock, files and env and, when it needs what the worker image lacks, push its image."""
+    if placement(environment) == Placement.BUILT_IMAGE:
+        # Repository validity is independent of the identity: a public namespace is refused
+        # before any build work, image or not.
+        _require_internal_repository(build.repository)
     if identity_digest(environment) != build.identity:
         raise RuntimeError("The environment changed after its artifact was planned; rerun the build")
     builds_image = placement(environment) == Placement.BUILT_IMAGE

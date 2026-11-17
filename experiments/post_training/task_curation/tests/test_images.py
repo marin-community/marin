@@ -280,7 +280,7 @@ def test_build_from_a_gitless_source_bundle_records_the_environment(docker_log, 
 def test_an_image_build_requires_repository_credentials(docker_log, tmp_path):
     (tmp_path / "docker-config" / "config.json").write_text(json.dumps({"auths": {}}))
     environment = Environment(requirements=REQUIREMENTS, apt=("jq",))
-    with pytest.raises(RuntimeError, match=re.escape("docker login registry.invalid")):
+    with pytest.raises(RuntimeError, match=re.escape("docker login ghcr.io")):
         build_environment(environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "out")))
 
 

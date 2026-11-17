@@ -14,7 +14,7 @@ from pathlib import Path
 from experiments.post_training.task_curation.environment import Archive
 from experiments.post_training.task_curation.images import build
 
-REPOSITORY = "registry.invalid/fixture/images"
+REPOSITORY = "ghcr.io/marin-community/fixture-images"
 REQUIREMENTS = ("numpy==2.3.5",)
 COMPILED_LOCK = "numpy==2.3.5 \\\n    --hash=sha256:" + hashlib.sha256(b"numpy==2.3.5").hexdigest() + "\n"
 COMPILED_LOCK += "tomli-w>=1.2 \\\n    --hash=sha256:" + hashlib.sha256(b"tomli-w>=1.2").hexdigest() + "\n"
