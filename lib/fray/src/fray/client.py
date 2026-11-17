@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from typing import Any, Protocol
 
 from fray.actor import ActorGroup, ActorHandle, HostedActor
-from fray.types import ActorConfig, JobRequest, JobStatus, ResourceConfig
+from fray.types import ActorConfig, EnvironmentConfig, JobRequest, JobStatus, ResourceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,7 @@ class Client(Protocol):
         name: str,
         resources: ResourceConfig = ResourceConfig(),
         actor_config: ActorConfig = ActorConfig(),
+        environment: EnvironmentConfig | None = None,
         **kwargs: Any,
     ) -> ActorHandle:
         """Create a named actor instance. Returns a handle immediately."""
@@ -78,6 +79,7 @@ class Client(Protocol):
         count: int,
         resources: ResourceConfig = ResourceConfig(),
         actor_config: ActorConfig = ActorConfig(),
+        environment: EnvironmentConfig | None = None,
         **kwargs: Any,
     ) -> ActorGroup:
         """Create N instances of an actor, returning a group handle."""

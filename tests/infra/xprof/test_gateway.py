@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
+import json
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlencode
 from wsgiref.util import setup_testing_defaults
@@ -15,6 +17,7 @@ from infra.xprof.gateway import (
     ProfileStageManager,
     XprofGateway,
 )
+from infra.xprof.rust_proxy import RustProxy
 
 
 def _request(app, path: str, query: str = "", method: str = "GET"):
@@ -40,8 +43,11 @@ class _BlockingStager:
     def validate(self, uri: str) -> str:
         return uri
 
-    def stage(self, uri: str) -> Path:
+    def stage(self, uri: str, progress) -> Path:
         self.started.set()
+        progress.set_size(2)
+        progress.add_bytes(4 * 1024 * 1024)
+        progress.complete_file()
         self.release.wait(timeout=5)
         return self.local_path
 
@@ -116,17 +122,32 @@ def test_open_stages_outside_request_then_redirects_to_proxy_path(tmp_path):
     stager = _BlockingStager(tmp_path / "cached profile")
     manager = ProfileStageManager(stager, max_workers=1)
     app = XprofGateway(_xprof_app, manager, "/proxy/xprof")
-    query = "uri=gs%3A%2F%2Fmarin-us-east5%2Ftmp%2Fttl%3D7d%2Fxprof%2Frun-1"
+    query = "uri=gs%3A%2F%2Fmarin-us-east5%2Ftmp%2Fttl%3D7d%2Fxprof%2Frun-1&tool=trace_viewer"
     try:
         pending = _request(app, "/open", query)
         assert pending["status"] == "202 Accepted"
         assert stager.started.wait(timeout=1)
+        assert b"Loading XProf profile" in pending["body"]
+
+        progress = _request(app, "/progress", query)
+        payload = json.loads(progress["body"])
+        assert payload["state"] == "downloading"
+        assert payload["downloaded_bytes"] == 4 * 1024 * 1024
+        assert payload["files_completed"] == 1
+        assert payload["total_files"] == 2
 
         stager.release.set()
         manager.future("gs://marin-us-east5/tmp/ttl=7d/xprof/run-1").result(timeout=1)
+        complete = json.loads(_request(app, "/progress", query)["body"])
+        assert complete == {
+            "state": "ready",
+            "location": f"./?{urlencode({'run_path': str(stager.local_path), 'tool': 'trace_viewer'})}",
+        }
         ready = _request(app, "/open", query)
         assert ready["status"] == "303 See Other"
-        assert ready["headers"]["Location"] == f"./?{urlencode({'run_path': str(stager.local_path)})}"
+        assert ready["headers"]["Location"] == (
+            f"./?{urlencode({'run_path': str(stager.local_path), 'tool': 'trace_viewer'})}"
+        )
     finally:
         app.shutdown()
 
@@ -157,3 +178,42 @@ def test_gateway_rewrites_compressed_xprof_assets(tmp_path):
         assert frontend["headers"]["Content-Length"] == str(len(frontend["body"]))
     finally:
         app.shutdown()
+
+
+def test_gateway_does_not_expose_capture_routes(tmp_path):
+    app = XprofGateway(_xprof_app, ProfileStageManager(_BlockingStager(tmp_path)), "/proxy/xprof")
+    try:
+        for path in ("/capture_profile", "/data/plugin/profile/capture_profile"):
+            assert _request(app, path, "service_addr=127.0.0.1:50051")["status"] == "404 Not Found"
+    finally:
+        app.shutdown()
+
+
+def test_rust_proxy_preserves_compressed_viewer_asset(tmp_path):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = gzip.compress(b"const api = '/data/plugin/profile/runs';")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format, *_args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as backend:
+        thread = threading.Thread(target=backend.serve_forever)
+        thread.start()
+        app = XprofGateway(
+            RustProxy(backend.server_port), ProfileStageManager(_BlockingStager(tmp_path)), "/proxy/xprof"
+        )
+        try:
+            frontend = _request(app, "/bundle.js")
+            assert frontend["status"] == "200 OK"
+            assert gzip.decompress(frontend["body"]) == b"const api = '/proxy/xprof/data/plugin/profile/runs';"
+        finally:
+            app.shutdown()
+            backend.shutdown()
+            thread.join()

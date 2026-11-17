@@ -10,7 +10,7 @@ jobs that can execute any callable.
 
 Example:
     from pathlib import Path
-    from iris.client import IrisClient
+    from iris.client.client import IrisClient
     from iris.client.worker_pool import WorkerPool, WorkerPoolConfig
     from iris.cluster.types import ResourceSpec
 
@@ -579,6 +579,6 @@ class WorkerPool:
         # Terminate worker job
         if self._job:
             try:
-                self._job.terminate()
+                self._job.cancel()
             except Exception as e:
                 logger.debug("Failed to terminate worker job %s: %s", self._job.job_id, e)

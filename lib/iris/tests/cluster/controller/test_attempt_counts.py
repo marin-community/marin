@@ -68,11 +68,6 @@ _CASES = [
 
 
 @pytest.mark.parametrize("label,attempts,failures,preemptions", _CASES, ids=[c[0] for c in _CASES])
-def test_counts_from_attempts(label, attempts, failures, preemptions):
-    assert counts_from_attempts(attempts) == AttemptCounts(failure_count=failures, preemption_count=preemptions)
-
-
-@pytest.mark.parametrize("label,attempts,failures,preemptions", _CASES, ids=[c[0] for c in _CASES])
 def test_sql_exprs_match_pure(label, attempts, failures, preemptions):
     """The GROUP-BY SQL expressions must agree with the pure function."""
     engine = create_engine("sqlite://")

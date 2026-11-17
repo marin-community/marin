@@ -1,0 +1,10 @@
+# One-request generation probe only; this is not a policy score.
+tasks: [gsm8k]
+task_options:
+  gsm8k:
+    num_fewshot: 0
+    task_alias: gsm8k_0shot_smoke
+    generation: true
+chat_template_kwargs:
+  enable_thinking: false
+limit: 1

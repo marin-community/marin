@@ -1,0 +1,53 @@
+name: Check write access
+description: Report whether a GitHub login has write, maintain, or admin permission on this repository
+
+inputs:
+  login:
+    description: GitHub login of the event author
+    required: true
+  allowed-bots:
+    description: Newline-separated bot logins that are allowed without a permission lookup
+    required: false
+    default: ""
+  token:
+    description: Token with metadata read on the repository
+    required: false
+    default: ${{ github.token }}
+outputs:
+  allowed:
+    description: "true when the login is an allowed bot or resolves to write, maintain, or admin"
+    value: ${{ steps.permission.outputs.allowed }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve repository permission
+      id: permission
+      shell: bash
+      env:
+        ALLOWED_BOTS: ${{ inputs.allowed-bots }}
+        GH_TOKEN: ${{ inputs.token }}
+        LOGIN: ${{ inputs.login }}
+      run: |
+        set -euo pipefail
+        # The event payload's author_association hides private organization
+        # membership, so ask GitHub for the effective repository permission.
+        # Bot accounts do not resolve through that endpoint and are matched
+        # against the explicit allowlist instead. Any lookup failure denies.
+        allowed=false
+        if grep -Fxq -- "$LOGIN" <<< "$ALLOWED_BOTS"; then
+          allowed=true
+          echo "login=$LOGIN allowed=true (bot allowlist)"
+        else
+          error_file=$(mktemp "$RUNNER_TEMP/permission-error.XXXXXX")
+          if permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$LOGIN/permission" \
+                --jq .permission 2>"$error_file"); then
+            case "$permission" in
+              admin|maintain|write) allowed=true ;;
+            esac
+            echo "login=$LOGIN permission=$permission allowed=$allowed"
+          else
+            echo "login=$LOGIN allowed=false (permission lookup failed: $(cat "$error_file"))"
+          fi
+          rm -f -- "$error_file"
+        fi
+        echo "allowed=$allowed" >> "$GITHUB_OUTPUT"

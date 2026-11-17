@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import inspect
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Dict, Optional, Type, cast
@@ -35,9 +34,6 @@ from levanter.utils.logging import silence_transformer_nag
 silence_transformer_nag()
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers import Qwen3MoeConfig as HfQwen3MoeConfig  # noqa: E402
-
-
-_SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
 
 
 def _expert_state_dict_key(prefix: str | None, expert_index: int, projection_name: str) -> str:
@@ -327,7 +323,7 @@ class Qwen3MoeSparseMoeBlock(eqx.Module):
                 hax.partitioning.pspec_for_axis((Token, TopExperts)),
                 hax.partitioning.pspec_for_axis((Experts,)),
             ),
-            **{_SHARD_MAP_CHECK_KWARG: False},
+            check_vma=False,
         )
         def sharded_route(router_logits_):
             router_probs_ = jax.nn.softmax(router_logits_, axis=-1)
@@ -364,7 +360,7 @@ class Qwen3MoeSparseMoeBlock(eqx.Module):
                 hax.partitioning.pspec_for_axis((Experts,)),
                 hax.partitioning.pspec_for_axis((TokenRepeat,)),
             ),
-            **{_SHARD_MAP_CHECK_KWARG: False},
+            check_vma=False,
         )
         def permute_sharded(x_flat_, topk_idx_flat_):
             sort_idx_ = jnp.argsort(topk_idx_flat_, axis=-1)
@@ -398,7 +394,7 @@ class Qwen3MoeSparseMoeBlock(eqx.Module):
                 hax.partitioning.pspec_for_axis(sort_idx.axes),
             ),
             out_specs=hax.partitioning.pspec_for_axis((Token, TopExperts, self.config.Embed)),
-            **{_SHARD_MAP_CHECK_KWARG: False},
+            check_vma=False,
         )
         def unpermute_sharded(out_repeat_sort_, sort_idx_):
             inv_sort_idx_ = jnp.argsort(sort_idx_)

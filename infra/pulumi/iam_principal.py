@@ -15,7 +15,7 @@
       | uv run --package marin-iac --extra deploy \
           python infra/pulumi/iam_principal.py decrypt --diff
 
-Both operations use the marin-iac KMS key. Plaintext emails remain local.
+These commands use the marin-iac KMS key. Plaintext emails remain outside Git.
 """
 
 import argparse
@@ -33,7 +33,11 @@ from iac.gcp.iam_config import (
 )
 from iac.gcp.iam_kms import crypto_key_id, decrypt_member, encrypt_email
 
-_PRINCIPAL_REF_RE = re.compile(rf"^[+-]\s*-\s+principal:\s+({PRINCIPAL_ID_PATTERN})\s*$")
+_PRINCIPAL_REFERENCE_PATTERNS = (
+    re.compile(rf"^[+-]\s*-\s+principal:\s+({PRINCIPAL_ID_PATTERN})\s*$"),
+    re.compile(rf'principals\["({PRINCIPAL_ID_PATTERN})"\]'),
+    re.compile(rf"principal:({PRINCIPAL_ID_PATTERN})"),
+)
 _PRINCIPAL_RECORD_RE = re.compile(rf"^[+-]\s*({PRINCIPAL_ID_PATTERN}):\s+(\S+)\s*$")
 
 
@@ -82,20 +86,23 @@ def decrypt_ciphertexts(ciphertexts: list[str]) -> None:
 
 
 def decrypt_diff() -> None:
-    """Annotate changed YAML principal references without printing unchanged people."""
+    """Annotate changed YAML or Python principal references without printing unchanged people."""
     lines = sys.stdin.readlines()
     config = load_iam_config()
     current_ciphertexts = {principal.principal_id: principal.ciphertext for principal in config.principals}
     changed_records: dict[tuple[str, str], str] = {}
     changed_references: list[tuple[str, str]] = []
     for line in lines:
-        if line.startswith(("+++", "---")):
+        if not line.startswith(("+", "-")) or line.startswith(("+++", "---")):
             continue
         if match := _PRINCIPAL_RECORD_RE.match(line):
             changed_records[(line[0], match.group(1))] = match.group(2)
             continue
-        if match := _PRINCIPAL_REF_RE.match(line):
-            changed_references.append((line[0], match.group(1)))
+        for reference_pattern in _PRINCIPAL_REFERENCE_PATTERNS:
+            matches = tuple(reference_pattern.finditer(line))
+            if matches:
+                changed_references.extend((line[0], match.group(1)) for match in matches)
+                break
 
     client = kms_v1.KeyManagementServiceClient()
     key_id = crypto_key_id(config)

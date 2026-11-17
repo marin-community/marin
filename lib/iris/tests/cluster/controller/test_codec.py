@@ -53,6 +53,11 @@ def _fully_populated_request(job_id: JobName) -> controller_pb2.Controller.Launc
         submit_argv=["iris", "job", "run", "--", "python", "train.py"],
         client_revision_date="2026-07-12",
         container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+        egress_policy=job_pb2.EGRESS_POLICY_ALLOWLIST,
+        egress_allow=[
+            job_pb2.EgressRule(domain="*.example.com", ports=[443]),
+            job_pb2.EgressRule(cidr="203.0.113.0/24"),
+        ],
     )
     request.entrypoint.setup_commands.append("uv sync")
     request.entrypoint.run_command.argv[:] = ["python", "train.py"]
@@ -62,6 +67,7 @@ def _fully_populated_request(job_id: JobName) -> controller_pb2.Controller.Launc
     request.coscheduling.group_by = "tpu-name"
     request.scheduling_timeout.milliseconds = 60_000
     request.timeout.milliseconds = 3_600_000
+    request.termination_grace.milliseconds = 60_000
     request.federation.requester_id = "parent"
     return request
 

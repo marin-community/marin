@@ -1,0 +1,25 @@
+schema_version: 1
+code: ml-consumer-policy-in-shared-layer
+lane: interfaces
+title: Consumer or deployment policy embedded in a shared library
+minimum_confidence: 0.85
+prompt: |-
+  **Why it's bad:** A reusable library becomes coupled to one caller or
+  deployment when it owns that caller's UI, task policy, or fixed service URL.
+  Keep the shared layer's interface generic and put the specific choice at the
+  consumer or deployment boundary.
+
+  Fire only when the visible code in a shared library directly names a specific
+  consumer, framework, or deployment and implements its policy there. Identify
+  both the shared location and the concrete consumer or configuration boundary
+  that should own the choice. If the owner is unclear from the visible context,
+  suppress the finding. A hard-coded value alone is insufficient: show why it
+  varies by consumer or deployment.
+
+  **When allowed:** Generic extension points, neutral data structures, and
+  adapters explicitly placed at the integration boundary. A constant shared by
+  all callers is not consumer policy.
+
+  **Bad examples:** A Zephyr-only dashboard component in Iris's generic
+  scheduler UI; a production Marina URL fixed inside the Zephyr coordinator
+  instead of resolved through cluster configuration.

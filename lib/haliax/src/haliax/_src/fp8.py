@@ -114,7 +114,7 @@ def in_q_fwd(compute_dtype, q_dtype, inp, scale, amax_history):
 def in_q_bwd(compute_dtype, q_dtype, res, _):
     new_scale, new_history = res
     # No gradient flows to inp/scale/amax_history; pass the updated scale and
-    # history through as the cotangents so that OverwriteWithGradient overwrites
+    # history through as the cotangents so that CustomGradientAccumulation overwrites
     # the persisted state with them.
     return None, new_scale, new_history
 

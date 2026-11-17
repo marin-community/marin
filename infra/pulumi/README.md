@@ -3,9 +3,10 @@
 Infrastructure-as-code for the static substrate of Marin clusters, per the design in
 [`.agents/projects/iac/`](../../.agents/projects/iac/). Pulumi (Python). **CoreWeave first.**
 
-This is the **minimal cut**: it provisions RBAC, reserved NodePools, Kueue objects, the
-Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs for a CoreWeave
-cluster. It is the sole owner of these resources — Iris no longer provisions any of them
+It provisions RBAC, reserved NodePools, Kueue objects, the
+Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs for CoreWeave,
+plus shared GCLB/IAP ingress, firewall rules, static addresses, registries, and IAM.
+It is the sole owner of these resources — Iris no longer provisions any of them
 (`verify_prerequisites()` in
 [`k8s/controller.py`](../../lib/iris/src/iris/cluster/platforms/k8s/controller.py) only checks
 presence and fails with a `pulumi up` remediation if something is missing). The CKS cluster
@@ -15,34 +16,40 @@ The cluster project retains the `marin-iac` Pulumi name so this directory's move
 
 Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster name. CoreWeave —
 `cw-us-west-04a`, `cw-us-east-02a`, `cw-rno2a`, `cw-us-east-08a` (GB200), all adopted into
-`gs://marin-iac-state/`. GCP — `marin`, which declares the reserved
-federation-egress static IPs (`GcpStaticAddresses`) and every non-authoritative GCP IAM grant
-on `hai-gcp-models` (`GcpIam`, driven by `src/iac/gcp/iam_data.yaml`; see "User grants" below).
+`gs://marin-iac-state/`. GCP — `marin`, which declares the reserved federation-egress static
+IPs (`GcpStaticAddresses`), shared GCE load-balancer ingress (`GcpGclbIap`), and every
+repository-managed GCP IAM grant on `hai-gcp-models` (`GcpIam`, driven by
+`src/iac/gcp/iam_data.yaml` and the adjacent deploy-target modules; see "User grants" below).
+The manually operated
+[`infra/buckets`](../buckets/README.md) project owns the shared GCS, CoreWeave AI Object
+Storage, and Cloudflare R2 buckets.
 
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
-used by `infra/echo`, `infra/evaldash`, and `infra/grafana`) and `iac.iris` (always-on Iris
+used by `infra/marina` and `infra/grafana`), `iac.iris` (always-on Iris
 service jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `infra/ducky` and
-`infra/xprof`). Every `CloudRunService` grants `roles/iap.httpsResourceAccessor` to the
-OpenAthena Workspace domain and the Loom VM service account. It also registers the shared Marin
-desktop OAuth client as a programmatic audience. The `iap_members` and
-`iap_programmatic_clients` arguments are only for service-specific exceptions.
+`infra/xprof`), and `iac.kubernetes.finelog` (a custom image plus stateful Kubernetes resources,
+used by [`infra/finelog`](../finelog/README.md)). The service components create runtime
+resources; the `marin` stack owns their
+service-account, Secret Manager, and Cloud Run IAP grants. The shared Marin desktop OAuth
+client remains a component-owned IAP setting.
 
 ### Cloud Run IAP access
 
-For an access report on a component-managed service, compare the live IAP policy and settings:
+For an access report, compare the live IAP policy and settings with the service declaration in
+`src/iac/gcp/{marina,grafana}.py`:
 
 ```bash
 gcloud iap web get-iam-policy \
   --project=hai-gcp-models \
   --resource-type=cloud-run \
   --region=us-central1 \
-  --service=marin-evaldash
+  --service=marina
 gcloud iap settings get \
   --project=hai-gcp-models \
   --resource-type=cloud-run \
   --region=us-central1 \
-  --service=marin-evaldash
+  --service=marina
 ```
 
 `domain:openathena.ai` and
@@ -59,24 +66,36 @@ redirect trace and follow [Google's IAP troubleshooting guide](https://cloud.goo
 
 ### User grants
 
-A user grant is either a GCP IAM binding in `src/iac/gcp/iam_data.yaml` (applied by the `marin`
-stack) or an IAP `viewers` entry in a service's `infra/<service>/Pulumi.marin-<service>.yaml`
-(plaintext, applied by that service's own stack). The IAM YAML declares each human principal's
-KMS ciphertext once under an opaque `human-NNN` ID; grants reference that ID so one person's
-ciphertext cannot drift across roles. Two agent skills drive the flow so no personal email
-lands in this public repo unencrypted:
+A GCP user grant is applied by the `marin` stack. Shared grants and the encrypted principal
+registry live in `src/iac/gcp/iam_data.yaml`; backend-service IAP, Echo, EvalDash, Grafana, and
+Loom grants live in the adjacent deploy-target modules. Service stack config must not contain
+IAM members. The IAM
+YAML declares each human principal's KMS ciphertext once under an opaque `human-NNN` ID, and
+deploy-target modules reference that ID so one person's ciphertext cannot drift across roles.
+Two agent skills drive the flow so no personal email lands in this public repo unencrypted:
 
 - **`add-grant`** — collect the request (locally or from a GitHub issue), encrypt the
   principal, edit the right surface, and open a reviewable PR.
 - **`review-grant`** — decrypt a grant PR's changed principals into the real emails and grants,
   confirm with a human, then approve, merge, and run `pulumi up`.
 
-For project roles, `iam_principal.py grant <email> --project-role <role>` finds and reuses an
-existing encrypted principal or creates one, then updates every requested role in one
-deterministic YAML edit. `iam_principal.py decrypt --diff` resolves changed opaque IDs for
+`iam_principal.py grant` finds and reuses an existing encrypted principal or creates one, then
+updates the requested target in one deterministic YAML edit. `iam_principal.py decrypt --diff`
+resolves changed opaque IDs for
 review. `iam_audit.py` bulk-rotates the principals declared in `iam_data.yaml`. Granting,
 decrypting, or applying needs `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the marin-iac
 key ("Backend").
+
+The `marin` stack is the sole repository owner of grants on `hai-gcp-models`; application
+stacks and deploy scripts must not create or mutate IAM policy. Each `*IAMBinding` resource is
+authoritative for one role and optional condition on its target: Pulumi removes undeclared
+members from managed bindings while leaving other roles untouched. Audit live policy before
+adding or importing a managed binding so the declaration includes every intended member.
+
+`src/iac/gcp/iris.py` declares the authoritative Iris backend-service bindings. Echo, EvalDash,
+and Grafana declare their Cloud Run bindings in their own target modules. Each service lists its
+members directly so changing one policy cannot broaden another. Do not add
+`roles/iap.httpsResourceAccessor` at project scope; add access to the owning service declaration.
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
@@ -84,7 +103,8 @@ while their values remain outside Pulumi.
 
 ## What it reads
 
-Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.yaml`):
+Cluster infrastructure comes from the per-cluster Iris config
+(`lib/iris/config/<cluster>.yaml`):
 
 - NodePools derive from `scale_groups` (`iac.nodepools.derive_nodepools`).
 - Namespace from `kubernetes_provider.namespace`; ClusterQueue name from
@@ -96,10 +116,21 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   `iac` — a `src/<pkg>` layout mirroring `lib/*/src/<pkg>`.)
 - Grafana's CoreWeave Managed Auth usernames from
   `provisioning.coreweave.grafana_observer_rbac`. The stack binds those identities to `get`,
-  `list`, and `watch` on Nodes; the standard CoreWeave `read` group omits Nodes. Retain both
-  identities during a token rotation.
-- Kueue's controller-manager memory request and limit default to `2Gi`.
-  `manager_memory_limit` accepts larger per-cluster values and rejects values below `2Gi`.
+  `list`, and `watch` on Nodes and NodePools; the standard CoreWeave `read` group omits these
+  cluster-inventory resources. Retain both identities during a token rotation.
+- Loom's CoreWeave Managed Auth usernames from
+  `provisioning.coreweave.loom_session_rbac`. CoreWeave's CKS Viewer role supplies namespaced
+  read access, including `get` on `pods/log`. The stack adds only `create` on `pods/exec` and
+  `pods/portforward` in that cluster's Iris namespace. `pods/portforward` is required because
+  the Iris CLI reaches the controller through `kubectl port-forward`.
+- For IaC-managed CoreWeave clusters, Kueue's controller-manager memory request and limit
+  default to `8Gi`; its Kubernetes API client defaults to `1000` QPS and `2000` burst.
+  `manager_memory_limit` accepts per-cluster values at or above `2Gi`, and
+  `client_connection` accepts positive `qps` and `burst` overrides.
+- The GCP GCLB route set from `provisioning.gcp.gclb`. Controller runtime details come from
+  each referenced Iris config, finelog VM details come from `lib/finelog/config`, and current
+  internal VM addresses are read from GCE during preview. See
+  [`lib/iris/docs/iap-gclb.md`](../../lib/iris/docs/iap-gclb.md).
 
 ## Operations
 
@@ -140,6 +171,24 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   path (typically `~/.kube/coreweave-iris`). The provider keeps this execution credential out
   of Pulumi configuration and state.
 
+### Pulumi cannot import its Python SDK
+
+These stacks use `runtime: python` without Pulumi's `virtualenv` option. Pulumi resolves
+its interpreter from `PULUMI_PYTHON_CMD` or `python3` on `PATH`; `uv sync` alone does not
+put the workspace virtualenv first on `PATH`.
+
+From the repository root, install the deployment dependencies and select that interpreter:
+
+```bash
+uv sync --all-packages --extra deploy
+export PULUMI_PYTHON_CMD="$PWD/.venv/bin/python"
+pulumi -C infra/pulumi preview
+```
+
+If the language executor reports `ModuleNotFoundError: No module named 'pulumi'`, inspect
+`PULUMI_PYTHON_CMD` before changing stack code. The Pulumi preview action uses the same
+workspace interpreter.
+
 ### Making a change
 
 ```bash
@@ -149,50 +198,118 @@ pulumi stack select <cluster>
 pulumi preview
 ```
 
+CoreWeave cluster stacks require `KUBECONFIG` and the DNS credential.
+
 Read the diff before doing anything else. **No-change / update-in-place is safe. Any `replace`
 or `delete` on a NodePool is not** — it deprovisions a reserved bare-metal fleet. Stop and
 reconcile the program to match reality; never `pulumi up` through a destructive NodePool diff.
 Once the preview is clean, `pulumi up`.
 
-### Adopting a new cluster
+### Adopting live resources
 
-A cluster whose RBAC/NodePools/Kueue/Traefik already exist live (the normal case — the CKS
-cluster and its kubeconfig were provisioned by hand first) needs one *import* pass so Pulumi
-takes ownership of the existing objects instead of planning creates for them. Setting
-`marin-iac:import=true` stamps `import_=<live id>` on every resource the program declares:
+Marin follows Pulumi's Program-first bulk-import workflow. The normal program never attaches
+`import_` options, so adding one live resource cannot put unrelated resources into import mode.
+Each component instead records the provider ID beside the resource declaration. This includes
+all seven GCP `*IAMBinding` types, custom roles, service accounts, and the existing CoreWeave
+resource types.
+
+Declare the resource in code first and review its ordinary `create` preview in the PR. After the
+code is approved, generate a transaction file from the repository root:
 
 ```bash
+uv run --package marin-iac --extra deploy python infra/pulumi/import_resources.py \
+  generate --stack <stack> --output /tmp/marin-iac-<stack>-import.json
+```
+
+The command runs the program against the selected stack with Pulumi's `--import-file` preview.
+Already-tracked resources are absent because they are not creates. It fills the generated
+placeholders from the program's provider-ID catalog and writes the result with mode `0600`.
+The file can contain decrypted IAM principals, so keep it outside the repository and never post
+or commit it. Reviewers use the normal code/config diff; the command emits only resource-type
+counts and a SHA-256 digest that are safe to share in the PR or deployment handoff.
+
+The generated file is also the import selector. Inspect it locally and delete complete resource
+entries that should be created rather than adopted. Keep component entries required as parents.
+Do not edit IDs, names, parents, providers, or the name table. A remaining `<PLACEHOLDER>` means
+the program has no provider ID for that resource: add the missing catalog registration and
+regenerate if it exists live, or remove its entry if it should be created.
+
+Apply the reviewed subset with:
+
+```bash
+uv run --package marin-iac --extra deploy python infra/pulumi/import_resources.py \
+  apply --stack <stack> --file /tmp/marin-iac-<stack>-import.json
+```
+
+Before changing state, `apply` regenerates the current candidates and rejects a stale or edited
+manifest. It then runs `pulumi import --preview-only`, prints the same digest for confirmation,
+and imports with Pulumi's default deletion protection. Finally it runs a normal preview. Lock
+changes on newly imported resources are stack metadata: the normal update removes temporary
+protection from leaf resources and retains it where the program declares `protect=True`. Stop on
+any unexpected provider update, replacement, or deletion, especially for a NodePool. When the
+follow-up preview is correct, run a normal `pulumi up`; that creates entries omitted from the
+import and reconciles the protection settings.
+
+For a new stack, initialize it before generating the transaction:
+
+```bash
+cd infra/pulumi
 pulumi stack init <cluster> \
   --secrets-provider="gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
-#    (on later runs, just: pulumi stack select <cluster>)
-
-pulumi config set marin-iac:import true
-pulumi preview          # gate: every resource `import` + no-op/update; ANY NodePool replace/delete → STOP
-pulumi up               # adopts live resources into GCS state; does not recreate them
-pulumi config rm marin-iac:import   # import_ is ONE-SHOT: set true → up once → remove
 ```
 
-Leaving the flag set makes the *next* `up` try to import an already-managed resource and error.
+### CoreWeave token rotation
 
-If only some components pre-exist (e.g. RBAC/NodePools/Kueue are live but Traefik was never
-installed on this cluster), scope the import pass to just those with `--target`, then run a
-normal untargeted `up` afterward to create the rest fresh:
+A Grafana token rotation creates a new Managed Auth username (`cwtoken-…`). Append it to
+`grafana_observer_rbac.usernames` in all three monitored cluster configs and run a normal
+preview/up for each stack before switching Grafana to the new token. Remove the old username
+and update the stacks again only after the new Grafana revision passes its bridge checks.
+
+Loom uses a separate user-scoped [CoreWeave API
+token](https://docs.coreweave.com/security/authn-authz/managed-auth/api-access). Its token-owning
+user has the [CKS Viewer role](https://docs.coreweave.com/security/iam/access-policies). During
+rotation, the token owner creates a replacement token and assembles a kubeconfig containing
+these four contexts:
+
+- `marin-gpu_US-EAST-02A` for `cw-us-east-02a`
+- `marin-us-east-08a_US-EAST-08A` for `cw-us-east-08a`
+- `marin-rn02a_RNO2A` for `cw-rno2a`
+- `marin_US-WEST-04A` for `cw-us-west-04a`
+
+These names must match each Iris config's `platform.coreweave.kube_context`; the short cluster
+names are not kubeconfig aliases.
+
+CKS Viewer maps the identity into Kubernetes' `read` group. Kubernetes RoleBindings, not the
+CoreWeave IAM policy, add `pods/exec` and `pods/portforward`. Keep the current and replacement
+Managed Auth usernames in every cluster config during rotation, and preview/apply all four
+Pulumi stacks before exposing the replacement kubeconfig to Loom.
+
+Inspect the replacement file without printing its token, verify the expected username and
+contexts, and add the complete kubeconfig as a new version of the existing
+`loom-coreweave-iris-kubeconfig` Secret Manager secret:
 
 ```bash
-pulumi config set marin-iac:import true
-targets="--target urn:pulumi:<cluster>::marin-iac::marin:coreweave:CoreweaveCluster::cluster \
-         --target urn:pulumi:<cluster>::marin-iac::marin:coreweave:IrisRbac::rbac \
-         --target urn:pulumi:<cluster>::marin-iac::marin:coreweave:KueueAddon::kueue"
-pulumi preview $targets
-pulumi up $targets
-pulumi config rm marin-iac:import
-pulumi up       # normal run, adopt=false now — creates the remaining components fresh
+export KUBECONFIG=/path/to/reviewed/coreweave-iris
+chmod 600 "$KUBECONFIG"
+kubectl auth whoami --kubeconfig "$KUBECONFIG" --context marin-us-east-08a_US-EAST-08A
+kubectl config get-contexts --kubeconfig "$KUBECONFIG" -o name
+
+gcloud secrets versions add loom-coreweave-iris-kubeconfig \
+  --project=hai-gcp-models \
+  --data-file="$KUBECONFIG"
 ```
 
-A CoreWeave token rotation creates a new Managed Auth username (`cwtoken-…`). Append it to
-`grafana_observer_rbac.usernames` in all three monitored cluster configs and run a normal preview/up for
-each stack before switching Grafana to the new token. Remove the old username and update the
-stacks again only after the new Grafana revision passes its bridge checks.
+Do not put the kubeconfig in Git, Pulumi configuration, shell output, or a PR. Pin the new
+numeric secret version through the Loom stack's `homeFiles` entry at `.kube/coreweave-iris`
+with mode `0600`. That deployment grants the Loom VM access only to the referenced secret and
+installs the file atomically.
+
+Exercise the replacement from a new Loom session before removing the old username from the
+four cluster configs, applying that removal, and revoking the old CoreWeave token. `pods/exec`
+permits arbitrary commands in any pod in the namespace, and `pods/portforward` permits direct
+connections to any pod port there; Kubernetes RBAC cannot constrain either subresource by
+command, container, label, or port. Any narrower policy requires separate namespaces or an
+authorization layer outside these Role rules.
 
 ### Backend
 
@@ -204,14 +321,20 @@ already provisioned:
   `gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key`.
   Access is asymmetric, not a shared passphrase: preview-only CI holds
   `roles/cloudkms.cryptoKeyDecrypter`; operators who run `pulumi up` need
-  `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key (see
-  [`infra/permissions`](../permissions/README.md)):
-  ```bash
-  gcloud kms keys add-iam-policy-binding marin-iac-key \
-    --keyring=marin-iac-keyring --location=us-central1 --project=hai-gcp-models \
-    --member="user:<operator email>" \
-    --role="roles/cloudkms.cryptoKeyEncrypterDecrypter"
-  ```
+  `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key. Request this through the central
+  `iam_data.yaml` grant workflow; do not mutate the key policy with `gcloud`.
+
+The `marin` GCP stack operator needs both project custom roles:
+
+- `projects/hai-gcp-models/roles/marindev` supplies resource reads, state-bucket object access,
+  KMS encrypt/decrypt, Secret Manager access, and project IAM policy updates.
+- `projects/hai-gcp-models/roles/marinPulumiAdmin` supplies the remaining resource writes and
+  resource-scoped IAM updates for the graph declared by `iac.program._build_gcp`.
+
+`marinPulumiAdmin` is supplemental to `marindev`; it does not duplicate permissions already in
+`marindev`. Several permissions can change IAM policy and therefore grant administrative access
+within the target resource. Grant both roles only to trusted operators of the `marin` stack.
+CoreWeave stacks still require the Kubernetes credentials described in "First-time setup."
 
 ## CI preview
 
@@ -221,15 +344,19 @@ posts one aggregated PR comment (status list plus per-stack diffs). Manual
 comment there; omit it for a drift check against the selected ref with no comment.
 **CI never runs `pulumi up`** — see `spec.md §9`. It authenticates as
 `pulumi-ci@hai-gcp-models.iam.gserviceaccount.com`, granted preview-only (decrypt/read, never
-write) access in [`infra/permissions`](../permissions/README.md).
+write) access in [`iam_data.yaml`](src/iac/gcp/iam_data.yaml). Shared data buckets are excluded
+from CI and operated through [`infra/buckets`](../buckets/README.md).
 
 Adapting this to another Pulumi project means a new thin workflow that triggers on that
 project's paths and calls `./.github/actions/pulumi-preview` with its own `stack`/`work-dir`.
 
 ## Unsupported
 
-- **Signing keys** (`iris-<cluster>-signing-key`, `finelog-<cluster>-signing-key`) stay manual,
-  minted with `iris cluster init-keys` — the key material must never pass through Pulumi state.
+- **Signing keys** (`iris-<cluster>-signing-key`, `finelog-<cluster>-signing-key`) stay manual.
+  Iris keys are minted with `iris cluster init-keys`; Finelog forwarding keys follow
+  [`lib/finelog/OPS.md`](../../lib/finelog/OPS.md). Their values never pass through Pulumi state.
+- **IAP Web OAuth client creation and secrets** stay in the Cloud Console. Pulumi preserves
+  the existing client fields while managing IAP enablement, programmatic clients, and access.
 
 ## Future work
 
@@ -239,10 +366,9 @@ project's paths and calls `./.github/actions/pulumi-preview` with its own `stack
   (`pulumi package add terraform-provider coreweave/coreweave`).
 - **Object storage** (`s3://marin-<region>` buckets + access keys): no schema or component
   exists yet; buckets are created by hand plus `configure_buckets.py` for lifecycle rules.
-  Clusters currently mix per-cluster buckets (`cw-us-west-04a`) and shared cross-region reuse
-  (`cw-rno2a`/`cw-us-east-08a` both read/write `marin-us-east-02a`'s bucket) — undecided whether
-  Pulumi should provision a bucket per cluster or this reuse is the standing choice.
-- **finelog server Deployment**: a planned `FinelogServer` component, not yet built.
+  `cw-rno2a` uses `marin-us-east-02a` through the LOTA endpoint, while `cw-us-east-02a` and
+  `cw-us-east-08a` share `marin-na` on R2. It remains undecided whether Pulumi should provision
+  a bucket per cluster or shared buckets are the standing choice.
 - **Federation peers**: `lib/iris/config/marin.yaml`/`marin-dev.yaml`'s `peers:` entries are
   hand-edited per cluster; generate or CI-validate the peer set from the cluster configs so a
   cluster can't be reachable-but-unregistered or registered-but-missing.
@@ -253,4 +379,5 @@ project's paths and calls `./.github/actions/pulumi-preview` with its own `stack
   `install_cw_network.py` directly for this.
 
 Everything else in the original design (RBAC, NodePools, Kueue, Traefik/cert-manager, the
-federation ingress and DNS, the GCP static IPs, and Artifact Registry mirrors) is landed.
+federation ingress and DNS, the GCP static IPs, GCLB/IAP ingress, firewall rules, and Artifact
+Registry mirrors) is landed.

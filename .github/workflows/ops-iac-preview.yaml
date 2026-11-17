@@ -9,6 +9,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      - "config/**"
       - "infra/pulumi/**"
       - "lib/iris/config/**"
       - ".github/workflows/ops-iac-preview.yaml"

@@ -4,10 +4,12 @@
 """Unit tests for federated availability: the job→gate translation, the
 generation-keyed reservation ledger, and the pure queued-assignment pass."""
 
+import pytest
 from iris.cluster.constraints import (
     Constraint,
     ConstraintOp,
     WellKnownAttribute,
+    availability_constraint,
     available_key,
     peer_availability_gate,
     required_resource_amounts,
@@ -49,7 +51,11 @@ def _backend(
         supplies_metric=supplies,
         generation=generation if supplies else 0,
         amounts={variant: free} if supplies else {},
-        advertised_shape={"device-type": ["gpu"], "device-variant": [variant]},
+        advertised_shape={
+            "device-type": ["gpu"],
+            "device-variant": [variant],
+            f"availability:{variant}": ["true"],
+        },
         held_by_band={band: {variant: amount} for band, amount in (held or {}).items()},
     )
 
@@ -66,6 +72,18 @@ def _candidate(name: str, variant: str = "h100", count: int = 8, *, pin: str = "
         submitted_at_ms=ts,
         shape_constraints=_gpu_shape(variant),
         availability_gate=peer_availability_gate(_gpu(variant, count), replicas=1),
+    )
+
+
+def _cpu_reserve(name: str, variant: str = "h100", *, ts: int = 0):
+    """CPU job with an availability marker and no numeric gate."""
+    return QueuedCandidate(
+        job_id=JobName.from_string(f"/u/{name}"),
+        pinned_peer_id="",
+        priority_band=2,
+        submitted_at_ms=ts,
+        shape_constraints=[availability_constraint(variant)],
+        availability_gate=[],
     )
 
 
@@ -184,16 +202,26 @@ def test_unreachable_peer_hosts_nothing():
 
 # --- priority-aware placement ----------------------------------------------
 
+_SYSTEM = job_pb2.PRIORITY_BAND_SYSTEM
+_PRODUCTION = job_pb2.PRIORITY_BAND_PRODUCTION
 _INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE
 _BATCH = job_pb2.PRIORITY_BAND_BATCH
 
 
-def test_interactive_job_reaches_a_peer_saturated_by_preemptible_batch_work():
-    # The peer advertises nothing free, but every chip is held by batch work the
+@pytest.mark.parametrize(
+    "candidate_band, held_band",
+    [
+        (_SYSTEM, _PRODUCTION),
+        (_PRODUCTION, _INTERACTIVE),
+        (_INTERACTIVE, _BATCH),
+    ],
+)
+def test_job_reaches_a_peer_saturated_by_lower_priority_work(candidate_band, held_band):
+    # The peer advertises nothing free, but every chip is held by work the
     # candidate outranks: it is placed so the peer's own scheduler can preempt.
-    peers = [_peer("cw", [_backend("b", free=0, held={_BATCH: 64})])]
+    peers = [_peer("cw", [_backend("b", free=0, held={held_band: 64})])]
     [promotion] = assign_queued(
-        [_candidate("j", count=32, band=_INTERACTIVE)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+        [_candidate("j", count=32, band=candidate_band)], peers, ReservationLedger(), max_per_peer_per_cycle=8
     )
     assert promotion.peer_id == "cw"
     assert promotion.reserved == {"h100": 32}
@@ -241,7 +269,6 @@ def test_a_tracked_preempting_backend_beats_a_shape_only_one():
 
 
 def test_a_tracked_preempting_peer_beats_a_shape_only_peer():
-    # Same ordering across peers, where the legacy peer also sorts first by id.
     peers = [
         _peer("cw-legacy", [_backend("b", free=0, supplies=False)]),
         _peer("cw-metric", [_backend("b", free=0, held={_BATCH: 64})]),
@@ -286,3 +313,23 @@ def test_per_peer_cap_limits_promotions_per_tick():
         max_per_peer_per_cycle=2,
     )
     assert len(promotions) == 2  # capped even though capacity remains
+
+
+# --- --reserve on a CPU job -----------------------------------------------
+
+
+def test_a_cpu_reservation_prefers_the_peer_with_more_free_capacity():
+    peers = [_peer("cw-rno2a", [_backend("b", free=7)]), _peer("cw-us-east-02a", [_backend("b", free=160)])]
+    promotions = assign_queued(
+        [_cpu_reserve(f"j{i}", ts=i) for i in range(8)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+    )
+    assert [(p.peer_id, p.reserved) for p in promotions] == [("cw-us-east-02a", {})] * 8
+
+
+def test_cpu_reservations_spread_over_tied_peers_even_with_no_free_capacity():
+    peers = [_peer(f"cw-{i}", [_backend("b", free=0)]) for i in range(4)]
+    promotions = assign_queued(
+        [_cpu_reserve(f"j{i}", ts=i) for i in range(8)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+    )
+    assert len(promotions) == 8
+    assert len({p.peer_id for p in promotions}) > 1

@@ -40,6 +40,7 @@ class ChatCompletionRequest(BaseModel):
     temperature: float = Field(default=1.0, description="Sampling temperature")
     top_p: float | None = None
     tools: list[dict[str, object]] | None = None
+    chat_template_kwargs: dict[str, object] | None = None
     tool_choice: str | dict[str, object] | None = None
     parallel_tool_calls: bool | None = None
     user: str | None = None

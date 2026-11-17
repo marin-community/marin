@@ -7,27 +7,36 @@ from dataclasses import dataclass
 
 import pulumi
 import pulumi_kubernetes as k8s
+from iris.cluster.config import IrisClusterConfig
+from iris.cluster.platforms.k8s.constants import CW_REPO_URL, NVIDIA_GPU_RESOURCE, RDMA_RESOURCE
 from iris.cluster.platforms.k8s.kueue_manifests import (
-    CW_REPO_URL,
+    CPU_NOMINAL_QUOTAS,
+    CPU_RESOURCE_FLAVOR_NAME,
+    CPU_TOPOLOGY_LEVELS,
+    CPU_TOPOLOGY_NAME,
     OPERATOR_NS,
     RELEASE_DEFAULT,
     RESOURCE_FLAVOR_NAME,
     TOPOLOGIES,
     build_cks_values,
     build_cluster_queue,
+    build_cpu_resource_flavor,
     build_resource_flavor,
     build_topology_cr,
 )
 from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_SYSTEM, iris_priority_class_manifest
+from iris.cluster.platforms.types import Labels
+from iris.cluster.types import AcceleratorType
 
 from iac.config import KueueProvisioningSpec
+from iac.imports import NO_IMPORTS, ImportRegistrar
 
 # cks-kueue chart coordinates. The installer resolves `latest`; IaC pins the version so the
 # release is reproducible. Bump this in lockstep with a chart upgrade.
 CKS_KUEUE_CHART = "cks-kueue"
-CKS_KUEUE_VERSION = "1.4.0"
+CKS_KUEUE_VERSION = "1.5.0"
 # The Topology CRD's served apiVersion (install_kueue.py reads it from the live CRD; it is
-# v1beta1 for cks-kueue 1.4.0).
+# v1beta1 for cks-kueue 1.5.0).
 TOPOLOGY_API_VERSION = "kueue.x-k8s.io/v1beta1"
 MANAGER_DEPLOYMENT = "kueue-controller-manager"
 
@@ -37,9 +46,38 @@ class KueueAddonArgs:
     namespace: str  # webhook scope + LocalQueue namespace, from kubernetes_provider.namespace
     cluster_queue: str  # from kubernetes_provider.kueue.cluster_queue
     spec: KueueProvisioningSpec
-    # Adoption mode: stamp import_ on each cluster-scoped object so `pulumi preview` shows the
-    # real adoption diff instead of planning creates. Set via the `marin-iac:import` flag.
-    adopt: bool = False
+    nominal_quotas: dict[str, str]
+    cpu_node_labels: dict[str, str] | None = None
+
+
+def cpu_flavor_node_labels(config: IrisClusterConfig, scale_group: str) -> dict[str, str]:
+    """Select a configured CoreWeave CPU pool without provider fabric labels."""
+    group = config.scale_groups[scale_group]
+    if (
+        group.resources is None
+        or group.resources.device_type != AcceleratorType.CPU
+        or group.slice_template is None
+        or group.slice_template.coreweave is None
+    ):
+        raise ValueError(f"Kueue CPU flavor requires a CoreWeave CPU scale group, got {scale_group!r}")
+    # Do not add the managed-label key here: Kueue checks Pod selectors against
+    # the union of flavor keys, and immutable cw-tas does not declare that key.
+    return {Labels(config.platform.label_prefix).iris_scale_group: scale_group}
+
+
+def accelerator_nominal_quotas(config: IrisClusterConfig) -> dict[str, str]:
+    """Return binding GPU and RDMA quotas from CoreWeave scale-group maxima."""
+    accelerator_count = 0
+    for scale_group in config.scale_groups.values():
+        resources = scale_group.resources
+        template = scale_group.slice_template
+        if resources is None or resources.device_type != AcceleratorType.GPU or template is None:
+            continue
+        accelerator_count += scale_group.max_slices * max(1, template.num_vms) * resources.device_count
+    if accelerator_count <= 0:
+        raise ValueError("CoreWeave Kueue requires positive accelerator capacity")
+    quota = str(accelerator_count)
+    return {NVIDIA_GPU_RESOURCE: quota, RDMA_RESOURCE: quota}
 
 
 class KueueAddon(pulumi.ComponentResource):
@@ -57,16 +95,16 @@ class KueueAddon(pulumi.ComponentResource):
         args: KueueAddonArgs,
         *,
         k8s_provider: pulumi.ProviderResource,
+        imports: ImportRegistrar = NO_IMPORTS,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__("marin:coreweave:KueueAddon", name, None, opts)
 
-        def child_opts(import_id: str | None = None, depends_on: list | None = None) -> pulumi.ResourceOptions:
+        def child_opts(depends_on: list | None = None) -> pulumi.ResourceOptions:
             return pulumi.ResourceOptions(
                 parent=self,
                 provider=k8s_provider,
                 depends_on=depends_on,
-                import_=import_id if (args.adopt and import_id) else None,
             )
 
         client_connection = args.spec.client_connection
@@ -87,25 +125,26 @@ class KueueAddon(pulumi.ComponentResource):
             create_namespace=True,
             repository_opts=k8s.helm.v3.RepositoryOptsArgs(repo=CW_REPO_URL),
             values=helm_values,
-            # helm Release import id is "<namespace>/<release-name>".
-            opts=child_opts(f"{OPERATOR_NS}/{RELEASE_DEFAULT}"),
+            opts=child_opts(),
         )
+        # Helm Release import IDs are "<namespace>/<release-name>".
+        imports.register(release, parent=self, provider_id=f"{OPERATOR_NS}/{RELEASE_DEFAULT}")
 
         # Topology CRs (infiniband + multinode-nvlink-ib) — applied out-of-band by the installer
         # because the chart renders them at a no-longer-served apiVersion.
         topologies = []
         for topology_name, levels in TOPOLOGIES.items():
             manifest = build_topology_cr(topology_name, levels, TOPOLOGY_API_VERSION)
-            topologies.append(
-                k8s.apiextensions.CustomResource(
-                    f"topology-{topology_name}",
-                    api_version=TOPOLOGY_API_VERSION,
-                    kind="Topology",
-                    metadata=manifest["metadata"],
-                    spec=manifest["spec"],
-                    opts=child_opts(topology_name, depends_on=[release]),
-                )
+            topology = k8s.apiextensions.CustomResource(
+                f"topology-{topology_name}",
+                api_version=TOPOLOGY_API_VERSION,
+                kind="Topology",
+                metadata=manifest["metadata"],
+                spec=manifest["spec"],
+                opts=child_opts(depends_on=[release]),
             )
+            imports.register(topology, parent=self, provider_id=topology_name)
+            topologies.append(topology)
 
         flavor_manifest = build_resource_flavor(args.spec.flavor_topology)
         resource_flavor = k8s.apiextensions.CustomResource(
@@ -114,30 +153,61 @@ class KueueAddon(pulumi.ComponentResource):
             kind=flavor_manifest["kind"],
             metadata=flavor_manifest["metadata"],
             spec=flavor_manifest["spec"],
-            opts=child_opts(RESOURCE_FLAVOR_NAME, depends_on=[release, *topologies]),
+            opts=child_opts(depends_on=[release, *topologies]),
         )
+        imports.register(resource_flavor, parent=self, provider_id=RESOURCE_FLAVOR_NAME)
 
-        queue_manifest = build_cluster_queue(args.cluster_queue)
-        k8s.apiextensions.CustomResource(
+        queue_dependencies = [release, resource_flavor]
+        if args.cpu_node_labels is not None:
+            cpu_topology_manifest = build_topology_cr(CPU_TOPOLOGY_NAME, CPU_TOPOLOGY_LEVELS, TOPOLOGY_API_VERSION)
+            cpu_topology = k8s.apiextensions.CustomResource(
+                "topology-cpu",
+                api_version=TOPOLOGY_API_VERSION,
+                kind="Topology",
+                metadata=cpu_topology_manifest["metadata"],
+                spec=cpu_topology_manifest["spec"],
+                opts=child_opts(depends_on=[release]),
+            )
+            imports.register(cpu_topology, parent=self, provider_id=CPU_TOPOLOGY_NAME)
+            cpu_manifest = build_cpu_resource_flavor(args.cpu_node_labels)
+            cpu_flavor = k8s.apiextensions.CustomResource(
+                "resource-flavor-cpu",
+                api_version=cpu_manifest["apiVersion"],
+                kind=cpu_manifest["kind"],
+                metadata=cpu_manifest["metadata"],
+                spec=cpu_manifest["spec"],
+                opts=child_opts(depends_on=[cpu_topology]),
+            )
+            imports.register(cpu_flavor, parent=self, provider_id=CPU_RESOURCE_FLAVOR_NAME)
+            queue_dependencies.append(cpu_flavor)
+
+        queue_manifest = build_cluster_queue(
+            args.cluster_queue,
+            nominal_quotas=args.nominal_quotas,
+            cpu_nominal_quotas=CPU_NOMINAL_QUOTAS if args.cpu_node_labels is not None else None,
+        )
+        cluster_queue = k8s.apiextensions.CustomResource(
             "cluster-queue",
             api_version=queue_manifest["apiVersion"],
             kind=queue_manifest["kind"],
             metadata=queue_manifest["metadata"],
             spec=queue_manifest["spec"],
-            opts=child_opts(args.cluster_queue, depends_on=[release, resource_flavor]),
+            opts=child_opts(depends_on=queue_dependencies),
         )
+        imports.register(cluster_queue, parent=self, provider_id=args.cluster_queue)
 
         # The iris-system PriorityClass and the manager's pin to it.
         priority_manifest = iris_priority_class_manifest(IRIS_PRIORITY_CLASS_SYSTEM)
-        k8s.scheduling.v1.PriorityClass(
+        priority_class = k8s.scheduling.v1.PriorityClass(
             "iris-system",
             metadata=priority_manifest["metadata"],
             value=priority_manifest["value"],
             preemption_policy=priority_manifest["preemptionPolicy"],
             global_default=priority_manifest["globalDefault"],
             description=priority_manifest["description"],
-            opts=child_opts(IRIS_PRIORITY_CLASS_SYSTEM),
+            opts=child_opts(),
         )
+        imports.register(priority_class, parent=self, provider_id=IRIS_PRIORITY_CLASS_SYSTEM)
         # Pin the chart-managed manager Deployment to iris-system. A Patch (server-side apply)
         # rather than an import: the chart owns the Deployment, IaC owns only this one field.
         k8s.apps.v1.DeploymentPatch(

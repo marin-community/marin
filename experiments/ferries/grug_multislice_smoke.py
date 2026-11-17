@@ -23,6 +23,7 @@ import os
 
 import fsspec
 from fray.cluster import ResourceConfig
+from levanter.data.text.datasets import DatasetComponent
 from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -30,13 +31,8 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 from marin.training.training import LevanterCheckpoint
 
-from experiments.datasets.nemotron import nemotron_datasets
-from experiments.datasets.paloma import paloma_datasets
-from experiments.datasets.proofpile import proofpile_dataset
-from experiments.datasets.starcoder import starcoder_dataset
-from experiments.datasets.uncheatable import uncheatable_datasets
+from experiments.datasets.prebuilt_caches import fineweb_edu_10M_dataset
 from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, run_grug_base_trial
-from experiments.llama import llama3_tokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -60,20 +56,6 @@ CHILD_ENV_KEYS = (
     "WANDB_PROJECT",
 )
 
-# Nemotron CC mixture weights: the corpus's TiB proportions, plus starcoder and
-# proof-pile at their published weights. Policy lives here, in the experiment.
-_NEMOTRON_WEIGHTS = {
-    "hq_actual": 0.91351,
-    "hq_synth": 2.72,
-    "medium_high": 0.82471,
-    "medium": 3.38,
-    "medium_low": 1.54,
-    "low_actual": 0.70123,
-    "low_synth": 0.62771,
-}
-_STARCODER_WEIGHT = 0.25
-_PROOFPILE_WEIGHT = 0.055
-
 
 def _env_int(key: str, default: int) -> int:
     raw = os.environ.get(key, "")
@@ -94,10 +76,10 @@ def multislice_smoke_resources() -> ResourceConfig:
 def build() -> ArtifactStep[LevanterCheckpoint]:
     """The Grug multislice smoke run as a lazy checkpoint, configured from the env.
 
-    The Nemotron mix and the WandB ``replicate_path`` depend on the run context, so
+    The data mixture and the WandB ``replicate_path`` depend on the run context, so
     they are assembled inside ``build_config``; the TPU slice count/region is a
     run-arg, so it never bears on identity. ``GRUG_MULTISLICE_OUTPUT_PATH`` pins the
-    output to an explicit location.
+    output to an explicit location. Eval is disabled, so the mixture has no validation sets.
     """
     max_seq_len = _env_int("GRUG_MULTISLICE_MAX_SEQ_LEN", DEFAULT_MAX_SEQ_LEN)
     steps = _env_int("GRUG_MULTISLICE_STEPS", DEFAULT_STEPS)
@@ -107,19 +89,24 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
     model = dataclasses.replace(GRUG_130M_MODEL, max_seq_len=max_seq_len)
     override_output_path = _override_output_path()
 
-    nem = nemotron_datasets(tokenizer=llama3_tokenizer)
-    train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
-    train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
-    train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
-    validation = [
-        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
-        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
-    ]
+    # This smoke trains on the ~21 MB prebuilt fineweb-edu 10M cache, read through
+    # mirror:// so the training process localizes it within the cross-region transfer
+    # budget wherever the TPU lands.
+    train = fineweb_edu_10M_dataset()
+
+    def build_data(ctx: StepContext):
+        data = mixture(ctx, {train: 1.0})
+        component = data.components[train.name]
+        assert isinstance(component, DatasetComponent)
+        return dataclasses.replace(
+            data,
+            components={train.name: dataclasses.replace(component, cache_dir=train.path("mirror://"))},
+        )
 
     def build_config(ctx: StepContext) -> GrugBaseLaunchConfig:
         return GrugBaseLaunchConfig(
             model=model,
-            data=mixture(ctx, train, validation=validation),
+            data=build_data(ctx),
             output_path=ctx.output_path,
             run_id=run_id,
             resources=ctx.runtime_arg("train_resources"),
@@ -157,7 +144,7 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         artifact_type=LevanterCheckpoint,
         run=run_grug_base_trial,
         build_config=build_config,
-        deps=(*train, *validation),
+        deps=(train,),
         runtime_args={"train_resources": multislice_smoke_resources()},
         override_path=override_output_path,
     )

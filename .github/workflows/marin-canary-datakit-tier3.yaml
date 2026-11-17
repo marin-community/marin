@@ -7,13 +7,17 @@ on:
 
 permissions:
   contents: read
+  id-token: write  # Loom federation OIDC
 
 jobs:
   datakit-nemotron-ferry:
     runs-on: ubuntu-latest
     timeout-minutes: 350  # GH-hosted runners cap at 6h; nemotron high (~28% of medium) targets 6h compute
+    outputs:
+      resource_exhausted: ${{ steps.wait.outputs.resource_exhausted }}
     concurrency:
-      group: datakit-nemotron-ferry
+      # A run on a branch must not cancel the scheduled run on main.
+      group: datakit-nemotron-ferry-${{ github.ref }}
       cancel-in-progress: true
     env:
       SMOKE_RUN_ID: datakit-nemotron-ferry-${{ github.run_id }}-${{ github.run_attempt }}
@@ -61,9 +65,6 @@ jobs:
           chmod 600 ~/.ssh/google_compute_engine
           chmod 644 ~/.ssh/google_compute_engine.pub
 
-      # If you change the iris flags below, also update the matching tier
-      # entry in scripts/ci/submit_perf_run.py (TIERS["3"]) so the
-      # evaluate-zephyr-perf skill's treatment job stays comparable to this baseline.
       - name: Submit datakit nemotron ferry
         id: submit
         shell: bash -l {0}
@@ -73,6 +74,7 @@ jobs:
           # once the tokenize job is fixed.
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
+            --timeout 21600 \
             --region=europe-west4 \
             --memory=4G --disk=5G --cpu=1 --extra=cpu \
             --enable-extra-resources \
@@ -84,7 +86,7 @@ jobs:
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
-            -e FERRY_TEST_MAX_FILES "1000" \
+            -e FERRY_TEST_MAX_FILES "1600" \
             -- python -m experiments.ferries.datakit_nemotron_ferry)
           if [ -z "$JOB_ID" ]; then
             echo "iris job run produced no job id" >&2
@@ -128,6 +130,12 @@ jobs:
           path: perf-report.json
           retention-days: 90
 
+      - name: Note a skipped day
+        if: steps.wait.outputs.resource_exhausted == 'true'
+        run: |
+          echo "::notice title=Datakit Nemotron Ferry skipped::Iris cancelled the ferry because it could not get capacity."
+          echo "Skipped: Iris cancelled the ferry because it could not get capacity." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Capture failure diagnostics
         if: failure() || cancelled()
         continue-on-error: true
@@ -155,6 +163,21 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+      - name: Launch Loom triage
+        id: loom_triage
+        if: (failure() || cancelled()) && github.event_name == 'schedule'
+        uses: ./.github/actions/loom-canary-triage
+        timeout-minutes: 5
+        with:
+          profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
+          lane: datakit-nemotron
+          job-id: ${{ steps.submit.outputs.job_id }}
+          run-id: ${{ env.SMOKE_RUN_ID }}
+          iris-config: ${{ env.IRIS_CONFIG }}
+          wandb-entity: ${{ env.WANDB_ENTITY }}
+          wandb-project: ${{ env.WANDB_PROJECT }}
+          gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. See the datakit-smoke workflow for rationale.
   notify-slack:
@@ -165,8 +188,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
       - name: Notify Slack
-        uses: marin-community/marin-style/actions/notify-slack@main
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Datakit Nemotron Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          message-artifact: ''
+
+  # A day skipped for lack of capacity finishes green, so it gets its own, non-failure message.
+  notify-skipped:
+    needs: datakit-nemotron-ferry
+    if: always() && needs.datakit-nemotron-ferry.outputs.resource_exhausted == 'true' && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Notify Slack
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: ":white_circle: *Datakit Nemotron Ferry skipped*: no capacity, so it did not run. This is not a failure.\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

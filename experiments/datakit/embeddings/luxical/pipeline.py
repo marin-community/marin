@@ -42,12 +42,15 @@ from huggingface_hub import hf_hub_download
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import write_artifact
+from marin.processing.embeddings.read_chunks import READ_CHUNK_TARGET_BYTES, rows_per_chunk
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, marin_temp_bucket
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import ZephyrContext
-from zephyr.readers import InputFileSpec, load_parquet_batch
+from zephyr.input_file import InputFileSpec
+from zephyr.readers import load_parquet_batch
 from zephyr.runners import InlineRunner
 from zephyr.worker_context import zephyr_worker_ctx
 
@@ -214,27 +217,6 @@ def sample_document(text: str, max_chars: int = EMBED_DOC_SAMPLE_CHARS) -> str:
     return text[:max_chars]
 
 
-# Target Python-object bytes per read chunk. ``zephyr.readers.load_parquet`` does
-# ``yield from batch.to_pylist()``, converting an ENTIRE Parquet row group into Python
-# dicts before yielding the first record -- roughly 3-4x the Arrow size. Truncation
-# happens after the read, so it cannot bound this: a 944 MB row group still materializes
-# in full. Slice the batch first; ``RecordBatch.slice`` is zero-copy, so only the slice
-# becomes Python objects.
-_READ_CHUNK_TARGET_BYTES = 64 * 1024 * 1024
-
-
-def rows_per_chunk(num_rows: int, nbytes: int, target_bytes: int = _READ_CHUNK_TARGET_BYTES) -> int:
-    """Rows to materialize at once, from a batch's own average row size.
-
-    Megabyte-document sources get small chunks and small-document sources get large
-    ones, without either needing to know the other's shape.
-    """
-    if num_rows <= 0:
-        return 1
-    avg_row_bytes = max(1, nbytes // num_rows)
-    return max(1, target_bytes // avg_row_bytes)
-
-
 def _load_records_bounded(
     source: InputFileSpec | str,
     doc_sample_chars: int = EMBED_DOC_SAMPLE_CHARS,
@@ -266,7 +248,7 @@ def _load_records_bounded(
     for batch in load_parquet_batch(source):
         if batch.num_rows == 0:
             continue
-        per_chunk = rows_per_chunk(batch.num_rows, batch.nbytes, _READ_CHUNK_TARGET_BYTES)
+        per_chunk = rows_per_chunk(batch.num_rows, batch.nbytes, READ_CHUNK_TARGET_BYTES)
         for offset in range(0, batch.num_rows, per_chunk):
             yield from prepare(batch.slice(offset, per_chunk).to_pylist())
 

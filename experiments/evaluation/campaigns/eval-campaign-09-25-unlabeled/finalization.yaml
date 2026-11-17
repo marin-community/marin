@@ -1,0 +1,1 @@
+judge_model_config: ablations/olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-262k.yaml

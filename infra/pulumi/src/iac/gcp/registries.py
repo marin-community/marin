@@ -22,6 +22,7 @@ from iac.config import (
     GcpDeleteCleanupPolicy,
     GcpRemoteRepositorySpec,
 )
+from iac.imports import NO_IMPORTS, ImportRegistrar
 
 DOCKER_HUB_URI = "https://registry-1.docker.io"
 
@@ -30,9 +31,6 @@ DOCKER_HUB_URI = "https://registry-1.docker.io"
 class GcpArtifactRegistriesArgs:
     project: str
     registries: list[GcpRemoteRepositorySpec]
-    # Adoption mode: stamp import_=<repo id> on each resource so `pulumi preview` shows the real
-    # adoption diff against the live repos instead of planning creates. Set via `marin-iac:import`.
-    adopt: bool = False
 
 
 def _import_id(project: str, location: str, repo_name: str) -> str:
@@ -73,12 +71,13 @@ class GcpArtifactRegistries(pulumi.ComponentResource):
         args: GcpArtifactRegistriesArgs,
         *,
         gcp_provider: pulumi.ProviderResource,
+        imports: ImportRegistrar = NO_IMPORTS,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__("marin:gcp:GcpArtifactRegistries", name, None, opts)
         for spec in args.registries:
             for location in spec.locations:
-                gcp.artifactregistry.Repository(
+                resource = gcp.artifactregistry.Repository(
                     f"repo-{spec.name}-{location}",
                     project=args.project,
                     location=location,
@@ -93,7 +92,11 @@ class GcpArtifactRegistries(pulumi.ComponentResource):
                     opts=pulumi.ResourceOptions(
                         parent=self,
                         provider=gcp_provider,
-                        import_=_import_id(args.project, location, spec.name) if args.adopt else None,
                     ),
+                )
+                imports.register(
+                    resource,
+                    parent=self,
+                    provider_id=_import_id(args.project, location, spec.name),
                 )
         self.register_outputs({})

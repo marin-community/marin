@@ -26,6 +26,7 @@ from sqlalchemy import (
     Column,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -43,6 +44,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.types import TypeDecorator
 
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 
 WORKER_ATTR_VALUE_TYPE_CHECK = "value_type IN ('str', 'int', 'float')"
 
@@ -249,8 +251,8 @@ jobs_table = Table(
     # The authenticated principal that submitted this job, distinct from the
     # friendly ``user_id`` owner: an IAP/JWT email, or ``local_admin`` for a
     # CIDR/loopback (null-auth) submission. Drives per-cluster federation
-    # authorization; a child inherits its root's value and a federated handoff
-    # carries it as a signed claim the receiving peer re-checks.
+    # authorization; a child inherits its root's value and
+    # a federated handoff carries it as a signed claim the receiving peer re-checks.
     Column("submitting_user", String, nullable=False, server_default=""),
     Column("parent_job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE")),
     Column("root_job_id", String, nullable=False),
@@ -293,6 +295,7 @@ job_config_table = Table(
     Column("constraints_json", String),
     Column("has_coscheduling", BoolIntType, nullable=False, server_default="0"),
     Column("coscheduling_group_by", String, nullable=False, server_default=""),
+    Column("coscheduling_group_sizes", JSONList(), nullable=False, server_default="[]"),
     Column("scheduling_timeout_ms", Integer),
     Column("max_task_failures", Integer, nullable=False, server_default="0"),
     Column("entrypoint_json", String, nullable=False, server_default="{}"),
@@ -302,6 +305,7 @@ job_config_table = Table(
     Column("max_retries_failure", Integer, nullable=False, server_default="0"),
     Column("max_retries_preemption", Integer, nullable=False, server_default="100"),
     Column("timeout_ms", Integer),
+    Column("termination_grace_ms", Integer, nullable=False, server_default=str(DEFAULT_TERMINATION_GRACE.to_ms())),
     Column("preemption_policy", Integer, nullable=False, server_default="0"),
     Column("existing_job_policy", Integer, nullable=False, server_default="0"),
     Column("priority_band", Integer, nullable=False, server_default="0"),
@@ -309,6 +313,9 @@ job_config_table = Table(
     Column("submit_argv_json", JSONList(), nullable=False, server_default="[]"),
     Column("fail_if_exists", BoolIntType, nullable=False, server_default="0"),
     Column("container_profile", Integer, nullable=False, server_default="0"),
+    Column("egress_policy", Integer, nullable=False, server_default="0"),
+    # An ALLOWLIST job's own egress rules, as rule strings (iris.cluster.egress).
+    Column("egress_allow_json", JSONList(), nullable=False, server_default="[]"),
     Index("idx_job_config_name", "name"),
 )
 
@@ -439,6 +446,7 @@ task_attempts_table = Table(
     Column("pod_name", String, nullable=False, server_default=""),
     Column("pod_uid", String, nullable=False, server_default=""),
     Column("node_name", String, nullable=False, server_default=""),
+    Column("topology_json", JSONDict(), nullable=False, server_default="{}"),
     Column("terminal_reason", String, nullable=False, server_default=""),
     PrimaryKeyConstraint("task_id", "attempt_id"),
     Index("idx_task_attempts_worker_task", "worker_id", "task_id", "attempt_id"),
@@ -452,6 +460,21 @@ task_attempts_table = Table(
     # Covers the failure/preemption derivation (COUNT by state, filtered on
     # started_at_ms), grouped per task — see iris.cluster.controller.attempt_counts.
     Index("idx_task_attempts_task_state", "task_id", "state", "started_at_ms"),
+)
+
+
+task_attempt_outputs_table = Table(
+    "task_attempt_outputs",
+    metadata,
+    Column("task_id", JobNameType, nullable=False),
+    Column("attempt_id", Integer, nullable=False),
+    Column("archive_json", String, nullable=False),
+    PrimaryKeyConstraint("task_id", "attempt_id"),
+    ForeignKeyConstraint(
+        ("task_id", "attempt_id"),
+        ("task_attempts.task_id", "task_attempts.attempt_id"),
+        ondelete="CASCADE",
+    ),
 )
 
 

@@ -6,10 +6,9 @@
 import pytest
 from iris.chaos import enable_chaos, reset_chaos
 from iris.rpc import controller_pb2, job_pb2
-from rigging.filesystem import StoragePath
+from iris.testing.e2e_helpers import TestJobs
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff
-
-from .helpers import TestJobs
 
 pytestmark = [pytest.mark.requires_cluster, pytest.mark.timeout(60)]
 

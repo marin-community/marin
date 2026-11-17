@@ -1,0 +1,34 @@
+schema_version: 1
+code: ml-echo-across-files
+lane: meta
+title: Cross-file duplication the PR introduces
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** The local duplication rules are scoped to one function or one
+  file's pair of sites; they cannot see that file A's new helper and file C's new
+  helper are the same algorithm born twins in one PR. Copy-paste across modules in a
+  single change is the most common way real duplication enters a codebase, and it is
+  exactly invisible to a hunk-scoped pass. Catching it at birth, before both copies
+  drift, is far cheaper.
+
+  Fire only when ≥2 files in this diff carry a block matching on STRUCTURE
+  (token-identical modulo renames, not "rhymes") of ≥8 logical lines, OR an identical
+  multi-element literal set (frozenset/tuple) in ≥2 files. Name a concrete shared
+  home that BOTH sites already depend on AND that already owns this concept's layer —
+  the extraction must not push higher-layer logic down into a leaf or create a
+  reverse/cross-layer dependency. Anchor on the first copy; cite the other.
+
+  **When allowed:** Two sites in deliberately isolated modules — experiment scripts,
+  one-off tools, or a **standalone executable script** (e.g. a PEP-723 `uv` script
+  carrying its own `# /// script` dependency block) that must not import its siblings
+  — where coupling them is the worse dependency. Same carve-out as
+  `ml-duplicate-logic-block`. A pure-stdlib helper mirrored into such a script, marked
+  as a deliberate mirror, is acceptable: there is no shared home both sides can import
+  without breaking the script's isolation, which is the gate's whole precondition.
+
+  **Bad example:**
+  ```python
+  # ingest/router.py and ingest/worker.py BOTH gain the same 12-line region-allowlist +
+  # normalize loop, neither pre-existing → extract one normalize_region(raw) in the
+  # boundary module both already import.
+  ```

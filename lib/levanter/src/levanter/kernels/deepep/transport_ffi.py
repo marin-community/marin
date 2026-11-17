@@ -303,10 +303,6 @@ def _build_artifact() -> BuildArtifact:
     return BuildArtifact(library_path=out_dir / "libdeepep_transport_ffi.so", module_name=None)
 
 
-def _shared_library_path() -> Path:
-    return _build_artifact().library_path
-
-
 def _nvcc_common_flags(
     deepep_root: Path,
     compatibility_flags: list[str],

@@ -19,7 +19,6 @@ Sealing policy (for new runs):
 - Summary: Inaugural daily 125M ferry run.
 - [Run `ferry_daily_125m_20260220-202930-daily-ferry-vmem50m-fusedargmax-5bbb39`](https://wandb.ai/marin-community/marin/runs/ferry_daily_125m_20260220-202930-daily-ferry-vmem50m-fusedargmax-5bbb39)
 - [Experiment Script `experiments/ferries/daily.py`](https://github.com/marin-community/marin/blob/main/experiments/ferries/daily.py)
-- [Data browser `daily-da79b9`](https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central1/experiments/daily-da79b9.json)
 - Seal tag: `N/A` (pre-sealing policy)
 - Metrics:
   - `eval/paloma/c4_en/bpb`: `1.12509`

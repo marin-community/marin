@@ -2,13 +2,44 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-from typing import Sequence, TypeVar
+import functools
+from typing import Any, Callable, Sequence, TypeVar
 
 import equinox as eqx
 import jax
 from jax._src.tree_util import DictKey, FlattenedIndexKey, GetAttrKey, KeyEntry, PyTreeDef, SequenceKey
 from jaxtyping import PyTree
 from enum import Enum
+
+import haliax as hax
+
+from levanter.layers.stacked import ArrayStacked, layer_in_axes
+
+
+def scan_aware_tree_map(fn, tree, *rest, is_leaf: Callable[[Any], bool] | None = None):
+    """Apply a pytree transform independently to each layer of scanned modules.
+
+    Supports native ``ArrayStacked`` and named ``haliax.nn.Stacked`` containers,
+    preserving their structure and treating named arrays as leaves.
+    """
+
+    def stop_at(node):
+        return isinstance(node, ArrayStacked) or (is_leaf is not None and is_leaf(node))
+
+    mapped_fn = functools.partial(scan_aware_tree_map, fn, is_leaf=is_leaf)
+
+    def apply(node, *others):
+        if isinstance(node, ArrayStacked):
+            bodies = (node.stacked, *[other.stacked for other in others])
+            in_axes = tuple(
+                layer_in_axes(body, node.num_layers, is_array_like=lambda leaf: isinstance(leaf, jax.Array))
+                for body in bodies
+            )
+            inner = jax.vmap(mapped_fn, in_axes=in_axes)(*bodies)
+            return dataclasses.replace(node, stacked=inner)
+        return fn(node, *others)
+
+    return hax.tree_util.scan_aware_tree_map(apply, tree, *rest, is_leaf=stop_at)
 
 
 class NonePolicy(str, Enum):

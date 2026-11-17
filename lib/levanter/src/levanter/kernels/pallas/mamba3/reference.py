@@ -230,17 +230,6 @@ def mamba3_mimo_rank_collapse_chunked(
     return mamba3_mimo_rank_collapse(jnp.moveaxis(ranked, -3, -1), rank_weights)
 
 
-def mamba3_mimo_apply_gate_and_collapse(
-    y_ranked: Float[Array, "... value rank"],
-    z_ranked: Float[Array, "... value rank"],
-    out_rank_weights: Float[Array, "... value rank"],
-) -> Float[Array, "... value"]:
-    """Apply the paper's SiLU gating and lightweight rank collapse."""
-
-    gated = y_ranked.astype(jnp.float32) * jax.nn.silu(z_ranked.astype(jnp.float32))
-    return mamba3_mimo_rank_collapse(gated, out_rank_weights.astype(jnp.float32)).astype(y_ranked.dtype)
-
-
 def mamba3_mimo_apply_gate_and_collapse_chunked(
     y_ranked: Float[Array, "... rank chunk value"],
     z_ranked: Float[Array, "... rank chunk value"],
@@ -575,7 +564,6 @@ def mamba3_mimo_direct_recurrence_reference_batched(
 __all__ = [
     "intra_chunk_log_alpha_cumsum",
     "local_log_alpha",
-    "mamba3_mimo_apply_gate_and_collapse",
     "mamba3_mimo_apply_gate_and_collapse_chunked",
     "mamba3_mimo_chunk_state_reference_batched",
     "mamba3_mimo_chunked_forward_ranked_reference_batched",

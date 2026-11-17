@@ -3,12 +3,105 @@
 
 """Tests for CloudK8sService helpers and K8sResource enum path construction."""
 
+import traceback
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
+import urllib3
 from iris.cluster.platforms.k8s import service as k8s_service
 from iris.cluster.platforms.k8s.service import CloudK8sService
-from iris.cluster.platforms.k8s.types import K8sResource
+from iris.cluster.platforms.k8s.types import K8sResource, KubectlError
+
+
+class _FakeExecStream:
+    def __init__(
+        self,
+        *,
+        returncode: int,
+        stdout: str = "",
+        stderr: str = "",
+        stream_open: bool = False,
+        exit_error: ValueError | None = None,
+    ):
+        self._returncode = returncode
+        self.exit_error = exit_error
+        self.stdout = stdout
+        self.stderr = stderr
+        self.open = stream_open
+        self.closed = False
+
+    @property
+    def returncode(self) -> int:
+        if self.exit_error is not None:
+            raise self.exit_error
+        return self._returncode
+
+    def run_forever(self, timeout: float | None = None) -> None:
+        pass
+
+    def is_open(self) -> bool:
+        return self.open
+
+    def read_stdout(self, timeout: float | None = None) -> str:
+        if self.open and timeout != 0:
+            raise AssertionError("blocking stdout read on an open exec stream")
+        return self.stdout
+
+    def read_stderr(self, timeout: float | None = None) -> str:
+        if self.open and timeout != 0:
+            raise AssertionError("blocking stderr read on an open exec stream")
+        return self.stderr
+
+    def close(self) -> None:
+        self.open = False
+        self.closed = True
+
+
+def _service_with_exec_stream(monkeypatch, stream: _FakeExecStream) -> CloudK8sService:
+    monkeypatch.setattr(k8s_service.kubernetes.stream, "stream", lambda *_args, **_kwargs: stream)
+    core_api = SimpleNamespace(connect_get_namespaced_pod_exec=object())
+    monkeypatch.setattr(k8s_service.kubernetes.client, "CoreV1Api", lambda _client: core_api)
+    svc = CloudK8sService(namespace="iris")
+    monkeypatch.setattr(svc, "create_api_client", lambda: nullcontext(object()))
+    return svc
+
+
+def test_exec_reports_command_exit_status(monkeypatch):
+    """A command error inside a reachable pod must not look successful."""
+    stream = _FakeExecStream(returncode=1, stderr="cat: profile.json: No such file")
+    svc = _service_with_exec_stream(monkeypatch, stream)
+
+    result = svc.exec("task-pod", ["cat", "profile.json"], container="task")
+
+    assert result.returncode == 1
+    assert result.stderr == "cat: profile.json: No such file"
+    assert stream.closed
+
+
+def test_exec_timeout_reads_open_stream_without_blocking(monkeypatch):
+    stream = _FakeExecStream(returncode=0, stream_open=True)
+    svc = _service_with_exec_stream(monkeypatch, stream)
+
+    result = svc.exec("task-pod", ["sleep", "infinity"], container="task", timeout=1)
+
+    assert result.returncode == 124
+    assert result.stderr == "Command timed out after 1 seconds"
+    assert stream.closed
+
+
+def test_exec_malformed_runtime_exit_code_reports_failure(monkeypatch):
+    stream = _FakeExecStream(
+        returncode=0,
+        exit_error=ValueError("invalid literal for int() with base 10: 'OCI runtime exec failed'"),
+    )
+    svc = _service_with_exec_stream(monkeypatch, stream)
+
+    result = svc.exec("task-pod", ["touch", "/tmp/release"], container="output-uploader")
+
+    assert result.returncode != 0
+    assert "OCI runtime exec failed" in result.stderr
+    assert stream.closed
 
 
 def test_construct_without_kubernetes_client(monkeypatch):
@@ -84,6 +177,22 @@ def _service_with_api(pages: list[list[str]]) -> tuple[CloudK8sService, _FakeApi
     return svc, api
 
 
+def test_secret_apply_failure_does_not_expose_api_echoed_values():
+    def reject_manifest(**_kwargs):
+        error = k8s_service.ApiException(status=422, reason="invalid submitted-sensitive-value")
+        error.body = "data: submitted-sensitive-value"
+        raise error
+
+    svc = CloudK8sService(namespace="iris")
+    svc.__dict__["_dyn"] = SimpleNamespace(
+        resources=SimpleNamespace(get=lambda **kwargs: object()),
+        server_side_apply=reject_manifest,
+    )
+    with pytest.raises(KubectlError) as captured:
+        svc.apply_json({"kind": "Secret", "metadata": {"name": "attempt-credentials"}, "data": {"API_KEY": "value"}})
+    assert "submitted-sensitive-value" not in "".join(traceback.format_exception(captured.value))
+
+
 def test_list_json_walks_all_pages():
     """A list must be chunked: an unpaginated response body has no read bound (#7881)."""
     svc, api = _service_with_api([["a", "b"], ["c", "d"], ["e"]])
@@ -93,6 +202,25 @@ def test_list_json_walks_all_pages():
     assert names == ["a", "b", "c", "d", "e"]
     # Every request carries a page limit: an unpaginated one is the wedge itself.
     assert [req.get("limit") for req in api.requests] == [k8s_service._LIST_PAGE_LIMIT] * 3
+
+
+def test_list_json_converts_transport_timeout_to_kubectl_error():
+    """A urllib3 timeout must surface as KubectlError, not escape the client boundary.
+
+    The node agent's collection loop catches KubectlError and skips the cycle; an
+    escaping transport error propagates out of its run loop and kills the agent.
+    """
+    svc = CloudK8sService(namespace="iris")
+
+    def timing_out(**kwargs):
+        raise urllib3.exceptions.ReadTimeoutError(None, "/api/v1/pods", "Read timed out. (read timeout=15.0)")
+
+    svc.__dict__["_dyn"] = SimpleNamespace(
+        resources=SimpleNamespace(get=lambda **kwargs: SimpleNamespace(get=timing_out))
+    )
+
+    with pytest.raises(KubectlError, match="list pods failed"):
+        svc.list_json(K8sResource.PODS)
 
 
 def test_iter_json_stops_fetching_when_abandoned():
@@ -117,70 +245,6 @@ def test_delete_by_labels_deletes_each_match_by_name():
 
     assert [d.get("name") for d in api.deletes] == ["a", "b", "c"]
     assert all(d.get("label_selector") is None for d in api.deletes)
-
-
-# Test item_path construction for namespaced resources
-@pytest.mark.parametrize(
-    "resource,name,namespace,expected",
-    [
-        (K8sResource.PODS, "mypod", "ns", "/api/v1/namespaces/ns/pods/mypod"),
-        (K8sResource.CONFIGMAPS, "cm1", "ns", "/api/v1/namespaces/ns/configmaps/cm1"),
-        (K8sResource.SERVICES, "s1", "ns", "/api/v1/namespaces/ns/services/s1"),
-        (K8sResource.SECRETS, "sec1", "ns", "/api/v1/namespaces/ns/secrets/sec1"),
-        (K8sResource.SERVICE_ACCOUNTS, "sa1", "ns", "/api/v1/namespaces/ns/serviceaccounts/sa1"),
-        (K8sResource.DEPLOYMENTS, "d1", "ns", "/apis/apps/v1/namespaces/ns/deployments/d1"),
-        (K8sResource.DAEMONSETS, "ds1", "ns", "/apis/apps/v1/namespaces/ns/daemonsets/ds1"),
-        (K8sResource.STATEFULSETS, "ss1", "ns", "/apis/apps/v1/namespaces/ns/statefulsets/ss1"),
-        (K8sResource.PDBS, "pdb1", "ns", "/apis/policy/v1/namespaces/ns/poddisruptionbudgets/pdb1"),
-    ],
-)
-def test_item_path_namespaced(resource: K8sResource, name: str, namespace: str, expected: str):
-    assert resource.item_path(name, namespace) == expected
-
-
-# Test item_path construction for cluster-scoped resources
-@pytest.mark.parametrize(
-    "resource,name,expected",
-    [
-        (K8sResource.NODES, "node1", "/api/v1/nodes/node1"),
-        (K8sResource.NAMESPACES, "myns", "/api/v1/namespaces/myns"),
-        (K8sResource.CLUSTER_ROLES, "cr1", "/apis/rbac.authorization.k8s.io/v1/clusterroles/cr1"),
-        (K8sResource.CLUSTER_ROLE_BINDINGS, "crb1", "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/crb1"),
-        (K8sResource.NODE_POOLS, "np1", "/apis/compute.coreweave.com/v1alpha1/nodepools/np1"),
-    ],
-)
-def test_item_path_cluster_scoped(resource: K8sResource, name: str, expected: str):
-    assert resource.item_path(name) == expected
-
-
-# Test collection_path for namespaced resources
-@pytest.mark.parametrize(
-    "resource,namespace,expected",
-    [
-        (K8sResource.PODS, "ns", "/api/v1/namespaces/ns/pods"),
-        (K8sResource.CONFIGMAPS, "ns", "/api/v1/namespaces/ns/configmaps"),
-        (K8sResource.DEPLOYMENTS, "ns", "/apis/apps/v1/namespaces/ns/deployments"),
-        (K8sResource.DAEMONSETS, "ns", "/apis/apps/v1/namespaces/ns/daemonsets"),
-        (K8sResource.PDBS, "ns", "/apis/policy/v1/namespaces/ns/poddisruptionbudgets"),
-    ],
-)
-def test_collection_path_namespaced(resource: K8sResource, namespace: str, expected: str):
-    assert resource.collection_path(namespace) == expected
-
-
-# Test collection_path for cluster-scoped resources
-@pytest.mark.parametrize(
-    "resource,expected",
-    [
-        (K8sResource.NODES, "/api/v1/nodes"),
-        (K8sResource.NAMESPACES, "/api/v1/namespaces"),
-        (K8sResource.CLUSTER_ROLES, "/apis/rbac.authorization.k8s.io/v1/clusterroles"),
-        (K8sResource.CLUSTER_ROLE_BINDINGS, "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings"),
-        (K8sResource.NODE_POOLS, "/apis/compute.coreweave.com/v1alpha1/nodepools"),
-    ],
-)
-def test_collection_path_cluster_scoped(resource: K8sResource, expected: str):
-    assert resource.collection_path() == expected
 
 
 # Test from_kind mapping
@@ -210,11 +274,3 @@ def test_from_kind_valid(kind: str, expected_resource: K8sResource):
 def test_from_kind_invalid():
     with pytest.raises(ValueError, match="Unknown kind: 'Bogus'"):
         K8sResource.from_kind("Bogus")
-
-
-def test_api_base_paths():
-    """Test that api_base() returns correct paths for core and custom API groups."""
-    assert K8sResource.PODS.api_base() == "/api/v1"
-    assert K8sResource.DEPLOYMENTS.api_base() == "/apis/apps/v1"
-    assert K8sResource.CLUSTER_ROLES.api_base() == "/apis/rbac.authorization.k8s.io/v1"
-    assert K8sResource.NODE_POOLS.api_base() == "/apis/compute.coreweave.com/v1alpha1"

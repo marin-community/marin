@@ -6,6 +6,9 @@
 import time
 
 import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from fray.actor import ActorUnavailableError
 from fray.iris_backend import OperationFuture
 from iris.actor.client import ActorClient
 from iris.actor.resolver import FixedResolver
@@ -27,6 +30,11 @@ class SlowActor:
 def _make_client(port: int, name: str = "actor") -> ActorClient:
     resolver = FixedResolver({name: f"http://127.0.0.1:{port}"})
     return ActorClient(resolver, name)
+
+
+class _MissingOperationClient:
+    def poll_operation_status(self, operation_id: str):
+        raise ConnectError(Code.NOT_FOUND, f"Operation '{operation_id}' not found")
 
 
 def test_operation_future_basic():
@@ -81,3 +89,10 @@ def test_operation_future_propagates_exception():
             future.result()
     finally:
         server.stop()
+
+
+def test_operation_future_converts_missing_operation_to_actor_unavailable():
+    future = OperationFuture(_MissingOperationClient(), "lost")
+
+    with pytest.raises(ActorUnavailableError, match="Operation lost was lost"):
+        future.result()

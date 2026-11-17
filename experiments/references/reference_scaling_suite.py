@@ -54,10 +54,11 @@ from marin.scaling_laws import (
     round_flops_to_bucket,
 )
 from marin.scaling_laws.eval_metrics_reader import read_eval_records
-from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.levanter import run_levanter_train_lm
+from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 from pydantic import Field
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.nemotron import nemotron_datasets
 from experiments.datasets.paloma import paloma_datasets

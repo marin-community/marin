@@ -1,0 +1,12 @@
+# Public release storage is independent of execution placement and build caches.
+data:
+  scheme: s3
+  region_buckets:
+    na: { bucket: marin-na-public, store: r2 }
+  stores:
+    r2:
+      endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+      endpoint_env: R2_S3_ENDPOINT
+      key_id_env: R2_KEY_ID
+      key_secret_env: R2_KEY_SECRET
+  root: s3://marin-na-public

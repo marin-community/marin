@@ -1,0 +1,34 @@
+schema_version: 1
+code: ml-reinvents-existing-helper
+lane: meta
+title: Hand-rolls a helper that already exists in the repo
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** AGENTS.md's "search the codebase before writing any utility" is
+  the single most-violated rule by generated code, and it is invisible to every local
+  lane because the duplicate lives in a file the hunk does not touch. Two
+  implementations of batching / retry / IO drift independently and the bug surfaces in
+  prod, not in tests.
+
+  Fire only when you can cite the EXISTING symbol by a path you have READ in the
+  worktree this run and quote its `def` signature line — never rest a finding on a
+  remembered or assumed symbol; if you cannot open the file and see the def, suppress.
+  The existing symbol's layer must be import-legal from the new code (`iris`/`haliax`
+  → `levanter`/`zephyr` → `marin`): a `marin` helper "reinvented" inside `levanter` is
+  NOT a finding — importing it would be an illegal reverse dependency, so the local
+  copy is mandatory. The new code must be behaviorally equivalent (e.g.
+  trailing-partial-batch handling matches), not merely similar-shaped.
+
+  **When allowed:** The existing helper lives behind an optional dependency the new
+  module cannot assume; no layer-legal import exists; the behaviors differ in a way
+  that matters.
+
+  **Bad example:**
+  ```python
+  def _chunks(xs, n):
+      out = []
+      for i in range(0, len(xs), n):
+          out.append(xs[i : i + n])
+      return out
+  # levanter/data/utils.py already defines `def batched(seq, n)` → import it (layer-legal here).
+  ```

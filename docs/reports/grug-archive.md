@@ -43,13 +43,40 @@ goes stale on the next commit.
 - Purpose: canonical Mixture-of-Experts variant; carries its own model, optimizer, train loop, and launch wiring so it can iterate independently of the dense template.
 - Issue: https://github.com/marin-community/marin/pull/3046
 
+### grug-moe-pipeline
+- Path: `experiments/grug/moe_pipeline/`
+- Origin: `moe`
+- Introduced: 734108b003
+- Status: active
+- Purpose: canonical automatic JaxPP ZeroBubble and DualPipeV implementation for Grug MoE.
+- Diff: https://marin-community.github.io/marin/grug-diffs/pr-8739/moe_pipeline-vs-moe/index.html
+- Issue: https://github.com/marin-community/marin/issues/7024
+
 ### grug-moe-hero-ep
 - Path: `experiments/grug/moe_hero_ep/`
 - Origin: `moe_hero_fsdp` at PR 7876
 - Introduced: b0d20062a
 - Status: active
-- Purpose: one-rack GB200 EP64 throughput and MFU baseline.
+- Purpose: one-rack GB200 EP64 baseline. The pipeline variant lives in `moe_hero_pipeline`.
 - Issue: https://github.com/marin-community/marin/issues/7279
+
+### grug-moe-hero-pipeline
+- Path: `experiments/grug/moe_hero_pipeline/`
+- Origin: `moe_hero_ep` model with the `moe_pipeline` stage adapter
+- Introduced: [PR #9279](https://github.com/marin-community/marin/pull/9279)
+- Status: active
+- Purpose: Hero pipeline adapters for GB200 and H100. The historical BF16 full 535B model completed ten synthetic 65K updates on H100 with PP24/EP8 at 15.523% MFU using local JAXPP overlays; production checkpoint continuation remains unvalidated.
+- Diff: https://github.com/marin-community/marin/pull/9279/files
+- Issue: https://github.com/marin-community/marin/issues/9277
+
+### grug-fast-track
+- Path: `experiments/grug/fast_track/`
+- Origin: `moe_hero_ep`
+- Introduced: a021438bc7
+- Status: active
+- Purpose: self-contained 16k-vocab dense-vs-MoE H100 scaling ladder + MFU study; trimmed from moe_hero_ep (HF/ragged/host-offload removed, H100 fixed-pooled-wave EP only).
+- Diff: https://marin-community.github.io/marin/grug-diffs/pr-9287/fast_track/index.html
+- Issue: https://github.com/marin-community/marin/pull/9287
 
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`

@@ -22,8 +22,7 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
     ActiveTaskRow,
-    TaskDetailRow,
-    task_is_finished,
+    task_is_finished_row,
 )
 from iris.cluster.types import (
     TERMINAL_TASK_STATES,
@@ -55,13 +54,6 @@ class TerminalKind(StrEnum):
     UNSCHEDULABLE = "unschedulable"
 
 
-class TransitionSource(StrEnum):
-    """Caller policy for side effects attached to task-state updates."""
-
-    WORKER_RECONCILE = "worker_reconcile"
-    DISPATCH = "dispatch"
-
-
 @dataclass(frozen=True, slots=True)
 class TerminalDecision:
     """One task → terminal assertion to be applied as part of a batch."""
@@ -90,16 +82,6 @@ class TransitionOutcome:
 
 
 # ─── Snapshot lookups ───
-
-
-def task_is_finished_row(task: TaskDetailRow) -> bool:
-    return task_is_finished(
-        task.state,
-        task.failure_count,
-        task.max_retries_failure,
-        task.preemption_count,
-        task.max_retries_preemption,
-    )
 
 
 def active_row_from_snapshot(snapshot: TransitionSnapshot, task_id: JobName) -> ActiveTaskRow | None:
@@ -146,6 +128,7 @@ def merge_task_termination(
     *,
     stamp_attempt_finished: bool,
     attempt_state: int | None = None,
+    exit_code: int | None = None,
 ) -> None:
     """Move a task to ``task_state`` and record its attempt.
 
@@ -178,6 +161,7 @@ def merge_task_termination(
                     attempt_id=attempt_id,
                     state=effective_attempt_state,
                     finished_at=now if stamp_attempt_finished else None,
+                    exit_code=exit_code,
                     error=error,
                 )
             )
@@ -187,6 +171,7 @@ def merge_task_termination(
             task_id=task_name,
             state=task_state,
             error=error,
+            exit_code=exit_code,
             finished_at=task_finished_at,
         )
     )
@@ -272,7 +257,7 @@ def preempt_one(
         new_state,
         reason,
         now_ms,
-        stamp_attempt_finished=False,
+        stamp_attempt_finished=row.current_worker_id is None,
         attempt_state=job_pb2.TASK_STATE_PREEMPTED,
     )
     return TransitionOutcome(
@@ -284,6 +269,31 @@ def preempt_one(
     )
 
 
+def _finalize_superseded_attempt(
+    state: Overlay,
+    snapshot: TransitionSnapshot,
+    update: TaskUpdate,
+    current_attempt_id: int,
+    now_ms: int,
+) -> None:
+    """Finalize a superseded attempt after a terminal worker observation."""
+    stale_state = state.attempt_state(update.task_id, update.attempt_id)
+    if stale_state is None:
+        return
+    if stale_state not in TERMINAL_TASK_STATES:
+        logger.error(
+            "Stale attempt precondition violation: task=%s reported=%d current=%d stale_state=%s",
+            update.task_id,
+            update.attempt_id,
+            current_attempt_id,
+            stale_state,
+        )
+        return
+    attempt = snapshot.attempts.get((update.task_id, update.attempt_id))
+    if update.new_state in TERMINAL_TASK_STATES and attempt is not None and attempt.worker_id is not None:
+        _backfill_attempt_finished_at(state, update.task_id, update.attempt_id, now_ms)
+
+
 # ─── The per-update transition core ───
 
 
@@ -292,15 +302,13 @@ def apply_one_transition(
     snapshot: TransitionSnapshot,
     update: TaskUpdate,
     now_ms: int,
-    *,
-    source: TransitionSource = TransitionSource.WORKER_RECONCILE,
 ) -> TransitionOutcome | None:
     """Apply one ``TaskUpdate`` against ``state``: write attempt + task mutations.
 
-    This is the single per-update transition core. Worker reconcile updates
-    charge build failures to worker health so hosts that keep failing builds
-    get reaped; direct providers manage their own hosts. ``update.container_id``
-    is folded into the task row when present.
+    This is the single per-update transition core. An update carrying an Iris
+    ``worker_id`` charges launch/build failures to that worker so a host that
+    keeps failing builds gets reaped. ``update.container_id`` is folded into the
+    task row when present.
 
     Returns a :class:`TransitionOutcome` describing the change so the
     orchestrator can drive the peer-cascade and job-recompute. Returns
@@ -315,6 +323,11 @@ def apply_one_transition(
 
     task = task_map.get(update.task_id)
     if task is None:
+        return None
+
+    # Handle old-attempt reports before guards that apply to the current task.
+    if update.attempt_id != task.current_attempt_id:
+        _finalize_superseded_attempt(state, snapshot, update, task.current_attempt_id, now_ms)
         return None
 
     # Overlay-aware terminal guard. An earlier item in the same batch (e.g. a
@@ -337,26 +350,10 @@ def apply_one_transition(
         # worker-bound attempt and we land here with the task already finished.
         # Stamp ``finished_at_ms`` on the attempt so the scheduler releases
         # capacity.
-        if (
-            task_is_finished_row(task)
-            and update.new_state in TERMINAL_TASK_STATES
-            and update.attempt_id == task.current_attempt_id
-        ):
+        if task_is_finished_row(task) and update.new_state in TERMINAL_TASK_STATES:
             attempt = attempt_map.get((update.task_id, update.attempt_id))
             if attempt is not None and attempt.worker_id is not None:
                 _backfill_attempt_finished_at(state, update.task_id, update.attempt_id, now_ms)
-        return None
-
-    if update.attempt_id != task.current_attempt_id:
-        stale_state = state.attempt_state(update.task_id, update.attempt_id)
-        if stale_state is not None and stale_state not in TERMINAL_TASK_STATES:
-            logger.error(
-                "Stale attempt precondition violation: task=%s reported=%d current=%d stale_state=%s",
-                update.task_id,
-                update.attempt_id,
-                task.current_attempt_id,
-                stale_state,
-            )
         return None
 
     # Overlay-aware prior state: a same-batch cascade may have already moved this
@@ -370,11 +367,12 @@ def apply_one_transition(
     # changelog row (commit._flush_tasks), so a stuck task's reason reaches the hub.
     # An unchanged message stays a no-op, so the message does not churn the changelog.
     message_changed = update.status_message is not None and update.status_message != (task.status_message or "")
-    has_new_data = update.error is not None or update.exit_code is not None or message_changed
+    attempt = attempt_map.get((update.task_id, update.attempt_id))
+    topology_changed = update.topology is not None and attempt is not None and update.topology != attempt.topology_json
+    has_new_data = update.error is not None or update.exit_code is not None or message_changed or topology_changed
     if update.new_state == prior_state and not has_new_data:
         return None
 
-    attempt = attempt_map.get((update.task_id, update.attempt_id))
     if attempt is None:
         return None
     # Overlay-aware attempt state: a same-batch cascade (e.g. a coscheduled
@@ -409,17 +407,15 @@ def apply_one_transition(
     # (see Overlay.job_basis), symmetric with preemption.
     failure_count = task.failure_count
     preemption_count = task.preemption_count
-    charge_worker_build_failures = source is TransitionSource.WORKER_RECONCILE
-
     if update.new_state == job_pb2.TASK_STATE_RUNNING:
         started_ms = now_ms
         task_state = job_pb2.TASK_STATE_RUNNING
     elif update.new_state == job_pb2.TASK_STATE_BUILDING:
-        # Worker BUILDING runs setup, so start its clock to catch wedged builds
-        # (#6077). K8s BUILDING includes pre-admission waits, so its clock starts
-        # at RUNNING instead (#7431).
-        if source is TransitionSource.WORKER_RECONCILE:
-            started_ms = now_ms
+        # Some runtimes report BUILDING while execution/setup is already under
+        # way; others include admission waits. The observation states the fact
+        # explicitly rather than making the kernel infer it from backend type.
+        if update.execution_started_at is not None:
+            started_ms = update.execution_started_at.epoch_ms()
         task_state = job_pb2.TASK_STATE_BUILDING
     elif update.new_state in (
         job_pb2.TASK_STATE_FAILED,
@@ -442,14 +438,19 @@ def apply_one_transition(
         # infra (bad/missing node); a FAILED-from-BUILDING is a failed image pull
         # or runtime setup. A FAILED-from-ASSIGNED is not a host fault (and the
         # worker never reports it: it announces BUILDING before running). Direct
-        # providers manage their own hosts, so this is gated on
-        # charge_worker_build_failures (worker path only).
+        # providers that do not expose Iris workers leave ``worker_id`` unset.
         launch_or_build_failure = (
             update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
             and prior_state in (job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING)
         ) or (update.new_state == job_pb2.TASK_STATE_FAILED and prior_state == job_pb2.TASK_STATE_BUILDING)
-        if charge_worker_build_failures and launch_or_build_failure and attempt_worker_id is not None:
-            state.emit_worker_build_failed(WorkerId(str(attempt_worker_id)))
+        observed_worker_id = update.worker_id
+        if (
+            launch_or_build_failure
+            and observed_worker_id is not None
+            and attempt_worker_id is not None
+            and observed_worker_id == WorkerId(str(attempt_worker_id))
+        ):
+            state.emit_worker_build_failed(observed_worker_id)
 
         if update.new_state == job_pb2.TASK_STATE_FAILED:
             # Application failure (non-zero exit / setup error): failure budget.
@@ -515,6 +516,8 @@ def apply_one_transition(
             pod_uid=update.pod_uid,
             node_name=update.node_name,
             terminal_reason=update.terminal_reason,
+            output_archive=update.output_archive,
+            topology=update.topology,
         )
     )
     state.merge_task(
@@ -559,5 +562,5 @@ def timeout_one(
         job_pb2.TASK_STATE_FAILED,
         reason,
         now_ms,
-        stamp_attempt_finished=False,
+        stamp_attempt_finished=row.current_worker_id is None,
     )

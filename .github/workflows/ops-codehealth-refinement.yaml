@@ -1,0 +1,53 @@
+name: "Ops - Agentic-lint Refinement"
+
+on:
+  schedule:
+    - cron: "41 8 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: codehealth-refinement
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Launch refinement agent
+        uses: ./.github/actions/launch-loom-run
+        with:
+          profile: ${{ vars.LOOM_CODEHEALTH_REFINEMENT_PROFILE }}
+          idempotency-key: codehealth-refinement:${{ github.run_id }}:${{ github.run_attempt }}
+          title: "Agentic-lint refinement for run ${{ github.run_id }}"
+          goal: |
+            Run the weekly agentic-lint refinement workflow. First run the
+            resumable 30-day review and lint telemetry sync into PostgreSQL.
+            Then use the review workbench commands to explore human feedback,
+            current lint activity, source context, and rule behavior. Probe
+            candidate or weak rules with models and effort levels you select.
+
+            If the evidence supports catalog changes, edit the structured YAML
+            rules, validate them, and open a normal pull request using
+            infra/codehealth/refinement_pr_template.md. Do not force a catalog
+            change when the evidence is inconclusive.
+
+            Write the analysis as Markdown, add charts when they clarify the
+            evidence, and publish it with the post-report command. The report
+            must distinguish observed human feedback from probe results, name
+            every denominator, link supporting and counterexample comments,
+            identify rules needing emphasis or retirement investigation, and
+            link any pull request opened by this run. The post-report command
+            appends the typed result to the durable codehealth-refinement
+            channel.
+          base: ${{ github.sha }}
+          channel: codehealth-refinement

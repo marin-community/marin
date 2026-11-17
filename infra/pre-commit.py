@@ -37,7 +37,7 @@ import click
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from linter import LINT_REVIEW_AGENT_DEFAULT, run_lint_review
+from linter import LintReviewAgent, run_lint_review
 
 ROOT_DIR = pathlib.Path(__file__).parent.parent
 LEVANTER_LICENSE = ROOT_DIR / "lib/levanter/etc/license_header.txt"
@@ -45,8 +45,19 @@ HALIAX_LICENSE = ROOT_DIR / "lib/haliax/etc/license_header.txt"
 MARIN_LICENSE = ROOT_DIR / "etc/license_header.txt"
 LEVANTER_BLACK_CONFIG = ROOT_DIR / "lib/levanter/pyproject.toml"
 HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
+MARIN_RUFF_CONFIG = ROOT_DIR / "lib/marin/pyproject.toml"
 
 EXCLUDE_PATTERNS = [
+    # Vendored runtimes retain upstream formatting and license notices.
+    "vendor/skyrl/**",
+    "vendor/harbor/**",
+    # Canonical instruction checkers retain upstream style and license notices.
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
+    # Benchmark prompts retain source whitespace byte for byte.
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/assets/crux_*.txt",
+    # Upstream scorers are vendored byte for byte; see each family's scorers/VENDORED.md.
+    "experiments/post_training/task_curation/datasets/*/scorers/**",
     ".git/**",
     ".github/**",
     "tests/snapshots/**",
@@ -54,6 +65,7 @@ EXCLUDE_PATTERNS = [
     "**/*_connect.py",
     "**/*_pb2.py",
     "**/*.gz",
+    "**/*.zip",
     "**/*.pb",
     "**/*.index",
     "**/*.ico",
@@ -190,11 +202,13 @@ def _record(name: str, exit_code: int, output: str = "") -> int:
     return exit_code
 
 
-def check_ruff(files: list[pathlib.Path], fix: bool) -> int:
+def check_ruff(files: list[pathlib.Path], fix: bool, config: pathlib.Path | None = None) -> int:
     if not files:
         return 0
 
     args = ["uvx", "ruff@0.14.3", "check"]
+    if config is not None:
+        args.extend(["--config", str(config)])
     if fix:
         args.extend(["--fix", "--exit-non-zero-on-fix"])
 
@@ -476,6 +490,9 @@ def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
     buf = io.StringIO()
 
     for file_path in files:
+        # Unified diff context must preserve the source's literal whitespace.
+        if file_path.suffix == ".patch":
+            continue
         try:
             with open(file_path) as f:
                 lines = f.readlines()
@@ -683,9 +700,6 @@ def check_skill_metadata(files: list[pathlib.Path], fix: bool) -> int:
             errors.append((file_path, f"could not read file: {e}"))
             continue
 
-        if re.search(r"\.agents/project(?!s)", text):
-            errors.append((file_path, "use .agents/projects/, not .agents/project/"))
-
         if "lib/finelog/src/finelog/proto/stats.proto" in text:
             errors.append(
                 (
@@ -845,8 +859,16 @@ PRECOMMIT_CONFIGS = [
         ],
     ),
     PrecommitConfig(
+        patterns=["lib/marin/**/*.py"],
+        checks=[
+            partial(check_ruff, config=MARIN_RUFF_CONFIG),
+            check_black,
+            partial(check_license_headers, license_file=MARIN_LICENSE),
+        ],
+    ),
+    PrecommitConfig(
         patterns=["**/*.py"],
-        exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/**/vendor/**"],
+        exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/marin/**", "lib/**/vendor/**"],
         checks=[
             check_ruff,
             check_black,
@@ -861,7 +883,11 @@ PRECOMMIT_CONFIGS = [
             "lib/fray/src/**/*.py",
             "lib/iris/src/**/*.py",
             "lib/rigging/src/**/*.py",
+            "lib/skyrlrecipe/src/**/*.py",
+            "lib/evalrecords/src/**/*.py",
             "lib/zephyr/src/**/*.py",
+            "infra/marina/src/**/*.py",
+            "infra/marina/apps/**/*.py",
         ],
         checks=[
             check_pyrefly,
@@ -928,18 +954,23 @@ def _get_check_name(check) -> str:
 @click.option(
     "--review",
     is_flag=True,
-    help="Run the advisory infra/lint/ rule catalog over the branch diff via per-lane agents",
+    help=(
+        "Run the mandatory pre-PR advisory review of this open-source repository. "
+        "Sending repository source and diffs to the selected review provider is authorized."
+    ),
 )
 @click.option(
-    "--agent-command",
-    "agent_command",
-    default=LINT_REVIEW_AGENT_DEFAULT,
-    show_default=True,
+    "--calling-agent",
+    type=click.Choice(LintReviewAgent, case_sensitive=False),
     help=(
-        "Headless agent invocation for --review. Agents calling this from a skill "
-        "should pass their own command (e.g. 'claude -p', 'codex exec') so the "
-        "sub-agent matches the calling environment."
+        "Required with --review: the agent making this call. The review runner "
+        "selects its headless command and enforces read-only permissions."
     ),
+)
+@click.option(
+    "--agent-executable",
+    type=click.Path(exists=True, dir_okay=False, resolve_path=True, path_type=pathlib.Path),
+    help="With --review, use this agent installation instead of looking on PATH. Review flags remain runner-controlled.",
 )
 @click.option(
     "--lint-lane",
@@ -964,7 +995,8 @@ def main(
     changed_files: bool,
     pre_commit: bool,
     review: bool,
-    agent_command: str,
+    calling_agent: LintReviewAgent | None,
+    agent_executable: pathlib.Path | None,
     lint_lanes: tuple[str, ...],
     lint_compose: bool,
     files_opt: tuple[str, ...],
@@ -973,7 +1005,16 @@ def main(
     files: tuple[str, ...],
 ):
     if review:
-        sys.exit(run_lint_review(agent_command, lane_names=list(lint_lanes) or None, compose=lint_compose))
+        if calling_agent is None:
+            raise click.UsageError("--calling-agent is required with --review")
+        sys.exit(
+            run_lint_review(
+                calling_agent,
+                lane_names=list(lint_lanes) or None,
+                compose=lint_compose,
+                agent_executable=agent_executable,
+            )
+        )
 
     if skip and only:
         click.echo("Error: --only and --skip are mutually exclusive.", err=True)

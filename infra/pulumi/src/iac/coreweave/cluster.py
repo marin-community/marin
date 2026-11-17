@@ -7,11 +7,8 @@ Renders the cluster's NodePools as `compute.coreweave.com/v1alpha1 NodePool` cus
 resources, the objects Iris applies today, and targets an existing CKS cluster and its
 kubeconfig.
 
-The CKS cluster object (`coreweave_cks_cluster` + VPC) stays outside Pulumi. Managing or
-adopting it would need the CoreWeave Terraform provider bridged into Pulumi
-(`pulumi package add terraform-provider coreweave/coreweave`) and CoreWeave API credentials,
-neither of which exists here (design.md Open Questions; README.md's "Future work").
-`CksClusterSpec` (`args.cluster`, exported below) records that externally-provisioned cluster
+The CKS cluster object (`coreweave_cks_cluster` + VPC) stays outside Pulumi.
+`CksClusterSpec` (`args.cluster`, exported below) records that externally provisioned cluster
 as in-tree config.
 """
 
@@ -22,6 +19,7 @@ import pulumi_kubernetes as k8s
 from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_manifest
 
 from iac.config import CksClusterSpec
+from iac.imports import NO_IMPORTS, ImportRegistrar
 from iac.nodepools import NodePoolSpec
 
 
@@ -29,9 +27,6 @@ from iac.nodepools import NodePoolSpec
 class CoreweaveClusterArgs:
     cluster: CksClusterSpec
     nodepools: list[NodePoolSpec]
-    # Adoption mode: stamp import_=<nodepool name> on each NodePool so `pulumi preview` shows
-    # the real adoption diff instead of planning creates. Set via `marin-iac:import`. §4.
-    adopt: bool = False
 
 
 def _nodepool_manifest(nodepool: NodePoolSpec) -> dict:
@@ -64,6 +59,7 @@ class CoreweaveCluster(pulumi.ComponentResource):
         args: CoreweaveClusterArgs,
         *,
         k8s_provider: pulumi.ProviderResource,
+        imports: ImportRegistrar = NO_IMPORTS,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__("marin:coreweave:CoreweaveCluster", name, None, opts)
@@ -74,7 +70,7 @@ class CoreweaveCluster(pulumi.ComponentResource):
             # have no autoscaler, so IaC keeps targetRacks reconciled.
             ignore_changes = [] if nodepool.target_racks is not None else ["spec.targetNodes"]
             # NodePools are cluster-scoped, so the k8s import ID is just the object name.
-            k8s.apiextensions.CustomResource(
+            resource = k8s.apiextensions.CustomResource(
                 f"nodepool-{nodepool.name}",
                 api_version=manifest["apiVersion"],
                 kind=manifest["kind"],
@@ -84,9 +80,9 @@ class CoreweaveCluster(pulumi.ComponentResource):
                     parent=self,
                     provider=k8s_provider,
                     ignore_changes=ignore_changes,
-                    import_=nodepool.name if args.adopt else None,
                 ),
             )
+            imports.register(resource, parent=self, provider_id=nodepool.name)
         # Exported so `pulumi stack output` names the CKS cluster this stack's NodePools
         # live on; the cluster object itself is not Pulumi-managed (see module docstring).
         self.register_outputs({"cluster_name": args.cluster.name, "cluster_zone": args.cluster.zone})

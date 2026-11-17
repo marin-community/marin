@@ -286,7 +286,8 @@ class GemmaConfig(HFCompatConfig):
             num_heads=self.num_heads,
             seq_len=context_length,
             vocab_size=vocab_size,
-            glu=False,
+            # Gemma's MLP is LlamaMlp, which gates up_proj with an activated gate_proj.
+            glu=True,
         )
 
     def attention_config(self) -> AttentionConfig:

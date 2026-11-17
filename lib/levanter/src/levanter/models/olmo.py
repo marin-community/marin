@@ -19,7 +19,7 @@ from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
-from levanter.layers import RmsNormConfig
+from levanter.layers.normalization import RmsNormConfig
 from levanter.layers.attention import (
     Attention,
     AttentionBackend,

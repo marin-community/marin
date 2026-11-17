@@ -13,10 +13,16 @@ import pytest
 
 import haliax as hax
 from haliax import NamedArray
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 # Import the functions from your module
 # Replace 'your_module' with the actual module name where your functions are defined
-from levanter.models.loss import cross_entropy_loss_and_log_normalizers, fused_cross_entropy_loss_and_logsumexp_penalty
+from levanter.models.loss import (
+    cross_entropy_loss_and_log_normalizers,
+    fused_cross_entropy_loss_and_logsumexp_penalty,
+    next_token_ids,
+)
+from levanter.testing.devices import use_test_devices
 from levanter.utils.jax_utils import key_iterator
 
 
@@ -45,13 +51,10 @@ def test_data():
 
     key = key_iterator(jax.random.PRNGKey(0))
 
-    # Initialize pred_embeddings with ones
     pred_embeddings = hax.random.normal(next(key), (Batch, Seq, Embed), dtype=jnp.float32) / math.sqrt(Embed.size)
 
-    # Initialize pred_lm_head with ones
     pred_lm_head = hax.random.normal(next(key), (Vocab, Embed), dtype=jnp.float32) / math.sqrt(Embed.size)
 
-    # Define true_ids such that the target is always the first token in vocab
     true_ids = hax.random.randint(next(key), (Batch, Seq), 0, Vocab.size)
 
     return pred_embeddings, pred_lm_head, true_ids
@@ -134,7 +137,7 @@ def test_single_block(test_data):
     # Compute full loss
     loss_full, _logz_full = _compute_full(Vocab, pred_embeddings, pred_lm_head, true_ids)
 
-    # Compute block-wise loss with block_size=4 (vocab_size=4)
+    # Compute block-wise loss with a single block covering the whole vocab
     with jax.disable_jit():
         loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
             pred_embeddings,
@@ -170,7 +173,7 @@ def test_multiple_blocks(test_data):
     # Compute full loss
     loss_full, _logz_full = _compute_full(Vocab, pred_embeddings, pred_lm_head, true_ids)
 
-    # Compute block-wise loss with block_size=1 (vocab_size=4)
+    # Compute block-wise loss with one vocab entry per block
     loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
         pred_embeddings,
         pred_lm_head,
@@ -193,7 +196,8 @@ def test_block_size_not_dividing_vocab(test_data):
     pred_embeddings, pred_lm_head, true_ids = test_data
 
     # Set block_size that does not divide vocab_size
-    block_size = 3  # vocab_size=4
+    block_size = 3
+    assert Vocab.size % block_size != 0
 
     # should be fine now
     loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
@@ -227,10 +231,8 @@ def test_vocab_size_less_than_block_size(test_data):
     """
     pred_embeddings, pred_lm_head, true_ids = test_data
 
-    # Set block_size greater than vocab_size
-    block_size = 5  # vocab_size=4
+    block_size = Vocab.size + 1
 
-    # should be fine now
     loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
         pred_embeddings,
         pred_lm_head,
@@ -395,3 +397,28 @@ def test_grad_loss_without_logz(test_data):
         hax.isclose(g_embed, g_embed_direct, atol=1e-3, rtol=1e-3)
     ), "Gradient of embeddings does not match."
     assert hax.all(hax.isclose(g_head, g_head_direct, atol=1e-3, rtol=1e-3)), "Gradient of lm_head does not match."
+
+
+@pytest.mark.multidevice
+def test_next_token_shift_preserves_explicit_layout():
+    with use_test_devices(4) as devices:
+        for batch, data_size, position_shard in [
+            (1, 1, "context"),
+            (2, 2, "context"),
+            (1, 1, None),
+            (2, 2, None),
+        ]:
+            context_size = 4 // data_size
+            mesh = Mesh(
+                np.asarray(devices).reshape(data_size, context_size),
+                ("data", "context"),
+                axis_types=(AxisType.Explicit, AxisType.Explicit),
+            )
+            with jax.set_mesh(mesh):
+                axes = (hax.Axis("batch", batch), hax.Axis("position", 8))
+                expected = np.arange(batch * 8, dtype=np.int32).reshape(batch, 8)
+                layout = NamedSharding(mesh, P("data", position_shard))
+                ids = hax.named(jax.device_put(expected, layout), axes)
+                actual = jax.jit(lambda a: next_token_ids(axes[1], a))(ids)
+                np.testing.assert_array_equal(actual.array, np.roll(expected, -1, axis=1))
+                assert actual.array.sharding == layout

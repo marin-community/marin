@@ -1,0 +1,24 @@
+schema_version: 1
+code: ml-speculative-abstraction
+lane: cruft
+title: Abstraction with exactly one implementation
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A `Union`, `Protocol`, or generic helper introduced "in
+  case we add more variants later" costs reader attention now and pays back
+  only at the second case — by which point the shape is concrete and easy to
+  refactor anyway. The same smell covers a single-caller forwarding wrapper — a
+  helper invoked from exactly one site that only forwards to one callee, adding a
+  hop that neither earns a clarifying name nor is reused.
+
+  **When allowed:** When the second variant is in flight, or when this has been explicitly
+  designed by the user as part of a longer term evolution.
+
+  **Bad example:**
+  ```python
+  TransitionDelta = AttemptMissingOnWorker   # single concrete variant; "widen later"
+  class WorkerReconcileResultLike(Protocol): ...   # one implementation, ever
+  db_writes: list[...] = field(default_factory=list)   # always []
+  ```
+
+  ## Duplication

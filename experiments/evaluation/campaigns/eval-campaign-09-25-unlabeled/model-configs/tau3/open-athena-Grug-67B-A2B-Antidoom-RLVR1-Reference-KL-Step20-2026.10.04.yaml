@@ -1,0 +1,27 @@
+# tau3-pi-only serving override: 131072 context, 32768 per-turn output.
+# GrugMoE Antidoom reference-KL step 20 uses the reviewed Grug topology.
+name: open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04
+location: open-athena/Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04
+revision: fd07ef0f2b78a83099a0042e59c00de986e7b647
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 131072
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+generation:
+  max_gen_toks: 32768

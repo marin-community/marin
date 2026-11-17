@@ -45,3 +45,7 @@ class QueryResultTooLargeError(StatsError):
 
     Caller should add a LIMIT, aggregate further, or pass a higher cap.
     """
+
+
+class QueryTimeoutError(StatsError):
+    """A direct query exceeded the lifetime guaranteed by its pinned catalogs."""

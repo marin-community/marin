@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import click
 import pytest
 from iris.cluster.config import (
@@ -9,19 +11,17 @@ from iris.cluster.config import (
     KubernetesProviderConfig,
     PlatformConfig,
 )
-from iris.rpc import job_pb2
+from iris.resources.state import JobState, TaskState
 
-from scripts.iris.dev_gpu import (
+from scripts.iris.coreweave_dev_pod import (
     CoreweaveTarget,
-    DevGpuState,
     PodRef,
     Priority,
     parse_running_pod,
     require_coreweave_platform,
-    resolve_coscheduling,
-    session_summary,
     wait_for_running_tasks,
 )
+from scripts.iris.dev_gpu import DevGpuState, resolve_coscheduling, session_summary
 
 JOB_ID = "/dev/dev-gpu-devbox"
 
@@ -121,7 +121,7 @@ class FakeTask:
         self.task_index = task_index
 
     def status(self):
-        return job_pb2.TaskStatus(state=job_pb2.TASK_STATE_RUNNING)
+        return SimpleNamespace(state=TaskState.RUNNING)
 
 
 class FakeJob:
@@ -131,7 +131,7 @@ class FakeJob:
         self.tasks_returned = [FakeTask(index) for index in reversed(range(replicas))]
 
     def state_only(self):
-        return job_pb2.JOB_STATE_RUNNING
+        return JobState.RUNNING
 
     def tasks(self):
         return self.tasks_returned

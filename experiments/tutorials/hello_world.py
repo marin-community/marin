@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
-from rigging.filesystem import open_url
+from rigging.filesystem.factory import open_url
 
 logger = logging.getLogger(__name__)
 

@@ -70,8 +70,10 @@ class BackgroundIterator(Iterator[Ex]):
         if self.thread is not None:
             batch = self.q.get()
             if batch is _SENTINEL:
+                self._stop_event.set()
                 raise StopIteration
             if isinstance(batch, _ExceptionWrapper):
+                self._stop_event.set()
                 batch.reraise()
             return batch
         # No background thread; consume the iterator on demand.
@@ -99,7 +101,7 @@ class BackgroundIterator(Iterator[Ex]):
         try:
             iterator = self._producer_fn()
         except Exception:
-            self.q.put(_ExceptionWrapper(sys.exc_info()))
+            self._enqueue(_ExceptionWrapper(sys.exc_info()))
             return
 
         if isinstance(iterator, Iterator):
@@ -127,7 +129,7 @@ class BackgroundIterator(Iterator[Ex]):
                     return
             self._enqueue(_SENTINEL)
         except Exception:
-            self.q.put(_ExceptionWrapper(sys.exc_info()))
+            self._enqueue(_ExceptionWrapper(sys.exc_info()))
 
     async def _produce_batches_async(self, iterator):
         try:
@@ -136,7 +138,7 @@ class BackgroundIterator(Iterator[Ex]):
                     return
             self._enqueue(_SENTINEL)
         except Exception:
-            self.q.put(_ExceptionWrapper(sys.exc_info()))
+            self._enqueue(_ExceptionWrapper(sys.exc_info()))
 
 
 class _Sentinel:

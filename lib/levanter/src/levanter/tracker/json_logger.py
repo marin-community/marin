@@ -10,7 +10,7 @@ import jax
 import numpy as np
 
 from levanter.tracker import Tracker
-from levanter.tracker.tracker import TrackerConfig
+from levanter.tracker.tracker import NoopTracker, TrackerConfig
 from levanter.utils.jax_utils import jnp_to_python
 
 
@@ -126,8 +126,10 @@ class JsonLoggerConfig(TrackerConfig):
     logger_name: str = "levanter.json_logger"
     level: int = logging.INFO
 
-    def init(self, run_id: Optional[str]) -> JsonLoggerTracker:
+    def init(self, run_id: Optional[str]) -> Tracker:
         del run_id
+        if jax.process_index() != 0:
+            return NoopTracker()
         log = logging.getLogger(self.logger_name)
         log.setLevel(self.level)
         return JsonLoggerTracker(log)

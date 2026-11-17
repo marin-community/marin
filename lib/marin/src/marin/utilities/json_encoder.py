@@ -13,27 +13,35 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-def _dtype_name(o) -> str | None:
-    """Canonical name for a numpy/jax dtype or scalar dtype *type*, else ``None``.
+def scalar_dtype(tp: type) -> np.dtype | None:
+    """The scalar dtype a *type* object names, or ``None`` if it names none.
 
-    Recognizes ``np.dtype`` instances and the scalar *type* objects that show up
-    as config values (``np.float32``, ``jax.numpy.bfloat16`` and other
-    ``ml_dtypes`` extensions) — all of which ``np.dtype`` normalizes without a
-    jax import. Returns ``None`` for scalar values, arrays, and unrelated classes
-    so they follow the normal encoding path instead of being mislabeled.
+    Accepts the scalar types that show up as config values (``np.float32``,
+    ``jax.numpy.bfloat16`` and other ``ml_dtypes`` extensions), all of which
+    ``np.dtype`` normalizes without a jax import.
     """
-    if isinstance(o, np.dtype):
-        return str(o)
-    if not isinstance(o, type):
-        return None
     try:
-        dt = np.dtype(o)
+        dt = np.dtype(tp)
     except TypeError:
         return None
     # np.dtype() coerces *any* class to a dtype (arbitrary classes -> object,
     # kind 'O'); keep only genuine scalar dtypes. bf16/fp8 extensions report
     # kind 'V', so accept that too rather than filtering to numeric kinds.
-    return str(dt) if dt.kind in "biufcV" else None
+    return dt if dt.kind in "biufcV" else None
+
+
+def _dtype_name(o) -> str | None:
+    """Canonical name for a numpy/jax dtype or scalar dtype *type*, else ``None``.
+
+    Returns ``None`` for scalar values, arrays, and unrelated classes so they
+    follow the normal encoding path instead of being mislabeled.
+    """
+    if isinstance(o, np.dtype):
+        return str(o)
+    if not isinstance(o, type):
+        return None
+    dt = scalar_dtype(o)
+    return None if dt is None else str(dt)
 
 
 class CustomJsonEncoder(json.JSONEncoder):

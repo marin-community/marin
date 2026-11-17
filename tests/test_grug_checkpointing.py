@@ -12,7 +12,11 @@ import pytest
 from jax.tree_util import register_dataclass
 from levanter.checkpoint import Checkpointer, CheckpointInterval, latest_checkpoint_path
 
-from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import (
+    init_weights_only_from_checkpoint,
+    restore_grug_state_and_source,
+    restore_grug_state_from_checkpoint,
+)
 
 
 @register_dataclass
@@ -189,6 +193,31 @@ def test_restore_falls_back_to_older_checkpoint_when_latest_fails(tmp_path: Path
     assert loaded == {"loaded_from": str(checkpoint_root / "step-90")}
 
 
+def test_restore_names_the_checkpoint_it_loaded_after_falling_back(tmp_path: Path):
+    checkpoint_root = tmp_path / "checkpoints"
+    _write_checkpoint_metadata(checkpoint_root / "step-100", step=100, timestamp="2026-03-17T10:00:00")
+    _write_checkpoint_metadata(checkpoint_root / "step-90", step=90, timestamp="2026-03-17T09:00:00")
+
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
+        if path.endswith("step-100") or not Path(path).exists():
+            raise FileNotFoundError(path)
+        return {"loaded_from": path}
+
+    def restore(search_paths):
+        return restore_grug_state_and_source(
+            {"state": "init"},
+            checkpoint_search_paths=search_paths,
+            load_checkpoint_setting=None,
+            mesh=None,
+            allow_partial=False,
+            _load_fn=fake_load,
+        )
+
+    step_90 = str(checkpoint_root / "step-90")
+    assert restore([str(checkpoint_root)]) == ({"loaded_from": step_90}, step_90)
+    assert restore([str(tmp_path / "empty")]) == ({"state": "init"}, None)
+
+
 def test_restore_raises_when_required_and_no_checkpoint_loads(tmp_path: Path):
     checkpoint_root = tmp_path / "checkpoints"
     _write_checkpoint_metadata(checkpoint_root / "step-100", step=100, timestamp="2026-03-17T10:00:00")
@@ -205,6 +234,43 @@ def test_restore_raises_when_required_and_no_checkpoint_loads(tmp_path: Path):
             allow_partial=False,
             _load_fn=fake_load,
         )
+
+
+def test_restore_raises_when_only_unreadable_checkpoints_present(tmp_path: Path):
+    """When checkpoints are present but all fail to load, raise instead of silently starting from step 0."""
+    checkpoint_root = tmp_path / "checkpoints"
+    _write_checkpoint_metadata(checkpoint_root / "step-100", step=100, timestamp="2026-03-17T10:00:00")
+
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
+        raise FileNotFoundError(path)
+
+    with pytest.raises(FileNotFoundError, match="none could be loaded"):
+        restore_grug_state_from_checkpoint(
+            {"state": "init"},
+            checkpoint_search_paths=[str(checkpoint_root)],
+            load_checkpoint_setting=None,
+            mesh=None,
+            allow_partial=False,
+            _load_fn=fake_load,
+        )
+
+
+def test_launch_with_no_checkpoints(tmp_path: Path):
+    """Launching with load_checkpoint_setting=None and no existing checkpoints starts training from scratch"""
+
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
+        raise FileNotFoundError(path)
+
+    restored = restore_grug_state_from_checkpoint(
+        {"state": "init"},
+        checkpoint_search_paths=[str(tmp_path / "checkpoints")],
+        load_checkpoint_setting=None,
+        mesh=None,
+        allow_partial=False,
+        _load_fn=fake_load,
+    )
+
+    assert restored == {"state": "init"}
 
 
 def test_restore_discovers_candidates_across_search_paths(tmp_path: Path):
@@ -327,3 +393,54 @@ def test_restore_supports_legacy_wrapped_and_current_checkpoint_formats(tmp_path
     )
     assert int(loaded_current["step"]) == 8
     assert jnp.array_equal(loaded_current["value"], current_state["value"])
+
+
+def test_a_refused_candidate_aborts_the_restore_instead_of_falling_back(tmp_path: Path):
+    """A template hook's refusal must not quietly skip to an older checkpoint.
+
+    Falling back would resume from stale state while the newest checkpoint sits unread, which is
+    exactly the silent outcome the hook exists to prevent.
+    """
+    checkpoint_root = tmp_path / "checkpoints"
+    _write_checkpoint_metadata(checkpoint_root / "step-100", step=100, timestamp="2026-03-17T10:00:00")
+    _write_checkpoint_metadata(checkpoint_root / "step-90", step=90, timestamp="2026-03-17T09:00:00")
+
+    def refuse_newest(candidate: str):
+        if candidate.endswith("step-100"):
+            raise ValueError("wrong layout")
+        return {"state": "init"}
+
+    with pytest.raises(ValueError, match="wrong layout"):
+        restore_grug_state_from_checkpoint(
+            {"state": "init"},
+            checkpoint_search_paths=[str(checkpoint_root)],
+            load_checkpoint_setting=None,
+            mesh=None,
+            allow_partial=False,
+            template_for_candidate=refuse_newest,
+            _load_fn=lambda state, path, **kwargs: {"loaded_from": path},
+        )
+
+
+def test_an_unverifiable_candidate_is_skipped_like_an_unreadable_one(tmp_path: Path):
+    """A template hook's ``FileNotFoundError`` (e.g. no manifest) falls through to an older candidate."""
+    checkpoint_root = tmp_path / "checkpoints"
+    _write_checkpoint_metadata(checkpoint_root / "step-100", step=100, timestamp="2026-03-17T10:00:00")
+    _write_checkpoint_metadata(checkpoint_root / "step-90", step=90, timestamp="2026-03-17T09:00:00")
+
+    def unverifiable_newest(candidate: str):
+        if candidate.endswith("step-100"):
+            raise FileNotFoundError("no manifest")
+        return {"state": "init"}
+
+    loaded = restore_grug_state_from_checkpoint(
+        {"state": "init"},
+        checkpoint_search_paths=[str(checkpoint_root)],
+        load_checkpoint_setting=None,
+        mesh=None,
+        allow_partial=False,
+        template_for_candidate=unverifiable_newest,
+        _load_fn=lambda state, path, **kwargs: {"loaded_from": path},
+    )
+
+    assert loaded["loaded_from"].endswith("step-90")

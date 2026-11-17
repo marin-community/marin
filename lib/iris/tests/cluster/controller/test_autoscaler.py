@@ -17,9 +17,11 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import cast
 
+import jwt
 import pytest
 from iris.cluster.config import AutoscalerConfig, ScaleGroupConfig, WorkerConfig, WorkerSettings
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
+from iris.cluster.controller.auth import create_controller_auth
 from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Autoscaler
 from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
@@ -34,26 +36,26 @@ from iris.cluster.platforms.types import (
 )
 from iris.cluster.types import AcceleratorType, WorkerStatus
 from iris.rpc import vm_pb2
-from rigging.timing import Duration, Timestamp
-from tests.cluster.backends.conftest import (
+from iris.testing.backends import (
     FakeSliceHandle,
     FakeWorkerHandle,
     make_mock_platform,
     make_mock_slice_handle,
     make_mock_worker_handle,
 )
-
-from .conftest import (
+from iris.testing.controller import (
     make_autoscaler,
     make_demand_entries,
     make_scale_group_config,
 )
-from .conftest import (
+from iris.testing.controller import (
     make_big_demand_entries as _make_big_demand_entries,
 )
-from .conftest import (
+from iris.testing.controller import (
     mark_discovered_ready as _mark_discovered_ready,
 )
+from rigging.auth import RefreshingTokenProvider
+from rigging.timing import Duration, Timestamp
 
 
 @dataclass
@@ -683,46 +685,6 @@ class TestAutoscalerStatusReporting:
         assert "test-group" in status.last_routing_decision.routed_entries
 
 
-class TestAutoscalerBootstrapLogs:
-    """Tests for bootstrap log reporting."""
-
-    def test_get_init_log_returns_bootstrap_output(self, scale_group_config: ScaleGroupConfig):
-        """Worker bootstrap logs are captured in autoscaler worker tracking."""
-        bootstrap_log = "line1\nline2\nline3"
-        mock_handle = make_mock_slice_handle("slice-001", all_ready=True, bootstrap_logs=[bootstrap_log])
-        platform = make_mock_platform(slices_to_discover=[mock_handle])
-        group = ScalingGroup(scale_group_config, platform)
-        autoscaler = make_autoscaler({"test-group": group})
-
-        group.reconcile()
-        autoscaler.run_once([], {}, timestamp=Timestamp.from_ms(1_000))
-
-        vm_id = mock_handle.describe().workers[0].worker_id
-        assert autoscaler.get_init_log(vm_id) == bootstrap_log
-        assert autoscaler.get_init_log(vm_id, tail=2) == "line2\nline3"
-
-    def test_get_vm_by_worker_id(self, scale_group_config: ScaleGroupConfig):
-        """get_vm() uses platform worker_id as the only lookup key."""
-        mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
-        platform = make_mock_platform(slices_to_discover=[mock_handle])
-        group = ScalingGroup(scale_group_config, platform)
-        autoscaler = make_autoscaler({"test-group": group})
-
-        group.reconcile()
-        autoscaler.run_once([], {}, timestamp=Timestamp.from_ms(1_000))
-        workers = mock_handle.describe().workers
-
-        worker = workers[0]
-        # Lookup by platform worker_id
-        info = autoscaler.get_vm(worker.worker_id)
-        assert info is not None
-        assert info.scale_group == "test-group"
-
-        # Unknown keys return None -- no address fallback
-        assert autoscaler.get_vm(worker.internal_address) is None
-        assert autoscaler.get_vm("192.168.0.99") is None
-
-
 class TestAutoscalerQuotaHandling:
     """Tests for quota exceeded error handling."""
 
@@ -777,7 +739,7 @@ class TestAutoscalerQuotaHandling:
         ts = Timestamp.from_ms(1000)
         group.begin_scale_up(timestamp=ts)
         with pytest.raises(QuotaExhaustedError):
-            group.scale_up(timestamp=ts)
+            group.scale_up()
         group.cancel_scale_up()
         group.record_quota_exceeded("quota exceeded", ts)
 
@@ -1971,3 +1933,31 @@ class TestAutoscalerHealthProbe:
 
         assert sorted(requested_urls) == ["http://10.0.0.1:10001/health", "http://127.0.0.1:54321/health"]
         autoscaler.shutdown()
+
+
+def test_new_worker_bootstrap_refreshes_credentials_after_controller_ages():
+    now = [1000.0]
+    auth = create_controller_auth(None, cluster_name="test")
+    manager = auth.jwt_manager
+    initial = manager.create_token("system:worker", "worker", "initial", ttl_seconds=3600)
+    expires = jwt.decode(initial, options={"verify_signature": False})["exp"]
+    now[0] = expires - 1000
+    renewed = manager.create_token("system:worker", "worker", "renewed", ttl_seconds=86400)
+    provider = RefreshingTokenProvider(initial, lambda token: renewed, now=lambda: now[0])
+    platform = make_mock_platform()
+    group = ScalingGroup(make_scale_group_config(name="renewal", max_slices=5), platform)
+    autoscaler = Autoscaler(
+        {"renewal": group},
+        evaluation_interval=Duration.from_seconds(1),
+        platform=platform,
+        base_worker_config=WorkerConfig(docker_image="test:latest", auth_token=initial),
+        worker_token_provider=provider,
+    )
+    now[0] = expires + 1
+    autoscaler.execute(
+        [ScalingDecision(scale_group="renewal", action=ScalingAction.SCALE_UP, reason="new demand")],
+        timestamp=Timestamp.from_ms(1000),
+    )
+    launched_config = platform.create_slice.call_args.kwargs["worker_config"]
+    assert launched_config.auth_token == renewed
+    assert manager.verify(launched_config.auth_token).role == "worker"

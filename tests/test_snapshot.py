@@ -7,14 +7,13 @@ import os
 import pytest
 
 from tests.snapshots.generate_expected import (
-    transform_ar5iv,
     transform_stackexchange,
     transform_web,
     transform_wiki,
 )
 
 TEST_PATH = os.path.dirname(os.path.realpath(__file__))
-SPLITS = ["web", "wiki", "ar5iv", "stackexchange"]
+SPLITS = ["web", "wiki", "stackexchange"]
 
 SNAPSHOT_PATHS = {
     split: {
@@ -117,26 +116,6 @@ def test_markdownify_wikipedia(input_name):
     input_content = read_file(input_file)
 
     output = transform_wiki(input_content)
-
-    expected_file = os.path.join(paths["expected"], f"{input_name}.md")
-    output_file = os.path.join(paths["outputs"], f"{input_name}.md")
-
-    os.makedirs(paths["outputs"], exist_ok=True)
-
-    with open(output_file, "w") as f:
-        f.write(output)
-        f.write("\n")
-
-    compare_outputs(input_name, expected_file, output_file, paths["diffs"])
-
-
-@parametrize_files(split="ar5iv")
-def test_markdownify_ar5iv(input_name):
-    paths = SNAPSHOT_PATHS["ar5iv"]
-    input_file = os.path.join(paths["inputs"], f"{input_name}.html")
-    input_content = read_file(input_file)
-
-    output = transform_ar5iv(input_content)
 
     expected_file = os.path.join(paths["expected"], f"{input_name}.md")
     output_file = os.path.join(paths["outputs"], f"{input_name}.md")

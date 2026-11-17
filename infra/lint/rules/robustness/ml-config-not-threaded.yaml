@@ -1,0 +1,25 @@
+schema_version: 1
+code: ml-config-not-threaded
+lane: robustness
+title: Configuration value not threaded to the consumer
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A config knob exposed at the deploy/CLI surface but ignored
+  by the actual consumer (e.g. `cfg.port` set in k8s while the image hard-codes
+  `--port 10001`) is worse than no knob — operators trust it and get burned.
+
+  **When allowed:** Genuinely cosmetic config (logging labels) where the
+  divergence is harmless. Anything that affects traffic/correctness must
+  thread.
+
+  **Bad example:**
+  ```python
+  # in deploy config
+  port: int = 10001
+
+  # in entrypoint
+  def main():
+      server.run(port=10001)   # hard-coded; cfg.port is decoration.
+  ```
+
+  ## Defensive code

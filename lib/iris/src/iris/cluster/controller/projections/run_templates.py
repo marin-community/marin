@@ -34,6 +34,7 @@ from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.lru_cache import LRUCache
 from iris.cluster.controller.projections.base import LazyFillGuard, Projection
 from iris.cluster.controller.schema import job_config_table, job_workdir_files_table
+from iris.cluster.egress import parse_egress_rules
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
@@ -53,10 +54,13 @@ def build_run_request_fields(
     ports_json: list,
     constraints_json: str | None,
     task_image: str,
+    termination_grace_ms: int,
     task_id: str = "",
     attempt_id: int = 0,
     priority: int = 0,
     container_profile: int = 0,
+    egress_policy: int = 0,
+    egress_allow_json: list[str] | None = None,
 ) -> job_pb2.RunTaskRequest:
     """Build a RunTaskRequest carrying the per-job fields shared by the template
     and per-attempt construction paths.
@@ -84,7 +88,10 @@ def build_run_request_fields(
         attempt_id=attempt_id,
         priority=priority,
         container_profile=container_profile,
+        egress_policy=egress_policy,
+        egress_allow=parse_egress_rules(egress_allow_json or []),
     )
+    request.termination_grace.milliseconds = termination_grace_ms
     for filename, data in workdir_files.items():
         request.entrypoint.workdir_files[filename] = data
     return request
@@ -151,7 +158,10 @@ class RunTemplatesProjection(Projection):
             ports_json=job.ports_json,
             constraints_json=job.constraints_json,
             task_image=job.task_image,
+            termination_grace_ms=job.termination_grace_ms,
             container_profile=job.container_profile,
+            egress_policy=job.egress_policy,
+            egress_allow_json=job.egress_allow_json,
         )
 
         with self._lock:
