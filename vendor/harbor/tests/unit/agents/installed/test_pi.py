@@ -217,7 +217,9 @@ class TestPiAgent:
         )
         settings_path = temp_dir / ".pi/agent/settings.json"
         settings_path.parent.mkdir(parents=True)
-        settings_path.write_text(json.dumps({"theme": "dark"}))
+        settings_path.write_text(
+            json.dumps({"theme": "dark", "httpIdleTimeoutMs": 120000})
+        )
         agent = Pi(
             logs_dir=temp_dir,
             model_name="openai/test-model",
@@ -232,6 +234,7 @@ class TestPiAgent:
         settings = json.loads(settings_path.read_text())
         assert settings == {
             "theme": "dark",
+            "httpIdleTimeoutMs": 120000,
             "compaction": {
                 "enabled": True,
                 "reserveTokens": max_tokens,
@@ -258,6 +261,7 @@ class TestPiAgent:
             model_name="openai/test-model",
             model_info={"max_input_tokens": 65536, "max_output_tokens": 16384},
             compaction_reserve_tokens=32768,
+            http_idle_timeout=360.0001,
         )
 
         await agent.run("Fix the bug", shell.environment, AgentContext())
@@ -268,6 +272,7 @@ class TestPiAgent:
             "reserveTokens": 32768,
             "keepRecentTokens": 16384,
         }
+        assert settings["httpIdleTimeoutMs"] == 360001
 
     @pytest.mark.parametrize("compaction_reserve_tokens", [16383, 65536])
     def test_explicit_compaction_reserve_must_fit_model_limits(
@@ -285,8 +290,9 @@ class TestPiAgent:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("http_idle_timeout", [None, 360])
     async def test_run_without_model_limits_preserves_pi_compaction_settings(
-        self, temp_dir, monkeypatch
+        self, temp_dir, monkeypatch, http_idle_timeout
     ):
         shell = _local_pi_shell(
             temp_dir,
@@ -301,14 +307,22 @@ class TestPiAgent:
         settings_path = temp_dir / ".pi/agent/settings.json"
         settings_path.parent.mkdir(parents=True)
         original_settings = {
-            "compaction": {"reserveTokens": 12000, "keepRecentTokens": 18000}
+            "compaction": {"reserveTokens": 12000, "keepRecentTokens": 18000},
+            "theme": "dark",
         }
         settings_path.write_text(json.dumps(original_settings))
-        agent = Pi(logs_dir=temp_dir, model_name="openai/test-model")
+        agent = Pi(
+            logs_dir=temp_dir,
+            model_name="openai/test-model",
+            http_idle_timeout=http_idle_timeout,
+        )
 
         await agent.run("Fix the bug", shell.environment, AgentContext())
 
-        assert json.loads(settings_path.read_text()) == original_settings
+        expected_settings = dict(original_settings)
+        if http_idle_timeout is not None:
+            expected_settings["httpIdleTimeoutMs"] = 360000
+        assert json.loads(settings_path.read_text()) == expected_settings
 
 
 @pytest.mark.asyncio
