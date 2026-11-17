@@ -337,7 +337,8 @@ def test_prepared_conversion_subdivides_a_row_group_without_changing_records(tmp
     }
     prepared_shards = list(Path(prepared.normalized_path).glob("*.parquet"))
     prepared_rows = {row["source_row"]: row for shard in prepared_shards for row in load_parquet(str(shard))}
-    assert len(prepared_shards) > 1
+    # Inspect conversion shards before deduplication repartitions this small population.
+    assert len(list((tmp_path / "prepared/within-source-dedup/payload").glob("*.parquet"))) > 1
     assert prepared_rows == native_rows
     assert len(prepared_rows) == prepared.input_rows == native.input_rows == 513
     assert prepared.rejections == native.rejections

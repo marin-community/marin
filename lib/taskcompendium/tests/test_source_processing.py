@@ -483,9 +483,9 @@ def test_complete_conversion_precedes_bounded_quality_and_preserves_ledgers(
         phase["phase"]: [execution["operation"] for execution in phase["executions"]] for phase in telemetry["phases"]
     }
     operations.pop("verification", None)
-    # The panel is prepared on the driver, and each later phase is one execution.
+    # Deduplication records payload preparation separately from its compact-key shuffles.
     expected_operations = {
-        "within_source_dedup": ["deduplicate"],
+        "within_source_dedup": ["deduplicate_prepare", "deduplicate"],
         "raw_sample": ["execute"],
         "panel_normalize": [],
         "sample_prepare": [],
