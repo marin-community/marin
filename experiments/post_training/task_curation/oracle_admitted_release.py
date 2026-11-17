@@ -29,7 +29,7 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.execution_applicability import is_nonagentic_task
 from taskcompendium.grading_environment import shared_integrity_issue
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.oracle_filter import OracleExclusionReason, require_oracle_filter
+from taskcompendium.pipeline.oracle_filter import require_oracle_filter
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
 from experiments.post_training.task_curation.full_content_binding import (
@@ -96,11 +96,6 @@ class OracleAdmittedReleaseReceipt(BaseModel):
             raise ValueError("Oracle release belongs to another original pin")
         if evidence.admitted_count <= 0 or evidence.oracle_filter_version != 4:
             raise ValueError("Admissions require nonempty current oracle/control filtration")
-        if any(
-            reason in evidence.exclusion_counts
-            for reason in (OracleExclusionReason.INFRASTRUCTURE, OracleExclusionReason.NEGATIVE_CONTROL_PENDING)
-        ):
-            raise ValueError("Pending source/control outcomes cannot qualify a release")
         if (self.source_id, release.repo, release.revision, evidence.admitted_count) != (
             self.actor.source_id,
             actor.dataset_id,

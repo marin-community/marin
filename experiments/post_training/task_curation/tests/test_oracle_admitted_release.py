@@ -13,6 +13,8 @@ from finestore.rl.curation import (
     LexicalContaminationEvidence,
     LexicalUse,
     OracleFiltrationEvidence,
+    OraclePendingExclusion,
+    OraclePendingExclusionReason,
     OracleValidation,
     QualityResultFinalization,
     SourceQualityResult,
@@ -443,3 +445,25 @@ def test_filtered_release_sample_missing_tolerance_keeps_measured_counts(admitte
             coverage_complete=False,
             finalization=QualityResultFinalization.COMPLETE,
         )
+
+
+@pytest.mark.parametrize("reason", ["resource_calibration:infrastructure", "negative_control_pending"])
+def test_passing_population_is_selectable_with_pending_originals(admitted_release, reason):
+    source, receipt = admitted_release
+    filtration = OracleFiltrationEvidence.model_validate(
+        {
+            **receipt.filtration.model_dump(),
+            "exclusion_counts": {reason: 1},
+            "pending_exclusions": (
+                [OraclePendingExclusion(task_id="pending-original", reason=OraclePendingExclusionReason.INFRASTRUCTURE)]
+                if reason == "resource_calibration:infrastructure"
+                else []
+            ),
+        }
+    )
+    qualified = OracleAdmittedReleaseReceipt.model_validate({**receipt.model_dump(), "filtration": filtration})
+    bound = bind_derived_oversight(bind_oracle_admitted_release(source, qualified), qualified.sample, None)
+    assert bound.declaration.status == "Available" and bound.declaration.task_count == 1
+    assert bound.current_release == filtration.filtered_release
+    assert bound.info.oracle_filtration == filtration
+    assert filtration.exclusion_counts == {reason: 1}
