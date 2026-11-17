@@ -77,6 +77,9 @@ async function render(data, sourceId) {
     node('span', `Daytona ${daytonaLabel(data.daytona)}`, 'chip quality-unassessed'),
     node('span', data.updated_at ? `Last updated ${new Date(data.updated_at).toLocaleDateString()}` : 'Catalog load time unavailable', 'chip quality-unassessed'),
   );
+  if (data.sample_pin_stale) {
+    $('labels').append(node('span', 'SAMPLE pin-stale', 'chip quality-unassessed'));
+  }
   const sections = [];
   const difficulty = card('Difficulty', [
     ['Protocol', data.difficulty.protocol_id],

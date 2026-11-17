@@ -41,8 +41,10 @@ from finestore.rl.curation import (
     CurrentCatalog,
     Defect,
     GradingEnvironmentEvidence,
+    IndependentQC,
     OversightLevel,
     ReferenceStatus,
+    SamplePanelCurrency,
     SnapshotSource,
     SourceDeclaration,
     SourceOrigin,
@@ -3289,7 +3291,8 @@ def _verify_pending_survey(survey: BackendSurvey, source_id: str) -> BackendSurv
 
 def _source_load_row(catalog_query: AppletQuery, load_id: str, source_id: str) -> dict:
     row = catalog_query(
-        "SELECT id, declaration->>'status' AS status, declaration->>'notes' AS notes, backend_verification_pending"
+        "SELECT id, declaration->>'status' AS status, declaration->>'notes' AS notes, "
+        "backend_verification_pending, sample_pin_stale"
         " FROM atlas_sources WHERE load_id=:load_id AND id=:source_id",
         {"load_id": load_id, "source_id": source_id},
     )["rows"]
@@ -3433,3 +3436,60 @@ def test_new_train_admission_without_lexical_clearance_is_refused(catalog_databa
     catalog = CurationCatalog(root)
     with pytest.raises(ValueError, match="Decontamination"):
         load_surveyed_catalog(catalog, catalog_query, catalog_backend_map(catalog), catalog_identity_map(catalog))
+
+
+def test_archived_lineage_panel_grandfathered_with_marker(catalog_database, catalog_query, tmp_path):
+    """The SAMPLE pin gate: new ARCHIVED_LINEAGE admissions refuse; grandfathered rows keep the marker."""
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "stale-panel", source_id="Marin:stalepanel")
+    catalog = CurationCatalog(root)
+    survey = catalog_backend_map(catalog)
+    stale = next(source.declaration for source in catalog.sources(catalog.current().snapshot_id)).model_copy(
+        update={
+            "independent_qc": IndependentQC(
+                verdict="good",
+                method="Archived SAMPLE content panel",
+                reviewed=100,
+                evidence_url="s3://test/panel",
+                panel_currency=SamplePanelCurrency.ARCHIVED_LINEAGE,
+            )
+        }
+    )
+    with DataStore.open(root, writer_id="stale-panel") as store:
+        register_catalog(store)
+        with store.transaction() as tx:
+            tx.table(INVENTORY).add(
+                SnapshotSource(
+                    snapshot_id="stale-panel",
+                    id=stale.id,
+                    declaration=stale,
+                    assessment_key=None,
+                    latest_attempt_key=None,
+                    latest_attempt_status="skipped",
+                    reason=None,
+                    curation=None,
+                ).model_dump(mode="json")
+            )
+            tx.table(SNAPSHOTS).add(
+                CatalogSnapshot(
+                    snapshot_id="stale-panel", created_at="2026-11-17T00:00:00Z", source_count=1
+                ).model_dump()
+            )
+            tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id="stale-panel").model_dump())
+    stale_catalog = CurationCatalog(root)
+    with pytest.raises(ValueError, match="older population pin"):
+        load_surveyed_catalog(stale_catalog, catalog_query, survey, catalog_identity_map(stale_catalog))
+    # grandfathering: seed the previous load with the same Available source, then reload
+    seed_previous_available(catalog_database, ["Marin:stalepanel"])
+    result = load_surveyed_catalog(stale_catalog, catalog_query, survey, catalog_identity_map(stale_catalog))
+    row = _source_load_row(catalog_query, result["load_id"], "Marin:stalepanel")
+    assert row["status"] == "Available"
+    assert row["sample_pin_stale"] is True
+    projected = canonical_source_record(
+        {
+            "id": "Marin:stalepanel",
+            "declaration": {"id": "Marin:stalepanel"},
+            "sample_pin_stale": True,
+        }
+    )
+    assert projected["sample_pin_stale"] is True

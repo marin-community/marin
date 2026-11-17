@@ -5,7 +5,7 @@
 
 from dataclasses import replace
 
-from finestore.rl.curation import ContentEvidenceReference, IndependentQC
+from finestore.rl.curation import ContentEvidenceReference, IndependentQC, SamplePanelCurrency
 from pydantic import BaseModel, ConfigDict, model_validator
 from taskcompendium.pipeline.models import ReviewRecord
 
@@ -119,6 +119,7 @@ def bind_sample_result[ConfigT: CatalogConfig](
                         method=lineage_note("", retained_lineage, "Archived SAMPLE content panel"),
                         reviewed=result.reviewed,
                         evidence_url=receipt.review.path,
+                        panel_currency=SamplePanelCurrency.ARCHIVED_LINEAGE,
                     ),
                 ),
             )
@@ -140,6 +141,7 @@ def bind_sample_result[ConfigT: CatalogConfig](
                 ),
                 reviewed=result.reviewed,
                 evidence_url=receipt.review.path,
+                panel_currency=SamplePanelCurrency.CURRENT_PIN,
             ),
         ),
     )

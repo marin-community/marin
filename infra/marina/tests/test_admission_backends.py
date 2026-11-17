@@ -4,6 +4,7 @@
 """Admission counts production backends only; dev-only verdicts never satisfy it."""
 
 import pytest
+from finestore.rl.curation import IndependentQC
 
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     with_declaration_admission_census,
@@ -12,6 +13,7 @@ from infra.marina.apps.rl_data_catalog.server.admission import (
     backend_admission_review,
     has_runnable_production_support,
     require_available_lexical_clearance,
+    require_sample_pin_currency,
 )
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import (
     contamination_declarations,
@@ -173,3 +175,33 @@ def test_new_evaluation_admission_passes_with_a_benchmark_measured_receipt():
 def test_null_intended_use_is_refused_before_any_lexical_check():
     with pytest.raises(ValueError, match="explicit intended_use"):
         require_available_lexical_clearance(_lexical_declaration(None))
+
+
+def _declaration_with_panel(use, panel_currency):
+    qc = (
+        IndependentQC(
+            verdict="good",
+            method="SAMPLE content panel: seed 0, 100 selected / 918 current tasks",
+            reviewed=100,
+            evidence_url="s3://test/panel",
+            panel_currency=panel_currency,
+        )
+        if panel_currency is not None
+        else None
+    )
+    source = with_declaration_admission_census(contamination_declarations()[0][1])
+    return source.model_copy(update={"intended_use": use, "independent_qc": qc})
+
+
+def test_archived_lineage_panel_refuses_a_new_available_admission():
+
+    with pytest.raises(ValueError, match="belongs to an older population pin"):
+        require_sample_pin_currency(_declaration_with_panel("eval", "archived-lineage"))
+
+
+def test_current_pin_panel_passes_the_gate():
+    require_sample_pin_currency(_declaration_with_panel("eval", "current-pin"))
+
+
+def test_missing_or_untyped_panel_is_not_the_sample_gate_to_refuse():
+    require_sample_pin_currency(_declaration_with_panel("train", None))

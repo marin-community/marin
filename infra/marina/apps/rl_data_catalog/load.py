@@ -24,6 +24,7 @@ from finestore.rl.curation import (
     CurationSummary,
     JudgmentStatus,
     ModelReference,
+    SamplePanelCurrency,
     Verdict,
     validate_items,
 )
@@ -57,6 +58,7 @@ from infra.marina.apps.rl_data_catalog.server.admission import (
     require_available_lexical_clearance,
     require_content_result,
     require_declaration_admission,
+    require_sample_pin_currency,
 )
 from infra.marina.apps.rl_data_catalog.server.cohort_summaries import materialize_cohort_summaries
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
@@ -80,7 +82,7 @@ TABLE_COLUMNS = {
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
         "latest_attempt_status TEXT, reason TEXT, curation JSONB, diagnostics JSONB, "
         "source_fingerprint JSONB, duplicate_group JSONB, review_completeness JSONB, "
-        "backend_verification_pending JSONB"
+        "backend_verification_pending JSONB, sample_pin_stale JSONB"
     ),
     "assessments": (
         "pipeline_key TEXT, source_id TEXT, scope TEXT, model JSONB, rubric TEXT, "
@@ -392,6 +394,7 @@ def load_catalog(
         else set()
     )
     verification_pending: dict[str, list[str]] = {}
+    sample_pin_stale: dict[str, bool] = {}
     downgraded: dict[str, str] = {}
     for source in sources:
         # Available rows must pass full population admission; every other status
@@ -405,9 +408,16 @@ def load_catalog(
                 # ARMED (rulings-enforcement): a NEW Available admission needs
                 # lexical clearance — explicit intended_use plus the train
                 # private-release receipt or the eval benchmark-measured
-                # receipt at the pin. Sources already Available in the
-                # previously selected catalog are grandfathered.
+                # receipt at the pin — and its SAMPLE panel on the current
+                # final pin. Sources already Available in the previously
+                # selected catalog are grandfathered with visible markers.
                 require_available_lexical_clearance(source.declaration)
+                require_sample_pin_currency(source.declaration)
+            elif (
+                source.declaration.independent_qc is not None
+                and source.declaration.independent_qc.panel_currency is SamplePanelCurrency.ARCHIVED_LINEAGE
+            ):
+                sample_pin_stale[source.id] = True
         backend_row = next(row for row in backend_map.sources if row.source_id == source.id)
         verdicts = {name: fit.support.value for name, fit in backend_row.backends.items()}
         blocker, pending = backend_admission_review(verdicts, source.declaration.status, backend_map.deployment_classes)
@@ -469,6 +479,7 @@ def load_catalog(
                 ),
                 "duplicate_group": groups.get(row.id),
                 "backend_verification_pending": verification_pending.get(row.id),
+                "sample_pin_stale": sample_pin_stale.get(row.id),
             }
             for row in sources
         ],

@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS atlas_sources (
     PRIMARY KEY (load_id, id)
 );
 ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS backend_verification_pending JSONB;
+ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS sample_pin_stale JSONB;
 ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS source_fingerprint JSONB;
 ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS duplicate_group JSONB;
 ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS review_completeness JSONB;

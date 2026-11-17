@@ -18,6 +18,7 @@ from finestore.rl.curation import (
     LexicalContaminationEvidence,
     LexicalUse,
     OversightLevel,
+    SamplePanelCurrency,
     SourceDeclaration,
     SourceUse,
     require_decontamination,
@@ -222,6 +223,20 @@ def require_available_lexical_clearance(declaration: SourceDeclaration) -> None:
         declaration.dataset_revision,
         declaration.intended_use,
     )
+
+
+def require_sample_pin_currency(declaration: SourceDeclaration) -> None:
+    """Require the admission SAMPLE panel on the current final pin.
+
+    Filtered private releases need their OWN SAMPLE on the final pin: a panel
+    bound through an archived lineage was drawn against an older population
+    and cannot qualify a new admission (coordinator ruling, SAMPLE
+    pin-currency). Sources already Available in the previously selected
+    catalog are grandfathered by the caller with a visible marker.
+    """
+    qc = declaration.independent_qc
+    if qc is not None and qc.panel_currency is SamplePanelCurrency.ARCHIVED_LINEAGE:
+        raise ValueError(f"Admission SAMPLE panel belongs to an older population pin: {declaration.id}")
 
 
 def require_lexical_qualification(

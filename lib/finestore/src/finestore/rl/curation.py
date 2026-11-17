@@ -346,6 +346,18 @@ class SourceQualityResult(CatalogRecord):
         return result
 
 
+class SamplePanelCurrency(StrEnum):
+    """Whether a source's admission SAMPLE panel was drawn on its current pin.
+
+    Policy basis: filtered private releases need their OWN SAMPLE on the final
+    pin; an archived-lineage panel was drawn against an older population and
+    cannot qualify a new admission.
+    """
+
+    CURRENT_PIN = "current-pin"
+    ARCHIVED_LINEAGE = "archived-lineage"
+
+
 class IndependentQC(CatalogRecord):
     """Quality checks reported by a pinned source release."""
 
@@ -355,6 +367,9 @@ class IndependentQC(CatalogRecord):
     # Absent when the release retained its reviewed population without an admission claim.
     admitted: int | None = Field(default=None, ge=0)
     evidence_url: str = Field(min_length=1)
+    # Which population the SAMPLE panel was drawn against; None predates the
+    # typed field (the binding writes it for every newly bound panel).
+    panel_currency: SamplePanelCurrency | None = None
 
     @model_validator(mode="after")
     def _admitted_within_reviewed(self) -> "IndependentQC":
