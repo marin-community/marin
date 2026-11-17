@@ -34,8 +34,8 @@ trials:
   baseline: belay-X0228-control 3.0444 (same commit, seed 0)
   step_time_change: +2%
 potential:
-  score: 5
-  rationale: 'No result yet: equal-data control and variant still running (late start) → 5'
+  score: 3
+  rationale: −0.0035 at equal data (noise band ±0.005); 2% slower so equal time not run → 3
   model: claude-opus-5-5
   date: '2026-11-17'
-  inputs_digest: 0e70df90410c
+  inputs_digest: 735fbb35a906
