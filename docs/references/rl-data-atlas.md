@@ -280,6 +280,8 @@ and body scroll together without widening the page.
 Use the app's canonical [release procedure](https://github.com/marin-community/marin/blob/atlas-env-audit/infra/marina/apps/rl_data_catalog/RELEASE.md)
 and `release_check` entry point for preview package validation, browser gates and
 post-release preservation checks. Catalog loading remains a separate operation.
+Never delete a published artifact or catalog row: removal is a versioned admission
+change, earlier loads stay selectable, and every historical artifact remains intact.
 
 Before selecting a new catalog load:
 
@@ -808,6 +810,9 @@ Non-distinct flags require resolution or an acknowledgement keyed by the exact
 measurement digest in `source_duplicate_acknowledgements.json`. The digest includes a hash of every sampled neighbor and excludes output URIs,
 example truncation and shortlist scores, so CI and survey reruns agree. Old approvals
 remain attached to their old request; new content measurements need new approvals.
+A pair's outcome is set by its first complete sealed receipt: a re-drive must
+reproduce those receipt bytes exactly, and later attempts stay provenance instead
+of replacing the sealed outcome.
 Groups choose a stable canonical member for default collapsing; every source
 and assessment remains available. The flags are advisory.
 

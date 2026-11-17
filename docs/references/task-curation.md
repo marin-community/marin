@@ -1640,7 +1640,12 @@ can express supported archive recipes as setup commands on a matching
 digest-pinned base, preserving the working directory and environment variables.
 Unsupported steps remain explicit conversion failures. `missing_environment`
 rejects an agentic task without an environment; `environment_unused` detects a
-conversion that drops the archive's environment.
+conversion that drops the archive's environment. Original graders and protocols
+are preserved verbatim as standing policy: the POLARIS grader keeps the upstream
+rule that a missing or misplaced `</think>` tag scores zero, the PDBThink grader
+keeps its `answer_status` sidecar protocol, and pinned environment images are
+consumed at their pin — a pinned image, including a pinned Apptainer SIF bundle,
+is never rebuilt from the Dockerfiles that happen to ship beside it.
 
 A source is repaired when the published specification completely describes its
 runtime behavior. Changing a task's bytes requires a new private, pinned
