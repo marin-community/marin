@@ -28,7 +28,7 @@ trials:
   priority: batch
 potential:
   score: 5
-  rationale: 'No result yet: X0230 seed0 eval never logged; rerun (idea #23) escalated, nothing launched → 5'
+  rationale: 'No result yet: seed0 variant crashed in eval at step 3029 (lag-window sharding); repair blocked on gate bug'
   model: claude-opus-5-5
   date: '2026-11-17'
   inputs_digest: b4612f7f0764
