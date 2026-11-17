@@ -240,15 +240,20 @@ def iris_job_exists(cluster: str, job_name: str) -> bool:
 
 
 def launch_round(plan: LaunchPlan, *, dry_run: bool = False) -> dict[str, Any]:
-    """Submit one round; refuses to double-submit on output root or live job."""
-    configure_coreweave_s3()
-    if StoragePath(plan.output_root).exists():
-        raise RoundsError(f"output root already exists (preserve prior campaigns): {plan.output_root}")
-    if iris_job_exists(ROOT_CLUSTER, plan.job_name):
-        raise RoundsError(f"an Iris job named {plan.job_name} is already live; refusing to double-submit")
+    """Submit one round; refuses to double-submit on output root or live job.
+
+    The double-submit probes (output root, live job) run only for real submissions;
+    a dry-run plan reports without provider access.
+    """
+    if not dry_run:
+        configure_coreweave_s3()
+        if StoragePath(plan.output_root).exists():
+            raise RoundsError(f"output root already exists (preserve prior campaigns): {plan.output_root}")
+        if iris_job_exists(ROOT_CLUSTER, plan.job_name):
+            raise RoundsError(f"an Iris job named {plan.job_name} is already live; refusing to double-submit")
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     dirty = subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
-    if dirty:
+    if dirty and not dry_run:
         raise RoundsError("working tree is dirty; commit the round's code before submitting")
     # A launch ships this working tree; warn when it is behind the rounds landing
     # branch so a stale worktree cannot ship an old bundle unnoticed.
@@ -692,6 +697,14 @@ def main() -> None:
     chain.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     chain.add_argument("--attempts-per-task", type=int, default=DEFAULT_ATTEMPTS_PER_TASK)
     chain.add_argument("--daytona-provisioning", default="declarative", choices=("snapshot", "declarative"))
+    chain.add_argument(
+        "--operator-stopped",
+        action="store_true",
+        help=(
+            "Treat an operator-stopped watch round (killed/failed root with final traffic "
+            "sealed) as sealed for the carry-over; recorded in the ledger."
+        ),
+    )
     chain.add_argument("--dry-run", action="store_true")
 
     args = parser.parse_args()
@@ -765,6 +778,12 @@ def main() -> None:
     if args.command == "next-round":
         configure_coreweave_s3()
         sealed = seal_status(args.watch_output_root, args.watch_job_id)
+        if not sealed["sealed"] and args.operator_stopped:
+            # An operator stop (rule 729 cancellation) leaves per-source evidence and
+            # the final traffic seal durable; the carry-over continues from them.
+            if sealed["final_traffic_sealed"] and sealed["job_state"] in ("killed", "failed"):
+                sealed["sealed"] = True
+                sealed["operator_stopped"] = True
         if not sealed["sealed"]:
             print(json.dumps({"sealed": False, "seal": sealed}, indent=2))
             return
@@ -809,6 +828,7 @@ def main() -> None:
                     "previous_serving_sha256": plan["previous_serving_sha256"],
                     "job_id": state["job_id"],
                     "output_root": state["output_root"],
+                    **({"operator_stopped": True} if sealed.get("operator_stopped") else {}),
                 },
             )
         print(json.dumps({"sealed": True, "plan": plan, "launch": state}, indent=2, default=str))

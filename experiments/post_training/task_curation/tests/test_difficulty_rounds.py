@@ -166,7 +166,7 @@ def _observation_row(source_id: str, measurement_id: str, pinned: bool) -> dict:
         "created_at": "2026-11-17T00:00:00+00:00",
         "source_id": source_id,
         "release": release,
-        "converter_version": "v",
+        "converter_version": "c",
         "solver": "small",
         "status": "measured" if pinned else "not_measured",
         "reason": None if pinned else "test fixture: no qualified measurement for this source/model",
@@ -191,7 +191,7 @@ def _observation_row(source_id: str, measurement_id: str, pinned: bool) -> dict:
         row["sample"] = {
             "source_id": source_id,
             "release": release,
-            "converter_version": "v",
+            "converter_version": "c",
             "converter_revision": "cr",
             "population_count": 2,
             "task_specs_sha256": "a" * 64,
@@ -266,3 +266,53 @@ def test_collect_observations_reads_qualified_measurements_json(tmp_path: Path) 
     empty.mkdir()
     with pytest.raises(dr.RoundsError, match=r"no measurements\.json"):
         dr.collect_observations([str(empty)])
+
+
+def test_operator_stopped_round_seals_for_carry_over(monkeypatch, capsys, tmp_path):
+    """next-round accepts an operator-stopped round (durable traffic seal) for carry-over."""
+    declarations = {
+        "Evalchemy:gsm8k": {
+            "id": "Evalchemy:gsm8k",
+            "status": "Available",
+            "current_release": {"repo": "openai/gsm8k", "revision": "a" * 40},
+            "pipeline": {"version": "v"},
+            "actor_census_input": {"task_specs_sha256": "t" * 64, "measured_tasks": 1, "converter_revision": "c"},
+        }
+    }
+    monkeypatch.setattr(dr, "fetch_declarations", lambda applet_id: declarations)
+    fixture_row = json.loads(Path(__file__).with_name("observation_fixture_row.json").read_text())
+    measurement = fixture_row
+    measurements_dir = tmp_path / "measurements.json"
+    measurements_dir.mkdir()
+    (measurements_dir / "measurements.json").write_text(json.dumps([measurement]))
+    root = Path("/tmp/rounds-operator-stopped-test/small-v17x")
+    (root / "trials").mkdir(parents=True, exist_ok=True)
+    (root / "serving.json").write_text(json.dumps({"solver": "small"}))
+    (root / dr.SEAL_FINAL_TRAFFIC).write_text("{}")
+
+    monkeypatch.setattr(dr, "_iris_root_job_state", lambda job_id: "killed")
+    argv = [
+        "next-round",
+        "--watch-job-id",
+        "/benfeuer/atlas-difficulty-small-20261116-v17x",
+        "--watch-output-root",
+        str(root),
+        "--job-name",
+        "atlas-difficulty-small-20261117-v18-test",
+        "--output-root",
+        "s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.17.9/small-v18-test",
+        "--measurements",
+        str(tmp_path / "measurements.json"),
+        "--coverage-output-dir",
+        str(tmp_path / "coverage"),
+        "--ledger",
+        str(tmp_path / "ledger.jsonl"),
+        "--operator-stopped",
+        "--dry-run",
+    ]
+    monkeypatch.setattr("sys.argv", ["difficulty_rounds.py", *argv])
+    dr.main()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["sealed"] is True
+    assert payload["launch"]["dry_run"] is True
+    assert payload["plan"]["source_ids"], "the queue carries carry-over sources"
