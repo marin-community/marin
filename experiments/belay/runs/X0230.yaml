@@ -1,0 +1,13 @@
+experiment: X0230
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: lag-1..3 causal window on routed-expert latent input
+    flags:
+    - --model-set
+    - moe_lag_window=true
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
