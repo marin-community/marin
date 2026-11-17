@@ -20,6 +20,7 @@
 .review-filter > span, .review-defects > span { color: var(--muted); font-size: max(var(--type-min), 11px); text-transform: uppercase; letter-spacing: 0.04em; }
 .review-defects { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .review-defect { display: inline-flex; gap: 5px; align-items: center; font-size: max(var(--type-min), 12px); }
+.review-defect input { accent-color: var(--green); }
 .review-pager { display: flex; gap: 10px; align-items: center; margin: 10px 0; }
 .review-pager button {
   background: var(--soft);

@@ -20,7 +20,17 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Annotated, ClassVar, Literal, NoReturn
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SerializationInfo,
+    TypeAdapter,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
 from shellbox.machine import CommandSemantics as CommandSemantics
 from shellbox.machine import PackageSpec, UnsupportedMachineSpec
@@ -978,12 +988,10 @@ class TaskSpec(BaseModel):
     id: str
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
-    execution_requirements: ExecutionRequirements | None = Field(default=None, exclude_if=lambda value: value is None)
-    verifier_execution_requirements: ExecutionRequirements | None = Field(
-        default=None, exclude_if=lambda value: value is None
-    )
+    execution_requirements: ExecutionRequirements | None = None
+    verifier_execution_requirements: ExecutionRequirements | None = None
     final_tools: tuple[FunctionDefinition, ...] = ()
-    completion_protocol: Literal["tool_free_single"] | None = Field(default=None, exclude_if=lambda value: value is None)
+    completion_protocol: Literal["tool_free_single"] | None = None
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     tool_bindings: dict[str, ShellToolBinding] = Field(default_factory=dict)
     output_paths: tuple[str, ...] = ()
@@ -997,6 +1005,31 @@ class TaskSpec(BaseModel):
     tags: tuple[str, ...] = ()
     labels: dict[str, str] = Field(default_factory=dict)
     integrity_contract: SharedIntegrityContract | RootDeliveryContract | MultiSweDeliveryContract | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize_with_explicit_nulls(self, handler, info: SerializationInfo) -> dict:
+        """Keep explicit nulls, omit absent execution-requirement fields.
+
+        The execution-requirement fields joined the schema after many
+        populations were frozen: an absent field must stay absent so
+        re-serializations stay byte-identical to the frozen packets, while an
+        explicitly serialized null or a value is real evidence and must round
+        trip unchanged.
+        """
+        payload = handler(self)
+        json_mode = info.mode_is_json()
+        for name in ("execution_requirements", "verifier_execution_requirements", "completion_protocol"):
+            if name not in self.model_fields_set:
+                payload.pop(name, None)
+                continue
+            value = getattr(self, name)
+            if value is None:
+                payload[name] = None
+            elif json_mode:
+                payload[name] = value.model_dump(mode="json")
+            else:
+                payload[name] = value.model_dump()
+        return payload
 
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":

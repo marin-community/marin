@@ -358,3 +358,22 @@ def test_task_json_rejects_prior_schema_version(specification):
     payload["schema_version"] = "0.26"
     with pytest.raises(ValidationError):
         TaskSpec.model_validate_json(json.dumps(payload))
+
+
+def test_explicit_null_execution_requirements_round_trip(specification):
+    """A frozen packet carrying an explicit null keeps the key and its identity."""
+    from taskcompendium.identity import canonical_sha256
+
+    wire = specification.model_dump_json()
+    injected = wire.replace(
+        '"environment_requirements":', '"execution_requirements":null,"environment_requirements":', 1
+    )
+    spec = TaskSpec.model_validate_json(injected)
+    assert '"execution_requirements":null' in spec.model_dump_json()
+    assert TaskSpec.model_validate_json(spec.model_dump_json()).model_dump_json() == spec.model_dump_json()
+    # the explicit null is real evidence: it digests differently from the
+    # absent field, and both stay stable across re-serialization
+    assert canonical_sha256(spec.model_dump(mode="json")) != canonical_sha256(specification.model_dump(mode="json"))
+    assert canonical_sha256(spec.model_dump(mode="json")) == canonical_sha256(
+        TaskSpec.model_validate_json(spec.model_dump_json()).model_dump(mode="json")
+    )

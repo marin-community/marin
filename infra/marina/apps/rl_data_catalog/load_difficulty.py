@@ -21,7 +21,7 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_s
 # under that bound with these batch sizes.
 DIFFICULTY_READ_BATCH = 50
 DECLARATION_READ_BATCH = 100
-MEASUREMENT_READBACK_BATCH = 500
+MEASUREMENT_READBACK_BATCH = DIFFICULTY_READ_BATCH
 
 
 def read_measurements(view: ReadView) -> list[DifficultyMeasurement]:
@@ -48,7 +48,7 @@ def load_measurements(records: list[DifficultyMeasurement], query: AppletQuery) 
             "source_id": canonical_source_id(record.source_id),
             "protocol_id": record.protocol_id,
             "created_at": record.created_at,
-            "measurement": json.dumps(record.model_dump(mode="json"), allow_nan=False),
+            "measurement": record.model_dump(mode="json"),
         }
         for record in records
     ):

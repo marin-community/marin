@@ -431,7 +431,9 @@ def test_load_measurements_batches_inserts_and_readbacks(monkeypatch):
                 inserted = 0
                 for row in rows:
                     if row["measurement_id"] not in table:
-                        table[row["measurement_id"]] = json.loads(row["measurement"])
+                        # the transport passes the measurement as a JSON object
+                        assert isinstance(row["measurement"], dict)
+                        table[row["measurement_id"]] = row["measurement"]
                         inserted += 1
                 return {"row_count": inserted}
             if "WHERE measurement_id IN" in sql:

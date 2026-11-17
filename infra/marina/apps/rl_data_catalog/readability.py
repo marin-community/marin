@@ -192,6 +192,12 @@ def readability_layout(
             expect(page.locator("#message")).not_to_contain_text("Loading", timeout=60000)
         page.locator("details").evaluate_all("es => es.forEach(e => e.open = true)")
         capture(label, focus=True)
+        if label == "assessment":
+            boxes = page.locator(".review-defect input:not(:disabled)")
+            if boxes.count():
+                boxes.first.check()
+                capture("assessment-defect-checked", screenshot=False)
+                boxes.first.uncheck()
         if label == "guide":
             counts = page.locator("button.count:not(:disabled)").all()
             for count in counts if scope is BrowserScope.FULL else counts[:1]:
