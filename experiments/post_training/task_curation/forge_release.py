@@ -37,11 +37,12 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
-import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from taskcompendium.models import TaskSpec
+from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.models import CommandSemantics, TaskSpec
+from taskforge.sandbox.images import GRADER_BASE_IMAGE
 
 from experiments.post_training.task_curation.lowered_envelope import LOWERED_TASK_SPEC_COLUMN, LoweredSpec, MachineShape
 
@@ -60,10 +61,8 @@ SELECTION_RULE = (
     "break on the SHA-256 of the task id."
 )
 CONTROLS_CREDIT_CAP = 20
-GRADER_BASE_IMAGE = "docker.io/library/python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
-"""``forge.policy.GRADER_BASE_IMAGE``: the image forge tasks and graders name for a plain Linux machine."""
 EMPTY_PACKAGES = {"pypi_packages": [], "tools": []}
-ENVIRONMENTS = {"shell_simulator": "shellsim", "linux_process": "linux", None: "reasoning"}
+ENVIRONMENTS = {CommandSemantics.SHELL_SIMULATOR: "shellsim", CommandSemantics.LINUX_PROCESS: "linux", None: "reasoning"}
 """A task's environment, by the command semantics of its (restored) task machine."""
 
 
@@ -116,7 +115,7 @@ class TaskSummary:
 
 
 @dataclass(frozen=True)
-class Selected:
+class Candidate:
     summary: TaskSummary
     choice: Choice
     rank: int | None
@@ -161,15 +160,15 @@ def task_summary(record: Mapping) -> TaskSummary:
     )
 
 
-def select(summaries: Iterable[TaskSummary], target: int) -> list[Selected]:
+def select(summaries: Iterable[TaskSummary], target: int) -> list[Candidate]:
     """Coverage-first selection of ``target`` clean tasks; see ``SELECTION_RULE``."""
     by_capability: dict[str, list[TaskSummary]] = defaultdict(list)
-    out: list[Selected] = []
+    out: list[Candidate] = []
     for summary in summaries:
         if summary.clean:
             by_capability[summary.capability].append(summary)
         else:
-            out.append(Selected(summary, Choice.NOT_CLEAN, None))
+            out.append(Candidate(summary, Choice.NOT_CLEAN, None))
     ranked: list[tuple[int, TaskSummary]] = []
     for tasks in by_capability.values():
         tasks.sort(key=lambda t: (-t.score, t.tiebreak))
@@ -179,7 +178,7 @@ def select(summaries: Iterable[TaskSummary], target: int) -> list[Selected]:
         raise ValueError(f"only {clean} clean tasks for a target of {target}")
     ranked.sort(key=lambda item: (item[0], -item[1].score, item[1].tiebreak))
     out += [
-        Selected(summary, Choice.SELECTED if index < target else Choice.COVERAGE_TIER, rank)
+        Candidate(summary, Choice.SELECTED if index < target else Choice.COVERAGE_TIER, rank)
         for index, (rank, summary) in enumerate(ranked)
     ]
     return out
@@ -198,7 +197,7 @@ def restored_machine(requirements: Mapping | None) -> Mapping | None:
     """
     if (
         requirements is not None
-        and requirements.get("command_semantics") == "linux_process"
+        and requirements.get("command_semantics") == CommandSemantics.LINUX_PROCESS
         and requirements.get("docker_image") is None
         and requirements.get("package_spec") == EMPTY_PACKAGES
     ):
@@ -246,20 +245,20 @@ def lowered_spec(record: Mapping) -> LoweredSpec:
 
 
 def read_records(root: str) -> list[dict]:
-    fs, base = fsspec.core.url_to_fs(root)
-    rows = fs.cat_file(f"{base}/{ACCEPTED_LIST}").decode().splitlines()
+    base = StoragePath(root)
+    rows = (base / ACCEPTED_LIST).read_text().splitlines()
     identities = [row.split("\t")[1] for row in rows if row]
     if not identities:
         raise ValueError(f"{root}/{ACCEPTED_LIST} lists no tasks")
 
     def read(identity: str) -> dict:
-        return json.loads(gzip.decompress(fs.cat_file(f"{base}/records/{identity}/task.json.gz")))
+        return json.loads(gzip.decompress((base / "records" / identity / "task.json.gz").read_bytes()))
 
     with concurrent.futures.ThreadPoolExecutor(READ_THREADS) as pool:
         return list(pool.map(read, identities))
 
 
-def selection_rows(selection: Sequence[Selected]) -> list[dict]:
+def selection_rows(selection: Sequence[Candidate]) -> list[dict]:
     return [
         {**asdict(item.summary), "score": round(item.summary.score, 6), "choice": item.choice, "rank": item.rank}
         for item in selection
