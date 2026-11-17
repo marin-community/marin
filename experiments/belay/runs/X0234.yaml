@@ -1,0 +1,13 @@
+experiment: X0234
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: 64-token softmax branch beside every KDA read
+    flags:
+    - --model-set
+    - kda_local_attn_window=64
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
