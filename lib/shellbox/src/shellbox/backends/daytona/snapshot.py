@@ -41,8 +41,8 @@ from shellbox.machine import MachineSpec, UnsupportedMachineSpec
 SNAPSHOT_PREFIX = "shellbox-"
 SNAPSHOT_STALE_AFTER = timedelta(hours=1)
 SNAPSHOT_PAGE_SIZE = 100
-DOCKERFILE_WORD = re.compile(r"""(?:[^\s'"\\]|\\.|'[^']*'|"(?:\\.|[^"\\])*")+""")
-HEREDOC_WORD = re.compile(r"^\d*<<(-?)([^<]+)$")
+DOCKERFILE_WORD = re.compile(r"""(?:<<[ \t]*|[^\s'"\\]|\\.|'[^']*'|"(?:\\.|[^"\\])*")+""")
+HEREDOC_WORD = re.compile(r"^\d*<<(-?)\s*([^<]*)$")
 PARSER_DIRECTIVE = re.compile(r"^#\s*(syntax|escape|check)\s*=\s*(\S+)\s*$", re.IGNORECASE)
 FAILED_SNAPSHOT_STATES = frozenset({SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE})
 
@@ -148,7 +148,7 @@ def _dockerfile_has_add(contents: str) -> bool:
         # Preserve quotes when identifying << words: an echo of "<<EOF" is not a heredoc.
         for word in DOCKERFILE_WORD.findall(header):
             marker = HEREDOC_WORD.fullmatch(word)
-            if marker is None:
+            if marker is None or not marker[2]:
                 continue
             (delimiter,) = shlex.split(marker[2])
             for body in lines:

@@ -1481,7 +1481,9 @@ def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path
         'add ["payload.tar", "/opt/"]',
         "  AdD payload.tar /opt/",
         "RUN cat <<'EOF'\nadd x0, x1, x2\nEOF\nADD payload.tar /opt/",
+        "RUN cat << 'EOF'\nadd x0, x1, x2\nEOF\nADD payload.tar /opt/",
         'RUN echo "<<EOF"\nADD payload.tar /opt/',
+        'RUN echo "<< EOF"\nADD payload.tar /opt/',
         "RUN cat <<ADD\nassembly\nADD\nADD payload.tar /opt/",
     ],
 )
@@ -1501,6 +1503,7 @@ def test_daytona_rejects_add_inputs_before_building(tmp_path, instruction, image
     "instructions",
     [
         "RUN cat <<'EOF' > /code.s\nadd x0, x1, x2\nEOF\n",
+        "RUN cat > /code.s << 'EOF'\nadd x5, x5, #'0'\nEOF\n",
         'RUN cat <<"EOF" > /code.s\nADD r0, r1, r2\nEOF\n',
         "RUN cat <<E'OF' > /code.s\nadd x0, x1, x2\nEOF\n",
         "RUN cat <<-'EOF' > /code.s\n\tadd x0, x1, x2\n\tEOF\n",
