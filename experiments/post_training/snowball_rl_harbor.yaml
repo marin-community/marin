@@ -17,6 +17,8 @@ job:
   environment:
     delete: true
     type: daytona
+    kwargs:
+      image_build: declarative
   n_attempts: 1
   n_concurrent_trials: 30
   retry:

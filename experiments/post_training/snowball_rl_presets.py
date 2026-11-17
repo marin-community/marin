@@ -844,7 +844,7 @@ PRESETS = MappingProxyType(
             replace(
                 _TRAIN_LONG,
                 name="train-long-harbor",
-                revision="2026.11.14.1",
+                revision="2026.11.17.1",
                 harbor=_harbor_evaluation(),
                 gaps=(*_TRAIN_LONG.gaps, Gap.HARBOR_ON_DAYTONA),
                 recipe=replace(

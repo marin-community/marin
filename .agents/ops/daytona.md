@@ -20,7 +20,7 @@ replace the RL credential: training containers remain in the RL account.
 `DaytonaValidationError: declarative builds are not allowed` is an account/build
 permission failure, not a model failure or a zero reward. Inline validation builds
 images into snapshots; the Harbor evaluation callback rejects
-`image_build: declarative`, which only standalone eval launches may set.
+`image_build: declarative`, which standalone evals and inline validation may select.
 
 The keys live in Google Secret Manager in project `hai-gcp-models`:
 `DAYTONA_RL_API_KEY` for training and `DAYTONA_EVAL_API_KEY` for validation.
