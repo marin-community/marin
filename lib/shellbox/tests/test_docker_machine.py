@@ -265,8 +265,18 @@ def test_docker_wire_preserves_resource_limits_and_per_command_users(monkeypatch
 
     asyncio.run(scenario())
     launch = requests[0]
-    limits = {flag: launch[launch.index(flag) + 1] for flag in ("--cpus", "--memory", "--storage-opt", "--gpus")}
-    assert limits == {"--cpus": "2", "--memory": "1536m", "--storage-opt": "size=1024M", "--gpus": "1"}
+    limits = {
+        flag: launch[launch.index(flag) + 1]
+        for flag in ("--cpus", "--memory", "--memory-swap", "--storage-opt", "--gpus")
+    }
+    # swapless enforcement: the memory cap must not be doubled by swap
+    assert limits == {
+        "--cpus": "2",
+        "--memory": "1536m",
+        "--memory-swap": "1536m",
+        "--storage-opt": "size=1024M",
+        "--gpus": "1",
+    }
     assert requests[2][requests[2].index("--user") + 1] == "1001"
     assert requests[3][requests[3].index("--user") + 1] == "1002"
     assert "--user" not in requests[4]

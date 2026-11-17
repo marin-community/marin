@@ -371,6 +371,10 @@ class DockerMachineFactory:
             args.extend(("--platform", IMAGE_PLATFORM))
         if spec.memory_mb is not None:
             args.extend(("--memory", f"{spec.memory_mb}m"))
+            # Swapless enforcement: docker's default memory-swap is twice the
+            # memory limit, so a 512 MiB container could otherwise allocate
+            # 1 GiB through swap and a memory probe would survive.
+            args.extend(("--memory-swap", f"{spec.memory_mb}m"))
         if spec.cpus is not None:
             args.extend(("--cpus", str(spec.cpus)))
         if spec.storage_mb is not None:
