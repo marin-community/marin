@@ -39,6 +39,7 @@ from taskcompendium.models import (
     CommandSemantics,
     ConversationInput,
     ConversationTrace,
+    EmptyOutputPolicy,
     EnvironmentRequirements,
     ExitCodeReward,
     FileReward,
@@ -641,3 +642,58 @@ async def test_verifyit_grader_receives_extracted_conversation_answer_without_ac
     result = await grade_in_sandbox(task, answered(task, response), FixtureImageFactory(), GRADER_MACHINE)
 
     assert (result.status, result.reward) == (Outcome.GRADED, reward), result.error
+
+
+@pytest.mark.asyncio
+async def test_setup_commands_see_the_candidate_answer_before_setup(tmp_path: Path):
+    """Script graders that read the answer in a setup command get it before setup.
+
+    The Evalchemy code graders' prepare.py builds the candidate program from
+    /app/answer.txt inside a setup command; staging the answer only after setup
+    crashed every attempt (infrastructure loop) regardless of the submission.
+    """
+    grader = ScriptGrader(
+        argv=(
+            "sh",
+            "-c",
+            "mkdir -p /logs/verifier && printf '{\"reward\": 1.0}' > /logs/verifier/reward.json",
+        ),
+        environment=GRADER_ENVIRONMENT.model_copy(update={"setup_commands": ("cat /app/answer.txt",)}),
+        answer_path="/app/answer.txt",
+        reward=FileReward(files=(RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON),)),
+        empty_output=EmptyOutputPolicy.GRADE,
+    )
+    task = arithmetic_task(grader)
+    result = await grade_in_sandbox(
+        task,
+        answered(task, "12"),
+        FixtureImageFactory(),
+        GRADER_MACHINE,
+    )
+    assert result.status == Outcome.GRADED, result.error
+
+
+@pytest.mark.asyncio
+async def test_setup_fixture_at_the_answer_path_is_replaced_after_setup(tmp_path: Path):
+    """A setup that writes fixtures at the answer path keeps replace-afterward semantics."""
+    grader = ScriptGrader(
+        argv=(
+            "sh",
+            "-c",
+            'mkdir -p /logs/verifier && grep -q "^12$" /app/answer.txt '
+            "&& printf '{\"reward\": 1.0}' > /logs/verifier/reward.json "
+            "|| printf '{\"reward\": 0.0}' > /logs/verifier/reward.json",
+        ),
+        environment=GRADER_ENVIRONMENT.model_copy(update={"setup_commands": ("echo fixture > /app/answer.txt",)}),
+        answer_path="/app/answer.txt",
+        reward=FileReward(files=(RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON),)),
+        empty_output=EmptyOutputPolicy.GRADE,
+    )
+    task = arithmetic_task(grader)
+    result = await grade_in_sandbox(
+        task,
+        answered(task, "12"),
+        FixtureImageFactory(),
+        GRADER_MACHINE,
+    )
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error

@@ -675,6 +675,13 @@ async def _grade_on(
         Command(("mkdir", "-p", workspace), cwd="/", timeout=preparation_timeout),
         "Could not initialize the grading workspace",
     )
+    if isinstance(grader, ScriptGrader) and grader.answer_path is not None:
+        # Script graders may read the candidate answer from ``answer_path`` in a
+        # setup command (the Evalchemy code graders' prepare.py builds the
+        # candidate program from it), so the submission must exist before setup.
+        # The post-setup install below still runs: a setup that writes fixtures
+        # at the answer path keeps its replace-afterward semantics.
+        await _install_grading_archive(machine, submission_archive, preparation_timeout, user)
     for setup in environment.setup_commands:
         await _run_checked(
             machine,
