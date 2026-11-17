@@ -11,6 +11,8 @@ kernel cgroup v2 filesystem and runs under the manual marker like the rest of
 the local cgroup suite.
 """
 
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -27,7 +29,18 @@ def _make_cgroup(root: Path, relative: str, *, procs: str) -> Path:
     path = root / relative
     path.mkdir(parents=True, exist_ok=True)
     (path / "cgroup.procs").write_text(procs)
+    (path / "cgroup.kill").write_text("")
+    (path / "cgroup.subtree_control").write_text("")
     return path
+
+
+def _reject_enable(candidate: Path) -> None:
+    """Make the kernel-refusal shape: the candidate cannot take controllers."""
+    os.chmod(candidate / "cgroup.subtree_control", stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+
+
+def _leftover_groups(root: Path) -> list[str]:
+    return [path.name for path in root.rglob("shellbox-*")]
 
 
 @pytest.fixture
@@ -81,6 +94,16 @@ def test_pod_slice_candidates_require_no_internal_processes(pod_tree):
     scope, slice_level = pod_tree
     (slice_level / "cgroup.procs").write_text("9999\n")
     assert _fallback_parents(scope) == []
+
+
+def test_containment_survives_when_no_candidate_enforces_limits(pod_tree):
+    """When nothing can enforce limits, containment survives with a warning."""
+    root, scope = pod_tree
+    slice_level = scope.parent
+    _reject_enable(scope)
+    _reject_enable(slice_level)
+    assert delegated_cgroup_parent() == scope
+    assert _leftover_groups(root) == []
 
 
 def test_cgroup_limits_applied_reads_back_written_files(tmp_path: Path):

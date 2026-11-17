@@ -98,15 +98,17 @@ def _fallback_parents(current: Path) -> list[Path]:
 
 
 def delegated_cgroup_parent() -> Path | None:
-    """Find a writable delegation that can actually enforce resource limits.
+    """Find a writable delegation, preferring one that can enforce resource limits.
 
     Candidates are the worker's own cgroup and any dedicated parent unit
     (:func:`_fallback_parents`). Container runtimes scope the worker into a
     ``cri-containerd`` scope whose subtree cannot enable domain controllers
     until the worker moves out; the wrapping pod slice can. Each candidate is
     verified by applying and reading back limits in a throwaway machine
-    cgroup, so a delegation that silently drops limits never becomes the
-    parent.
+    cgroup, and a verifying candidate wins. If no candidate can enforce
+    limits, the first candidate that still passes ``check_cgroup_parent`` is
+    returned so process containment is preserved and the limits degrade to
+    the documented warn-and-continue behavior.
     """
     if not (CGROUP_ROOT / "cgroup.controllers").is_file():
         return None
@@ -118,14 +120,21 @@ def delegated_cgroup_parent() -> Path | None:
     for parent in _fallback_parents(current):
         if parent not in candidates:
             candidates.insert(0, parent)
+    contained = []
     for parent in candidates:
         try:
             check_cgroup_parent(parent)
         except UnsupportedMachineSpec:
             continue
-        if not probe_cgroup_limits(parent):
-            continue
-        return parent
+        contained.append(parent)
+        if probe_cgroup_limits(parent):
+            return parent
+    if contained:
+        logger.warning(
+            "No cgroup delegation candidate could enforce cpu/memory limits; using %s for containment only",
+            contained[0],
+        )
+        return contained[0]
     return None
 
 
