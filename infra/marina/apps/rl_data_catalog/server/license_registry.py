@@ -4,19 +4,105 @@
 """Versioned user decisions; Python packaging preserves this registry in hosted backends."""
 
 LICENSE_BANS = r"""{
-  "version": "2026.11.16.4",
+  "version": "2026.11.16.5",
   "bans": [
     {
-      "source_id": "FWeindel:validated-tasks",
-      "upstream_id": "FWeindel/validated-tasks",
+      "source_id": "FWeindel:validated-tasks/termigen-v3",
+      "upstream_id": "FWeindel/validated-tasks/termigen-v3",
       "upstream_revision": "317659ac88c8b706d318020c5fc3813a931fb6ec",
       "classification": "missing",
       "license_ids": [
         "missing"
       ],
-      "reason": "Automated FAIL F2: no license declaration at the pinned upstream; standing doubt rule binding.",
+      "reason": "Per-folder lineage decision: no license at the pinned upstream (F2); the doubt rule is binding.",
       "evidence_urls": [
-        "https://huggingface.co/datasets/FWeindel/validated-tasks/resolve/317659ac88c8b706d318020c5fc3813a931fb6ec/README.md"
+        "https://github.com/ucsb-mlsec/terminal-bench-env/tree/03bddac74ada2fa344df0e93b4a3ace2034294d1",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-16T21:10:00-05:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "FWeindel:validated-tasks/termigen-v2",
+      "upstream_id": "FWeindel/validated-tasks/termigen-v2",
+      "upstream_revision": "317659ac88c8b706d318020c5fc3813a931fb6ec",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "Per-folder lineage decision: no license at the pinned upstream (F2); the doubt rule is binding.",
+      "evidence_urls": [
+        "https://github.com/ucsb-mlsec/terminal-bench-env/tree/03bddac74ada2fa344df0e93b4a3ace2034294d1",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-16T21:10:00-05:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "FWeindel:validated-tasks/termigen-v1",
+      "upstream_id": "FWeindel/validated-tasks/termigen-v1",
+      "upstream_revision": "317659ac88c8b706d318020c5fc3813a931fb6ec",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "Per-folder lineage decision: no license at the pinned upstream (F2); the doubt rule is binding.",
+      "evidence_urls": [
+        "https://github.com/ucsb-mlsec/terminal-bench-env/tree/03bddac74ada2fa344df0e93b4a3ace2034294d1",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-16T21:10:00-05:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "FWeindel:validated-tasks/bugsinpy-v3",
+      "upstream_id": "FWeindel/validated-tasks/bugsinpy-v3",
+      "upstream_revision": "317659ac88c8b706d318020c5fc3813a931fb6ec",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "Per-folder lineage decision: no license at the pinned upstream (F2); the doubt rule is binding.",
+      "evidence_urls": [
+        "https://github.com/soarsmu/BugsInPy/tree/11c5f1eea954a42132cfd06bf257766a7963e0fd",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-16T21:10:00-05:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "FWeindel:validated-tasks/bugsinpy-v2",
+      "upstream_id": "FWeindel/validated-tasks/bugsinpy-v2",
+      "upstream_revision": "317659ac88c8b706d318020c5fc3813a931fb6ec",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "Per-folder lineage decision: no license at the pinned upstream (F2); the doubt rule is binding.",
+      "evidence_urls": [
+        "https://github.com/soarsmu/BugsInPy/tree/11c5f1eea954a42132cfd06bf257766a7963e0fd",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-16T21:10:00-05:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "FWeindel:validated-tasks/bugsinpy-v1",
+      "upstream_id": "FWeindel/validated-tasks/bugsinpy-v1",
+      "upstream_revision": "317659ac88c8b706d318020c5fc3813a931fb6ec",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "Per-folder lineage decision: no license at the pinned upstream (F2); the doubt rule is binding.",
+      "evidence_urls": [
+        "https://github.com/soarsmu/BugsInPy/tree/11c5f1eea954a42132cfd06bf257766a7963e0fd",
+        "https://github.com/marin-community/marin/issues/11497"
       ],
       "decided_at": "2026-11-16T21:10:00-05:00",
       "decision_by": "user via coordinator",
