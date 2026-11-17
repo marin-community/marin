@@ -588,3 +588,37 @@ The guest has persistent files for a trial. A minimal bundle uses BusyBox `ash` 
 The QEMU image must contain the task tools and verifier dependencies needed without guest internet. `Bash` runs through a guest PTY on a separate virtio-serial channel. One `Bash` tool returns JSON with `output`, `status`, `exit_code`, and `truncated`. Pass `command` to start a command; omit it to read a running command, pass `input` to send text, or set `signal` to `interrupt` to send Ctrl-C. Use at most one of `command`, `input`, and `signal` per call. `Bash` waits at most 30 seconds per call; a longer command remains active for later reads or interruption. PTY stdout and stderr are combined. A tool result retains at most 128 KiB and marks excess output as truncated; excess output cannot be retrieved later. Agents can redirect large output to a file and inspect a smaller excerpt. `exit` or shell failure resets Bash while files remain. The one-shot serial protocol still buffers setup and verifier output in guest files. Each machine writes to a private temporary overlay over the read-only ext4 base; writes persist until close and are then discarded. Extended attributes, Linux capabilities, device nodes outside `/dev`, and volume semantics have not been checked against an OCI runtime.
 
 The guest is isolated by QEMU's emulated machine boundary, but this prototype has not been security audited. It is intended for nonhostile agents on an already controlled compute node.
+
+## Preserving SIF images as OCI
+
+The `shellbox.sif` API converts a digest-pinned primary amd64 Squashfs partition from a Singularity Image Format (SIF) file into a single-layer Open Container Initiative (OCI) layout on Linux. The caller pins the versions and supplies paths for `siftool`, `unsquashfs`, GNU tar, `umoci` and Bubblewrap. No Dockerfile build runs. The converter unpacks the OCI layer and compares every path, inode type, mode, owner, timestamp, file hash, symbolic link, hard link, device number and extended attribute against the original filesystem. A mismatch aborts conversion.
+
+The [SIF environment scripts](https://apptainer.org/docs/user/main/environment_and_metadata.html) run in an isolated Bubblewrap guest with a read-only root, an empty inherited environment and no network. Their exports become OCI environment values. The original scripts, runscript and labels remain in the filesystem. `sif_runtime` supports the source runscript form `cd ABSOLUTE_PATH; exec "$@"`. Other forms require the caller to establish an `OciRuntime` containing the source's environment, entrypoint, command, working directory, user and labels, then pass it directly to `oci_from_filesystem`. The metadata timeout applies to inspection, separately from task execution budgets.
+
+```python
+from pathlib import Path
+
+from shellbox.sif import OciTools, SifTools, oci_from_filesystem, sif_runtime, unpack_sif
+
+
+def convert_source(image_path: Path, expected_sif_sha256: str):
+    # The calling experiment supplies the local SIF path and its trusted input SHA-256.
+    source = unpack_sif(
+        image_path,
+        expected_sif_sha256,
+        Path("/private/conversion/source"),
+        SifTools(Path("/opt/tools/siftool"), Path("/usr/bin/unsquashfs")),
+        processors=4,
+    )
+    runtime = sif_runtime(source.root, Path("/usr/bin/bwrap"), metadata_timeout=60)
+    return oci_from_filesystem(
+        source.root,
+        runtime,
+        Path("/private/conversion/result"),
+        OciTools(Path("/usr/bin/tar"), Path("/usr/bin/umoci")),
+    )
+```
+
+The returned `OciFilesystem` exposes `layout`, `manifest_digest`, `config_digest`, `entries` and `tree_sha256`. `entries` is a path-ordered tuple of `FilesystemEntry` dataclasses; serialize each with `dataclasses.asdict`. `tree_sha256` is the SHA-256 of their UTF-8 JSON list, using sorted object keys, compact separators and `ensure_ascii=False`.
+
+The calling experiment's artifact step owns persistence and registry publication. Record the source SIF SHA, OCI digests, `OciRuntime`, filesystem entries and tree SHA. Publish the layout through an authenticated registry client and verify the pushed manifest digest. Registry visibility and task execution qualification require their own checks. Large image inputs and outputs stay on the regional worker.
