@@ -41,6 +41,8 @@ UNKNOWN_DECISION_STATUS = "Unknown decision"
 HEADER = ("Cluster", "Job", "Started", "Age (days)", "Resources", "Listed", "Decision", "Keep until", "Status")
 DECISION_COLUMN = HEADER.index("Decision")
 LAST_COLUMN = chr(ord("A") + len(HEADER) - 1)
+# Pixel widths of the columns whose text is longer than the default width shows.
+WIDE_COLUMN_WIDTHS = {HEADER.index("Job"): 380, HEADER.index("Resources"): 420}
 SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
@@ -233,26 +235,23 @@ def read_owner_tabs(session: AuthorizedSession, sheet_id: str) -> dict[str, list
     return tabs
 
 
-def add_owner_tabs(session: AuthorizedSession, sheet_id: str, titles: Sequence[str]) -> None:
-    """Add a tab for each title, with a frozen header row and a dropdown in the Decision column."""
-    if not titles:
-        return
-    added = _call(
-        session,
-        "POST",
-        f"{SHEETS_API}/{sheet_id}:batchUpdate",
-        json={
-            "requests": [
-                {"addSheet": {"properties": {"title": title, "gridProperties": {"frozenRowCount": 1}}}}
-                for title in titles
-            ]
-        },
-    )["replies"]
-    validations = [
+def _tab_format_requests(tab_id: int) -> list[dict]:
+    """Return the requests that give a tab its Decision dropdown, wrapped cells, and column widths."""
+    column_widths = [
+        {
+            "updateDimensionProperties": {
+                "range": {"sheetId": tab_id, "dimension": "COLUMNS", "startIndex": column, "endIndex": column + 1},
+                "properties": {"pixelSize": width},
+                "fields": "pixelSize",
+            }
+        }
+        for column, width in WIDE_COLUMN_WIDTHS.items()
+    ]
+    return [
         {
             "setDataValidation": {
                 "range": {
-                    "sheetId": reply["addSheet"]["properties"]["sheetId"],
+                    "sheetId": tab_id,
                     "startRowIndex": 1,
                     "startColumnIndex": DECISION_COLUMN,
                     "endColumnIndex": DECISION_COLUMN + 1,
@@ -266,10 +265,37 @@ def add_owner_tabs(session: AuthorizedSession, sheet_id: str, titles: Sequence[s
                     "showCustomUi": True,
                 },
             }
-        }
-        for reply in added
+        },
+        {
+            "repeatCell": {
+                "range": {"sheetId": tab_id},
+                "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP", "verticalAlignment": "TOP"}},
+                "fields": "userEnteredFormat(wrapStrategy,verticalAlignment)",
+            }
+        },
+        *column_widths,
     ]
-    _call(session, "POST", f"{SHEETS_API}/{sheet_id}:batchUpdate", json={"requests": validations})
+
+
+def add_owner_tabs(session: AuthorizedSession, sheet_id: str, titles: Sequence[str]) -> None:
+    """Add a formatted tab for each title, with a frozen header row."""
+    if not titles:
+        return
+    added = _call(
+        session,
+        "POST",
+        f"{SHEETS_API}/{sheet_id}:batchUpdate",
+        json={
+            "requests": [
+                {"addSheet": {"properties": {"title": title, "gridProperties": {"frozenRowCount": 1}}}}
+                for title in titles
+            ]
+        },
+    )["replies"]
+    formats = [
+        request for reply in added for request in _tab_format_requests(reply["addSheet"]["properties"]["sheetId"])
+    ]
+    _call(session, "POST", f"{SHEETS_API}/{sheet_id}:batchUpdate", json={"requests": formats})
 
 
 def write_owner_tabs(session: AuthorizedSession, sheet_id: str, tabs: Mapping[str, Sequence[SheetRow]]) -> None:
