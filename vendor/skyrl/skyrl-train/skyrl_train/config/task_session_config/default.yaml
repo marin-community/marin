@@ -30,6 +30,36 @@ task_spec:
     cleanup_timeout: 60
     command_timeout: 30
     shell_tool: {}
+  image_task:
+    backend: daytona
+    cpus: 2
+    memory_mb: 4096
+    storage_mb: 10240
+    gpus: 0
+    network: allow
+    user: null
+    startup_timeout: 600
+    cleanup_timeout: 60
+  package_task:
+    backend: local
+    cpus: null
+    memory_mb: null
+    storage_mb: null
+    gpus: 0
+    network: allow
+    user: null
+    startup_timeout: 600
+    cleanup_timeout: 60
+  shellsim_task:
+    backend: shellsim
+    cpus: null
+    memory_mb: 2048
+    storage_mb: null
+    gpus: 0
+    network: deny
+    user: null
+    startup_timeout: 600
+    cleanup_timeout: 60
   image_verifier:
     backend: daytona
     cpus: 2

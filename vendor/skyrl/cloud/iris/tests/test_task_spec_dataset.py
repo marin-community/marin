@@ -11,7 +11,8 @@ from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
 from rolloutengine.validation import validate_spec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.backends.local.machine import check_local_environment
-from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineSpec
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineSpec, PackageSpec
 from skyrl_gym.rollout_specs import is_shell_harness
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import SourceTaskDataset
@@ -121,3 +122,35 @@ def test_curated_structure_closure_row_keeps_its_prefix_last(tmp_path: Path):
     assert task_messages(spec)[-1] == {"role": "assistant", "content": '{"a":[1'}
     assert spec.harness == ASSISTANT_PREFIX_HARNESS
     validate_spec(spec, {})
+
+
+@pytest.mark.parametrize("simulated", [False, True])
+def test_canonical_rows_select_a_task_machine_for_declared_environments(tmp_path: Path, simulated: bool):
+    requirements = EnvironmentRequirements(
+        command_semantics=CommandSemantics.SHELL_SIMULATOR if simulated else CommandSemantics.LINUX_PROCESS,
+        capabilities=("shell",),
+        **({"package_spec": PackageSpec()} if simulated else {"docker_image": "fixture@sha256:" + "0" * 64}),
+    )
+    task = text_task("needs-machine").model_copy(
+        update={
+            "environment_requirements": requirements,
+            "resources": ResourceGroups(
+                worker=(inline_resource("input.txt", b"public input"),),
+                verifier=(inline_resource("gold.txt", b"private verifier"),),
+            ),
+        }
+    )
+    loaded = _loaded_specs(tmp_path, [task])[0]
+    assert loaded.task == task
+    assert "private verifier" not in json.dumps(task_messages(loaded))
+    assert loaded.task.resources.worker == task.resources.worker
+    assert loaded.task.resources.verifier == task.resources.verifier
+    assert loaded.task_machine is not None
+    assert loaded.task_machine.backend == ("shellsim" if simulated else "daytona")
+    validate_spec(
+        loaded,
+        {
+            "shellsim": ShellSimMachineFactory(),
+            "daytona": DaytonaMachineFactory(client_factory=lambda: pytest.fail("No sandbox may be created")),
+        },
+    )

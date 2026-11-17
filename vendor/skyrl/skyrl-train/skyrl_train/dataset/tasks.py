@@ -18,6 +18,8 @@ from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
 from taskcompendium.models import (
+    AnswerType,
+    CommandSemantics,
     EnvironmentRequirements,
     NoGrader,
     ScriptGrader,
@@ -199,9 +201,29 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
         and grader.environment is not None
         and not grades_with_judge(grader)
     ):
-        machine = config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
+        machine = (
+            config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
+        )
         verifier = MachineRuntimeSpec.model_validate(machine)
-    lowered = rollout_spec(task, session, verifier_machine=verifier)
+    requirements = task.environment_requirements.model_copy(update={"tool_providers": {}})
+    task_machine = None
+    if (
+        requirements != EnvironmentRequirements()
+        or task.resources.all
+        or task.resources.worker
+        or task.tool_bindings
+        or task.output_paths
+        or task.answer_type in (AnswerType.FILE, AnswerType.WORKSPACE_STATE)
+        or (isinstance(grader, ScriptGrader) and (grader.collect or grader.artifacts))
+    ):
+        if requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR:
+            machine = config["shellsim_task"]
+        elif requirements.docker_image is not None:
+            machine = config["image_task"]
+        else:
+            machine = config["package_task"]
+        task_machine = MachineRuntimeSpec.model_validate(machine)
+    lowered = rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
     return _stored_prompt(lowered)
 
 

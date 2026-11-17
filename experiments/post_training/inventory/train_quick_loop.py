@@ -46,7 +46,7 @@ EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
 
 
-def training_recipe(steps: int) -> dict:
+def training_recipe(steps: int, max_turns: int = 1) -> dict:
     """Use the maintained Snowball geometry with synchronous RLOO-N updates."""
     preset = replace(
         DEFAULT,
@@ -59,6 +59,7 @@ def training_recipe(steps: int) -> dict:
         batch_policy="full_batch",
     )
     config = training_config(preset)
+    config["context_budget"]["max_turns"] = max_turns
     config["entrypoint"] = "taskcompendium"
     config["data"] = {"kind": "parquet", "shuffle": True}
     config["environment"] = {
@@ -66,6 +67,7 @@ def training_recipe(steps: int) -> dict:
             "local": {},
             "daytona": {"api_key_env": EVALUATION_API_KEY_ENV, "ttl_minutes": 60},
             "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": JUDGE_API_KEY_ENV},
+            "task_spec": {"session": {"max_turns": max_turns}},
         }
     }
     config["extra_env"].update(
@@ -110,6 +112,7 @@ def build_run(
     selection: ArtifactStep[Artifact],
     validation_selection: ArtifactStep[Artifact] | None = None,
     steps: int = DEFAULT_STEPS,
+    max_turns: int = 1,
     export_hf: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
@@ -132,7 +135,7 @@ def build_run(
         SkyRLSpec(
             name=user_owned_name(ARTIFACT_NAME),
             version=version,
-            config_yaml=yaml.safe_dump(training_recipe(steps), sort_keys=False),
+            config_yaml=yaml.safe_dump(training_recipe(steps, max_turns), sort_keys=False),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=MODEL_ID,
@@ -192,10 +195,11 @@ def _adopt_selection(selection_uri: str, option: str) -> ArtifactStep[Artifact]:
     help="Published selection root containing the fixed validation panel. Defaults to --selection-uri.",
 )
 @click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
+@click.option("--max-turns", type=click.IntRange(min=1), default=1, show_default=True)
 @click.option("--export-hf", is_flag=True, help="Export the final Hugging Face model after training.")
 @rl_build_options
 def main(
-    selection_uri: str, steps: int, export_hf: bool, validation_selection_uri: str | None = None
+    selection_uri: str, steps: int, export_hf: bool, validation_selection_uri: str | None = None, max_turns: int = 1
 ) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name(ARTIFACT_NAME)
     selection = _adopt_selection(selection_uri, "--selection-uri")
@@ -209,6 +213,7 @@ def main(
         selection=selection,
         validation_selection=validation_selection,
         steps=steps,
+        max_turns=max_turns,
         export_hf=export_hf,
     )
 
