@@ -1,4 +1,3 @@
-import importlib
 import ipaddress
 import os
 import time
@@ -409,8 +408,6 @@ def validate_batch_sizes(cfg: DictConfig):
 
 def validate_megatron_cfg(cfg: DictConfig):
     validate_megatron_config(cfg)
-    if cfg.trainer.flash_attn:
-        importlib.import_module("flash_attn")
 
 
 def validate_cfg(cfg: DictConfig):
