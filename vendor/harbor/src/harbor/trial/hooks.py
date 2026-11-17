@@ -13,6 +13,7 @@ class TrialEvent(Enum):
 
     START = "start"
     ENVIRONMENT_START = "environment_start"
+    ENVIRONMENT_READY = "environment_ready"
     AGENT_START = "agent_start"
     VERIFICATION_START = "verification_start"
     VERIFICATION_END = "verification_end"
@@ -56,11 +57,7 @@ async def emit_trial_hooks(
         trial_id=trial_id,
         task_name=task_name,
         config=config,
-        result=(
-            result
-            if event in {TrialEvent.RESULT_PERSISTENCE_START, TrialEvent.END}
-            else None
-        ),
+        result=(result if event in {TrialEvent.RESULT_PERSISTENCE_START, TrialEvent.END} else None),
     )
     for hook in hooks:
         await hook(hook_event)

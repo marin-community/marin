@@ -111,7 +111,7 @@ async def run_harbor_trial(
                 evidence_dir=evidence_dir / "task-setup",
             )
 
-        trial.add_hook(TrialEvent.AGENT_START, prepare_task)
+        trial.add_hook(TrialEvent.ENVIRONMENT_READY, prepare_task)
     trace_path = evidence_dir / "turns.jsonl"
     with backend.session(correlation_id, recorded_completion(complete, trace_path)):
         return await trial.run()
