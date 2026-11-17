@@ -44,6 +44,7 @@ from levanter.grug.attention import (
     fa4_cute_segment_bounds,
     inkling_rel_bias,
 )
+from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK, _skewed_bank
 from levanter.grug.grug_moe import MoeActivation, MoEExpertMlp, moe_mlp
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
@@ -502,10 +503,17 @@ class GrugModelConfig:
     """``spelling_ngram_source``'s n-gram, leading-space and case rows added to the input embedding table before the
     token gather, zero-initialised like ``spelling_byte_embeds``. The n-gram sum is one segment-sum over the
     vocabulary's flat (token, n-gram) pairs (``spelling_ngrams.ngram_pairs``). No AttnRes source and no norm."""
+    kda_local_attn_fused_window: int = 0
+    """``kda_local_attn_window``'s branch and maths on the recipe's attention kernel: q/k/v from one GEMM, the
+    window and document limits as per-token key lower bounds, the offset bias as the kernel's banded ``rel_bias``,
+    and one output GEMM over the KDA output and the gained branch output (``KdaLocalAttention.fused_heads``).
+    0: off. Needs ``local_mixer=kda``; excludes ``kda_local_attn_window``."""
 
     def __post_init__(self) -> None:
         if self.kda_local_attn_window and self.local_mixer != LocalMixer.KDA:
             raise ValueError("kda_local_attn_window adds a branch to the KDA layers; it needs local_mixer=kda")
+        if self.kda_local_attn_fused_window and (self.local_mixer != LocalMixer.KDA or self.kda_local_attn_window):
+            raise ValueError("kda_local_attn_fused_window needs local_mixer=kda and excludes kda_local_attn_window")
         if self.spelling_ngram_source and not self.attn_res:
             raise ValueError("spelling_ngram_source is an AttnRes source; it needs attn_res")
         if self.spelling_byte_source and (not self.attn_res or self.spelling_byte_embeds):
@@ -1084,6 +1092,8 @@ class KdaLocalAttention(eqx.Module):
     the other dense matrices). q and k are RMS-normed; the logits are ``logit_scale[n] q.k / sqrt(h)`` (scale
     initialised at ``qk_mult``) plus a zero-init per-head bias over the window's relative offsets. Each head's
     output is scaled by a zero-init per-head gain before ``w_o``, so the branch adds nothing at step 0.
+
+    ``kda_local_attn_fused_window`` keeps these parameters and maths and runs them through ``fused_heads`` instead.
     """
 
     w_q: Float[Array, "D NH"]
@@ -1094,22 +1104,56 @@ class KdaLocalAttention(eqx.Module):
     offset_bias: Float[Array, "N W"]
     out_gain: Float[Array, " N"]
     window: int = eqx.field(static=True)
+    fused: bool = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "KdaLocalAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, h, std = cfg.hidden_dim, KDA_LOCAL_ATTN_HEAD_DIM, cfg.initializer_std
         n = max(1, d // 128)
+        window = cfg.kda_local_attn_window or cfg.kda_local_attn_fused_window
         return KdaLocalAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
             w_k=reshard(_init_weight(k_k, (d, n * h), std), P(_FSDP_AXES, "model")),
             w_v=reshard(_init_weight(k_v, (d, n * h), std), P(_FSDP_AXES, "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", _FSDP_AXES)),
             logit_scale=jnp.full((n,), cfg.qk_mult, jnp.float32),
-            offset_bias=jnp.zeros((n, cfg.kda_local_attn_window), jnp.float32),
+            offset_bias=jnp.zeros((n, window), jnp.float32),
             out_gain=jnp.zeros((n,), jnp.float32),
-            window=cfg.kda_local_attn_window,
+            window=window,
+            fused=bool(cfg.kda_local_attn_fused_window),
         )
+
+    @named_call
+    def fused_heads(
+        self, x: Float[Array, "B S D"], mask: AttentionMask, implementation: str | None
+    ) -> Float[Array, "B S NH"]:
+        """The gained head outputs, before ``w_o``. ``mask`` carries the window's segment ids and its FA4 key lower
+        bounds; the kernel applies ``1 / sqrt(h)``. The offset bias goes in as a banded ``rel_bias`` whose extent is
+        the window rounded up to ``REL_BIAS_BLOCK`` (the kernels' key tiles must divide it): offsets past the
+        window carry zero bias and are masked by the bounds anyway."""
+        b, s, _ = x.shape
+        n, h = self.logit_scale.shape[0], KDA_LOCAL_ATTN_HEAD_DIM
+        replicated = P(None, None)
+        weights = tuple(reshard(w.astype(x.dtype), replicated) for w in (self.w_q, self.w_k, self.w_v))
+        q, k, v = (
+            rearrange(t, "(b s) (n d) -> b s n d", b=b, d=h)
+            for t in _fused_projection(rearrange(x, "b s d -> (b s) d"), weights)
+        )
+        q = rms_norm(q) * self.logit_scale[:, None].astype(q.dtype)
+        k = rms_norm(k)
+        spec4 = P(_BATCH_AXES, None, "model", None)
+        q, k, v = (reshard(t, spec4) for t in (q, k, v))
+        extent = -(-self.window // REL_BIAS_BLOCK) * REL_BIAS_BLOCK
+        bias = jnp.pad(self.offset_bias.astype(x.dtype), ((0, 0), (0, extent - self.window)))
+        # Each query block of the band reads the same per-head bank, so the band is a broadcast of it.
+        bank = reshard(_skewed_bank(bias), P("model", None, None))
+        blocks = -(-s // REL_BIAS_BLOCK)
+        band = jnp.broadcast_to(bank[None, :, None], (b, n, blocks, REL_BIAS_BLOCK, bank.shape[-1]))
+        band = reshard(band.reshape(b, n, blocks * REL_BIAS_BLOCK, bank.shape[-1])[:, :, :s], P(_BATCH_AXES, "model"))
+        o = attention(q, k, v, mask, implementation=implementation, rel_bias=band)
+        o = o * self.out_gain[:, None].astype(o.dtype)
+        return jnp.reshape(o, (b, s, n * h), out_sharding=P(_BATCH_AXES, None, "model"))
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"], segment_ids: Int[Array, "B S"] | None) -> Float[Array, "B S D"]:
@@ -1190,7 +1234,7 @@ class KimiDeltaAttention(eqx.Module):
             sconv_v=ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
             local_attn=(
                 KdaLocalAttention.init(cfg, key=random.fold_in(key, _KDA_LOCAL_ATTN_KEY_SALT))
-                if cfg.kda_local_attn_window
+                if cfg.kda_local_attn_window or cfg.kda_local_attn_fused_window
                 else None
             ),
             cfg=cfg,
@@ -1202,9 +1246,11 @@ class KimiDeltaAttention(eqx.Module):
         x: Float[Array, "B S D"],
         segment_ids: Int[Array, "B S"] | None = None,
         kv_input: Float[Array, "B S D"] | None = None,
+        local_mask: AttentionMask | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``kv_input`` (``attn_res_kv_layers``) is the normed stream that the ``k`` / ``v`` projections (and their
-        SConvs) read instead of ``x``; beta and the decay stay on ``x``. Also returns logging stats."""
+        SConvs) read instead of ``x``; beta and the decay stay on ``x``. ``local_mask`` is the
+        ``kda_local_attn_fused_window`` branch's mask (``Transformer.__call__``). Also returns logging stats."""
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
         b, s, _ = x.shape
@@ -1260,6 +1306,13 @@ class KimiDeltaAttention(eqx.Module):
         gate = jax.nn.sigmoid(_proj(x, self.w_g))
         gate_heads = rearrange(gate, "... (n d) -> ... n d", d=head_dim)
         _log_head_gate_off(jnp.mean(gate_heads.astype(jnp.float32), axis=-1), stats)
+        if self.local_attn is not None and self.local_attn.fused:
+            assert local_mask is not None
+            attn_impl = cfg.gpu_attention if jax.default_backend() == "gpu" else None
+            branch = self.local_attn.fused_heads(x, local_mask, attn_impl)
+            w_o = jnp.concatenate([self.w_o, self.local_attn.w_o.astype(self.w_o.dtype)], axis=0)
+            heads = jnp.concatenate([o * gate, branch.astype(o.dtype)], axis=-1)
+            return _proj(heads, w_o, out_sharding=_batch_spec()), stats
         out = _proj(o * gate, self.w_o, out_sharding=_batch_spec())
         if self.local_attn is not None:
             out = out + self.local_attn(x, segment_ids)
@@ -1660,7 +1713,8 @@ class Block(eqx.Module):
         attn_in = self.attn_input(h)
         if isinstance(self.attn, KimiDeltaAttention):
             # KDA has no positional encoding or window; it only needs the document boundaries.
-            out, stats = self.attn(attn_in, _sconv_segment_ids(mask), kv_input=kv_input)
+            local_mask = mask if isinstance(mask, AttentionMask) else None
+            out, stats = self.attn(attn_in, _sconv_segment_ids(mask), kv_input=kv_input, local_mask=local_mask)
         else:
             out, stats = self.attn(
                 attn_in, mask, disable_rope=disable_rope, is_global=is_global, token_ids=token_ids, kv_input=kv_input
@@ -2431,6 +2485,16 @@ class Transformer(eqx.Module):
         long_lower_bounds = _batch_reshard(long_lower_bounds)
         short_lower_bounds = _batch_reshard(short_lower_bounds)
         valid = _batch_reshard(valid)
+        short_layer_mask = long_mask.with_fa4_bounds(short_lower_bounds, valid)
+        if cfg.kda_local_attn_fused_window:
+            # The short layers are the KDA layers, which read their mask only for its segment ids; carry the
+            # fused branch's window and its FA4 bounds instead.
+            window = cfg.kda_local_attn_fused_window
+            window_mask = AttentionMask(is_causal=True, sliding_window=window, segment_ids=segment_ids)
+            window_lower_bounds, _ = fa4_cute_segment_bounds(
+                window_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=window
+            )
+            short_layer_mask = window_mask.with_fa4_bounds(_batch_reshard(window_lower_bounds), valid)
 
         final_gate_stats: dict[str, jax.Array] = {}
         if cfg.attn_res:
@@ -2438,7 +2502,7 @@ class Transformer(eqx.Module):
                 hidden,
                 token_ids,
                 long_mask.with_fa4_bounds(long_lower_bounds, valid),
-                long_mask.with_fa4_bounds(short_lower_bounds, valid),
+                short_layer_mask,
                 layer_skip,
                 extra_mlp_active,
                 self._spelling_sources(token_ids),
