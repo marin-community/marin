@@ -29,8 +29,8 @@ architecture. Dataset changes can usually reuse an existing heuristic.
 ## Key reference files
 
 ```
-experiments/grug/moe/heuristic.py              # MuonH MoE heuristic — use as template
-experiments/references/completed_adamh.py      # AdamH heuristic (no create_isoflop_sweep_steps)
+experiments/references/completed_adamh.py      # AdamH heuristic implementing ScalingHeuristic
+experiments/grug/moe/heuristic.py              # MoE-specific scaling rules; not a ScalingHeuristic
 
 experiments/references/
     reference_hyperparameter_sweep.py  # Vizier hparam tuning at fixed scale
@@ -72,8 +72,9 @@ Update `SweepSettings` for your search space, model, budget, and metric.
 ### 3) Define scaling rules
 
 Implement as a frozen dataclass in `experiments/` that satisfies the `ScalingHeuristic`
-protocol. See `experiments/grug/moe/heuristic.py` for the canonical example (MuonH MoE)
-and `experiments/references/completed_adamh.py` for the AdamH dense-model heuristic.
+protocol. Use `experiments/references/completed_adamh.py` as the protocol example.
+`experiments/grug/moe/heuristic.py` has MoE-specific scaling rules but does not
+implement `estimate_memory_bytes()` or `candidates_for_budget()`.
 
 The protocol requires `name`, `vocab_size`, `estimate_memory_bytes()`, and
 `candidates_for_budget()`. A **candidate** is a specific `(model_config, token_count,
@@ -120,7 +121,12 @@ Before launching a sweep, print the candidate grids for a few budgets and check 
 ### 4) Run an IsoFLOP sweep
 
 Create a standalone script (modelled on `experiments/references/reference_scaling_suite.py`)
-that holds the isoflop runs as an `ArtifactStep` analysis plus optimal-training steps:
+that holds the completed isoflop run paths, an analysis step, and optimal-training
+steps. Copy its `IsoFlopAnalysisConfig`, `IsoFlopAnalysisArtifact`, and
+`run_isoflop_analysis` definitions and adapt the metric and run list. The analysis
+function reads metrics, fits the scaling laws, writes `fit_curves.json` for inspection,
+and returns an artifact containing the fitted coefficients. Wire it into the graph as
+follows:
 
 ```python
 # List the GCS paths of completed isoflop runs:
@@ -129,32 +135,27 @@ _ISOFLOP_RUNS: tuple[str, ...] = (
     # ...
 )
 
-def run_isoflop_analysis(config: IsoFlopAnalysisConfig) -> None:
-    raw = read_eval_records(config.training_runs, ...)
-    records = transform_levanter_metrics(raw, config.metric_key, ...)
-    result = fit_scaling_laws(records)
-    save_isoflop_analysis_result(result, config.output_path)
+def analysis_step(*, version: str) -> ArtifactStep[IsoFlopAnalysisArtifact]:
+    def build_config(ctx: StepContext) -> IsoFlopAnalysisConfig:
+        return IsoFlopAnalysisConfig(training_runs=_ISOFLOP_RUNS, output_path=ctx.output_path)
 
-def build(*, version: str = "dev") -> list[ArtifactStep[Artifact]]:
-    analysis = ArtifactStep(
+    return ArtifactStep(
         name=user_namespaced_name("my-scaling-suite-analysis", version),
-        ...
+        version=version,
+        artifact_type=IsoFlopAnalysisArtifact,
         run=remote(run_isoflop_analysis, resources=ResourceConfig.with_cpu()),
-        build_config=lambda ctx: IsoFlopAnalysisConfig(
-            training_runs=_ISOFLOP_RUNS, output_path=ctx.output_path
-        ),
+        build_config=build_config,
+        deps=(),
     )
-    # ... optimal training steps ...
-    return [analysis, *optimal_runs]
-
-if __name__ == "__main__":
-    StepRunner().run([s.lower() for s in build()])
 ```
 
 Metrics are read from `tracker_metrics.jsonl` with WandB fallback via `read_eval_records`.
-Submit individual isoflop candidate runs as separate `ArtifactStep` objects (see
-`reference_scaling_suite.py` for how the existing AdamH isoflop paths are hard-coded and
-read retroactively).
+Submit individual isoflop candidate runs as separate `ArtifactStep` objects. The
+AdamH reference instead lists paths from completed runs and reads their metrics
+retroactively. Its `build()` combines the analysis and optimal-training steps,
+then passes them to `StepRunner`. The optimal-training steps read `scaling_fits`
+from the resolved analysis artifact. A maintained builder for candidate sweep
+steps is tracked in [#10675](https://github.com/marin-community/marin/issues/10675).
 
 What to check after the sweep:
 - No loss spikes or divergence at any candidate size.
@@ -165,7 +166,8 @@ What to check after the sweep:
 
 Train compute-optimal models at larger budgets (modelled on `reference_scaling_suite.py`):
 
-1. Analysis step reads existing isoflop runs and writes `isoflop_analysis_result.json`.
+1. Analysis step reads existing isoflop runs, returns fitted coefficients in its
+   artifact, and writes `fit_curves.json` for inspection.
 2. `predict_optimal_config()` for each target budget.
 3. Use `candidate.optimizer_config` or recompute via `build_optimizer_config()` when
    batch size must be overridden for available hardware.
