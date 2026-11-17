@@ -13,8 +13,8 @@ from collections.abc import Iterator
 import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
-from marin.evaluation.eval_measurements import measurement_from_record
-from marin.evaluation.records import EvalRunRecord, list_records, write_record
+from evalrecords.eval_measurements import measurement_from_record
+from evalrecords.records import EvalRunRecord, list_records, write_record
 from marina.apps import RegisteredApi
 from starlette.testclient import TestClient
 
@@ -341,6 +341,14 @@ def test_api_compare_spans_cohorts_when_all_cohorts_are_selected(client):
     assert comparison["shared"]
     versions = {cell["version"] for row in comparison["rows"] for cell in row["cells"].values()}
     assert versions >= {"2026.07.20", "2026.07.21"}
+
+    panel = client.get("/panel", params={"cohort": "all"}).json()
+    panel_cells = {row["model"]: row["cells"] for row in panel["rows"]}
+    assert "mmlu" in comparison["shared"]
+    mmlu = next(row for row in comparison["rows"] if row["benchmark"] == "mmlu")
+    for model in ("snowball", "qwen3-8b"):
+        assert mmlu["cells"][model]["run_id"] == panel_cells[model]["mmlu"]["run_id"]
+    assert {cell["version"] for cell in mmlu["cells"].values()} == {"2026.07.20", "2026.07.21"}
 
 
 def test_api_selects_unversioned_records_by_name(client):

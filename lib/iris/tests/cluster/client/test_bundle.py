@@ -165,6 +165,16 @@ def test_collect_respects_extra_exclude(workspace):
     assert "pyproject.toml" in rel
 
 
+def test_zip_with_all_files_excluded_has_no_bundle(workspace):
+    assert create_workspace_zip(workspace, exclude=re.compile(r".*")) == b""
+
+
+def test_zip_with_files_preserves_workspace_contents(workspace):
+    with zipfile.ZipFile(io.BytesIO(create_workspace_zip(workspace))) as archive:
+        assert set(archive.namelist()) == {"pyproject.toml", "src/main.py"}
+        assert archive.read("src/main.py") == b"print('hello')"
+
+
 def test_extra_exclude_is_matched_literally_not_verbose(workspace):
     # DEFAULT_EXCLUDE is verbose; the merge must not extend re.VERBOSE onto the
     # caller's pattern, or literal whitespace in it would be dropped and match

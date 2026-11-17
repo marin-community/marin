@@ -1,20 +1,16 @@
-"""Hydra entrypoint for policy-only distributed checkpoint conversion."""
+"""Policy-only distributed checkpoint conversion."""
 
 from __future__ import annotations
 
 import signal
 import sys
-from pathlib import Path
 
-import hydra
 import ray
 from loguru import logger
 from omegaconf import DictConfig
 
 from skyrl_train.checkpoint_exporter import checkpoint_exporter
 from skyrl_train.utils.utils import initialize_ray
-
-_CONFIG_DIR = str(Path(__file__).parent.parent / "config")
 
 
 @ray.remote(num_cpus=1, max_retries=0)
@@ -36,12 +32,3 @@ def run(cfg: DictConfig) -> None:
         logger.info(f"Exported global_step_{result.step} to {result.export_path}")
     finally:
         ray.shutdown()
-
-
-@hydra.main(config_path=_CONFIG_DIR, config_name="ppo_base_config", version_base=None)
-def main(cfg: DictConfig) -> None:
-    run(cfg)
-
-
-if __name__ == "__main__":
-    main()

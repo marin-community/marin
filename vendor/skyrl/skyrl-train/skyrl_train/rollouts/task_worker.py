@@ -22,6 +22,7 @@ from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.models import (
     GenerationLimitReached,
+    ContextRejected,
     ContextWindowExceeded,
     GradedRollout,
     GradedRolloutInterrupted,
@@ -491,12 +492,10 @@ class TaskRolloutWorker:
             task = lowered.task
             harbor = harbor_settings[index]
             session_id = session_ids[index]
-            has_sampled_turn = False
 
             async def model(request):
-                nonlocal has_sampled_turn
                 try:
-                    turn = await _model_turn(
+                    return await _model_turn(
                         self.model_client,
                         request,
                         sampling_params=sampling,
@@ -506,19 +505,11 @@ class TaskRolloutWorker:
                         session_id=session_id,
                     )
                 except (GenerationLimitReached, ContextLengthExceededError) as error:
-                    # Harbor still verifies after a rejected prompt. Preserve the last
-                    # sampled turn instead of replacing it with the unsent conversation.
-                    recoverable = lowered.harness == SKYRL_AGENT_HARNESS or (
-                        lowered.harness == HARBOR_TRIAL_SESSION and has_sampled_turn
-                    )
-                    if not recoverable:
-                        raise
-                    raise ContextWindowExceeded(
+                    raise ContextRejected(
+                        error,
                         f"This request exceeds the maximum context length of {max_context_length} tokens. "
-                        "Compact the conversation and retry."
+                        "Compact the conversation and retry.",
                     ) from error
-                has_sampled_turn = True
-                return turn
 
             engine = engines[index]
             harbor_slots = nullcontext() if harbor is None else self.harbor_task_slots
@@ -552,7 +543,6 @@ class TaskRolloutWorker:
                 with rollout_wait("retry_backoff"):
                     await self.retry_wait(delay)
                 retries += 1
-                has_sampled_turn = False
 
         with rollout_phase("collect"):
             async with asyncio.TaskGroup() as group:
@@ -674,7 +664,8 @@ class TaskRolloutWorkerSpec:
         installed_agents = None
         if self.harbor_config is not None and self.harbor_config.get("installed_agent") is not None:
             # Full Harbor is an optional dependency for installed-agent runs.
-            from harbor.host_capabilities import DAYTONA_API_URL, DaytonaConnection
+            from harbor.host_capabilities import HostCapabilities
+            from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
             from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
             from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 
@@ -685,7 +676,7 @@ class TaskRolloutWorkerSpec:
             daytona_options = harbor.environment.kwargs
             daytona_connection = DaytonaConnection(
                 api_key=os.environ.get(daytona_options.get("api_key_env") or "DAYTONA_API_KEY"),
-                api_url=os.environ.get("DAYTONA_API_URL", DAYTONA_API_URL),
+                api_url=os.environ.get("DAYTONA_API_URL", DEFAULT_DAYTONA_API_URL),
                 target=os.environ.get("DAYTONA_TARGET"),
             )
             installed_agents = InstalledAgentRuntime(

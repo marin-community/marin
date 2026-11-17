@@ -20,6 +20,7 @@ from marin.experiment.checkpoints import hf_to_levanter
 from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
 from experiments.sft.launcher import (
@@ -151,7 +152,7 @@ def build_trial(
     trained = sft_step(spec, _gpu_resources(TRAIN_NODES))
     baseline: ArtifactStep[EvaluationResult] = eval_step(
         snowball_model(f"{eval_name}-base", HF_MODEL, HF_REVISION),
-        evals,
+        resolve_evaluations(evals),
         version=version,
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
@@ -171,7 +172,7 @@ def trained_eval(trained: ArtifactStep, *, eval_name: str, evals: str, version: 
 
     return eval_step(
         trained_model,
-        evals,
+        resolve_evaluations(evals),
         version=version,
         deps=(trained,),
         resolve_model=resolve_trained_model,

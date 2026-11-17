@@ -21,8 +21,8 @@ from enum import StrEnum
 from itertools import batched
 
 import sqlalchemy
-from marin.evaluation.records import EvalRunRecord
-from marin.evaluation.repeat_aggregates import normalize_repeat_record
+from evalrecords.records import EvalRunRecord
+from evalrecords.repeat_aggregates import normalize_repeat_record
 from sqlalchemy import (
     JSON,
     BigInteger,

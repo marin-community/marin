@@ -928,11 +928,12 @@ def test_checkpointer_commits_application_metadata_with_every_save(tmp_path):
 
     checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
     checkpointer.on_step(tree=state, step=1)
-    checkpointer.save_final_checkpoint(tree=state, step=2)
-
+    checkpointer.wait_until_finished()
     temporary = load_checkpoint_metadata(str(tmp_path / "temporary" / "run1" / "step-1"))
-    permanent = load_checkpoint_metadata(str(tmp_path / "checkpoints" / "run1" / "step-2"))
     assert (temporary["placement"], temporary["is_temporary"]) == ({"fingerprint": "abc"}, True)
+
+    checkpointer.save_final_checkpoint(tree=state, step=2)
+    permanent = load_checkpoint_metadata(str(tmp_path / "checkpoints" / "run1" / "step-2"))
     assert (permanent["placement"], permanent["step"]) == ({"fingerprint": "abc"}, 2)
 
 

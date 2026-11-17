@@ -137,6 +137,30 @@ NVL72 gangs use stricter rack-aware placement:
   split evenly over the fewest racks with 10 to 16 replicas per rack slice.
   Valid examples include 20, 24, 32, and 48 replicas.
 
+Applications can request unequal local groups through the SDK:
+
+```python
+from iris.cluster.types import CoschedulingConfig
+
+CoschedulingConfig(group_by="nvlink.domain", group_sizes=(8, 16))
+```
+
+For a 24-task job, tasks 0–7 share one NVLink domain and tasks 8–23 share
+one NVLink domain. With one four-GPU task per host, these groups occupy
+eight and sixteen hosts. Kueue admits both groups as one workload. The groups may
+share a domain if they fit. Iris still retries and cancels the whole job.
+Each task keeps its global ordinal. Group sizes must be positive and sum to
+the task count. Explicit groups require the Kubernetes backend, a required
+topology level, and at most ten groups. `nvlink.domain` is a required level;
+preferred and sliced levels cannot be used with explicit groups. Each NVLink
+group is limited to 16 tasks. Omitting `group_sizes` keeps the existing rules above.
+
+The task status API exposes the assigned Node's topology labels in
+`attempt.topology`, including `ds.coreweave.com/nvlink.domain` for NVLink
+placement. The mapping is empty until Iris observes the assignment. It is
+recorded per attempt and retained after the Pod is deleted. These values
+describe scheduler placement; they do not measure physical connectivity.
+
 Invalid multi-rack shapes fail before submission rather than silently losing
 the one-slice-per-rack guarantee. The canonical arithmetic is in
 [`coreweave_topology.py`](../src/iris/cluster/platforms/k8s/coreweave_topology.py).
@@ -153,9 +177,13 @@ enables `TASRecomputeAssignmentWithinSchedulingCycle`, added in Kueue 0.18.2,
 so a workload's hostname assignment is recomputed when an earlier admission in
 the same scheduling cycle consumes that domain.
 
+When upgrading Kueue, check that unequal groups remain separate PodSets and
+that each PodSet's Pod indices start at zero. Iris uses preset role-hash
+annotations to keep those groups separate.
+
 #### TAS preemption and CPU spillover
 
-All Iris Pods use the topology-aware `cw-tas` ResourceFlavor. Its
+Iris Pods use topology-aware flavors. The shared `cw-tas` ResourceFlavor's
 `iris.kueue=true` selector covers every Iris-managed NodePool. Accelerator-free
 Pods request unconstrained TAS, so Kueue records their per-node CPU reservations
 in the same flavor as GPU gangs. The ClusterQueue's binding GPU and RDMA quotas
@@ -223,20 +251,38 @@ a CPU-only placement constraint; rare jobs that require hard CPU-node placement
 must use Kubernetes-native scheduling outside Iris. GPU and RDMA resource
 requests exclude CPU nodes without an additional selector.
 
-Kueue requires every node in a TAS flavor to carry every level in the referenced
-Topology. CoreWeave supplies the physical hierarchy on accelerator nodes. Iris
-labels CPU NodePools with a synthetic `iris-cpu-only` fabric, superpod,
-leafgroup, and NVLink domain so unconstrained TAS can assign them at the hostname
-level. The synthetic values do not advertise GPU or RDMA resources.
+Kueue requires every topology label key to exist on a Node; an empty value is
+valid in Kueue v0.18.3. CoreWeave supplies physical fabric, superpod, leafgroup
+and NVLink-domain labels on accelerator Nodes. Its node metadata controller
+owns the `backend.coreweave.cloud/*` labels and can overwrite synthetic values.
+Do not repair CPU placement by patching those provider-owned labels.
 
-This layout replaces the selectorless, non-TAS `cw-cpu` flavor that caused
-[#7916](https://github.com/marin-community/marin/issues/7916). Kueue v0.18 could
-not reclaim those Pods during `cw-ib` topology fit; the general upstream case is
-tracked by
-[kubernetes-sigs/kueue#9992](https://github.com/kubernetes-sigs/kueue/issues/9992).
-When migrating from the split flavors, apply the NodePool labels before
-switching the ClusterQueue to `cw-tas`, then verify CPU nodes appear in Kueue's
-topology cache.
+`provisioning.coreweave.kueue.cpu_scale_group` selects the physical CPU pool for
+the `iris-cpu` ResourceFlavor: `cpu-erapids` on `cw-us-east-08a`, `cpu-genoa` on
+`cw-us-east-02a` and `cpu-turin` on `cw-rno2a`. That flavor uses the existing
+Iris scale-group selector and a separate `iris-cpu-hostname` Topology containing
+only `kubernetes.io/hostname`. Its GPU and RDMA quotas are zero. It is first in
+`iris-cq`'s resource group, so CPU-only work uses the physical CPU pool;
+requests that do not fit can still use `cw-tas`. All resources of a PodSet stay
+in one resource group and use one flavor. GPU and RDMA work retains the shared
+flavor and its binding quotas. CPU pool declarations on these clusters no
+longer set synthetic physical-topology labels.
+
+The CPU flavor is TAS and selects only the CPU pool. CPU spillover onto GPU
+Nodes stays in `cw-tas` so GPU TAS fit can reclaim it
+([#7916](https://github.com/marin-community/marin/issues/7916)). Both topologies
+end at hostname. Kueue v0.18.3's default-enabled `TASHandleOverlappingFlavors`
+accounts for any Node temporarily selected by both flavors; keep that gate
+enabled during rollout.
+
+See [CPU topology admission](../OPS.md#cpu-topology-admission) for the staged
+per-cluster apply procedure. No controller deployment is required for this
+Kueue admission change.
+
+Iris `region` constraints match the backend's advertised region. They do not
+become a Node selector: CoreWeave's `US-EAST-08A` backend has Nodes labelled
+`topology.kubernetes.io/region=US-EAST-08`. A required region mismatch is
+rejected before Pod creation; preferred regions do not restrict placement.
 
 TAS admission pins each Pod to a hostname from Kueue's capacity snapshot. The
 same-cycle recomputation gate prevents two newly admitted Workloads from keeping

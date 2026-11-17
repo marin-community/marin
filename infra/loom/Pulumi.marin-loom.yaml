@@ -554,6 +554,17 @@ config:
       repo: marin-community/marin
       promptFile: watches/belay.md
       slackChannels: []
+    # Posts long-running Iris root jobs to Slack, once per job.
+    old-iris-jobs:
+      enabled: true
+      cron: "0 9 * * 1-5"
+      timezone: America/Los_Angeles
+      runTimeoutSeconds: 1800
+      profile: ops
+      repo: marin-community/marin
+      promptFile: watches/old-iris-jobs.md
+      slackChannels:
+        - C0BN20081CH
     # Disabled until an operator selects the jobs and notification destination.
     weekday-job-check:
       enabled: false
