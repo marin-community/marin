@@ -77,19 +77,26 @@ def restriction_registry_key() -> str:
 def declaration_restriction(declaration: dict[str, Any]) -> DataRestriction:
     """The effective tier of one stored declaration.
 
-    The override registry is authoritative; otherwise the stored ``data_restriction``
-    tag applies, ``Open`` when the declaration predates the tier. A malformed stored
-    tag fails closed to ``PRIVATE_ALWAYS`` so broken bytes hide content.
+    A stored tag applies when present — ``Open`` only when the declaration
+    predates the tier (the key is absent); an explicit ``null`` or malformed
+    stored tag fails closed to ``PRIVATE_ALWAYS`` so erased or broken bytes hide
+    content. The override registry can only strengthen the tier: it forces a
+    source private, but it can never lower an explicit ``PRIVATE_ALWAYS`` — a
+    private source stops being private only through a reviewed declaration
+    change in code, never through a registry row.
     """
-    raw = declaration.get("data_restriction")
-    restriction = DataRestriction.OPEN
-    if raw is not None:
+    if "data_restriction" in declaration:
+        raw = declaration["data_restriction"]
         try:
-            restriction = DataRestriction(raw)
+            declared = DataRestriction(raw)
         except ValueError:
-            restriction = DataRestriction.PRIVATE_ALWAYS
+            declared = DataRestriction.PRIVATE_ALWAYS
+    else:
+        declared = DataRestriction.OPEN
     override = restriction_overrides().get(declaration.get("id", ""))
-    return override if override is not None else restriction
+    if declared is DataRestriction.PRIVATE_ALWAYS or override is DataRestriction.PRIVATE_ALWAYS:
+        return DataRestriction.PRIVATE_ALWAYS
+    return declared
 
 
 def is_private(declaration: dict[str, Any]) -> bool:

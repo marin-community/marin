@@ -3,11 +3,12 @@
 
 """Versioned restriction-tier rulings; Python packaging preserves this registry in hosted backends.
 
-An override forces a source's restriction tier regardless of what a stored declaration
-says: it is authoritative for declarations written before the tier existed and for a
-stored row whose tag was tampered with. Every entry records its user ruling; a private
-override must never be removed to "downgrade" a source — retiring a private source is a
-declaration change in code, reviewed like any other.
+An override forces a source private regardless of what a stored declaration
+says: it is authoritative for declarations written before the tier existed and
+for a stored row whose tag was tampered with or erased. It can only strengthen
+the tier — it never lowers an explicit ``PRIVATE_ALWAYS`` declaration, because a
+private source stops being private only through a reviewed declaration change in
+code. Every entry records its user ruling.
 """
 
 import json

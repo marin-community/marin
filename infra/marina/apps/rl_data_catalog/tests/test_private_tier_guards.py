@@ -86,6 +86,32 @@ def test_registry_override_is_authoritative_over_a_flipped_tag(monkeypatch):
     assert declaration_restriction({"id": "Flipped:x", "data_restriction": "open"}) is DataRestriction.PRIVATE_ALWAYS
 
 
+def test_explicit_null_tag_fails_closed_to_private(monkeypatch):
+    """An explicitly stored null is an erased tag, not a pre-tier declaration."""
+    assert declaration_restriction({"id": "Null:x", "data_restriction": None}) is DataRestriction.PRIVATE_ALWAYS
+    # A missing key remains the tolerated pre-tier Open default.
+    assert declaration_restriction({"id": "Legacy:old"}) is DataRestriction.OPEN
+
+
+def test_open_override_never_lowers_an_explicit_private_declaration(monkeypatch):
+    """The registry can only strengthen the tier: private no matter what."""
+    override(monkeypatch, "Held:private", DataRestriction.OPEN)
+    assert (
+        declaration_restriction({"id": "Held:private", "data_restriction": "private_always"})
+        is DataRestriction.PRIVATE_ALWAYS
+    )
+    # An open override on a pre-tier open declaration stays open.
+    assert declaration_restriction({"id": "Held:legacy"}) is DataRestriction.OPEN
+
+
+def test_malformed_tag_stays_private_even_under_an_open_override(monkeypatch):
+    override(monkeypatch, "Broken:x", DataRestriction.OPEN)
+    assert (
+        declaration_restriction({"id": "Broken:x", "data_restriction": "public-someday"})
+        is DataRestriction.PRIVATE_ALWAYS
+    )
+
+
 def test_private_marker_replaces_content():
     marker = private_content_marker()
     assert marker == {
