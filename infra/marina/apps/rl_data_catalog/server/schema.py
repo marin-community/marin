@@ -172,7 +172,7 @@ CREATE OR REPLACE VIEW atlas_cohort_summary AS
 WITH counts AS (
 SELECT p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count,
     COUNT(i.task_id) FILTER (WHERE i.status = 'reviewed') AS reviewed,
-    COUNT(i.task_id) FILTER (WHERE NOT i.has_task) AS missing_evidence,
+    COUNT(i.task_id) FILTER (WHERE NOT i.has_task AND a.scope <> 'full') AS missing_evidence,
     COUNT(i.task_id) FILTER (WHERE jsonb_array_length(i.omissions) > 0) AS packets_with_omissions,
     jsonb_build_object(
         'good', COUNT(i.task_id) FILTER (WHERE i.verdict = 'good'),
@@ -195,14 +195,34 @@ SELECT p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count,
         'unrecorded', COUNT(i.task_id) FILTER (WHERE i.confidence IS NULL)
     ) AS confidence_counts,
     COUNT(i.task_id) AS item_count,
-    COUNT(i.task_id) FILTER (WHERE i.status = 'reviewed' AND i.has_task AND i.verdict = 'good') AS good_count,
     COUNT(i.task_id) FILTER (
-        WHERE i.status = 'reviewed' AND i.has_task AND i.verdict <> 'unknown'
+        WHERE i.status = 'reviewed'
+        AND (
+            (
+                a.scope = 'full' AND i.confidence IS DISTINCT FROM 'low' AND i.verdict = 'good'
+                AND COALESCE(jsonb_array_length(i.defects), 0) = 0
+                AND i.reference_status IS DISTINCT FROM 'conflict'
+            )
+            OR (a.scope <> 'full' AND i.has_task AND i.verdict = 'good')
+        )
+    ) AS good_count,
+    COUNT(i.task_id) FILTER (
+        WHERE i.status = 'reviewed'
+        AND (
+            (
+                a.scope = 'full' AND i.verdict IS NOT NULL AND i.confidence IS DISTINCT FROM 'low'
+                AND NOT (
+                    i.verdict = 'unknown' AND COALESCE(jsonb_array_length(i.defects), 0) = 0
+                    AND i.reference_status IS DISTINCT FROM 'conflict'
+                )
+            )
+            OR (a.scope <> 'full' AND i.has_task AND i.verdict <> 'unknown')
+        )
     ) AS conclusive_count
 FROM atlas_populations p JOIN atlas_assessments a USING (load_id, pipeline_key)
 LEFT JOIN atlas_items i
     ON i.load_id = p.load_id AND i.pipeline_key = p.pipeline_key AND i.cohort = p.cohort
-GROUP BY p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count, a.curation
+GROUP BY p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count, a.curation, a.scope
 )
 SELECT load_id, pipeline_key, cohort, population, sample_count, reviewed,
     missing_evidence, packets_with_omissions, verdict_counts,

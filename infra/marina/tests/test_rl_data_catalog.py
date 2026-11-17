@@ -102,8 +102,12 @@ from experiments.post_training.task_curation.tests.admission_fixtures import (
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from experiments.post_training.task_curation.tests.license_fixtures import isolated_license_bans as isolated_license_bans
 from infra.marina.apps.rl_data_catalog.confidence import confidence_rows
+from experiments.post_training.task_curation.review_quality import quality_result
 from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
-from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
+from infra.marina.apps.rl_data_catalog.load import (
+    full_review_pipeline_key,
+    load_catalog as load_surveyed_catalog,
+)
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.load_difficulty import load_measurements, read_measurements
 from infra.marina.apps.rl_data_catalog.load_identity import load_identity
@@ -2824,6 +2828,25 @@ def test_full_review_rows_load_typed_and_browseable(catalog_database, catalog_qu
     assert load_result["full_reviews"] == {
         FULL_QC_SOURCE: {"reviewed": result.reviewed, "unavailable": result.unavailable_count}
     }
+    # the cohort summary honors the review policy for FULL rows: the review
+    # record is the evidence, so has_task=False does not zero the counts, and
+    # conclusive/good follow review_quality.quality_result (low confidence or
+    # unknown-without-issues is uncertain; defects or reference conflicts are
+    # issues even under a good/unknown verdict)
+    full_key = full_review_pipeline_key(FULL_QC_SOURCE)
+    policy = quality_result(records)
+    summary = catalog_query(
+        "SELECT reviewed, missing_evidence, result_reviewed, issue_count, grade"
+        " FROM atlas_cohort_summary WHERE load_id=:load_id AND pipeline_key=:key AND cohort='admitted'",
+        {"load_id": load_result["load_id"], "key": full_key},
+    )["rows"]
+    assert len(summary) == 1
+    row = summary[0]
+    assert row["reviewed"] == FULL_QC_POPULATION - result.unavailable_count
+    assert row["missing_evidence"] == 0
+    assert row["result_reviewed"] == policy.reviewed
+    assert row["issue_count"] == policy.issue_count
+    assert row["grade"] == "bad"
     services = cast(AppletServices, CatalogServices(catalog_database))
     with TestClient(create_api(services)) as client:
         page = client.get("/assessment", params={"source_id": FULL_QC_SOURCE}).json()
