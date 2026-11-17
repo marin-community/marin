@@ -137,7 +137,7 @@ uv run marina apps sql UUID 'SELECT * FROM observations LIMIT 20' --url ORIGIN
 Omitting `--url` targets production. Use the printed origin/UUID while a local
 preview runs. Loading without `--replace` appends. `--replace` drops the table before
 separate inserts; a live catalog needs staged loading and an atomic selection.
-See [Atlas](rl-data-atlas.md) for a code release plus explicit catalog-load workflow.
+See [Atlas](rl-data-atlas.md) and [Knotmeter](knotmeter.md) for code releases with explicit data-loading workflows.
 
 ## Operate
 
