@@ -563,3 +563,17 @@ drain and outer-job deadline relationship. A successful SFT-only dry run does
 not certify downstream admission. After approval, the same frozen command with
 `--run` submits through Iris; keep the runtime commit and artifact version
 unchanged between approval and submission.
+
+### Fresh Exp3 RL after the Socket failure
+
+`exp3_rl_restart` adopts the sealed `.51` SFT export and data inputs without
+rerunning SFT. Supply the hash-pinned predecessor plan and launch document as one
+reference JSON object. The fresh lineage removes forced Socket transport, keeps
+the 12-hour learning budget, saves native checkpoints every two hours and at
+finalization, and labels a final-native HF fallback when no native best exists.
+Evaluation sandbox storage is 128 GiB; training sandbox resources are unchanged.
+
+Run without `--run` first, with `--reference`, `--reference-sha256`,
+`--source-revision`, `--validation-output`, and a fresh `--version`. Inspect the
+resolved launch diff and the cross-node InfiniBand probe receipt before adding
+`--run`. Both the coordinator and child job names use the `mochi-` prefix.

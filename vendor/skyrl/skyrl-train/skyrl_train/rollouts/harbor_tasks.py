@@ -111,7 +111,10 @@ class HarborTaskSettings:
         if environment.eval_provisioning is None:
             raise ValueError("Daytona evaluation requires explicit eval_daytona_provisioning")
         return environment.model_copy(
-            update={"kwargs": {**environment.kwargs, "provisioning": environment.eval_provisioning.value}}
+            update={
+                "kwargs": {**environment.kwargs, "provisioning": environment.eval_provisioning.value},
+                "override_storage_mb": environment.eval_override_storage_mb or environment.override_storage_mb,
+            }
         )
 
     def machine_factory(self, *, phase: str = "train") -> MachineFactory:

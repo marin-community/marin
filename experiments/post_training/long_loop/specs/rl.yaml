@@ -231,9 +231,6 @@ config:
   extra_env:
     PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
     VERIFYIT_JUDGE_MODEL: openai/gpt-oss-120b
-    NCCL_NET: Socket
-    NCCL_IB_DISABLE: '1'
-    NCCL_SOCKET_FAMILY: AF_INET
     TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC: '259200'
   terminal_bench:
     harbor:

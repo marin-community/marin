@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Type
 
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from rigging.timing import Timer
 
 from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
@@ -114,11 +115,29 @@ class CheckpointCallback(TrainerCallback):
         save_after_fraction: Suppress saves before this fraction of planned updates, including early termination.
     """
 
-    def __init__(self, save_steps: int = 10, save_on_train_end: bool = True, save_after_fraction: float = 0.0):
+    def __init__(
+        self,
+        save_steps: int = 10,
+        save_on_train_end: bool = True,
+        save_after_fraction: float = 0.0,
+        save_interval_seconds: float | None = None,
+    ):
         validate_save_after_fraction(save_after_fraction)
+        if save_interval_seconds is not None and (not math.isfinite(save_interval_seconds) or save_interval_seconds <= 0):
+            raise ValueError("Checkpoint time interval must be finite and positive")
         self.save_steps = save_steps
         self.save_on_train_end = save_on_train_end
         self.save_after_fraction = save_after_fraction
+        self.save_interval_seconds = save_interval_seconds
+        self.timer = Timer()
+
+    def on_train_begin(self, state, control, **kwargs):
+        self.timer.reset()
+        return control
+
+    def on_save(self, state, control, **kwargs):
+        self.timer.reset()
+        return control
 
     def on_step_end(
         self,
@@ -126,11 +145,9 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if (
-            self.save_steps > 0
-            and state.global_step % self.save_steps == 0
-            and checkpoint_save_allowed(state, self.save_after_fraction)
-        ):
+        step_due = self.save_steps > 0 and state.global_step % self.save_steps == 0
+        time_due = self.save_interval_seconds is not None and self.timer.elapsed_seconds() >= self.save_interval_seconds
+        if (step_due or time_due) and checkpoint_save_allowed(state, self.save_after_fraction):
             control.should_save = True
         return control
 
@@ -140,7 +157,8 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_on_train_end and self.save_steps > 0 and checkpoint_save_allowed(state, self.save_after_fraction):
+        enabled = self.save_steps > 0 or self.save_interval_seconds is not None
+        if self.save_on_train_end and enabled and checkpoint_save_allowed(state, self.save_after_fraction):
             control.should_save = True
         return control
 

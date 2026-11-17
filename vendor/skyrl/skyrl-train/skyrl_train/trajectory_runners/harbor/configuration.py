@@ -52,6 +52,7 @@ ENVIRONMENT_SCHEMA = SectionSchema(
         "override_cpus": FieldMapping("override_cpus"),
         "override_memory_mb": FieldMapping("override_memory_mb"),
         "override_storage_mb": FieldMapping("override_storage_mb"),
+        "eval_override_storage_mb": FieldMapping("eval_override_storage_mb"),
         "override_gpus": FieldMapping("override_gpus"),
         "environment_type": FieldMapping("type", default=EnvironmentType.DAYTONA.value),
         "daytona_provisioning": FieldMapping("provisioning", field_type="kwargs"),

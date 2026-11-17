@@ -30,6 +30,7 @@ class EnvironmentConfig(BaseModel):
     override_cpus: int | None = None
     override_memory_mb: int | None = None
     override_storage_mb: int | None = None
+    eval_override_storage_mb: int | None = None
     override_gpus: int | None = None
     kwargs: dict[str, Any] = Field(default_factory=dict)
 

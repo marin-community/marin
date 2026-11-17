@@ -6,9 +6,9 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
-from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE
+from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE, selected_export_step
 from skyrl_train.callbacks.base import TrainerControl, TrainerState
-from skyrl_train.callbacks.builtin import create_callbacks_from_config
+from skyrl_train.callbacks.builtin import CheckpointCallback, create_callbacks_from_config
 from skyrl_train.rollouts.context import TrainingContextState
 from skyrl_train.rollouts.loader import PromptLoaderState
 from skyrl_train.trainer import RayPPOTrainer
@@ -54,6 +54,7 @@ async def test_best_selection_reuses_committed_shards_and_recovers_failed_upload
     trainer.distillation_scored_tokens_total = 0
     trainer._ftpo_stopped = False
     trainer._domain_balancer = None
+    trainer.tracker = SimpleNamespace(journal=None)
     trainer.all_timings = {}
     trainer.all_metrics = {}
     rollout_state = TrainingContextState(PromptLoaderState({"position": 42}, []), [], None)
@@ -185,3 +186,26 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
     assert selected["accuracy"] == 0.7
     assert selected["preservation_baseline"] == {"preservation": 0.9}
     assert selected["model_format"] == "native"
+
+
+@pytest.mark.parametrize("elapsed,periodic", [(7199, False), (7200, True)])
+def test_timed_checkpoint_interval_and_forced_final(monkeypatch, elapsed, periodic):
+    clock = [0.0]
+    monkeypatch.setattr("rigging.timing.time.monotonic", lambda: clock[0])
+    callback = CheckpointCallback(save_steps=-1, save_interval_seconds=7200)
+    state = TrainerState(3, 0, 100, 100)
+    callback.on_train_begin(state, TrainerControl())
+    clock[0] = elapsed
+    assert callback.on_step_end(state, TrainerControl()).should_save is periodic
+    callback.on_save(state, TrainerControl())
+    assert callback.on_train_end(state, TrainerControl()).should_save
+
+
+def test_best_export_falls_back_to_committed_final_and_preserves_native_best(tmp_path):
+    final = tmp_path / "global_step_7"
+    final.mkdir()
+    (final / "trainer_state.pt").write_bytes(b"committed-control")
+    (tmp_path / LATEST_CHECKPOINT_FILE).write_text("7")
+    assert selected_export_step(str(tmp_path), "best", 7) == 7
+    (tmp_path / "best_checkpoint.json").write_text(json.dumps({"model_format": "native", "step": 5}))
+    assert selected_export_step(str(tmp_path), "best", 7) == 5
