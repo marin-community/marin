@@ -3,8 +3,10 @@
 
 """Tests for workspace bundling."""
 
+import io
 import os
 import re
+import zipfile
 from unittest.mock import patch
 
 import pytest
@@ -78,6 +80,16 @@ def test_collect_respects_extra_exclude(workspace):
     rel = {str(f.relative_to(workspace)) for f in files}
     assert "data/big.csv" not in rel
     assert "pyproject.toml" in rel
+
+
+def test_zip_with_all_files_excluded_has_no_bundle(workspace):
+    assert create_workspace_zip(workspace, exclude=re.compile(r".*")) == b""
+
+
+def test_zip_with_files_preserves_workspace_contents(workspace):
+    with zipfile.ZipFile(io.BytesIO(create_workspace_zip(workspace))) as archive:
+        assert set(archive.namelist()) == {"pyproject.toml", "src/main.py"}
+        assert archive.read("src/main.py") == b"print('hello')"
 
 
 def test_zip_rejects_oversized_bundles(workspace):

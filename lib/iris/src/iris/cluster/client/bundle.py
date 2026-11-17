@@ -113,6 +113,8 @@ def create_workspace_zip(
     """
     workspace = Path(workspace)
     files = collect_workspace_files(workspace, exclude=exclude, extra_includes=extra_includes)
+    if not files:
+        return b""
 
     fd, tmp_path = tempfile.mkstemp(suffix=".zip", prefix="workspace_")
     os.close(fd)
