@@ -33,6 +33,7 @@ from experiments.post_training.task_curation.full_qc_artifacts import (
     FullQCInputs,
     FullQCReview,
     FullQCReviewShard,
+    GrandfatheredReview,
 )
 from experiments.post_training.task_curation.full_qc_inputs import task_contract
 from experiments.post_training.task_curation.published_census import population_documents
@@ -243,6 +244,8 @@ def write_source_result(
     records_path: StoragePath,
     reviews: Sequence[ReviewRecord],
     receipts: list[str],
+    *,
+    grandfathered: GrandfatheredReview | None = None,
 ) -> FullQCReview:
     """Record an immutable source summary for persisted retained observations."""
     if len(reviews) != inputs.retained_count or len({row.task_id for row in reviews}) != inputs.retained_count:
@@ -271,6 +274,7 @@ def write_source_result(
         records_path=str(records_path),
         records_sha256=file_sha256(records_path),
         batch_receipts=receipts,
+        grandfathered=grandfathered,
     )
     # Each final summary is an immutable attempt; complete batch receipts are shared across retries.
     write_record(

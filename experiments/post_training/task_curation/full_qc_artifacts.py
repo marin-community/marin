@@ -5,9 +5,9 @@
 
 from typing import Literal
 
-from finestore.rl.curation import SourceQualityResult
+from finestore.rl.curation import ContentEvidenceReference, SourceQualityResult
 from marin.execution.artifact import Artifact
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
@@ -27,6 +27,21 @@ class FullQCInputs(Artifact):
     grading_environments: dict[str, int]
 
 
+class GrandfatheredReview(BaseModel):
+    """Completed old-campaign reviews carried into this receipt under a typed marker.
+
+    The carried rows keep the original reviewer identity recorded here; they are
+    never relabeled as current-reviewer output (user ruling 2026-11-15).
+    """
+
+    reviewer: dict
+    """The old campaign's reviewer identity, copied from the old receipt."""
+    evidence: ContentEvidenceReference
+    """The recorded decision that authorizes carrying these reviews."""
+    accepted_count: int = Field(ge=1)
+    """Number of carried observations whose batch receipt belongs to the old campaign."""
+
+
 class FullQCReview(Artifact):
     source_id: str
     inputs: FullQCInputs
@@ -40,6 +55,7 @@ class FullQCReview(Artifact):
     records_path: str
     records_sha256: str
     batch_receipts: list[str]
+    grandfathered: GrandfatheredReview | None = None
 
 
 class BatchReviewReceipt(BaseModel):

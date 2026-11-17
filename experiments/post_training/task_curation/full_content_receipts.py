@@ -66,6 +66,16 @@ def full_content_result_binding(
         or review.coverage_complete != all(row.status is ReviewStatus.REVIEWED for row in observations)
     ):
         raise ValueError("Whole-source Result differs from its task-level observations")
+    if review.grandfathered is not None:
+        marker = review.grandfathered
+        if canonical_sha256(marker.reviewer) == canonical_sha256(review.reviewer):
+            raise ValueError("Grandfathered reviews must carry another reviewer identity")
+        if file_sha256(StoragePath(marker.evidence.uri)) != marker.evidence.sha256:
+            raise ValueError("Grandfathering evidence changed")
+        fresh_receipts = set(review.batch_receipts)
+        carried = sum(1 for row in records.values() if row["batch_receipt"] not in fresh_receipts)
+        if carried != marker.accepted_count:
+            raise ValueError("Grandfathered marker does not match the carried observations")
     population = population or review.inputs.population
     if population.source_id != review.source_id or population.task_count != review.inputs.retained_count:
         raise ValueError("Final binding requires an exact retained population census")

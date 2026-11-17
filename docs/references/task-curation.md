@@ -3265,7 +3265,11 @@ identity and a grandfathering marker in each source's FULL binding/receipt, and
 they are never relabeled as current-reviewer output. Old invalid or truncated
 rows are not grandfathered and still need review. Raw or processed duplicates
 with identical content reuse the grandfathered review. New reviews write the
-shared content-addressed review cache at commit time.
+shared content-addressed review cache at commit time. The merge is enforced in
+code: [`full_qc_grandfather.py`](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/full_qc_grandfather.py)
+carries only content-hash-matching REVIEWED rows, writes the typed marker onto
+the merged receipt, and the whole-source binding verifies the marker's old
+reviewer identity, evidence digest and carried-observation count.
 
 Quality manifests and assessment model metadata record the complete spec identity.
 The request-cache namespace includes every spec field, including deployment and
