@@ -19,8 +19,8 @@ inference engine at TP1/PP1/DP12/EP12. Hosts request 120 CPUs, `900GB` RAM and
 and four concurrent requests per inference worker. The inference sequence cap
 stays at 16; this workload has no new one-rack GPU memory-fit result.
 
-The runtime keeps Torch 2.14.1/CUDA 13.2, TE 2.21 and FA4. Compilation mode 3
-stays enabled. CUDA graphs use `NONE` after DP12/EP12 graph replay failed during
+The one-rack runtime keeps Torch 2.14.1/CUDA 13.2, TE 2.21 and FA4. Compilation
+mode 3 stays enabled. Its CUDA graphs use `NONE` after DP12/EP12 graph replay failed during
 weight publication; the performance cost remains unmeasured.
 [#11307](https://github.com/marin-community/marin/pull/11307) has merged. The draft
 uses a pinned integration of the existing route-quota, selection, budget,
@@ -187,27 +187,36 @@ run's 120-score/five-evaluation selection or ten-hour completion.
 ## Three-rack profile
 
 Check out [draft #11353](https://github.com/marin-community/marin/pull/11353)
-for `--profile three-rack`. It keeps the one-rack option and raises the context
-window to 262,144 tokens. It requests 64 trainer GPUs at TP1/PP16/CP4/EP4 and
-two 64-GPU inference replicas at TP1/PP1/DP64/EP64. Each role occupies a separate
-16-host NVLink domain. Rack placement is mandatory.
+for `--profile three-rack`. It keeps the one-rack option and the 262,144-token
+context window. It requests 64 trainer GPUs at TP1/PP16/CP4/EP4 and eight 16-GPU
+inference engines at TP1/PP1/DP16/EP16. The trainer occupies one 16-host NVLink
+domain. Four inference engines share each of two further 16-host domains.
+The allocation stays at 48 four-GPU hosts and 192 GPUs. Rack placement is mandatory.
 
 The trainer retains activation fusion, 256-KiB NCCL buffers and pinned CPU
-storage for checkpointed activation inputs. Inference keeps the 0.80 KV-memory
-budget and verified expert-block publication with an 1,800-second timeout.
-Cross-rack transport uses InfiniBand. The inference sequence cap is 64, following
-MA's completed 32-group mixed batch; the one-rack cap stays at 16. Both profiles
-keep compilation mode 3 and CUDA graphs `NONE`.
-Three-rack trace capture keeps its 256-MiB per-step and 1-GiB per-run limits.
+storage for checkpointed activation inputs. Cross-rack transport uses InfiniBand.
+Inference uses FlashInfer, a 128-sequence limit per engine, a 2,048-token batched
+budget, a 0.90 GPU-memory fraction and disabled prefix caching. Compilation mode 3
+uses `PIECEWISE` graphs with the existing ShortConv/attention split points and
+qualified Inductor options. Routed-expert capture and verified expert-block
+publication remain enabled, with a 1,800-second publication timeout. Three-rack
+trace capture keeps its 256-MiB per-step and 1-GiB per-run limits.
+
+Normal rollout admission permits up to 128 prompt groups in flight; the trainer
+batch stays at 32 groups of eight samples. The native buffer also bounds untrained
+groups by `(staleness + 1) * batch_size`. At staleness three, `--batch-groups 6`
+admits at most 24 groups. `--smoke` keeps two collection workers and its two-group
+admission cap. The one-rack profile retains its EP12 layout, 16-sequence limit,
+FlashAttention backend and graphs `NONE`.
 
 Use the retained inputs and `LAUNCH`/`BASE` arrays above. This profile requires
 one training artifact and its SHA-256. These commands render normal fresh,
 normal continuation and explicit smoke configurations:
 
 ```bash
-THREE_FRESH_VERSION='<new-three-rack-normal-version>'
-THREE_RESUME_VERSION='<new-three-rack-continuation-version>'
-THREE_SMOKE_VERSION='<new-three-rack-smoke-version>'
+THREE_FRESH_VERSION='<new-ep16-normal-version>'
+THREE_RESUME_VERSION='<new-ep16-continuation-version>'
+THREE_SMOKE_VERSION='<new-ep16-smoke-version>'
 NATIVE_262K='<completed-TP1-PP16-CP4-EP4-checkpoint-directory>'
 "${LAUNCH[@]}" "${BASE[@]}" --profile three-rack \
   --validation-data-uri "$HOLDOUTS" --version "$THREE_FRESH_VERSION" \
@@ -221,7 +230,8 @@ NATIVE_262K='<completed-TP1-PP16-CP4-EP4-checkpoint-directory>'
 ```
 
 Native continuation needs a completed checkpoint with matching TP1/PP16/CP4/EP4
-geometry. It uses the same absolute target and same-version recovery contract
+geometry. Use a new output version when switching from the earlier two-engine
+EP64 layout. It uses the same absolute target and same-version recovery contract
 as the one-rack path. Normal runs use the shared evaluation/checkpoint cadence,
 selection gate and ten-hour RL budget, with a separate 48-hour GPU-job limit.
 The smoke command selects a six-hour job limit explicitly.
@@ -231,12 +241,29 @@ The smoke command selects a six-hour job limit explicitly.
 The one-rack Ben workload has CPU configuration coverage only. Earlier one-rack
 535B evidence belongs to the older source and workload linked in
 [#11321](https://github.com/marin-community/marin/pull/11321).
-MA's three-rack source `8b4710feb7d6` applied two fresh 64-group mixed updates at a
-102K cap and imported its native checkpoint at later source `3f4a411d3202`.
-Its held-out evaluation scored 69 of 120 tasks and was ineligible for best
-selection.
-Source `940be7913eb7` separately proved controlled near-262K backward and one
-fresh 32-group mixed update under a 262K cap, whose actual maximum length was
-42,380. Its evaluation and saving were disabled. The normal recipe here changes
-cadence and profile context limits; eligible best selection, sustained completion
-and live recovery are not established by those earlier results.
+
+The new inference bundle uses the published BF16 vLLM build
+`marin-vllm-gpu-20261113-0ac9dcb157ee`. A matched 64-GB200 serving comparison used
+the same nodes, prompts, seeds, 256-token outputs and 2,048 concurrent requests.
+Output tokens/s per allocated inference GPU rose from 126 with EP64/graphs `NONE`,
+to 293 with EP64/`PIECEWISE`, to 416 with four EP16 groups, to 464 with the full
+serving bundle. The 3.68x gain measures serving; it does not isolate FlashInfer's
+contribution or measure RL speedup. [Issue #11430](https://github.com/marin-community/marin/issues/11430)
+provides the public serving context. Detailed matched-run receipts are not public.
+The measured gain requires neither [vLLM #130](https://github.com/marin-community/vllm/pull/130)
+nor [#11492](https://github.com/marin-community/marin/pull/11492).
+
+MA's source `612fa39494f9` completed three fresh nonzero RL updates at a
+102,400-token cap. Updated weights were verified and later used for generation in
+all eight EP16 engines. Both held-out evaluations scored 120/120 tasks, and native
+checkpoint 3 completed. The first batch's actual maximum attended length was
+56,196. That qualification used separate task-setup/runtime repairs and cadence;
+this draft keeps its existing setup, evaluation, selection and recovery behavior.
+Two eligible evaluations do not complete the five-evaluation selection window.
+
+Separate EP16 serving reached 262,024 total tokens. Earlier near-262K trainer
+backward at source `940be7913eb7` used the previous inference geometry. Its separate
+fresh 32-group mixed batch reached 42,380 tokens with evaluation and saving
+disabled. This draft keeps the 262,144-token cap. Integrated near-262K training
+with all eight engines, sustained completion and live same-version recovery
+remain unqualified by those results. MA owns the continuing runtime campaign.

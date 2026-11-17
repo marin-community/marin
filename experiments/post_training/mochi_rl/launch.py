@@ -111,9 +111,9 @@ PROFILES = MappingProxyType(
             role_plan=replace(
                 ROLE_PLAN,
                 policy_num_nodes=16,
-                num_inference_engines=2,
-                inference_engine_data_parallel_size=64,
-                inference_engine_expert_parallel_size=64,
+                num_inference_engines=8,
+                inference_engine_data_parallel_size=16,
+                inference_engine_expert_parallel_size=16,
             ),
             megatron=replace(MEGATRON, pipeline_model_parallel_size=16),
             execution=EXECUTION,
@@ -124,6 +124,7 @@ PROFILES = MappingProxyType(
                 ),
                 trainer=sections.Trainer(
                     project_name="mochi-three-rack",
+                    rollout_buffer=sections.RolloutBuffer(max_in_flight=128),
                     policy=sections.Policy(
                         nccl_buffer_size_bytes=262144,
                         megatron_config=sections.PolicyMegatronConfig(
@@ -145,9 +146,22 @@ PROFILES = MappingProxyType(
                 ),
                 generator=sections.Generator(
                     expert_block_sync=sections.ExpertBlockSync(verify=True, timeout_seconds=1800),
-                    # The 0.75 KV budget missed the full-context startup requirement by 0.47 GiB.
-                    gpu_memory_utilization=0.80,
-                    max_num_seqs=64,
+                    vllm_attention_backend="FLASHINFER",
+                    gpu_memory_utilization=0.90,
+                    max_num_seqs=128,
+                    max_num_batched_tokens=2048,
+                    enable_prefix_caching=False,
+                    engine_init_kwargs={
+                        "compilation_config": {
+                            "mode": 3,
+                            "cudagraph_mode": "PIECEWISE",
+                            "inductor_compile_config": {
+                                "enable_auto_functionalized_v2": False,
+                                "combo_kernels": True,
+                                "benchmark_combo_kernel": True,
+                            },
+                        },
+                    },
                     trajectory_retention=sections.TrajectoryRetention(
                         max_bytes_per_step=256 * 1024**2, max_bytes_per_run=1024**3
                     ),
