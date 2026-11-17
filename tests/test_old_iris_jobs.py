@@ -14,6 +14,7 @@ from scripts.ops.old_iris_jobs import (
     OldJob,
     SheetRow,
     find_old_jobs,
+    mark_failed_cancels,
     plan_tabs,
 )
 
@@ -116,6 +117,20 @@ def test_plan_cancels_a_job_marked_kill_until_it_stops_and_then_drops_its_row():
     assert second["alice"][0].status == f"Cancel requested {TODAY}"
     assert stopped_cancels == []
     assert [row.job for row in stopped["alice"]] == ["/alice/other"]
+
+
+def test_plan_cancels_again_a_job_whose_cancel_failed():
+    job, other = _old_job("/alice/stale", 9), _old_job("/alice/other", 8)
+    listed, _ = _replan([job, other], {})
+    marked = {"alice": [replace(listed["alice"][0], decision=KILL_DECISION), listed["alice"][1]]}
+    planned, cancels = _replan([job, other], marked)
+
+    failed = mark_failed_cancels(planned, {str(cancels[0]): "permission denied"})
+    retried, retried_cancels = _replan([job, other], failed, days_later=1)
+
+    assert [row.status for row in failed["alice"]] == ["Cancel failed: permission denied", ""]
+    assert retried_cancels == [job.root]
+    assert retried["alice"][0].status == "Cancel requested 2027-01-16"
 
 
 def test_plan_asks_again_when_a_keep_decision_expires():

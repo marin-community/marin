@@ -22,6 +22,7 @@ from dataclasses import astuple, dataclass, replace
 
 import click
 import google.auth
+from connectrpc.errors import ConnectError
 from google.auth import impersonated_credentials
 from google.auth.transport.requests import AuthorizedSession
 from iris.cli.connect import open_iris_client
@@ -37,6 +38,7 @@ KILL_DECISION = "Kill"
 KEEP_DAYS_BY_DECISION = {"Keep 30 days": 30, "Keep 365 days": 365}
 DECISIONS = (KILL_DECISION, *KEEP_DAYS_BY_DECISION)
 CANCEL_REQUESTED_STATUS = "Cancel requested"
+CANCEL_FAILED_STATUS = "Cancel failed"
 UNKNOWN_DECISION_STATUS = "Unknown decision"
 HEADER = ("Cluster", "Job", "Started", "Age (days)", "Resources", "Listed", "Decision", "Keep until", "Status")
 DECISION_COLUMN = HEADER.index("Decision")
@@ -182,6 +184,19 @@ def plan_tabs(
         )
         planned.setdefault(tab_title(job.root.user), []).append(row)
     return planned, cancels
+
+
+def mark_failed_cancels(
+    tabs: Mapping[str, Sequence[SheetRow]], failures: Mapping[str, str]
+) -> dict[str, list[SheetRow]]:
+    """Return ``tabs`` with the error of each failed cancel in the Status cell of its job; the next run tries again."""
+    return {
+        title: [
+            replace(row, status=f"{CANCEL_FAILED_STATUS}: {failures[row.job]}") if row.job in failures else row
+            for row in rows
+        ]
+        for title, rows in tabs.items()
+    }
 
 
 def sheets_session(service_account: str) -> AuthorizedSession:
@@ -359,6 +374,7 @@ def main(
     now_ms = Timestamp.now().epoch_ms()
     cutoff_ms = now_ms - int(min_age_days * MS_PER_DAY)
     session = sheets_session(service_account)
+    failures: dict[str, str] = {}
     with open_iris_client(cluster_name=cluster, workspace=None) as client:
         # ListJobs omits resources; the per-job status carries them.
         old_jobs = find_old_jobs(
@@ -377,8 +393,13 @@ def main(
         else:
             # The hub routes a cancel to the peer that runs a federated job.
             for root in cancels:
-                client.cancel_job(root)
+                try:
+                    client.cancel_job(root)
+                except ConnectError as error:
+                    # The sheet update for the other jobs must still happen; the run fails after it.
+                    failures[str(root)] = str(error)
     if not dry_run:
+        planned = mark_failed_cancels(planned, failures)
         add_owner_tabs(session, sheet_id, [title for title in planned if title not in tabs])
         write_owner_tabs(session, sheet_id, planned, {title: len(rows) for title, rows in tabs.items()})
     listed = sum(len(rows) for rows in planned.values())
@@ -387,6 +408,8 @@ def main(
         f"{listed} old running jobs in {len(planned)} owner tabs; {undecided} without a decision; "
         f"{len(cancels)} cancels requested" + ("; dry run, nothing changed" if dry_run else "")
     )
+    if failures:
+        raise click.ClickException(f"{len(failures)} cancels failed: {failures}")
 
 
 if __name__ == "__main__":

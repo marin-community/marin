@@ -587,7 +587,9 @@ config:
       profile: ops-report
       repo: marin-community/marin
       promptFile: watches/old-iris-jobs.md
-      slackChannels: []
+      # Only a failed run posts.
+      slackChannels:
+        - C0BN20081CH
     # Disabled until an operator selects the jobs and notification destination.
     weekday-job-check:
       enabled: false

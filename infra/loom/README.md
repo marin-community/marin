@@ -369,7 +369,8 @@ row per Iris root job older than the prompt's `--min-age-days`. An owner sets
 the Decision cell of a row. `Kill` makes the next run cancel the job. `Keep 30
 days` or `Keep 365 days` leaves the job alone until the Keep until date, then
 the run clears the decision. A job with no decision stays in the sheet, and a job that stops
-running leaves it. The watch posts nothing to Slack. It needs:
+running leaves it. The watch posts to `#marin-alerts` only when the script
+fails, which includes a cancel that Iris rejects. It needs:
 
 - the sheet shared with `loom-vm@hai-gcp-models.iam.gserviceaccount.com` as an
   editor. Every person with edit access to the sheet can make the watch cancel
