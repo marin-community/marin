@@ -206,8 +206,8 @@ def sync() -> None:
     measured = call("agent/state")["watcher"]["storage_at"]
     storage_at = None if measured is None else datetime.datetime.fromisoformat(measured)
     Watcher(CONFIG.registry_checkout, token=None, storage_at=storage_at).tick(refreshed, "; ".join(notes) or None)
+    relay_intake()  # first: the app approves trusted submitters' new comments as it receives them
     react_to_reviewed()
-    relay_intake()
 
 
 # Accounts whose #9514 comments are not suggestions: Belay's own bot and Loom's.
