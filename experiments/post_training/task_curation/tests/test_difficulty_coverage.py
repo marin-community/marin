@@ -20,7 +20,8 @@ from finestore.rl.difficulty import (
     difficulty_gap_reason,
 )
 
-from experiments.post_training.task_curation.difficulty_coverage import (
+from infra.marina.apps.rl_data_catalog.load_difficulty import publish_coverage
+from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import (
     CoverageStatus,
     DifficultyCoverage,
     campaign_queue,
@@ -28,7 +29,6 @@ from experiments.post_training.task_curation.difficulty_coverage import (
     document_digest,
     source_coverage,
 )
-from infra.marina.apps.rl_data_catalog.load_difficulty import publish_coverage
 
 RELEASE = DatasetRelease(
     repo="open-athena/example-retained",

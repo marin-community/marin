@@ -14,8 +14,6 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from taskcompendium.source_fingerprints import DuplicateReview
 
-from experiments.post_training.task_curation.difficulty_coverage import difficulty_coverage
-
 from .audit import register_audit_routes
 from .contamination import contamination
 from .count_evidence import SOURCE_COUNTS
@@ -23,6 +21,7 @@ from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
 from .derived_contract import contract_projection, contract_records
 from .difficulty import difficulty_records, difficulty_summary
+from .difficulty_coverage import difficulty_coverage
 from .duplicate_folding import (
     SourceStanding,
     canonical_duplicate_group,

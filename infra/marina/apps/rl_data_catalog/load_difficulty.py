@@ -13,7 +13,7 @@ from finestore.rl.difficulty import MEASUREMENTS, DifficultyMeasurement, Difficu
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.post_training.task_curation.difficulty_coverage import DifficultyCoverage, difficulty_coverage
+from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import DifficultyCoverage, difficulty_coverage
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 
