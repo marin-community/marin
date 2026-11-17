@@ -3,14 +3,16 @@
 
 import inspect
 import json
+import uuid
 from pathlib import Path
 
 import pytest
 from marin.rl.skyrl import SkyRLSpec, skyrl_cpu_command
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 
-from experiments.post_training import snowball_rl_presets as snowball
-from experiments.post_training.skyrl_test_support import current_control_pins
+from experiments.post_training import rl_recipe as snowball
+from experiments.post_training import snowball_rl as snowball_model
+from experiments.post_training.skyrl_test_support import with_current_control_revisions
 from tests.rl.launch_document_census import render_launch_census
 
 
@@ -19,7 +21,7 @@ from tests.rl.launch_document_census import render_launch_census
 def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(snowball, "SELECTION_ROOT", str(tmp_path / "selections"))
     monkeypatch.setattr(snowball, "artifact_prefix", lambda cluster: str(tmp_path / "artifacts"))
-    current_control_pins(monkeypatch)
+    monkeypatch.setattr(snowball_model, "SNOWBALL", with_current_control_revisions(snowball_model.SNOWBALL))
     producers = set()
     validate = SkyRLSpec.__post_init__
 
@@ -29,6 +31,8 @@ def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path, mon
         validate(spec)
 
     monkeypatch.setattr(SkyRLSpec, "__post_init__", record_producer)
+    # PyYAML writes these hex digits unquoted, and OmegaConf reads them as a float.
+    monkeypatch.setattr(uuid, "uuid4", lambda: uuid.UUID(hex="104e63883176".ljust(32, "0")))
     documents, failures = render_launch_census(tmp_path / "artifacts")
     assert not failures, failures
     root = Path(__file__).resolve().parents[2]

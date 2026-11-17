@@ -13,7 +13,6 @@ Without ``--model``, the experiment first writes the tiny policy under its root.
 """
 
 import argparse
-import json
 import os
 from enum import StrEnum
 from pathlib import Path
@@ -22,7 +21,7 @@ from finestore.rl.run_records import read_attempt_metrics, read_attempts
 import ray
 from omegaconf import DictConfig, OmegaConf
 from skyrl_train.config.rollout_validation import validate_rollout_launch
-from skyrl_train.config.utils import get_default_config
+from skyrl_train.config.utils import get_default_config, normalize_logging_backends
 from skyrl_train.dataset.tasks import SourceTaskDataset
 from skyrl_train.entrypoints.main_base import BasePPOExp, EntrypointOperation
 from skyrl_train.entrypoints.main_generate import EvalOnlyEntrypoint
@@ -213,6 +212,7 @@ def run_tiny_training(cfg: DictConfig) -> None:
 
 def run_with_exp(cfg: DictConfig, make_exp, *, operation: EntrypointOperation = EntrypointOperation.TRAIN) -> None:
     """Run one validated experiment class in a fresh local Ray session."""
+    normalize_logging_backends(cfg)
     validate_cfg(cfg)
     validate_rollout_launch(cfg, operation)
     ray.init(

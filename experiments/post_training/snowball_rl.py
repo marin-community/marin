@@ -1,558 +1,580 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a Snowball RL experiment and compare a gated preset with pinned controls.
-
-\b
-  speed-short      engine throughput and full EvalLite quality; 8 H100, about 15 min.
-  speed-medium     asynchronous update time and mismatch; 40 H100, runtime unmeasured.
-  speed-long       asynchronous update time and mismatch; 40 H100, 45-75 min.
-  learning-medium  EvalLite score after 25 async updates; 40 H100, runtime unmeasured.
-  data-short       mixed-answer fraction on a training-task sample; 8 H100, about 15 min.
-  data-medium      learning-medium on --tasks; 40 H100, runtime unmeasured.
-  train-long       async training, checkpoints and HF export; 40 H100 east; no verdict.
-
-Guide: docs/recipes/snowball-rl.md. Without --run, print the plan and saved status.
-A gated preset without a pin at its current revision refuses every command, including the plan print,
-with exit 4. Controls are collected after merge; --control and train-long need no pin.
-
-\b
-Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
-  --preset speed-medium --version dev --run --wait
-  --preset learning-medium --set trainer.algorithm.advantage_estimator=grpo \
-    --set trainer.algorithm.group_advantage_min_size=null --version dev --run
-  --preset speed-medium --require 'policy/mismatch/staleness0/log_ratio_abs_max<=0' --version dev --run
-  --preset learning-medium --require 'eval_lite/aaii_category/coding/mean>=control' --version dev --run
-  --preset learning-medium --version dev --run
-  --preset data-short --tasks my-selection@2026.11.02 --version dev --run
-  --preset train-long --set trainer.max_steps=100 --version dev --run
-"""
+"""Snowball model, layouts and RL experiment presets."""
 
 from __future__ import annotations
 
-import json
-import os
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
-from dataclasses import asdict, dataclass, replace
-from functools import partial, wraps
+from dataclasses import replace
 from pathlib import Path
-from urllib.parse import urlencode
+from types import MappingProxyType
 
-import click
-import yaml
-from finestore.rl.run_records import AttemptRecord
-from iris.cli.connect import open_iris_client
-from iris.client.client import IrisClient, get_iris_ctx
-from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import JobName
-from iris.resources.state import JobState
-from marin.execution.artifact import is_mutable_version
-from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.lazy import run as build_artifacts
-from marin.execution.step_status import get_status_path
-from marin.experiment.cli import build_options_with_runner
-from marin.experiment.namespacing import user_owned_name
-from marin.rl.cli import submit_or_run
-from marin.rl.rl_progress import Verdict
+from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import (
-    IRIS_HUB_CLUSTER_CONFIG,
-    IrisSkyRLExecution,
-    SkyRLReceiptLookupError,
-    SkyRLRun,
-    SkyRLRunConfig,
-    read_skyrl_attempt,
-    run_skyrl,
+    ArtifactHfModel,
+    MegatronGeometry,
+    SkyRLGenerationPlan,
+    SkyRLRetentionPolicy,
+    SkyRLRolePlan,
 )
-from marin.rl.skyrl_records import (
-    RecordedLaunch,
-    attempt_tracking,
-    read_skyrl_metrics,
-    read_stored_skyrl_attempt,
-    recorded_launch,
+from marin.training.training import LevanterCheckpoint
+from skyrlrecipe import ContextBudget, RecipePatch, sections
+from skyrlrecipe.declared import (
+    EvaluationSampling,
 )
-from rigging.filesystem.storage_path import StoragePath
-from rigging.provenance import Provenance, git_output
+from skyrlrecipe.documents import set_path
+from skyrlrecipe.sampling import EvalSamplingParams
 
-from experiments.post_training import snowball_rl_gate, snowball_rl_publication
-from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training import snowball_rl_recipe as recipe
-from experiments.post_training.snowball_rl_command import EXIT_CODES, SnowballCommand
-from experiments.post_training.snowball_rl_scoring import GATE_INPUTS_FILENAME, GateInputs, InvalidComparison
+from experiments.post_training import rl
+from experiments.post_training.rl_presets import (
+    UPDATE_SECONDS_METRIC,
+    ControlPin,
+    Evaluation,
+    Generation,
+    Layout,
+    Metric,
+    ModelPresets,
+    Preset,
+    Recipe,
+    Training,
+    WindowStatistic,
+)
+from experiments.post_training.rl_recipe import BATCH_SETTINGS
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
+    TRAIN_FILENAME,
+    VALIDATION_FILENAME,
 )
 
-_WANDB_ENTITY_ENV = "WANDB_ENTITY"
-_FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
+SEED = 20261020
 
 
-@dataclass(frozen=True)
-class SnowballRun:
-    runs: tuple[ArtifactStep[SkyRLRun], ...]
-    gate: ArtifactStep[snowball_rl_gate.GateReport] | None = None
-    inputs: GateInputs | None = None
+MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 
 
-def _provenance(*, control: bool) -> Provenance:
-    root = presets.REPO_ROOT
-    provenance = Provenance.capture(root)
-    if (root / ".git").exists():
-        untracked = git_output(
-            ["ls-files", "--others", "--exclude-standard", "experiments", "lib", "vendor"], cwd=root
-        ).splitlines()
-        if untracked:
-            raise click.BadParameter(f"stage source files before naming a run: {', '.join(untracked)}")
-    if not provenance.tree_hash or (control and provenance.dirty):
-        raise click.BadParameter("controls require a clean checkout; runs require git or Iris source provenance")
-    return provenance
+MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 
 
-def _run_snowball(config: SkyRLRunConfig, *, inputs: GateInputs) -> SkyRLRun:
-    path = StoragePath(config.output.resolved_config_uri).parent / GATE_INPUTS_FILENAME
-    if not path.exists():
-        path.parent.mkdirs()
-        path.write_text(inputs.model_dump_json(indent=2) + "\n")
-    return run_skyrl(config)
+MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 
 
-def _run_name(preset: presets.Preset, provenance: Provenance, inputs_hash: str, replicate: int, *, control: bool) -> str:
-    if control:
-        return snowball_rl_gate.control_name(preset.name, provenance.base_commit, replicate)
-    name = f"{presets.RUN_PREFIX}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
-    return user_owned_name(name + (f"-r{replicate}" if preset.gated else ""))
+DEFAULT_SELECTION_VERSION = "2026.11.04.1"
 
 
-def build_run(
-    preset: presets.Preset,
-    *,
-    tasks: ArtifactStep | None = None,
-    init: ArtifactStep | None = None,
-    settings: tuple[str, ...] = (),
-    replicates: int = 1,
-    control: bool = False,
-    requirements: tuple[str, ...] = (),
-) -> SnowballRun:
-    """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
-    wandb_entity = os.environ.get(_WANDB_ENTITY_ENV)
-    if not 1 <= replicates <= 5:
-        raise click.BadParameter("replicates must be between 1 and 5")
-    if settings and not preset.accepts_settings:
-        raise click.BadParameter("this preset accepts no --set")
-    if preset.tasks_input == "required":
-        if tasks is None and not control:
-            raise click.BadParameter("data presets require --tasks and accept no --set")
-    elif preset.tasks_input == "forbidden" and tasks is not None:
-        raise click.BadParameter("use a data or train-long preset with --tasks")
-    if not preset.accepts_init and init is not None:
-        raise click.BadParameter("--init requires a learning or train-long preset")
-    if (not preset.gated and replicates != 1) or (control and preset.controls != preset.name):
-        raise click.BadParameter(f"{preset.name} does not accept this replicate or control selection")
-    if control and (settings or tasks is not None or init is not None):
-        raise click.BadParameter("controls use only the preset's pinned default inputs")
-    default, selection = presets.task_selections(preset, tasks)
-    if is_mutable_version(selection.version):
-        raise click.BadParameter("curated task selections must have an immutable version")
-    summary = presets.selection_summary(selection)
-    if (
-        tasks is not None
-        and preset.tasks_input == "required"
-        and summary["recipe"]["heldout"] != presets.selection_summary(default)["recipe"]["heldout"]
-    ):
-        raise click.BadParameter(
-            "candidate tasks use a different heldout input; curate against the default task selection"
+DEFAULT_EVAL_LITE_NAME = "eval-lite"
+
+
+DEFAULT_EVAL_LITE_VERSION = "2026.11.11.1"
+
+
+EVAL_REPLY_TOKENS = 8192
+
+
+_DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
+
+
+_DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
+
+
+_DEFAULT_MODEL = ArtifactHfModel(
+    ArtifactStep.adopt(
+        f"models/snowball-datakit-sft-{MODEL_REVISION}", "2026.09.21", MODEL_URI, kind=LevanterCheckpoint
+    ),
+    MODEL_ID,
+    MODEL_REVISION,
+    relative_path="",
+)
+
+
+_DEFAULT_PATCH = RecipePatch(
+    context_budget=ContextBudget(request_window_tokens=24576, max_new_tokens_per_turn=8192, max_turns=1),
+    environment=sections.Environment(task_sessions={"local": {}}),
+    data=sections.Data(kind="parquet", shuffle=True),
+    trainer=sections.Trainer(
+        strategy="megatron",
+        flash_attn=False,
+        use_sample_packing=False,
+        gradient_checkpointing=True,
+        offload_optimizer_during_rollouts=False,
+        epochs=50,
+        update_epochs_per_batch=1,
+        eval_batch_size=256,
+        eval_before_train=False,
+        logger=("console", "records", "wandb"),
+        project_name="marin-snowball-rl",
+        tracker_commit_each_step=True,
+        training_metrics=True,
+        rollout_spans=True,
+        policy_train_spans=True,
+        algorithm=sections.Algorithm(
+            advantage_estimator="rloo_n",
+            off_policy_correction="none",
+            policy_loss_type="regular",
+            loss_reduction="token_mean",
+            use_kl_loss=False,
+            kl_estimator_type="k3_unbiased_gradient",
+            eps_clip_low=0.2,
+            eps_clip_high=0.2,
+            group_advantage_min_size=2,
+            advantage_batch_normalize=False,
+            rloo_n_filter_zero_reward_groups=True,
+            use_entropy_loss=False,
+        ),
+        policy=sections.Policy(
+            optimizer_config=sections.PolicyOptimizerConfig(
+                optimizer="AdamW",
+                lr=1e-6,
+                adam_betas=(0.9, 0.999),
+                weight_decay=0.0,
+                max_grad_norm=0.5,
+                scheduler="constant_with_warmup",
+                num_warmup_steps=0,
+            ),
+        ),
+        rollout_buffer=sections.RolloutBuffer(object_store_root=None),
+        ckpt_interval=0,
+        hf_save_interval=-1,
+    ),
+    generator=sections.Generator(
+        backend="vllm",
+        vllm_attention_backend="FLASH_ATTN",
+        run_engines_locally=True,
+        weight_sync_backend="nccl",
+        weight_sync_pause=sections.WeightSyncPause(mode="keep", clear_cache=True),
+        weight_sync_transport="expert_block",
+        expert_block_sync=sections.ExpertBlockSync(timeout_seconds=600, verify=False),
+        gpu_memory_utilization=0.75,
+        max_num_seqs=1024,
+        max_num_batched_tokens=8192,
+        enable_prefix_caching=True,
+        trajectory_reward_shaping=sections.TrajectoryRewardShaping(
+            enabled=True,
+            overlong=sections.Overlong(penalty_scale=0.0),
+            reasoning_span=sections.ReasoningSpan(penalty=0.1, target="marker"),
+        ),
+        enable_chunked_prefill=True,
+        enforce_eager=False,
+        enable_http_endpoint=False,
+        chat_template=None,
+        apply_overlong_filtering=False,
+        engine_init_kwargs={"moe_backend": "triton", "enable_auto_tools": True, "tool_parser": "hermes"},
+        sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
+    ),
+    trajectory_runner=sections.TrajectoryRunner(max_concurrent_tasks=1024),
+    extra_env={
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        "NCCL_NET": "Socket",
+        "NCCL_IB_DISABLE": "1",
+        "NCCL_SOCKET_FAMILY": "AF_INET",
+    },
+)
+
+
+_MODE_KEYS = (
+    "trainer.rollout_buffer.max_staleness_steps",
+    "trainer.rollout_buffer.batch_policy",
+    "trainer.algorithm.off_policy_correction",
+)
+
+
+_HELD_OUT_SAMPLING = EvaluationSampling(
+    n_samples_per_prompt=1,
+    sampling_params=EvalSamplingParams(
+        temperature=0.0, top_p=1.0, logprobs=None, ignore_eos=False, max_generate_length=EVAL_REPLY_TOKENS
+    ),
+)
+
+
+_THROUGHPUT_SAMPLING = EvaluationSampling(
+    n_samples_per_prompt=4,
+    sampling_params=EvalSamplingParams(temperature=1.0, top_p=1.0, logprobs=None, ignore_eos=True),
+)
+
+
+_SCREENING_SAMPLING = EvaluationSampling(
+    n_samples_per_prompt=4,
+    sampling_params=EvalSamplingParams(temperature=1.0, top_p=1.0, logprobs=None, ignore_eos=False),
+)
+
+
+EVALUATIONS = MappingProxyType(
+    {
+        evaluation.name: evaluation
+        for evaluation in (
+            Evaluation(
+                name="eval_lite",
+                file=Path(FULL_VALIDATION_FILENAME).stem,
+                source="eval_lite",
+                profile=_HELD_OUT_SAMPLING,
+            ),
+            Evaluation(
+                name="eval_lite_100",
+                file=Path(VALIDATION_FILENAME).stem,
+                source="eval_lite",
+                profile=_HELD_OUT_SAMPLING,
+            ),
+            Evaluation(
+                name="speed_512x4",
+                file=Path(TRAIN_FILENAME).stem,
+                sample=512,
+                profile=_THROUGHPUT_SAMPLING,
+            ),
+            Evaluation(
+                name="screen_256x4",
+                file=Path(TRAIN_FILENAME).stem,
+                source="tasks",
+                sample=256,
+                profile=_SCREENING_SAMPLING,
+            ),
         )
-    if tasks is not None:
-        task_set = presets.selection_artifact(preset.eval_lite)
-        excluded = summary["recipe"].get("exclusions", ())
-        expected = str(StoragePath(task_set.path()) / FULL_VALIDATION_FILENAME)
-        if not any(row["uri"] == expected and row["version"] == task_set.version for row in excluded):
-            raise click.BadParameter("candidate tasks must record the full EvalLite in recipe.exclusions")
-    spec = recipe.run_spec(preset, name="snowball-config", tasks=tasks, init=init, settings=settings)
-    evaluation_inputs = [
-        (evaluation.name, source.name, source.version)
-        for evaluation in preset.evaluations
-        for source in (evaluation.tasks(selection, default, preset.eval_lite),)
-    ]
-    changes = {
-        "tasks": (selection.name, selection.version),
-        "init": None if init is None else (init.name, init.version),
-        "layout": preset.recipe.layout.name,
-        "settings": sorted(presets.override_document(settings).items()),
-        "evaluations": sorted(evaluation_inputs),
     }
-    snowball_rl_gate.validate_requirements(preset, requirements, control=control)
-    provenance = _provenance(control=control)
-    inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
-    inputs = snowball_rl_gate.gate_inputs(
-        preset.name,
-        settings,
-        f"{tasks.name}@{tasks.version}" if tasks is not None else None,
-        f"{init.name}@{init.version}" if init is not None else None,
-        requirements,
-    )
-    runs = []
-    for replicate in range(replicates):
-        name = _run_name(preset, provenance, inputs_hash, replicate, control=control)
-        run = recipe.run_step(preset, replace(spec, name=name), wandb_entity=wandb_entity)
-        runs.append(replace(run, run=partial(_run_snowball, inputs=inputs)))
-    gate = (
-        snowball_rl_gate.gate_step(
-            preset,
-            tuple(runs),
-            inputs=inputs,
+)
+
+
+_P40_PLAN = SkyRLRolePlan(
+    colocate_all=False,
+    policy_num_nodes=4,
+    policy_num_gpus_per_node=8,
+    num_inference_engines=1,
+    inference_engine_tensor_parallel_size=1,
+    inference_engine_pipeline_parallel_size=1,
+    inference_engine_data_parallel_size=8,
+    inference_engine_expert_parallel_size=8,
+    train_batch_size=128,
+    policy_mini_batch_size=128,
+    micro_train_batch_size_per_gpu=1,
+    n_samples_per_prompt=4,
+)
+
+
+P40 = Layout(
+    name="p40",
+    workload=Training(_P40_PLAN),
+    megatron=MegatronGeometry(
+        tensor_model_parallel_size=1,
+        pipeline_model_parallel_size=2,
+        context_parallel_size=1,
+        expert_model_parallel_size=8,
+        expert_tensor_parallel_size=1,
+    ),
+    cluster="cw-us-east-02a",
+    host_memory="1800GB",
+    gpu_variant="H100",
+    host_cpu=32,
+    host_disk="2TB",
+    priority="interactive",
+    coordinator_timeout_hours=72,
+    job_timeout_seconds=72 * 3600,
+)
+
+
+E8 = replace(
+    P40,
+    name="e8",
+    workload=Generation(
+        SkyRLGenerationPlan(
+            gpus_per_node=8,
+            num_inference_engines=1,
+            inference_engine_tensor_parallel_size=1,
+            inference_engine_pipeline_parallel_size=1,
+            inference_engine_data_parallel_size=8,
+            inference_engine_expert_parallel_size=8,
+            n_samples_per_prompt=4,
         )
-        if preset.gated and not control
-        else None
-    )
-    return SnowballRun(tuple(runs), gate, inputs)
+    ),
+)
 
 
-def _grafana_links(receipt: AttemptRecord | None, cluster: str, launch: RecordedLaunch | None) -> dict[str, str]:
-    if receipt is None or not receipt.native.result.iris_job_id or not receipt.native.result.started_at:
-        return {}
-    if launch is None or launch.training_type not in ("sync", "async"):
-        return {}
-    query = urlencode(
-        {
-            "orgId": 1,
-            "timezone": "utc",
-            "from": presets.utc_millis(receipt.native.result.started_at),
-            "to": presets.utc_millis(receipt.native.result.finished_at) if receipt.native.result.finished_at else "now",
-            "var-training_type": launch.training_type,
-            "var-cluster": cluster,
-            "var-run": receipt.run_id,
-            "var-job": "$__all",
-            "var-execution": "$__all",
-        },
-        safe="$",
-    )
-    return {"run": f"{presets.GRAFANA_URL}?{query}"}
+_GENERATION_DOCUMENT = {}
 
 
-def _completed_update(path: str, workload: presets.Training | presets.Generation) -> int | None:
-    key = workload.completion_metric
-    try:
-        metrics = read_skyrl_metrics(path)
-    except FileNotFoundError:
-        return None
-    for _, values in sorted(metrics.items(), reverse=True):
-        if key in values and workload.completed_row(values):
-            return values["step"]
-    return None
+for _key, _value in _P40_PLAN.config_values().items():
+    if _key.startswith("trainer."):
+        set_path(_GENERATION_DOCUMENT, _key, _value)
 
 
-def _status(
-    run: SnowballRun,
-    preset: presets.Preset,
-    *,
-    stored_only: bool = False,
-    issue: int | None = None,
-    publication_urls: dict[str, str] | None = None,
-) -> dict:
-    rows = []
-    planned = []
-    for step in run.runs:
-        execution = next(value for value in step.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
-        path = step.path(presets.artifact_prefix(execution.cluster))
-        config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-        planned.append(yaml.safe_load(config.launch_config_yaml))
-        try:
-            receipt = read_stored_skyrl_attempt(path) if stored_only else read_skyrl_attempt(path)
-        except SkyRLReceiptLookupError as error:
-            raise click.BadParameter(str(error)) from error
-        result = receipt.native.result if receipt is not None else None
-        try:
-            launch = recorded_launch(receipt) if receipt is not None else None
-        except ValueError as error:
-            raise InvalidComparison(str(error)) from error
-        tracking = attempt_tracking(receipt, launch) if receipt is not None else {}
-        team = launch.wandb_entity if launch else execution.wandb_entity
-        grafana = _grafana_links(receipt, execution.cluster, launch)
-        state = (
-            result.state.value
-            if result
-            else (
-                StoragePath(get_status_path(path)).read_text().strip()
-                if StoragePath(get_status_path(path)).exists()
-                else "not built"
+_GENERATION_NATIVE_DEFAULTS = RecipePatch.from_document(_GENERATION_DOCUMENT)
+
+
+_ASYNC_P40 = Recipe(
+    layout=P40,
+    fixed_reply_tokens=None,
+    config=_DEFAULT_PATCH.merge(
+        RecipePatch(
+            trainer=sections.Trainer(
+                rollout_buffer=sections.RolloutBuffer(max_staleness_steps=2, batch_policy="full_batch"),
+                algorithm=sections.Algorithm(off_policy_correction="tis"),
             )
         )
-        rows.append(
-            {
-                "name": step.name,
-                "version": step.version,
-                "state": state,
-                "iris_job_id": result.iris_job_id if result else None,
-                "wandb_entity": team or recipe.DEFAULT_WANDB_ENTITY,
-                **{
-                    key: tracking.get(key)
-                    for key in ("attempt_id", "wandb_url", "started_at", "engine")
-                    if tracking.get(key) is not None
-                },
-                **({"grafana_links": grafana} if grafana else {}),
-                "latest_completed_update": _completed_update(path, preset.recipe.layout.workload),
-                "cluster": execution.cluster,
-                "allocation": {
-                    **planned[-1]["iris"]["allocation"],
-                    "cpu": execution.cpu,
-                    "memory": execution.memory,
-                    "disk": execution.disk,
-                },
-                "output": path,
-                "issue": issue,
-                "rl_progress_url": (publication_urls or {}).get(path),
-            }
-        )
-    verdict = {}
-    report = None
-    if run.gate is not None:
-        path = run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster))
-        report = snowball_rl_gate.read_gate_report(path)
-        if report is not None:
-            verdict = {
-                "report": str(StoragePath(path) / snowball_rl_gate.GATE_REPORT_FILENAME),
-                **report.model_dump(mode="json", include={"verdict", "label", "reason"}),
-            }
-    if "verdict" not in verdict and preset.gated:
-        crashed = next((row for row in rows if str(row["state"]).lower() in _FAILED_RUN_STATES), None)
-        if crashed is not None:
-            verdict = {
-                "verdict": Verdict.INVALID.value,
-                "reason": f"native job {crashed['iris_job_id']} is {crashed['state']}",
-                "iris_job_id": crashed["iris_job_id"],
-            }
-    preset = preset.with_updates(planned[0]["skyrl"]["trainer"]["max_steps"])
-    return {
-        "preset": preset.name,
-        "code": asdict(Provenance.capture(presets.REPO_ROOT)),
-        "inputs": {
-            "model": planned[0]["inputs"]["model"]["identity"],
-            **{
-                name: [source["identity"] for source in planned[0]["inputs"][name]]
-                for name in ("train_data", "validation_data")
-            },
-        },
-        "context_budget": planned[0]["skyrl"]["context_budget"],
-        "updates": preset.recipe.layout.workload.update_count(planned[0]["skyrl"]["trainer"]["max_steps"]),
-        "measured_updates": list(preset.measured),
-        "config_changes": list(report.run.config_changes) if report else [],
-        "budget_estimate": preset.budget,
-        "guards": [metric.key for metric in preset.guards],
-        "gaps": [gap.value for gap in preset.gaps],
-        "runs": rows,
-        **verdict,
+    ),
+)
+
+
+_GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH.merge(_GENERATION_NATIVE_DEFAULTS))
+
+
+_GAPS = (
+    "aaii-coverage",
+    "no-agentic-tasks",
+    "no-image-sandbox",
+)
+
+
+_TASK_SET = EVALUATIONS["eval_lite_100"]
+
+
+_BATCH_KEYS = frozenset(BATCH_SETTINGS)
+
+
+_OWNED_KEYS = (
+    frozenset(
+        {
+            "entrypoint",
+            "trainer.resume_mode",
+            "trainer.dump_eval_results",
+            "trainer.placement",
+            "generator.trajectory_retention",
+            "generator.run_engines_locally",
+            "trainer.callbacks",
+            "trainer.ckpt_interval",
+            "trainer.hf_save_interval",
+        }
+    )
+    | (frozenset(_P40_PLAN.config_values()) - _BATCH_KEYS)
+    | frozenset(_MODE_KEYS)
+)
+
+
+_GATED_KEYS = frozenset(
+    {
+        "trainer.max_steps",
+        "trainer.logger",
+        "trainer.project_name",
+        "context_budget",
+        "generator.sampling_params.ignore_eos",
+        "generator.sampling_params.min_tokens",
     }
+)
 
 
-def _print_status(snapshot: dict) -> None:
-    click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
-    if "report" in snapshot:
-        click.echo((StoragePath(snapshot["report"]).parent / snowball_rl_gate.GATE_MARKDOWN_FILENAME).read_text())
+_SPEED_KEYS = frozenset(
+    {"generator.sampling_params.logprobs", "trainer.training_metrics", "generator.apply_overlong_filtering"}
+)
 
 
-def _from_handles(handles: list[ArtifactStep]) -> SnowballRun:
-    return SnowballRun(
-        tuple(step for step in handles if step.artifact_type is SkyRLRun),
-        next((step for step in handles if step.artifact_type is snowball_rl_gate.GateReport), None),
-    )
+_LEARNING_MEDIUM = Preset(
+    tasks=_DEFAULT_TASKS,
+    model=_DEFAULT_MODEL,
+    eval_lite=_DEFAULT_EVAL_LITE,
+    seed=SEED,
+    sample_namespace="datasets/snowball-rl",
+    wandb_entity="marin-community",
+    retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
+    export_hf=True,
+    name="learning-medium",
+    revision="2026.11.12.1",
+    recipe=_ASYNC_P40,
+    updates=25,
+    measured=range(21, 26),
+    tasks_input="forbidden",
+    accepts_settings=True,
+    accepts_init=True,
+    publishes=True,
+    controls="learning-medium",
+    checkpoint_every=None,
+    owned_keys=_OWNED_KEYS | _GATED_KEYS,
+    data_settings=frozenset({"shuffle", "sampling"}),
+    evaluations=(replace(EVALUATIONS["eval_lite"], at_start=True),),
+    guards=(Metric("eval_lite/family_mean", True),),
+    objectives=(
+        Metric("eval_lite/family_mean", True),
+        Metric("eval_lite/family_mean/gain_per_h100_hour", True, WindowStatistic.GAIN_PER_H100_HOUR),
+    ),
+    gaps=_GAPS,
+    budget="asynchronous runtime unmeasured",
+)
 
 
-@contextmanager
-def _iris_client() -> Iterator[IrisClient]:
-    context = get_iris_ctx()
-    if context is not None and context.client is not None:
-        yield context.client
-    else:
-        with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=presets.REPO_ROOT) as client:
-            yield client
+_PRESETS = (
+    Preset(
+        tasks=_DEFAULT_TASKS,
+        model=_DEFAULT_MODEL,
+        eval_lite=_DEFAULT_EVAL_LITE,
+        seed=SEED,
+        sample_namespace="datasets/snowball-rl",
+        wandb_entity="marin-community",
+        retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
+        export_hf=False,
+        name="speed-short",
+        revision="2026.11.13.1",
+        recipe=replace(_GENERATING, fixed_reply_tokens=4096),
+        updates=0,
+        measured=range(1),
+        tasks_input="forbidden",
+        accepts_settings=True,
+        accepts_init=False,
+        publishes=False,
+        controls="speed-short",
+        checkpoint_every=None,
+        owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+        data_settings=frozenset(),
+        evaluations=(EVALUATIONS["speed_512x4"], EVALUATIONS["eval_lite"]),
+        guards=(Metric("generate/tokens_per_second_per_gpu", True), Metric("eval_lite/family_mean", True)),
+        objectives=(Metric("generate/tokens_per_second_per_gpu", True),),
+        gaps=_GAPS,
+        budget="14-17 min; 2 H100-h",
+    ),
+    Preset(
+        tasks=_DEFAULT_TASKS,
+        model=_DEFAULT_MODEL,
+        eval_lite=_DEFAULT_EVAL_LITE,
+        seed=SEED,
+        sample_namespace="datasets/snowball-rl",
+        wandb_entity="marin-community",
+        retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
+        export_hf=False,
+        name="data-short",
+        revision="2026.11.13.1",
+        recipe=_GENERATING,
+        updates=0,
+        measured=range(1),
+        tasks_input="required",
+        accepts_settings=False,
+        accepts_init=False,
+        publishes=False,
+        controls="data-short",
+        checkpoint_every=None,
+        owned_keys=_OWNED_KEYS | _GATED_KEYS | _BATCH_KEYS,
+        data_settings=frozenset(),
+        evaluations=(EVALUATIONS["screen_256x4"],),
+        guards=(Metric("screen_256x4/mixed_fraction", True),),
+        objectives=(Metric("screen_256x4/mixed_fraction", True),),
+        gaps=_GAPS,
+        budget="10-15 min; 2 H100-h",
+    ),
+    Preset(
+        tasks=_DEFAULT_TASKS,
+        model=_DEFAULT_MODEL,
+        eval_lite=_DEFAULT_EVAL_LITE,
+        seed=SEED,
+        sample_namespace="datasets/snowball-rl",
+        wandb_entity="marin-community",
+        retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
+        export_hf=False,
+        evaluations=(),
+        name="speed-medium",
+        revision="2026.11.12.1",
+        recipe=replace(
+            _ASYNC_P40,
+            fixed_reply_tokens=4096,
+            config=_ASYNC_P40.config.merge(
+                RecipePatch(
+                    trainer=sections.Trainer(algorithm=sections.Algorithm(rloo_n_filter_zero_reward_groups=False))
+                )
+            ),
+        ),
+        updates=10,
+        measured=range(2, 11),
+        tasks_input="forbidden",
+        accepts_settings=True,
+        accepts_init=False,
+        publishes=False,
+        controls="speed-medium",
+        checkpoint_every=None,
+        owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+        data_settings=frozenset(),
+        guards=(
+            Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),
+            Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
+        ),
+        objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),),
+        gaps=(*_GAPS, "mismatch-is-agreement", "layout-p40-only"),
+        budget="asynchronous runtime unmeasured",
+    ),
+    Preset(
+        tasks=_DEFAULT_TASKS,
+        model=_DEFAULT_MODEL,
+        eval_lite=_DEFAULT_EVAL_LITE,
+        seed=SEED,
+        sample_namespace="datasets/snowball-rl",
+        wandb_entity="marin-community",
+        retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
+        export_hf=False,
+        evaluations=(),
+        name="speed-long",
+        revision="2026.11.11.1",
+        recipe=_ASYNC_P40,
+        updates=20,
+        measured=range(3, 21),
+        tasks_input="forbidden",
+        accepts_settings=True,
+        accepts_init=False,
+        publishes=False,
+        controls="speed-long",
+        checkpoint_every=None,
+        owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+        data_settings=frozenset(),
+        guards=(
+            Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),
+            Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
+        ),
+        objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),),
+        gaps=(*_GAPS, "layout-p40-only"),
+        budget="45-75 min; 30-50 H100-h",
+    ),
+    _LEARNING_MEDIUM,
+    replace(
+        _LEARNING_MEDIUM,
+        name="data-medium",
+        tasks_input="required",
+        accepts_settings=False,
+        accepts_init=False,
+        controls=_LEARNING_MEDIUM.name,
+        data_settings=frozenset(),
+    ),
+    Preset(
+        tasks=_DEFAULT_TASKS,
+        model=_DEFAULT_MODEL,
+        eval_lite=_DEFAULT_EVAL_LITE,
+        seed=SEED,
+        sample_namespace="datasets/snowball-rl",
+        wandb_entity="marin-community",
+        retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
+        export_hf=True,
+        name="train-long",
+        revision="2026.11.11.1",
+        recipe=_ASYNC_P40,
+        updates=100,
+        measured=range(1, 101),
+        tasks_input="optional",
+        accepts_settings=True,
+        accepts_init=True,
+        publishes=True,
+        controls=None,
+        checkpoint_every=10,
+        owned_keys=_OWNED_KEYS,
+        data_settings=frozenset({"shuffle", "sampling"}),
+        evaluations=(replace(_TASK_SET, every=10, at_start=True),),
+        gaps=_GAPS,
+    ),
+)
 
 
-def _publish_records(
-    run: SnowballRun, preset: presets.Preset, *, issue: int | None = None, service_url: str | None = None
-) -> snowball_rl_publication.PublicationOutcome | None:
-    if not preset.publishes:
-        return None
-    prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
-    gate_path = run.gate.path(prefix) if run.gate is not None else None
-    outputs = [training.path(prefix) for training in run.runs]
-    return snowball_rl_publication.publish_runs(
-        outputs, preset, gate_path=gate_path, issue=issue, service_url=service_url
-    )
-
-
-def _wait_for_run(
-    job: JobName,
-    handles: list[ArtifactStep],
-    preset: presets.Preset,
-    *,
-    issue: int | None = None,
-    service_url: str | None = None,
-) -> None:
-    with _iris_client() as client:
-        parent = client.job(job).wait(recipe.RUN_TIMEOUT_HOURS * 3600, poll_interval=60, raise_on_failure=False)
-    coordinator_error = (
-        f"coordinator {job} is {parent.state}; required verdict unavailable"
-        if parent.state != JobState.SUCCEEDED
-        else None
-    )
-    run = _from_handles(handles)
-    run = replace(run, gate=snowball_rl_gate.completed_gate(run.gate))
-    try:
-        publication = _publish_records(run, preset, issue=issue, service_url=service_url)
-    except Exception as error:
-        publication = snowball_rl_publication.PublicationOutcome(
-            errors=[str(error)], retry="Repeat the original command with --wait."
+SNOWBALL = ModelPresets(
+    presets=_PRESETS,
+    namespace="snowball-rl",
+    controls={
+        name: ControlPin(name, "648b5687f0", "2026.11.06.1", count)
+        for name, count in (
+            ("speed-short", 5),
+            ("data-short", 4),
+            ("speed-medium", 4),
+            ("learning-medium", 4),
+            ("speed-long", 4),
         )
-    snapshot = _status(
-        run,
-        preset,
-        issue=issue,
-        stored_only=True,
-        publication_urls=publication.urls if publication is not None else None,
-    )
-    if publication is not None:
-        snapshot["publication"] = publication.to_dict()
-    if "verdict" not in snapshot and (coordinator_error is not None or run.gate is not None):
-        snapshot["reason"] = coordinator_error or "required verdict unavailable"
-    _print_status(snapshot)
-    verdict = snapshot.get("verdict")
-    if verdict is None and run.gate is None and coordinator_error is None:
-        verdict = Verdict.PASS
-    raise click.exceptions.Exit(EXIT_CODES[verdict])
-
-
-def _run_command(function: Callable) -> click.Command:
-    @wraps(function)
-    def checked(*args, wait: bool = False, **kwargs):
-        if wait and not click.get_current_context().params["do_run"]:
-            raise click.BadParameter("--wait requires --run")
-        return function(*args, **kwargs)
-
-    def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
-        options = click.get_current_context().params
-        preset = presets.PRESETS[options["preset_name"]]
-        if get_job_info() is None:
-            job = submit_or_run("experiments.post_training.snowball_rl", handles, max_concurrent, os.environ)
-        else:
-            planned = _from_handles(handles)
-            build_artifacts(*planned.runs, max_concurrent=max_concurrent)
-            gate = snowball_rl_gate.completed_gate(planned.gate)
-            if gate is not None:
-                build_artifacts(gate, max_concurrent=max_concurrent)
-            job = None
-        if options["wait"] and job is not None:
-            _wait_for_run(job, handles, preset, issue=options["issue"], service_url=options["url"])
-
-    return click.command(cls=SnowballCommand, help=__doc__)(build_options_with_runner(checked, runner))
-
-
-@_run_command
-@click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for launcher publication.")
-@click.option("--url", help="Marina origin for run publication (defaults to the Marina service).")
-@click.option(
-    "--wait",
-    is_flag=True,
-    help="Wait after --run and publish training attempts using the caller Marina login; "
-    "exit 0 for PASS, 1 for FAIL, 2 for INVALID, 3 without a required verdict.",
+    },
 )
-@click.option(
-    "--preset",
-    "preset_name",
-    required=True,
-    type=click.Choice(sorted(presets.PRESETS)),
-    help="Experiment to run; the table above says which preset fits a change.",
-)
-@click.option(
-    "--set",
-    "settings",
-    multiple=True,
-    metavar="KEY=VALUE",
-    help="Change one typed SkyRL setting: a dotted key and a JSON value, for example "
-    "trainer.algorithm.advantage_estimator=grpo. Text values may be bare. "
-    "Repeatable. Keys the preset owns (placement, data, evaluation, measurement) are refused with the "
-    "reason; data presets accept none. Code changes need no flag: the run name includes the source "
-    "tree hash.",
-)
-@click.option(
-    "--require",
-    "requirements",
-    multiple=True,
-    metavar="KEY<=|>=BOUND",
-    help="Add a condition the gate checks on a metric key; the examples above show two. With a "
-    "number, every candidate replicate must meet the bound. With control, the candidate mean must not "
-    "be worse than the controls' beyond tolerance. Repeatable; gated presets only, not with --control. "
-    "A training metric the controls never recorded is refused before launch.",
-)
-@click.option(
-    "--tasks",
-    "tasks_name",
-    metavar="NAME@VERSION",
-    help="Curated task selection at an immutable version, recording the full EvalLite in recipe.exclusions. "
-    "Required by data presets, whose selection must hold out the same task set as the default; "
-    "train-long defaults to the pinned snowball-100k.",
-)
-@click.option(
-    "--init",
-    "init_name",
-    metavar="NAME@VERSION",
-    help="Initial weights: a published model artifact, or a finished train-long run (its HF export). "
-    "learning presets and train-long only. The initial weights are evaluated too, so the report shows "
-    "the gain.",
-)
-@click.option(
-    "--replicates",
-    type=click.IntRange(1, 5),
-    default=1,
-    show_default=True,
-    help="Identical copies of a gated preset, sharing one seed. The gate compares their "
-    "mean with the controls; more copies narrow the tolerance. Not for train-long.",
-)
-@click.option(
-    "--control",
-    is_flag=True,
-    help="Run the preset's control replicates from a clean checkout with only its pinned default "
-    "inputs. Only for pinning new controls; refuses --set, --tasks, --init, --require "
-    "and data-medium, which uses the corresponding learning preset's controls.",
-)
-def main(
-    preset_name: str,
-    settings: tuple[str, ...],
-    tasks_name: str | None,
-    init_name: str | None,
-    replicates: int,
-    control: bool,
-    requirements: tuple[str, ...],
-    issue: int | None,
-    url: str | None,
-) -> tuple[ArtifactStep, ...]:
-    preset = presets.PRESETS[preset_name]
-    run = build_run(
-        preset,
-        settings=settings,
-        tasks=presets.selection_artifact(tasks_name) if tasks_name else None,
-        init=presets.published_artifact(init_name) if init_name else None,
-        replicates=replicates,
-        control=control,
-        requirements=requirements,
-    )
-    do_run = click.get_current_context().params.get("do_run", False)
-    if do_run and get_job_info() is None:
-        assert run.inputs is not None
-        snowball_rl_gate.validate_candidate(
-            preset,
-            run.inputs,
-            control=control,
-        )
-    snapshot = _status(
-        replace(run, gate=snowball_rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue
-    )
-    _print_status(snapshot)
-    if not do_run and "verdict" in snapshot:
-        raise click.exceptions.Exit(EXIT_CODES[snapshot["verdict"]])
-    return (*run.runs, *((run.gate,) if run.gate else ()))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(rl.main(SNOWBALL))

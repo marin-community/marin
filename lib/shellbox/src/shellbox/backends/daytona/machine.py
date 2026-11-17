@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 from daytona import (
     AsyncDaytona,
     AsyncSandbox,
+    CreateSandboxFromImageParams,
     CreateSandboxFromSnapshotParams,
     DaytonaConflictError,
     DaytonaNotFoundError,
@@ -31,6 +32,7 @@ from rigging.timing import ExponentialBackoff
 
 from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.daytona.snapshot import (
+    daytona_image,
     ensure_snapshot,
     snapshot_request_for_spec,
 )
@@ -53,6 +55,7 @@ from shellbox.machine import (
 from shellbox.process_session import finish_owned, own_cleanup
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
+DEFAULT_OUTPUT_COLLECTION_TIMEOUT = 60
 logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 CONTROL_CWD = "/"
@@ -80,7 +83,9 @@ def _control_command(script: str) -> str:
     )
 
 
-async def _create_sandbox(client: AsyncDaytona, params: CreateSandboxFromSnapshotParams, timeout: float) -> AsyncSandbox:
+async def _create_sandbox(
+    client: AsyncDaytona, params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams, timeout: float
+) -> AsyncSandbox:
     """Retry throttling using a caller-owned name to recover an accepted creation."""
     assert params.name is not None
     backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
@@ -113,6 +118,19 @@ async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
         except DaytonaNotFoundError:
             return
         await client.delete(sandbox)
+
+
+class DaytonaImageBuild(StrEnum):
+    """How a sandbox gets its image.
+
+    ``SNAPSHOT`` builds each distinct image once into a named account snapshot and starts
+    sandboxes from it; snapshots persist and count against the account's snapshot quota.
+    ``DECLARATIVE`` builds the image for every sandbox and creates no snapshot. The account
+    must permit declarative builds.
+    """
+
+    SNAPSHOT = "snapshot"
+    DECLARATIVE = "declarative"
 
 
 class DaytonaNetworkMode(StrEnum):
@@ -149,10 +167,18 @@ class DaytonaNetworkPolicy:
 class DaytonaMachine:
     """One Daytona sandbox. Each command gets a fresh process and shared files."""
 
-    def __init__(self, sandbox: AsyncSandbox, spec: MachineSpec, resources: AsyncExitStack):
+    def __init__(
+        self,
+        sandbox: AsyncSandbox,
+        spec: MachineSpec,
+        resources: AsyncExitStack,
+        *,
+        output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
+    ):
         self.sandbox = sandbox
         self.spec = spec
         self.resources = resources
+        self.output_collection_timeout = output_collection_timeout
         self._closed = False
         self._sessions: set[DaytonaProcessSession] = set()
         self._acquisitions: set[asyncio.Task[None]] = set()
@@ -339,7 +365,7 @@ class DaytonaMachine:
                     env=environment,
                     timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,
                 )
-            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            async with asyncio.timeout(self.output_collection_timeout):
                 limit = command.output_limit_bytes
                 stdout, stdout_truncated = await self._read_output(stdout_path, limit)
                 stderr, stderr_truncated = await self._read_output(stderr_path, limit)
@@ -487,12 +513,16 @@ class DaytonaMachineFactory:
         *,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
+        output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
         network_policy: DaytonaNetworkPolicy | None = None,
+        image_build: DaytonaImageBuild = DaytonaImageBuild.SNAPSHOT,
     ):
         self.client_factory = client_factory
         self.ttl_minutes = ttl_minutes
         self.create_timeout = create_timeout
+        self.output_collection_timeout = output_collection_timeout
         self.network_policy = network_policy
+        self.image_build = image_build
 
     def _clients(self) -> Callable[[], AsyncDaytona]:
         """Resolve the configured client factory for one provider session."""
@@ -528,19 +558,19 @@ class DaytonaMachineFactory:
             image_reference=reference,
         )
 
-    async def _prepare(self, client: AsyncDaytona, spec: MachineSpec) -> str:
-        self._check_spec(spec)
-        return await ensure_snapshot(client, snapshot_request_for_spec(spec))
-
     async def prepare(self, spec: MachineSpec) -> str:
         """Prepare the snapshot used by create without starting a sandbox.
 
         Pin registry sources by digest to reuse immutable image content.
         """
+        if self.image_build != DaytonaImageBuild.SNAPSHOT:
+            raise ValueError(f"{self.image_build} image builds create no snapshot to prepare")
         client_factory = self._clients()
         timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
+        self._check_spec(spec)
+        request = snapshot_request_for_spec(spec)
         async with client_factory() as client, asyncio.timeout(timeout):
-            return await self._prepare(client, spec)
+            return await ensure_snapshot(client, request)
 
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
         network = (
@@ -552,27 +582,28 @@ class DaytonaMachineFactory:
             client = await lifetime.enter_async_context(self._clients()())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
             async with asyncio.timeout(timeout):
-                snapshot = await self._prepare(client, spec)
+                self._check_spec(spec)
+                request = snapshot_request_for_spec(spec)
                 name = f"shellbox-{uuid.uuid4().hex}"
-                lifetime.push_async_callback(_delete_named_sandbox, client, name)
-                sandbox = await _create_sandbox(
-                    client,
-                    CreateSandboxFromSnapshotParams(
-                        name=name,
-                        snapshot=snapshot,
-                        os_user="root",
-                        env_vars=spec.env,
-                        **network,
-                        ttl_minutes=self.ttl_minutes,
-                    ),
-                    timeout=timeout,
+                sandbox_fields = dict(
+                    name=name, os_user="root", env_vars=spec.env, **network, ttl_minutes=self.ttl_minutes
                 )
+                if self.image_build == DaytonaImageBuild.SNAPSHOT:
+                    params = CreateSandboxFromSnapshotParams(
+                        snapshot=await ensure_snapshot(client, request), **sandbox_fields
+                    )
+                else:
+                    params = CreateSandboxFromImageParams(
+                        image=daytona_image(request.source), resources=request.resources, **sandbox_fields
+                    )
+                lifetime.push_async_callback(_delete_named_sandbox, client, name)
+                sandbox = await _create_sandbox(client, params, timeout=timeout)
             prepared = await sandbox.process.exec(
                 _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT
             )
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
-            machine = DaytonaMachine(sandbox, spec, lifetime)
+            machine = DaytonaMachine(sandbox, spec, lifetime, output_collection_timeout=self.output_collection_timeout)
             if spec.workdir:
                 result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/", env={"PATH": CONTROL_PATH}))
                 if result.exit_code:

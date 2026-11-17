@@ -175,8 +175,8 @@ def _exported_policy(config: DictConfig) -> ExportedPolicy:
     return ExportedPolicy(
         policy_export_uri=policy_uri,
         global_step=global_step,
-        tokenizer_uri=str(config.inputs.model.tokenizer_uri),
-        tokenizer_revision=str(config.inputs.model.tokenizer_revision),
+        tokenizer_uri=config.inputs.model.tokenizer_uri,
+        tokenizer_revision=config.inputs.model.tokenizer_revision,
         checkpoint_root=checkpoint_root,
         terminal_manifest_uri=str(config.artifacts.terminal_manifest_uri),
     )
@@ -230,19 +230,27 @@ def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> LaunchRe
     return receipt
 
 
-def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
+def execute_launch(
+    config_path: Path, *, backend: LaunchBackend | None = None, forward_env: tuple[str, ...] = ()
+) -> LaunchResult:
     """Execute the lifecycle declared by one resolved launch config."""
     config = _prepare_config(load_launch_config(config_path))
+    previous_path = StoragePath(str(config.artifacts.resolved_config_uri))
+    if previous_path.exists():
+        previous = OmegaConf.create(previous_path.read_text())
+        previous = previous.get("config", previous)
+        if previous.inputs.get("starting_checkpoint") != config.inputs.starting_checkpoint:
+            raise ValueError("inputs.starting_checkpoint changed for an existing run; use a new RL artifact version")
     terminal_receipt_uri = str(config.artifacts.terminal_manifest_uri)
     if StoragePath(terminal_receipt_uri).exists():
-        raise ValueError(f"Terminal receipt is immutable and already exists: {terminal_receipt_uri}")
+        raise ValueError(f"Terminal manifest is immutable and already exists: {terminal_receipt_uri}")
 
     if backend is None:
         # The concrete Iris backend imports the training/export stack. Keep it
         # outside the CPU-only config validation and launcher import boundary.
         from cloud.iris.iris_backend import IrisBackend  # noqa: PLC0415
 
-        active_backend: LaunchBackend = IrisBackend()
+        active_backend: LaunchBackend = IrisBackend(forward_env=forward_env)
     else:
         active_backend = backend
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as resolved_file:
@@ -311,13 +319,14 @@ def create_parser() -> argparse.ArgumentParser:
     iris_commands = iris.add_subparsers(dest="action", required=True)
     launch = iris_commands.add_parser("launch")
     launch.add_argument("--config", required=True, type=Path)
+    launch.add_argument("--forward-env", action="append", default=[], metavar="NAME")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = create_parser().parse_args(argv)
     with contextlib.redirect_stdout(sys.stderr):
-        result = execute_launch(args.config)
+        result = execute_launch(args.config, forward_env=tuple(args.forward_env))
     json.dump(result.model_dump(mode="json"), sys.stdout, sort_keys=True)
     sys.stdout.write("\n")
     return 0 if result.state in {LaunchState.PREPARED, LaunchState.SUBMITTED, LaunchState.SUCCEEDED} else 1

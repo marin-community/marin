@@ -55,8 +55,7 @@ def test_coordinator_request_replays_the_experiment_main() -> None:
     cluster_config, request = _coordinator_request(
         [_step(_execution())],
         "experiments.test_rl",
-        ("--version", "2026.09.21", "--run"),
-        3,
+        ("--version", "2026.09.21", "--run", "--max-concurrent", "3"),
         Path("/workspace/marin"),
         {"DAYTONA_API_KEY": "secret"},
     )
@@ -83,7 +82,13 @@ def test_coordinator_request_replays_the_experiment_main() -> None:
 
 def test_coordinator_request_requires_a_skyrl_step() -> None:
     with pytest.raises(ValueError, match="did not construct a SkyRL artifact step"):
-        _coordinator_request([_step()], "experiments.test_rl", ("--run",), 8, Path("/workspace/marin"), {})
+        _coordinator_request(
+            [_step()],
+            "experiments.test_rl",
+            ("--run",),
+            Path("/workspace/marin"),
+            {},
+        )
 
 
 @pytest.mark.parametrize("missing_name", [None, "JUDGE_KEY", "EVAL_KEY"])
@@ -149,8 +154,16 @@ def test_rl_entrypoint_can_spawn_workers(tmp_path: Path) -> None:
         textwrap.dedent(
             """\
         import multiprocessing
+        import sys
         import click
         from marin.rl.cli import rl_build_options
+        from experiments.post_training import rl
+
+        assert "experiments.post_training.snowball_rl" not in sys.modules
+        from experiments.post_training import snowball_rl
+
+        assert "marin.processing.embeddings.harrier" not in sys.modules
+        assert "levanter" not in sys.modules
 
         @click.command()
         @rl_build_options
@@ -184,5 +197,22 @@ def test_rl_entrypoint_can_spawn_workers(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         timeout=50,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_cat_count_launcher_import_keeps_training_dependencies_unloaded() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import experiments.post_training.cat_count_canary.launcher; "
+            "heavy = {'levanter', 'transformers', 'torch', 'wandb'}; "
+            "loaded = heavy.intersection(name.split('.')[0] for name in sys.modules); "
+            "assert not loaded, sorted(loaded)",
+        ],
+        timeout=30,
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, result.stderr

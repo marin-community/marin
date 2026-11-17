@@ -98,7 +98,6 @@ def _coordinator_request(
     handles: list[ArtifactStep],
     module_name: str,
     argv: tuple[str, ...],
-    max_concurrent: int,
     workspace: Path,
     env_vars: Mapping[str, str],
 ) -> tuple[str, JobRequest]:
@@ -114,7 +113,7 @@ def _coordinator_request(
         name=job_name,
         entrypoint=Entrypoint.from_binary(
             "python",
-            ["-m", module_name, *argv, "--max-concurrent", str(max_concurrent)],
+            ["-m", module_name, *argv],
         ),
         resources=ResourceConfig.with_cpu(
             cpu=_COORDINATOR_CPU,
@@ -133,7 +132,12 @@ def _coordinator_request(
 
 
 def submit_or_run(
-    module_name: str, handles: list[ArtifactStep], max_concurrent: int, coordinator_env: Mapping[str, str]
+    module_name: str,
+    handles: list[ArtifactStep],
+    max_concurrent: int,
+    coordinator_env: Mapping[str, str],
+    *,
+    argv: tuple[str, ...],
 ) -> JobName | None:
     """Run the graph in-job, or submit it and return the coordinator's ID."""
     if get_job_info() is not None:
@@ -144,8 +148,7 @@ def submit_or_run(
     cluster_config, request = _coordinator_request(
         handles,
         module_name,
-        tuple(sys.argv[1:]),
-        max_concurrent,
+        argv,
         workspace,
         coordinator_env,
     )
@@ -161,6 +164,6 @@ def rl_build_options(fn: Callable[..., BuildResult]) -> Callable[..., None]:
     def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
         # Spawn workers import the main module before registering its module spec.
         module_name = _module_name(sys.modules[fn.__module__])
-        submit_or_run(module_name, handles, max_concurrent, os.environ)
+        submit_or_run(module_name, handles, max_concurrent, os.environ, argv=tuple(sys.argv[1:]))
 
     return build_options_with_runner(fn, runner)

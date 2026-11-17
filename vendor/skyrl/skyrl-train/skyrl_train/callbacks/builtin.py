@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
 
 from loguru import logger
+from shellbox.backends.daytona.machine import DaytonaImageBuild
 from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.evaluation_profiles import (
@@ -294,7 +295,11 @@ class BestCheckpointCallback(TrainerCallback):
             "save_after_fraction": self.save_after_fraction,
         }
         io.makedirs(root, exist_ok=True)
-        io.write_bytes_atomic(best_path, json.dumps(payload).encode())
+        encoded = json.dumps(payload).encode()
+        io.write_bytes_atomic(best_path, encoded)
+        export_root = trainer.cfg.trainer.export_path
+        io.makedirs(export_root, exist_ok=True)
+        io.write_bytes_atomic(join_resource_path(export_root, BEST_CHECKPOINT_FILENAME), encoded)
         self.best_score = score
         return control
 
@@ -307,6 +312,12 @@ class HarborEvaluationCallback(TrainerCallback):
 
     def __init__(self, *, cohorts: list[dict], timeout: float, minimum_coverage: float, daytona_api_key_env: str):
         self.cohorts = OmegaConf.to_container(cohorts, resolve=True) if OmegaConf.is_config(cohorts) else cohorts
+        # Per-sandbox declarative builds are limited to standalone evals for now; reject them
+        # before the trainer acquires resources.
+        for cohort in self.cohorts:
+            kwargs = cohort["job"].get("environment", {}).get("kwargs", {})
+            if kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT) != DaytonaImageBuild.SNAPSHOT:
+                raise ValueError(f"Harbor validation cohort {cohort['name']} requires Daytona snapshot image builds")
         self.timeout = timeout
         self.minimum_coverage = minimum_coverage
         self.daytona_api_key_env = daytona_api_key_env
@@ -999,6 +1010,16 @@ class InferenceStatsCallback(TrainerCallback):
                 logger.warning(f"InferenceStatsCallback: {type(sink).__name__} failed", exc_info=True)
 
 
+def _add_inference_stats_callback(cfg: DictConfig, callbacks: List[TrainerCallback]) -> None:
+    interval = getattr(cfg.generator, "inference_stats_interval", 1)
+    if (
+        cfg.generator.backend == "vllm"
+        and interval > 0
+        and not any(isinstance(callback, InferenceStatsCallback) for callback in callbacks)
+    ):
+        callbacks.append(InferenceStatsCallback(log_every_steps=interval))
+
+
 def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
     """
     Create the default set of callbacks based on trainer configuration.
@@ -1054,6 +1075,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
             callbacks.append(LoggingCallback())
         if cfg.trainer.get("mismatch_probe", {}).get("enabled", False):
             callbacks.append(MismatchProbeCallback(cfg))
+        _add_inference_stats_callback(cfg, callbacks)
         return callbacks
 
     # Fall back to legacy interval-based configuration
@@ -1111,18 +1133,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
             )
         )
 
-    # Inference stats callback (enabled when using the vLLM backend). This combines
-    # engine and HTTP bridge stats without relying on Ray log-to-driver forwarding.
-    generator_backend = getattr(cfg.generator, "backend", None)
-    inference_stats_interval = getattr(cfg.generator, "inference_stats_interval", 1)
-    if generator_backend == "vllm" and inference_stats_interval > 0:
-        callbacks.append(
-            InferenceStatsCallback(
-                log_every_steps=inference_stats_interval,
-                log_to_console=True,
-                log_to_tracker=True,
-            )
-        )
+    _add_inference_stats_callback(cfg, callbacks)
 
     token_budget = _configured_distillation_token_budget(cfg)
     if token_budget is not None:

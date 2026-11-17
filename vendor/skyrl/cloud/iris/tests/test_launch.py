@@ -86,6 +86,29 @@ def test_prepare_validates_without_submitting(tmp_path: Path) -> None:
     assert not backend.launched
 
 
+@pytest.mark.parametrize(("previous_step", "next_step"), [(None, 2), (2, None), (2, 5), (2, 2)])
+def test_existing_run_rejects_changed_starting_checkpoint(tmp_path, previous_step, next_step):
+    path = _config_path(tmp_path, submission="prepare")
+    config = yaml.safe_load(path.read_text())
+    config["artifacts"] = {key: str(tmp_path / key) for key in config["artifacts"]}
+    previous_inputs = {}
+    for step, inputs in ((previous_step, previous_inputs), (next_step, config["inputs"])):
+        if step is not None:
+            inputs["starting_checkpoint"] = {"uri": f"s3://seed/global_step_{step}", "identity": f"seed@{step}"}
+    path.write_text(yaml.safe_dump(config))
+    resolved = Path(config["artifacts"]["resolved_config_uri"])
+    snapshot = json.dumps({"config": {"inputs": previous_inputs}})
+    resolved.write_text(snapshot)
+    backend = RecordingBackend()
+
+    if previous_step == next_step:
+        assert execute_launch(path, backend=backend).state is LaunchState.PREPARED
+    else:
+        with pytest.raises(ValueError, match="new RL artifact version"):
+            execute_launch(path, backend=backend)
+    assert resolved.read_text() == snapshot
+
+
 def test_detach_submits_without_exporting(tmp_path: Path) -> None:
     backend = RecordingBackend()
 
@@ -147,21 +170,26 @@ class LocalLaunchBackend:
 
 
 @pytest.mark.parametrize(
-    "export_hf,outcome",
+    "export_hf,outcome,own_tokenizer",
     [
-        (None, LaunchOutcome("/user/training", "succeeded", 0)),
-        (True, LaunchOutcome("/user/training", "succeeded", 0)),
-        (None, LaunchOutcome("/user/training", "failed", 1)),
+        (None, LaunchOutcome("/user/training", "succeeded", 0), False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), True),
+        (None, LaunchOutcome("/user/training", "failed", 1), False),
     ],
-    ids=["default-native", "explicit-hf", "failed-native"],
+    ids=["default-native", "explicit-hf", "embedded-tokenizer-hf", "failed-native"],
 )
-def test_launch_persists_attempt_result_and_exports_only_on_opt_in(tmp_path: Path, export_hf: bool | None, outcome):
+def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
+    tmp_path: Path, export_hf: bool | None, outcome, own_tokenizer: bool
+):
     path = _config_path(tmp_path)
     config = yaml.safe_load(path.read_text())
     if export_hf is None:
         config["run"].pop("export_hf")
     else:
         config["run"]["export_hf"] = export_hf
+    if own_tokenizer:
+        config["inputs"]["model"].update(tokenizer_uri=None, tokenizer_revision=None)
     config["skyrl"]["trainer"].update(max_steps=3, eval_interval=3, ckpt_interval=3)
     path.write_text(yaml.safe_dump(config))
     backend = LocalLaunchBackend(outcome=outcome)
@@ -190,6 +218,8 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(tmp_path: Pat
         assert backend.export_jobs == [str(tmp_path / "exports/global_step_3/policy")]
         assert result.model is not None and result.model.global_step == 3
         assert terminal["result"]["model"]["policy_export_uri"] == backend.export_jobs[0]
+        for key in ("tokenizer_uri", "tokenizer_revision"):
+            assert terminal["result"]["model"][key] == config["inputs"]["model"][key]
     else:
         assert backend.export_jobs == []
         assert result.model is None and terminal["result"]["model"] is None
@@ -328,7 +358,7 @@ def test_hub_models_are_not_downloaded_on_a_local_launcher(tmp_path, monkeypatch
         set_job_info(previous)
 
 
-@pytest.mark.parametrize("tokenizer_uri", ["org/policy", ""])
+@pytest.mark.parametrize("tokenizer_uri", ["org/policy", "", None])
 def test_policy_without_a_separate_tokenizer_rejects_model_only_mirrors(tmp_path, monkeypatch, tokenizer_uri):
     path = _hub_config_path(tmp_path)
     config = yaml.safe_load(path.read_text())

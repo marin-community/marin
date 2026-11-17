@@ -24,6 +24,7 @@ from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from finestore.rl.run_records import read_attempt, read_attempt_metrics
 from cloud.iris import launch, skyrl_entrypoint, task_runtime, training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
+from cloud.iris.role_plan import derive_num_nodes, derive_role_plan
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
     compose_skyrl_config,
@@ -41,6 +42,124 @@ from skyrl_train.utils.tracking import Tracking
 from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
 from skyrl_train.inference_engines import placement as inference_placement
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
+
+
+@pytest.mark.parametrize(
+    "overrides", [{}, {"resume_mode": "from_path"}, {"resume_mode": "none"}, {"resume_path": "other"}]
+)
+def test_starting_checkpoint_requires_automatic_recovery(tmp_path: Path, overrides: dict) -> None:
+    raw = raw_launch_config()
+    checkpoint = {"uri": "s3://seed/checkpoints/global_step_2", "identity": "seed@2026.11.13:abc"}
+    raw["inputs"]["starting_checkpoint"] = checkpoint
+    raw["skyrl"]["trainer"].update(overrides)
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    if overrides:
+        with pytest.raises(ValueError, match="starting_checkpoint"):
+            load_launch_config(path)
+    else:
+        resolved = load_launch_config(path)
+        assert resolved.skyrl.trainer.resume_mode == "latest"
+        assert resolved.skyrl.trainer.resume_path == checkpoint["uri"]
+
+
+@pytest.mark.parametrize("entrypoint", ["generate", "terminal_bench_generate"])
+def test_generation_rejects_starting_checkpoint(tmp_path: Path, entrypoint: str) -> None:
+    raw = raw_launch_config()
+    raw["skyrl"]["entrypoint"] = entrypoint
+    raw["inputs"]["starting_checkpoint"] = {"uri": "s3://seed/global_step_2", "identity": "seed@2:abc"}
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    with pytest.raises(ValueError, match="starting_checkpoint"):
+        load_launch_config(path)
+
+
+@pytest.mark.parametrize(
+    ("trainer_gpus", "rollout_gpus", "expected_nodes"),
+    [
+        (32, 16, 12),
+        (32, 32, 16),
+        (32, 64, 24),
+        (48, 16, 16),
+        (48, 32, 20),
+        (48, 64, 28),
+        (64, 16, 20),
+        (64, 32, 24),
+        (64, 64, 32),
+        (48, 12, 15),
+        (72, 16, 22),
+    ],
+)
+def test_cross_host_ep_launch_derives_whole_node_claims(tmp_path, trainer_gpus, rollout_gpus, expected_nodes):
+    raw = raw_launch_config()
+    raw["iris"]["allocation"].update(num_nodes=expected_nodes, gpus_per_node=4)
+    raw["skyrl"]["trainer"]["placement"].update(
+        colocate_all=False,
+        policy_num_nodes=trainer_gpus // 4,
+        policy_num_gpus_per_node=4,
+    )
+    raw["skyrl"]["trainer"]["policy"] = {
+        "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 2,
+            "context_parallel_size": 4,
+            "expert_model_parallel_size": 4,
+            "expert_tensor_parallel_size": 1,
+        }
+    }
+    raw["skyrl"]["generator"].update(
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=rollout_gpus,
+        inference_engine_expert_parallel_size=rollout_gpus,
+    )
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path)
+    plan = derive_role_plan(OmegaConf.to_container(config.skyrl, resolve=True))
+    rollout = plan.claim("rollout")
+    policy = plan.claim("policy")
+
+    assert derive_num_nodes(plan) == expected_nodes
+    assert policy.num_nodes * policy.gpus_per_node == trainer_gpus
+    assert rollout.num_nodes * rollout.gpus_per_node == rollout_gpus
+    assert {bundle.name: bundle.num_nodes for bundle in plan.bundles} == {
+        "policy": trainer_gpus // 4,
+        "rollout": rollout_gpus // 4,
+    }
+
+
+@pytest.mark.parametrize(
+    ("gpus_per_node", "engines", "dp", "rollout_nodes"),
+    [(4, 4, 3, 4), (8, 5, 3, 3), (4, 3, 10, 8), (8, 2, 12, 3)],
+)
+def test_rollout_pool_respects_host_local_engines_and_cross_host_workers(gpus_per_node, engines, dp, rollout_nodes):
+    config = raw_launch_config()["skyrl"]
+    config["trainer"]["placement"].update(colocate_all=False, policy_num_gpus_per_node=gpus_per_node)
+    config["generator"].update(
+        num_inference_engines=engines,
+        inference_engine_data_parallel_size=dp,
+        inference_engine_expert_parallel_size=dp,
+    )
+    plan = derive_role_plan(config)
+    assert plan.claim("rollout").num_nodes == rollout_nodes
+    assert derive_num_nodes(plan) == 1 + rollout_nodes
+
+
+@pytest.mark.parametrize(("tp", "pp", "dp", "ep"), [(2, 1, 4, 4), (1, 2, 4, 4), (1, 1, 8, 4)])
+def test_unsupported_cross_host_layouts_still_require_one_node(tp, pp, dp, ep):
+    config = raw_launch_config()["skyrl"]
+    config["trainer"]["placement"].update(colocate_all=False, policy_num_gpus_per_node=4)
+    config["generator"].update(
+        num_inference_engines=1,
+        inference_engine_tensor_parallel_size=tp,
+        inference_engine_pipeline_parallel_size=pp,
+        inference_engine_data_parallel_size=dp,
+        inference_engine_expert_parallel_size=ep,
+    )
+    with pytest.raises(ValueError, match="each ray-backed rollout engine requires"):
+        derive_role_plan(config)
 
 
 def test_training_channels_require_compatible_weight_transport() -> None:
@@ -389,11 +508,15 @@ def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_
     assert seen[0].model_source_uri is None
 
 
-@pytest.mark.parametrize("entrypoint", ["standard", "generate"])
-def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path, monkeypatch, entrypoint) -> None:
+@pytest.mark.parametrize("entrypoint,own_tokenizer", [("standard", False), ("generate", False), ("standard", True)])
+def test_forwarded_launch_metadata_reaches_attempt_startup_record(
+    tmp_path: Path, monkeypatch, entrypoint, own_tokenizer
+) -> None:
     destination = tmp_path / "launch.yaml"
     document = raw_launch_config()
     document["run"]["coordinator_iris_job_id"] = "/tests/coordinator"
+    if own_tokenizer:
+        document["inputs"]["model"].update(tokenizer_uri=None, tokenizer_revision=None)
     document["iris"]["max_retries"] = 0
     document["skyrl"]["trainer"]["logger"] = "records" if entrypoint == "standard" else ["console", "records", "wandb"]
     document["skyrl"]["entrypoint"] = entrypoint
@@ -459,6 +582,9 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
         "iris_job_id": "/tests/bootstrap-trainer",
         "coordinator_iris_job_id": "/tests/coordinator",
     }
+    assert runtime["tokenizer_identity"] == (
+        "sha256:model" if own_tokenizer else "s3://models/qwen-tokenizer@" + "a" * 40
+    )
     assert first_start <= datetime.fromisoformat(attempt.started_at) <= datetime.now(timezone.utc)
     assert attempt.vllm_version == ("fixture-vllm" if entrypoint == "generate" else None)
     fail = False

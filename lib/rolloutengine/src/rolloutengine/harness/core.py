@@ -15,7 +15,7 @@ from typing import Any, Protocol
 from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 
-from rolloutengine.models import EventSink, ModelTurn, Prompt, RolloutLimits
+from rolloutengine.models import ContextRecovery, EventSink, ModelTurn, Prompt, RolloutLimits
 
 
 class HarnessCleanup(Protocol):
@@ -99,6 +99,11 @@ class ModelSession(Protocol):
 
 class Harness(Protocol):
     """The agent loop for a task: what the model sees, which tools run, and when the attempt ends."""
+
+    @property
+    def context_recovery(self) -> ContextRecovery:
+        """When the session lets this harness recover from a context rejection during an attempt."""
+        ...
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         """Raise an error if this harness cannot run ``task`` under ``limits``, before any machine starts."""

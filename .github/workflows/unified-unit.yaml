@@ -138,7 +138,7 @@ jobs:
         run: >-
           uv run --all-packages --no-default-groups --extra cpu --extra dedup
           --group test pytest -n 0 -m integration infra/marina/tests/test_rl_progress.py
-          experiments/post_training/snowball_tests/test_snowball_rl_publication.py::test_snowball_publication_updates_attempts_and_publishes_controls
+          experiments/post_training/rl_tests/test_rl_publication.py::test_snowball_publication_updates_attempts_and_publishes_controls
 
   slow:
     if: ${{ github.event_name == 'schedule' }}
@@ -553,6 +553,8 @@ jobs:
         run: |
           uv run --isolated --frozen --extra cpu --group harbor-test --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
             infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py skyrl-train/tests/test_*.py \
+            skyrl-train/tests/cpu/test_remote_safetensors.py \
+            skyrl-train/tests/cpu/test_dataset.py \
             skyrl-train/tests/cpu/test_megatron_router_replay_plumbing.py \
             skyrl-train/tests/cpu/test_compact_distillation.py \
             skyrl-train/tests/cpu/test_evaluation_score_order.py \

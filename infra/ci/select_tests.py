@@ -101,15 +101,15 @@ MARIN_NATIVE_CONFIG_TESTS = {
         "vendor/skyrl/marinskyrl/checkpoint_paths.py",
         "vendor/skyrl/skyrl-train/skyrl_train/utils/tracking.py",
     ),
-    "experiments/post_training/snowball_tests/test_snowball_rl.py": (
+    "experiments/post_training/rl_tests/test_rl.py": (
         "vendor/skyrl/cloud/iris/",
         "vendor/skyrl/skyrl-train/skyrl_train/config/",
     ),
-    "experiments/post_training/snowball_tests/test_snowball_rl_gate.py": (
+    "experiments/post_training/rl_tests/test_rl_gate.py": (
         "vendor/skyrl/cloud/iris/",
         "vendor/skyrl/skyrl-train/skyrl_train/config/",
     ),
-    "experiments/post_training/snowball_tests/test_snowball_rl_publication.py": (
+    "experiments/post_training/rl_tests/test_rl_publication.py": (
         "vendor/skyrl/cloud/iris/",
         "vendor/skyrl/skyrl-train/skyrl_train/config/",
     ),
@@ -214,6 +214,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "infra/marina/",
         "lib/marin/src/marin/rl/",
         "lib/marin/src/marin/execution/",
+        "experiments/post_training/rl",
         "experiments/post_training/snowball_",
         "experiments/post_training/publish_rl_progress.py",
         "experiments/post_training/skyrl_test_support.py",

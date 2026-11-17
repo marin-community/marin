@@ -134,6 +134,7 @@ def _attempt_status_from_proto(value: job_pb2.TaskAttempt) -> AttemptStatus:
         node_name=value.node_name,
         terminal_reason=value.terminal_reason,
         output_archive=output_archive,
+        topology=dict(value.topology),
     )
 
 

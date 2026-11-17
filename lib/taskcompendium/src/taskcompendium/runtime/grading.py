@@ -3,9 +3,9 @@
 
 """Grade an attempt in a fresh machine with the verifyit command or a grader script.
 
-Grader inputs cross into the grading machine as one archive: verifier resources under
-``/tests``, shared and worker resources, captured agent files, the extracted answer, the captured
-state, the conversation, and copied artifacts. The agent's own machine never grades.
+Resources, metadata and extracted conversation answers are installed before environment setup.
+Captured agent files and copied artifacts are installed after setup in a separate archive.
+The agent's own machine never grades.
 """
 
 import asyncio
@@ -423,8 +423,10 @@ def _sandbox_grading(task: TaskSpec, task_machine: Machine | None, timeout: floa
     return grading
 
 
-def _grading_files(task: TaskSpec, attempt: GradingAttempt, grading: _SandboxGrading) -> list[StagedFile]:
-    """Trusted resources and metadata installed before environment setup."""
+def _grading_files(
+    task: TaskSpec, attempt: GradingAttempt, grading: _SandboxGrading, submissions: list[StagedFile]
+) -> list[StagedFile]:
+    """Resources, metadata and the extracted conversation answer installed before setup."""
     files = [
         *resource_files(task.resources.verifier, "/tests"),
         *resource_files(task.resources.all + task.resources.worker, ""),
@@ -438,6 +440,16 @@ def _grading_files(task: TaskSpec, attempt: GradingAttempt, grading: _SandboxGra
         files.append(StagedFile(grading.grader.conversation_path, json.dumps(messages, allow_nan=False).encode()))
         if grading.grader.judge is not None:
             files.append(StagedFile(JUDGE_SPEC_PATH, render_spec(grading.grader.judge).encode()))
+    if task.answer_type in CONVERSATION_ANSWERS:
+        if grading.spec is not None:
+            answer_path = verifyit_answer_file(grading.spec)
+        else:
+            assert isinstance(grading.grader, ScriptGrader)
+            answer_path = grading.grader.answer_path
+        if answer_path is not None:
+            answer = next((file for file in reversed(submissions) if file.path == answer_path), None)
+            if answer is not None:
+                files.append(answer)
     return files
 
 
@@ -534,7 +546,7 @@ async def _grade_staged(
     judge_connection: JudgeConnection | None,
 ) -> GradeResult:
     """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
-    files = _grading_files(task, attempt, grading)
+    files = _grading_files(task, attempt, grading, submissions)
     try:
         for command in grading.collect:
             assert task_machine is not None

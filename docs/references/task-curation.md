@@ -141,7 +141,7 @@ inputs. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
-For the current task-to-training recipe, see the [Snowball RL experiments](../recipes/snowball-rl.md).
+For the current task-to-training recipe, see the [Snowball RL experiments](../recipes/rl-experiments.md).
 
 The recipe contains an explicit source allowlist and family quotas. For example,
 this small recipe selects 100 calendar tasks from two admitted sources:
@@ -292,13 +292,13 @@ finished campaign, pass its `corpus.json` with `--corpus` as shown in
 [Final task selection](#final-task-selection). Check the source and family counts in
 `summary.json` before training.
 
-Train with `snowball_rl --preset data-short --tasks NAME@VERSION`, then data-medium
-(see [Snowball RL experiments](../recipes/snowball-rl.md#change-one-input)). The launcher
+Train with `rl --preset data-short --tasks NAME@VERSION`, then data-medium
+(see [Snowball RL experiments](../recipes/rl-experiments.md#change-one-input)). The launcher
 reads `rl-data/task-selection/NAME/VERSION` under `s3://marin-us-east-02a/marin`, the
 driver's default `--artifact-root`. It refuses selections that contain AI-judged tasks,
 and data presets require the default selection's heldout input. Snowball presets do not
 evaluate the selection's `validation.parquet`; held-out comparisons use the
-[EvalLite](../recipes/snowball-rl.md#tasks-and-evaluation).
+[EvalLite](../recipes/rl-experiments.md#tasks-and-evaluation).
 
 ## Dataset-owned invocation
 
@@ -546,7 +546,9 @@ the worker. The TaskTrove competitive-programming
 sources declare `COMPILER_GRADER_PACKAGES`, which adds `build-essential` for
 C++ submissions; the worker image provides it, so they also run in the worker.
 `LEAN_GRADER_PACKAGES` adds the Lean 4 and Mathlib fragment
-`datasets/nemotron_ultra/lean.Dockerfile`, so it runs in a built image.
+`datasets/nemotron_ultra/lean.Dockerfile`, so it runs in a built image, and
+`LEAN_KERNEL_GRADER_PACKAGES` adds `datasets/lean/lean.Dockerfile`, which installs
+Lean, Mathlib and Prime Intellect's proof checker, built likewise.
 Converters declare agent requirements independently. A simulated shell requires
 explicit `SHELL_SIMULATOR` semantics; an absent image does not select simulation.
 Conversation-only tasks need no machine. Memory settings are advisory sizing hints.

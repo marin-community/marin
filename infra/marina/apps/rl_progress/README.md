@@ -34,7 +34,7 @@ measurements unknown; a missing window leaves elapsed time unknown with a timing
 `marin.rl.rl_progress.RunSummary`, upserts its native key and returns the stored
 record. `GET /api/runs` returns stored records and lists malformed historical rows
 in `skipped_records`. See the
-[Snowball publication rules](../../../../docs/recipes/snowball-rl.md#dashboard-publication)
+[Snowball publication rules](../../../../docs/recipes/rl-experiments.md#dashboard-publication)
 for record semantics, retries and publishing pinned controls.
 
 ## Validate and release
