@@ -4,7 +4,7 @@ name: Exact-match pointer mixture on the output
 category: Output head and loss
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6959043400
@@ -12,3 +12,16 @@ intake:
   approved_by: armorfaye (trusted)
 code_commits:
 - 12d13b11521b954eee440a1b0bd635df6db6020b
+trials:
+- id: t001
+  variant: exact-match pointer mixture, 8 candidates
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0238
+  date: '2026-11-17'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0238
+  wandb: []
+  settings:
+    pointer_mixture: 'true'
+  commit: 3400b535db
+  priority: batch
