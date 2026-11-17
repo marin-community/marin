@@ -40,8 +40,11 @@ Every experiment is compared to the official recipe unless its Track says otherw
    the diff matches your intent), the **W&B runs** (variant vs. same-commit control), and the agent's plan and verdict.
    Results are single seed; treat anything near the noise band as weak evidence.
 
-4. **If it looks good, post `Track: ladder`** naming its registry id. A ladder without a `hero-mfu` result is
-   provisional; ask for `hero-mfu` too if the idea changes step time.
+4. **Run the ladder only after a promising speedrun.** The ladder trains at every rung, up to the largest, and
+   costs many times the compute of a speedrun, so it is reserved for ideas with initial evidence. Once the speedrun
+   shows a win (or a near-win worth confirming), post a new comment with `Track: ladder` that names the idea's
+   registry id, so the ladder reuses the same implementation. A ladder without a `hero-mfu` result is provisional;
+   ask for `hero-mfu` too if the idea changes step time.
 
 5. **Merge.** Once an idea holds up on `speedrun`, `hero-mfu` and the `ladder`, a maintainer can merge it into the
    official recipe. Depending on the magnitude of the change, further tests may be run first, such as larger
