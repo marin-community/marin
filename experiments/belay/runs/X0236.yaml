@@ -1,0 +1,13 @@
+experiment: X0236
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: X0234 window-64 branch on the fused FA4 path
+    flags:
+    - --model-set
+    - kda_local_attn_fused_window=64
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
