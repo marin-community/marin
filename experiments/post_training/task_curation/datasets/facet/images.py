@@ -16,12 +16,12 @@ from tempfile import TemporaryDirectory
 from finestore.rl.licenses import LicenseReceipt, require_license
 from huggingface_hub import hf_hub_download
 from iris.cluster.client.job_info import get_job_info
-from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.sif import OciTools, SifTools, file_sha256, oci_from_filesystem, sif_runtime, unpack_sif
 
+from experiments.post_training.task_curation.datasets.facet.artifacts import PreservedImage
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 
@@ -31,23 +31,6 @@ IMAGE_REVISION = "815988416b9a982932b5531eee9853d4c0e3b55a"
 REGIONAL_PREFIX = "s3://marin-us-east-02a/marin"
 EXPECTED_IMAGES = 747
 EXPECTED_TASKS = {"facet_v2": 780, "facet_v3": 728}
-
-
-class PreservedImage(Artifact):
-    bundle_id: str
-    source_repo: str
-    source_revision: str
-    source_filename: str
-    sif_sha256: str
-    sif_bytes: int
-    partition_sha256: str
-    manifest_digest: str
-    config_digest: str
-    diff_id: str
-    tree_sha256: str
-    tree_entries: int
-    provenance_uri: str
-    provenance_sha256: str
 
 
 @dataclass(frozen=True)
