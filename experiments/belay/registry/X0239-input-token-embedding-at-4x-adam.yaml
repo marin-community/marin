@@ -4,7 +4,7 @@ name: Input token embedding at 4x Adam LR
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6959048333
@@ -12,3 +12,16 @@ intake:
   approved_by: armorfaye (trusted)
 code_commits:
 - 6dd569ae3d46bcd9af7dd1d6434e830f12406d1c
+trials:
+- id: t001
+  variant: token_embed in its own Adam group at 4x adam_lr
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0239
+  date: '2026-11-17'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0239
+  wandb: []
+  settings:
+    embed_lr_mult: '4.0'
+  commit: e71120947b
+  priority: batch
