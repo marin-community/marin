@@ -9,6 +9,7 @@ the tests directory there. Harbor retains the Pi agent loop and result reporting
 """
 
 import asyncio
+import hashlib
 import json
 import os
 from dataclasses import asdict, replace
@@ -25,7 +26,7 @@ from taskcompendium.runtime.output_capture import MAX_OUTPUT_BYTES, captured_out
 from taskcompendium.runtime.task_grading import sandbox_grade
 from verifyit.modes.grade_judge import JudgeConnection
 
-from experiments.evaluation.scienceagentbench_tasks import TASK_SPEC_FILENAME
+from experiments.evaluation.scienceagentbench_tasks import TASK_SPEC_FILENAME, TASK_SPEC_HASH_KEY
 
 CAPTURE_TIMEOUT = 60.0
 
@@ -48,7 +49,10 @@ class ScienceAgentBenchVerifier(BaseVerifier):
             raise ValueError(
                 "Pass judge connection declarations through verifier kwargs, not guest environment overrides"
             )
-        task = TaskSpec.model_validate_json((self.task.paths.task_dir / TASK_SPEC_FILENAME).read_text())
+        specification = (self.task.paths.task_dir / TASK_SPEC_FILENAME).read_bytes()
+        if hashlib.sha256(specification).hexdigest() != self.task.config.metadata.get(TASK_SPEC_HASH_KEY):
+            raise ValueError("Private grading specification does not match the pinned Harbor task")
+        task = TaskSpec.model_validate_json(specification)
         if not isinstance(task.grader, ScriptGrader) or task.grader.replay is None:
             raise ValueError("ScienceAgentBench requires a replay-enabled script grader")
         if task.grader.environment is None or task.grader.environment.docker_image is None:

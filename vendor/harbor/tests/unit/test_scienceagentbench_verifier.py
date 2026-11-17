@@ -29,7 +29,7 @@ from harbor.models.trial.config import VerifierConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.verifier.factory import VerifierFactory
 from harbor.verifier.verifier import VerifierRuntimeError
-from experiments.evaluation.scienceagentbench_tasks import VERIFIER_IMPORT_PATH, write_harbor_task
+from experiments.evaluation.scienceagentbench_tasks import TASK_SPEC_FILENAME, VERIFIER_IMPORT_PATH, write_harbor_task
 from lib.taskcompendium.tests.grading_machines import GRADER_IMAGE, REPLAY_IMAGE, ReplayMachine, ReplayMachines
 
 
@@ -38,8 +38,13 @@ class ActorMachine(ReplayMachine):
     spec: MachineSpec
 
 
-@pytest.mark.parametrize("candidate,gold,expected", [("42", b"42", 1.0), ("wrong", b"42", 0.0), ("42", None, None)])
-async def test_harbor_bridge_records_replayed_grade_without_exposing_private_assets(tmp_path, candidate, gold, expected):
+@pytest.mark.parametrize(
+    "candidate,gold,expected,tampered",
+    [("42", b"42", 1.0, False), ("wrong", b"42", 0.0, False), ("42", None, None, False), ("42", b"42", None, True)],
+)
+async def test_harbor_bridge_records_replayed_grade_without_exposing_private_assets(
+    tmp_path, candidate, gold, expected, tampered
+):
     replay = EnvironmentRequirements(
         docker_image=REPLAY_IMAGE,
         command_semantics=CommandSemantics.LINUX_PROCESS,
@@ -134,6 +139,16 @@ Path('pred_results/result.txt').write_text({candidate!r})
         trial_paths=paths,
         environment=environment,
     )
+    if tampered:
+        specification = task_dir / TASK_SPEC_FILENAME
+        altered = json.loads(specification.read_text())
+        altered["grader"]["argv"] = ["python3", "-c", "print(1.0)"]
+        specification.write_text(json.dumps(altered))
+        with pytest.raises(ValueError):
+            await verifier.verify()
+        assert machines.machines == []
+        assert not paths.reward_json_path.exists()
+        return
     if expected is None:
         with pytest.raises(VerifierRuntimeError):
             await verifier.verify()

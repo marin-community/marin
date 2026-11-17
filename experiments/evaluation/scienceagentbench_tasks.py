@@ -3,6 +3,7 @@
 
 """Materialize prepared ScienceAgentBench tasks for the Harbor + Pi launch path."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from taskcompendium.importers.scienceagentbench import SUBMISSION_PATH, WORKING_
 from taskcompendium.models import ScriptGrader, TaskSpec, TextMessage
 
 TASK_SPEC_FILENAME = "grading.json"
+TASK_SPEC_HASH_KEY = "grading_sha256"
 VERIFIER_IMPORT_PATH = "experiments.evaluation.scienceagentbench_verifier:ScienceAgentBenchVerifier"
 
 
@@ -45,6 +47,7 @@ def write_harbor_task(
     events = task.context.events
     if len(events) != 1 or not isinstance(events[0], TextMessage) or events[0].role != "user":
         raise ValueError("ScienceAgentBench requires a single task instruction")
+    specification_bytes = (task.model_dump_json() + "\n").encode("utf-8")
     config = TaskConfig(
         source=task.source.dataset,
         metadata={
@@ -52,6 +55,7 @@ def write_harbor_task(
             "source_revision": task.source.revision,
             "source_row": task.source.row,
             **task.labels,
+            TASK_SPEC_HASH_KEY: hashlib.sha256(specification_bytes).hexdigest(),
         },
         environment=environment,
         agent=AgentConfig(timeout_sec=agent_timeout),
@@ -67,7 +71,7 @@ def write_harbor_task(
         encoding="utf-8",
     )
     specification = directory / TASK_SPEC_FILENAME
-    specification.write_text(task.model_dump_json() + "\n", encoding="utf-8")
+    specification.write_bytes(specification_bytes)
     specification.chmod(0o600)
     # Harbor's default verifier uploads tests/. Keep private material outside it,
     # and fail if a launch omits the required custom-verifier selection.
