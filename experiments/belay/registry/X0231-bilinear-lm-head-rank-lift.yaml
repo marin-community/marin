@@ -4,7 +4,7 @@ name: Bilinear lm_head rank lift
 category: Output head and loss
 summary: 'Track: speedrun'
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6940686544
@@ -26,6 +26,13 @@ trials:
     lm_head_bilinear: 'true'
   commit: 759042a2c7
   priority: batch
+  loss:
+  - 3.0416
+  delta:
+  - -0.0038
+  steps: 3030
+  baseline: belay-X0231-control 3.0454 (same commit, seed 0)
+  step_time_change: +2%
 potential:
   score: 5
   rationale: 'No result yet: control done, variant preempted mid-run and retrying -> 5'
