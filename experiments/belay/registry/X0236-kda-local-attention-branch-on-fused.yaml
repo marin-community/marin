@@ -4,7 +4,7 @@ name: KDA local attention branch on fused FA4 path
 category: Linear attention / KDA
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6944916989
@@ -12,3 +12,16 @@ intake:
   approved_by: armorfaye (trusted)
 code_commits:
 - 490fb4175a609f28fb53bfe176ab16f56964a5cc
+trials:
+- id: t001
+  variant: X0234 window-64 branch on the fused FA4 path
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0236
+  date: '2026-11-17'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0236
+  wandb: []
+  settings:
+    kda_local_attn_fused_window: '64'
+  commit: a33a14c494
+  priority: batch
