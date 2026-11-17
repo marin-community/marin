@@ -59,7 +59,7 @@ def test_snapshot_lease_survives_until_sandbox_deletion_is_observed(creation_fai
                 events.append("delete-accepted")
 
         async def execute(*args, **kwargs):
-            return SimpleNamespace(exit_code=0)
+            return SimpleNamespace(exit_code=0, result="/")
 
         sandbox = SimpleNamespace(process=SimpleNamespace(exec=execute))
         client = Client()

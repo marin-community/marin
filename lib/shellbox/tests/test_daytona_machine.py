@@ -1514,3 +1514,37 @@ def test_snapshot_request_interchange_rejects_a_mismatched_name(tmp_path) -> Non
 
     del spec["name"]
     assert SnapshotRequest.from_dict(spec) == request
+
+
+@pytest.mark.requires_host_setsid
+def test_recreated_image_workdir_is_reopened_before_each_command(tmp_path):
+    image_workdir = tmp_path / "image-workdir"
+    image_workdir.mkdir()
+    original_inode = image_workdir.stat().st_ino
+
+    class ImageProcess(LocalProcess):
+        async def exec(self, command, cwd=None, env=None, timeout=None):
+            if cwd is None:
+                if image_workdir.stat().st_ino != original_inode:
+                    return SimpleNamespace(exit_code=1, result="Provider inherited a deleted image cwd")
+                cwd = str(image_workdir)
+            return await super().exec(command, cwd=cwd, env=env, timeout=timeout)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = ImageProcess()
+        factory = DaytonaMachineFactory(lambda: client, image_build=DaytonaImageBuild.DECLARATIVE)
+        machine = await factory.create(MachineSpec(RegistryImage("fixture/image:1"), workdir=""))
+        try:
+            moved = tmp_path / "previous-workdir"
+            image_workdir.rename(moved)
+            image_workdir.mkdir()
+            moved.rmdir()
+            result = await machine.run(Command((sys.executable, "-c", "import os; print(os.getcwd())")))
+            assert result.exit_code == 0
+            assert Path(result.stdout.decode().strip()).resolve() == image_workdir.resolve()
+        finally:
+            await machine.close()
+        assert client.deleted and client.closed
+
+    asyncio.run(scenario())

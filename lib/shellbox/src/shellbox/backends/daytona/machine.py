@@ -659,13 +659,20 @@ class DaytonaMachineFactory:
                 if lease is None:
                     lifetime.push_async_callback(self._delete_and_release, client, name, None)
                 sandbox = await _create_sandbox(client, params, timeout=timeout)
+            requested_workdir = spec.workdir
+            if not requested_workdir:
+                working_directory = await sandbox.process.exec(_control_command("pwd"), timeout=INTERRUPT_TIMEOUT)
+                resolved_workdir = working_directory.result.strip()
+                if working_directory.exit_code or not PurePosixPath(resolved_workdir).is_absolute():
+                    raise UnsupportedMachineSpec("Cannot resolve the image working directory")
+                spec = replace(spec, workdir=resolved_workdir)
             prepared = await sandbox.process.exec(
                 _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT
             )
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
             machine = DaytonaMachine(sandbox, spec, lifetime, output_collection_timeout=self.output_collection_timeout)
-            if spec.workdir:
+            if requested_workdir:
                 result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/", env={"PATH": CONTROL_PATH}))
                 if result.exit_code:
                     raise RuntimeError(f"Failed to create workdir {spec.workdir}: {result.stderr!r}")

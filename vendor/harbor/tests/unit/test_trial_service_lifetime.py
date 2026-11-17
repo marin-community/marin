@@ -427,6 +427,7 @@ async def test_declared_fixture_setup_precedes_agent_access_and_preserves_infra_
         assert factory.machine.path("/workspace/answer").read_text() == "partial"
     else:
         assert result.exception_info.exception_type == "EnvironmentSetupError"
+        assert error_category(result.exception_info.exception_type) == ErrorCategory.INFRASTRUCTURE
         assert "bootstrap-failed" in result.exception_info.exception_message
         assert not factory.machine.path("/workspace/agent-started").exists()
         assert result.verifier_result is None
