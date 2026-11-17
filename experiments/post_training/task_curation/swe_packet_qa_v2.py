@@ -313,10 +313,12 @@ def main() -> None:
                 "executor": "daytona-eval declarative (target=us, eval key as secret, no snapshots)",
                 "packet_source": "frozen TaskSpec packet bytes consumed verbatim (no reconstruction)",
                 "trial_contract": (
-                    "TaskSpecTrial on frozen packet bytes; nop + original TaskSpec oracle for rst/multi (functional, no family tamper tooling); nop/oracle/tamper for scale/lego"
+                    "TaskSpecTrial on frozen packet bytes; nop + original TaskSpec oracle for rst/multi"
+                    " (functional, no family tamper tooling); nop/oracle/tamper for scale/lego"
                 ),
                 "budgets": (
-                    "map-calibrated actor/verifier phase deadlines applied when present; None declarations preserved (field unset)"
+                    "map-calibrated actor/verifier phase deadlines applied when present;"
+                    " None declarations preserved (field unset)"
                 ),
                 "peak_physical_sandboxes": 2,
                 "scope": "QA rows per sealed map only; not qualification authority",
