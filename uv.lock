@@ -4640,8 +4640,8 @@ dependencies = [
     { name = "marin-iris" },
     { name = "marin-levanter", extra = ["serve"] },
     { name = "marin-rigging", extra = ["prometheus"] },
-    { name = "marin-skyrlrecipe" },
     { name = "marin-rolloutengine" },
+    { name = "marin-skyrlrecipe" },
     { name = "marin-taskcompendium", extra = ["pipeline"] },
     { name = "marin-zephyr" },
     { name = "markdownify" },
@@ -4813,8 +4813,8 @@ requires-dist = [
     { name = "marin-levanter", extras = ["rocm"], marker = "extra == 'rocm'", editable = "lib/levanter" },
     { name = "marin-levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["prometheus"], editable = "lib/rigging" },
-    { name = "marin-skyrlrecipe", editable = "lib/skyrlrecipe" },
     { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
+    { name = "marin-skyrlrecipe", editable = "lib/skyrlrecipe" },
     { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "markdownify", specifier = ">=0.14.1" },
@@ -5911,6 +5911,7 @@ secrets = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "google-auth-oauthlib" },
     { name = "httpx" },
     { name = "prometheus-client" },
     { name = "pytest" },
@@ -5919,6 +5920,7 @@ dev = [
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "google-auth-oauthlib" },
     { name = "httpx" },
     { name = "prometheus-client" },
     { name = "pytest" },
@@ -5956,6 +5958,7 @@ provides-extras = ["iap", "prometheus", "secrets"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "google-auth-oauthlib", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "prometheus-client", specifier = ">=0.24" },
     { name = "pytest", specifier = ">=8.3.2" },
@@ -5964,6 +5967,7 @@ dev = [
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "google-auth-oauthlib", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "prometheus-client", specifier = ">=0.24" },
     { name = "pytest", specifier = ">=8.3.2" },

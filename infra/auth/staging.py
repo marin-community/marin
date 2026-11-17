@@ -156,10 +156,11 @@ def leaf_certificate(
 
 def kubectl(arguments: list[str], payload: dict | None = None) -> bytes:
     result = subprocess.run(
-        ["kubectl", "--context", CONTEXT, *arguments],
+        ["kubectl", "--context", CONTEXT, "--request-timeout=30s", *arguments],
         input=None if payload is None else json.dumps(payload).encode(),
         capture_output=True,
         check=False,
+        timeout=45,
     )
     if result.returncode:
         raise RuntimeError(f"Kubernetes staging operation failed ({arguments[0]}); private output withheld")
@@ -350,6 +351,58 @@ def unsealed_peer(client: OperatorClient, key: str) -> bool:
         raise
 
 
+def wait_for_broker_credential(filename: str, expected: bytes) -> int:
+    fingerprint = hashlib.sha256(expected).hexdigest()
+    pods = json.loads(kubectl(["-n", NAMESPACE, "get", "pods", "-l", "app.kubernetes.io/name=marin-auth", "-o", "json"]))
+    command = (
+        "import hashlib; from pathlib import Path; "
+        f"print(hashlib.sha256(Path({filename!r}).read_bytes()).hexdigest())"
+    )
+    for pod in pods["items"]:
+        name = pod["metadata"]["name"]
+        ExponentialBackoff(initial=0.5, maximum=2).wait_until_or_raise(
+            lambda name=name: kubectl(["-n", NAMESPACE, "exec", name, "--", "python", "-P", "-c", command])
+            .decode()
+            .strip()
+            == fingerprint,
+            Duration.from_seconds(120),
+            "The staging broker did not project the refreshed credential",
+        )
+    return len(pods["items"])
+
+
+def rotate_broker(directory: Path, address: str) -> dict:
+    """Replace the staging signing credential after every replica receives it."""
+    material = json.loads(credential(directory, "initialization.json"))
+    operator = OperatorClient(address, material["root_token"], str(directory / "ca.crt"))
+    previous = credential(directory, "broker.token")
+    pending = directory / "broker-next.token"
+    # Preserve an unfinished rotation so retrying does not leave more live tokens.
+    if not pending.exists():
+        token = operator.request(
+            "POST",
+            "auth/token/create",
+            {
+                "policies": ["marin-auth-broker"],
+                "no_default_policy": True,
+                "ttl": "24h",
+                "explicit_max_ttl": "24h",
+                "renewable": True,
+            },
+        )["auth"]["client_token"]
+        private_file(pending, token.encode())
+    token = credential(directory, pending.name)
+    metadata = operator.request("POST", "auth/token/lookup", {"token": token})["data"]
+    if metadata["policies"] != ["marin-auth-broker"] or metadata["ttl"] <= 0:
+        raise ValueError("The pending broker credential has unexpected authority or has expired")
+    install_secret(NAMESPACE, "broker-token", {"token": token})
+    if wait_for_broker_credential("/var/run/marin-auth/broker-token/token", token.encode()) == 0:
+        raise ValueError("No staging broker pods were found; the previous token remains unrevoked")
+    operator.request("POST", "auth/token/revoke", {"token": previous})
+    os.replace(pending, directory / "broker.token")
+    return {"broker_expires_at": metadata["expire_time"], "replicas_refreshed": True}
+
+
 def issue_proof(directory: Path, address: str, ttl: int) -> dict:
     """Refresh synthetic proof credentials only while the execution proof is idle."""
     proof = private_directory(Path(tempfile.mkdtemp(prefix="proof-", dir=directory)))
@@ -359,22 +412,7 @@ def issue_proof(directory: Path, address: str, ttl: int) -> dict:
     canary = seed_canary(operator, token_file=proof / "task-canary.token", ttl=ttl)
     native = operator.request("POST", "auth/token/lookup", {"token": credential(proof, "task-canary.token")})["data"]
     install_secret(NAMESPACE, "task-canary-token", {"token": credential(proof, "task-canary.token")})
-    expected_fingerprint = hashlib.sha256((proof / "task-canary.token").read_bytes()).hexdigest()
-    pods = json.loads(kubectl(["-n", NAMESPACE, "get", "pods", "-l", "app.kubernetes.io/name=marin-auth", "-o", "json"]))
-    fingerprint_command = (
-        "import hashlib; from pathlib import Path; "
-        "print(hashlib.sha256(Path('/var/run/marin-auth/task-canary-token/token').read_bytes()).hexdigest())"
-    )
-    for pod in pods["items"]:
-        name = pod["metadata"]["name"]
-        ExponentialBackoff(initial=0.5, maximum=2).wait_until_or_raise(
-            lambda name=name: kubectl(["-n", NAMESPACE, "exec", name, "--", "python", "-P", "-c", fingerprint_command])
-            .decode()
-            .strip()
-            == expected_fingerprint,
-            Duration.from_seconds(120),
-            "The staging broker did not project the refreshed canary credential",
-        )
+    wait_for_broker_credential("/var/run/marin-auth/task-canary-token/token", (proof / "task-canary.token").read_bytes())
     expiries = {}
     for username, filename, metadata_file in (
         ("launcher", "launcher.jwt", "identity.json"),
@@ -432,6 +470,7 @@ def main() -> None:
             "initialize",
             "publish-policy",
             "issue-proof",
+            "rotate-broker",
         ],
     )
     parser.add_argument("--bao-address", action="append")
@@ -449,6 +488,8 @@ def main() -> None:
         install_database_ca(directory)
     elif args.command == "initialize":
         print(json.dumps(initialize(directory, args.bao_address or ["https://localhost:18200"])))
+    elif args.command == "rotate-broker":
+        print(json.dumps(rotate_broker(directory, (args.bao_address or ["https://localhost:18200"])[0])))
     elif args.command == "issue-proof":
         if args.ttl is None:
             parser.error("issue-proof requires --ttl (at most 900 seconds)")

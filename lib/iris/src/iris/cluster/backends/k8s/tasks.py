@@ -3459,14 +3459,13 @@ class K8sTaskProvider:
                     # application failure, so charge the preemption budget either
                     # way: PREEMPTED when the pod was seen terminating under a
                     # disruption (Kueue deletes every pod of a preempted Workload,
-                    # leaving no terminal status), WORKER_FAILED when the cause was
-                    # never observed.
+                    # leaving no terminal status), MISSING when the cause was
+                    # never observed. The controller resolves absence against the
+                    # current attempt and may still be deferring its dispatch.
                     disruption_reason = self._disruption_reasons.get(entry)
                     terminal_reason = disruption_reason or _POD_DELETED_TERMINAL_REASON
                     new_state = (
-                        job_pb2.TASK_STATE_PREEMPTED
-                        if disruption_reason is not None
-                        else job_pb2.TASK_STATE_WORKER_FAILED
+                        job_pb2.TASK_STATE_PREEMPTED if disruption_reason is not None else job_pb2.TASK_STATE_MISSING
                     )
                     updates.append(
                         TaskUpdate(

@@ -1,5 +1,9 @@
 # Marin auth management service
 
+Use [Google login for shared grants](../../docs/dev-guide/shared-auth-login.md)
+for browser sign-in, operator enrollment, a disposable end-to-end trial and
+session cleanup.
+
 ## Application adapters and local operation
 
 Applications select their authentication backend at startup. Python services use
@@ -78,7 +82,10 @@ only the intended task pods and broker destination and port.
 Completion, cancellation and retries retire attempt grants through a durable
 controller outbox. Broker tombstones prevent retired attempt identities from
 being reissued, including after restart or a lost issuance response. Retirement
-does not revoke the enclosing Loom grant. If a controller or broker is down,
+does not revoke the enclosing Loom grant. Temporary credential issuance failures
+defer the same attempt while other
+reconciliation and real runtime observations continue. Explicit denial or an
+expired grant fails the affected attempt. If a controller or broker is down,
 retirement can be delayed; existing attempt authority expires within its fixed
 60-second maximum, and refresh cannot extend that deadline. This path supports
 short CPU tasks. Queueing time counts against the bound; long-running or delayed

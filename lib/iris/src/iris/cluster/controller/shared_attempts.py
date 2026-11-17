@@ -48,7 +48,10 @@ class SharedAttemptClient:
         self.config = config
 
     def _post(self, endpoint: str, payload: dict) -> dict:
-        token = self.config.identity_token_file.read_text().strip()
+        try:
+            token = self.config.identity_token_file.read_text().strip()
+        except OSError as error:
+            raise SharedGrantUnavailable("The controller workload identity is unavailable") from error
         if not token:
             raise GrantDenied("A controller workload identity is required")
         try:

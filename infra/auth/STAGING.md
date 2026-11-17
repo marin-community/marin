@@ -141,6 +141,21 @@ them. Certificate reloads require replacing/unsealing one Bao replica at a time.
 The private issuer does not establish CoreWeave WIF: registration also needs
 publicly reachable OIDC discovery and JWKS.
 
+Before reusing staging after the broker token expires, keep the OpenBao tunnel
+running and rotate the credential:
+
+```bash
+uv run --no-sync -m infra.auth.staging --directory "$STAGING_PRIVATE" rotate-broker
+```
+
+Rotation installs an identity restricted to broker signing, waits for every
+broker pod to project it, then revokes the previous token. It does not restart
+pods or change policy. A failed projection leaves the previous token and a
+private pending token file; rerun the command after restoring the replica.
+The replacement has a 24-hour maximum lifetime. Continuous renewal remains
+an operational requirement. Pod readiness alone does not verify that OpenBao
+will accept the broker's signing credential; run the execution proof afterward.
+
 ## Isolated Iris tasks
 
 The auth stack creates `auth-staging-proof` in `marin-auth-staging`. Its task
@@ -197,6 +212,23 @@ mkdir -p artifacts/auth-execution-tools
 install -m 755 "$CARGO_TARGET_DIR/debug/loom" artifacts/auth-execution-tools/loom
 install -m 755 "$CARGO_TARGET_DIR/debug/tapestry" artifacts/auth-execution-tools/tapestry
 strip --strip-debug artifacts/auth-execution-tools/loom artifacts/auth-execution-tools/tapestry
+uvx --with ziglang maturin build --zig --compatibility manylinux_2_34 --profile fast \
+  --manifest-path lib/iris/rust/pyext/Cargo.toml --out artifacts/auth-execution-wheels
+uvx --with ziglang maturin build --zig --compatibility manylinux_2_34 --profile fast \
+  --manifest-path lib/finelog/rust/pyext/Cargo.toml --out artifacts/auth-execution-wheels
+uv run --no-sync python - <<'PY'
+import zipfile
+from pathlib import Path
+
+for package, module in (("marin_iris_native", "iris_native"), ("marin_finelog_server", "finelog_server")):
+    wheels = list(Path("artifacts/auth-execution-wheels").glob(f"{package}-*-manylinux_2_34_x86_64.whl"))
+    assert len(wheels) == 1, "Keep one current wheel per package in the build inputs"
+    with zipfile.ZipFile(wheels[0]) as wheel:
+        for name in (f"{module}/__init__.py", f"{module}/{module}.abi3.so"):
+            target = Path("artifacts/auth-execution-tools") / name
+            target.parent.mkdir(exist_ok=True)
+            target.write_bytes(wheel.read(name))
+PY
 docker buildx build --network=none --load \
   --build-context execution-tools=artifacts/auth-execution-tools \
   --build-context loom-source="$AUTH_LOOM_SOURCE" \
@@ -207,6 +239,9 @@ docker buildx build --network=none --load \
 Run offline imports, tools and native callback checks before publishing a new
 image, including with an empty `/app` mount. Pin its reviewed published digest
 for driver and task; rebuilding alone does not update the digest below.
+These commands build Linux x86-64 extensions against glibc 2.34. Host-native
+builds can require a newer glibc than the proof image provides.
+Released Iris binaries do not contain this branch's shared-grant ingress.
 
 ## Run the execution proof
 

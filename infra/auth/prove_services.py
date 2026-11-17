@@ -23,10 +23,6 @@ import httpx
 import pyarrow.ipc as paipc
 import requests
 from config import LoomAlertConfig, SharedLoomAuth, SlackAlertConfig
-from iris.cluster.config import AuthConfig
-from iris.cluster.controller.auth import create_controller_auth
-from iris.managed_thread import thread_container_scope
-from iris.testing.controller import controller_factory
 from iris.version import client_revision_date
 from loom_alerts import LoomAlertClient, OperatorBehavior
 from marina.applets import AppletStore, package_applet, read_applet_package
@@ -38,6 +34,7 @@ from rigging.shared_grants import SharedGrantConfig
 
 from infra.auth.proof_fga import free_port
 from infra.auth.proof_http import serve
+from infra.auth.proof_iris import iris
 
 APP_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 OTHER_APP_ID = uuid.UUID("00000000-0000-4000-8000-000000000002")
@@ -87,23 +84,6 @@ def postgres(binary_dir: Path, directory: Path):
             check=True,
             capture_output=True,
         )
-
-
-@contextmanager
-def iris(directory: Path, trust: SharedGrantConfig | None):
-    directory.mkdir()
-    with thread_container_scope():
-        factory = controller_factory(directory)
-        make = next(factory)
-        try:
-            auth = create_controller_auth(
-                AuthConfig(shared_grants=trust) if trust else None, cluster_name="isolated-proof"
-            )
-            controller = make(auth=auth, host="127.0.0.1", port=0)
-            controller.start()
-            yield controller.url
-        finally:
-            next(factory, None)
 
 
 @contextmanager

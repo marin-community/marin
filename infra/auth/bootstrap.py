@@ -4,6 +4,7 @@
 """Configure public OpenBao metadata and ACLs using an operator's ephemeral token."""
 
 import argparse
+import hashlib
 import json
 import os
 import ssl
@@ -29,6 +30,9 @@ path "transit/keys/{GRANT_KEY}" {{ capabilities = ["read"] }}
 """
     ),
 }
+GOOGLE_ISSUER = "https://accounts.google.com"
+GOOGLE_MOUNT = "google"
+SESSION_POLICY = 'path "auth/token/revoke-self" { capabilities = ["update"] }\n'
 
 
 class RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -69,8 +73,7 @@ class OperatorClient:
             with self.opener.open(request, timeout=30) as response:
                 data = response.read()
         except urllib.error.HTTPError as error:
-            detail = error.read(4096).decode(errors="replace")
-            error.add_note(f"OpenBao {method} {path} returned {error.code}: {detail}")
+            error.add_note(f"OpenBao {method} {path} returned HTTP {error.code}")
             raise
         return json.loads(data) if data else {}
 
@@ -123,6 +126,101 @@ def configure(client: OperatorClient, issuer: str) -> None:
         client.request("POST", f"identity/oidc/role/{role}", {"key": IDENTITY_KEY, "client_id": audience, "ttl": "10m"})
     for name, policy in ACL_POLICIES.items():
         client.request("PUT", f"sys/policies/acl/{name}", {"policy": policy})
+
+
+def configure_google(
+    client: OperatorClient,
+    *,
+    subject: str,
+    audience: str,
+    email: str,
+    principal: str,
+    hosted_domain: str | None = None,
+    issuer: str = GOOGLE_ISSUER,
+    issuer_ca_pem: str | None = None,
+) -> dict:
+    """Enroll an operator-reviewed Google subject with a stable Bao entity.
+
+    The caller verifies the Google ID token before supplying these claims.
+    Broker principal mapping and OpenFGA relationships are separate operator steps.
+    """
+    if not all((subject, audience, email, principal)):
+        raise ValueError("Google enrollment requires subject, audience, email and operator-selected principal")
+    mounts = client.request("GET", "sys/auth")["data"]
+    if f"{GOOGLE_MOUNT}/" not in mounts:
+        client.request("POST", f"sys/auth/{GOOGLE_MOUNT}", {"type": "jwt"})
+        mounts = client.request("GET", "sys/auth")["data"]
+    mount = mounts[f"{GOOGLE_MOUNT}/"]
+    if mount["type"] != "jwt":
+        raise ValueError("The google/ auth mount must use the JWT auth method")
+    provider = {
+        "oidc_discovery_url": issuer,
+        "bound_issuer": issuer,
+        "jwt_supported_algs": ["RS256"],
+        "default_role": "",
+    }
+    if issuer_ca_pem is not None:
+        provider["oidc_discovery_ca_pem"] = issuer_ca_pem
+    client.request(
+        "POST",
+        f"auth/{GOOGLE_MOUNT}/config",
+        provider,
+    )
+    entity_name = "google-" + hashlib.sha256(subject.encode()).hexdigest()
+    try:
+        entity = client.request("GET", f"identity/entity/name/{entity_name}")["data"]
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        entity = client.request("POST", "identity/entity", {"name": entity_name})["data"]
+    if entity.get("policies") or entity.get("disabled", False):
+        raise ValueError("The Google identity entity must be enabled and have no direct Bao policies")
+    entity_id = entity["id"]
+    # The alias includes the mount accessor, so recreating the mount preserves
+    # the explicitly named entity and therefore its broker subject mapping.
+    lookup = client.request(
+        "POST", "identity/lookup/entity", {"alias_name": subject, "alias_mount_accessor": mount["accessor"]}
+    )
+    if lookup.get("data") is None:
+        client.request(
+            "POST",
+            "identity/entity-alias",
+            {"name": subject, "mount_accessor": mount["accessor"], "canonical_id": entity_id},
+        )
+    elif lookup["data"]["id"] != entity_id:
+        raise ValueError("The Google subject alias already belongs to another Bao entity")
+    role = "user-" + hashlib.sha256((audience + "\0" + subject).encode()).hexdigest()[:32]
+    claims: dict = {"email": email, "email_verified": True}
+    if hosted_domain is not None:
+        claims["hd"] = hosted_domain
+    client.request("PUT", "sys/policies/acl/marin-auth-session", {"policy": SESSION_POLICY})
+    client.request(
+        "POST",
+        f"auth/{GOOGLE_MOUNT}/role/{role}",
+        {
+            "role_type": "jwt",
+            "user_claim": "sub",
+            "bound_subject": subject,
+            "bound_audiences": [audience],
+            "bound_claims": claims,
+            "token_policies": ["marin-auth-identity", "marin-auth-session"],
+            "token_no_default_policy": True,
+            "token_ttl": "10m",
+            "token_explicit_max_ttl": "10m",
+            "expiration_leeway": -1,
+            "clock_skew_leeway": -1,
+            "not_before_leeway": -1,
+        },
+    )
+    return {
+        "role": role,
+        "subject": subject,
+        "audience": audience,
+        "email": email,
+        "hosted_domain": hosted_domain,
+        "entity_id": entity_id,
+        "principal": principal,
+    }
 
 
 def main() -> None:

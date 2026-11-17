@@ -5,7 +5,9 @@ USER root
 RUN mv /app/.venv /opt/marin-venv \
     && mv /app/grafana /opt/marin-grafana \
     && rm -rf /opt/marin-venv/lib/python3.12/site-packages/iris \
-        /opt/marin-venv/lib/python3.12/site-packages/rigging
+        /opt/marin-venv/lib/python3.12/site-packages/rigging \
+        /opt/marin-venv/lib/python3.12/site-packages/iris_native \
+        /opt/marin-venv/lib/python3.12/site-packages/finelog_server
 RUN /opt/marin-venv/bin/python - <<'PY'
 from pathlib import Path
 
@@ -26,6 +28,8 @@ COPY config /opt/marin-venv/lib/python3.12/site-packages/rigging/clusters
 COPY infra/auth/*.py /opt/marin-source/infra/auth/
 COPY infra/auth/policy /opt/marin-source/infra/auth/policy
 COPY --from=execution-tools /loom /tapestry /usr/local/bin/
+COPY --from=execution-tools /iris_native /opt/marin-venv/lib/python3.12/site-packages/iris_native
+COPY --from=execution-tools /finelog_server /opt/marin-venv/lib/python3.12/site-packages/finelog_server
 COPY --from=loom-source /crates/loom/tests/fixtures/fake-acp-agent.mjs /opt/loom-source/crates/loom/tests/fixtures/fake-acp-agent.mjs
 
 ARG IRIS_REVISION_DATE

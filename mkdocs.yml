@@ -108,6 +108,7 @@ nav:
           - Discord: dev-guide/writing-style/discord.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
       - Internal Onboarding: dev-guide/guidelines-internal.md
+      - Shared Grant Login: dev-guide/shared-auth-login.md
       - Forking Policy: dev-guide/forking-policy.md
       - SkyRL Runtime: dev-guide/skyrl.md
       - Building Docs: dev-guide/building-docs.md

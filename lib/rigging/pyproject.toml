@@ -46,6 +46,7 @@ secrets = ["google-cloud-secret-manager>=2.16.0"]
 
 [dependency-groups]
 test = [
+    "google-auth-oauthlib>=1.0.0",
     # starlette.testclient needs an HTTP client; rigging has no runtime httpx dep.
     "httpx>=0.28.1",
     # Exercises the optional telemetry bridge without enabling it for every consumer.

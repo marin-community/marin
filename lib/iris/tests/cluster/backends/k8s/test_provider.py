@@ -490,7 +490,7 @@ def test_sync_running_task_returns_running_state(provider, k8s):
     assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
 
 
-def test_sync_pod_not_found_marks_worker_failed(provider, k8s):
+def test_sync_pod_not_found_reports_missing_after_grace(provider, k8s):
     """A pod missing for _POD_UNRESOLVED_GRACE_CYCLES consecutive syncs with no
     disruption ever observed is worker loss (preemption budget), not an
     application failure — nothing the task did deletes its own pod."""
@@ -506,7 +506,7 @@ def test_sync_pod_not_found_marks_worker_failed(provider, k8s):
 
     result = provider.sync(batch)
     assert len(result) == 1
-    assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert result[0].new_state == job_pb2.TASK_STATE_MISSING
     assert result[0].terminal_reason == _POD_DELETED_TERMINAL_REASON
     assert result[0].error == _POD_DELETED_TERMINAL_REASON
 
@@ -684,7 +684,7 @@ def test_sync_ignores_legacy_pod_for_an_attempt_this_process_dispatched(provider
         assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
 
     result = provider.sync(batch)
-    assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert result[0].new_state == job_pb2.TASK_STATE_MISSING
     assert result[0].error == _POD_DELETED_TERMINAL_REASON
 
 
@@ -756,7 +756,7 @@ def test_sync_does_not_charge_a_new_incarnation_with_the_previous_eviction(provi
         assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
 
     result = provider.sync(batch)
-    assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert result[0].new_state == job_pb2.TASK_STATE_MISSING
     assert result[0].terminal_reason == _POD_DELETED_TERMINAL_REASON
 
 
@@ -795,7 +795,7 @@ def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
         assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
 
     result = provider.sync(batch)
-    assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert result[0].new_state == job_pb2.TASK_STATE_MISSING
 
 
 def test_sync_empty_batch(provider):
