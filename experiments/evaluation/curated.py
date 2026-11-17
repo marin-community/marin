@@ -16,6 +16,7 @@ from evalrecords.records import (
     EvaluationSelection,
     PromptFormat,
     ResolvedEvaluationSelection,
+    TaskEvidence,
 )
 from huggingface_hub import HfApi
 from marin.evaluation.model_config import ModelConfig
@@ -114,6 +115,7 @@ def settings_for(
     limit: int | None,
     seed: int | None,
     default_seed: int | None,
+    task_evidence: TaskEvidence,
 ) -> CuratedSettings:
     """Resolve run settings; the seed is the launch seed, else the selection's, else ``default_seed``."""
     if model.effective_tokenizer_revision is None:
@@ -139,6 +141,7 @@ def settings_for(
         source_limit=limit if limit is not None else run.limit,
         seed=explicit_seed if explicit_seed is not None else default_seed,
         judge=run.judge,
+        task_evidence=task_evidence,
     )
 
 

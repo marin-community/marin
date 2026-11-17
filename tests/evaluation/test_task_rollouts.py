@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 import openai
 import pytest
-from evalrecords.records import JudgeIdentity
+from evalrecords.records import JudgeIdentity, TaskEvidence
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
@@ -24,7 +24,7 @@ from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import PackageSpec
 from taskcompendium.convert.answers import answer_task, exact_answer_task, source_evidence
-from taskcompendium.evaluation.corpus import chat_item, evaluation_protocol
+from taskcompendium.evaluation.corpus import chat_item, evaluation_cases, evaluation_protocol
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
 from taskcompendium.evaluation.spec import (
     ChatGeneration,
@@ -52,6 +52,7 @@ from taskcompendium.models import (
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
+    TaskSpec,
     TextMessage,
 )
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
@@ -511,7 +512,10 @@ async def test_driver_zero_shot_fallback_reduces_output_cap_and_records_oversize
 
 
 @pytest.mark.asyncio
-async def test_driver_multimetric_submission_failure_saves_raw_response_without_component_scores(tmp_path, run_config):
+@pytest.mark.parametrize("task_evidence", list(TaskEvidence))
+async def test_driver_multimetric_submission_failure_saves_raw_response_without_component_scores(
+    tmp_path, run_config, task_evidence
+):
     corpus = publish_policy_corpus(tmp_path, [{"prompt": "Return an answer"}])
     raw_message = {
         "role": "assistant",
@@ -525,7 +529,9 @@ async def test_driver_multimetric_submission_failure_saves_raw_response_without_
         return ModelTurn(raw_message, (), (), None, "tool_calls", usage=TokenUsage(10, 1))
 
     output = str(tmp_path / "results")
-    config = run_config.model_copy(update={"verifier_machine": machine_runtime(backend="shellsim")})
+    config = run_config.model_copy(
+        update={"verifier_machine": machine_runtime(backend="shellsim"), "task_evidence": task_evidence}
+    )
     machines = {"shellsim": ShellSimMachineFactory()}
     await run_evaluation((corpus,), output, config, model, machine_factories=machines)
     reader = ReadView(output)
@@ -534,6 +540,13 @@ async def test_driver_multimetric_submission_failure_saves_raw_response_without_
     assert terminal[0]["outcome"] == "submission_failure"
     raw = json.loads(reader.read_blob(terminal[0]["result_blob"]))
     assert raw["conversations"][0]["steps"][0]["turn"]["metadata"]["evaluation_raw_message"] == raw_message
+    # Evidence always names its task in the immutable corpus; only embedded evidence copies it.
+    (case,) = evaluation_cases(corpus, source_rows={raw["item"]["source_row"]})
+    assert case.task.id == raw["item"]["task_id"]
+    if task_evidence is TaskEvidence.EMBEDDED:
+        assert TaskSpec.model_validate(raw["task"]) == case.task
+    else:
+        assert "task" not in raw
     assert raw["grade"]["status"] == "submission_failure"
     samples = [sample_from_archive_row(row) for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE)]
     assert len(samples) == 1

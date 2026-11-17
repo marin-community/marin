@@ -416,6 +416,15 @@ class EvaluationSelection(BaseModel):
         return "-".join(parts)
 
 
+class TaskEvidence(StrEnum):
+    """What each curated attempt's saved evidence keeps of its task."""
+
+    REFERENCE = "reference"
+    """The item's task id and source row; the run record's corpus manifest pins the task."""
+    EMBEDDED = "embedded"
+    """A full copy of the TaskSpec, including hidden test resources."""
+
+
 class CuratedSettings(BaseModel):
     """Recorded selection and execution settings shared by launch and dashboard readers."""
 
@@ -426,6 +435,10 @@ class CuratedSettings(BaseModel):
     seed: int | None = None
     judge: JudgeIdentity | None = None
     concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
+    # Omitted at the default, which matches records written before this setting existed.
+    task_evidence: TaskEvidence = Field(
+        default=TaskEvidence.EMBEDDED, exclude_if=lambda value: value is TaskEvidence.EMBEDDED
+    )
 
 
 def scoring_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
