@@ -131,6 +131,7 @@ from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import conta
 from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
 from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_evidence, filtered_declaration
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 pytestmark = pytest.mark.usefixtures("isolated_admission_census")
@@ -409,6 +410,15 @@ def catalog_query(catalog_database: Engine) -> AppletQuery:
     return query
 
 
+FIXTURE_DATASET = "open-athena/fixture"
+FIXTURE_REVISION = "b" * 40
+
+
+def fixture_lexical_clearance() -> Any:
+    """Train-use lexical clearance bound to the fixture pin."""
+    return decontamination_evidence(FIXTURE_DATASET, FIXTURE_REVISION, 3)
+
+
 def publish_sample(
     root: str,
     snapshot_id: str,
@@ -422,9 +432,10 @@ def publish_sample(
     admitted_verdicts: tuple[str, str] = ("good", "unknown"),
     oversight: OversightLevel = OversightLevel.NONE,
     review_types: dict[str, dict[str, Any]] | None = None,
+    lexical_clearance: bool = True,
 ) -> None:
     declaration = SourceDeclaration(
-        license_receipt=fixture_license(source_id, "fixture", "1"),
+        license_receipt=fixture_license(source_id, FIXTURE_DATASET, FIXTURE_REVISION),
         id=source_id,
         name="Marin:math",
         display_name="Math",
@@ -442,13 +453,14 @@ def publish_sample(
         family="Marin:math",
         tags=[],
         task_count=3 - duplicates,
-        within_source_dedup=deduplication_evidence("fixture", "1", "1", 3).model_copy(
+        within_source_dedup=deduplication_evidence(FIXTURE_DATASET, FIXTURE_REVISION, "1", 3).model_copy(
             update={"unique_count": 3 - duplicates, "within_source_duplicates": duplicates}
         ),
         notes="",
         oversight=unassessed_oversight or oversight,
-        dataset_id="fixture",
-        dataset_revision="1",
+        dataset_id=FIXTURE_DATASET,
+        dataset_revision=FIXTURE_REVISION,
+        lexical_contamination=fixture_lexical_clearance() if lexical_clearance else None,
         url=None,
         type="RLVR",
         turns="Single-turn",
@@ -456,8 +468,14 @@ def publish_sample(
         intended_use="train",
         kind="Dataset",
         status="Available",
-        pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},
-        actor_census_input=actor_census_input("fixture", "1", "1", 3 - duplicates),
+        pipeline={
+            "name": "fixture",
+            "version": "1",
+            "source": FIXTURE_DATASET,
+            "revision": FIXTURE_REVISION,
+            "files": [],
+        },
+        actor_census_input=actor_census_input(FIXTURE_DATASET, FIXTURE_REVISION, "1", 3 - duplicates),
     )
     curation = CurationSummary(
         status="completed",
@@ -564,17 +582,23 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
             family="Numbers",
             tags=[],
             task_count=1,
-            within_source_dedup=deduplication_evidence("fixture", "1", "1"),
+            within_source_dedup=deduplication_evidence(FIXTURE_DATASET, FIXTURE_REVISION, "1"),
             notes="",
-            dataset_id="fixture",
-            dataset_revision="1",
+            dataset_id=FIXTURE_DATASET,
+            dataset_revision=FIXTURE_REVISION,
             url=None,
             type="RLVR",
             turns="Single-turn",
             is_benchmark=False,
             kind="Dataset",
             status="Available",
-            pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},
+            pipeline={
+                "name": "fixture",
+                "version": "1",
+                "source": FIXTURE_DATASET,
+                "revision": FIXTURE_REVISION,
+                "files": [],
+            },
         )
         for identifier in ("Marin:a", "Marin:b", "Marin:inventory")
     ]
@@ -1138,6 +1162,36 @@ def test_unchanged_catalog_refreshes_pre_completeness_load(catalog_database, cat
         assert source["result_provisional"] is False
 
 
+def seed_previous_available(catalog_database, source_ids: list[str]) -> None:
+    """Seed a legacy selected load whose Available rows grandfather the gate.
+
+    The lexical-clearance gate refuses NEW Available admissions; these tests
+    render display states that only exist on sources admitted before the gate,
+    so the previous load's Available set is seeded explicitly.
+    """
+    with catalog_database.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO atlas_loads (load_id, catalog_root, snapshot_id, created_at) "
+                "VALUES ('legacy', 'fixture', 'legacy', '2026-11-01T00:00:00Z')"
+            )
+        )
+        for source_id in source_ids:
+            connection.execute(
+                text(
+                    "INSERT INTO atlas_sources (load_id, id, declaration, latest_attempt_status, diagnostics) "
+                    "VALUES ('legacy', :id, CAST(:declaration AS JSONB), 'skipped', '[]'::jsonb)"
+                ),
+                {"id": source_id, "declaration": json.dumps({"id": source_id, "status": "Available"})},
+            )
+        connection.execute(
+            text(
+                "INSERT INTO atlas_current (name, load_id) VALUES ('latest', 'legacy') "
+                "ON CONFLICT (name) DO UPDATE SET load_id = EXCLUDED.load_id"
+            )
+        )
+
+
 def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, catalog_query, tmp_path):
     root = str(tmp_path / "lexical-catalog")
     cases = [
@@ -1187,6 +1241,7 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
                 ).model_dump()
             )
             tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id="lexical").model_dump())
+    seed_previous_available(catalog_database, [declaration.id for _, declaration in cases])
     load_catalog(CurationCatalog(root), catalog_query)
     shutil.rmtree(root)
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
@@ -1210,6 +1265,7 @@ def test_loaded_assemblies_keep_inflight_and_uncertain_results_provisional(catal
     cases = [
         (expected, with_declaration_admission_census(declaration)) for expected, declaration in review_declarations()
     ]
+    seed_previous_available(catalog_database, [declaration.id for _, declaration in cases])
     with DataStore.open(root, writer_id="lexical") as store:
         register_catalog(store)
         with store.transaction() as tx:
@@ -2156,8 +2212,8 @@ def test_role_projection_requires_receipt_and_preserves_frozen_sample_roles(cata
         "changes": [
             {
                 **{key: source[key] for key in ("source_id", "source_key", "population", "task_count")},
-                "dataset_id": "fixture",
-                "dataset_revision": "1",
+                "dataset_id": FIXTURE_DATASET,
+                "dataset_revision": FIXTURE_REVISION,
                 "recorded_use": "train",
                 "effective_use": "eval",
             }
@@ -2824,6 +2880,7 @@ def test_full_review_rows_load_typed_and_browseable(catalog_database, catalog_qu
         result=result,
         waiver=ContentEvidenceReference.model_validate(bindings[FULL_QC_SOURCE]["waiver"]),
     )
+    seed_previous_available(catalog_database, [FULL_QC_SOURCE, "Marin:math"])
     load_result = load_surveyed_catalog(
         CurationCatalog(root),
         catalog_query,
@@ -3265,3 +3322,12 @@ def test_all_unsupported_without_a_profile_conflict_still_blocks(catalog_databas
     flipped = _unsupported_profile_survey(catalog, "Marin:plain", grader_demands_network=False)
     with pytest.raises(ValueError, match="Backend admission blocked"):
         load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+
+
+def test_new_train_admission_without_lexical_clearance_is_refused(catalog_database, catalog_query, tmp_path):
+    """The armed gate: a new Available TRAIN source without clearance cannot load."""
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "uncleared", source_id="Marin:uncleared", lexical_clearance=False)
+    catalog = CurationCatalog(root)
+    with pytest.raises(ValueError, match="Decontamination"):
+        load_surveyed_catalog(catalog, catalog_query, catalog_backend_map(catalog), catalog_identity_map(catalog))

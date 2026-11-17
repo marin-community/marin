@@ -97,34 +97,6 @@
       "dataset_id": null,
       "dataset_revision": null,
       "reasons": []
-    },
-    {
-      "id": "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified",
-      "name": "multi-swe-rl-verified",
-      "display_name": "Multi-SWE-RL-Verified",
-      "status": "Pending",
-      "origin": "PrimeIntellect",
-      "upstream_dataset": "PrimeIntellect/Multi-SWE-RL-Verified",
-      "upstream_url": null,
-      "notes": "Original source images and captured /home grading archives are pinned. Original root actor and host-side multi-swe-bench1.1.2 report checks retained. Pending current-pin execution qualification and admission.",
-      "stage": "Measurements pending",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": []
-    },
-    {
-      "id": "RST:laion/rts-1k-rootless-apptainer",
-      "name": "rst-validated",
-      "display_name": "Recursive Task Synthesis validated RTS-1K",
-      "status": "Pending",
-      "origin": "RST",
-      "upstream_dataset": "laion/rts-1k-rootless-apptainer",
-      "upstream_url": null,
-      "notes": "984 source-validated packages retain original root actors, instructions, builds and solutions. The original verifier is host-delivered at grading time and its reward copied for numeric parsing. Mutable Dockerfile bases and build downloads use explicit Daytona EVAL declarative provisioning. Pending current-pin execution qualification and admission.",
-      "stage": "Measurements pending",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": []
     }
   ],
   "stages": {

@@ -54,6 +54,7 @@ from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
 from infra.marina.apps.rl_data_catalog.server.admission import (
     backend_admission_review,
     has_runnable_production_support,
+    require_available_lexical_clearance,
     require_content_result,
     require_declaration_admission,
 )
@@ -397,6 +398,13 @@ def load_catalog(
             and filtration(source.declaration.model_dump(mode="json"))["state"] != "excluded"
         ):
             require_declaration_admission(source.declaration)
+            if source.id not in previously_available:
+                # ARMED (rulings-enforcement): a NEW Available admission needs
+                # lexical clearance — explicit intended_use plus the train
+                # private-release receipt or the eval benchmark-measured
+                # receipt at the pin. Sources already Available in the
+                # previously selected catalog are grandfathered.
+                require_available_lexical_clearance(source.declaration)
         backend_row = next(row for row in backend_map.sources if row.source_id == source.id)
         verdicts = {name: fit.support.value for name, fit in backend_row.backends.items()}
         blocker, pending = backend_admission_review(verdicts, source.declaration.status, backend_map.deployment_classes)
