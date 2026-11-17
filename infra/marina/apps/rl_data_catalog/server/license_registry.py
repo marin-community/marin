@@ -4,8 +4,42 @@
 """Versioned user decisions; Python packaging preserves this registry in hosted backends."""
 
 LICENSE_BANS = r"""{
-  "version": "2026.11.16.5",
+  "version": "2026.11.16.6",
   "bans": [
+    {
+      "source_id": "FWeindel:validated-tasks/tmax11-v1.1",
+      "upstream_id": "FWeindel/validated-tasks/tmax11-v1.1",
+      "upstream_revision": "317659ac88c8b706d318020c5fc3813a931fb6ec",
+      "classification": "unknown",
+      "license_ids": [
+        "other"
+      ],
+      "reason": "User ruling: per-folder ban under the doubt rule; the upstream card is license: other, no terms.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/TMaxxx/tmax-13k-v1.1/tree/8d47de78dc85ae7f8cf4853b6777a0917e49fad9",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-16T20:26:00-05:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "FWeindel:validated-tasks/tmax11_v1.1",
+      "upstream_id": "FWeindel/validated-tasks/tmax11_v1.1",
+      "upstream_revision": "317659ac88c8b706d318020c5fc3813a931fb6ec",
+      "classification": "unknown",
+      "license_ids": [
+        "other"
+      ],
+      "reason": "User ruling: per-folder ban under the doubt rule; the upstream card is license: other, no terms.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/TMaxxx/tmax-13k-v1.1/tree/8d47de78dc85ae7f8cf4853b6777a0917e49fad9",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-16T20:26:00-05:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
     {
       "source_id": "FWeindel:validated-tasks/termigen-v3",
       "upstream_id": "FWeindel/validated-tasks/termigen-v3",
