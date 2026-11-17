@@ -35,6 +35,14 @@ class NgramTables:
     num_ngrams: int
 
 
+@dataclasses.dataclass(frozen=True)
+class NgramPairs:
+    """Every (token, kept n-gram) pair of an ``NgramTables`` as two flat arrays, sorted by token."""
+
+    token: np.ndarray  # [P] int32
+    ngram: np.ndarray  # [P] int32, the n-gram's table row
+
+
 def spelling_ngrams(surface: bytes) -> frozenset[Ngram]:
     """The character 1- to ``MAX_NGRAM``-grams of ``surface``'s normalised, boundary-marked spelling; empty for a
     token whose normalised spelling is empty."""
@@ -69,3 +77,11 @@ def ngram_tables(vocab_size: int) -> NgramTables:
     if vocab_size > len(surfaces):
         raise ValueError(f"spelling_ngram_source: vocab_size {vocab_size} exceeds the {len(surfaces)} stored tokens")
     return ngram_tables_from_surfaces(surfaces[:vocab_size])
+
+
+@functools.cache
+def ngram_pairs(vocab_size: int) -> NgramPairs:
+    """The (token, n-gram) pairs of ``ngram_tables(vocab_size)``."""
+    tables = ngram_tables(vocab_size)
+    token, slot = np.nonzero(tables.ngram_present)
+    return NgramPairs(token.astype(np.int32), tables.ngram_ids[token, slot])

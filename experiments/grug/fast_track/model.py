@@ -60,7 +60,7 @@ from experiments.grug.fast_track.router_metrics import (
     summarize_router_metrics,
 )
 from experiments.grug.fast_track.spelling_bytes import BYTE_POSITIONS, SpellingCase, spelling_tables
-from experiments.grug.fast_track.spelling_ngrams import ngram_tables
+from experiments.grug.fast_track.spelling_ngrams import ngram_pairs, ngram_tables
 from experiments.grug.moe.kda import chunk_kda, kda_fused
 from experiments.grug.moe.kda_prep_pallas import GateFn, GateKind, gate_log_decay
 from experiments.grug.moe.kda_state_pallas import StateGrads
@@ -498,6 +498,10 @@ class GrugModelConfig:
     """Exact causal softmax attention over the last ``kda_local_attn_window`` tokens (self included, never across a
     document start) beside every KDA layer's delta-rule read, on the same normed input, added to the KDA output
     (``KdaLocalAttention``). 0: off. Needs ``local_mixer=kda``."""
+    spelling_ngram_embeds: bool = False
+    """``spelling_ngram_source``'s n-gram, leading-space and case rows added to the input embedding table before the
+    token gather, zero-initialised like ``spelling_byte_embeds``. The n-gram sum is one segment-sum over the
+    vocabulary's flat (token, n-gram) pairs (``spelling_ngrams.ngram_pairs``). No AttnRes source and no norm."""
 
     def __post_init__(self) -> None:
         if self.kda_local_attn_window and self.local_mixer != LocalMixer.KDA:
@@ -2173,6 +2177,10 @@ class Transformer(eqx.Module):
     token_embed_source_space: Float[Array, " D"] | None
     token_embed_source_case: Float[Array, "C D"] | None
     spelling_byte_norm: RMSNorm | None
+    # cfg.spelling_ngram_embeds: the n-gram rows, the leading-space row and the case rows added to the input table.
+    token_embed_add_ngrams: Float[Array, "R D"] | None
+    token_embed_add_space: Float[Array, " D"] | None
+    token_embed_add_case: Float[Array, "C D"] | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -2215,6 +2223,12 @@ class Transformer(eqx.Module):
             source_space = reshard(_init_weight(k_space, (cfg.hidden_dim,), std), P(None))
             source_case = reshard(_init_weight(k_case, (len(SpellingCase), cfg.hidden_dim), std), P(None, None))
             spelling_byte_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+        add_ngrams = add_space = add_case = None
+        if cfg.spelling_ngram_embeds:
+            num_ngrams = ngram_tables(cfg.vocab_size).num_ngrams
+            add_ngrams = reshard(jnp.zeros((num_ngrams, cfg.hidden_dim), jnp.float32), P(None, None))
+            add_space = reshard(jnp.zeros((cfg.hidden_dim,), jnp.float32), P(None))
+            add_case = reshard(jnp.zeros((len(SpellingCase), cfg.hidden_dim), jnp.float32), P(None, None))
 
         def stack(layers: tuple[int, ...], use_kda: bool) -> ArrayStacked[Block]:
             keys = jnp.stack([block_keys[i] for i in layers])
@@ -2278,6 +2292,9 @@ class Transformer(eqx.Module):
             token_embed_source_space=source_space,
             token_embed_source_case=source_case,
             spelling_byte_norm=spelling_byte_norm,
+            token_embed_add_ngrams=add_ngrams,
+            token_embed_add_space=add_space,
+            token_embed_add_case=add_case,
             config=cfg,
         )
 
@@ -2297,15 +2314,34 @@ class Transformer(eqx.Module):
         return [by_index[i] for i in range(self.config.num_layers)]
 
     def input_embedding_table(self) -> Float[Array, "V D"]:
-        """``token_embed``, plus each token's byte, space and case rows under ``spelling_byte_embeds``."""
-        if self.token_embed_bytes is None:
+        """``token_embed``, plus each token's byte, space and case rows under ``spelling_byte_embeds`` and its
+        n-gram, space and case rows under ``spelling_ngram_embeds``."""
+        if self.token_embed_bytes is None and self.token_embed_add_ngrams is None:
             return self.token_embed
-        assert self.token_embed_space is not None and self.token_embed_case is not None
-        extra = _spelling_byte_rows(
-            self.token_embed_bytes, self.token_embed_space, self.token_embed_case, self.config.vocab_size
-        )
-        table = self.token_embed.astype(jnp.float32) + extra
+        table = self.token_embed.astype(jnp.float32)
+        if self.token_embed_bytes is not None:
+            assert self.token_embed_space is not None and self.token_embed_case is not None
+            table = table + _spelling_byte_rows(
+                self.token_embed_bytes, self.token_embed_space, self.token_embed_case, self.config.vocab_size
+            )
+        if self.token_embed_add_ngrams is not None:
+            table = table + self._spelling_ngram_embed_rows()
         return reshard(table.astype(self.token_embed.dtype), P(None, None))
+
+    def _spelling_ngram_embed_rows(self) -> Float[Array, "V D"]:
+        """Each token's ``spelling_ngram_embeds`` rows (float32): its case row, leading-space row and the
+        segment-sum of its n-gram rows."""
+        assert self.token_embed_add_ngrams is not None and self.token_embed_add_space is not None
+        assert self.token_embed_add_case is not None
+        vocab_size = self.config.vocab_size
+        spelling = spelling_tables(vocab_size)
+        pairs = ngram_pairs(vocab_size)
+        # Gather in float32 so the backward scatter-adds into float32 rows.
+        rows = self.token_embed_add_ngrams.astype(jnp.float32)
+        extra = self.token_embed_add_case.astype(jnp.float32)[spelling.case]
+        extra = extra + spelling.leading_space[:, None] * self.token_embed_add_space.astype(jnp.float32)
+        ngram_sum = jax.ops.segment_sum(rows[pairs.ngram], pairs.token, num_segments=vocab_size, indices_are_sorted=True)
+        return extra + ngram_sum
 
     def spelling_byte_table(self) -> Float[Array, "V D"]:
         """Each token's ``spelling_byte_source`` feature before its norm: its byte, leading-space and case rows."""
@@ -2844,7 +2880,16 @@ def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float
 
 
 # Lookup tables: a token reads one row, so they cost no matmul FLOPs.
-_EMBEDDING_TABLES = frozenset({"token_embed", "value_embed", "token_embed_bytes", "token_embed_case"})
+_EMBEDDING_TABLES = frozenset(
+    {
+        "token_embed",
+        "value_embed",
+        "token_embed_bytes",
+        "token_embed_case",
+        "token_embed_add_ngrams",
+        "token_embed_add_case",
+    }
+)
 # Per-head or per-expert vectors stored as 2-D arrays that are added, not multiplied.
 _NON_MATMUL_PARAMS = frozenset({"dt_bias", "router_bias", "a_log", "offset_bias"})
 
