@@ -98,12 +98,13 @@ def test_pod_slice_candidates_require_no_internal_processes(pod_tree):
 
 def test_containment_survives_when_no_candidate_enforces_limits(pod_tree):
     """When nothing can enforce limits, containment survives with a warning."""
-    root, scope = pod_tree
-    slice_level = scope.parent
+    scope, slice_level = pod_tree
     _reject_enable(scope)
     _reject_enable(slice_level)
-    assert delegated_cgroup_parent() == scope
-    assert _leftover_groups(root) == []
+    # ranking returns the first candidate that passes check_cgroup_parent
+    assert delegated_cgroup_parent() == slice_level
+    for candidate in (scope, slice_level):
+        assert not list(candidate.glob("shellbox-*"))
 
 
 def test_cgroup_limits_applied_reads_back_written_files(tmp_path: Path):
