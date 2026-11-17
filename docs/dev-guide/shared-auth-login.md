@@ -92,8 +92,8 @@ Select an approved Bao deployment and supply its verified TLS CA through
 auth bootstrap before enrolling users. Bao requires outbound HTTPS access to
 Google discovery and signing-key endpoints. Deployment network policy owns
 that access.
-The [auth deployment guide](../../infra/auth/README.md#initialize-unseal-and-configure)
-describes bootstrap. Its [OpenFGA policy procedure](../../infra/auth/README.md#openfga-publication)
+The [auth deployment guide](https://github.com/marin-community/marin/blob/main/infra/auth/README.md#initialize-unseal-and-configure)
+describes bootstrap. Its [OpenFGA policy procedure](https://github.com/marin-community/marin/blob/main/infra/auth/README.md#openfga-publication)
 owns model publication and relationships.
 
 An operator supplies an ephemeral `BAO_TOKEN` and independently selects the
@@ -137,8 +137,8 @@ these steps. Start with denied access and add the approved nested membership
 to establish the authorization transition.
 The fields are `broker_policy.subjects` and
 `broker_policy.openfga.principals`, illustrated in the
-[staging configuration](../../infra/auth/Pulumi.staging.yaml). The
-[relationship examples](../../infra/auth/policy/relationships.json) show a
+[staging configuration](https://github.com/marin-community/marin/blob/main/infra/auth/Pulumi.staging.yaml). The
+[relationship examples](https://github.com/marin-community/marin/blob/main/infra/auth/policy/relationships.json) show a
 principal joining a team, the team joining `marin-research`, and that group's
 access to an action/resource scope. Publish them only to the intended trial
 store. A broker policy-bundle update requires draining existing shared

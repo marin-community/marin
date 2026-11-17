@@ -49,7 +49,7 @@ from infra.auth.service import LoomConfig, ServiceConfig, create_service
 TASK_NAMESPACE = "marin-auth-task-staging"
 PROOF_MARKER = "AUTH_ATTEMPT_BOUNDED"
 PROOF_PYTHON = "/opt/marin-venv/bin/python"
-RELEASE_FILE = "/app/auth-proof.release"
+RELEASE_FILE = "/tmp/auth-proof.release"
 
 
 @dataclass(frozen=True)
@@ -309,7 +309,7 @@ def run_execution_proof(
                     captured["pod_name"], ["touch", RELEASE_FILE], container="task", timeout=5
                 )
                 if released.returncode != 0:
-                    raise RuntimeError("The proof observer could not release its CPU task")
+                    raise RuntimeError(f"The proof observer could not release its CPU task: {released.stderr}")
 
             def finished() -> bool:
                 response = iris.post("/iris.cluster.ControllerService/GetJobStatus", json={"jobId": job_name})

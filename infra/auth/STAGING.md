@@ -195,6 +195,12 @@ configuration; no node runtime or cluster DNS setting is changed.
 
 ## Execution proof image
 
+The proof image is stored in the `iris-worker` registry repository for this
+experiment. Its name does not select the worker-fleet backend. The driver runs
+Loom and an isolated Iris controller using `K8sTaskProvider`; Kubernetes runs
+the CPU task pods directly. The same image supplies the driver's tools and the
+task's Python authorization probe. No Iris worker daemon is deployed.
+
 Use the published digest below unless rebuilding is needed. The image keeps
 Python/current source under `/opt`, so a task workdir at `/app` does not hide
 them. It runs as 1000:1000 and retains PG17, Bao, OpenFGA, Node and Git tools.
