@@ -142,9 +142,10 @@ def test_data_parallel_hosts_form_one_global_data_parallel_group(monkeypatch):
     assert "--headless" in follower
 
 
-def test_single_host_data_parallel_keeps_its_rank_zero_start(monkeypatch):
+def test_pipeline_gang_omits_multi_host_data_parallel_flags(monkeypatch):
     monkeypatch.setattr(iris_vllm, "_node_network", lambda _: ("10.0.0.9", "eth0"))
     _, flags = _launch_args(0, pipeline_parallel_size=2, data_parallel_size=1, data_parallel_hosts=1)
     assert flags["--nnodes"] == "2"
     assert flags["--data-parallel-size"] == flags["--data-parallel-size-local"] == "1"
     assert "--data-parallel-address" not in flags
+    assert "--data-parallel-start-rank" not in flags

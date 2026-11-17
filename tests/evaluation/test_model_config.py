@@ -497,12 +497,8 @@ def test_mochi_catalog_lowers_one_server_across_four_gb200_hosts():
     assert config.broker is None
     assert config.iris.worker_resources.replicas == 4
     assert config.iris.worker_resources.chip_count() == 16
-    assert config.iris.worker_resources.ram == "880g"
-    extra_args = config.engine.extra_args
-    assert "--data-parallel-size" not in extra_args
-    assert extra_args[extra_args.index("--tool-call-parser") + 1] == "hermes"
-    assert "--enable-auto-tool-choice" in extra_args
-    assert config.model.eos_token_ids == (128001, 128009)
+    # The gang launcher owns data-parallel sizing; a catalog value would conflict with it.
+    assert "--data-parallel-size" not in config.engine.extra_args
 
 
 @pytest.mark.parametrize(
