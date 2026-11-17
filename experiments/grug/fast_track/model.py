@@ -1469,7 +1469,11 @@ class MoEMLP(eqx.Module):
     ) -> Float[Array, "T L"]:
         """``g * rms_norm(concat_lag(shift_lag(x W_down)) W_up)`` from ``narrow_flat = x W_down``."""
         assert self.lag_up is not None and self.lag_gain is not None
-        shifted = rearrange(narrow_flat, "(b s) n -> b s n", b=b)
+        # An explicit sharding: on a mesh with one row per data shard (the dropless eval mesh), the unsharded
+        # split moves the size-1 expert axis onto the sequence, which the segment mask's batch sharding rejects.
+        shifted = jnp.reshape(
+            narrow_flat, (b, narrow_flat.shape[0] // b, narrow_flat.shape[1]), out_sharding=P(_BATCH_AXES, None, None)
+        )
         lags = []
         for _ in range(MOE_LAG_WINDOW):
             shifted = previous_token(shifted, segment_ids)

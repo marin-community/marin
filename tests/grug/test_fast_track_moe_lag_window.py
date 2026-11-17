@@ -2,9 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """fast_track ``moe_lag_window``: the routed experts' lag window against a direct sum over lags with its document
-masking, and a tiny model that starts as the baseline, trains the gain, and routes the new leaves to their groups."""
+masking, on a mesh with one batch row per data shard, and a tiny model that starts as the baseline, trains the gain,
+and routes the new leaves to their groups."""
 
 import dataclasses
+import os
+import subprocess
+import sys
+import textwrap
 
 import equinox as eqx
 import jax
@@ -38,6 +43,58 @@ def test_lag_window_matches_direct_sum_within_documents():
     up = window.reshape(batch * seq, -1) @ np.asarray(mlp.lag_up)
     want = np.asarray(gain) * up / np.sqrt(np.mean(up**2, axis=-1, keepdims=True) + 1e-6)
     np.testing.assert_allclose(got, want, rtol=1e-4, atol=1e-5)
+
+
+_ONE_ROW_PER_SHARD_SCRIPT = """
+import dataclasses
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import AxisType, Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
+
+from experiments.belay.model_probe import tiny_config
+from experiments.grug.fast_track.model import MoEMLP
+
+batch_axes = ("replica_dcn", "data", "expert")
+config = dataclasses.replace(tiny_config(), moe_lag_window=True)
+batch, seq = 4, 8
+segments = np.repeat(np.array([[0, 0, 0, 1, 1, 1, 1, 1]]), batch, axis=0)
+narrow = np.asarray(jax.random.normal(jax.random.key(2), (batch * seq, config.hidden_dim // 4)))
+
+
+def window(shape):
+    mesh = Mesh(
+        np.array(jax.devices()[: int(np.prod(shape))], dtype=object).reshape(shape),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    with jax.set_mesh(mesh):
+        mlp = MoEMLP.init(config, key=jax.random.key(0))
+        mlp = dataclasses.replace(mlp, lag_gain=jnp.ones_like(mlp.lag_gain))
+        x = jax.device_put(narrow, NamedSharding(mesh, P(batch_axes, None)))
+        seg = jax.device_put(segments, NamedSharding(mesh, P(batch_axes, None)))
+        return np.asarray(jax.jit(lambda m, n, s: m._lag_window(n, batch, s))(mlp, x, seg))
+
+
+# The dropless eval mesh: data spans the batch rows and expert is collapsed to 1.
+np.testing.assert_allclose(window((1, 4, 1, 1)), window((1, 1, 1, 1)), rtol=1e-5, atol=1e-5)
+"""
+
+
+def test_lag_window_runs_with_one_batch_row_per_data_shard():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(_ONE_ROW_PER_SHARD_SCRIPT)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_tiny_model_starts_as_baseline_and_trains_the_gain():
