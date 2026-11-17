@@ -72,3 +72,40 @@ def test_sample_tolerance_display_preserves_counts_and_full_finality(provisional
         displayed = quality_display(declaration.model_dump(mode="json"), None, None)
         assert displayed.quality.value != "FULL"
         assert displayed.quality.value == "SAMPLE"
+
+
+@pytest.mark.parametrize(
+    "status,admitted,state",
+    [("Excluded", 0, "excluded"), ("Deprecated", 0, "excluded"), ("Pending", None, "pending")],
+)
+def test_headline_counts_follow_the_source_status(status: str, admitted: int | None, state: str) -> None:
+    """Only Available sources admit; excluded/deprecated count zero, pending stays unmeasured."""
+    source = with_declaration_admission_census(contamination_declarations()[0][1])
+    observation = count_evidence(source, oracle_tasks=0, blocked=1)
+    declaration = source.model_dump(mode="json")
+    declaration["status"] = status
+    result = filtration(declaration, observation)
+    assert result["admitted_count"] == admitted
+    assert result["state"] == state
+    assert result["source_status"] == status
+    # the retained projection stays visible as evidence for every status
+    assert "retains 2 tasks" in result["reason"]
+    assert result["population_count"] == 3
+
+
+def test_admitted_headline_sums_available_sources_only() -> None:
+    """The served admitted total is the sum over Available sources only."""
+    sources = {
+        status: with_declaration_admission_census(contamination_declarations()[0][1])
+        for status in ("Available", "Excluded", "Pending", "Deprecated")
+    }
+    counts = {status: count_evidence(source, oracle_tasks=0, blocked=1) for status, source in sources.items()}
+    admitted = []
+    for status, source in sources.items():
+        declaration = source.model_dump(mode="json")
+        declaration["status"] = status
+        admitted.append(filtration(declaration, counts[status])["admitted_count"])
+    # Available admits 2; Excluded/Deprecated contribute 0; Pending contributes nothing
+    total = sum(value or 0 for value in admitted)
+    assert total == 2
+    assert admitted == [2, 0, None, 0]

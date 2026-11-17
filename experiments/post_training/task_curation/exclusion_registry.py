@@ -25,6 +25,19 @@ def _note(message: str) -> ExclusionEvidence:
 
 
 MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
+    "TaskTrove:swesmith-verifier-repaired-v5": (
+        ExclusionClaim(
+            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
+            evidence=_note(
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Machine execution requires "
+                "explicit semantics and native dependencies. The dev-only backends (docker, docker-gvisor) never "
+                "count for admission, and the declared TaskSpec population (7016 tasks) stays intact pending a "
+                "pinned rebuild. Surfaced by the 908 grading-metadata adoption (grading-metadata-proof-v5)."
+            ),
+        ),
+    ),
     "TaskTrove:DCAgent__exp_rle_adversarial-v6": (
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,

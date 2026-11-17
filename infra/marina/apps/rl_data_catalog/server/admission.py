@@ -62,6 +62,26 @@ def population_admission_blocker(
     return None
 
 
+def has_runnable_production_support(
+    verdicts: Mapping[str, str], deployment_classes: Mapping[str, str] | None = None
+) -> bool:
+    """Whether any production backend's verdict satisfies admission.
+
+    Dev-only backends (local Docker, Docker+runsc) are dropped before the
+    check: a DEV_ONLY SUPPORTED cell can never satisfy admission.
+    """
+    classes = dict.fromkeys(
+        (*PRODUCTION_BACKENDS_DEFAULT, *DEV_ONLY_BACKENDS_DEFAULT),
+        "dev_only",
+    )
+    classes.update({name: "production" for name in PRODUCTION_BACKENDS_DEFAULT})
+    if deployment_classes:
+        classes.update(deployment_classes)
+    return any(
+        support in RUNNABLE_FIT for name, support in verdicts.items() if classes.get(name, "dev_only") == "production"
+    )
+
+
 def backend_admission_review(
     verdicts: Mapping[str, str],
     status: str | None,

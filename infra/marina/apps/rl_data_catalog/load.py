@@ -51,6 +51,7 @@ from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prio
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
 from infra.marina.apps.rl_data_catalog.server.admission import (
     backend_admission_review,
+    has_runnable_production_support,
     require_content_result,
     require_declaration_admission,
 )
@@ -381,24 +382,23 @@ def load_catalog(
             and filtration(source.declaration.model_dump(mode="json"))["state"] != "excluded"
         ):
             require_declaration_admission(source.declaration)
-        blocker, pending = backend_admission_review(
-            {
-                name: fit.support.value
-                for name, fit in next(row for row in backend_map.sources if row.source_id == source.id).backends.items()
-            },
-            source.declaration.status,
-            backend_map.deployment_classes,
-        )
+        verdicts = {
+            name: fit.support.value
+            for name, fit in next(row for row in backend_map.sources if row.source_id == source.id).backends.items()
+        }
+        blocker, pending = backend_admission_review(verdicts, source.declaration.status, backend_map.deployment_classes)
         if blocker:
             raise ValueError(f"Backend admission blocked: {source.id}: {blocker}")
         if pending:
             # An already-admitted source keeps its status with a visible marker.
-            # A new fully-qualified source whose only positive production outcome
-            # is VERIFY materializes as Pending (admission pending live
-            # qualification) instead of Available, so it never enters selection
-            # while unverified.
+            # A new source downgrades to Pending only when NO production backend
+            # satisfies admission and VERIFY is its only positive production
+            # outcome; a runnable production backend admits it regardless of
+            # sibling VERIFY cells.
             verification_pending[source.id] = pending
-            if source.id not in previously_available:
+            if source.id not in previously_available and not has_runnable_production_support(
+                verdicts, backend_map.deployment_classes
+            ):
                 downgraded.append(source.id)
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")

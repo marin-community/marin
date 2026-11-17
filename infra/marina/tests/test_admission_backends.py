@@ -4,7 +4,10 @@
 """Admission counts production backends only; dev-only verdicts never satisfy it."""
 
 
-from infra.marina.apps.rl_data_catalog.server.admission import backend_admission_review
+from infra.marina.apps.rl_data_catalog.server.admission import (
+    backend_admission_review,
+    has_runnable_production_support,
+)
 
 
 def test_dev_only_supported_cell_never_satisfies_admission():
@@ -89,3 +92,17 @@ def test_not_applicable_does_not_negate_a_production_verify():
     verdicts = {"daytona": "not_applicable", "iris": "not_applicable", "local": "verify"}
     blocker, pending = backend_admission_review(verdicts, "Available")
     assert blocker is None and pending == ["local"]
+
+
+def test_runnable_production_support_ignores_dev_only_cells():
+    """The runnable check filters to production backends before scanning verdicts."""
+    assert has_runnable_production_support({"docker": "supported", "iris": "unsupported"}) is False
+    assert has_runnable_production_support({"docker": "supported", "iris": "supported"}) is True
+    assert has_runnable_production_support({"iris": "verify", "local": "verify"}) is False
+    assert (
+        has_runnable_production_support(
+            {"custom": "supported"},
+            deployment_classes={"custom": "production"},
+        )
+        is True
+    )

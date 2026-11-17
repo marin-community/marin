@@ -123,13 +123,44 @@ def counted_population(
         }
     retained = counts.input.measured_tasks - counts.static_blocked_tasks
     training = counts.intended_use == "train"
+    status = declaration["status"]
+    if status != "Available":
+        # Headline admitted totals sum admitted_count over sources; only
+        # Available sources admit. Excluded and Deprecated populations count
+        # zero; Pending (and any other status) keeps its retained count
+        # visible as evidence but never enters the admitted total.
+        if status in {"Excluded", "Deprecated"}:
+            return {
+                "state": "excluded",
+                "example_count": 0,
+                "admitted_count": 0,
+                "population_count": counts.input.measured_tasks,
+                "excluded_count": counts.input.measured_tasks,
+                "source_status": status,
+                "reason": (
+                    f"Source status {status} removes the population from admission; the current-pin "
+                    f"static projection retains {retained} tasks "
+                    f"(static blockers {counts.static_blocked_tasks}) as evidence only."
+                ),
+                "count_evidence": evidence,
+            }
+        return {
+            **pending,
+            "example_count": retained,
+            "admitted_count": None,
+            "count_evidence": evidence,
+            "reason": (
+                f"Source status {status}: the current-pin static projection retains {retained} tasks, "
+                "pending admission; the retained count stays visible but is not admitted."
+            ),
+        }
     return {
         "state": "static_retained" if retained else "static_blocked",
         "example_count": retained,
         "admitted_count": retained,
         "population_count": counts.input.measured_tasks,
         "excluded_count": counts.static_blocked_tasks,
-        "source_status": declaration["status"],
+        "source_status": status,
         "reason": (
             "No oracle: retained population minus unique typed static blockers under the pinned policy."
             if training
