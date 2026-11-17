@@ -4,7 +4,7 @@ name: Input token embedding at 4x Adam LR
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6959048333
@@ -26,6 +26,13 @@ trials:
     embed_lr_mult: '4.0'
   commit: e71120947b
   priority: batch
+  loss:
+  - 3.0427
+  delta:
+  - -0.003
+  steps: 3030
+  baseline: belay-X0239-control 3.0457 (same commit, seed 0)
+  step_time_change: 0%
 potential:
   score: 5
   rationale: 'No result yet: speedrun control and variant preempted and still running → 5'
