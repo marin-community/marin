@@ -46,7 +46,8 @@ trials:
   batch: X0229
   date: '2026-11-17'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0229
-  wandb: []
+  wandb:
+  - belay-X0229v3-seed0
   settings:
     mla_qk_norm_cap: '30'
   commit: b55893e78a
