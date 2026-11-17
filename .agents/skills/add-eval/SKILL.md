@@ -24,6 +24,12 @@ evidence and stopping rules an agent needs.
    the reference implementation, or a published score for a model Marin can
    serve. Prefer a per-item comparison.
 4. Pick the pattern from the guide's table and read its example module end to end.
+5. Confirm the hardware you may launch on. GPU smoke runs use CoreWeave and need
+   `CW_KEY_ID` and `CW_KEY_SECRET` in your environment; the launcher refuses
+   them otherwise. Without the keys, the model's default GCP TPU needs none.
+   When delegating, state which platforms the delegate may use so a missing
+   credential does not stop the work. Never search for or copy credentials
+   that the requester did not provide.
 
 Stop and report when the source is gated or licensed in a way that forbids
 evaluation use, or when the reference requires tools or multi-turn
@@ -33,11 +39,15 @@ interaction (that is a Harbor benchmark).
 
 - Pin the dataset commit and exact files. Count the evaluated rows from the
   pinned files; never copy a population from a paper.
+- Keep sampling at the served model's defaults unless the reference fixes it;
+  fixed values apply to every model evaluated.
 - Put prompt rendering, conversion and scorers in `lib/taskcompendium`; put
   pins and protocols in `experiments/evaluation/benchmarks/`.
 - Set the protocol `benchmark` to the intended `--evals` key.
 - Bump the recipe and protocol versions whenever prompt or conversion code
-  changes; corpus identity does not hash that code.
+  changes; corpus identity does not hash that code. Changing an existing
+  `multiple_choice_evaluation` template means bumping `EXPLICIT_TEMPLATE_VERSION`,
+  which republishes every benchmark that helper builds; say so in the PR.
 - Do not add the benchmark to a suite in `configs/evalchemy.yaml` unless the
   user asks.
 
@@ -50,13 +60,14 @@ Run every step; each produces evidence for the PR.
    answers. Run the affected tests and `./infra/pre-commit.py --fix` on the
    changed files.
 2. **Local corpus build.** Build the full population with the curation driver
-   and print three compiled requests. Compare them character by character with
-   the reference's rendered prompts for the same rows.
-3. **Smoke.** Dry-run, then launch with `--model qwen3-0.6b --platform gpu
-   --accelerator H100x1 --federated_cluster cw-us-east-02a --limit 50
-   --version dev`. Follow `use-iris` for job monitoring with a bounded wait.
-   Confirm with `cli scores` that every selected item is scored and no
-   infrastructure errors remain.
+   and compare every compiled request character by character with the
+   reference's rendering of the same rows.
+3. **Smoke.** Dry-run, then launch with `--model qwen3-0.6b --limit 50
+   --version dev`, adding `--platform gpu --accelerator H100x1
+   --federated_cluster cw-us-east-02a` when CoreWeave keys are available.
+   Follow `use-iris` for job monitoring with a bounded wait. Confirm with
+   `cli scores` that every selected item is scored and no infrastructure
+   errors remain.
 4. **Full-population run and reference comparison.** Run without `--limit` on
    the same model as the reference. For a per-item reference, report the
    agreement rate and explain each disagreement. For a published score, report
