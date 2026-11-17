@@ -59,24 +59,25 @@ defineExpose({ open })
   >
     <div v-if="status === 'saved'" class="space-y-4 p-5">
       <h2 id="report-issue-title" class="text-sm font-semibold">Report saved</h2>
-      <p class="text-sm leading-relaxed text-text-secondary">
-        Thanks. The report is stored privately in Marin storage.
-        <a
-          class="break-all text-accent hover:underline"
-          :href="FILER_URL + encodeURIComponent(location)"
-          target="_blank"
-          rel="noopener"
-        >Open it in Filer</a>.
-      </p>
-      <div class="flex justify-end">
+      <p class="text-sm leading-relaxed text-text-secondary">Thanks. The report is stored privately in Marin storage:</p>
+      <p class="break-all rounded-lg bg-surface px-3 py-2 font-mono text-xs text-text-secondary">{{ location }}</p>
+      <div class="flex justify-end gap-2">
         <button
           type="button"
-          autofocus
-          class="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-surface transition-colors hover:bg-accent-hover"
+          class="rounded-lg px-3 py-1.5 text-sm text-text-muted transition-colors hover:text-text"
           @click="dialog?.close()"
         >
           Close
         </button>
+        <a
+          autofocus
+          class="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-surface transition-colors hover:bg-accent-hover"
+          :href="FILER_URL + encodeURIComponent(location)"
+          target="_blank"
+          rel="noopener"
+        >
+          Open in Filer
+        </a>
       </div>
     </div>
     <form v-else class="space-y-4 p-5" @submit.prevent="submit">
