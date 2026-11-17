@@ -48,7 +48,12 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
         ("versioned-missing-evaluation", None, None, ["evaluation_records_available"]),
         ("checkpoint-lineage", 2, 7200, []),
         ("lineage-unknown-grandparent", None, None, []),
-        ("untracked-native", None, None, []),
+        (
+            "untracked-native",
+            None,
+            None,
+            ["eval_lite/grader_error_fraction", "eval_lite/initial/grader_error_fraction"],
+        ),
         ("updates-override", 1, 3600, []),
         ("train-long-updates-override", 2, 3600, []),
         ("negative-duration", None, None, []),
@@ -194,8 +199,8 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     assert (row["optimizer_steps"], row["elapsed_seconds"]) == (expected_updates, expected_time)
     assert (row["planned_updates"], row["measured_updates"]) == ((1, [1]) if case == "updates-override" else (2, [1, 2]))
     assert row["timing_scope"] == "checkpoint_lineage_native_jobs"
-    assert row["status"] == ("failed" if expected_facts else "succeeded")
-    assert row["failed_facts"] == expected_facts
+    assert row["status"] == ("failed" if expected_facts else "succeeded"), (row["failed_facts"], row["evidence"])
+    assert row["failed_facts"] == expected_facts, (row["failed_facts"], row["evidence"])
     if case == "native-composed":
         assert row["engine"]["vllm_version"] == "fixture-vllm"
 
