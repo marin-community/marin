@@ -11,6 +11,7 @@ import shlex
 import stat
 import tarfile
 import tempfile
+import time
 import uuid
 from asyncio import sleep
 from collections.abc import Callable, Mapping
@@ -25,8 +26,11 @@ from daytona import (
     CreateSandboxFromImageParams,
     CreateSandboxFromSnapshotParams,
     DaytonaConflictError,
+    DaytonaConnectionError,
+    DaytonaError,
     DaytonaNotFoundError,
     DaytonaRateLimitError,
+    DaytonaTimeoutError,
     SessionExecuteRequest,
 )
 from rigging.timing import ExponentialBackoff
@@ -81,6 +85,18 @@ def _control_command(script: str) -> str:
             f"_SHELLBOX_COMMAND_PATH=$PATH; export _SHELLBOX_COMMAND_PATH; "
             f"PATH={CONTROL_PATH}; export PATH; {script}",
         )
+    )
+
+
+def _transient_session_error(error: Exception) -> bool:
+    if isinstance(
+        error, (TimeoutError, ConnectionError, DaytonaConnectionError, DaytonaTimeoutError, DaytonaRateLimitError)
+    ):
+        return True
+    return (
+        isinstance(error, DaytonaError)
+        and error.status_code is not None
+        and (error.status_code in (408, 429) or 500 <= error.status_code < 600)
     )
 
 
@@ -315,11 +331,18 @@ class DaytonaMachine:
 
     async def _delete_command_session(self, name: str) -> None:
         try:
-            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            for attempt in range(2):
                 try:
-                    await self.sandbox.process.delete_session(name, request_timeout=INTERRUPT_TIMEOUT)
+                    async with asyncio.timeout(INTERRUPT_TIMEOUT):
+                        await self.sandbox.process.delete_session(name, request_timeout=INTERRUPT_TIMEOUT)
+                    return
                 except DaytonaNotFoundError:
-                    pass
+                    return
+                except Exception as error:
+                    if attempt or not _transient_session_error(error):
+                        raise
+                    logger.warning("Retrying Daytona command session deletion: error=%s", type(error).__name__)
+                    await sleep(0.2)
         except Exception as error:
             try:
                 await self.close()
@@ -333,6 +356,10 @@ class DaytonaMachine:
         name = f"shellbox-run-{uuid.uuid4().hex}"
         creation = asyncio.create_task(process.create_session(name, request_timeout=INTERRUPT_TIMEOUT))
         primary_error = None
+        polling = ExponentialBackoff(initial=0.2, maximum=5, factor=1.5)
+        retry = ExponentialBackoff(initial=0.5, maximum=5, factor=2)
+        requests = failures = consecutive_failures = 0
+        started = time.monotonic()
         try:
             await asyncio.shield(creation)
             response = await process.execute_session_command(
@@ -341,14 +368,43 @@ class DaytonaMachine:
                 timeout=INTERRUPT_TIMEOUT,
             )
             while True:
-                status = await process.get_session_command(name, response.cmd_id, request_timeout=INTERRUPT_TIMEOUT)
+                requests += 1
+                try:
+                    status = await process.get_session_command(name, response.cmd_id, request_timeout=INTERRUPT_TIMEOUT)
+                except Exception as error:
+                    if not _transient_session_error(error):
+                        raise
+                    failures += 1
+                    consecutive_failures += 1
+                    if consecutive_failures >= 5:
+                        raise RuntimeError("Daytona command status unavailable") from error
+                    retry_after = max(
+                        (
+                            int(value)
+                            for key, value in getattr(error, "headers", {}).items()
+                            if key.lower().startswith("retry-after") and str(value).isdecimal()
+                        ),
+                        default=0,
+                    )
+                    delay = max(retry_after, retry.next_interval())
+                    logger.warning("Retrying Daytona command status: error=%s delay=%.3f", type(error).__name__, delay)
+                    await sleep(delay)
+                    continue
+                consecutive_failures = 0
+                retry.reset()
                 if status.exit_code is not None:
                     return status.exit_code
-                await sleep(1)
+                await sleep(polling.next_interval())
         except BaseException as error:
             primary_error = error
             raise
         finally:
+            logger.info(
+                "Daytona command status polling finished: requests=%d failures=%d seconds=%.3f",
+                requests,
+                failures,
+                time.monotonic() - started,
+            )
             if not creation.done():
                 try:
                     await finish_owned(creation)

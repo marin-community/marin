@@ -30,7 +30,10 @@ from daytona import (
     CreateSandboxFromImageParams,
     CreateSandboxFromSnapshotParams,
     DaytonaConfig,
+    DaytonaConnectionError,
+    DaytonaError,
     DaytonaNotFoundError,
+    DaytonaRateLimitError,
     Image,
     Resources,
 )
@@ -678,8 +681,13 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
 
 @pytest.mark.requires_host_setsid
 @pytest.mark.parametrize("cleanup_fails", [False, True])
-def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_path, cleanup_fails):
+def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_path, monkeypatch, cleanup_fails):
     provider_error = TimeoutError("Provider status request timed out")
+
+    async def fake_sleep(_delay):
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", fake_sleep)
 
     class FailedStatus(LocalProcess):
         fail = False
@@ -710,9 +718,9 @@ def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_
         before = process.executions
         process.fail = True
         try:
-            with pytest.raises(TimeoutError) as caught:
+            with pytest.raises(RuntimeError) as caught:
                 await machine.run(Command(("printf", "do-not-replay")))
-            assert caught.value is provider_error
+            assert caught.value.__cause__ is provider_error
             assert process.executions == before + 1
             assert not process.sessions
             if cleanup_fails:
@@ -722,6 +730,62 @@ def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_
                 process.fail = False
                 result = await machine.run(Command(("printf", "following")))
                 assert (result.exit_code, result.stdout) == (0, b"following")
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        TimeoutError(),
+        ConnectionError(),
+        DaytonaRateLimitError("throttled", status_code=429, headers={"Retry-After": "2"}),
+        DaytonaError("unavailable", status_code=503),
+    ],
+)
+def test_daytona_polling_recovers_status_and_deletion_without_replaying(tmp_path, monkeypatch, provider_error):
+    delays = []
+
+    async def fake_sleep(delay):
+        delays.append(delay)
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", fake_sleep)
+
+    class TransientStatus(LocalProcess):
+        status_failure = None
+        deletion_failure = False
+
+        async def get_session_command(self, *args, **kwargs):
+            if self.status_failure is not None:
+                error, self.status_failure = self.status_failure, None
+                raise error
+            return await super().get_session_command(*args, **kwargs)
+
+        async def delete_session(self, *args, **kwargs):
+            if self.deletion_failure:
+                self.deletion_failure = False
+                raise DaytonaConnectionError("disconnected")
+            await super().delete_session(*args, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        process = client.sandbox.process = TransientStatus()
+        machine = await DaytonaMachineFactory(lambda: client, command_polling=True).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        process.status_failure = provider_error
+        process.deletion_failure = True
+        try:
+            result = await machine.run(Command(("sh", "-c", "printf applied >> effect; printf selected")))
+            assert (result.exit_code, result.stdout) == (0, b"selected")
+            assert (tmp_path / "effect").read_text() == "applied"
+            assert not process.sessions and not client.deleted
+            if isinstance(provider_error, DaytonaRateLimitError):
+                assert any(delay >= 2 for delay in delays)
         finally:
             await machine.close()
 

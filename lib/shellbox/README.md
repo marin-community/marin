@@ -47,6 +47,11 @@ for commands and directory transfer.
 Set `command_polling=True` on `DaytonaMachineFactory` to execute commands in
 provider sessions with short status requests. This opt-in mode keeps `run`'s
 caller deadline, separate bounded output files and process cleanup.
+Use this mode for commands that exceed the synchronous provider gateway limit.
+Status polling backs off from 0.2 to about 5 seconds and retries transient
+request failures without resubmitting the command. Logs report status-request
+and failure counts. Harbor accepts the `command_polling` environment option;
+SkyRL exposes it as `terminal_bench_config.harbor.daytona_command_polling`.
 Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
 expired jobs about once a minute. An expired, killed or preempted machine raises
 `MachineTerminated`; uncertain command failures are not replayed.
