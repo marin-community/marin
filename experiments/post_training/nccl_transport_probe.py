@@ -8,7 +8,7 @@ command. Task 0 publishes a rendezvous endpoint through the Iris endpoint
 registry; both tasks then run the same sequence of environment variants, each
 spawning one NCCL worker per local GPU for an all-reduce and an all-to-all
 benchmark with ``NCCL_DEBUG=INFO``. The launcher parses each worker's captured
-stderr for the transport NCCL selected (``via NET/IB/...`` versus
+stdout and stderr for the transport NCCL selected (``via NET/IB/...`` versus
 ``via NET/Socket``) and reports bandwidth and pass/fail per variant as one JSON
 object on stdout. A failing variant records the worker log tail instead of
 aborting the run.
