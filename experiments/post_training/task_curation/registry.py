@@ -41,15 +41,17 @@ def read_registry_json(path: Path) -> dict[str, Any]:
     return document
 
 
-def _require_complete_shard_family(documents: dict[str, bytes], references_root: Path, directory: Path) -> None:
+def _require_complete_shard_family(
+    documents: dict[str, bytes], references_root: Path, directory: Path, repo: str, parent_revision: str
+) -> None:
     """Refuse a publish that would blank rows held by sibling shards it does not stage.
 
     The archive flow writes ``{}`` over every sibling ``part-*.json`` it is not
     staging, treating them as inactive tail shards whose rows the staged shards
     consolidate. A staged subset of an active family instead silently drops the
     siblings' rows from the refreshed collection (the 2026-11-16 census incident).
-    A sibling whose rows are all present in the staged shards may still be
-    blanked; a sibling holding rows the staged set lacks aborts the publish.
+    A sibling whose parent-revision rows are all present in the staged shards may
+    still be blanked; a sibling holding rows the staged set lacks aborts the publish.
     """
     staged_keys: set[str] = set()
     for name, data in documents.items():
@@ -60,10 +62,18 @@ def _require_complete_shard_family(documents: dict[str, bytes], references_root:
         if name in documents:
             continue
         try:
-            previous_content = read_registry_json(previous)
+            parent_bytes = Path(
+                hf_hub_download(repo_id=repo, repo_type="dataset", revision=parent_revision, filename=name)
+            ).read_bytes()
+            parent_content = json.loads(parent_bytes)
+            if not isinstance(parent_content, dict):
+                raise ValueError("registry document must contain an object")
         except Exception as error:
-            raise ValueError(f"Cannot verify the sibling shard {name} before publishing {directory}: {error}") from error
-        dropped = sorted(set(previous_content) - staged_keys)
+            raise ValueError(
+                f"Cannot verify the sibling shard {name} at the parent revision before publishing"
+                f" {directory.as_posix()}/: {error}"
+            ) from error
+        dropped = sorted(set(parent_content) - staged_keys)
         if dropped:
             raise ValueError(
                 f"Publishing {directory.as_posix()}/ would drop {len(dropped)} rows held by the unstaged shard"
@@ -88,7 +98,7 @@ def archive_registry_documents(
         raise ValueError(f"No registry documents staged in {staged_root}")
     shard_directories = {Path(name).parent for name in documents if Path(name).match("part-*.json")}
     for directory in shard_directories:
-        _require_complete_shard_family(documents, references_root, directory)
+        _require_complete_shard_family(documents, references_root, directory, repo, parent_revision)
     for name, data in documents.items():
         if not isinstance(json.loads(data), dict):
             raise ValueError(f"Registry document must contain an object: {name}")

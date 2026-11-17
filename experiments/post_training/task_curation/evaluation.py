@@ -102,26 +102,39 @@ def _build_run(
     )
 
 
-def _publish(dataset: EvalDataset, options: PipelineOptions, identity: dict, run: EvaluationRun) -> CampaignArtifact:
+def publish_dataset_corpus(
+    recipe: CurationRecipe,
+    protocol: EvaluationProtocol,
+    item_builder: ItemBuilder,
+    *,
+    options: PipelineOptions,
+    identity: dict,
+    run: EvaluationRun,
+    curation_identity: str | None = None,
+    protocol_name: str | None = None,
+) -> CampaignArtifact:
+    """Publish one evaluated corpus and validate the input identity before and after."""
     assert options.license_receipt is not None
     (StoragePath(run.output_path) / "license.json").write_text(options.license_receipt.model_dump_json(indent=2))
-    validate_input_identity(dataset.recipe, options.inputs, identity)
+    validate_input_identity(recipe, options.inputs, identity)
     grader_environment = None
-    if dataset.recipe.grader is not None:
+    if recipe.grader is not None:
         built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
-        grader_environment = environment_requirements(dataset.recipe.grader, built)
+        grader_environment = environment_requirements(recipe.grader, built)
     publish_evaluation_corpus(
-        source_recipe(dataset.recipe, run.inputs, grader_environment),
-        dataset.protocol,
-        dataset.item_builder,
+        source_recipe(recipe, run.inputs, grader_environment),
+        protocol,
+        item_builder,
         options.runtime.context,
         run.source_input,
         run.output_path,
         source_overrides=input_file_overrides(options.inputs.files),
+        curation_identity=curation_identity,
+        protocol_name=protocol_name,
     )
     validated = False
     try:
-        validate_input_identity(dataset.recipe, options.inputs, identity)
+        validate_input_identity(recipe, options.inputs, identity)
         validated = True
     finally:
         if not validated:
@@ -138,6 +151,17 @@ def _publish(dataset: EvalDataset, options: PipelineOptions, identity: dict, run
             {"manifest": str(StoragePath(run.output_path) / MANIFEST_FILENAME)},
             ("normalize", "evaluation"),
         ),
+    )
+
+
+def _publish(dataset: EvalDataset, options: PipelineOptions, identity: dict, run: EvaluationRun) -> CampaignArtifact:
+    return publish_dataset_corpus(
+        dataset.recipe,
+        dataset.protocol,
+        dataset.item_builder,
+        options=options,
+        identity=identity,
+        run=run,
     )
 
 

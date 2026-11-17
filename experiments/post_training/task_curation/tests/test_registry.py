@@ -71,6 +71,12 @@ def test_archive_updates_references_only_after_every_document_verifies(tmp_path,
             return SimpleNamespace(oid="b" * 40)
 
     def download(*, repo_id, repo_type, revision, filename):
+        if revision == "a" * 40:
+            # The sibling-family guard reads unstaged shards at the parent revision.
+            path = cached / filename
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(remote[filename])
+            return str(path)
         assert (repo_id, repo_type, revision) == ("fixture/registry", "dataset", "b" * 40)
         path = cached / filename
         path.parent.mkdir(parents=True, exist_ok=True)

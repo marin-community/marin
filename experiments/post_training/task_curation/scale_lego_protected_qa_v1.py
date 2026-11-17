@@ -29,6 +29,7 @@ from harbor.agents.base import BaseAgent
 from harbor.host_capabilities import host_capabilities_from_environment
 from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
+from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
 from rigging.secrets import get_secret
 from taskcompendium.harbor.shared_source import (
@@ -137,17 +138,6 @@ def adapt_for_local(files: dict[str, bytes], workdir: str, pinned_reference: str
     files["task.toml"] = tomlkit.dumps(task).encode()
 
 
-limits_holder: dict = {}
-
-# Per-attempt tamper-probe observations, populated by qa_task and consumed by
-# the TamperAgent registered inside run_trial.
-probe_holder: dict = {}
-
-
-def _worker_limits():
-    return limits_holder.get("value", {})
-
-
 def run_checked(command: list[str], **kwargs) -> str:
     result = subprocess.run(command, capture_output=True, text=True, check=False, **kwargs)
     if result.returncode != 0:
@@ -224,13 +214,15 @@ def package_files(row: dict, family: str) -> tuple[dict[str, bytes], str]:
     return files, workdir
 
 
-def write_package(root: Path, name: str, files: dict[str, bytes], row: dict, family: str, workdir: str) -> Path:
+def write_package(
+    root: Path, name: str, files: dict[str, bytes], row: dict, family: str, workdir: str, kind: str
+) -> Path:
     package = root / "packages" / name
     if package.exists():
         raise FileExistsError(package)
     package.mkdir(parents=True)
     preparation = "original landed package with its Dockerfile layer (Daytona declarative build)"
-    if qa_environment_kind() == "local":
+    if kind == "local":
         adapt_for_local(files, workdir, row["pinned_reference"])
         preparation = "image layer installed at setup time; source image consumed digest-pinned without a build"
     for relative, content in sorted(files.items()):
@@ -253,14 +245,14 @@ def write_package(root: Path, name: str, files: dict[str, bytes], row: dict, fam
     return package
 
 
-async def run_trial(config_path: Path) -> dict:
+async def run_trial(config_path: Path, probe_state: dict) -> dict:
     """Run one production trial in-process and return its result summary."""
 
     class TamperAgent(BaseAgent):
         """The QA's declared tamper probe, registered as a scripted agent.
 
-        The agent writes the interpreter probe into the enclosing record via
-        the trial hook context; the probe dict is bound per attempt below.
+        The agent writes the interpreter probe into ``probe_state``, the
+        per-attempt record bound by the enclosing run.
         """
 
         SUPPORTS_WINDOWS = False
@@ -280,7 +272,7 @@ async def run_trial(config_path: Path) -> dict:
             probe = await environment.exec(
                 command="python -c 'import sys; print(sys.version_info[:3])'", timeout_sec=120
             )
-            probe_holder["testbed_python"] = probe.stdout.strip()
+            probe_state["testbed_python"] = probe.stdout.strip()
             result = await environment.exec(command=f"bash -c {shlex.quote(TAMPER_SCRIPT)}", timeout_sec=900)
             if result.return_code != 0:
                 raise RuntimeError(f"tamper probe failed inside the agent phase: {result.stdout[-2000:]}")
@@ -299,11 +291,10 @@ async def run_trial(config_path: Path) -> dict:
     }
 
 
-def trial_environment() -> dict:
+def trial_environment(kind: str, limits: dict) -> dict:
     """The declared QA executor; shared adapters need a real-root backend."""
-    kind = qa_environment_kind()
     if kind == "local":
-        return {"type": "local", "kwargs": dict(_worker_limits())}
+        return {"type": "local", "kwargs": dict(limits)}
     # Validation builds use the dedicated eval account, mapped per the Daytona
     # runbook; the RL credential is never touched in this QA job. The key
     # arrives as an Iris-delivered secret file or an environment value.
@@ -313,27 +304,27 @@ def trial_environment() -> dict:
     return {"type": "daytona", "kwargs": {}}
 
 
-def trial_config(package: Path, trials_dir: Path, agent: dict, name: str) -> dict:
+def trial_config(package: Path, trials_dir: Path, agent: dict, name: str, kind: str, limits: dict) -> dict:
     return {
         "task": {"path": str(package)},
         "agent": agent,
-        "environment": trial_environment(),
+        "environment": trial_environment(kind, limits),
         "trials_dir": str(trials_dir),
         "trial_name": name,
         "trial_attempt_timeout_sec": ATTEMPT_TIMEOUT,
     }
 
 
-async def _run_logged(config_path: Path, log_path: Path) -> dict:
+async def _run_logged(config_path: Path, log_path: Path, probe_state: dict) -> dict:
     with log_path.open("w") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
-        return await run_trial(config_path)
+        return await run_trial(config_path, probe_state)
 
 
-def qa_task(root: Path, family: str, row: dict) -> dict:
+def qa_task(root: Path, family: str, row: dict, kind: str, limits: dict) -> dict:
     name = row["instance_id"]
     LOGGER.info("[%s] building hardened package", name)
     files, workdir = package_files(row, family)
-    package = write_package(root, f"{family}-{name}", files, row, family, workdir)
+    package = write_package(root, f"{family}-{name}", files, row, family, workdir, kind)
     record = {
         "task_id": name,
         "family": family,
@@ -345,17 +336,17 @@ def qa_task(root: Path, family: str, row: dict) -> dict:
         ("oracle", {"name": "oracle", "kwargs": {"resource_usage_filename": "resource-usage.json"}}),
         ("tamper", {"name": "tamper"}),
     ):
-        probe_holder.clear()
+        probe_state: dict = {}
         attempt = root / "trials" / f"{family}-{name}-{phase}"
         attempt.mkdir(parents=True)
-        config = trial_config(package, attempt / "jobs", agent, f"{family}-{name}-{phase}")
+        config = trial_config(package, attempt / "jobs", agent, f"{family}-{name}-{phase}", kind, limits)
         config_path = attempt / "trial.json"
         config_path.write_text(json.dumps(config))
         summary = asyncio.run(
-            asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log"), timeout=ATTEMPT_TIMEOUT + 900)
+            asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log", probe_state), timeout=ATTEMPT_TIMEOUT + 900)
         )
         if phase == "tamper":
-            summary["testbed_python"] = probe_holder.get("testbed_python")
+            summary["testbed_python"] = probe_state.get("testbed_python")
         record[phase] = summary
         LOGGER.info("[%s/%s] reward=%s", name, phase, summary["rewards"].get("reward"))
     return record
@@ -363,8 +354,10 @@ def qa_task(root: Path, family: str, row: dict) -> dict:
 
 def main() -> None:
     run = os.environ.get("QA_RUN_NAME", "local")
-    output = f"{OUTPUT_ROOT}/{run}"
+    kind = qa_environment_kind()
     root = Path(os.environ["IRIS_OUTPUT_DIR"]) / "scale-lego-protected-qa-v1"
+    limits = worker_limits(root) if kind == "local" else {}
+    output = str(StoragePath(OUTPUT_ROOT) / run)
     root.mkdir(parents=True)
     mapping = read_sample_map(root)
     revision = os.environ.get("QA_GIT_REVISION") or "bundle"
@@ -388,13 +381,12 @@ def main() -> None:
         )
         + "\n"
     )
-    if qa_environment_kind() == "local":
-        limits_holder["value"] = worker_limits(root)
-        LOGGER.info("worker limits: %s", json.dumps(limits_holder["value"]))
+    if kind == "local":
+        LOGGER.info("worker limits: %s", json.dumps(limits))
     selected = [(family, row) for family, section in mapping["families"].items() for row in section["rows"]]
     records = []
     with ThreadPoolExecutor(max_workers=2) as pool:
-        for record in pool.map(lambda item: qa_task(root, *item), selected):
+        for record in pool.map(lambda item: qa_task(root, *item, kind, limits), selected):
             records.append(record)
     (root / "qa-records.json").write_text(json.dumps(records, indent=2) + "\n")
     verdicts = {
@@ -410,7 +402,7 @@ def main() -> None:
     archive = root.parent / "scale-lego-protected-qa-v1.tar.gz"
     with tarfile.open(archive, "w:gz") as bundle:
         bundle.add(root, arcname=root.name)
-    copy(str(archive), output + "/evidence.tar.gz", no_clobber=True)
+    copy(str(archive), str(StoragePath(output) / "evidence.tar.gz"), no_clobber=True)
     LOGGER.info("verdicts: %s", json.dumps(verdicts, indent=2))
     failed = [task for task, verdict in verdicts.items() if not all(verdict.values())]
     if failed:

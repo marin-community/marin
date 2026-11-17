@@ -50,7 +50,7 @@ def family(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_refuses_a_publish_that_would_drop_sibling_rows(family: Path):
     documents = {"datasets/census/part-001.json": json.dumps({"gamma": {"count": 3}}, indent=2).encode()}
     with pytest.raises(ValueError, match="would drop 2 rows held by the unstaged shard"):
-        _require_complete_shard_family(documents, family, Path("datasets/census"))
+        _require_complete_shard_family(documents, family, Path("datasets/census"), "open-athena/example-registry", "a" * 40)
     # the refusal must happen before any publish-side effects: nothing was staged
     assert "datasets/census/part-000.json" not in documents
 
@@ -61,7 +61,7 @@ def test_allows_consolidation_when_every_sibling_row_is_staged(family: Path):
             json.dumps({"alpha": {"count": 1}, "beta": {"count": 2}, "gamma": {"count": 3}}, indent=2).encode()
         )
     }
-    _require_complete_shard_family(documents, family, Path("datasets/census"))
+    _require_complete_shard_family(documents, family, Path("datasets/census"), "open-athena/example-registry", "a" * 40)
     # the superseded sibling is blanked in the refreshed collection, as designed
     assert json.loads(documents["datasets/census/part-000.json"]) == {}
 
@@ -71,7 +71,7 @@ def test_staging_the_sibling_itself_skips_the_blank(family: Path):
         "datasets/census/part-000.json": json.dumps({"alpha": {"count": 1}, "beta": {"count": 2}}, indent=2).encode(),
         "datasets/census/part-001.json": json.dumps({"gamma": {"count": 3}}, indent=2).encode(),
     }
-    _require_complete_shard_family(documents, family, Path("datasets/census"))
+    _require_complete_shard_family(documents, family, Path("datasets/census"), "open-athena/example-registry", "a" * 40)
     assert json.loads(documents["datasets/census/part-000.json"]) == {"alpha": {"count": 1}, "beta": {"count": 2}}
 
 
