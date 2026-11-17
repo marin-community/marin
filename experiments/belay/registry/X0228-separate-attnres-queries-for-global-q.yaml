@@ -1,0 +1,12 @@
+id: X0228
+slug: separate-attnres-queries-for-global-q
+name: Separate AttnRes queries for global Q and KV
+category: Depth connections
+summary: 🤖 Posted on behalf of @ClassicLarry.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6933514429
+  author: ClassicLarry
+  approved_by: ClassicLarry
