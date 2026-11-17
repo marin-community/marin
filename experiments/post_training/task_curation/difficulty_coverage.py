@@ -6,20 +6,34 @@
 import argparse
 import json
 import logging
-import urllib.request
 from pathlib import Path
 from typing import Any
+
+from marina.client import DEFAULT_MARINA_URL, applet_query
 
 from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import DifficultyCoverage, campaign_queue
 
 logger = logging.getLogger(__name__)
 
 
-def served_queue(url: str) -> dict[str, Any]:
-    """Fetch the published coverage document from the served Atlas app."""
-    endpoint = url.rstrip("/") + "/api/difficulty-coverage"
-    with urllib.request.urlopen(endpoint) as response:
-        return json.load(response)
+def published_queue(marina_url: str, applet_id: str) -> dict[str, Any]:
+    """Fetch the published coverage document through the app's authenticated query channel.
+
+    The Atlas is IAP-protected, so the fetch uses the marina query client the
+    loaders use, not a bare HTTP request: the caller names the applet whose
+    rebuild published the coverage.
+    """
+    query = applet_query(marina_url, applet_id)
+    rows = query(
+        """
+        SELECT c.coverage FROM atlas_difficulty_coverage c
+        JOIN atlas_current a ON a.load_id = c.load_id WHERE a.name = 'latest' LIMIT 1
+        """,
+        {},
+    )["rows"]
+    if not rows:
+        raise ValueError("The current load has no published Difficulty coverage; run load_difficulty first")
+    return rows[0]["coverage"]
 
 
 def main() -> None:
@@ -27,17 +41,20 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     queue = commands.add_parser("queue", help="Emit the next campaign source queue from NEEDS_MEASUREMENT.")
     source = queue.add_mutually_exclusive_group(required=True)
-    source.add_argument("--from-url", help="The served Atlas app URL publishing /api/difficulty-coverage.")
-    source.add_argument("--coverage", type=Path, help="A published coverage artifact.")
+    source.add_argument("--applet-id", help="The Atlas applet whose rebuild published the coverage.")
+    source.add_argument("--coverage", type=Path, help="A published coverage artifact file.")
+    queue.add_argument("--marina-url", default=DEFAULT_MARINA_URL, show_default=True)
     queue.add_argument("--declarations", type=Path, help="The served catalog's declaration map (file mode).")
     queue.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command != "queue":
         raise ValueError(f"Unknown command: {args.command}")
-    if args.from_url:
-        document = served_queue(args.from_url)
+    if args.applet_id:
+        document = published_queue(args.marina_url, args.applet_id)
         args.output.write_text(json.dumps(document.get("queue", []), indent=2) + "\n")
-        logger.info("Queued %d sources needing measurement from %s", len(document.get("queue", [])), args.from_url)
+        logger.info(
+            "Queued %d sources needing measurement from applet %s", len(document.get("queue", [])), args.applet_id
+        )
         return
     if not args.declarations:
         raise ValueError("File mode needs --declarations alongside --coverage")
