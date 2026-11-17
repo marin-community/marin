@@ -376,3 +376,21 @@ def test_explicit_null_execution_requirements_round_trip(specification):
     assert canonical_sha256(spec.model_dump(mode="json")) == canonical_sha256(
         TaskSpec.model_validate_json(spec.model_dump_json()).model_dump(mode="json")
     )
+
+
+def test_explicit_literal_completion_protocol_round_trip(specification):
+    """A str-typed late-joining field survives the explicit-null serializer.
+
+    The serializer must not assume every late-joining field is a model: the
+    str-typed completion_protocol crashed value.model_dump() when explicitly
+    set (B's regional validation on baf6327d53).
+    """
+    spec = specification.model_copy(update={"completion_protocol": "tool_free_single"})
+    assert spec.model_dump(mode="json")["completion_protocol"] == "tool_free_single"
+    assert spec.model_dump()["completion_protocol"] == "tool_free_single"
+    assert '"completion_protocol":"tool_free_single"' in spec.model_dump_json()
+    # and the explicit null case still round trips
+    null_spec = specification.model_copy(update={"completion_protocol": None})
+    assert null_spec.model_dump(mode="json")["completion_protocol"] is None
+    absent = specification.model_dump(mode="json")
+    assert "completion_protocol" not in absent

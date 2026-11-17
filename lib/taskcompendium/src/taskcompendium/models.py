@@ -1025,10 +1025,10 @@ class TaskSpec(BaseModel):
             value = getattr(self, name)
             if value is None:
                 payload[name] = None
-            elif json_mode:
-                payload[name] = value.model_dump(mode="json")
+            elif isinstance(value, BaseModel):
+                payload[name] = value.model_dump(mode="json") if json_mode else value.model_dump()
             else:
-                payload[name] = value.model_dump()
+                payload[name] = value
         return payload
 
     @model_validator(mode="after")
