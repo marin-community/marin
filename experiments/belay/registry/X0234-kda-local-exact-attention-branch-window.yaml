@@ -1,0 +1,12 @@
+id: X0234
+slug: kda-local-exact-attention-branch-window
+name: KDA local exact-attention branch (window 64)
+category: Linear attention / KDA
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6943201377
+  author: armorfaye
+  approved_by: armorfaye (trusted)
