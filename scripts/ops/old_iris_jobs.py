@@ -11,13 +11,14 @@ row: ``Kill`` makes the next run cancel the job, and a keep decision leaves the 
 alone until the Keep until date. A job that stops running leaves the sheet.
 
 The sheet is the only state. A run reads every owner tab, then writes it again, so
-an edit that an owner makes during a run can be lost.
+an edit that an owner makes between the read and the write is lost.
 """
 
 import datetime
+import secrets
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import astuple, dataclass, replace
 
 import click
 import google.auth
@@ -83,17 +84,7 @@ class SheetRow:
         return cls(*cells, *[""] * (len(HEADER) - len(cells)))
 
     def cells(self) -> list[str]:
-        return [
-            self.cluster,
-            self.job,
-            self.started,
-            self.age_days,
-            self.resources,
-            self.listed,
-            self.decision,
-            self.keep_until,
-            self.status,
-        ]
+        return list(astuple(self))
 
 
 def active_task_count(job: JobStatus) -> int:
@@ -279,36 +270,43 @@ def _tab_format_requests(tab_id: int) -> list[dict]:
 
 
 def add_owner_tabs(session: AuthorizedSession, sheet_id: str, titles: Sequence[str]) -> None:
-    """Add a formatted tab for each title, with a frozen header row."""
-    if not titles:
-        return
-    added = _call(
-        session,
-        "POST",
-        f"{SHEETS_API}/{sheet_id}:batchUpdate",
-        json={
-            "requests": [
-                {"addSheet": {"properties": {"title": title, "gridProperties": {"frozenRowCount": 1}}}}
-                for title in titles
-            ]
-        },
-    )["replies"]
-    formats = [
-        request for reply in added for request in _tab_format_requests(reply["addSheet"]["properties"]["sheetId"])
-    ]
-    _call(session, "POST", f"{SHEETS_API}/{sheet_id}:batchUpdate", json={"requests": formats})
+    """Add a formatted tab with a frozen header row for each title.
+
+    One request adds every tab with its header, so a failure cannot leave a tab that
+    ``read_owner_tabs`` does not recognize.
+    """
+    requests: list[dict] = []
+    for title in titles:
+        # The request must name the new tab's ID for the format and header requests that follow it.
+        tab_id = secrets.randbelow(2**31 - 1) + 1
+        requests += [
+            {"addSheet": {"properties": {"sheetId": tab_id, "title": title, "gridProperties": {"frozenRowCount": 1}}}},
+            *_tab_format_requests(tab_id),
+            {
+                "updateCells": {
+                    "start": {"sheetId": tab_id, "rowIndex": 0, "columnIndex": 0},
+                    "rows": [{"values": [{"userEnteredValue": {"stringValue": name}} for name in HEADER]}],
+                    "fields": "userEnteredValue",
+                }
+            },
+        ]
+    if requests:
+        _call(session, "POST", f"{SHEETS_API}/{sheet_id}:batchUpdate", json={"requests": requests})
 
 
-def write_owner_tabs(session: AuthorizedSession, sheet_id: str, tabs: Mapping[str, Sequence[SheetRow]]) -> None:
-    """Replace the content of each tab in ``tabs`` with the header and its rows."""
+def write_owner_tabs(
+    session: AuthorizedSession,
+    sheet_id: str,
+    tabs: Mapping[str, Sequence[SheetRow]],
+    previous_row_counts: Mapping[str, int],
+) -> None:
+    """Write the header and rows of each tab in one request.
+
+    ``previous_row_counts`` gives the rows that each tab held; blank rows overwrite the ones no longer listed.
+    """
     if not tabs:
         return
-    _call(
-        session,
-        "POST",
-        f"{SHEETS_API}/{sheet_id}/values:batchClear",
-        json={"ranges": [_rows_range(title, 1) for title in tabs]},
-    )
+    blank = [""] * len(HEADER)
     _call(
         session,
         "POST",
@@ -317,7 +315,14 @@ def write_owner_tabs(session: AuthorizedSession, sheet_id: str, tabs: Mapping[st
             # RAW keeps dates and ages as the text that the next run reads.
             "valueInputOption": "RAW",
             "data": [
-                {"range": _rows_range(title, 1), "values": [list(HEADER), *(row.cells() for row in rows)]}
+                {
+                    "range": _rows_range(title, 1),
+                    "values": [
+                        list(HEADER),
+                        *(row.cells() for row in rows),
+                        *[blank] * max(0, previous_row_counts.get(title, 0) - len(rows)),
+                    ],
+                }
                 for title, rows in tabs.items()
             ],
         },
@@ -354,7 +359,6 @@ def main(
     now_ms = Timestamp.now().epoch_ms()
     cutoff_ms = now_ms - int(min_age_days * MS_PER_DAY)
     session = sheets_session(service_account)
-    tabs = read_owner_tabs(session, sheet_id)
     with open_iris_client(cluster_name=cluster, workspace=None) as client:
         # ListJobs omits resources; the per-job status carries them.
         old_jobs = find_old_jobs(
@@ -363,6 +367,8 @@ def main(
             cutoff_ms,
             lambda job_id: client.job_status(job_id).resources,
         )
+        # The scan takes minutes. Read the sheet after it, so the time in which an owner's edit can be lost is short.
+        tabs = read_owner_tabs(session, sheet_id)
         planned, cancels = plan_tabs(old_jobs, tabs, now_ms)
         if dry_run:
             for title, rows in planned.items():
@@ -374,7 +380,7 @@ def main(
                 client.cancel_job(root)
     if not dry_run:
         add_owner_tabs(session, sheet_id, [title for title in planned if title not in tabs])
-        write_owner_tabs(session, sheet_id, planned)
+        write_owner_tabs(session, sheet_id, planned, {title: len(rows) for title, rows in tabs.items()})
     listed = sum(len(rows) for rows in planned.values())
     undecided = sum(not row.decision for rows in planned.values() for row in rows)
     click.echo(

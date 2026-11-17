@@ -361,8 +361,8 @@ Belay app's admin page pauses it without a Loom deploy.
 
 The `old-iris-jobs` watch runs the `ops-report` profile
 ([instructions](profiles/ops-report/AGENTS.md)) at 09:00 Pacific on weekdays
-([prompt](watches/old-iris-jobs.md)). The profile runs Claude: a strict Codex
-profile cannot run `uv run`, because its commands cannot write the uv cache. The watch runs
+([prompt](watches/old-iris-jobs.md)). The profile runs Claude: the sandbox of a Codex
+profile makes the uv cache read-only and permits network access only to Loom. The watch runs
 [`scripts/ops/old_iris_jobs.py`](../../scripts/ops/old_iris_jobs.py) against the
 `marin` hub. The script keeps a Google Sheet with one tab per job owner and one
 row per Iris root job older than the prompt's `--min-age-days`. An owner sets

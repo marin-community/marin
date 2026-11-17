@@ -350,8 +350,8 @@ config:
         - marin-community/marin
       allowedTools: []
       mcpAccess: *builtinMcpAccess
-    # Scheduled reports run `uv run` scripts. A strict Codex profile cannot: its commands get
-    # neither the container's UV_CACHE_DIR nor write access to the default uv cache.
+    # Scheduled reports run `uv run` scripts that call Iris and Google APIs. A Codex profile cannot:
+    # its sandbox makes the uv cache read-only and permits network access only to Loom.
     ops-report:
       agent: claude
       description: Run scheduled Marin operations reports
