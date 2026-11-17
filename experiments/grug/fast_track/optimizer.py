@@ -287,7 +287,7 @@ ATTN_RES_QUERY_LR_SCALE = 0.1
 """Adam LR of the AttnRes pseudo-queries as a multiple of ``adam_lr``."""
 KDA_BETA_LR_MULT = 2.0
 """MuonH LR multiple of the ``kda_beta`` group (the KDA write-strength projection)."""
-_ADAM_LEAVES = re.compile(r"(?:^|\.)(value_embed|ve_lambda|ve_gate|qk_mult)$")
+_ADAM_LEAVES = re.compile(r"(?:^|\.)(value_embed|ve_lambda|ve_gate|head_ve_lambda|head_ve_gate|head_ve_gain|qk_mult)$")
 
 
 @OptimizerConfig.register_subclass("grug_fast_track_muonh_v1")

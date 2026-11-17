@@ -467,8 +467,22 @@ class GrugModelConfig:
     of its kept n-gram rows from one learned table plus ``spelling_byte_embeds``-style leading-space and case rows
     (all initialised like ``token_embed``), through its own RMS norm and gain. The result is a history source ahead
     of the token embedding, which every AttnRes gate and the final gate weight separately. Needs ``attn_res``."""
+    lm_head_value_embeds: bool = False
+    """Value embeddings from the output head on every MLA layer: ``v = lambda1 * v + sigmoid(x W_g) * e`` with
+    ``e = g * rms_norm(stop_gradient(output_proj[:, token]))``, the input token's lm_head row normed without a gain
+    (gathered and normed once per step, shared by every MLA layer, no gradient into the head). Per layer, the
+    channel gain ``g`` and the per-head gate ``W_g`` are zero-initialised and the scalar ``lambda1`` starts at 1,
+    all on Adam without decay. ``e`` fills the value's heads x head_dim channels, the leading ones of the row
+    (all of it at the recipe rungs, where that equals ``hidden_dim``). Needs ``mla`` and ``attn_res``; excludes
+    ``value_embeds`` and ``lm_head_bilinear``."""
 
     def __post_init__(self) -> None:
+        if self.lm_head_value_embeds and (
+            not (self.mla and self.attn_res) or self.value_embeds != ValueEmbeds.NONE or self.lm_head_bilinear
+        ):
+            raise ValueError(
+                "lm_head_value_embeds needs mla and attn_res, and excludes value_embeds and lm_head_bilinear"
+            )
         if self.spelling_ngram_source and not self.attn_res:
             raise ValueError("spelling_ngram_source is an AttnRes source; it needs attn_res")
         if self.lm_head_bilinear and self.cplm_plus:
@@ -663,6 +677,10 @@ class CausalSelfAttention(eqx.Module):
     ve_lambda: Float[Array, " 2"] | None  # (lambda1 on v, lambda2 on the value embedding)
     ve_gate: Float[Array, "D N"] | None
     qk_mult: Float[Array, ""] | None  # learnable logit scale (cfg.learnable_qk_mult)
+    # cfg.lm_head_value_embeds (MLA only): lambda1 on v, the per-head gate and the channel gain of the head rows.
+    head_ve_lambda: Float[Array, ""] | None
+    head_ve_gate: Float[Array, "D N"] | None
+    head_ve_gain: Float[Array, " NH"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -681,6 +699,9 @@ class CausalSelfAttention(eqx.Module):
             k_q, k_dkv, k_uk, k_uv, k_o, k_rel, k_ve = random.split(key, 7)
             kvl = cfg.mla_kv_latent_dim
             use_ve = cfg.value_embeds != ValueEmbeds.NONE
+            head_ve = cfg.lm_head_value_embeds
+            if head_ve and n * h > d:
+                raise ValueError(f"lm_head_value_embeds needs heads x head_dim ({n * h}) <= hidden_dim ({d})")
             return CausalSelfAttention(
                 w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
                 w_k=None,
@@ -699,6 +720,9 @@ class CausalSelfAttention(eqx.Module):
                 ve_lambda=_ve_lambda_init(cfg.value_embeds),
                 ve_gate=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.value_embeds in _GATED_VALUE_EMBEDS else None,
                 qk_mult=_qk_mult_init(cfg),
+                head_ve_lambda=jnp.ones((), jnp.float32) if head_ve else None,
+                head_ve_gate=reshard(jnp.zeros((d, n)), P(None, None)) if head_ve else None,
+                head_ve_gain=reshard(jnp.zeros((n * h,)), P(None)) if head_ve else None,
                 cfg=cfg,
             )
         # Eight keys (three unused) so every initial weight matches the runs before the cleanup.
@@ -719,6 +743,9 @@ class CausalSelfAttention(eqx.Module):
             ve_lambda=None,
             ve_gate=None,
             qk_mult=_qk_mult_init(cfg),
+            head_ve_lambda=None,
+            head_ve_gate=None,
+            head_ve_gain=None,
             cfg=cfg,
         )
 
@@ -728,9 +755,10 @@ class CausalSelfAttention(eqx.Module):
         sconv_segment_ids: Int[Array, "B S"] | None,
         token_ids: Int[Array, "B S"] | None,
         kv_input: Float[Array, "B S D"] | None,
+        head_ve: Float[Array, "B S D"] | None,
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         """MLA with a compressed KV latent: full-rank q; k and v up-projected from one normed latent (of
-        ``kv_input`` when given)."""
+        ``kv_input`` when given). ``head_ve`` is the normed lm_head rows of ``lm_head_value_embeds``."""
         assert self.w_dkv is not None and self.kv_latent_norm is not None
         assert self.w_uk is not None and self.w_uv is not None
         head_dim = self.cfg.inferred_head_dim
@@ -749,6 +777,14 @@ class CausalSelfAttention(eqx.Module):
             lam = self.ve_lambda.astype(x.dtype)
             ve_weight = _value_embed_weight(self.cfg.value_embeds, x, self.ve_gate, lam)
             v = lam[0] * v + ve_weight * reshard(ve, _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
+        if self.head_ve_gain is not None:
+            assert self.head_ve_lambda is not None and self.head_ve_gate is not None and head_ve is not None
+            width = self.head_ve_gain.shape[-1]
+            ve = head_ve[..., :width].astype(x.dtype) * self.head_ve_gain.astype(x.dtype)
+            ve = rearrange(ve, "... (n d) -> ... n d", d=head_dim)
+            gate = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.head_ve_gate.astype(x.dtype)))[..., None]
+            ve = reshard(ve, _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
+            v = self.head_ve_lambda.astype(x.dtype) * v + gate * ve
         return q, k, v
 
     def _gqa_qkv(
@@ -849,15 +885,16 @@ class CausalSelfAttention(eqx.Module):
         is_global: bool | jax.Array = False,
         token_ids: Int[Array, "B S"] | None = None,
         kv_input: Float[Array, "B S D"] | None = None,
+        head_ve: Float[Array, "B S D"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``kv_input`` (``attn_res_kv_layers``) is the normed stream the K/V projections read instead of ``x``.
-        Returns the output and logging-only stats."""
+        """``kv_input`` (``attn_res_kv_layers``) is the normed stream the K/V projections read instead of ``x``;
+        ``head_ve`` the ``lm_head_value_embeds`` rows. Returns the output and logging-only stats."""
         head_dim = self.cfg.inferred_head_dim
         # segment_ids (packed-document boundaries) come from the mask so the SConv never mixes across a
         # document boundary.
         sconv_segment_ids = _sconv_segment_ids(mask)
         if self.cfg.mla:
-            q, k, v = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_input)
+            q, k, v = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_input, head_ve)
         else:
             q, k, v = self._gqa_qkv(x, sconv_segment_ids, is_global, kv_input)
         stats: dict[str, jax.Array] = {}
@@ -1407,16 +1444,24 @@ class Block(eqx.Module):
         is_global: bool | jax.Array,
         token_ids: Int[Array, "B S"] | None = None,
         kv_input: Float[Array, "B S D"] | None = None,
+        head_ve: Float[Array, "B S D"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """The attention sublayer on its input ``h``; ``kv_input`` (``attn_res_kv_layers``) is the normed stream
-        the K/V projections read. Returns the branch output and the mixer's logging stats."""
+        the K/V projections read, ``head_ve`` the ``lm_head_value_embeds`` rows. Returns the branch output and the
+        mixer's logging stats."""
         attn_in = self.attn_input(h)
         if isinstance(self.attn, KimiDeltaAttention):
             # KDA has no positional encoding or window; it only needs the document boundaries.
             out, stats = self.attn(attn_in, _sconv_segment_ids(mask), kv_input=kv_input)
         else:
             out, stats = self.attn(
-                attn_in, mask, disable_rope=disable_rope, is_global=is_global, token_ids=token_ids, kv_input=kv_input
+                attn_in,
+                mask,
+                disable_rope=disable_rope,
+                is_global=is_global,
+                token_ids=token_ids,
+                kv_input=kv_input,
+                head_ve=head_ve,
             )
         if self.sconv_attn is not None:
             out = self.sconv_attn(out, _sconv_segment_ids(mask))
@@ -1702,6 +1747,7 @@ def _attn_res_layer(
     diff_args: _LayerArgs,
     mask: AttentionMask,
     token_ids: Int[Array, "B S"],
+    head_ve: Float[Array, "B S D"] | None,
     use_long: bool,
     layer_index: int,
     eps: float,
@@ -1735,7 +1781,7 @@ def _attn_res_layer(
         # KV-gate queries follow the per-layer gates: the KV gate of layer i is row 2 L + i.
         h_kv, _, _ = mix(None, 2 * cfg.num_layers + layer_index, leading_sources_only=True)
         kv_input = layer.attn_input(h_kv)
-    attn_out, attn_stats = attn_branch(layer, h, mask, use_long, use_long, token_ids, kv_input)
+    attn_out, attn_stats = attn_branch(layer, h, mask, use_long, use_long, token_ids, kv_input, head_ve)
     skip_keep = None if extras is None else extras.get(_SKIP_KEEP)
     if skip_keep is not None:
         attn_out = attn_out * skip_keep[..., None].astype(attn_out.dtype)
@@ -1753,16 +1799,16 @@ def _attn_res_layer(
     }
 
 
-def _attn_res_layer_passthrough(diff_args: _LayerArgs, mask, token_ids, use_long, layer_index, eps):
+def _attn_res_layer_passthrough(diff_args: _LayerArgs, mask, token_ids, head_ve, use_long, layer_index, eps):
     """``_attn_res_layer`` returning ``(partial, blocks, block_logits, router_stats)``: the history is
     passed through so ``_attn_res_layer_remat`` can thread each block's cotangent layer to layer."""
     _, blocks, block_logits, _, _, _ = diff_args
-    partial, router_stats = _attn_res_layer(diff_args, mask, token_ids, use_long, layer_index, eps)
+    partial, router_stats = _attn_res_layer(diff_args, mask, token_ids, head_ve, use_long, layer_index, eps)
     return partial, blocks, block_logits, router_stats
 
 
 @eqx.filter_custom_vjp
-def _attn_res_layer_remat(diff_args, mask, token_ids, use_long, layer_index, eps):
+def _attn_res_layer_remat(diff_args, mask, token_ids, head_ve, use_long, layer_index, eps):
     """``_attn_res_layer_passthrough`` with a backward shaped for the unrolled layer loop.
 
     The history is passed through unchanged so each block's cotangent is threaded layer to layer and
@@ -1774,17 +1820,19 @@ def _attn_res_layer_remat(diff_args, mask, token_ids, use_long, layer_index, eps
     layer's starts. Without the barriers the unrolled loop's peak memory at d1024 is 3.6x a scanned
     layer stack's.
     """
-    return _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps)
+    return _attn_res_layer_passthrough(diff_args, mask, token_ids, head_ve, use_long, layer_index, eps)
 
 
 @_attn_res_layer_remat.def_fwd
-def _attn_res_layer_remat_fwd(perturbed, diff_args, mask, token_ids, use_long, layer_index, eps):
+def _attn_res_layer_remat_fwd(perturbed, diff_args, mask, token_ids, head_ve, use_long, layer_index, eps):
     del perturbed
-    return _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps), None
+    return _attn_res_layer_passthrough(diff_args, mask, token_ids, head_ve, use_long, layer_index, eps), None
 
 
 @_attn_res_layer_remat.def_bwd
-def _attn_res_layer_remat_bwd(residuals, grad_out, perturbed, diff_args, mask, token_ids, use_long, layer_index, eps):
+def _attn_res_layer_remat_bwd(
+    residuals, grad_out, perturbed, diff_args, mask, token_ids, head_ve, use_long, layer_index, eps
+):
     del residuals, perturbed
     # Router stats are logging-only and carry no cotangent.
     d_partial, d_blocks, d_block_logits, _ = grad_out
@@ -1798,7 +1846,7 @@ def _attn_res_layer_remat_bwd(residuals, grad_out, perturbed, diff_args, mask, t
             (diff_args, d_partial, d_blocks, d_block_logits)
         )
         _, vjp_fn = jax.vjp(
-            lambda args: _attn_res_layer(args, mask, token_ids, use_long, layer_index, eps)[0], diff_args
+            lambda args: _attn_res_layer(args, mask, token_ids, head_ve, use_long, layer_index, eps)[0], diff_args
         )
         ((d_layer, d_blocks_own, d_block_logits_own, d_partial_in, d_queries, d_extras),) = vjp_fn(d_partial)
         d_blocks = tuple(a + b for a, b in zip(d_blocks, d_blocks_own, strict=True))
@@ -2045,6 +2093,12 @@ class Transformer(eqx.Module):
             return ()
         return (self.spelling_ngram_norm(_embedding_gather(self.spelling_ngram_table(), token_ids)),)
 
+    def _head_value_embeds(self, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+        """``lm_head_value_embeds``' shared source: each input token's lm_head row, RMS-normed without a gain. The
+        head weight is behind ``stop_gradient``, so the gather has no backward."""
+        table = reshard(jax.lax.stop_gradient(self.output_proj).T, P(None, None))
+        return rms_norm(_embedding_gather(table, token_ids))
+
     @property
     def Vocab(self) -> Axis:
         return Axis("vocab", self.config.vocab_size)
@@ -2104,6 +2158,7 @@ class Transformer(eqx.Module):
                 layer_skip,
                 extra_mlp_active,
                 self._spelling_sources(token_ids),
+                self._head_value_embeds(token_ids) if cfg.lm_head_value_embeds else None,
             )
         else:
             if layer_skip is not None:
@@ -2166,6 +2221,7 @@ class Transformer(eqx.Module):
         layer_skip: LayerSkip | None,
         extra_mlp_active: jax.Array | bool,
         spelling_sources: tuple[Float[Array, "B S D"], ...],
+        head_ve: Float[Array, "B S D"] | None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
@@ -2237,6 +2293,7 @@ class Transformer(eqx.Module):
                 (layer, blocks, block_logits, partial, queries, layer_extras),
                 long_layer_mask if use_long else short_layer_mask,
                 token_ids,
+                head_ve,
                 use_long,
                 i,
                 eps,
