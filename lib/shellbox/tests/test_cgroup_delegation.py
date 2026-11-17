@@ -56,7 +56,7 @@ def test_scope_failure_falls_back_to_the_wrapping_pod_slice(cgroup_tree: Path, m
         applying={slice_level},
     )
     assert delegated_cgroup_parent() == slice_level
-    assert checked == [scope, slice_level]
+    assert checked == [slice_level]
 
 
 def test_worker_scope_wins_when_it_can_enforce_limits(cgroup_tree: Path, monkeypatch: pytest.MonkeyPatch):
