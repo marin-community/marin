@@ -4602,8 +4602,8 @@ dependencies = [
     { name = "marin-iris" },
     { name = "marin-levanter", extra = ["serve"] },
     { name = "marin-rigging", extra = ["prometheus"] },
-    { name = "marin-skyrlrecipe" },
     { name = "marin-rolloutengine" },
+    { name = "marin-skyrlrecipe" },
     { name = "marin-taskcompendium", extra = ["pipeline"] },
     { name = "marin-zephyr" },
     { name = "markdownify" },
@@ -4775,8 +4775,8 @@ requires-dist = [
     { name = "marin-levanter", extras = ["rocm"], marker = "extra == 'rocm'", editable = "lib/levanter" },
     { name = "marin-levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["prometheus"], editable = "lib/rigging" },
-    { name = "marin-skyrlrecipe", editable = "lib/skyrlrecipe" },
     { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
+    { name = "marin-skyrlrecipe", editable = "lib/skyrlrecipe" },
     { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "markdownify", specifier = ">=0.14.1" },
@@ -5946,6 +5946,7 @@ dependencies = [
 [package.dev-dependencies]
 test = [
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
+    { name = "marin-taskcompendium", extra = ["pipeline"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
@@ -5962,6 +5963,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 test = [
     { name = "marin-shellbox", extras = ["daytona", "shellsim"], editable = "lib/shellbox" },
+    { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
