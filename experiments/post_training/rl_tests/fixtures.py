@@ -1,6 +1,5 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
 import json
 import shutil
 from contextlib import contextmanager
@@ -39,8 +38,10 @@ from experiments.post_training import rl_command as command
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_recipe as recipe
+from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInputs
-from experiments.post_training.skyrl_test_support import current_control_pins, selection_summary
+from experiments.post_training.skyrl_test_support import selection_summary, with_current_control_revisions
+from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, TASK_MANIFEST_FILENAME
 
 NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_text())
 
@@ -92,26 +93,26 @@ def write_metrics(root: Path, metrics: dict[int, dict]) -> None:
 
 
 def selection(tmp_path, monkeypatch):
-    current_control_pins(monkeypatch)
+    monkeypatch.setattr(snowball_model, "SNOWBALL", with_current_control_revisions(snowball_model.SNOWBALL))
     monkeypatch.setattr(command, "configure_coreweave_s3", lambda: None)
-    monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
-    monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
-    training = {preset.tasks for preset in presets.PRESETS.values()}
-    task_sets = {preset.eval_lite for preset in presets.PRESETS.values()}
+    monkeypatch.setattr(recipe, "SELECTION_ROOT", str(tmp_path))
+    monkeypatch.setattr(recipe, "artifact_prefix", lambda cluster: str(tmp_path))
+    training = {preset.tasks for preset in snowball_model.SNOWBALL.by_name.values()}
+    task_sets = {preset.eval_lite for preset in snowball_model.SNOWBALL.by_name.values()}
     summary = selection_summary(910)
     for binding in training:
-        write_json(Path(presets.selection_artifact(binding).path()) / "summary.json", summary)
-    candidate = presets.selection_artifact("fixture-selection@2026.11.10")
+        write_json(Path(recipe.selection_artifact(binding).path()) / "summary.json", summary)
+    candidate = recipe.selection_artifact("fixture-selection@2026.11.10")
     candidate_summary = deepcopy(summary)
     candidate_summary["recipe"]["exclusions"] = [
-        {"uri": str(Path(task_set.path()) / presets.FULL_VALIDATION_FILENAME), "version": task_set.version}
+        {"uri": str(Path(task_set.path()) / FULL_VALIDATION_FILENAME), "version": task_set.version}
         for binding in sorted(task_sets)
-        for task_set in (presets.selection_artifact(binding),)
+        for task_set in (recipe.selection_artifact(binding),)
     ]
     write_json(Path(candidate.path()) / "summary.json", candidate_summary)
     for binding in task_sets:
         write_json(
-            Path(presets.selection_artifact(binding).path()) / "summary.json",
+            Path(recipe.selection_artifact(binding).path()) / "summary.json",
             selection_summary(20),
         )
     return candidate
@@ -134,8 +135,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    for binding in {preset.eval_lite for preset in presets.PRESETS.values()}:
-        task_set = Path(presets.selection_artifact(binding).path())
+    for binding in {preset.eval_lite for preset in snowball_model.SNOWBALL.by_name.values()}:
+        task_set = Path(recipe.selection_artifact(binding).path())
         pq.write_table(
             pa.Table.from_pylist(
                 [
@@ -148,7 +149,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     for i in range(100)
                 ]
             ),
-            task_set / presets.TASK_MANIFEST_FILENAME,
+            task_set / TASK_MANIFEST_FILENAME,
         )
 
     @contextmanager
@@ -176,8 +177,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             spec = recipe.run_spec(
                 preset,
                 name="fixture",
-                tasks=presets.selection_artifact(inputs.tasks) if inputs.tasks else None,
-                init=presets.published_artifact(inputs.init) if inputs.init else None,
+                tasks=recipe.selection_artifact(inputs.tasks) if inputs.tasks else None,
+                init=recipe.model_from_reference(inputs.init) if inputs.init else None,
                 settings=inputs.settings,
             )
             step = recipe.run_step(preset, spec)
@@ -186,7 +187,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             document = source_root / "launch.yaml"
             context = StepContext.for_run(
                 str(source_root),
-                presets.artifact_prefix(preset.recipe.layout.cluster),
+                recipe.artifact_prefix(preset.recipe.layout.cluster),
                 runtime_args=step.runtime_args,
                 deps=step.deps,
             )
@@ -207,7 +208,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         fingerprint="",
         missing_steps=(),
     ):
-        preset = presets.PRESETS[preset_name]
+        preset = snowball_model.SNOWBALL.by_name[preset_name]
         root = tmp_path / name / preset.revision
         root.mkdir(parents=True, exist_ok=True)
         inputs = inputs or GateInputs(preset_name=preset.name)
@@ -227,7 +228,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
 
         native = {"config": relocate(config), "result": deepcopy(NATIVE_RECORD["receipt"]["result"])}
         launch, result = native["config"], native["result"]
-        pin = gate.control_pin(preset) if preset.gated else None
+        pin = gate.control_pin(preset, table=snowball_model.SNOWBALL) if preset.gated else None
         result.update(
             iris_job_id="/tests/native-run",
             started_at="2026-11-06T18:40:00+00:00",
@@ -297,11 +298,11 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 }
                 row.update({"generate/wall_seconds": 1.0, "generate/tokens_per_second_per_gpu": speed})
             stored_metrics[step] = row
-        default, selected = presets.task_selections(
-            preset, presets.selection_artifact(inputs.tasks) if inputs.tasks else None
+        default, selected = recipe.task_selections(
+            preset, recipe.selection_artifact(inputs.tasks) if inputs.tasks else None
         )
         for index, evaluation in enumerate(preset.evaluations):
-            source = evaluation.tasks(selected, default, preset.eval_lite)
+            source = recipe.evaluation_source(evaluation, selected, default, preset.eval_lite)
             sources = (
                 launch["inputs"]["validation_data"]
                 if index == 0
@@ -311,7 +312,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             descriptor = sources[0]
             directory = Path(descriptor["uri"])
             directory.mkdir(parents=True, exist_ok=True)
-            count = evaluation.sample or presets.selection_summary(source)[f"{evaluation.file}_rows"]
+            count = evaluation.sample or recipe.selection_summary(source)[f"{evaluation.file}_rows"]
             ids = [f"train-task-{i}" if evaluation.file == "train" else f"task-{i}" for i in range(count)]
             path = directory / descriptor["relative_path"]
             if not path.exists():

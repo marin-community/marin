@@ -203,11 +203,11 @@ def write_checkpoint_export_config(
     return destination
 
 
-def build_command(spec: ExportJobSpec) -> list[str]:
+def build_command(spec: ExportJobSpec, *, forward_env: tuple[str, ...] = ()) -> list[str]:
     """Return the config-native command for an export-only run."""
     if spec.launch_config_path is None:
         raise ValueError("checkpoint export requires a generated launch config")
-    return [
+    command = [
         sys.executable,
         "-m",
         "cloud.iris.launch",
@@ -216,6 +216,10 @@ def build_command(spec: ExportJobSpec) -> list[str]:
         "--config",
         spec.launch_config_path,
     ]
+
+    for name in forward_env:
+        command.extend(("--forward-env", name))
+    return command
 
 
 def _with_checkpoint_export_config(
@@ -393,7 +397,7 @@ def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
     _write_hf_export_request(request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
 
 
-def export_terminal_policy(training_config_path: Path) -> None:
+def export_terminal_policy(training_config_path: Path, *, forward_env: tuple[str, ...] = ()) -> None:
     """Derive and run the terminal policy export from one training launch document."""
     training_config = load_launch_config(training_config_path)
     checkpoint_root = str(training_config.artifacts.checkpoint_root)
@@ -426,7 +430,7 @@ def export_terminal_policy(training_config_path: Path) -> None:
         allocation_gpus_per_node=int(allocation.gpus_per_node),
     )
     resolved_spec = _with_checkpoint_export_config(training_config_path, spec)
-    submit_requested_export(resolved_spec, build_command(resolved_spec))
+    submit_requested_export(resolved_spec, build_command(resolved_spec, forward_env=forward_env))
 
 
 def main() -> None:

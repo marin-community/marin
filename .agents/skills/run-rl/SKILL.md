@@ -1,11 +1,11 @@
 ---
 name: run-rl
-description: Choose, run and read a Snowball RL preset through experiments/post_training/rl.py, compare it with pinned controls and record the experiment. Use for inference, trainer, numerics, task-selection or RL-algorithm measurements, stored-answer inspection and gate reports. New RL launch files and other experiments belong to launch-rl.
+description: Choose, run and read a Snowball RL preset through experiments/post_training/snowball_rl.py, compare it with pinned controls and record the experiment. Use for inference, trainer, numerics, task-selection or RL-algorithm measurements, stored-answer inspection and gate reports. New RL launch files and other experiments belong to launch-rl.
 ---
 
 # Run the RL runner
 
-Use `experiments/post_training/rl.py`. The [recipe](../../../docs/recipes/rl-experiments.md)
+Use `experiments/post_training/snowball_rl.py`. The [recipe](../../../docs/recipes/rl-experiments.md)
 owns the preset table, flag contracts, measurement windows, saved files and comparison math.
 Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
 
@@ -22,7 +22,7 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
    with exit 4. Controls are collected after merge; `--control` and train-long need no pin. Print the plan:
 
    ```bash
-   uv run python -m experiments.post_training.rl --preset speed-short --version dev
+   uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev
    ```
 
    Check inputs, allocation, guards, budget estimate and output paths.
@@ -41,14 +41,14 @@ Follow the recipe's [input and flag contracts](../../../docs/recipes/rl-experime
 For an exact-numerics claim, require zero mismatch:
 
 ```bash
-uv run python -m experiments.post_training.rl --preset speed-medium \
+uv run python -m experiments.post_training.snowball_rl --preset speed-medium \
   --require 'policy/mismatch/staleness0/log_ratio_abs_max<=0' --version dev --run
 ```
 
 ## Inspect saved answers
 
 Read existing answers before launching another run. Controls are named by preset, `commit`
-and revision in `rl_gate.CONTROLS`; use their configured output paths. Candidate status
+and revision in `snowball_rl.SNOWBALL.controls`; use their configured output paths. Candidate status
 prints its output. Read the configured export root from the native resolved launch to locate answers.
 [EvalLite evaluations](../../../docs/recipes/rl-experiments.md#tasks-and-evaluation) are greedy; data-short
 evaluates sampled candidate training tasks. Each native JSONL row carries

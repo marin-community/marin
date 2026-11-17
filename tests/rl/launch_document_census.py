@@ -18,6 +18,8 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import iceball_micro, rl, skyrl_port_smoke, snowball_online_eagle
 from experiments.post_training import rl_presets as snowball
+from experiments.post_training import rl_recipe as recipe
+from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.mismatch_probe import launch as mismatch
@@ -32,23 +34,24 @@ def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
 
 
 def _snowball_step(preset: snowball.Preset, settings: tuple[str, ...] = ()) -> ArtifactStep[SkyRLRun]:
-    eval_lite = snowball.selection_artifact(preset.eval_lite)
-    selection = snowball.selection_artifact(preset.tasks)
+    eval_lite = recipe.selection_artifact(preset.eval_lite)
+    selection = recipe.selection_artifact(preset.tasks)
     for source, full_rows in ((selection, 910), (eval_lite, 20)):
         summary = selection_summary(full_rows)
         summary["recipe"]["exclusions"] = [
             {
-                "uri": str(StoragePath(eval_lite.path()) / snowball.FULL_VALIDATION_FILENAME),
+                "uri": str(StoragePath(eval_lite.path()) / recipe.FULL_VALIDATION_FILENAME),
                 "version": eval_lite.version,
             }
         ]
-        path = StoragePath(source.path()) / snowball.SUMMARY_FILENAME
+        path = StoragePath(source.path()) / recipe.SUMMARY_FILENAME
         path.parent.mkdirs()
         path.write_text(json.dumps(summary))
     return rl.build_run(
         preset,
         tasks=selection if preset.tasks_input == "required" else None,
         settings=settings,
+        table=snowball_model.SNOWBALL,
     ).runs[0]
 
 
@@ -85,13 +88,13 @@ def launch_builders(
         if (policy is curriculum.SNOWBALL_POLICY) != scale.startswith("snowball-"):
             continue
         builders[name] = partial(_curriculum_step, scale, policy, arm)
-    for label, preset in snowball.PRESETS.items():
+    for label, preset in snowball_model.SNOWBALL.by_name.items():
         builders[f"snowball/{label}"] = partial(_snowball_step, preset)
     builders["snowball/settings/optimizer"] = partial(
-        _snowball_step, snowball.PRESETS["learning-medium"], ("trainer.policy.optimizer_config.lr=2e-6",)
+        _snowball_step, snowball_model.SNOWBALL.by_name["learning-medium"], ("trainer.policy.optimizer_config.lr=2e-6",)
     )
     builders["snowball/settings/context-budget"] = partial(
-        _snowball_step, snowball.PRESETS["train-long"], ("context_budget.request_window_tokens=32768",)
+        _snowball_step, snowball_model.SNOWBALL.by_name["train-long"], ("context_budget.request_window_tokens=32768",)
     )
     canary_base = {"preset": "dry", "lane": "async", "model": canary.DEFAULT_MODEL, "checkpoint": False, "export": False}
     canary_axes = {

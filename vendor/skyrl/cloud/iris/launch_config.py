@@ -10,7 +10,11 @@ from typing import Any, Mapping
 
 from omegaconf import MISSING, DictConfig, OmegaConf, open_dict
 
-from skyrl_train.evaluation_profiles import resolve_evaluation_profiles, validate_evaluation_data, validate_evaluation_schedule
+from skyrl_train.evaluation_profiles import (
+    resolve_evaluation_profiles,
+    validate_evaluation_data,
+    validate_evaluation_schedule,
+)
 
 from skyrl_train.config.validation import (
     validate_training_settings,
@@ -94,8 +98,8 @@ class LaunchModelLocator:
     uri: str = MISSING
     identity: str = MISSING
     local_path: str = MISSING
-    tokenizer_uri: str = MISSING
-    tokenizer_revision: str = MISSING
+    tokenizer_uri: str | None = None
+    tokenizer_revision: str | None = None
     chat_template: str | None = None
 
 

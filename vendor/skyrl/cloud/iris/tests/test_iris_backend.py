@@ -29,6 +29,8 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     tmp_path, monkeypatch, target_cluster, parent_cluster_config, interface, logger, entrypoint, preemption_retries
 ):
     requests = []
+    monkeypatch.setenv("HF_TEST_KEY", "test-extra-credential")
+    monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
 
     class ControllerStub:
         def __init__(self, *, address, **kwargs):
@@ -87,13 +89,16 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     previous = get_job_info()
     set_job_info(JobInfo(task_id=JobName.from_wire("/alice/coordinator/0")))
     try:
-        result = launch(args, tmp_path)
+        result = launch(args, tmp_path, forward_env=("HF_TEST_KEY",))
     finally:
         set_job_info(previous)
 
     assert result.job_id == "/alice/coordinator/train"
     [(address, request)] = requests
     assert address == "http://parent-controller:8080"
+    assert request.environment.env_vars["HF_TEST_KEY"] == "test-extra-credential"
+    assert "UNRELATED_SECRET" not in request.environment.env_vars
+    assert "test-extra-credential" not in OmegaConf.to_yaml(config)
     assert request.name == result.job_id
     assert (request.max_retries_failure, request.max_task_failures, request.max_retries_preemption) == (
         0,

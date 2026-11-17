@@ -13,9 +13,10 @@ from experiments.post_training.rl_scoring import InvalidComparison
 
 EXIT_CODES = {Verdict.PASS: 0, Verdict.FAIL: 1, Verdict.INVALID: 2, None: 3}
 REFUSAL_EXIT_CODE = 4
+GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
 
 
-class SnowballCommand(click.Command):
+class RLCommand(click.Command):
     def make_context(self, *args, **kwargs):
         try:
             return super().make_context(*args, **kwargs)

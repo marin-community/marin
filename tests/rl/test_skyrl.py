@@ -102,9 +102,7 @@ def test_artifact_hf_model_resolves_root_explicit_path_and_discovery(
     # A config without tokenizer metadata is not a discoverable HF export.
     (root / "config.json").write_text("{}")
     model = ArtifactHfModel(
-        ArtifactStep.adopt("tests/model", "2026.08.01", str(root), kind=LevanterCheckpoint),
-        "test/tokenizer",
-        "revision",
+        ArtifactStep.adopt("tests/model", "2026.08.01", str(root), kind=Artifact),
         relative_path=relative_path,
     )
     ctx = StepContext.for_run(str(tmp_path / "output"), str(tmp_path), deps=model.deps())
@@ -1273,15 +1271,16 @@ def test_skyrl_spec_rejects_unsupported_training_strategy() -> None:
         dataclasses.replace(_spec(), config_yaml=_config_yaml(strategy="fsdp2"))
 
 
-def test_finished_policy_resolves_terminal_export_as_model_input(tmp_path):
+@pytest.mark.parametrize("tokenizer", ["tests/tokenizer", None])
+def test_finished_policy_resolves_terminal_export_as_model_input(tmp_path, tokenizer):
     root = tmp_path / "finished"
     root.mkdir()
     result = SkyRLRun(
         path=str(root),
         hf_model_uri=str(root / "policy"),
         global_step=100,
-        tokenizer_uri="tests/tokenizer",
-        tokenizer_revision="tokenizer-commit",
+        tokenizer_uri=tokenizer,
+        tokenizer_revision="tokenizer-commit" if tokenizer else None,
         checkpoint_root=str(root / "checkpoints"),
         draft_checkpoint_root=None,
         terminal_manifest_uri=str(root / "terminal.json"),
@@ -1294,20 +1293,23 @@ def test_finished_policy_resolves_terminal_export_as_model_input(tmp_path):
     context = StepContext.for_run(str(tmp_path / "evaluation"), str(tmp_path), deps=model.deps())
     resolved = model.resolve(context)
     assert resolved.uri == str(root / "policy")
-    assert (resolved.tokenizer_uri, resolved.tokenizer_revision) == ("tests/tokenizer", "tokenizer-commit")
+    assert (resolved.tokenizer_uri, resolved.tokenizer_revision) == (
+        tokenizer,
+        "tokenizer-commit" if tokenizer else None,
+    )
     evaluation = ModelConfig(name="finished", location=SKYRL_POLICY_LOCATION, tokenizer="declared/tokenizer")
     evaluated = resolve_skyrl_model(context, source, evaluation)
     assert (evaluated.location, evaluated.tokenizer, evaluated.tokenizer_revision) == (
         str(root / "policy"),
-        "tests/tokenizer",
-        "tokenizer-commit",
+        tokenizer or str(root / "policy"),
+        "tokenizer-commit" if tokenizer else None,
     )
     fingerprint = StepContext.for_fingerprint({}, model.deps())
     policy_identity = model.resolve(fingerprint)
     evaluation_identity = resolve_skyrl_model(fingerprint, source, evaluation)
     assert (evaluation_identity.location, evaluation_identity.tokenizer, evaluation_identity.tokenizer_revision) == (
         policy_identity.uri,
-        policy_identity.tokenizer_uri,
+        policy_identity.tokenizer_uri or policy_identity.uri,
         policy_identity.tokenizer_revision,
     )
     assert evaluated.identity == evaluation_identity.identity == f"tests/finished@2026.10.26:{source.fingerprint()}"

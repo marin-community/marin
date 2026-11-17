@@ -8,20 +8,23 @@ from pathlib import Path
 import pytest
 from omegaconf import OmegaConf
 
+from cloud.iris import export_hf_checkpoint, launch
+from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from cloud.iris.export_hf_checkpoint import (
     ExportJobSpec,
     _run_export,
     checkpoint_export_launch_config,
 )
-from cloud.iris.launch_config import validate_iris_allocation
+from cloud.iris.launch_config import load_launch_config, validate_iris_allocation
+from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import HFModelSaveCallback
 from skyrl_train.config.utils import get_default_config
-from skyrl_train.hf_export import read_hf_export_request
+from skyrl_train.hf_export import read_hf_export_request, write_hf_export_request
 from skyrl_train.trainer import RayPPOTrainer
-from skyrl_train.hf_export_schema import HFExportRequest
-from marinskyrl.checkpoint_paths import selected_export_step
+from skyrl_train.hf_export_schema import HFExportRequest, HFExportStatus
+from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
 
 
 def _training_config():
@@ -175,21 +178,44 @@ def test_nested_export_reads_cluster_config_relative_to_parent_launch(tmp_path: 
     cluster_config = tmp_path / "lib/iris/config/cw-rno2a.yaml"
     cluster_config.parent.mkdir(parents=True)
     cluster_config.write_text("platform:\n  coreweave:\n    kube_context: export-cluster\n")
-    output = tmp_path / "resolved-cluster.json"
     monkeypatch.chdir(tmp_path)
-    spec = replace(_spec(_request()), no_wait=True)
-    command = [
-        sys.executable,
-        "-c",
-        "import json,sys,yaml; from pathlib import Path; "
-        "config=yaml.safe_load(Path(sys.argv[1]).read_text()); "
-        "Path(sys.argv[2]).write_text(json.dumps(config))",
-        "lib/iris/config/cw-rno2a.yaml",
-        str(output),
-    ]
+    monkeypatch.setenv("HF_TEST_KEY", "test-export-credential")
+    document = raw_launch_config()
+    checkpoints = tmp_path / "checkpoints"
+    checkpoint = checkpoints / "global_step_7"
+    checkpoint.mkdir(parents=True)
+    (checkpoints / CHECKPOINT_MARKER_FILENAME).write_text("7\n")
+    document["iris"]["cluster_config"] = "lib/iris/config/cw-rno2a.yaml"
+    document["skyrl"]["trainer"]["hf_export_checkpoint"] = "latest"
+    for name, value in (("checkpoint_root", checkpoints), ("export_root", tmp_path / "exports")):
+        document["artifacts"][name] = str(value)
+    path = tmp_path / "training.yaml"
+    OmegaConf.save(OmegaConf.create(document), path)
+    request = replace(
+        _request(),
+        checkpoint_base_path=str(checkpoints),
+        checkpoint_path=str(checkpoint),
+        export_path=str(tmp_path / "exports"),
+    )
+    write_hf_export_request(request)
+    output = tmp_path / "resolved-cluster.json"
 
-    _run_export(spec, command)
+    def child_export(command, *, stdout):
+        args = launch.create_parser().parse_args(command[3:])
+        assert tuple(args.forward_env) == ("HF_TEST_KEY",)
+        config = load_launch_config(args.config)
+        cluster = OmegaConf.to_container(OmegaConf.load(config.iris.cluster_config), resolve=True)
+        output.write_text(json.dumps(cluster))
+        assert "test-export-credential" not in args.config.read_text()
+        assert "test-export-credential" not in " ".join(command)
+        export = Path(policy_export_path(config.artifacts.export_root, request.step))
+        export.mkdir(parents=True)
+        (export / "model.safetensors").write_bytes(b"exported-weights")
+        return 0
 
+    monkeypatch.setattr(export_hf_checkpoint.subprocess, "call", child_export)
+    export_hf_checkpoint.export_terminal_policy(path, forward_env=("HF_TEST_KEY",))
+    assert read_hf_export_request(str(checkpoint)).status is HFExportStatus.COMPLETE
     assert json.loads(output.read_text())["platform"]["coreweave"]["kube_context"] == "export-cluster"
 
 
