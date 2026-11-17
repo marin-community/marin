@@ -45,7 +45,7 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
     "case, expected_updates, expected_time, expected_facts",
     [
         ("native-composed", 2, 3600, []),
-        ("versioned-missing-evaluation", 2, 3600, ["evaluation_records_available"]),
+        ("versioned-missing-evaluation", None, None, ["evaluation_records_available"]),
         ("checkpoint-lineage", 2, 7200, []),
         ("lineage-unknown-grandparent", None, None, []),
         ("untracked-native", None, None, []),
@@ -110,7 +110,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         inputs=inputs,
     )
     receipt = json.loads((source / "terminal.json").read_text())
-    if case == "untracked-native":
+    if case in ("untracked-native", "versioned-missing-evaluation"):
         receipt["config"]["skyrl"]["trainer"]["logger"] = ["console", "files"]
     write_receipt(source, receipt)
     metrics = read_skyrl_metrics(str(source))
@@ -152,7 +152,10 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         )
         metrics[1]["attempt_id"] = "ancestor"
     if case == "versioned-missing-evaluation":
-        records["native-attempt"] = records["native-attempt"].model_copy(update={"evaluation_storage_version": 1})
+        metrics = {}
+        records["native-attempt"] = records["native-attempt"].model_copy(
+            update={"evaluation_storage_version": 1, "metrics_started_at": None}
+        )
     if case == "untracked-native":
         metrics = {}
         records["native-attempt"] = records["native-attempt"].model_copy(update={"metrics_started_at": None})
@@ -205,10 +208,8 @@ def test_control_publication_rejects_presets_without_dashboard_controls(monkeypa
     table = snowball_model.SNOWBALL
     command = publication.control_command(table)
     for name in ("train-long", "speed-medium"):
-        with pytest.raises(click.BadParameter):
-            command.make_context("snowball_rl_publication", ["--preset", name])
-        with pytest.raises(click.BadParameter):
-            publication.publish_controls(table, name)
+        result = CliRunner().invoke(command, ["--preset", name])
+        assert result.exit_code == 2, (result.output, result.exception)
 
 
 @pytest.mark.integration

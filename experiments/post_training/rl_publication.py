@@ -102,12 +102,7 @@ def build_record(
     historical_legacy = receipt.evaluation_storage_version is None and attempt_id != attempts[0]
     if historical_legacy:
         evidence.append("Legacy evaluation dumps cannot be attributed to this historical attempt.")
-    if (
-        preset.evaluations
-        and result.state == "succeeded"
-        and receipt.metrics_started_at is not None
-        and not historical_legacy
-    ):
+    if preset.evaluations and result.state == "succeeded" and not historical_legacy:
         try:
             data = load_run(run_output, preset, inputs, receipt=receipt)
             evaluations = list(data.evaluations)
@@ -319,12 +314,15 @@ def control_command(table: presets.ModelPresets) -> click.Command:
         """Publish pinned controls or one stored native attempt."""
         if (run_output is None) != (attempt is None):
             raise click.UsageError("--output and --attempt are required together")
-        configure_coreweave_s3()
-        result = (
-            publish_runs([run_output], table.by_name[preset_name], table=table, service_url=url, attempt_id=attempt)
-            if run_output is not None
-            else publish_controls(table, preset_name, service_url=url)
-        )
+        if run_output is not None:
+            configure_coreweave_s3()
+            result = publish_runs(
+                [run_output], table.by_name[preset_name], table=table, service_url=url, attempt_id=attempt
+            )
+            if result.unserved_records:
+                result.retry = "Repeat this publication command with --output and --attempt."
+        else:
+            result = publish_controls(table, preset_name, service_url=url)
         click.echo(json.dumps(result.to_dict()))
         if result.unserved_records:
             raise click.exceptions.Exit(1)
