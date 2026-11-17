@@ -107,6 +107,9 @@ _KDA_ATTN_LEAF = re.compile(r"kda_blocks\.stacked\.attn\.(\w+)")
 _KDA_ADAM_LEAVES = frozenset({"w_a_down", "w_a_up", "a_log", "dt_bias"})
 # Write-strength projection: MuonH at ``KDA_BETA_LR_MULT`` x the MuonH LR, or Adam (``kda_beta_group``).
 _KDA_BETA_LEAF = "w_beta"
+# ``kda_local_attn_window`` per-head logit scale, offset bias and output gain (2-D or 3-D once stacked): Adam. Its
+# q/k/v/o matrices take the MuonH catch-all.
+_KDA_LOCAL_ATTN_ADAM_LEAF = re.compile(r"\.local_attn\.(logit_scale|offset_bias|out_gain)$")
 
 
 def _kda_leaf(path_lower: str) -> str | None:
@@ -442,6 +445,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # Inkling rel-pos weights; value embeddings and their mixing weights; small per-layer gates; the dynamic
             # K/V conv tap generators and the MoE lag-window gain (zero-initialised).
             if ".rel_pos." in path_lower or _ADAM_LEAVES.search(path_lower):
+                return "adam"
+            if _KDA_LOCAL_ATTN_ADAM_LEAF.search(path_lower):
                 return "adam"
             if _TOKEN_EMBED.search(path_lower) and self.embed_optimizer != EmbedOptimizer.ADAM_GROUP:
                 return "embed"

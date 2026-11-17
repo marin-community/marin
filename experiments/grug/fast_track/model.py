@@ -99,6 +99,10 @@ KDA_CHUNK_SIZE = 16
 # GPU chunk size (``kda_chunk_size``) -> decay tile of the fused kernels: longer chunks stay exact at the
 # -5 floor with tiles referenced at their middle token, <= 32 tokens (``kda_fused``'s ``sub_chunk_size``).
 KDA_CHUNK_TILES: dict[int, int | None] = {16: None, 32: 32, 64: 32}
+# Head width of the ``kda_local_attn_window`` branch (``KdaLocalAttention``).
+KDA_LOCAL_ATTN_HEAD_DIM = 64
+# ``fold_in`` salt of the branch's init key, so the KDA layer's own weights keep their keys.
+_KDA_LOCAL_ATTN_KEY_SALT = 1
 # Softmax-attention layers whose attention output gate is below this count as off (``head_gate_off``).
 _HEAD_GATE_OFF = 0.1
 # Under a pre-norm probe: each token's RMS of the residual entering final_norm, [B, S] float32 (stop-gradient).
@@ -490,8 +494,14 @@ class GrugModelConfig:
     """``spelling_byte_embeds``'s byte, leading-space and case rows as their own AttnRes source: they sum into a
     separate ``[V, D]`` table (rows initialised like ``token_embed``), whose gathered rows pass through their own
     RMS norm and gain into a history source ahead of the token embedding. Needs ``attn_res``."""
+    kda_local_attn_window: int = 0
+    """Exact causal softmax attention over the last ``kda_local_attn_window`` tokens (self included, never across a
+    document start) beside every KDA layer's delta-rule read, on the same normed input, added to the KDA output
+    (``KdaLocalAttention``). 0: off. Needs ``local_mixer=kda``."""
 
     def __post_init__(self) -> None:
+        if self.kda_local_attn_window and self.local_mixer != LocalMixer.KDA:
+            raise ValueError("kda_local_attn_window adds a branch to the KDA layers; it needs local_mixer=kda")
         if self.spelling_ngram_source and not self.attn_res:
             raise ValueError("spelling_ngram_source is an AttnRes source; it needs attn_res")
         if self.spelling_byte_source and (not self.attn_res or self.spelling_byte_embeds):
@@ -1027,6 +1037,103 @@ def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaK
     return jnp.swapaxes(out, 1, 2)
 
 
+def _window_attention(q, k, v, offset_bias, extras: dict[str, jax.Array], *, window: int):
+    """Causal softmax attention of each query over the ``window`` keys ending at itself, on ``(B, S, N, h)`` with
+    ``q`` already scaled. ``offset_bias`` ``[N, window]`` is added to the logit of the key ``offset`` tokens back;
+    ``extras`` optionally holds ``segment_ids`` ``[B, S]`` (keys in another document are masked). The sequence is
+    cut into ``window``-token blocks; each block's queries attend to its own and the previous block's keys."""
+    b, s, n, h = q.shape
+    pad = -s % window
+    q, k, v = (jnp.pad(t, ((0, 0), (0, pad), (0, 0), (0, 0))) for t in (q, k, v))
+    num_blocks = (s + pad) // window
+
+    def with_previous(t: jax.Array, fill) -> jax.Array:
+        """``[B, nb, W, ...]`` -> ``[B, nb, 2W, ...]``: each block's keys preceded by the previous block's."""
+        widths = [(0, 0)] * t.ndim
+        widths[1] = (1, 0)
+        return jnp.concatenate([jnp.pad(t[:, :-1], widths, constant_values=fill), t], axis=2)
+
+    qb, kb, vb = (t.reshape(b, num_blocks, window, n, h) for t in (q, k, v))
+    kw, vw = with_previous(kb, 0), with_previous(vb, 0)
+    logits = jnp.einsum("bcqnd,bcknd->bcnqk", qb, kw, preferred_element_type=jnp.float32)
+    # Query i of a block and key j of its two-block span are ``i + W - j`` tokens apart.
+    offset = jnp.arange(window)[:, None] + window - jnp.arange(2 * window)[None, :]
+    in_window = (offset >= 0) & (offset < window)
+    logits = logits + jnp.take(offset_bias.astype(jnp.float32), jnp.clip(offset, 0, window - 1), axis=1)
+    # The first block has no previous block.
+    allowed = in_window & ((jnp.arange(num_blocks)[:, None, None] > 0) | (jnp.arange(2 * window) >= window))
+    allowed = allowed[None, :, None]
+    if "segment_ids" in extras:
+        seg = jnp.pad(extras["segment_ids"], ((0, 0), (0, pad)), constant_values=-1).reshape(b, num_blocks, window)
+        same_doc = seg[..., :, None] == with_previous(seg, -1)[..., None, :]
+        allowed = allowed & same_doc[:, :, None]
+    # Every query sees itself, so no row is fully masked.
+    probs = jax.nn.softmax(jnp.where(allowed, logits, -jnp.inf), axis=-1).astype(v.dtype)
+    out = jnp.einsum("bcnqk,bcknd->bcqnd", probs, vw)
+    return out.reshape(b, num_blocks * window, n, h)[:, :s]
+
+
+class KdaLocalAttention(eqx.Module):
+    """``kda_local_attn_window``: narrow exact attention beside a KDA layer's delta-rule read.
+
+    ``max(1, D // 128)`` heads of width ``KDA_LOCAL_ATTN_HEAD_DIM`` with their own q/k/v/o projections (MuonH like
+    the other dense matrices). q and k are RMS-normed; the logits are ``logit_scale[n] q.k / sqrt(h)`` (scale
+    initialised at ``qk_mult``) plus a zero-init per-head bias over the window's relative offsets. Each head's
+    output is scaled by a zero-init per-head gain before ``w_o``, so the branch adds nothing at step 0.
+    """
+
+    w_q: Float[Array, "D NH"]
+    w_k: Float[Array, "D NH"]
+    w_v: Float[Array, "D NH"]
+    w_o: Float[Array, "NH D"]
+    logit_scale: Float[Array, " N"]
+    offset_bias: Float[Array, "N W"]
+    out_gain: Float[Array, " N"]
+    window: int = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "KdaLocalAttention":
+        k_q, k_k, k_v, k_o = random.split(key, 4)
+        d, h, std = cfg.hidden_dim, KDA_LOCAL_ATTN_HEAD_DIM, cfg.initializer_std
+        n = max(1, d // 128)
+        return KdaLocalAttention(
+            w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
+            w_k=reshard(_init_weight(k_k, (d, n * h), std), P(_FSDP_AXES, "model")),
+            w_v=reshard(_init_weight(k_v, (d, n * h), std), P(_FSDP_AXES, "model")),
+            w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", _FSDP_AXES)),
+            logit_scale=jnp.full((n,), cfg.qk_mult, jnp.float32),
+            offset_bias=jnp.zeros((n, cfg.kda_local_attn_window), jnp.float32),
+            out_gain=jnp.zeros((n,), jnp.float32),
+            window=cfg.kda_local_attn_window,
+        )
+
+    @named_call
+    def __call__(self, x: Float[Array, "B S D"], segment_ids: Int[Array, "B S"] | None) -> Float[Array, "B S D"]:
+        b, s, _ = x.shape
+        n, h = self.logit_scale.shape[0], KDA_LOCAL_ATTN_HEAD_DIM
+        q, k, v = (rearrange(_proj(x, w), "... (n d) -> ... n d", d=h) for w in (self.w_q, self.w_k, self.w_v))
+        q = rms_norm(q) * (self.logit_scale[:, None] / math.sqrt(h)).astype(q.dtype)
+        k = rms_norm(k)
+        spec4 = P(_BATCH_AXES, None, "model", None)
+        q, k, v = (reshard(t, spec4) for t in (q, k, v))
+        extras: dict[str, jax.Array] = {}
+        extra_specs: dict[str, P] = {}
+        if segment_ids is not None:
+            extras["segment_ids"] = reshard(jnp.broadcast_to(segment_ids, (b, s)), P(_BATCH_AXES, None))
+            extra_specs["segment_ids"] = P(_BATCH_AXES, None)
+        head_spec = P("model", None)
+        kernel = jax.shard_map(
+            functools.partial(_window_attention, window=self.window),
+            mesh=get_abstract_mesh(),
+            in_specs=(spec4,) * 3 + (head_spec, extra_specs),
+            out_specs=spec4,
+        )
+        o = kernel(q, k, v, reshard(self.offset_bias, head_spec), extras)
+        o = o * self.out_gain[:, None].astype(o.dtype)
+        o = jnp.reshape(o, (b, s, n * h), out_sharding=P(_BATCH_AXES, None, "model"))
+        return _proj(o, self.w_o, out_sharding=_batch_spec())
+
+
 class KimiDeltaAttention(eqx.Module):
     """KDA linear-attention token mixer for the local layers, following Kimi K3's KDA layer.
 
@@ -1054,6 +1161,7 @@ class KimiDeltaAttention(eqx.Module):
     sconv_q: ShortConv
     sconv_k: ShortConv
     sconv_v: ShortConv
+    local_attn: KdaLocalAttention | None  # cfg.kda_local_attn_window
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -1076,6 +1184,11 @@ class KimiDeltaAttention(eqx.Module):
             sconv_q=ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
             sconv_k=ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
             sconv_v=ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
+            local_attn=(
+                KdaLocalAttention.init(cfg, key=random.fold_in(key, _KDA_LOCAL_ATTN_KEY_SALT))
+                if cfg.kda_local_attn_window
+                else None
+            ),
             cfg=cfg,
         )
 
@@ -1144,6 +1257,8 @@ class KimiDeltaAttention(eqx.Module):
         gate_heads = rearrange(gate, "... (n d) -> ... n d", d=head_dim)
         _log_head_gate_off(jnp.mean(gate_heads.astype(jnp.float32), axis=-1), stats)
         out = _proj(o * gate, self.w_o, out_sharding=_batch_spec())
+        if self.local_attn is not None:
+            out = out + self.local_attn(x, segment_ids)
         return out, stats
 
 
@@ -2731,7 +2846,7 @@ def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float
 # Lookup tables: a token reads one row, so they cost no matmul FLOPs.
 _EMBEDDING_TABLES = frozenset({"token_embed", "value_embed", "token_embed_bytes", "token_embed_case"})
 # Per-head or per-expert vectors stored as 2-D arrays that are added, not multiplied.
-_NON_MATMUL_PARAMS = frozenset({"dt_bias", "router_bias", "a_log"})
+_NON_MATMUL_PARAMS = frozenset({"dt_bias", "router_bias", "a_log", "offset_bias"})
 
 
 def forward_flops_per_token(model: Transformer) -> float:
@@ -2788,4 +2903,8 @@ def forward_flops_per_token(model: Transformer) -> float:
         heads = attn.a_log.shape[-1]
         d_k, d_v = attn.w_q.shape[-1] // heads, attn.w_v.shape[-1] // heads
         core += model.kda_blocks.num_layers * heads * (6 * d_k * d_v + 4 * cfg.kda_chunk_size * (d_k + d_v))
+        if attn.local_attn is not None:
+            span = min(attn.local_attn.window, seq)
+            keys = (span * (span + 1) / 2 + (seq - span) * span) / seq
+            core += model.kda_blocks.num_layers * 2 * keys * attn.local_attn.w_q.shape[-1] * 2
     return matmul + core
