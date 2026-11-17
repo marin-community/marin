@@ -31,9 +31,17 @@ def validate_hf_export_config(cfg: DictConfig) -> None:
             ]
 
         checkpoint_intervals = callback_intervals(CHECKPOINT_CALLBACK_TYPE)
+        timed_final_checkpoint = any(
+            callback.get("type") == CHECKPOINT_CALLBACK_TYPE
+            and callback.get("save_interval_seconds") is not None
+            and callback.get("save_interval_seconds") > 0
+            and callback.get("save_on_train_end", True)
+            for callback in callbacks
+        )
         export_intervals = callback_intervals(HF_MODEL_SAVE_CALLBACK_TYPE)
         export_requested = any(callback.get("type") == HF_MODEL_SAVE_CALLBACK_TYPE for callback in callbacks)
     else:
+        timed_final_checkpoint = False
         checkpoint_interval = int(cfg.trainer.get("ckpt_interval", -1))
         checkpoint_intervals = [checkpoint_interval] if checkpoint_interval > 0 else []
         export_requested = hf_export_destination_configured(cfg)
@@ -42,7 +50,7 @@ def validate_hf_export_config(cfg: DictConfig) -> None:
 
     if cfg.trainer.get("export_hf_artifact", False) and not export_requested:
         raise ValueError("Terminal HF artifact export requires an HF model-save callback")
-    if export_requested and not checkpoint_intervals:
+    if export_requested and not (checkpoint_intervals or timed_final_checkpoint):
         raise ValueError("HF export requires checkpoint saving to produce the terminal checkpoint")
 
     for export_interval in export_intervals:
