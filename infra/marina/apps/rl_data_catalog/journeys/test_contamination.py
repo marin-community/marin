@@ -692,12 +692,21 @@ def test_backend_link_opens_role_fit_and_survey_provenance(journey: Journey, the
     expect(page.locator("#fit .backend-table tbody tr")).to_have_count(5)
     expect(page.locator("#fit")).to_contain_text("docker image")
     expect(page.locator("#fit")).to_contain_text("packages lock")
-    for backend in ["Docker + runsc (local dev)", "QEMU"]:
-        binary = page.locator("#fit tbody tr").filter(has=page.get_by_role("cell", name=backend, exact=True))
-        expect(binary.locator(".chip")).to_have_text("UNSUPPORTED")
-        expect(binary.locator("td").nth(2)).to_have_text("unsupported: 3")
-        expect(binary.locator("td").nth(4)).to_contain_text("agent: 3")
-    expect(page.locator("#fit")).not_to_contain_text(re.compile(r"\bpartial\b", re.I))
+    api = page.evaluate("async () => (await (await fetch('api/source?source_id=Marin%3Aclean')).json())")
+    recorded = api["backend_capabilities"]["backends"]["docker-gvisor"]
+    assert recorded["support"] == "partial"
+    assert recorded["roles"]["agent"] == {"partial": 3}
+    assert recorded["blockers"] == {"agent:cpus": 3}
+    partial = page.locator("#fit tbody tr").filter(
+        has=page.get_by_role("cell", name="Docker + runsc (local dev)", exact=True)
+    )
+    expect(partial.locator(".chip")).to_have_text("Partial")
+    expect(partial.locator("td").nth(2)).to_have_text("Partial: 3")
+    expect(partial.locator("td").nth(4)).to_contain_text("agent: 3")
+    expect(partial.locator("td").nth(5)).to_contain_text("agent:cpus: 3")
+    unsupported = page.locator("#fit tbody tr").filter(has=page.get_by_role("cell", name="QEMU", exact=True))
+    expect(unsupported.locator(".chip")).to_have_text("UNSUPPORTED")
+    expect(unsupported.locator("td").nth(2)).to_have_text("unsupported: 3")
     expect(page.locator("#provenance")).to_contain_text("survey-fixture")
     expect(page.locator("#provenance")).to_contain_text("b" * 40)
     expect(page.locator("#provenance")).to_contain_text("c" * 64)

@@ -200,12 +200,12 @@ Enum chips have no subtitle text. Issue rate and Overlap have numeric columns; a
 Result from incomplete content review carries a provisional variant within its
 chip unless an explicit whole-source waiver finalizes it. Review progress and lower bounds appear only on the source Evidence page.
 
-Backend fit is binary in the display: Supported requires every present task/role
-to be supported on that backend. A conditional capability, missing measurement,
-validation failure or incompatible environment kind produces Unsupported with its
-typed blockers. N/A is reserved for absent roles. Affected-task counts are exact
-per role; roles can overlap, so those counts are not a unique task union. The
-immutable survey can retain its original conditional-support states as evidence.
+Backend fit preserves the survey's Supported, Partial and Unsupported states.
+Partial names its conditional capabilities and remains eligible under the
+maintained admission policy. Missing measurements, validation failures and
+incompatible environment kinds keep their typed reasons. N/A is reserved for
+absent roles. Affected-task counts are exact per role; roles can overlap, so those
+counts are not a unique task union.
 
 **Daytona safety**, shown in the Backends tooltip and evidence page, measures the actor only: SAFE requires at most ten snapshot
 identities and no refused actor requirements. Sources without an actor show N/A;

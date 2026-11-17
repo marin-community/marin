@@ -145,10 +145,11 @@ optional filter. Complete per-source counts remain available below the samples.
 The confidence sidecar and overlap/Grader measurement loaders are documented in
 [Release procedure](RELEASE.md#intended-measurement-refreshes).
 
-Backend fit is binary for each source/backend: Supported requires every present
-role and applicable task to be supported. Conditional survey support and
-unsupported environment kinds display Unsupported with typed reasons and exact
-per-role affected counts. N/A is reserved for an absent role. Counts from agent
+Backend fit preserves Supported, Partial and Unsupported survey states. Partial
+names the conditional capabilities and their affected-task counts; it remains
+eligible under the maintained admission policy. Missing measurements, validation
+failures and incompatible environment kinds retain their typed reasons.
+N/A is reserved for an absent role. Counts from agent
 and grader roles can overlap and must not be added into a unique-task union.
 
 ## Contrast and readability

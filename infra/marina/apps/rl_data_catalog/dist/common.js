@@ -151,8 +151,8 @@ function overlapEvidence(source, labels) {
 
 const backendNames = {local: 'LOCAL', daytona: 'Daytona', docker: 'Docker', 'docker-gvisor': 'Docker + runsc (local dev)', qemu: 'QEMU', shellsim: 'ShellSim', iris: 'Iris (gVisor, production)'};
 const backendDeploymentClass = {iris: 'production', daytona: 'production', local: 'production', docker: 'dev_only', 'docker-gvisor': 'dev_only', qemu: 'dev_only', shellsim: 'dev_only'};
-const supportClasses = {supported: 'good', unsupported: 'bad', role_absent: 'unassessed'};
-const backendStatusLabels = {role_absent: 'N/A (no role)', verify: 'Verify (live probe pending)'};
+const supportClasses = {supported: 'good', partial: 'some_issues', unsupported: 'bad', role_absent: 'unassessed'};
+const backendStatusLabels = {partial: 'Partial', role_absent: 'N/A (no role)', verify: 'Verify (live probe pending)'};
 function readableRecord(value) {
   if (value instanceof Node) return value;
   if (value === null || value === undefined) return node('span', 'Not measured', 'muted');
@@ -165,15 +165,15 @@ function readableRecord(value) {
   }
   return list;
 }
-function binaryBackendFit(fit, taskCount) {
+function displayBackendFit(fit, taskCount) {
   const roles = {}, affected = {}, blockers = {...fit.blockers};
   for (const role of ['agent', 'grader']) {
-    const counts = {supported: 0, unsupported: 0, role_absent: 0};
-    for (const [state, count] of Object.entries(fit.roles[role] || {})) counts[state === 'supported' || state === 'role_absent' ? state : 'unsupported'] += count;
+    const counts = {supported: 0, partial: 0, unsupported: 0, role_absent: 0};
+    for (const [state, count] of Object.entries(fit.roles[role] || {})) counts[['supported', 'partial', 'role_absent'].includes(state) ? state : 'unsupported'] += count;
     const known = Object.values(counts).reduce((sum, count) => sum + count, 0);
     if (known < taskCount) { counts.unsupported += taskCount - known; blockers[`${role}:not_measured`] = taskCount - known; }
     roles[role] = Object.fromEntries(Object.entries(counts).filter(([, count]) => count > 0));
-    affected[role] = counts.unsupported;
+    affected[role] = counts.unsupported + counts.partial;
   }
   for (const [reason, count] of Object.entries(fit.not_applicable || {})) {
     const [role, ...kind] = reason.split(':'); blockers[`${role}:unsupported_environment_kind:${kind.join(':')}`] = count;
@@ -182,13 +182,13 @@ function binaryBackendFit(fit, taskCount) {
   const absent = Object.values(roles).every(counts => (counts.role_absent || 0) === taskCount);
   const pending = fit.support === 'verify' || Object.values(roles).some(counts => (counts.verify || 0) > 0);
   const failed = ['partial', 'unsupported', 'not_applicable'].includes(fit.support) || Object.values(affected).some(count => count > 0) || Object.keys(blockers).length || Object.keys(fit.validation_errors).length;
-  return {...fit, roles, blockers, affected_roles: affected, support: absent ? 'role_absent' : failed ? 'unsupported' : pending ? 'verify' : 'supported'};
+  return {...fit, roles, blockers, affected_roles: affected, support: absent ? 'role_absent' : fit.support === 'partial' ? 'partial' : failed ? 'unsupported' : pending ? 'verify' : 'supported'};
 }
 function backendLabels(source) {
   const capabilities = source.backend_capabilities;
   if (!capabilities || capabilities.basis === 'unassessed') return [];
   return Object.entries(capabilities.backends).map(([key, recorded]) => {
-    const fit = binaryBackendFit(recorded, capabilities.task_count);
+    const fit = displayBackendFit(recorded, capabilities.task_count);
     const reasons = [...new Set(Object.keys(fit.blockers).map(reason => reason.split(':').slice(1).join(':') || reason))];
     if (!reasons.length && Object.keys(fit.validation_errors).length) reasons.push('validation');
     const name = backendNames[key] || key;
