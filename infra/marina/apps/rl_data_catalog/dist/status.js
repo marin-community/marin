@@ -179,6 +179,15 @@ async function load() {
   $('message').textContent = '';
 }
 window.addEventListener('DOMContentLoaded', () => {
+  $('status-table').addEventListener('focusin', event => {
+    // Native table scrolling can leave a reason or evidence link mostly outside
+    // the narrow scroller. Run after native focus scrolling and keep the target
+    // centered without moving the reader to another row.
+    const target = event.target;
+    if (target instanceof HTMLElement) {
+      requestAnimationFrame(() => target.scrollIntoView({ block: 'nearest', inline: 'center' }));
+    }
+  });
   load().catch(error => {
     $('message').textContent = error.message;
     $('message').classList.add('error');

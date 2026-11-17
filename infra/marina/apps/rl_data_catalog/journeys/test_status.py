@@ -5,13 +5,45 @@
 
 import json
 import re
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
+from infra.marina.apps.rl_data_catalog.readability import inspect_status_focus
+
 APP_ROOT = "a/fb11c931-5861-4878-8bb5-a964d652b45f"
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width", [390, 320])
+def test_status_keyboard_keeps_deep_reason_and_evidence_targets_visible(
+    journey: Journey, seeded_extras: dict, theme: str, width: int
+) -> None:
+    # The real failing rows had two reasons, with the long grading label first.
+    # Include multiple such rows and evidence links to exercise cross-row Tab.
+    for index in range(3):
+        row = deepcopy(seeded_extras["metadata_exclusions"][0])
+        row.update(id=f"Fixture:focus-{index}", display_name=f"Fixture focus {index}")
+        evidence = row["reasons"][0]["evidence"]
+        row["reasons"] = [
+            {"reason": reason, "evidence": evidence}
+            for reason in ["grading-census-incomplete", "lexical-receipt-missing"]
+        ]
+        seeded_extras["metadata_exclusions"].append(row)
+    page = journey.page
+    page.emulate_media(color_scheme=theme, reduced_motion="reduce")
+    page.set_viewport_size({"width": width, "height": 1000})
+    page.goto(f"{journey.origin}/{APP_ROOT}/")
+    page.goto(page.url.rstrip("/") + "/status.html")
+    expect(page.locator('tr[data-source-id="Fixture:focus-2"]')).to_have_count(1)
+    for opened in [False, True]:
+        page.locator("#rows details").evaluate_all("(es, open) => es.forEach(e => e.open = open)", opened)
+        result = inspect_status_focus(page)
+        assert not result["findings"], result["findings"]
+    page.screenshot(path=str(journey.shots / f"status-keyboard-{theme}-{width}.png"))
 
 
 def test_all_pages_share_navigation_labels_order_and_current_view(journey: Journey, readability_catalog: None) -> None:

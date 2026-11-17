@@ -51,6 +51,31 @@ def inspect_state(page: Page, *, focus: bool = False, focus_limit: int | None = 
     return result
 
 
+def inspect_status_focus(page: Page) -> dict[str, Any]:
+    """Check every Status reason/evidence target, including rows below the fold."""
+    result: dict[str, Any] = {"findings": [], "measurements": []}
+    targets = page.locator("#rows summary, #rows .status-evidence a")
+    for target in targets.all():
+        # Tab from the preceding control so native scrolling and :focus-visible
+        # are exercised. The representative gate must reach deep table rows too.
+        target.evaluate(
+            """e => {
+            const controls=[...document.querySelectorAll('a[href],button,input,select,textarea,summary')]
+                .filter(node => node.checkVisibility() && !node.disabled);
+            const previous=controls[controls.indexOf(e)-1];
+            previous.focus({preventScroll:true});
+        }"""
+        )
+        page.keyboard.press("Tab")
+        page.evaluate("() => new Promise(resolve => requestAnimationFrame(resolve))")
+        if not target.evaluate("e => e === document.activeElement"):
+            raise ValueError("Status keyboard target is not reachable with Tab")
+        focused = page.evaluate(AUDIT, {"mode": "focus"})
+        for key in result:
+            result[key].extend(focused[key])
+    return result
+
+
 def readability_layout(
     page: Page, root: str, shots: Path, theme: str, width: int, scope: BrowserScope = BrowserScope.FULL
 ) -> list[dict[str, Any]]:
@@ -260,8 +285,10 @@ def readability_layout(
     # themes and at every width, so its controls and panels stay readable.
     visit("status.html", "#status-counts button")
     capture("status", focus=True)
+    record("status-table-keyboard", inspect_status_focus(page))
     page.locator("#rows details > summary").evaluate_all("es => es.forEach(e => e.parentElement.open = true)")
     capture("status-reason-open", focus=True)
+    record("status-open-table-keyboard", inspect_status_focus(page))
     # The difficulty coverage page: computed counts plus the needs-measurement,
     # blocked and measured tables, in both themes and at every width.
     visit("difficulty.html", "#coverage-counts div")
