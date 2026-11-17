@@ -1008,7 +1008,7 @@ def build_eval_bloom(
             must report.
         best_effort_required_tasks: Tasks in the best-effort manifest that
             must have loaded. The manifest's ``required_tasks`` must list the
-            leaf tasks of each one, and every leaf must be included.
+            leaf tasks of each one, and every leaf must have records.
         worker_resources: Resource request for each eval-file shard.
         max_workers: Maximum Zephyr workers for the Bloom build.
         zephyr_context: Optional shared Zephyr worker context.
@@ -1245,17 +1245,10 @@ def _validate_best_effort_eval_manifest(
     manifest_required_tasks = manifest.get("required_tasks", {})
     if not isinstance(manifest_required_tasks, Mapping):
         raise ValueError("best-effort eval manifest required_tasks must be an object")
-    for task in required_tasks:
-        leaves = manifest_required_tasks.get(task)
-        if not leaves:
-            raise ValueError(f"best-effort eval manifest does not list required task {task!r}")
-        missing_leaves = sorted(set(leaves) - set(included_tasks))
-        if missing_leaves:
-            raise ValueError(f"required task {task!r} is missing leaf tasks {missing_leaves}")
 
     manifest_parent = os.path.dirname(manifest_path)
     paths: list[str] = []
-    artifact_tasks: list[str] = []
+    artifact_records: dict[str, int] = {}
     for entry in artifacts:
         task = entry.get("task")
         artifact = entry.get("artifact")
@@ -1274,11 +1267,18 @@ def _validate_best_effort_eval_manifest(
             raise ValueError(
                 f"{task}: best-effort manifest expects {expected_records} records, artifact contains {actual_records}"
             )
-        artifact_tasks.append(task)
+        artifact_records[task] = actual_records
         paths.append(artifact_path)
 
-    if sorted(artifact_tasks) != sorted(included_tasks) or len(artifact_tasks) != len(included_tasks):
+    if sorted(artifact_records) != sorted(included_tasks) or len(artifacts) != len(included_tasks):
         raise ValueError("best-effort eval artifact tasks do not match included_leaf_tasks")
+    for task in required_tasks:
+        leaves = manifest_required_tasks.get(task)
+        if not leaves:
+            raise ValueError(f"best-effort eval manifest does not list required task {task!r}")
+        empty_leaves = sorted(leaf for leaf in leaves if not artifact_records.get(leaf))
+        if empty_leaves:
+            raise ValueError(f"required task {task!r} has no records for leaf tasks {empty_leaves}")
     return paths
 
 

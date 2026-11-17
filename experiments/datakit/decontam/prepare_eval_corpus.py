@@ -51,7 +51,6 @@ import dataclasses
 import io as io_mod
 import json
 import logging
-import urllib.request
 import zipfile
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from enum import StrEnum
@@ -61,6 +60,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from datasets import Image as DatasetsImage
 from datasets import load_dataset
+from marin.datakit.download.http_session import build_retrying_session
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
@@ -71,7 +71,12 @@ from experiments.datakit.decontam.lmh_loader import (
     materialize_first_nonempty_split,
     patch_hf_dataset_loading,
 )
-from experiments.datasets.uncheatable import UNCHEATABLE_SUBSETS
+from experiments.datasets.uncheatable import (
+    UNCHEATABLE_COMMIT,
+    UNCHEATABLE_REPOSITORY_NAME,
+    UNCHEATABLE_REPOSITORY_OWNER,
+    UNCHEATABLE_SUBSETS,
+)
 from experiments.evals.task_configs import (
     ACTION_TASKS,
     BIAS_SAFETY_TASKS,
@@ -105,10 +110,11 @@ AA_MANIFEST_RELATIVE = "aa/_manifest.json"
 UNCHEATABLE_MANIFEST_RELATIVE = "uncheatable/_manifest.json"
 LMH_MANIFEST_RELATIVE = "lmh/_manifest.json"
 
-# Downloads and required lm-eval task loads retry transient failures such as
-# "Server disconnected" before preparation stops.
+# Required lm-eval task loads retry transient failures such as "Server
+# disconnected" before preparation stops.
 LOAD_ATTEMPTS = 5
 LOAD_BACKOFF = ExponentialBackoff(initial=2.0, maximum=60.0, factor=2.0)
+DOWNLOAD_TIMEOUT = 120
 
 
 def _output_root() -> str:
@@ -420,17 +426,9 @@ def _write_parquet(path: str, records: Iterator[dict]) -> int:
 
 
 def _download(url: str) -> bytes:
-    def fetch() -> bytes:
-        with urllib.request.urlopen(url) as response:
-            return response.read()
-
-    return retry_with_backoff(
-        fetch,
-        retryable=lambda exc: isinstance(exc, OSError),
-        max_attempts=LOAD_ATTEMPTS,
-        backoff=LOAD_BACKOFF,
-        operation=f"download {url}",
-    )
+    response = build_retrying_session().get(url, timeout=DOWNLOAD_TIMEOUT)
+    response.raise_for_status()
+    return response.content
 
 
 def _iter_aa_rows(cfg: AAEvalConfig) -> Iterator[dict[str, Any]]:
@@ -673,9 +671,7 @@ def _prepare_aa() -> dict[str, Any]:
 
 
 # The Uncheatable Eval dumps that ``experiments/datasets/uncheatable.py`` evaluates,
-# pinned to the upstream commit that holds them, with their record counts.
-UNCHEATABLE_REPOSITORY = "ziqing-huang/uncheatable_eval"
-UNCHEATABLE_COMMIT = "185c463882a8ae0f203e51ae5852d8cf4fe299cf"
+# read from the commit that it downloads, with their record counts.
 UNCHEATABLE_WINDOW = "20250901to20250914"
 UNCHEATABLE_RECORDS: dict[str, int] = {
     "wikipedia_english": 1000,
@@ -693,7 +689,8 @@ UNCHEATABLE_BENCHMARK_NAMES: tuple[str, ...] = tuple(f"Uncheatable Eval {subset}
 
 def _uncheatable_url(subset: str) -> str:
     return (
-        f"https://raw.githubusercontent.com/{UNCHEATABLE_REPOSITORY}/{UNCHEATABLE_COMMIT}/"
+        f"https://raw.githubusercontent.com/{UNCHEATABLE_REPOSITORY_OWNER}/{UNCHEATABLE_REPOSITORY_NAME}/"
+        f"{UNCHEATABLE_COMMIT}/"
         f"data/{subset}_{UNCHEATABLE_WINDOW}.json"
     )
 
@@ -809,11 +806,15 @@ def _lmh_task_names() -> list[str]:
     return sorted(names - DECON_EXCLUDED_EVAL_TASKS)
 
 
-def _missing_required_lmh_tasks(task_leaves: dict[str, list[str]], failed: list[tuple[str, str]]) -> list[str]:
-    """Return required tasks that did not load or have a failed leaf task."""
-    failed_names = {name for name, _ in failed}
+def _missing_required_lmh_tasks(task_leaves: dict[str, list[str]], records: dict[str, int]) -> list[str]:
+    """Return required tasks that did not load or have a leaf task without records.
+
+    ``records`` maps each leaf task that has an artifact to its record count.
+    """
     return [
-        task for task in REQUIRED_LMH_TASKS if not task_leaves.get(task) or failed_names.intersection(task_leaves[task])
+        task
+        for task in REQUIRED_LMH_TASKS
+        if not task_leaves.get(task) or not all(records.get(leaf) for leaf in task_leaves[task])
     ]
 
 
@@ -854,6 +855,11 @@ def _prepare_lmh() -> dict[str, Any]:
             raise ValueError(
                 f"lmh manifest extraction version is {existing_manifest.get('extraction_version')!r}, "
                 f"expected {_LMH_EXTRACTION_VERSION!r}"
+            )
+        if set(existing_manifest.get("required_tasks", {})) != set(REQUIRED_LMH_TASKS):
+            raise ValueError(
+                "lmh manifest required tasks changed within EVAL_CORPUS_VERSION; "
+                "change EVAL_CORPUS_VERSION before preparation"
             )
         logger.info("lmh: version %s is already sealed at %s", EVAL_CORPUS_VERSION, manifest_path)
         return existing_manifest
@@ -937,10 +943,6 @@ def _prepare_lmh() -> dict[str, Any]:
         for n, reason in failed:
             logger.info("  FAIL lmh/%s: %s", n, reason)
 
-    missing_required = _missing_required_lmh_tasks(task_leaves, failed)
-    if missing_required:
-        raise ValueError(f"required lm-eval tasks did not load: {missing_required}; the FAIL lines above give reasons")
-
     included_leaf_tasks = sorted(set(succeeded + skipped_existing))
     artifacts: list[dict[str, Any]] = []
     for task_name in included_leaf_tasks:
@@ -949,6 +951,13 @@ def _prepare_lmh() -> dict[str, Any]:
         with StoragePath(artifact_path).open("rb") as source:
             records = pq.ParquetFile(source).metadata.num_rows
         artifacts.append({"task": task_name, "artifact": artifact, "records": records})
+
+    missing_required = _missing_required_lmh_tasks(task_leaves, {entry["task"]: entry["records"] for entry in artifacts})
+    if missing_required:
+        raise ValueError(
+            f"required lm-eval tasks did not load or have no records: {missing_required}; "
+            "the FAIL lines above give reasons"
+        )
 
     manifest = {
         "schema_version": 1,

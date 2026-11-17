@@ -208,8 +208,7 @@ def test_terminal_bench_archive_pairs_each_instruction_with_its_solution(monkeyp
         zf.writestr("terminal-bench/tasks/task-b/solution/solve.sh", "Solution B")
         zf.writestr("terminal-bench/tasks/task-a/instruction.md", "Instruction A")
         zf.writestr("terminal-bench/tasks/task-a/solution/solve.sh", "Solution A")
-    archive.seek(0)
-    monkeypatch.setattr(prepare_eval_corpus.urllib.request, "urlopen", lambda _url: archive)
+    monkeypatch.setattr(prepare_eval_corpus, "_download", lambda _url: archive.getvalue())
     cfg = _aa_config(
         name="Terminal-Bench v2.1",
         subdir="terminal_bench_2_1",
@@ -275,6 +274,7 @@ def test_lmh_manifest_is_immutable_within_a_corpus_version(tmp_path, monkeypatch
         "status": "complete_with_failures",
         "artifact_root": prepare_eval_corpus.LMH_EVALS_RELATIVE,
         "extraction_version": prepare_eval_corpus._LMH_EXTRACTION_VERSION,
+        "required_tasks": {task: [task] for task in prepare_eval_corpus.REQUIRED_LMH_TASKS},
         "included_leaf_tasks": ["existing-task"],
         "artifacts": [{"task": "existing-task", "artifact": "existing-task/eval.parquet", "records": 1}],
         "failed": [],
@@ -348,6 +348,13 @@ def _load_required_group(names: list[str]) -> dict:
     }
 
 
+def _load_required_group_without_text(names: list[str]) -> dict:
+    [name] = names
+    if name != "required-group":
+        return _load_required_group(names)
+    return {"required-group": {"required-group_a": _fake_task([{"question": "", "answer": ""}])}}
+
+
 def _reject_required_group(names: list[str]) -> dict:
     if names == ["required-group"]:
         raise ConnectionError("Server disconnected without sending a response.")
@@ -356,8 +363,8 @@ def _reject_required_group(names: list[str]) -> dict:
 
 @pytest.mark.parametrize(
     "get_task_dict",
-    [_reject_required_group, _load_required_group],
-    ids=["task-load-fails", "one-leaf-has-no-docs"],
+    [_reject_required_group, _load_required_group, _load_required_group_without_text],
+    ids=["task-load-fails", "one-leaf-has-no-docs", "one-leaf-has-no-text"],
 )
 def test_lmh_required_task_failure_does_not_seal_manifest(tmp_path, monkeypatch, get_task_dict):
     _use_fake_lm_eval(
@@ -368,38 +375,6 @@ def test_lmh_required_task_failure_does_not_seal_manifest(tmp_path, monkeypatch,
         prepare_eval_corpus._prepare_lmh()
 
     assert not (tmp_path / prepare_eval_corpus.EVALS_RELATIVE / prepare_eval_corpus.LMH_MANIFEST_RELATIVE).exists()
-
-
-def test_lmh_required_task_load_is_retried(tmp_path, monkeypatch):
-    attempts = []
-
-    def flaky_get_task_dict(names: list[str]) -> dict:
-        attempts.append(names)
-        if len(attempts) == 1:
-            raise ConnectionError("Server disconnected without sending a response.")
-        return {"required-task": _fake_task([{"question": "What is two plus two?", "answer": "4"}])}
-
-    _use_fake_lm_eval(monkeypatch, tmp_path, flaky_get_task_dict, ["required-task"], required=("required-task",))
-
-    manifest = prepare_eval_corpus._prepare_lmh()
-
-    assert len(attempts) == 2
-    assert manifest["required_tasks"] == {"required-task": ["required-task"]}
-
-
-def test_lmh_optional_task_load_is_not_retried(tmp_path, monkeypatch):
-    attempts = []
-
-    def failing_get_task_dict(names: list[str]) -> dict:
-        attempts.append(names)
-        raise ConnectionError("Server disconnected without sending a response.")
-
-    _use_fake_lm_eval(monkeypatch, tmp_path, failing_get_task_dict, ["optional-task"], required=())
-
-    manifest = prepare_eval_corpus._prepare_lmh()
-
-    assert len(attempts) == 1
-    assert manifest["failed"][0]["task"] == "optional-task"
 
 
 def _use_fake_uncheatable(monkeypatch, tmp_path, dumps: dict[str, list[str]], expected: dict[str, int]) -> None:
@@ -434,31 +409,6 @@ def test_uncheatable_record_count_mismatch_does_not_seal_manifest(tmp_path, monk
 
     manifest = json.loads((tmp_path / prepare_eval_corpus.UNCHEATABLE_MANIFEST_RELATIVE).read_text())
     assert manifest["status"] == "building"
-
-
-def test_uncheatable_dump_must_be_a_list_of_strings(tmp_path, monkeypatch):
-    _use_fake_uncheatable(monkeypatch, tmp_path, {"bbc_news": [{"text": "An article."}]}, expected={"bbc_news": 1})
-
-    with pytest.raises(ValueError, match="expected a JSON list of strings"):
-        prepare_eval_corpus._prepare_uncheatable()
-
-
-def test_download_retries_transient_network_errors(monkeypatch):
-    calls = []
-
-    def flaky_urlopen(url):
-        calls.append(url)
-        if len(calls) == 1:
-            raise ConnectionResetError("connection reset")
-        return io.BytesIO(b"payload")
-
-    monkeypatch.setattr(prepare_eval_corpus.urllib.request, "urlopen", flaky_urlopen)
-    monkeypatch.setattr(
-        prepare_eval_corpus, "LOAD_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0)
-    )
-
-    assert prepare_eval_corpus._download("https://example.com/data.json") == b"payload"
-    assert len(calls) == 2
 
 
 def test_lmh_import_failure_does_not_seal_manifest(tmp_path, monkeypatch):

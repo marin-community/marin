@@ -1220,20 +1220,26 @@ def test_build_eval_bloom_uses_only_manifested_best_effort_artifacts(tmp_path: P
 
 
 @pytest.mark.parametrize(
-    "required_tasks",
-    [None, {"required": ["required_a", "required_b"]}],
-    ids=["manifest-without-required-tasks", "required-leaf-not-included"],
+    ("required_tasks", "records"),
+    [
+        (None, [{"id": "a-1", "text": "alpha beta gamma"}]),
+        ({"required": ["required_a", "required_b"]}, [{"id": "a-1", "text": "alpha beta gamma"}]),
+        ({"required": ["required_a"]}, []),
+    ],
+    ids=["manifest-without-required-tasks", "required-leaf-not-included", "required-leaf-without-records"],
 )
-def test_build_eval_bloom_requires_best_effort_required_tasks(tmp_path: Path, required_tasks: dict | None):
+def test_build_eval_bloom_requires_best_effort_required_tasks(
+    tmp_path: Path, required_tasks: dict | None, records: list[dict]
+):
     best_effort_root = tmp_path / "evals" / "lmh"
-    _write_input_parquet(best_effort_root / "required_a" / "eval.parquet", [{"id": "a-1", "text": "alpha beta gamma"}])
+    _write_input_parquet(best_effort_root / "required_a" / "eval.parquet", records)
     manifest = {
         "schema_version": 1,
         "corpus_version": "test-corpus-v1",
         "required": False,
         "status": "complete_with_failures",
         "included_leaf_tasks": ["required_a"],
-        "artifacts": [{"task": "required_a", "artifact": "required_a/eval.parquet", "records": 1}],
+        "artifacts": [{"task": "required_a", "artifact": "required_a/eval.parquet", "records": len(records)}],
         "failed": [{"task": "required_b", "reason": "no docs"}],
     }
     if required_tasks is not None:
