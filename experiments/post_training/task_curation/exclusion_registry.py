@@ -659,42 +659,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             ),
         ),
     ),
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "BackendSurvey c729bdc01ce6eb1a4f3a392659d88450aebc440af8cf9bdd39e017a8f40202cf "
-                "(catalog s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/"
-                "catalog-regional, snapshot atlas-preview-20261116-r20-v1): every backend "
-                "unsupported; DifficultyGap.TOOL_PROVIDER_REQUIRED (v9.3 measurements + "
-                "2026-11-16 exclude ruling)."
-            ),
-        ),
-    ),
-    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "BackendSurvey c729bdc01ce6eb1a4f3a392659d88450aebc440af8cf9bdd39e017a8f40202cf "
-                "(catalog s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/"
-                "catalog-regional, snapshot atlas-preview-20261116-r20-v1): every backend "
-                "unsupported; DifficultyGap.TOOL_PROVIDER_REQUIRED (v9.3 measurements + "
-                "2026-11-16 exclude ruling)."
-            ),
-        ),
-    ),
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "BackendSurvey c729bdc01ce6eb1a4f3a392659d88450aebc440af8cf9bdd39e017a8f40202cf "
-                "(catalog s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/"
-                "catalog-regional, snapshot atlas-preview-20261116-r20-v1): every backend "
-                "unsupported; DifficultyGap.TOOL_PROVIDER_REQUIRED (v9.3 measurements + "
-                "2026-11-16 exclude ruling)."
-            ),
-        ),
-    ),
     "TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3": (
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
