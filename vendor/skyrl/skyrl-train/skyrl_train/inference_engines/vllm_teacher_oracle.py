@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 from collections.abc import Sequence
 from typing import cast
 
@@ -23,23 +21,10 @@ from skyrl_train.distillation import (
 )
 from skyrl_train.inference_engines.base import InferenceEngineInterface
 from skyrl_train.teacher_oracle import TeacherCapabilities, TeacherEndpointUnavailable
+from skyrl_train.tokenizer import tokenizer_vocabulary_fingerprint
 
 
 PromptLogprobs = Sequence[Sequence[dict[int, float] | None]]
-
-
-def tokenizer_vocabulary_fingerprint(tokenizer: PreTrainedTokenizerBase) -> str:
-    """Hash token-ID semantics without coupling identity to a model or chat template."""
-    vocabulary = tokenizer.get_vocab()
-    ordered_tokens: list[str | None] = [None] * (max(vocabulary.values(), default=-1) + 1)
-    for token, token_id in vocabulary.items():
-        if token_id < 0 or token_id >= len(ordered_tokens) or ordered_tokens[token_id] is not None:
-            raise ValueError("tokenizer vocabulary must map each non-negative token ID to exactly one token")
-        ordered_tokens[token_id] = token
-    if any(token is None for token in ordered_tokens):
-        raise ValueError("tokenizer vocabulary token IDs must be contiguous")
-    encoded = json.dumps(ordered_tokens, ensure_ascii=False, separators=(",", ":")).encode()
-    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 async def close_owned_inference_engine(engine: InferenceEngineInterface) -> None:

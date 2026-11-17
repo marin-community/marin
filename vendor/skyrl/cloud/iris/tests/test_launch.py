@@ -170,21 +170,26 @@ class LocalLaunchBackend:
 
 
 @pytest.mark.parametrize(
-    "export_hf,outcome",
+    "export_hf,outcome,own_tokenizer",
     [
-        (None, LaunchOutcome("/user/training", "succeeded", 0)),
-        (True, LaunchOutcome("/user/training", "succeeded", 0)),
-        (None, LaunchOutcome("/user/training", "failed", 1)),
+        (None, LaunchOutcome("/user/training", "succeeded", 0), False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), True),
+        (None, LaunchOutcome("/user/training", "failed", 1), False),
     ],
-    ids=["default-native", "explicit-hf", "failed-native"],
+    ids=["default-native", "explicit-hf", "embedded-tokenizer-hf", "failed-native"],
 )
-def test_launch_persists_attempt_result_and_exports_only_on_opt_in(tmp_path: Path, export_hf: bool | None, outcome):
+def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
+    tmp_path: Path, export_hf: bool | None, outcome, own_tokenizer: bool
+):
     path = _config_path(tmp_path)
     config = yaml.safe_load(path.read_text())
     if export_hf is None:
         config["run"].pop("export_hf")
     else:
         config["run"]["export_hf"] = export_hf
+    if own_tokenizer:
+        config["inputs"]["model"].update(tokenizer_uri=None, tokenizer_revision=None)
     config["skyrl"]["trainer"].update(max_steps=3, eval_interval=3, ckpt_interval=3)
     path.write_text(yaml.safe_dump(config))
     backend = LocalLaunchBackend(outcome=outcome)
@@ -213,6 +218,8 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(tmp_path: Pat
         assert backend.export_jobs == [str(tmp_path / "exports/global_step_3/policy")]
         assert result.model is not None and result.model.global_step == 3
         assert terminal["result"]["model"]["policy_export_uri"] == backend.export_jobs[0]
+        for key in ("tokenizer_uri", "tokenizer_revision"):
+            assert terminal["result"]["model"][key] == config["inputs"]["model"][key]
     else:
         assert backend.export_jobs == []
         assert result.model is None and terminal["result"]["model"] is None
@@ -351,7 +358,7 @@ def test_hub_models_are_not_downloaded_on_a_local_launcher(tmp_path, monkeypatch
         set_job_info(previous)
 
 
-@pytest.mark.parametrize("tokenizer_uri", ["org/policy", ""])
+@pytest.mark.parametrize("tokenizer_uri", ["org/policy", "", None])
 def test_policy_without_a_separate_tokenizer_rejects_model_only_mirrors(tmp_path, monkeypatch, tokenizer_uri):
     path = _hub_config_path(tmp_path)
     config = yaml.safe_load(path.read_text())

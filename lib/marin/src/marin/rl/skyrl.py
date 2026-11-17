@@ -48,7 +48,6 @@ from marin.rl.skyrl_records import (
     read_stored_skyrl_attempt,
 )
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
-from marin.training.training import LevanterCheckpoint
 
 _EXECUTION = "skyrl_execution"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
@@ -445,8 +444,8 @@ class ResolvedModelLocator:
     uri: str
     identity: str
     local_path: str
-    tokenizer_uri: str
-    tokenizer_revision: str
+    tokenizer_uri: str | None
+    tokenizer_revision: str | None
 
 
 @dataclass(frozen=True)
@@ -524,14 +523,16 @@ def _validate_relative_file_path(name: str, value: str) -> None:
 
 @dataclass(frozen=True)
 class ArtifactHfModel:
-    """An exact HF export; an empty relative path selects the artifact root."""
+    """An artifact's HF export using its own tokenizer unless a separate reference is given."""
 
-    step: ArtifactStep[LevanterCheckpoint]
-    tokenizer_uri: str
-    tokenizer_revision: str
+    step: ArtifactStep
+    tokenizer_uri: str | None = None
+    tokenizer_revision: str | None = None
     relative_path: str | None = None
 
     def __post_init__(self) -> None:
+        if self.tokenizer_uri is None and self.tokenizer_revision is not None:
+            raise ValueError("tokenizer_revision requires tokenizer_uri")
         if self.relative_path is not None and any(part in (".", "..") for part in self.relative_path.split("/")):
             raise ValueError("HF model relative_path must not contain dot segments; use '' for the artifact root")
 
@@ -837,8 +838,8 @@ class SkyRLRun(Artifact):
 
     hf_model_uri: str | None
     global_step: int | None
-    tokenizer_uri: str
-    tokenizer_revision: str
+    tokenizer_uri: str | None
+    tokenizer_revision: str | None
     checkpoint_root: str
     draft_checkpoint_root: str | None
     terminal_manifest_uri: str
@@ -908,14 +909,17 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
 
 
-def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
+def run_skyrl(config: SkyRLRunConfig, *, forward_env: tuple[str, ...] = ()) -> SkyRLRun:
     """Run the nested SkyRL executable and return its validated result."""
     response: LaunchResult | None = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as launch_file:
             launch_file.write(config.launch_config_yaml)
             launch_file.flush()
-            completed = _run_launcher(_launcher_command(launch_file.name))
+            command = _launcher_command(launch_file.name)
+            for name in forward_env:
+                command.extend(("--forward-env", name))
+            completed = _run_launcher(command)
         if not completed.stdout.strip():
             raise RuntimeError(
                 f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"

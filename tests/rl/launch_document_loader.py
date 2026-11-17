@@ -24,7 +24,8 @@ def load_documents(source: Path, output: Path) -> None:
             path = Path(directory) / f"{index}.yaml"
             path.write_text(yaml, encoding="utf-8")
             try:
-                loaded = launch_config.load_launch_config(path).run.attempt_id
+                config = launch_config.load_launch_config(path)
+                loaded = config.run.attempt_id
                 written = safe_load(yaml)["run"]["attempt_id"]
                 assert loaded == written, f"run.attempt_id {written!r} loads as {loaded!r}"
             except Exception as error:

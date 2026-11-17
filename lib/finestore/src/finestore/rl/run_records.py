@@ -40,8 +40,8 @@ class LaunchState(StrEnum):
 class ExportedPolicy(BaseModel):
     policy_export_uri: str
     global_step: int
-    tokenizer_uri: str
-    tokenizer_revision: str
+    tokenizer_uri: str | None
+    tokenizer_revision: str | None
     checkpoint_root: str
     terminal_manifest_uri: str
 

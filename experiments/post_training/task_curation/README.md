@@ -15,7 +15,7 @@ The step filters heldout overlap and cross-source duplicates before sampling,
 then writes canonical `task_spec` Parquet for training and evaluation.
 See [task selection](../../../docs/references/task-curation.md#final-task-selection) for the recipe and
 resume commands, and [train on a Snowball selection](../../../docs/references/task-curation.md#train-on-a-snowball-selection)
-for the handoff to [Snowball RL experiments](../../../docs/recipes/snowball-rl.md).
+for the handoff to [Snowball RL experiments](../../../docs/recipes/rl-experiments.md).
 
 ## EvalLite
 

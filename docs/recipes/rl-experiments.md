@@ -1,4 +1,4 @@
-# Snowball RL experiments
+# RL experiments
 
 Run an experiment from a named preset. The command binds the versioned task selection,
 Datakit SFT weights and tokenizer, GPU layout, evaluation schedule and measurement window.
@@ -98,7 +98,7 @@ JSON comparison rows have `objective`, `constraint`, `requirement`, `reported` o
 `gate_inputs.json` records the requested settings and inputs for re-scoring; `run.config_changes` lists
 explicit settings and derived differences. Native elapsed time and allocated GPUs determine gain per H100-hour.
 
-Each gated preset uses one control pin in `snowball_rl_gate.CONTROLS`, with a source commit, revision and
+Each gated preset uses one control pin in `snowball_rl.SNOWBALL.controls`, with a source commit, revision and
 replicate count. Data-medium shares learning-medium's pin. Before submission, the command composes the
 candidate on CPU and checks every control against current defaults. During scoring, candidate configuration
 must match its recorded inputs. The report states why a comparison is INVALID or an invariant fails.
@@ -116,9 +116,9 @@ refuse requirements. Requirements change report identity while training names an
 Run stored comparisons on CPU:
 
 ```bash
-uv run python -m experiments.post_training.snowball_rl_gate \
+uv run python -m experiments.post_training.snowball_rl rescore \
   --preset learning-medium --candidate RUN_NAME[@VERSION] --require 'eval_lite/aaii_category/coding/mean>=control'
-uv run python -m experiments.post_training.snowball_rl_gate \
+uv run python -m experiments.post_training.snowball_rl rescore \
   --preset speed-medium --leave-out r0
 ```
 
@@ -127,7 +127,7 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 
 ## Change a preset's default
 
-1. Edit that preset's `tasks`, `model`, `eval_lite` or `recipe` in `snowball_rl_presets.py`.
+1. Edit that preset's `tasks`, `model`, `eval_lite` or `recipe` in `snowball_rl.py`.
    A preset's `Recipe.config` is its typed override point; merge a `RecipePatch` there for a
    preset-specific default. `_DEFAULT_PATCH` supplies shared settings, including context budget.
    Trainer precision, engine precision and batch invariance use the native recipe keys through `--set`.
@@ -135,7 +135,7 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 3. From the repository root, print the complete compared-configuration hash:
 
    ```bash
-   uv run pytest -s -q -n 0 experiments/post_training/snowball_tests/test_snowball_rl.py::test_presets_match_revisioned_native_configs
+   uv run pytest -s -q -n 0 experiments/post_training/rl_tests/test_rl.py::test_presets_match_revisioned_native_configs
    ```
 
    A new revision intentionally fails until its printed hash is added under that preset in
@@ -144,8 +144,8 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 4. Controls are collected by CI after the default change merges, once per changed default.
    That CI workflow is planned separately; control collection is not a merge gate.
    The manual `--control` command remains available for an explicitly authorized calibration.
-   Source, revision and replicate count live in `snowball_rl_gate.CONTROLS`.
-5. Validate a newly collected cohort with `snowball_rl_gate --leave-out rN` for every replicate.
+   Source, revision and replicate count live in `snowball_rl.SNOWBALL.controls`.
+5. Validate a newly collected cohort with `snowball_rl rescore --leave-out rN` for every replicate.
    Every leave-one-out verdict must PASS.
 
 ## Tasks and evaluation
@@ -184,3 +184,43 @@ the latest checkpoint. This runtime evaluates the current training weights; the 
 | AAII coverage; no-agentic-tasks | scientific reasoning, coding, General and a single-turn Agents stand-in; multi-turn tools and long context need separate qualification |
 | no-image-sandbox | image-only tasks need a sandbox backend |
 | harbor-on-daytona | train-long-harbor needs the eval account, sandbox capacity and agentic runtime qualification |
+
+## Add a model entry
+
+The shared `experiments/post_training/rl.py` builds the CLI and executes a `ModelPresets` value.
+`rl_presets.py` defines its types; `rl_recipe.py` composes launch specifications; `rl_gate.py`
+compares stored results; `rl_scoring.py` reads measurements. These modules contain no model table.
+
+`snowball_rl.py` is Snowball's model entry. Its `SNOWBALL` value contains the presets, the
+`p40` and `e8` layouts, immutable model and task references, evaluation selections and control pins.
+The layouts declare GPU type, CPU, memory, disk, priority and both job deadlines; their role plans
+supply the GPU width. Presets declare seed, W&B entity, checkpoint retention and HF export
+independently of dashboard publication. Its `__main__` calls `rl.main(SNOWBALL)`.
+
+To add a model, create its own entry file with explicit `Preset.model`, `Preset.tasks`,
+`Preset.eval_lite`, evaluations and recipe configuration, then pass its `ModelPresets` value to
+`rl.main`. The table's namespace owns run and control paths. The shared runner imports no other
+model entries. The native launch-document census counts `rl_recipe.py`, where `SkyRLSpec` is
+constructed; add the new table's builders to `tests/rl/launch_document_census.py` the same way
+as Snowball. Use `assert_revisioned_native_configs` in `skyrl_test_support.py` with the table's
+pinned revisions and native hashes.
+
+Python callers can pass `init: SkyRLModelSource` to `rl.main(table, argv=..., init=...)` or
+`build_run(preset, table=..., init=...)`. An `ArtifactHfModel` accepts any `ArtifactStep`;
+`tokenizer_uri=None` uses the export's own tokenizer files. An explicit tokenizer reference
+and revision are preserved. `--init NAME@VERSION` resolves a published model to the same type;
+an unpinned Hub tokenizer reference is resolved to a launch-time commit. Python `init` and
+`--init` together are refused. Planning retains an unbuilt initializer's producer dependency
+without reading its export. Stored inputs preserve its identity and export selector;
+rescoring uses the concrete export URI recorded by the candidate. At RL startup, after the
+model is built, the checkpoint and loaded tokenizer vocabularies must match before engines load.
+
+The coordinator re-enters the calling module with the exact arguments. Run model files with
+`python -m PACKAGE.MODULE`; callers without module metadata can set `entry_module` on `rl.main`.
+Its `forward_env=("NAME", ...)` argument requires and forwards extra environment variables to
+the coordinator and native jobs, including terminal export. Configuration and logs contain
+names only. A layout's coordinator deadline can be changed with `dataclasses.replace`.
+
+A control can omit a configuration key when its current value equals the native SkyRL schema
+default. An omitted key whose current value differs from that default makes the control stale.
+Candidate receipts must match their recorded inputs exactly.

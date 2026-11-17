@@ -102,11 +102,11 @@ MARIN_NATIVE_CONFIG_TESTS = {
         "vendor/skyrl/marinskyrl/checkpoint_paths.py",
         "vendor/skyrl/skyrl-train/skyrl_train/utils/tracking.py",
     ),
-    "experiments/post_training/snowball_tests/test_snowball_rl.py": (
+    "experiments/post_training/rl_tests/test_rl.py": (
         "vendor/skyrl/cloud/iris/",
         "vendor/skyrl/skyrl-train/skyrl_train/config/",
     ),
-    "experiments/post_training/snowball_tests/test_snowball_rl_gate.py": (
+    "experiments/post_training/rl_tests/test_rl_gate.py": (
         "vendor/skyrl/cloud/iris/",
         "vendor/skyrl/skyrl-train/skyrl_train/config/",
     ),

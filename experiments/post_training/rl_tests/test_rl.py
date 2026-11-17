@@ -1,30 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
 import json
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import click
 import pytest
-from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import ArtifactStep, materialized_config
+import yaml
+from levanter import model_cache
+from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
+from marin.execution.lazy import OUT, ArtifactStep, apply, materialized_config, run
+from marin.rl import skyrl as skyrl_api
+from marin.rl.skyrl import ArtifactHfModel
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 
-from experiments.post_training import snowball_rl as snowball
-from experiments.post_training import snowball_rl_gate as gate
-from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training import snowball_rl_recipe as recipe
-from experiments.post_training.skyrl_test_support import native_json
+from experiments.post_training import rl as snowball
+from experiments.post_training import rl_gate as gate
+from experiments.post_training import rl_recipe as recipe
+from experiments.post_training import snowball_rl as snowball_model
+from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs, native_json
+from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SELECTION_PREFIX
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 
 
 def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     monkeypatch.setenv("WANDB_ENTITY", "test-team")
-    learning = presets.PRESETS["learning-medium"]
+    learning = snowball_model.SNOWBALL.by_name["learning-medium"]
     changed = snowball.build_run(
         learning,
         settings=(
@@ -35,6 +39,7 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
             "trainer.policy.optimizer_config.lr=2e-6",
             "generator.engine_init_kwargs.probe={}",
         ),
+        table=snowball_model.SNOWBALL,
     ).runs[0]
     promoted = replace(
         learning,
@@ -56,14 +61,66 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     export.mkdir(parents=True)
     for name in ("config.json", "tokenizer_config.json"):
         (export / name).write_text("{}")
-    initializer = ArtifactStep.adopt("tests/checkpoint", "2026.11.10", str(checkpoint), kind=LevanterCheckpoint)
-    revisioned = replace(presets.PRESETS["speed-short"], revision="2026.11.12.2")
+    metadata = {"train_config": {"data": {"tokenizer": "tests/own-tokenizer"}}}
+    monkeypatch.setattr(model_cache, "model_info", lambda *args, **kwargs: SimpleNamespace(sha="a" * 40))
+    initializer = ArtifactStep.adopt(
+        "tests/checkpoint", "2026.11.10", str(checkpoint), kind=LevanterCheckpoint, config=metadata
+    )
+    alias = tmp_path / initializer.name / initializer.version
+    alias.mkdir(parents=True)
+    (alias / RECORD_FILENAME).write_text(
+        ArtifactRecord(
+            name=initializer.name,
+            version=initializer.version,
+            result_type=result_type_name(LevanterCheckpoint),
+            config=metadata,
+            source=str(checkpoint),
+        ).model_dump_json()
+    )
+    cli_initializer = recipe.published_model(f"{initializer.name}@{initializer.version}", preset=learning)
+    published = []
+    for suffix, config in (
+        ("own", {}),
+        (
+            "explicit",
+            {
+                "tokenizer_uri": "tests/top-tokenizer",
+                "tokenizer_revision": "top-revision",
+                "train_config": {"data": {"tokenizer": "tests/nested-ignored"}},
+            },
+        ),
+    ):
+        name = "tests/checkpoint-" + suffix
+        record = tmp_path / name / initializer.version / RECORD_FILENAME
+        record.parent.mkdir(parents=True)
+        record.write_text(
+            ArtifactRecord(
+                name=name,
+                version=initializer.version,
+                result_type=result_type_name(Artifact),
+                config=config,
+                source=str(checkpoint),
+            ).model_dump_json()
+        )
+        published.append(recipe.published_model(f"{name}@{initializer.version}", preset=learning))
+
+    revisioned = replace(snowball_model.SNOWBALL.by_name["speed-short"], revision="2026.11.12.2")
     steps = (
         changed,
-        snowball.build_run(promoted).runs[0],
-        snowball.build_run(learning, init=initializer).runs[0],
-        snowball.build_run(presets.PRESETS["train-long"], settings=("trainer.max_steps=2",)).runs[0],
-        snowball.build_run(revisioned, control=True).runs[0],
+        snowball.build_run(promoted, table=snowball_model.SNOWBALL).runs[0],
+        snowball.build_run(
+            learning,
+            init=ArtifactHfModel(initializer, "tests/own-tokenizer", "tokenizer-revision"),
+            table=snowball_model.SNOWBALL,
+        ).runs[0],
+        snowball.build_run(
+            snowball_model.SNOWBALL.by_name["train-long"],
+            settings=("trainer.max_steps=2",),
+            table=snowball_model.SNOWBALL,
+        ).runs[0],
+        snowball.build_run(revisioned, control=True, table=snowball_model.SNOWBALL).runs[0],
+        snowball.build_run(learning, init=cli_initializer, table=snowball_model.SNOWBALL).runs[0],
+        *(snowball.build_run(learning, init=model, table=snowball_model.SNOWBALL).runs[0] for model in published),
     )
     paths = []
     for index, step in enumerate(steps):
@@ -95,24 +152,75 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     ) == (False, "float16", True, {})
     assert configs[2]["inputs"]["model"]["uri"] == str(export)
     assert configs[2]["iris"]["wandb_entity"] == "test-team"
+    for config, revision in ((configs[2], "tokenizer-revision"), (configs[5], "a" * 40)):
+        assert (config["inputs"]["model"]["tokenizer_uri"], config["inputs"]["model"]["tokenizer_revision"]) == (
+            "tests/own-tokenizer",
+            revision,
+        )
+        assert config["inputs"]["model"]["uri"] == str(export)
+    assert (configs[6]["inputs"]["model"]["tokenizer_uri"], configs[6]["inputs"]["model"]["tokenizer_revision"]) == (
+        None,
+        None,
+    )
+    assert (configs[7]["inputs"]["model"]["tokenizer_uri"], configs[7]["inputs"]["model"]["tokenizer_revision"]) == (
+        "tests/top-tokenizer",
+        "top-revision",
+    )
     callbacks = configs[3]["skyrl"]["trainer"]["callbacks"]
     assert next(row for row in callbacks if row["type"] == "evaluation")["eval_on_train_end"] is True
     assert configs[3]["skyrl"]["trainer"]["max_steps"] == 2
     assert configs[4]["inputs"]["validation_data"][0]["identity"].partition(":")[0].endswith("@" + revisioned.revision)
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
+    def export_model(output):
+        destination = Path(output) / "hf"
+        destination.mkdir(parents=True)
+        for name in ("config.json", "tokenizer_config.json"):
+            (destination / name).write_text("{}")
+        return Artifact(path=output)
+
+    producer = apply("tests/computed-init", export_model, version="2026.11.17", output=OUT)
+    own_model = ArtifactHfModel(producer)
+    train = snowball_model.SNOWBALL.by_name["train-long"]
+
+    def reject_export_read(*args, **kwargs):
+        raise AssertionError("planning read an unbuilt export")
+
+    with monkeypatch.context() as planning:
+        planning.setattr(skyrl_api, "discover_hf_checkpoints", reject_export_read)
+        planned = snowball.build_run(train, init=own_model, table=snowball_model.SNOWBALL)
+        assert producer in planned.runs[0].deps
+        planned.runs[0].lower()
+        assert (
+            snowball.main(
+                snowball_model.SNOWBALL, argv=["--preset", train.name, "--version", train.revision], init=own_model
+            )
+            == 0
+        )
+    assert not Path(producer.path()).exists()
+    run(producer)
+    document = yaml.safe_load(materialized_config(planned.runs[0], str(tmp_path)).launch_config_yaml)
+    assert document["inputs"]["model"]["uri"] == str(Path(producer.path()) / "hf")
+    assert document["inputs"]["model"]["tokenizer_uri"] is None
+    assert document["inputs"]["model"]["tokenizer_revision"] is None
+    best = next(row for row in document["skyrl"]["trainer"]["callbacks"] if row["type"] == "best_checkpoint")
+    assert best["initial_model_uri"] == document["inputs"]["model"]["uri"]
     with pytest.raises(ValueError, match="require guards"):
         replace(learning, guards=())
     with pytest.raises(ValueError, match="evaluation"):
-        replace(presets.PRESETS["train-long"], evaluations=())
-    summary = Path(presets.selection_artifact(learning.tasks).path()) / presets.SUMMARY_FILENAME
+        replace(snowball_model.SNOWBALL.by_name["train-long"], evaluations=())
+    summary = Path(recipe.selection_artifact(learning.tasks).path()) / recipe.SUMMARY_FILENAME
     content = json.loads(summary.read_text())
     content["grader_kind_counts"]["train"]["remote_judge"] = 1
     summary.write_text(json.dumps(content))
     with pytest.raises(click.BadParameter, match="AI-judge"):
-        snowball.build_run(learning)
+        snowball.build_run(learning, table=snowball_model.SNOWBALL)
 
 
 def test_harbor_coverage_controls_best_checkpoint(selection, tmp_path):
-    step = snowball.build_run(presets.PRESETS["train-long-harbor"]).runs[0]
+    step = snowball.build_run(snowball_model.SNOWBALL.by_name["train-long-harbor"], table=snowball_model.SNOWBALL).runs[
+        0
+    ]
     path = tmp_path / "harbor.yaml"
     path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
     selected = native_json()(
@@ -146,15 +254,6 @@ print(json.dumps(selected))
 
 
 def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch):
-    monkeypatch.delenv("WANDB_ENTITY", raising=False)
-    bindings = {binding for preset in presets.PRESETS.values() for binding in (preset.tasks, preset.eval_lite)}
-    summaries = {
-        binding: (Path(presets.selection_artifact(binding).path()) / presets.SUMMARY_FILENAME).read_text()
-        for binding in bindings
-    }
-    monkeypatch.setattr(presets, "SELECTION_ROOT", "memory://snowball-calibration")
-    for binding, summary in summaries.items():
-        (StoragePath(presets.selection_artifact(binding).path()) / presets.SUMMARY_FILENAME).write_text(summary)
     revisions = {
         "speed-short": {"2026.11.13.1": "96e0d088"},
         "data-short": {"2026.11.13.1": "7d9a590f"},
@@ -165,20 +264,9 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         "train-long": {"2026.11.11.1": "4945b701"},
         "train-long-harbor": {"2026.11.17.1": "97f23c40"},
     }
-    paths = []
-    for name in revisions:
-        preset = presets.PRESETS[name]
-        step = recipe.run_step(preset, recipe.run_spec(preset, name="fixture-default-" + name))
-        path = tmp_path / f"{name}.yaml"
-        path.write_text(materialized_config(step, "/snowball-pin-prefix").launch_config_yaml)
-        paths.append(str(path))
-    configs = gate.compose_configs(paths)
-    actual = {
-        name: fingerprint_hash(json.dumps(gate.comparison_config(config), sort_keys=True))
-        for name, config in zip(revisions, configs, strict=True)
-    }
-    print(json.dumps(actual, sort_keys=True, indent=2))
-    assert actual == {name: values.get(presets.PRESETS[name].revision) for name, values in revisions.items()}
+    configs = assert_revisioned_native_configs(
+        snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch
+    )
     for name, config in zip(revisions, configs, strict=True):
         trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
         assert config["iris"]["wandb_entity"] == "marin-community"
@@ -222,7 +310,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             for source in config["inputs"].get("evaluation_data", {}).get("eval_lite", []):
                 assert (
                     source["identity"].partition(":")[0]
-                    == f"{presets.SELECTION_PREFIX}/{presets.PRESETS[name].eval_lite}"
+                    == f"{SELECTION_PREFIX}/{snowball_model.SNOWBALL.by_name[name].eval_lite}"
                 )
                 assert source["relative_path"] == "full_validation.parquet"
             sampling = profile["sampling_params"] if profile else generator["eval_sampling_params"]
@@ -244,28 +332,30 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
-    learning = presets.PRESETS["learning-medium"]
-    data = presets.PRESETS["data-short"]
+    learning = snowball_model.SNOWBALL.by_name["learning-medium"]
+    data = snowball_model.SNOWBALL.by_name["data-short"]
     with pytest.raises(click.BadParameter, match="accepts no --set"):
         snowball.build_run(
-            replace(learning, accepts_settings=False), settings=("trainer.policy.optimizer_config.lr=2e-6",)
+            replace(learning, accepts_settings=False),
+            settings=("trainer.policy.optimizer_config.lr=2e-6",),
+            table=snowball_model.SNOWBALL,
         )
 
     def run(preset=learning, *settings, **kwargs):
-        return snowball.build_run(preset, settings=settings, **kwargs).runs[0]
+        return snowball.build_run(preset, settings=settings, **kwargs, table=snowball_model.SNOWBALL).runs[0]
 
     def name(preset=learning, *settings, **kwargs):
         return run(preset, *settings, **kwargs).name
 
     assert name(learning, "generator.engine_init_kwargs.probe={}") != name()
-    repeated = snowball.build_run(learning, replicates=3)
-    assert [step.name for step in snowball.build_run(learning, replicates=2).runs] == [
+    repeated = snowball.build_run(learning, replicates=3, table=snowball_model.SNOWBALL)
+    assert [step.name for step in snowball.build_run(learning, replicates=2, table=snowball_model.SNOWBALL).runs] == [
         step.name for step in repeated.runs[:2]
     ]
     assert len({step.name for step in repeated.runs}) == 3
     initializer = ArtifactStep.adopt("tests/initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
-    task_set_name = presets.DEFAULT_EVAL_LITE_NAME
-    task_set_version = presets.DEFAULT_EVAL_LITE_VERSION
+    task_set_name = snowball_model.DEFAULT_EVAL_LITE_NAME
+    task_set_version = snowball_model.DEFAULT_EVAL_LITE_VERSION
     new_task_set = tmp_path / task_set_name / "2026.11.05"
     new_task_set.mkdir(parents=True)
     (new_task_set / "summary.json").write_bytes(
@@ -278,7 +368,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     pairs = [
         (name(), name(learning, "trainer.policy.optimizer_config.lr=2e-6")),
         (name(data, tasks=selection), name(data, tasks=replace(selection, version="2026.10.27"))),
-        (name(), name(init=initializer)),
+        (name(), name(init=ArtifactHfModel(initializer, "tests/own-tokenizer", "tokenizer-revision", relative_path=""))),
         (name(), name(changed_task_set)),
     ]
     assert all(left != right for left, right in pairs), pairs
@@ -292,11 +382,11 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     assert name(learning, "trainer.policy.optimizer_config.lr=2e-6") == name(
         learning, "trainer.policy.optimizer_config.lr=0.000002"
     )
-    pin = gate.control_pin(presets.PRESETS["learning-medium"])
+    pin = gate.control_pin(snowball_model.SNOWBALL.by_name["learning-medium"], table=snowball_model.SNOWBALL)
     for index in range(pin.runs):
-        recorded_runs("learning-medium", gate.control_name(pin.preset, pin.commit, index))
-    first = snowball.build_run(learning, requirements=("eval_lite/mean>=0",))
-    second = snowball.build_run(learning, requirements=("eval_lite/mean>=0.1",))
+        recorded_runs("learning-medium", gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL))
+    first = snowball.build_run(learning, requirements=("eval_lite/mean>=0",), table=snowball_model.SNOWBALL)
+    second = snowball.build_run(learning, requirements=("eval_lite/mean>=0.1",), table=snowball_model.SNOWBALL)
     assert first.runs[0].name == second.runs[0].name == name()
     assert first.gate.name != second.gate.name
     original_name = name()
@@ -314,22 +404,22 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     summary["recipe"]["heldout"] = [{"version": "different-development-input"}]
     summary_path.write_text(json.dumps(summary))
     with pytest.raises(click.BadParameter, match="different heldout"):
-        snowball.build_run(data, tasks=selection)
+        snowball.build_run(data, tasks=selection, table=snowball_model.SNOWBALL)
     summary["recipe"]["heldout"] = heldout
     summary_path.write_text(json.dumps(summary))
-    for current in (data, presets.PRESETS["data-medium"]):
+    for current in (data, snowball_model.SNOWBALL.by_name["data-medium"]):
         selected = replace(current, eval_lite=f"{task_set_name}@2026.11.05")
         with pytest.raises(click.BadParameter, match="full EvalLite"):
-            snowball.build_run(selected, tasks=selection)
+            snowball.build_run(selected, tasks=selection, table=snowball_model.SNOWBALL)
         summary["recipe"]["exclusions"] = [
-            {"uri": str(new_task_set / presets.FULL_VALIDATION_FILENAME), "version": "2026.11.05"}
+            {"uri": str(new_task_set / FULL_VALIDATION_FILENAME), "version": "2026.11.05"}
         ]
         summary_path.write_text(json.dumps(summary))
-        assert snowball.build_run(selected, tasks=selection).gate is not None
+        assert snowball.build_run(selected, tasks=selection, table=snowball_model.SNOWBALL).gate is not None
         summary["recipe"]["exclusions"] = original_exclusions
         summary_path.write_text(json.dumps(summary))
     summary["recipe"]["exclusions"] = []
     summary_path.write_text(json.dumps(summary))
-    for tasks in (presets.selection_artifact(presets.PRESETS["learning-medium"].tasks), selection):
+    for tasks in (recipe.selection_artifact(snowball_model.SNOWBALL.by_name["learning-medium"].tasks), selection):
         with pytest.raises(click.BadParameter, match="full EvalLite"):
-            snowball.build_run(data, tasks=tasks)
+            snowball.build_run(data, tasks=tasks, table=snowball_model.SNOWBALL)

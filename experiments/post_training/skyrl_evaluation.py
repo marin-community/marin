@@ -19,15 +19,13 @@ def resolve_skyrl_model(ctx: StepContext, source: ArtifactStep[SkyRLRun], model:
     """Resolve a terminal policy's export URI and tokenizer in an evaluation step."""
     if model.location != SKYRL_POLICY_LOCATION:
         raise ValueError(f"SkyRL evaluation model location must be {SKYRL_POLICY_LOCATION!r}")
-    if model.tokenizer is None:
-        raise ValueError("SkyRL evaluation models require an explicit Hugging Face tokenizer")
 
     resolved = resolve_skyrl_policy(ctx, source)
     return replace(
         model,
         location=resolved.uri,
         identity=resolved.identity,
-        tokenizer=resolved.tokenizer_uri,
+        tokenizer=resolved.tokenizer_uri or resolved.uri,
         tokenizer_revision=resolved.tokenizer_revision,
     )
 

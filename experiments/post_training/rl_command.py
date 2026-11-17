@@ -9,13 +9,14 @@ from marin.rl.rl_progress import Verdict
 from marin.rl.skyrl import SkyRLReceiptLookupError
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.post_training.snowball_rl_scoring import InvalidComparison
+from experiments.post_training.rl_scoring import InvalidComparison
 
 EXIT_CODES = {Verdict.PASS: 0, Verdict.FAIL: 1, Verdict.INVALID: 2, None: 3}
 REFUSAL_EXIT_CODE = 4
+GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
 
 
-class SnowballCommand(click.Command):
+class RLCommand(click.Command):
     def make_context(self, *args, **kwargs):
         try:
             return super().make_context(*args, **kwargs)

@@ -37,6 +37,7 @@ from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewM
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL
+from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.assessment import (
     AssessmentSettings,
     assessment_paths,
@@ -81,7 +82,6 @@ LOCAL_NORMALIZED_SHARDS = 4
 WORKER_CONTAINER_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 IRIS_JOB_TTL = 1800
 CORPUS_CONVERSION_VERSION = "2026.10.14.1"
-CANONICAL_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin"
 TASK_SELECTION_KEY = "task_selection"
 EMBEDDING_STAGES = (
     "inputs",

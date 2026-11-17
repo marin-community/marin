@@ -1,8 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
 import json
 import math
+import runpy
 import shutil
 import subprocess
 import sys
@@ -16,40 +16,45 @@ import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import yaml
 from click.testing import CliRunner
-from iris.client.client import IrisClient
-from iris.cluster.client.job_info import set_job_info
+from cloud.iris import launch as native_launch
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
-from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
-from marin.execution.lazy import ArtifactStep, run
+from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
+from marin.execution.lazy import ArtifactStep, materialized_config, run
+from marin.rl import skyrl as skyrl_api
 from marin.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant
-from marin.rl.skyrl import SkyRLRun
+from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
 from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_launch_config, read_skyrl_metrics
 from rigging.provenance import Provenance
 from scipy.stats import t
 from taskcompendium.grading_result import Outcome
 
-from experiments.post_training import snowball_rl as snowball
-from experiments.post_training import snowball_rl_gate as gate
-from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training import snowball_rl_scoring as scoring
-from experiments.post_training.snowball_rl_command import EXIT_CODES
-from experiments.post_training.snowball_rl_scoring import GATE_INPUTS_FILENAME, GateInputs, read_gate_inputs
-from experiments.post_training.snowball_tests.fixtures import answer as _answer
-from experiments.post_training.snowball_tests.fixtures import write_json as _json
-from experiments.post_training.snowball_tests.fixtures import write_metrics, write_receipt
+from experiments.post_training import rl as snowball
+from experiments.post_training import rl_gate as gate
+from experiments.post_training import rl_recipe as recipe
+from experiments.post_training import rl_scoring as scoring
+from experiments.post_training import snowball_rl as snowball_model
+from experiments.post_training.rl_command import EXIT_CODES
+from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInputs, read_gate_inputs
+from experiments.post_training.rl_tests.fixtures import answer as _answer
+from experiments.post_training.rl_tests.fixtures import write_json as _json
+from experiments.post_training.rl_tests.fixtures import write_metrics, write_receipt
+from experiments.post_training.task_curation.selection import TASK_MANIFEST_FILENAME
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 KL = "policy/mismatch/staleness0/kl_k3"
 
 
 def controls(write, name, **kwargs):
-    pin = gate.control_pin(presets.PRESETS[name])
+    pin = gate.control_pin(snowball_model.SNOWBALL.by_name[name], table=snowball_model.SNOWBALL)
     return [
         write(
             name,
-            gate.control_name(pin.preset, pin.commit, i),
+            gate.control_name(pin.preset, pin.commit, i, table=snowball_model.SNOWBALL),
             speed=100 + i,
             score=0.49 + i * 0.01,
             **kwargs,
@@ -59,7 +64,7 @@ def controls(write, name, **kwargs):
 
 
 def rescore(preset, *args, exit_code=None):
-    result = CliRunner().invoke(gate.main, ["--preset", preset, *args])
+    result = CliRunner().invoke(gate.command(snowball_model.SNOWBALL), ["--preset", preset, *args])
     assert result.exception is None or isinstance(result.exception, SystemExit), (result.output, result.exception)
     payload = json.loads(result.stdout.splitlines()[-1])
     assert result.exit_code == (exit_code if exit_code is not None else EXIT_CODES[payload["verdict"]]), (
@@ -136,12 +141,15 @@ def test_rescore_leave_one_out_writes_the_printed_report(recorded_runs):
 
 
 def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
-    preset = presets.PRESETS["speed-medium"]
+    preset = snowball_model.SNOWBALL.by_name["speed-medium"]
     key = "policy/raw_grad_norm"
-    pin = gate.control_pin(preset)
+    pin = gate.control_pin(preset, table=snowball_model.SNOWBALL)
     for index in range(pin.runs):
         root = recorded_runs(
-            preset.name, gate.control_name(pin.preset, pin.commit, index), speed=100 + index, metrics={key: 100 + index}
+            preset.name,
+            gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL),
+            speed=100 + index,
+            metrics={key: 100 + index},
         )
     candidates = []
     for index, value in enumerate((0, 0.01)):
@@ -161,6 +169,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
                     "speed/update_seconds<=control",
                 ),
             ),
+            table=snowball_model.SNOWBALL,
         )
     )[0]
     assert report.verdict == "fail" and report.label == "regression"
@@ -176,7 +185,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
 
 @pytest.mark.parametrize("case,expected", [("weighted", 0.05), ("empty", None), ("nonfinite", None), ("pooled", 0.2)])
 def test_mismatch_uses_selected_tokens_over_the_measured_window(case, expected):
-    preset = replace(presets.PRESETS["speed-long"], measured=range(2, 4))
+    preset = replace(snowball_model.SNOWBALL.by_name["speed-long"], measured=range(2, 4))
     prefix = KL.rsplit("/", 1)[0]
     metrics = {
         step: {
@@ -205,7 +214,7 @@ def test_mismatch_uses_selected_tokens_over_the_measured_window(case, expected):
 
 @pytest.mark.parametrize("fault", ["updates", "loss", "policy-loss", "union", "missing-counter"])
 def test_training_invariants_from_recorded_values(fault):
-    preset = replace(presets.PRESETS["speed-medium"], updates=2, measured=range(1, 3))
+    preset = replace(snowball_model.SNOWBALL.by_name["speed-medium"], updates=2, measured=range(1, 3))
     metrics = {
         step: {"policy/raw_grad_norm": 1, "policy/policy_loss": 1, "policy/final_loss": 1, "loss/total": 1}
         for step in (1, 2)
@@ -236,7 +245,7 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
     controls(recorded_runs, preset)
     inputs = None
     if preset == "data-short":
-        selected = presets.selection_artifact("candidate-training@2026.11.10")
+        selected = recipe.selection_artifact("candidate-training@2026.11.10")
         shutil.copytree(selection.path(), selected.path())
         inputs = GateInputs(preset_name=preset, tasks="candidate-training@2026.11.10")
     root = recorded_runs(preset, "users/test/current-generation", speed=101, inputs=inputs)
@@ -256,7 +265,7 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
             row["task_id"] = "candidate-" + row["task_id"]
         path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     metrics = read_skyrl_metrics(str(root))
-    step = presets.PRESETS[preset].updates
+    step = snowball_model.SNOWBALL.by_name[preset].updates
     values = metrics[step]
     report = rescore(preset, "--candidate", "users/test/current-generation")
     assert (report["verdict"], report["label"]) == ("pass", "no change"), report
@@ -355,19 +364,54 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
         ("candidate-compose", 4),
         ("train-candidate-compose", 4),
         ("train-pass", 0),
+        ("train-entry-override", 0),
         ("train-failed", 3),
         ("malformed-control", 4),
         ("malformed-status", 4),
         ("compose-timeout", 4),
         ("unexpected", 3),
         ("missing-requirement", 4),
+        ("missing-entry", 4),
+        ("missing-env", 4),
     ],
 )
-def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
+def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
+    recorded_runs, tmp_path, monkeypatch, case, expected
+):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
-    preset = presets.PRESETS["train-long" if case.startswith("train-") else "speed-medium"]
+    preset = snowball_model.SNOWBALL.by_name["train-long" if case.startswith("train-") else "speed-medium"]
     roots = controls(recorded_runs, preset.name) if preset.gated else []
-    built = snowball.build_run(preset)
+    if case in ("train-pass", "train-entry-override"):
+        preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_disk="3TB")))
+        monkeypatch.setattr(
+            snowball_model,
+            "SNOWBALL",
+            replace(
+                snowball_model.SNOWBALL,
+                presets=tuple(preset if row.name == preset.name else row for row in snowball_model.SNOWBALL.presets),
+            ),
+        )
+    initializer = (
+        ArtifactHfModel(
+            ArtifactStep.adopt(
+                "tests/python-init",
+                "2026.11.17",
+                str(Path(recipe.artifact_prefix(preset.recipe.layout.cluster)) / "python-init"),
+                kind=preset.model.step.artifact_type,
+            ),
+            "tests/python-tokenizer",
+            "python-tokenizer-revision",
+            relative_path="",
+        )
+        if case in ("train-pass", "train-entry-override")
+        else None
+    )
+    if initializer is not None:
+        model_root = Path(initializer.step.path())
+        model_root.mkdir(parents=True)
+        for filename in ("config.json", "tokenizer_config.json"):
+            (model_root / filename).write_text("{}")
+    built = snowball.build_run(preset, table=snowball_model.SNOWBALL, init=initializer)
     source = (
         None
         if "candidate-compose" in case
@@ -376,6 +420,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
             built.runs[0].name,
             speed=150 if case == "fail" else 101,
             fingerprint=built.runs[0].fingerprint(),
+            inputs=built.inputs,
         )
     )
     if case == "train-failed":
@@ -410,7 +455,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
 
         monkeypatch.setattr(subprocess, "run", timeout_native)
     if case == "unexpected":
-        path = Path(presets.selection_artifact(preset.tasks).path()) / presets.SUMMARY_FILENAME
+        path = Path(recipe.selection_artifact(preset.tasks).path()) / recipe.SUMMARY_FILENAME
         summary = json.loads(path.read_text())
         summary.pop("grader_kind_counts")
         path.write_text(json.dumps(summary))
@@ -445,23 +490,122 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     if case == "child":
         monkeypatch.setenv("IRIS_TASK_ID", "/test-user/coordinator/0")
         client.submit.side_effect = AssertionError("coordinator execution submitted another job")
-    try:
-        result = CliRunner().invoke(
-            snowball.main,
-            [
-                "--preset",
-                preset.name,
-                "--version",
-                preset.revision,
-                "--run",
-                *(("--set", "trainer.algorithm.policy_loss_type=gspo") if "candidate-compose" in case else ()),
-                *(("--require", "typo>=0") if case == "missing-requirement" else ()),
-                *(() if case.endswith("no-wait") or case == "unexpected" else ("--wait",)),
-            ],
+    arguments = [
+        "--preset",
+        preset.name,
+        "--version",
+        preset.revision,
+        "--run",
+        *(("--set", "trainer.algorithm.policy_loss_type=gspo") if "candidate-compose" in case else ()),
+        *(("--require", "typo>=0") if case == "missing-requirement" else ()),
+        *(() if case.endswith("no-wait") or case == "unexpected" else ("--wait",)),
+    ]
+    if case in ("train-pass", "train-entry-override"):
+        monkeypatch.setenv("HF_TEST_KEY", "test-initializer-credential")
+        monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
+        module_name = "second_model_rl"
+        entry_module = "override_model_rl" if case == "train-entry-override" else None
+        coordinator_module = entry_module or module_name
+        module = tmp_path / (module_name + ".py")
+        module.write_text(
+            "from dataclasses import replace\n"
+            "from marin.execution.lazy import ArtifactStep\n"
+            "from marin.rl.skyrl import ArtifactHfModel\n"
+            "from experiments.post_training import rl, snowball_rl\n"
+            "preset = snowball_rl.SNOWBALL.by_name['train-long']\n"
+            "preset = replace(preset, recipe=replace(preset.recipe,\n"
+            "    layout=replace(preset.recipe.layout, host_disk='3TB')))\n"
+            "table = replace(snowball_rl.SNOWBALL, presets=tuple(preset if row.name == preset.name else row "
+            "for row in snowball_rl.SNOWBALL.presets))\n"
+            f"step = ArtifactStep.adopt('tests/python-init', '2026.11.17', {initializer.step.path()!r}, "
+            "kind=preset.model.step.artifact_type)\n"
+            "init = ArtifactHfModel(step, 'tests/python-tokenizer', 'python-tokenizer-revision', relative_path='')\n"
+            f"raise SystemExit(rl.main(table, init=init, forward_env=('HF_TEST_KEY',), entry_module={entry_module!r}))\n"
         )
+        if entry_module is not None:
+            (tmp_path / (entry_module + ".py")).write_text(module.read_text())
+        monkeypatch.syspath_prepend(str(tmp_path))
+        arguments += ["--max-concurrent", "3"]
+        staged = source.with_name("native-fixture-before-execution")
+        source.rename(staged)
+
+        def launch_native(command):
+            args = native_launch.create_parser().parse_args(command[command.index("marinskyrl") + 1 :])
+            assert args.forward_env == ["HF_TEST_KEY"]
+            native = native_launch.load_launch_config(args.config)
+            assert native.iris.allocation.disk == "3TB"
+            assert native.inputs.model.tokenizer_uri == "tests/python-tokenizer"
+            shutil.copytree(staged, source, dirs_exist_ok=True)
+            response = json.loads((source / "terminal.json").read_text())["result"]
+            response["model"] = dict(
+                policy_export_uri=str(source / "policy"),
+                global_step=preset.updates,
+                tokenizer_uri="tests/python-tokenizer",
+                tokenizer_revision="python-tokenizer-revision",
+                checkpoint_root=str(source / "checkpoints"),
+                terminal_manifest_uri=str(source / "terminal.json"),
+            )
+            return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
+
+        monkeypatch.setattr(skyrl_api, "_run_launcher", launch_native)
+
+        def submit(**kwargs):
+            assert kwargs["entrypoint"].command == ["python", "-m", coordinator_module, *arguments]
+            environment = kwargs["environment"].env_vars
+            assert environment["HF_TEST_KEY"] == "test-initializer-credential"
+            assert "UNRELATED_SECRET" not in environment
+            with monkeypatch.context() as child:
+                child.setenv("IRIS_TASK_ID", "/test-user/coordinator/0")
+                child.setattr(sys, "argv", [module_name, *arguments])
+                info = JobInfo(task_id=JobName.from_wire("/test-user/coordinator/0"))
+                with iris_ctx_scope(IrisContext.from_job_info(info)):
+                    with pytest.raises(SystemExit) as finished:
+                        runpy.run_module(coordinator_module, run_name="__main__", alter_sys=True)
+                assert finished.value.code == 0
+            return SimpleNamespace(job_id=job)
+
+        client.submit.side_effect = submit
+
+        @click.command()
+        def entry():
+            with pytest.raises(SystemExit) as finished:
+                if entry_module is not None:
+                    runpy.run_path(str(module), run_name="__main__")
+                else:
+                    runpy.run_module(module_name, run_name="__main__", alter_sys=True)
+            raise click.exceptions.Exit(finished.value.code)
+
+        monkeypatch.setattr(sys, "argv", [module_name, *arguments])
+        selected = entry
+        invoked = []
+    else:
+        selected = snowball.command(
+            snowball_model.SNOWBALL,
+            argv=tuple(arguments),
+            init=initializer,
+            entry_module="experiments.post_training.snowball_rl",
+        )
+        invoked = arguments
+    if case == "missing-entry":
+        monkeypatch.setattr(sys.modules["__main__"], "__spec__", None)
+    if case in ("missing-entry", "missing-env"):
+        monkeypatch.delenv("RLCI_ABSENT_KEY", raising=False)
+        selected = snowball.command(
+            snowball_model.SNOWBALL,
+            argv=tuple(arguments),
+            forward_env=("RLCI_ABSENT_KEY",) if case == "missing-env" else (),
+        )
+        client.submit.side_effect = AssertionError("invalid caller reached coordinator RPC")
+    try:
+        result = CliRunner().invoke(selected, invoked)
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
+    if case in ("train-pass", "train-entry-override"):
+        restored_config = yaml.safe_load(materialized_config(built.runs[0], str(source.parent)).launch_config_yaml)
+        assert restored_config["inputs"]["model"]["tokenizer_uri"] == "tests/python-tokenizer"
+        assert "test-initializer-credential" not in result.output
+        assert "test-initializer-credential" not in json.dumps(restored_config)
     if case.startswith("malformed-"):
         assert "malformed recorded configuration" in result.output and "seed" in result.output
     if case.startswith("stale-control"):
@@ -474,6 +618,10 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         assert "KeyError" in result.output and "grader_kind_counts" in result.output
     if case == "missing-requirement":
         assert "does not compute" in result.output
+    if case == "missing-entry":
+        assert "python -m MODULE" in result.output and "entry_module" in result.output
+    if case == "missing-env":
+        assert "RLCI_ABSENT_KEY" in result.output
     if case == "child":
         report = gate.completed_gate(built.gate)
         assert Path(report.path(), gate.GATE_REPORT_FILENAME).exists()
@@ -487,30 +635,59 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     (root / "experiments").mkdir()
     (root / "experiments/untracked.py").write_text("VALUE = 1\n")
-    monkeypatch.setattr(presets, "REPO_ROOT", root)
+    monkeypatch.setattr(recipe, "REPO_ROOT", root)
     if fault == "dirty":
         subprocess.run(["git", "-C", str(root), "add", "experiments/untracked.py"], check=True)
         monkeypatch.setattr(
             Provenance, "capture", lambda *args, **kwargs: Provenance("tree", "commit", True, "branch", "test")
         )
     with pytest.raises(click.BadParameter, match="stage source" if fault == "untracked" else "clean checkout"):
-        snowball.build_run(presets.PRESETS["speed-medium"], control=True)
+        snowball.build_run(snowball_model.SNOWBALL.by_name["speed-medium"], control=True, table=snowball_model.SNOWBALL)
 
 
 @pytest.mark.parametrize(
     "arguments",
     [
         ("--wait",),
+        ("python-init-conflict",),
+        ("python-init-rescore",),
         ("--set", "trainer.dump_eval_results=false"),
         ("--set", 'trainer={"algorithm":{"off_policy_correction":"none"}}'),
         ("--set", "trainer.policy.optimizer_config.lr=wrong"),
     ],
 )
-def test_refusals_use_exit_four(selection, arguments):
+def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path):
+    if arguments == ("python-init-rescore",):
+        assert (
+            snowball.main(snowball_model.SNOWBALL, argv=["rescore"], init=snowball_model.SNOWBALL.presets[0].model) == 4
+        )
+        assert "Python init" in capsys.readouterr().err
+        return
+    initializer = snowball_model.SNOWBALL.presets[0].model if arguments == ("python-init-conflict",) else None
+    preset_name = "speed-medium"
+    if initializer is not None:
+        preset_name = "train-long"
+        name, version = "tests/valid-published-init", "2026.11.17"
+        root = tmp_path / name / version
+        _json(
+            root / RECORD_FILENAME,
+            ArtifactRecord(
+                name=name, version=version, result_type=result_type_name(Artifact), source=str(root)
+            ).model_dump(mode="json"),
+        )
+        arguments = ("--init", f"{name}@{version}")
     result = CliRunner().invoke(
-        snowball.main, ["--preset", "speed-medium", "--version", presets.PRESETS["speed-medium"].revision, *arguments]
+        snowball.command(
+            snowball_model.SNOWBALL,
+            argv=tuple(arguments),
+            init=initializer,
+            entry_module="experiments.post_training.snowball_rl",
+        ),
+        ["--preset", preset_name, "--version", snowball_model.SNOWBALL.by_name[preset_name].revision, *arguments],
     )
     assert result.exit_code == 4, (result.output, result.exception)
+    if initializer is not None:
+        assert "Python init and --init" in result.output
     if "trainer.dump_eval_results=false" in arguments:
         assert "owned" in result.output
 
@@ -535,7 +712,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         {"task_id": task, "family": family, "aaii_category": category} for task, (family, category) in families.items()
     ]
     (tmp_path / "selection").mkdir()
-    pq.write_table(pa.Table.from_pylist(manifest), tmp_path / "selection" / presets.TASK_MANIFEST_FILENAME)
+    pq.write_table(pa.Table.from_pylist(manifest), tmp_path / "selection" / TASK_MANIFEST_FILENAME)
     root = recorded_runs("learning-medium", "users/test/score-order")
     launch = read_skyrl_launch_config(str(root))
     launch["artifacts"]["export_root"] = str(tmp_path / "configured-export")
@@ -548,7 +725,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
             "\n".join(json.dumps(row, ensure_ascii=False) for row in answers) + "\n"
         )
         (directory / "aggregated_results.jsonl").write_text('{"avg_score": 0.5}\n')
-    scores = scoring.evaluation_scores(presets.EVALUATIONS["eval_lite_100"], str(tmp_path))
+    scores = scoring.evaluation_scores(snowball_model.EVALUATIONS["eval_lite_100"], str(tmp_path))
     final = [row for row in scores.to_pylist() if row["step"] == 25]
     assert [(row["item"], row["attempt"], row["scored"], row["score"]) for row in final] == [
         ("bounded", 0, True, 0.5),
@@ -584,14 +761,30 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         "cached-default",
         "zero-spread",
         "missing-guard",
+        "omitted-default",
+        "omitted-current-nondefault",
+        "omitted-candidate-default",
     ],
 )
 def test_gate_compares_recorded_configuration_and_defaults(recorded_runs, tmp_path, monkeypatch, case):
-    preset = presets.PRESETS[
+    preset = snowball_model.SNOWBALL.by_name[
         "speed-short" if case == "staged-profile" else "speed-medium" if case == "missing-guard" else "learning-medium"
     ]
     setting = "trainer.policy.optimizer_config.lr=2e-6"
-    settings = () if case in ("stale-default", "cached-default", "zero-spread", "staged-profile") else (setting,)
+    settings = (
+        ()
+        if case
+        in (
+            "stale-default",
+            "cached-default",
+            "zero-spread",
+            "staged-profile",
+            "omitted-default",
+            "omitted-current-nondefault",
+            "omitted-candidate-default",
+        )
+        else (setting,)
+    )
     if case == "batch":
         settings = (
             "trainer.train_batch_size=64",
@@ -624,17 +817,33 @@ def test_gate_compares_recorded_configuration_and_defaults(recorded_runs, tmp_pa
                 result=model.result_payload(),
             ).model_dump(mode="json"),
         )
-        inputs = inputs.model_copy(update={"init": f"{name}@{version}"})
+        inputs = inputs.model_copy(
+            update={
+                "init": recipe.stored_initializer(
+                    SkyRLPolicyModel(ArtifactStep.adopt(name, version, str(root), kind=SkyRLRun)), preset=preset
+                )
+            }
+        )
     control_roots = controls(recorded_runs, preset.name)
     if case == "zero-spread":
-        pin = gate.control_pin(preset)
+        pin = gate.control_pin(preset, table=snowball_model.SNOWBALL)
         control_roots = [
-            recorded_runs(preset.name, gate.control_name(pin.preset, pin.commit, index), score=0.5)
+            recorded_runs(
+                preset.name, gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL), score=0.5
+            )
             for index in range(pin.runs)
         ]
-    if case == "stale-default":
-        preset = replace(preset, recipe=replace(preset.recipe, config=preset.recipe.config.with_settings((setting,))))
-        monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: preset})
+    if case in ("stale-default", "omitted-current-nondefault"):
+        changed = setting if case == "stale-default" else 'generator.chat_template_kwargs={"enable_thinking":false}'
+        preset = replace(preset, recipe=replace(preset.recipe, config=preset.recipe.config.with_settings((changed,))))
+        monkeypatch.setattr(
+            snowball_model,
+            "SNOWBALL",
+            replace(
+                snowball_model.SNOWBALL,
+                presets=tuple(preset if row.name == preset.name else row for row in snowball_model.SNOWBALL.presets),
+            ),
+        )
     name = "users/test/config-" + case
     candidate = recorded_runs(preset.name, name, inputs=inputs)
     fault = {
@@ -644,7 +853,18 @@ def test_gate_compares_recorded_configuration_and_defaults(recorded_runs, tmp_pa
         "allocation": "iris.allocation.num_nodes",
         "zero-spread": "variation is zero",
         "missing-guard": "missing or non-finite guard metric",
+        "omitted-current-nondefault": "control config differs",
+        "omitted-candidate-default": "skyrl.generator.chat_template_kwargs",
     }.get(case)
+    if case.startswith("omitted-"):
+        omitted = [candidate] if case == "omitted-candidate-default" else control_roots
+        for old in omitted:
+            receipt = json.loads((old / "terminal.json").read_text())
+            assert receipt["config"]["skyrl"]["generator"].pop("chat_template_kwargs") == {}
+            if case == "omitted-default":
+                assert receipt["config"]["inputs"].pop("starting_checkpoint") is None
+                assert receipt["config"]["iris"].pop("role_topology") is None
+            write_receipt(old, receipt)
     root = control_roots[0] if case == "control-commit" else candidate
     if case in ("control-commit", "unbound-data", "allocation", "staged-profile"):
         receipt = json.loads((root / "terminal.json").read_text())
@@ -682,7 +902,14 @@ def test_gate_compares_recorded_configuration_and_defaults(recorded_runs, tmp_pa
                 config=preset.recipe.config.with_settings(("trainer.policy.optimizer_config.weight_decay=0.1",)),
             ),
         )
-        monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: promoted})
+        monkeypatch.setattr(
+            snowball_model,
+            "SNOWBALL",
+            replace(
+                snowball_model.SNOWBALL,
+                presets=tuple(promoted if row.name == preset.name else row for row in snowball_model.SNOWBALL.presets),
+            ),
+        )
         updated = rescore(preset.name, "--candidate", name)
         assert updated["verdict"] == "invalid" and "weight_decay" in updated["reason"]
         assert updated["report"] != report["report"]
@@ -719,7 +946,7 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
 
 @pytest.mark.parametrize("preset_name", ["learning-medium", "data-medium"])
 def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, tmp_path, monkeypatch, preset_name):
-    preset = presets.PRESETS[preset_name]
+    preset = snowball_model.SNOWBALL.by_name[preset_name]
     model = tmp_path / "model"
     model.mkdir()
     local = replace(
@@ -732,7 +959,14 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
         ),
     )
     preset = replace(preset, model=local)
-    monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset_name: preset})
+    monkeypatch.setattr(
+        snowball_model,
+        "SNOWBALL",
+        replace(
+            snowball_model.SNOWBALL,
+            presets=tuple(preset if row.name == preset_name else row for row in snowball_model.SNOWBALL.presets),
+        ),
+    )
     controls(recorded_runs, preset_name)
     tasks = selection if preset_name == "data-medium" else None
     setting_text = (
@@ -741,21 +975,45 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
         else ()
     )
     settings = setting_text
-    built = snowball.build_run(preset, settings=settings, tasks=tasks, requirements=("policy/raw_grad_norm<=10",))
+    export = model / "selected-hf"
+    export.mkdir()
+    for filename in ("config.json", "tokenizer_config.json"):
+        (export / filename).write_text("{}")
+    initializer = (
+        ArtifactHfModel(
+            ArtifactStep.adopt(
+                "tests/noncanonical-initializer",
+                "2026.11.17",
+                str(model),
+                kind=local.step.artifact_type,
+                config={"tokenizer_uri": "tests/own-tokenizer"},
+            ),
+            "tests/own-tokenizer",
+            "own-tokenizer-revision",
+        )
+        if preset.accepts_init
+        else None
+    )
+    built = snowball.build_run(
+        preset,
+        settings=settings,
+        tasks=tasks,
+        init=initializer,
+        requirements=("policy/raw_grad_norm<=10",),
+        table=snowball_model.SNOWBALL,
+    )
     task_name = "fixture-selection@2026.11.10" if tasks else None
     source = recorded_runs(
         preset.name,
         built.runs[0].name,
         fingerprint=built.runs[0].fingerprint(),
-        inputs=GateInputs(
-            preset_name=preset.name, settings=setting_text, tasks=task_name, requirements=("policy/raw_grad_norm<=10",)
-        ),
+        inputs=built.inputs,
     )
     staged = source.with_name("native-staging")
     source.rename(staged)
     (staged / GATE_INPUTS_FILENAME).unlink()
 
-    def native(config):
+    def native(config, *, forward_env=()):
         shutil.copytree(staged, source, dirs_exist_ok=True)
         return SkyRLRun.raw_load(str(source))
 
@@ -775,6 +1033,18 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
         }
     )
     assert recorded.tasks == task_name
+    if initializer is not None:
+        assert (
+            recorded.init.artifact_root,
+            recorded.init.relative_path,
+            recorded.init.tokenizer_uri,
+            recorded.init.tokenizer_revision,
+        ) == (str(model), None, "tests/own-tokenizer", "own-tokenizer-revision")
+        assert json.loads(recorded.init.fingerprint_payload)["config"]["tokenizer_uri"] == "tests/own-tokenizer"
+        newer = model / "newer-hf"
+        newer.mkdir()
+        for filename in ("config.json", "tokenizer_config.json"):
+            (newer / filename).write_text("{}")
     report = rescore(preset_name, "--candidate", built.runs[0].name)
     assert report["verdict"] == "pass", report
     assert report["run"]["requirements"] == list(recorded.requirements)

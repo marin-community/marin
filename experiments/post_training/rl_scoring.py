@@ -34,7 +34,8 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grading_result import Outcome
 
-from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training import rl_presets as presets
+from experiments.post_training import rl_recipe as recipe
 from experiments.post_training.task_curation.selection import TASK_MANIFEST_FILENAME, TASK_SPEC_COLUMN
 
 SLICE_COLUMNS = ("family", "aaii_category", "agentic")
@@ -281,12 +282,12 @@ class GateInputs(BaseModel, frozen=True):
     preset_name: str
     settings: tuple[str, ...] = ()
     tasks: str | None = None
-    init: str | None = None
+    init: presets.StoredInitializer | None = None
     requirements: tuple[str, ...] = ()
 
 
 def read_gate_inputs(run_output: str) -> GateInputs:
-    """Read the typed Snowball inputs saved beside a native launch receipt."""
+    """Read the typed RL inputs saved beside a native launch receipt."""
     return GateInputs.model_validate_json((StoragePath(run_output) / GATE_INPUTS_FILENAME).read_text())
 
 
@@ -468,14 +469,16 @@ def load_run(
         }
     except (KeyError, TypeError, ValueError) as error:
         raise InvalidComparison(f"recorded evaluation identity is malformed: {error}") from error
-    default, selection = presets.task_selections(
-        preset, presets.selection_artifact(inputs.tasks) if inputs.tasks else None
+    default, selection = recipe.task_selections(
+        preset, recipe.selection_artifact(inputs.tasks) if inputs.tasks else None
     )
     task_set = preset.eval_lite if preset.held_out is not None else None
     scores, initial_scores = [EVAL_SCORE_SCHEMA.empty_table()], []
     for evaluation in preset.evaluations:
         quality = evaluation.held_out and evaluation == preset.guarded
-        expected = presets.evaluation_answer_count(evaluation, evaluation.tasks(selection, default, preset.eval_lite))
+        expected = recipe.evaluation_answer_count(
+            evaluation, recipe.evaluation_source(evaluation, selection, default, preset.eval_lite)
+        )
         table = evaluation_scores(evaluation, path, answers, launch=launch)
         initial = table.filter(pc.equal(table["step"], 0))
         table = table.filter(pc.equal(table["step"], workload.scored_step(preset.updates)))
@@ -521,7 +524,7 @@ def load_run(
     result = terminal.native.result
     h100_hours = None
     if result.started_at and result.finished_at:
-        seconds = (presets.utc_millis(result.finished_at) - presets.utc_millis(result.started_at)) / 1000
+        seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(result.started_at)) / 1000
         if seconds > 0:
             h100_hours = seconds * launch.num_nodes * launch.gpus_per_node / 3600
     slices = {key: len({row["item"] for row in rows}) for key, rows in score_slices(final).items()}
