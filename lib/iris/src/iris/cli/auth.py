@@ -33,29 +33,27 @@ def auth():
 @click.option(
     "--ttl-hours",
     type=float,
-    default=24.0,
-    show_default=True,
+    default=None,
     help="Token lifetime; clamped server-side to the controller's maximum (30 days).",
 )
 @click.pass_context
-def mint_scoped(ctx, prefix: str, ttl_hours: float):
+def mint_scoped(ctx, prefix: str, ttl_hours: float | None):
     """Mint a job-prefix-scoped token for your user.
 
     The token authenticates as you on every RPC, but owner-gated actions —
     submit, cancel, exec, kick, endpoint mint — only reach jobs whose name
     starts with --prefix. Give each agent its own prefix so one agent cannot
-    cancel another's jobs. The token is not revocable; it expires after
-    --ttl-hours.
+    cancel another's jobs. The token is not revocable. The controller sets
+    the default lifetime when --ttl-hours is omitted.
 
     Pass it to the agent as MARIN_CLUSTER_TOKEN.
     """
+    request = controller_pb2.Controller.MintScopedTokenRequest(prefix=prefix)
+    if ttl_hours is not None:
+        request.ttl.CopyFrom(duration_to_proto(Duration.from_hours(ttl_hours)))
+
     with rpc_client_for_ctx(ctx) as client:
-        resp = client.mint_scoped_token(
-            controller_pb2.Controller.MintScopedTokenRequest(
-                prefix=prefix,
-                ttl=duration_to_proto(Duration.from_hours(ttl_hours)),
-            )
-        )
+        resp = client.mint_scoped_token(request)
 
     hours_left = max(0.0, (resp.expires_at.epoch_ms - int(time.time() * 1000)) / 3_600_000)
     click.echo(f"Scoped token for jobs under {resp.prefix} (expires in {hours_left:.1f}h):")

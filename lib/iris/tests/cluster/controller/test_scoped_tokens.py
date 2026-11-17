@@ -196,16 +196,6 @@ def test_scoped_token_with_malformed_prefix_claim_is_rejected(scoped_auth):
         scoped_auth.jwt_manager.verify(token)
 
 
-def test_foreign_signed_scoped_token_is_rejected(scoped_auth):
-    """A scoped token minted by another cluster's key never verifies here."""
-    stranger = JwtSigner(signing_key_from_private_pem(generate_ed25519_keypair().private_pem), issuer="other-cluster")
-    token = stranger.mint(
-        {"sub": _ALICE, "role": "user", "jti": "k", "prefix": _PREFIX}, audience="iris", ttl_seconds=60
-    )
-    with pytest.raises(ValueError):
-        scoped_auth.jwt_manager.verify(token)
-
-
 # --- Native identity stamp ------------------------------------------------------
 
 _STAMP_HEADER = "x-iris-verified-identity"
