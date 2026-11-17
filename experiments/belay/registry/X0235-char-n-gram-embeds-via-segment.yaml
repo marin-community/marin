@@ -47,6 +47,19 @@ trials:
   commit: bd1e076e0e
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+- id: t003
+  variant: char 1-4-gram rows summed into input embed table
+  rung: competitive-d768
+  protocol: equal_steps
+  batch: X0235
+  date: '2026-11-17'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0235
+  wandb: []
+  settings:
+    spelling_ngram_embeds: 'true'
+  commit: 748581f0a2
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 potential:
   score: 7
   rationale: −0.0131 at equal time (step time within 1%); ladder and MFU not run → 7
