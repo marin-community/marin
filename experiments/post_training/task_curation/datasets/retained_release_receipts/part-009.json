@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "f3312f99fe4d6be474aaa201b2ae62d6112e12ff",
+  "revision": "498b95b2be062759ab9e3afff9628aa7dba3dbbc",
   "path": "experiments/post_training/task_curation/datasets/retained_release_receipts/part-009.json",
-  "sha256": "41e2fb1526875f2c22f718762819460cbe1b0853858364b4ce3fd0813b1c93f5"
+  "sha256": "606a5bc2cdbae413ce3afe7c366e9473962e208cfb78931ac63b6165b72217a1"
 }
