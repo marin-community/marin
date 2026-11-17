@@ -3141,6 +3141,7 @@ class RayPPOTrainer:
             checkpoint_path: The path to the checkpoint.
         """
         checkpoint_path = None
+        recovering_own_checkpoint = False
         # Check if resumption is enabled
         if self.resume_mode == ResumeMode.NONE:
             logger.info("Checkpoint resumption disabled, starting training from scratch")
@@ -3148,24 +3149,26 @@ class RayPPOTrainer:
         # first, let's get resume_path
         elif self.resume_mode == ResumeMode.LATEST:
             latest_checkpoint_file = os.path.join(self.cfg.trainer.ckpt_path, LATEST_CHECKPOINT_FILE)
-            if not io.exists(latest_checkpoint_file):
+            if io.exists(latest_checkpoint_file):
+                recovering_own_checkpoint = True
+                with io.open_file(latest_checkpoint_file, "r") as f:
+                    ckpt_iteration = int(f.read().strip())
+                checkpoint_path = os.path.join(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{ckpt_iteration}")
+                # A corrupt or incomplete current-run checkpoint must still fail validation.
+                validate_consistency_for_latest_checkpoint(
+                    self.cfg.trainer.ckpt_path,
+                    ckpt_iteration,
+                    checkpoint_path,
+                    latest_checkpoint_file,
+                    self.cfg.trainer.ckpt_interval,
+                )
+            elif not self.cfg.trainer.get("resume_path"):
                 logger.warning(
                     f"resume_mode=latest found no checkpoint marker at {latest_checkpoint_file}; "
                     "starting training from global_step 0"
                 )
                 return 0, None
-            with io.open_file(latest_checkpoint_file, "r") as f:
-                ckpt_iteration = int(f.read().strip())
-            checkpoint_path = os.path.join(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{ckpt_iteration}")
-            # Run validation: Make sure ckpt folder is consistent with latest_ckpt_global_step.txt
-            validate_consistency_for_latest_checkpoint(
-                self.cfg.trainer.ckpt_path,
-                ckpt_iteration,
-                checkpoint_path,
-                latest_checkpoint_file,
-                self.cfg.trainer.ckpt_interval,
-            )
-        else:
+        if checkpoint_path is None:
             # Get and validate resume path
             checkpoint_path = self.cfg.trainer.resume_path
             if not checkpoint_path:
@@ -3204,7 +3207,7 @@ class RayPPOTrainer:
             trainer_state = torch.load(f, map_location="cpu", weights_only=False)
         saved_global_step = trainer_state.get("global_step", global_step)
         self._ftpo_stopped = bool(trainer_state.get("ftpo_stopped", False))
-        if self.cfg.trainer.get("reset_distillation_token_count_on_resume", False):
+        if not recovering_own_checkpoint and self.cfg.trainer.get("reset_distillation_token_count_on_resume", False):
             self.distillation_scored_tokens_total = 0
         else:
             self.distillation_scored_tokens_total = int(trainer_state.get("distillation_scored_tokens_total", 0))
@@ -3218,7 +3221,9 @@ class RayPPOTrainer:
             logger.warning(f"Global step mismatch: path={global_step}, saved={saved_global_step}. Using path value.")
 
         # 2. Load rollout state if requested and available
-        if not self.cfg.trainer.restore_dataloader_state:
+        if self.resume_mode == ResumeMode.LATEST and not recovering_own_checkpoint:
+            logger.info("Starting checkpoint imported; starting the configured dataset from the beginning")
+        elif not self.cfg.trainer.restore_dataloader_state:
             logger.info("Rollout state restoration disabled; starting the configured dataset from the beginning")
         elif io.exists(rollout_state_path):
             with io.open_file(rollout_state_path, "rb") as f:
@@ -3249,7 +3254,7 @@ class RayPPOTrainer:
         logger.info("Successfully loaded policy checkpoint")
 
         logger.info(f"Successfully loaded complete checkpoint state from global_step_{global_step}")
-        if self.cfg.trainer.get("reset_global_step_on_resume", False):
+        if not recovering_own_checkpoint and self.cfg.trainer.get("reset_global_step_on_resume", False):
             logger.info("Resetting the trainer step to 0 at the explicit stage boundary")
             global_step = 0
         return global_step, str(checkpoint_path)

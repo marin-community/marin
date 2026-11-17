@@ -1,4 +1,3 @@
-import importlib
 import ipaddress
 import os
 import time
@@ -402,9 +401,6 @@ def validate_batch_sizes(cfg: DictConfig):
 def validate_megatron_cfg(cfg: DictConfig):
     # not yet supported + tested features
     assert cfg.generator.weight_sync_backend == "nccl", "only nccl is supported for megatron weight sync"
-
-    if cfg.trainer.flash_attn:
-        importlib.import_module("flash_attn")
 
     worker_configs = [(cfg.trainer.policy, "policy"), (cfg.trainer.ref, "ref")]
     for config, worker_type in worker_configs:
@@ -1025,7 +1021,6 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
     # See https://github.com/NVIDIA/Megatron-LM/issues/533#issuecomment-1760193239
     env_vars["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     if cfg.trainer.flash_attn:
-        # TransformerEngine otherwise overrides the FlashAttention choice on Hopper+.
         env_vars["NVTE_FUSED_ATTN"] = "0"
 
     env_vars["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "true"

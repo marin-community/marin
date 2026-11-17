@@ -16,12 +16,14 @@ from marin.execution.lazy import run
 from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.grading import grade_remote_judge_answer
 from taskcompendium.grading_result import Outcome
+from taskcompendium.importers.evalchemy.judge_prompts import SIMPLEQA_VERIFIED_GRADER_TEMPLATE
 from taskcompendium.models import ConversationTrace, GradingAttempt, TextMessage
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
+from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 from zephyr.context import ZephyrContext
 
-from experiments.evaluation.benchmarks.simpleqa import simpleqa_source
+from experiments.evaluation.benchmarks.simpleqa import simpleqa_source, simpleqa_verified_source
 from experiments.evaluation.preparation import prepare_evaluation
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
@@ -36,28 +38,15 @@ def write_simpleqa(file, rows):
         )
 
 
-@pytest.fixture
-def judged_corpus(tmp_path, monkeypatch):
-    reference = {
-        "name": "SimpleQA",
-        "rows": [{"question": "What is the revenue?", "answer": "$7", "evidence_text": "Revenue: $7", "metadata": {}}],
-    }
-    source = simpleqa_source("SimpleQA", mini=False)
+def published_cases(source, write_rows, tmp_path, monkeypatch, population):
     dataset = source.config
     root = tmp_path / "source"
     file = root / dataset.files[0]
     file.parent.mkdir(parents=True)
-    write_simpleqa(file, reference["rows"])
+    write_rows(file)
     source = replace(
         source,
-        config=replace(
-            dataset,
-            protocol=dataset.protocol.model_copy(
-                update={
-                    "expected_population": len(reference["rows"]),
-                }
-            ),
-        ),
+        config=replace(dataset, protocol=dataset.protocol.model_copy(update={"expected_population": population})),
     )
     runtime = CampaignRuntime()
     options = PipelineOptions(SourceProcessingMode.QUICK, runtime, inputs=InputOverrides(root=str(root)))
@@ -70,9 +59,26 @@ def judged_corpus(tmp_path, monkeypatch):
             runtime.activate(context),
         ):
             artifact = run(prepare_evaluation(source, options), max_concurrent=1)[0]
-        yield reference, list(evaluation_cases(artifact.path))
+        return list(evaluation_cases(artifact.path))
     finally:
         client.shutdown()
+
+
+@pytest.fixture
+def judged_corpus(tmp_path, monkeypatch):
+    reference = {
+        "name": "SimpleQA",
+        "rows": [{"question": "What is the revenue?", "answer": "$7", "evidence_text": "Revenue: $7", "metadata": {}}],
+    }
+    source = simpleqa_source("SimpleQA", mini=False)
+    cases = published_cases(
+        source,
+        lambda file: write_simpleqa(file, reference["rows"]),
+        tmp_path,
+        monkeypatch,
+        len(reference["rows"]),
+    )
+    return reference, cases
 
 
 @pytest.fixture
@@ -162,3 +168,31 @@ def test_source_judge_accepts_content_on_length_and_keeps_malformed_labels_unsco
     assert result.reward == (1 if expected is Outcome.GRADED else None)
     assert len(state["requests"]) == 1
     assert result.detail["finish_reason"] == finish_reason
+
+
+def test_simpleqa_verified_publishes_bare_question_and_judges_only_the_final_answer(tmp_path, monkeypatch, judge_http):
+    fields = ("original_index", "problem", "answer", "topic", "answer_type", "multi_step", "requires_reasoning", "urls")
+
+    def write_rows(file):
+        with file.open("w", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=fields)
+            writer.writeheader()
+            writer.writerow(
+                dict(zip(fields, ("3", "Who wrote it?", "Ada", "Art", "Person", "False", "False", "u"), strict=True))
+            )
+
+    (case,) = published_cases(simpleqa_verified_source(thinking=False), write_rows, tmp_path, monkeypatch, 1)
+    assert conversation_messages(case.task.context.events) == [{"role": "user", "content": "Who wrote it?"}]
+    assert case.item.operation.response_selection == "final_only"
+    assert case.item.groups == {"source_index": "0"}
+    state, connection = judge_http
+    state["response"] = judge_response("SimpleQAVerified")
+    # The launcher supplies the judge deployment's default model.
+    connection = replace(connection, default_model="fixture-judge")
+    result = grade_remote_judge_answer(case.task, judged_attempt(case.task, "It was Ada."), connection)
+    assert result.status is Outcome.GRADED
+    assert result.reward == 1
+    assert state["requests"][-1]["model"] == "fixture-judge"
+    assert state["requests"][-1]["messages"][-1]["content"] == SIMPLEQA_VERIFIED_GRADER_TEMPLATE.format(
+        question="Who wrote it?", target="Ada", predicted_answer="It was Ada."
+    )

@@ -50,6 +50,7 @@ provisioning:
   coreweave:
     cluster: { name: marin-gpu, zone: US-EAST-02A }
     kueue:
+      cpu_scale_group: cpu-genoa
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
     ingress:
       ingress_class: traefik
@@ -117,6 +118,7 @@ auth:
     - principal:human-080
     - "*@openathena.ai"
     - principal:human-076
+    - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
     - morrisy@stanford.edu
     - wg0420@princeton.edu

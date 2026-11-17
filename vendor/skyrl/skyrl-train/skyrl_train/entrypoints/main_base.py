@@ -122,12 +122,11 @@ class EntrypointSupervisor:
 def create_ray_wrapped_inference_engines_from_config(
     cfg: DictConfig,
     colocate_pg,
-    tokenizer: object | None = None,
     *,
     entrypoint: str = STANDARD_TRAINING_ENTRYPOINT,
     operation: EntrypointOperation = EntrypointOperation.TRAIN,
 ):
-    """Create rollout engines from config; the tokenizer argument is unused."""
+    """Create rollout engines from config."""
     from skyrl_train.inference_engines.configuration import (
         InferenceEngineRoleConfig,
         inference_engine_kwargs_from_config,
@@ -220,6 +219,9 @@ def create_ray_wrapped_inference_engines_from_config(
         role,
         engine_init_kwargs=engine_init_kwargs,
     )
+    selectors = OmegaConf.select(cfg, "runtime.placement.engines", default=None)
+    if selectors:
+        engine_kwargs["node_label_selectors"] = [dict(selector) for selector in selectors]
     if cfg.generator.weight_sync_transport == WeightSyncTransport.EXPERT_BLOCK:
         engine_kwargs["require_verified_placements"] = True
     if cfg.trainer.strategy == "megatron":
@@ -474,7 +476,8 @@ class BasePPOExp:
         )  # noqa: PLC0415
 
         timeout = int(self.cfg.trainer.distributed.placement_group_timeout_seconds) if timeout is None else timeout
-        if not policy_strict_spread_eligible(self.cfg):
+        selector = dict(OmegaConf.select(self.cfg, "runtime.placement.policy", default={}))
+        if not policy_strict_spread_eligible(self.cfg) and not selector:
             return None
 
         from ray.util.placement_group import placement_group as _placement_group
@@ -489,7 +492,9 @@ class BasePPOExp:
         # reservation ordering, not from the spread strategy. Whole-node bundles
         # keep STRICT_SPREAD (one whole-node bundle per node) as before.
         strategy = "PACK" if per_gpu else "STRICT_SPREAD"
-        pg = _placement_group(bundles, strategy=strategy)
+        pg = _placement_group(
+            bundles, strategy=strategy, bundle_label_selector=[selector] * len(bundles) if selector else None
+        )
         get_ray_pg_ready_with_timeout(pg, timeout=timeout)
         logger.info(
             f"Reserved dedicated policy placement group (strategy={strategy}, "
@@ -582,12 +587,12 @@ class BasePPOExp:
         )
 
     def get_worker_classes(self):
-        """Return policy, unused critic, and reference Ray actor classes."""
+        """Return policy and reference Ray actor classes."""
         if self.cfg.trainer.strategy != "megatron":
             raise ValueError(f"Unknown strategy type: {self.cfg.trainer.strategy}")
         from skyrl_train.workers.megatron.megatron_worker import PolicyWorker, RefWorker  # noqa: PLC0415
 
-        return PolicyWorker, None, RefWorker
+        return PolicyWorker, RefWorker
 
     def get_tracker(self):
         """Initializes the tracker for experiment tracking.
@@ -610,7 +615,7 @@ class BasePPOExp:
         os.makedirs(self.cfg.trainer.export_path, exist_ok=True)
         os.makedirs(self.cfg.trainer.ckpt_path, exist_ok=True)
 
-        PolicyWorker, CriticWorker, RefWorker = self.get_worker_classes()
+        PolicyWorker, RefWorker = self.get_worker_classes()
 
         tokenizer = self.tokenizer
         from skyrl_train.teacher_runtime import prepare_distillation_runtime, start_distillation_runtime  # noqa: PLC0415
@@ -633,7 +638,7 @@ class BasePPOExp:
 
         logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
         try:
-            trainer.build_models(PolicyWorker, CriticWorker, RefWorker, policy_pg=self.policy_pg)
+            trainer.build_models(PolicyWorker, None, RefWorker, policy_pg=self.policy_pg)
             logger.info(
                 "Policy workers ready: strategy={} count={}",
                 self.cfg.trainer.strategy,
