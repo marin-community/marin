@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Archive-only continuation: no dependency can launch an earlier training stage."""
+"""Seal long-loop evidence after the supplied producer dependencies complete."""
 
 import hashlib
 import json

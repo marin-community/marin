@@ -608,3 +608,9 @@ retain the 120-task coverage gate and the five-observation evaluation EMA.
 Native checkpoints are not pruned by these profiles (`checkpoint_count: -1`);
 the regional temporary storage has a 14-day lifecycle. Record a durable handoff
 before that lifecycle expires. No model weights are copied to the submitter.
+
+For an adopted NVL72 run, upload the small self-contained run spec to regional S3
+and pass its immutable URI to `--spec`. The coordinator replays this argument on
+Iris; a Mac-local absolute path is not available there. Keep `--validation-output`
+under `/tmp` when submitting. Save its local preflight receipts in the experiment
+record before launch.

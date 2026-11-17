@@ -21,7 +21,7 @@ from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import SkyRLRunConfig
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import require_secret
 
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation
@@ -61,7 +61,7 @@ def validate_graph(
 
 
 @click.command(help=__doc__)
-@click.option("--spec", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--spec", required=True, help="Pinned local run spec or regional S3 NVL72 spec URI.")
 @click.option("--smoke", is_flag=True, help="Apply only the spec's explicit scale overrides.")
 @click.option("--through", type=click.Choice(["sft", "rl", "archive"]), default="archive", show_default=True)
 @click.option("--validation-output", type=click.Path(path_type=Path), required=True)
@@ -72,7 +72,7 @@ def validate_graph(
 )
 @rl_build_options
 def main(
-    spec: Path,
+    spec: str,
     smoke: bool,
     through: str,
     validation_output: Path,
@@ -80,7 +80,8 @@ def main(
     i_know_i_am_breaking_experimental_controls: bool,
     experimental_controls_reason: str | None,
 ) -> ArtifactStep:
-    document = yaml.safe_load(spec.read_text())
+    configure_coreweave_s3()
+    document = yaml.safe_load(StoragePath(spec).read_bytes())
     if document.get("format") == "nvl72_rl":
         if through != "rl":
             raise click.UsageError("An adopted NVL72 RL input requires --through rl")
@@ -102,7 +103,7 @@ def main(
         validate_graph(terminal, validation_output / terminal.version, nvl72.output_prefix, model_config=model_config)
         return terminal
     resolved = resolve_spec(
-        spec,
+        Path(spec),
         smoke=smoke,
         acknowledge_deprecated_config_format=i_know_i_am_using_a_deprecated_config_format,
         acknowledge_experimental_controls=i_know_i_am_breaking_experimental_controls,

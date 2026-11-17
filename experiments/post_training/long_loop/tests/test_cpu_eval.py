@@ -19,7 +19,7 @@ def run_cpu_eval(*, output: str):
     root.mkdir(parents=True, exist_ok=True)
     environment = dict(
         os.environ,
-        PYTHONPATH=f"{REPO}:{REPO}/vendor/skyrl:{REPO}/vendor/skyrl/skyrl-train:{REPO}/vendor/skyrl/skyrl-gym",
+        PYTHONPATH=f"{REPO}/vendor/skyrl/skyrl-train:{REPO}/vendor/skyrl:{REPO}/vendor/skyrl/skyrl-gym:{REPO}",
         RAY_ENABLE_UV_RUN_RUNTIME_ENV="0",
     )
     with (root / "cpu-eval.log").open("w") as log:
