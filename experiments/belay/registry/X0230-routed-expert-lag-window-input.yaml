@@ -12,6 +12,7 @@ intake:
   approved_by: ClassicLarry
 code_commits:
 - e99ff55ff2ea828b3a711c25e02fe750b51153d7
+- 8780f218c46d15f1a91c7276899277e01546ec9a
 trials:
 - id: t001
   variant: lag-1..3 causal window on routed-expert latent input
