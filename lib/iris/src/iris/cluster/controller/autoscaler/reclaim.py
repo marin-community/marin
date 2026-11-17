@@ -82,18 +82,22 @@ class ReclaimPlan:
     blocked: list[ReclaimBlocked]
 
 
-def _slice_rank(slice_: PoolSlice, worker_status: WorkerStatusMap) -> tuple[bool, int | None]:
-    """Return (eligible, rank of the slice's highest running band; None when idle).
+# Rank of an idle slice: below every band, so idle slices sort first and are always eligible.
+_IDLE_RANK = len(PRIORITY_BAND_VALUES)
 
-    Not eligible when a worker is missing from the snapshot or runs a task of an unknown band.
+
+def _slice_rank(slice_: PoolSlice, worker_status: WorkerStatusMap) -> int | None:
+    """Rank of the slice's highest running band, ``_IDLE_RANK`` when idle.
+
+    None (never a victim) when a worker is missing from the snapshot or runs a task of an unknown band.
     """
     ranks: list[int] = []
     for worker_id in slice_.worker_ids:
         status = worker_status.get(worker_id)
         if status is None or any(band not in PRIORITY_BAND_VALUES for band in status.running_bands):
-            return False, None
+            return None
         ranks.extend(priority_band_rank(band) for band in status.running_bands)
-    return True, min(ranks, default=None)
+    return min(ranks, default=_IDLE_RANK)
 
 
 def plan_reservation_reclaim(
@@ -147,20 +151,14 @@ def plan_reservation_reclaim(
         target, band = min(waiting, key=lambda item: (priority_band_rank(item[1]), item[0].created_at.epoch_ms()))
         preemptor_rank = priority_band_rank(band)
 
-        candidates: list[tuple[tuple[int, int, int, int], PoolSlice]] = []
+        candidates: list[tuple[tuple[int, int, int], PoolSlice]] = []
         for slice_ in slices:
             if slice_.quota_pool != pool or not slice_.ready or slice_.group == target.group:
                 continue
-            eligible, rank = _slice_rank(slice_, worker_status)
-            if not eligible:
+            rank = _slice_rank(slice_, worker_status)
+            if rank is None or rank <= preemptor_rank or rank < victim_limit:
                 continue
-            if rank is None:
-                key = (0, 0, slice_.chips, -slice_.created_at.epoch_ms())
-            else:
-                if rank <= preemptor_rank or rank < victim_limit:
-                    continue
-                key = (1, -rank, slice_.chips, -slice_.created_at.epoch_ms())
-            candidates.append((key, slice_))
+            candidates.append(((-rank, slice_.chips, -slice_.created_at.epoch_ms()), slice_))
         candidates.sort(key=lambda item: item[0])
 
         victims: list[PoolSlice] = []

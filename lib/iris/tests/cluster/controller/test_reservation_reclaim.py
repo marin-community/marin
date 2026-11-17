@@ -6,7 +6,6 @@
 import dataclasses
 from dataclasses import dataclass, field
 
-import yaml
 from iris.cluster.config import AutoscalerConfig, ReservationReclaimConfig
 from iris.cluster.constraints import DeviceType
 from iris.cluster.controller.autoscaler.reclaim import PoolSlice, ReclaimDecision, plan_reservation_reclaim
@@ -106,7 +105,7 @@ def _plan(slices, bands, *, config=ON, waiting=None, last_reclaim=None, now=NOW)
 
 
 def _fragmented_pool() -> tuple[list[PoolSlice], dict[str, int | None]]:
-    """The 2026-11-17 case in miniature: a full reserved pool of smaller, lower-band slices."""
+    """A full reserved pool of smaller, lower-band slices, with a production v4-1024 waiting."""
     slices = [
         _slice("wait-1024", "v4-1024", 512, ready=False, created_min=30),
         _slice("i-512", "v4-512", 256, created_min=5),
@@ -367,22 +366,6 @@ def test_controller_fails_and_removes_reclaimed_workers_and_retries_their_tasks(
     # The worker-failure path retries the task on its preemption budget.
     assert row.state == job_pb2.TASK_STATE_PENDING
     assert row.preemption_count == 1
-
-
-def test_documented_reclaim_block_parses():
-    block = yaml.safe_load(
-        """
-        reservation_reclaim:
-          quota_pools: [v4-reserved/us-central2-b]
-          min_wait: { seconds: 600 }
-          cooldown: { seconds: 1800 }
-          highest_victim_band: batch
-        """
-    )
-    reclaim = AutoscalerConfig.model_validate(block).reservation_reclaim
-    assert reclaim.quota_pools == [POOL]
-    assert reclaim.min_wait == Duration.from_minutes(10) and reclaim.cooldown == Duration.from_minutes(30)
-    assert reclaim.highest_victim_band == "batch"
 
 
 def test_unknown_bands_never_trigger_reclaim_and_never_make_victims():

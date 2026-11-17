@@ -1237,14 +1237,13 @@ class Controller:
         """Build the autoscaler's complete worker view from one controller snapshot."""
         liveness = self._worker_health.all()
         worker_ids = {worker_id for worker_id, state in liveness.items() if state.usability is not WorkerUsability.DEAD}
-        running = reads.running_tasks_by_worker(snap, worker_ids)
-        bands = reads.running_bands_by_worker(snap, worker_ids)
+        running = reads.running_task_bands_by_worker(snap, worker_ids)
         return {
             worker_id: WorkerStatus(
                 worker_id=worker_id,
-                running_task_ids=frozenset(task_id.to_wire() for task_id in running.get(worker_id, set())),
+                running_task_ids=frozenset(task_id.to_wire() for task_id in running.get(worker_id, {})),
                 usability=liveness[worker_id].usability,
-                running_bands=bands.get(worker_id, frozenset()),
+                running_bands=frozenset(running.get(worker_id, {}).values()),
             )
             for worker_id in worker_ids
         }
