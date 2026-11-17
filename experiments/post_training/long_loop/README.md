@@ -602,8 +602,8 @@ domains at production priority. Compilation and piecewise CUDA graphs stay on.
 
 NVL72 coordinators use `mochi-<profile>-<version>` for RL and
 `mochi-<evaluation-name>-<version>` for policy evaluation. Iris adds the submitting
-user namespace; children stay beneath that coordinator's job ID. Record the
-exact submitted IDs before using the assigned prefix for cancellation.
+user namespace, giving the cancellation prefix `/<owner>/mochi-`. Children stay
+beneath that coordinator's job ID. Record the exact submitted IDs before cancellation.
 
 Smoke mode uses two groups of eight samples, two rollout workers and a one-hour
 clock after the first optimizer update. It saves each update and at finalization;
