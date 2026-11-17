@@ -21,4 +21,3 @@ class PreservedImage(Artifact):
     tree_entries: int
     provenance_uri: str
     provenance_sha256: str
-
