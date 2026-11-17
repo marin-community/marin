@@ -4,7 +4,7 @@ name: Bilinear lm_head rank lift
 category: Output head and loss
 summary: 'Track: speedrun'
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6940686544
@@ -12,3 +12,16 @@ intake:
   approved_by: ClassicLarry
 code_commits:
 - 39655ca2d00fc6322ba395ca87d1ff0003acbd28
+trials:
+- id: t001
+  variant: lm_head reads [h, g*rms_norm(hA*hB)], widened by d/4
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0231
+  date: '2026-11-17'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0231
+  wandb: []
+  settings:
+    lm_head_bilinear: 'true'
+  commit: 759042a2c7
+  priority: batch
