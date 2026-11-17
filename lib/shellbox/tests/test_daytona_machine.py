@@ -45,6 +45,7 @@ from daytona import (
 from daytona_api_client_async import SandboxState, SnapshotState
 from rigging.timing import ExponentialBackoff, active_timeout
 from shellbox.backends.daytona.connection import DaytonaConnection
+from shellbox.backends.daytona.lifecycle import process_lifecycle_log
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
     DaytonaDeclarativeMachineFactory,
@@ -464,7 +465,9 @@ class LocalSnapshots:
 
 class LocalDaytona:
     def __init__(self):
-        self.sandbox = SimpleNamespace(fs=LocalFiles(), process=LocalProcess())
+        self.sandbox = SimpleNamespace(
+            id="11111111-1111-4111-8111-111111111111", fs=LocalFiles(), process=LocalProcess()
+        )
         self.deleted = False
         self.closed = False
         self.params = None
@@ -497,7 +500,12 @@ class LocalDaytona:
         self.closed = True
 
 
-def test_daytona_close_waits_until_provider_destruction():
+def test_daytona_close_waits_until_provider_destruction_and_records_owned_id(tmp_path):
+    lifecycle = tmp_path / "sandbox-lifecycle.jsonl"
+
+    def events():
+        return [json.loads(line) for line in lifecycle.read_text().splitlines()]
+
     async def scenario():
         delete_requested = asyncio.Event()
         destruction_allowed = asyncio.Event()
@@ -521,12 +529,24 @@ def test_daytona_close_waits_until_provider_destruction():
             await delete_requested.wait()
             assert not closing.done()
             assert not client.deleted
+            recorded = events()
+            assert [row["event"] for row in recorded] == ["create_requested", "created", "delete_requested"]
+            assert {row["requested_name"] for row in recorded} == {client.params.name}
+            assert {row["sandbox_id"] for row in recorded[1:]} == {client.sandbox.id}
         finally:
             destruction_allowed.set()
             await closing
         assert client.deleted and client.closed
+        assert events()[-1] == {
+            "kind": "daytona_sandbox_lifecycle",
+            "schema_version": 1,
+            "event": "deleted",
+            "requested_name": client.params.name,
+            "sandbox_id": client.sandbox.id,
+        }
 
-    asyncio.run(scenario())
+    with process_lifecycle_log(lifecycle):
+        asyncio.run(scenario())
 
 
 class FailedDeletion(LocalDaytona):
@@ -662,7 +682,9 @@ def test_daytona_control_ip_failure_distinguishes_startup_from_stopped_host(tmp_
 
 
 @pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
-def test_daytona_failed_creation_deletes_an_accepted_sandbox(error_type):
+def test_daytona_failed_creation_deletes_an_accepted_sandbox(error_type, tmp_path):
+    lifecycle = tmp_path / "sandbox-lifecycle.jsonl"
+
     class AcceptedThenFailed(LocalDaytona):
         async def create(self, params, *, timeout):
             await super().create(params, timeout=timeout)
@@ -675,8 +697,13 @@ def test_daytona_failed_creation_deletes_an_accepted_sandbox(error_type):
             await factory.create(MachineSpec(source=RegistryImage("fixture@sha256:" + "a" * 64), cpus=2))
         assert client.deleted
         assert client.closed
+        events = [json.loads(line) for line in lifecycle.read_text().splitlines()]
+        assert [event["event"] for event in events] == ["create_requested", "delete_requested", "deleted"]
+        assert {event["requested_name"] for event in events} == {client.params.name}
+        assert {event["sandbox_id"] for event in events[1:]} == {client.sandbox.id}
 
-    asyncio.run(scenario())
+    with process_lifecycle_log(lifecycle):
+        asyncio.run(scenario())
 
 
 def test_snapshot_preflight_builds_without_starting_sandbox_and_reuses_image():

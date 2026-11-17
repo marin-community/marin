@@ -59,6 +59,10 @@ Daytona disables the provider's inactivity auto-stop while retaining the wall-cl
 TTL and caller-owned teardown. If a container-IP control failure reveals a stopped,
 paused, archived, failed or destroyed sandbox, the command raises `MachineTerminated`.
 Pending startup keeps the existing control retries.
+The Daytona logger records generated sandbox names, returned provider IDs and
+awaited deletion events as versioned JSON message payloads. Keep these records
+with owned trial logs; see [sandbox ownership evidence](../../.agents/ops/daytona.md#sandbox-ownership-evidence)
+before releasing leased capacity.
 
 ```python
 from shellbox.backends.daytona.machine import DaytonaMachineFactory

@@ -88,6 +88,42 @@ OpenThoughts-Agent Jupiter launcher also uses `DC_AGENT_SECRET_ENV` to identify
 its private secrets file. That is a launcher-specific setting, not an Iris
 requirement. See the source Jupiter runbook below for that workflow.
 
+## Sandbox ownership evidence
+
+For a single-trial subprocess started by your campaign, preserve its trial
+configuration, job/task ID and complete lifecycle log. The native oracle-filter
+launcher passes `--sandbox-lifecycle-log ATTEMPT/sandbox-lifecycle.jsonl` to
+`harbor trials start`. This writes a fresh local file and explicitly enables
+ownership logging, independent of the process's default log level. The file
+contains events from that trial process; do not combine other campaigns' logs.
+
+The `shellbox.backends.daytona.lifecycle` logger emits JSON message payloads with
+`kind: daytona_sandbox_lifecycle` and `schema_version: 1`. `create_requested`
+records the generated `requested_name`; `created` binds it to the returned
+`sandbox_id`. `delete_requested` records the exact ID before deletion, and
+`deleted` follows the awaited provider deletion. A failed creation can still
+emit deletion events when the provider accepted the request before returning an
+error. An `absent` event has no ID: it means only that the generated name was
+not found.
+
+Collect IDs only from `created` or `delete_requested` events tied to a preceding
+`create_requested` in that owned subprocess. After the trial subprocess and its
+normal awaited cleanup finish, use the same account's read-only
+`AsyncDaytona.get(id)` on each exact ID. Only `DaytonaNotFoundError` establishes
+absence; authorization errors, timeouts and other lookup failures leave it
+unverified. Do not infer ownership from status, age or account-wide lists.
+Every `create_requested` without a bound ID remains unresolved, including when
+there is an `absent` event. An interrupted subprocess or unresolved request keeps
+its slots held pending ledger-owner review; an empty ID list cannot release them.
+
+Before returning reserved sandbox concurrency slots to the campaign's capacity
+ledger, store an immutable receipt containing the trial/job identity, complete
+log URI and SHA-256, exact IDs, check time and each lookup result. Publish the
+receipt URI and SHA-256 to the ledger owner. Presence or an unverified lookup
+keeps those slots held. These lifecycle records do not establish correct
+scoring; run the [grader controls](../../docs/references/task-curation.md#graders-and-controls)
+separately.
+
 ## Snapshot preflight and reclamation
 
 Shellbox identifies snapshots for all launchers. One snapshot

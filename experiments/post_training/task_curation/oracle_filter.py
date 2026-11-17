@@ -1002,6 +1002,8 @@ def calibrated_task(
                     "start",
                     "--config",
                     str(config_path),
+                    "--sandbox-lifecycle-log",
+                    str(attempt / "sandbox-lifecycle.jsonl"),
                 ],
                 stdout=log,
                 stderr=subprocess.STDOUT,

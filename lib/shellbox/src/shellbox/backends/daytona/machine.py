@@ -5,7 +5,6 @@
 
 import asyncio
 import json
-import logging
 import math
 import re
 import shlex
@@ -32,6 +31,7 @@ from daytona import (
 )
 from daytona_api_client_async import SandboxState
 
+from shellbox.backends.daytona.lifecycle import SandboxLifecycleEvent, record_sandbox_lifecycle
 from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.daytona.provider import (
     PENDING_SANDBOX_IP_MESSAGE,
@@ -80,7 +80,6 @@ TERMINAL_SANDBOX_STATES = frozenset(
         SandboxState.PAUSING,
     }
 )
-logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 CONTROL_CWD = "/"
 COUNT_PREFIX = "SHELLBOX_COUNT="
@@ -137,8 +136,11 @@ async def _delete_named_sandbox(
         try:
             sandbox = await client.get(name)
         except DaytonaNotFoundError:
+            record_sandbox_lifecycle(SandboxLifecycleEvent.ABSENT, name)
             return
+        record_sandbox_lifecycle(SandboxLifecycleEvent.DELETE_REQUESTED, name, sandbox.id)
         await client.delete(sandbox, wait=True)
+        record_sandbox_lifecycle(SandboxLifecycleEvent.DELETED, name, sandbox.id)
 
     async with wait_policy.timeout(INTERRUPT_TIMEOUT):
         await wait_policy.request("sandbox.delete", delete, request_timeout=PROVIDER_REQUEST_TIMEOUT)
@@ -727,6 +729,7 @@ class DaytonaMachineFactory:
             async with self.provider_wait_policy.timeout(timeout) as deadline:
                 name = f"shellbox-{uuid.uuid4().hex}"
                 params = await self._create_parameters(client, spec, name, deadline)
+                record_sandbox_lifecycle(SandboxLifecycleEvent.CREATE_REQUESTED, name)
 
                 async def delete_sandbox(_error_type, error, _traceback):
                     try:
@@ -744,6 +747,7 @@ class DaytonaMachineFactory:
                     deadline=self.provider_wait_policy.startup_deadline(deadline),
                     wait_policy=self.provider_wait_policy,
                 )
+                record_sandbox_lifecycle(SandboxLifecycleEvent.CREATED, name, sandbox.id)
             machine = DaytonaMachine(sandbox, spec, lifetime, self.provider_wait_policy)
             prepared = await machine._control_exec(
                 _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT
