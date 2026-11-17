@@ -59,3 +59,10 @@ trials:
     mla_qk_norm_cap: '30'
   commit: b55893e78a
   priority: batch
+  loss:
+  - 3.0505
+  delta:
+  - 0.0048
+  steps: 3030
+  baseline: belay-X0229v1-control 3.0457 (same commit, seed 0)
+  step_time_change: 0%
