@@ -29,7 +29,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (2726 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (2726 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -37,7 +42,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (4196 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (4196 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -45,7 +55,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (9659 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (9659 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -53,7 +68,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (1996 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (1996 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -61,7 +81,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (925 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (925 tasks) stays intact pending "
+                "a pinned rebuild."
             ),
         ),
     ),
@@ -69,7 +94,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (1000 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (1000 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -77,7 +107,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (479 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (479 tasks) stays intact pending "
+                "a pinned rebuild."
             ),
         ),
     ),
@@ -85,7 +120,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (9930 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (9930 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -93,7 +133,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (447 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (447 tasks) stays intact pending "
+                "a pinned rebuild."
             ),
         ),
     ),
@@ -101,7 +146,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (3121 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (3121 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -109,7 +159,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (7878 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (7878 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -117,7 +172,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (587 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (587 tasks) stays intact pending "
+                "a pinned rebuild."
             ),
         ),
     ),
@@ -125,7 +185,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (2275 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (2275 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -133,7 +198,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (424 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (424 tasks) stays intact pending "
+                "a pinned rebuild."
             ),
         ),
     ),
@@ -141,7 +211,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (843 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (843 tasks) stays intact pending "
+                "a pinned rebuild."
             ),
         ),
     ),
@@ -149,7 +224,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (462 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (462 tasks) stays intact pending "
+                "a pinned rebuild."
             ),
         ),
     ),
@@ -157,7 +237,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (1782 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (1782 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -165,7 +250,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (8860 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (8860 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -173,7 +263,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (2858 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (2858 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -181,7 +276,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (2859 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (2859 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -189,7 +289,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (2848 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (2848 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -197,7 +302,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (9579 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (9579 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -205,7 +315,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (1272 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (1272 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -213,7 +328,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (1541 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (1541 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -221,7 +341,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (468 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (468 tasks) stays intact pending "
+                "a pinned rebuild."
             ),
         ),
     ),
@@ -229,7 +354,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (21660 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (21660 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -237,7 +367,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (1000 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (1000 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -245,7 +380,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (9033 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (9033 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -253,7 +393,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (1982 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (1982 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -261,7 +406,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (1000 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (1000 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -269,7 +419,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (2915 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (2915 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -277,7 +432,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (5232 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (5232 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -285,7 +445,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (5291 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (5291 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -293,7 +458,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (1050 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (1050 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -301,7 +471,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (3150 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (3150 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -309,7 +484,12 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey (4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend (daytona/iris/local) UNSUPPORTED — measured per-role cause: agent: Unresolved Docker build context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) never count for admission, and the declared TaskSpec population (1010 tasks) stays intact pending a pinned rebuild."
+                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
+                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
+                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
+                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
+                "never count for admission, and the declared TaskSpec population (1010 tasks) stays intact "
+                "pending a pinned rebuild."
             ),
         ),
     ),
