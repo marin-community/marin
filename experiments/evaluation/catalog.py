@@ -8,6 +8,7 @@ from functools import cache, partial
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.benchmarks import (
+    biomedical,
     code,
     commonsense,
     financebench,
@@ -49,6 +50,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             mmlu_redux,
             code,
             commonsense,
+            biomedical,
             instruction_following,
             jee,
             math,
