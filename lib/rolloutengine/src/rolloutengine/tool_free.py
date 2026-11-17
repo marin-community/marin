@@ -83,7 +83,7 @@ class ToolFreeChatModel:
             tokenization=self.tokenization,
             prompt_tokens=len(tokens),
         )
-        body = {
+        body: dict[str, Any] = {
             **options,
             "model": self.model,
             "messages": list(request.messages),
