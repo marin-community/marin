@@ -44,6 +44,7 @@ def test_find_old_jobs_counts_active_tasks_of_each_tree_on_the_cluster_that_runs
         _running_job("/bob/fresh", started_days_ago=2, task_states={"running": 1}),
         _running_job("/carol/preempted", started_days_ago=10, task_states={"pending": 2}),
         _running_job("/dave/gang", started_days_ago=9, task_states={"running": 8}, cluster="cw-rno2a"),
+        _running_job("/erin/excluded", started_days_ago=30, task_states={"running": 1}),
     ]
     # The lookup fails for any job without an active task, so it also checks those are skipped.
     requests = {
@@ -52,7 +53,7 @@ def test_find_old_jobs_counts_active_tasks_of_each_tree_on_the_cluster_that_runs
         JobName.from_wire("/dave/gang"): GPU_TASK,
     }
 
-    old_jobs = find_old_jobs("marin", jobs, CUTOFF_MS, requests.__getitem__)
+    old_jobs = find_old_jobs("marin", jobs, CUTOFF_MS, requests.__getitem__, excluded_owners={"erin"})
 
     assert sorted(old_jobs, key=lambda job: job.key) == [
         OldJob("cw-rno2a", JobName.from_wire("/dave/gang"), NOW_MS - 9 * MS_PER_DAY, {GPU_TASK: 8}),

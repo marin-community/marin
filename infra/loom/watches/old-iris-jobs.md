@@ -7,6 +7,7 @@ Post the report of old active Iris jobs to the watch's allowed Slack channel.
 
    ```bash
    uv run python scripts/ops/old_iris_jobs.py --min-age-days 7 --cluster marin \
+     --exclude-owner kaiyuew@stanford.edu --exclude-owner michaelryan \
      --state $WORK/state.json --messages-dir $WORK/messages
    ```
 

@@ -13,7 +13,7 @@ pending; a job that stops running leaves the state.
 
 import json
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,16 +61,18 @@ def find_old_jobs(
     running_jobs: Iterable[JobStatus],
     cutoff_ms: int,
     task_resources: Callable[[JobName], ResourceRequest],
+    excluded_owners: Collection[str],
 ) -> list[OldJob]:
     """Group running jobs by the cluster that runs them and their root; keep the trees started before ``cutoff_ms``.
 
     ``task_resources`` gives a job's per-task request; only jobs with an active task need it.
+    Jobs of ``excluded_owners`` are left out.
     """
     # Offset paging over a changing job set can return a job twice.
     unique = {job.job_id: job for job in running_jobs}
     trees: dict[tuple[str, JobName], list[tuple[int, JobStatus]]] = defaultdict(list)
     for job in unique.values():
-        if job.started_at is None:
+        if job.started_at is None or job.job_id.user in excluded_owners:
             continue
         cluster = scanned_cluster if job.execution_cluster_id == LOCAL_CLUSTER else job.execution_cluster_id
         trees[(cluster, job.job_id.root_job)].append((job.started_at.epoch_ms(), job))
@@ -149,6 +151,12 @@ def read_reported(state_path: Path) -> set[str]:
     help="Report root jobs whose running tree started more than this many days ago.",
 )
 @click.option(
+    "--exclude-owner",
+    "excluded_owners",
+    multiple=True,
+    help="Owner whose jobs the report leaves out. Repeat for each owner.",
+)
+@click.option(
     "--state",
     "state_path",
     type=click.Path(dir_okay=False, path_type=Path),
@@ -162,7 +170,9 @@ def read_reported(state_path: Path) -> set[str]:
     help="Slack messages output, one file per message, to post in name order; "
     "must not exist yet. Stays empty when no job is new.",
 )
-def main(cluster: str, min_age_days: float, state_path: Path, messages_dir: Path) -> None:
+def main(
+    cluster: str, min_age_days: float, excluded_owners: tuple[str, ...], state_path: Path, messages_dir: Path
+) -> None:
     # A message left by an earlier run must not be posted again.
     messages_dir.mkdir(parents=True)
     now_ms = Timestamp.now().epoch_ms()
@@ -174,6 +184,7 @@ def main(cluster: str, min_age_days: float, state_path: Path, messages_dir: Path
             client.list_jobs(state=JobState.RUNNING),
             cutoff_ms,
             lambda job_id: client.job_status(job_id).resources,
+            excluded_owners,
         )
 
     reported = read_reported(state_path)

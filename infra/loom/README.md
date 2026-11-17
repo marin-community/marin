@@ -366,6 +366,8 @@ profile cannot run `uv run`, because its commands cannot write the uv cache. The
 [`scripts/ops/old_iris_jobs.py`](../../scripts/ops/old_iris_jobs.py) against the
 `marin` hub and posts the Iris root jobs older than the prompt's
 `--min-age-days` to `#marin-alerts`, once per job while the job keeps running.
+The report leaves out the jobs of the owners that the prompt's `--exclude-owner`
+options name.
 Loom has no CoreWeave kubeconfig, so the report has the jobs the hub federates
 to CoreWeave but not the jobs submitted directly to a CoreWeave controller. The
 watch does not cancel jobs.
