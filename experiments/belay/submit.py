@@ -231,6 +231,58 @@ def experiment_id(registry_id: str, track: Track, ladder: bool) -> str:
     return f"{registry_id}{LADDER_RUNGS[track]}" if ladder else registry_id
 
 
+SWEEP_TAG = "v"
+"""The tag a sweep member's experiment id carries (``X0229v2``): one spec, trial and stages per swept value."""
+SWEEP_EXPERIMENT = re.compile(rf"X\d{{4}}{SWEEP_TAG}\d+$")
+MAX_SWEEP = 4
+
+
+@dataclass(frozen=True)
+class Sweep:
+    """One setting swept over several values: each value is its own variant, run against one shared control."""
+
+    option: str
+    name: str
+    values: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SweepMember:
+    experiment: str
+    variant: str
+    settings: list[tuple[str, str]]
+
+
+def parse_sweep(option: str, text: str) -> Sweep:
+    """``name=v1,v2,...`` for ``option`` (``--model-set`` or ``--opt-set``); refuses fewer than two values, more than
+    ``MAX_SWEEP``, or a repeated value."""
+    name, _, joined = text.partition("=")
+    values = tuple(v.strip() for v in joined.split(",") if v.strip())
+    if not name or len(values) < 2:
+        raise SystemExit(f"refusing: a sweep is <name>=<value>,<value>[,...], got {text!r}")
+    if len(values) > MAX_SWEEP or len(set(values)) != len(values):
+        raise SystemExit(f"refusing: a sweep takes 2 to {MAX_SWEEP} distinct values, got {joined!r}")
+    return Sweep(option, name, values)
+
+
+def sweep_members(registry_id: str, variant: str, settings: list[tuple[str, str]], sweep: Sweep) -> list[SweepMember]:
+    """One member per swept value, numbered from 1: the shared ``settings`` plus the value, labelled
+    ``<variant>, <name>=<value>``. Refuses shared settings that already set the swept field."""
+    if any(option == sweep.option and s.partition("=")[0] == sweep.name for option, s in settings):
+        raise SystemExit(f"refusing: {sweep.name} is swept; drop its {sweep.option} setting")
+    members = []
+    for i, value in enumerate(sweep.values, start=1):
+        member_settings = [*settings, (sweep.option, f"{sweep.name}={value}")]
+        label = f"{variant}, {sweep.name}={value}"
+        check_variant(label, member_settings)
+        members.append(SweepMember(f"{registry_id}{SWEEP_TAG}{i}", label, member_settings))
+    return members
+
+
+def is_sweep_member(experiment: str) -> bool:
+    return SWEEP_EXPERIMENT.match(experiment) is not None
+
+
 def registry_of(experiment: str) -> str:
     """The registry id an experiment id belongs to (``X0037d768`` -> ``X0037``)."""
     match = REGISTRY_ID.match(experiment)
@@ -278,7 +330,7 @@ def check_variant(variant: str, settings: list[tuple[str, str]]) -> None:
     if not settings:
         raise SystemExit("refusing: give at least one --opt-set or --model-set setting")
     if len(variant) > MAX_VARIANT:
-        raise SystemExit(f"refusing: --variant is longer than {MAX_VARIANT} characters")
+        raise SystemExit(f"refusing: the variant {variant!r} is longer than {MAX_VARIANT} characters")
     for option, setting in settings:
         check_setting(option, setting)
 

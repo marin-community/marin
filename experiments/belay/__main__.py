@@ -185,6 +185,7 @@ from experiments.belay.submit import (
     IrisJob,
     RunSpec,
     Stage,
+    Sweep,
     TrackSource,
     check_ladder_launch,
     check_launch,
@@ -193,6 +194,7 @@ from experiments.belay.submit import (
     hero_mfu_result,
     hero_mfu_steps,
     iris_jobs,
+    is_sweep_member,
     latest_stage,
     launch_band,
     launch_command,
@@ -201,6 +203,7 @@ from experiments.belay.submit import (
     next_stage_runs,
     own_runs,
     parse_spec,
+    parse_sweep,
     parse_track,
     previous_tracks,
     refuse_over_cap,
@@ -217,6 +220,7 @@ from experiments.belay.submit import (
     spec_with_runs,
     stage_runs,
     submit_run,
+    sweep_members,
     track_command,
     tracks_of_comment,
     variant_settings,
@@ -454,6 +458,8 @@ def print_idea_brief(idea: Idea, tracks: tuple[Track, ...], defaulted: bool) -> 
     say_next(
         f'{BELAY} new-idea --idea-id {idea.id} --category "<category>" --variant "<what changes, at most 60 '
         'characters>" --opt-set <name>=<value>   (one --opt-set or --model-set per setting)\n'
+        "   or, if it asks for several values of one setting, add --sweep-model-set (or --sweep-opt-set) "
+        "<name>=<v1>,<v2>[,...]: one run per value (at most 4) against one shared control\n"
         f'   or, if the idea needs code: {BELAY} new-idea --idea-id {idea.id} --category "<category>"'
     )
 
@@ -571,14 +577,17 @@ def new_idea(
     settings: list[tuple[str, str]],
     defaults: str | None,
     *,
+    sweep: Sweep | None = None,
     named_entry: str | None = None,
     inferred_track: str | None = None,
     dry_run: bool,
 ) -> None:
     """Register an approved idea, commit its run spec, post the plan and launch it; resumes where it stopped. A
-    ladder idea gets one spec and trial per rung, launched together. ``named_entry`` is an existing registry entry
-    the approved text names (an idea that takes a recorded one further, such as up the ladder). ``inferred_track`` is
-    the Track the session reads from approved text that asks for one in words but has no ``Track:`` line."""
+    ladder idea gets one spec and trial per rung, launched together; a ``sweep`` gets one per swept value
+    (``X####v1``, ``v2``, ...), launched together against one shared control. ``named_entry`` is an existing
+    registry entry the approved text names (an idea that takes a recorded one further, such as up the ladder).
+    ``inferred_track`` is the Track the session reads from approved text that asks for one in words but has no
+    ``Track:`` line."""
     repo = repo_root()
     branch = require_week_branch(repo, datetime.date.today())
     require_registry_checkout()
@@ -621,8 +630,15 @@ def new_idea(
         return
     if category not in categories():
         raise SystemExit(f"refusing: category {category!r} is not in the list printed by new-idea --idea-id {idea_id}")
-    if variant is not None or settings:
+    if sweep is not None:
+        if ladder or tracks[0] is Track.CUSTOM or TRACKS[tracks[0]].needs_go_ahead:
+            raise SystemExit(f"refusing: a sweep runs on one Track a session launches, not {label}")
+        if variant is None:
+            raise SystemExit("refusing: a sweep needs --variant (what changes; each value is appended to it)")
+        sweep_members(registry_id or "X0000", variant, settings, sweep)  # checks every member before any write
+    elif variant is not None or settings:
         check_variant(variant or "", settings)
+    if variant is not None or settings or sweep is not None:
         if not defaults:
             raise SystemExit(
                 "refusing: give --defaults: each setting the idea left open and the value chosen, or 'none'"
@@ -641,7 +657,7 @@ def new_idea(
         print(f"{registry_id} is registered as a study on its budget: {study_budget(idea)}")
         say_next(f"{BELAY} study {registry_id} --spec <file>   (write the spec as RUNBOOK.md section 1c shows)")
         return
-    if variant is None or not settings:
+    if variant is None or not (settings or sweep):
         print(f"{registry_id} is registered; its change needs code (section 1b)")
         say_next(f"{BELAY} code-change {registry_id} --start")
         return
@@ -653,6 +669,23 @@ def new_idea(
         defaults_text = f"track speedrun (no Track: line); {defaults_text}"
     if source is TrackSource.INFERRED:
         defaults_text = f"track {label} inferred from the approved text; {defaults_text}"
+    if sweep is not None:
+        launch_sweep(
+            repo,
+            branch,
+            idea,
+            registry_id,
+            tracks[0],
+            variant,
+            settings,
+            sweep,
+            defaults_text,
+            name,
+            state,
+            dry_run=dry_run,
+        )
+        say_next("stop (the watcher starts a new session when the runs finish)")
+        return
     if ladder:  # all rungs or none: a rung launched alone would leave the idea planned with the rest never started
         waiting = [t for t in tracks if not spec_launched(repo, experiment_id(registry_id, t, ladder))]
         check_ladder_launch(waiting, iris_jobs(), state.node_cap, idea.node_grant, registry_id)
@@ -665,6 +698,40 @@ def new_idea(
             dry_run=dry_run,
         )
     say_next("stop (the watcher starts a new session when the runs finish)")
+
+
+def launch_sweep(
+    repo: Path,
+    branch: str,
+    idea: Idea,
+    registry_id: str,
+    track: Track,
+    variant: str,
+    settings: list[tuple[str, str]],
+    sweep: Sweep,
+    defaults: str,
+    name: str | None,
+    state: PageState,
+    *,
+    dry_run: bool,
+) -> None:
+    """Plan and launch every member of ``sweep`` not yet launched, all or none: the first launches the control (unless
+    the Track compares against a finished recipe run) and the rest reuse it as a shared control."""
+    members = sweep_members(registry_id, variant, settings, sweep)
+    waiting = [m for m in members if not spec_launched(repo, m.experiment)]
+    if waiting:
+        control = 0 if TRACKS[track].baseline_run or len(waiting) < len(members) else 1
+        nodes = TRACKS[track].nodes * (len(waiting) + control)
+        refuse_over_cap(nodes, iris_jobs(), state.node_cap, idea.node_grant, registry_id)
+    note = f"{defaults}; sweeps {sweep.name} over {', '.join(sweep.values)} against one shared control"
+    for m in members:
+        plan_and_launch(
+            Plan(repo, branch, idea, registry_id, track, m.experiment, note),
+            m.variant,
+            m.settings,
+            name,
+            dry_run=dry_run,
+        )
 
 
 def named(idea: Idea, entry: str | None) -> str | None:
@@ -1434,7 +1501,11 @@ def run_finished(experiment: str, *, dry_run: bool) -> None:
         earlier[i + 1] = reproduce(trial_experiment, t["commit"], key)
     body = with_reproduce(body, earlier)  # sections written before posts carried a Reproduce line
     publish_thread(registry_id, new_title, body, None if idea is None else idea.id, "result", dry_run=dry_run)
-    rungs_left = ladder_rungs_left(trials, trial)
+    if is_sweep_member(experiment):
+        live = {run_parts(r.name)[0] for r in state.runs if not r.terminal and r.name.startswith(RUN_PREFIX)}
+        rungs_left = sweep_members_left(trials, experiment, live)
+    else:
+        rungs_left = ladder_rungs_left(trials, trial)
     if idea is not None:
         result = {"rows": [asdict(r) for r in results], "verdict": overall, "kind": PAGE_RESULT_KIND[overall]}
         idea_state = "running" if rungs_left else "recorded"
@@ -1445,9 +1516,13 @@ def run_finished(experiment: str, *, dry_run: bool) -> None:
         advance(nxt, dry_run=dry_run)
         return
     if rungs_left:
-        print(f"{experiment} recorded; {len(rungs_left)} other rung(s) of {registry_id} still running")
-        say_next("stop (the last rung to finish scores the entry)")
+        print(f"{experiment} recorded; {len(rungs_left)} other rung(s) or sweep value(s) of {registry_id} still running")
+        say_next("stop (the last one to finish scores the entry)")
         return
+    if is_sweep_member(experiment):  # the sweep is complete: it is judged by its best value
+        overall, status = sweep_verdict(trials, baseline)
+        if idea is not None:
+            report_idea(idea.id, {"state": "recorded", "result": {**result, "summary": status}}, dry_run=dry_run)
     if spec.track in LADDER_RUNGS:  # the ladder is complete: it is judged by its projection to hero compute
         overall, status = record_projection(registry_id, dry_run=dry_run)
         if idea is not None:
@@ -1497,6 +1572,28 @@ def ladder_rungs_left(trials: list[dict], finished: dict) -> list[dict]:
     the trials of an earlier attempt that crashed."""
     latest = {t.get("rung"): t for t in trials if t.get("rung") in LADDER_RUNGS}
     return [t for rung, t in latest.items() if rung != finished.get("rung") and t.get("loss") is None]
+
+
+def latest_by_experiment(trials: list[dict]) -> dict[str, dict]:
+    """Each experiment's latest trial (a relaunch or an equal-time trial replaces the earlier one), by its runs."""
+    return {run_parts(t["wandb"][0])[0]: t for t in trials if t.get("wandb")}
+
+
+def sweep_members_left(trials: list[dict], finished: str, live: set[str]) -> list[str]:
+    """The sweep's other members still going: one with a live run (a timing probe or equal-time run included) or a
+    latest trial with no result yet. While any remain the idea stays running and only the last member scores it."""
+    latest = latest_by_experiment(trials)
+    members = {e for e in [*latest, *live] if is_sweep_member(e)}
+    return sorted(e for e in members if e != finished and (e in live or latest[e].get("loss") is None))
+
+
+def sweep_verdict(trials: list[dict], baseline: Baseline) -> tuple[Verdict, str]:
+    """A finished sweep's verdict (a win if any value won) and status line naming its best value, from each member's
+    latest trial (for speedrun, the equal-time one when it ran)."""
+    scored = [(t["delta"][0], t) for e, t in latest_by_experiment(trials).items() if is_sweep_member(e)]
+    delta, best = min(scored, key=lambda pair: pair[0])
+    overall = overall_verdict([verdict(d, baseline) for d, _ in scored])
+    return overall, f"sweep {overall}: best {best['variant']} (Δ {delta:+.4f})"
 
 
 @dataclass(frozen=True)
@@ -2115,6 +2212,11 @@ def main(argv: list[str]) -> None:
     p.add_argument("--variant")
     p.add_argument("--opt-set", action="append", default=[])
     p.add_argument("--model-set", action="append", default=[])
+    sweep = p.add_mutually_exclusive_group()
+    sweep.add_argument(
+        "--sweep-model-set", metavar="NAME=V1,V2,...", help="run one variant per value against one shared control"
+    )
+    sweep.add_argument("--sweep-opt-set", metavar="NAME=V1,V2,...", help="as --sweep-model-set, for an optimizer field")
     p.add_argument("--registry-id", help="an existing entry the approved text names (such as a ladder of X####)")
     p.add_argument(
         "--track",
@@ -2200,6 +2302,11 @@ def main(argv: list[str]) -> None:
             args.variant,
             settings,
             args.defaults,
+            sweep=(
+                parse_sweep("--model-set", args.sweep_model_set)
+                if args.sweep_model_set
+                else parse_sweep("--opt-set", args.sweep_opt_set) if args.sweep_opt_set else None
+            ),
             named_entry=args.registry_id,
             inferred_track=args.track,
             dry_run=args.dry_run,
