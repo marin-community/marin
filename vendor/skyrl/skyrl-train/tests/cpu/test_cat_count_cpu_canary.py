@@ -261,36 +261,11 @@ def assert_cpu_learning(positive, root: Path, telemetry):
         )
     assert evaluations[0]["eval/reporting/avg_score_improvement"] == 0
     assert evaluations[-1]["eval/reporting/avg_score_improvement"] >= 0.1
-    greedy_rows = [
-        json.loads(line)
-        for line in (
-            Path(
-                evaluation_dump_dir(
-                    str(root / "exports"), 0, attempt_id=next(reversed(read_attempts(str(root / "exports"))))
-                )
-            )
-            / "train.jsonl"
-        )
-        .read_text()
-        .splitlines()
-    ]
-    sampled_rows = [
-        json.loads(line)
-        for line in (
-            (
-                Path(
-                    evaluation_dump_dir(
-                        str(root / "exports/sampled"),
-                        0,
-                        attempt_id=next(reversed(read_attempts(str(root / "exports")))),
-                    )
-                )
-                / "train.jsonl"
-            )
-            .read_text()
-            .splitlines()
-        )
-    ]
+    attempt_id = next(reversed(read_attempts(str(root / "exports"))))
+    greedy_path = Path(evaluation_dump_dir(str(root / "exports"), 0, attempt_id=attempt_id)) / "train.jsonl"
+    sampled_path = Path(evaluation_dump_dir(str(root / "exports/sampled"), 0, attempt_id=attempt_id)) / "train.jsonl"
+    greedy_rows = [json.loads(line) for line in greedy_path.read_text().splitlines()]
+    sampled_rows = [json.loads(line) for line in sampled_path.read_text().splitlines()]
     assert len(sampled_rows) == 8 * len(greedy_rows)
     for prefix, rows in (("eval/train", greedy_rows), ("eval/sampled/train", sampled_rows)):
         exact = sum((sum(row["score"]) if isinstance(row["score"], list) else row["score"]) == 1.0 for row in rows)
