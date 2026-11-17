@@ -6,7 +6,7 @@
 from pathlib import Path, PurePosixPath
 
 from taskcompendium.grader import GraderPackage
-from taskcompendium.importers.scienceagentbench import VerifiedAnnotation
+from taskcompendium.importers.scienceagentbench import SUBMISSION_PATH, VerifiedAnnotation
 from taskcompendium.models import (
     ArtifactKind,
     EnvironmentRequirements,
@@ -59,7 +59,7 @@ def deterministic_grader(
         reward=FileReward(files=(RewardFile(path=VERDICT_PATH, format=RewardFileFormat.VERDICT_JSON),), pass_above=0.5),
         replay=ReplayStage(
             environment=replay_environment,
-            argv=("python3", "/testbed/solution.py"),
+            argv=("python3", SUBMISSION_PATH),
             cwd="/testbed",
             timeout=replay_timeout,
             artifacts=(
@@ -105,7 +105,7 @@ def papyrus_grader(
                 "python3",
                 "-I",
                 "/replay/decode_papyrus.py",
-                "/testbed/solution.py",
+                SUBMISSION_PATH,
                 "/testbed/pred_results/papyrus_filtered.pkl",
                 PAPYRUS_ROWS,
             ),
