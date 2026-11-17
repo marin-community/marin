@@ -627,8 +627,10 @@ class RlDataSource[ConfigT: CatalogConfig]:
         fails loudly. A source whose only exclusion claim is the missing
         lexical remediation receipt queues as Pending with the remediation
         stage when a remediation agent can produce it: no user-ruling claim
-        applies and the population is nonempty. Ruled exclusions and
-        zero-task sources stay Excluded.
+        applies and the population is nonempty. A legacy ``excluded`` tag
+        without a recorded ruling does not override that queue (user ruling
+        2026-11-17: lexical-remediation sources are Pending, not Excluded);
+        ruled exclusions and zero-task sources stay Excluded.
         """
         claims = self.exclusion_claims
         if "excluded" in self.info.tags and not claims:
@@ -639,8 +641,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
         if claims or "excluded" in self.info.tags:
             reasons = {claim.reason for claim in claims}
             if (
-                "excluded" not in self.info.tags
-                and not manual_exclusion_claims(self.info.id)
+                not manual_exclusion_claims(self.info.id)
                 and reasons == {ExclusionReason.LEXICAL_REMEDIATION_REQUIRED}
                 and (self.info.within_source_dedup.unique_count or 0) > 0
             ):

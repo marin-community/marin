@@ -204,6 +204,49 @@ def test_remediation_rows_are_configured_pending_sources():
         assert row["reasons"], f"Remediation row without its claim: {row['id']}"
 
 
+REBUILT_LEXICAL_ONLY_SOURCES = (
+    "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1",
+    "TaskTrove:tasktrove-curriculum-medium-rebuilt-v1",
+    "TaskTrove:tasktrove-e2egit-v2-rebuilt",
+    "TaskTrove:tasktrove-e2egit-large-rebuilt-v1",
+    "TaskTrove:tasktrove-multifile-rebuilt-v1",
+    "TaskTrove:tasktrove-stack-pytest-rebuilt-v1",
+)
+
+
+@pytest.mark.data_integration
+def test_lexical_only_sources_queue_as_pending_with_the_remediation_stage():
+    """User ruling 2026-11-17: lexical-remediation sources are Pending, not Excluded.
+
+    A source whose only exclusion claim is the missing lexical remediation
+    receipt queues for remediation when no user ruling excludes it and the
+    population is nonempty — a stale legacy ``excluded`` tag must not keep it
+    Excluded. The six rebuilt cohorts named in the excluded-triage brief are
+    the regression rows.
+    """
+    lexical_only = {}
+    for source in all_sources().values():
+        claims = source.exclusion_claims
+        if {claim.reason for claim in claims} != {ExclusionReason.LEXICAL_REMEDIATION_REQUIRED}:
+            continue
+        if manual_exclusion_claims(source.info.id):
+            continue
+        if (source.info.within_source_dedup.unique_count or 0) <= 0:
+            continue
+        lexical_only[source.info.id] = source
+        assert (
+            source.status is SourceStatus.PENDING
+        ), f"Lexical-remediation-only source must queue as Pending: {source.info.id}"
+    for expected in REBUILT_LEXICAL_ONLY_SOURCES:
+        assert expected in lexical_only, f"Rebuilt lexical-only source is not queued: {expected}"
+    remediation = {row["id"]: row for row in source_status.remediation_rows()}
+    for expected in REBUILT_LEXICAL_ONLY_SOURCES:
+        row = remediation.get(expected)
+        assert row is not None, f"Remediation queue lacks the rebuilt source: {expected}"
+        assert row["stage"] == source_status.PendingStage.LEXICAL_REMEDIATION_QUEUED.value
+        assert {claim["reason"] for claim in row["reasons"]} == {ExclusionReason.LEXICAL_REMEDIATION_REQUIRED.value}
+
+
 def test_admission_blocker_strings_stay_mapped():
     """Every blocker string the population check can emit keeps its typed reason."""
     admission = ast.parse((Path("infra/marina/apps/rl_data_catalog/server/admission.py")).read_text())

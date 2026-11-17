@@ -132,7 +132,13 @@
     "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2": "Lexical remediation queued",
     "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2": "Lexical remediation queued",
     "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2": "Lexical remediation queued",
-    "TaskTrove:laion__wizardlm-orca-v4": "Lexical remediation queued"
+    "TaskTrove:laion__wizardlm-orca-v4": "Lexical remediation queued",
+    "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1": "Lexical remediation queued",
+    "TaskTrove:tasktrove-curriculum-medium-rebuilt-v1": "Lexical remediation queued",
+    "TaskTrove:tasktrove-e2egit-v2-rebuilt": "Lexical remediation queued",
+    "TaskTrove:tasktrove-e2egit-large-rebuilt-v1": "Lexical remediation queued",
+    "TaskTrove:tasktrove-multifile-rebuilt-v1": "Lexical remediation queued",
+    "TaskTrove:tasktrove-stack-pytest-rebuilt-v1": "Lexical remediation queued"
   },
   "remediation_queue": [
     {
@@ -244,6 +250,156 @@
       "upstream_dataset": "laion__wizardlm-orca-v4",
       "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
       "notes": "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1",
+      "name": "curriculum-easy-v1-rebuilt",
+      "display_name": "tasktrove-curriculum-easy-rebuilt-v1",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-curriculum-easy-rebuilt-v1",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "505 curriculum-easy tasks converted to run in their archived environment, lowered onto the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_curriculum-easy @ 02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a negative verdict on an empty submission. The repository is private pending release.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:tasktrove-curriculum-medium-rebuilt-v1",
+      "name": "curriculum-medium-v1-rebuilt",
+      "display_name": "tasktrove-curriculum-medium-rebuilt-v1",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-curriculum-medium-rebuilt-v1",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "488 curriculum-medium tasks converted to run in their archived environment, lowered onto the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_curriculum-medium-v2 @ 02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a negative verdict on an empty submission. The repository is private pending release.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:tasktrove-e2egit-v2-rebuilt",
+      "name": "e2egit-v2-rebuilt",
+      "display_name": "tasktrove-e2egit-v2-rebuilt",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-e2egit-v2-rebuilt",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "477 e2egit-v2 tasks preserve their archived environment, lowered onto its digest-pinned base. The upstream is DCAgent__exp_rpt_e2egit-v2 at 02923004846e4e73862c20962f823a6d05100e7a; ten reviewed source defects remain excluded. The private release includes setup and liveness evidence, retained rejections, and an explicit durable compiler grader lock. Qualification uses an empty submission; no oracle or model-quality run is claimed. Daytona execution remains untested",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:tasktrove-e2egit-large-rebuilt-v1",
+      "name": "e2egit-large-v1-rebuilt",
+      "display_name": "tasktrove-e2egit-large-rebuilt-v1",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-e2egit-large-rebuilt-v1",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "4,993 e2egit-large tasks converted to run in their archived environment, lowered onto the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_e2egit-large @ 02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a negative verdict on an empty submission. The repository is private pending release.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:tasktrove-multifile-rebuilt-v1",
+      "name": "multifile-v1-rebuilt",
+      "display_name": "tasktrove-multifile-rebuilt-v1",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-multifile-rebuilt-v1",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "4,842 multifile tasks converted to run in their archived environment, lowered onto the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_multifile-v3 @ 02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a negative verdict on an empty submission. The repository is private pending release.",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TaskTrove:tasktrove-stack-pytest-rebuilt-v1",
+      "name": "stack-pytest-v1-rebuilt",
+      "display_name": "tasktrove-stack-pytest-rebuilt-v1",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-stack-pytest-rebuilt-v1",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "492 stack-pytest tasks converted to run in their archived environment, lowered onto the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_stack-pytest-v2 @ 02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a negative verdict on an empty submission. The repository is private pending release.",
       "stage": "Lexical remediation queued",
       "dataset_id": null,
       "dataset_revision": null,
