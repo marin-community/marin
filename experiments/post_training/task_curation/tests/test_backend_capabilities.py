@@ -45,6 +45,7 @@ from taskcompendium.backend_fields import (
 )
 from taskcompendium.backend_requirements import BackendSurvey, FitSupport, RuntimeProfile
 from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements, ScriptGrader, TaskResource, TaskSpec
+from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.backend_capabilities import (
     build_survey,
@@ -795,3 +796,115 @@ def test_unclassified_capability_is_verify_not_unsupported():
         assert fit.blockers.get("agent:nemotron-agent:ns_tools_simple_agent") == 1
     for backend in ("daytona", "iris", "local"):
         assert mapped.backends[backend].support == FitSupport.VERIFY, backend
+
+
+def _delivery_document(contract_id: str | None, *, grader_build: bool = True, agent_build: bool = False) -> dict:
+    """A Multi/RST-shaped task: contract-delivered roles with shipped build contexts."""
+    dockerfile = inline_resource("Dockerfile", b"FROM busybox:1.36\nCOPY lock .\n")
+    build = {"files": [dockerfile.model_dump(mode="json")]}
+    contract = (
+        {"id": contract_id, "version": 1, "dependency_state": "agent_mutable"} if contract_id is not None else None
+    )
+    if contract_id == "root-delivery":
+        contract["verifier_files"] = [{"name": "test.sh", "mode": 493, "sha256": "0" * 64}]
+    if contract_id == "multi-swe-delivery":
+        contract["archive_sha256"] = "0" * 64
+    agent_environment = (
+        {
+            "command_semantics": "linux_process",
+            "docker_build": build,
+        }
+        if agent_build
+        else {"command_semantics": "linux_process", "docker_image": PDB_SHAPE}
+    )
+    grader_environment = (
+        {"command_semantics": "linux_process", "docker_build": build}
+        if grader_build
+        else {
+            "command_semantics": "linux_process",
+            "docker_image": PDB_SHAPE,
+        }
+    )
+    return {
+        "task": {
+            "environment_requirements": agent_environment,
+            "grader": {
+                "environment": grader_environment,
+                "timeout": 600,
+            },
+            "integrity_contract": contract,
+        },
+        "runtime": {},
+    }
+
+
+def test_multi_shaped_contract_rows_resolve_through_the_shipped_build():
+    """A complete multi-swe delivery contract resolves the grader's shipped build."""
+    checkers = _unit_checkers()
+    mapped = source_map(
+        "multi-shaped",
+        [_delivery_document("multi-swe-delivery") for _ in range(3)],
+        production_matrix(checkers),
+        checkers,
+        {},
+        {"agent": RUNTIME, "grader": RUNTIME},
+        None,
+        {"absent_contract_tasks": 0, "groups": [{"id": "multi-swe-delivery", "present": True, "count": 3}]},
+    )
+    docker = mapped.backends["docker"]
+    # the shipped build resolves: neither role carries the docker_build refusal
+    assert FitSupport.UNSUPPORTED not in docker.roles["agent"]
+    assert FitSupport.UNSUPPORTED not in docker.roles["grader"]
+    assert not any("Unresolved Docker build context" in error for error in docker.validation_errors)
+
+
+def test_rst_shaped_contract_rows_resolve_both_roles():
+    """A complete root-delivery contract resolves agent and grader shipped builds."""
+    checkers = _unit_checkers()
+    mapped = source_map(
+        "rst-shaped",
+        [_delivery_document("root-delivery", agent_build=True) for _ in range(3)],
+        production_matrix(checkers),
+        checkers,
+        {},
+        {"agent": RUNTIME, "grader": RUNTIME},
+        None,
+        {"absent_contract_tasks": 0, "groups": [{"id": "root-delivery", "present": True, "count": 3}]},
+    )
+    docker = mapped.backends["docker"]
+    assert FitSupport.UNSUPPORTED not in docker.roles["agent"]
+    assert FitSupport.UNSUPPORTED not in docker.roles["grader"]
+    assert not any("Unresolved Docker build context" in error for error in docker.validation_errors)
+
+
+def test_docker_build_without_a_contract_still_fails_closed():
+    checkers = _unit_checkers()
+    mapped = source_map(
+        "uncovered",
+        [_delivery_document(None) for _ in range(3)],
+        production_matrix(checkers),
+        checkers,
+        {},
+        {"agent": RUNTIME, "grader": RUNTIME},
+    )
+    docker = mapped.backends["docker"]
+    assert docker.roles["grader"] == {FitSupport.UNSUPPORTED: 3}
+    assert any("Unresolved Docker build context" in error for error in docker.validation_errors)
+
+
+def test_partial_contract_fails_closed():
+    """A role covered on some tasks only keeps the refusal for every task."""
+    checkers = _unit_checkers()
+    documents = [_delivery_document("root-delivery"), _delivery_document(None), _delivery_document("root-delivery")]
+    mapped = source_map(
+        "partial",
+        documents,
+        production_matrix(checkers),
+        checkers,
+        {},
+        {"agent": RUNTIME, "grader": RUNTIME},
+        None,
+        {"absent_contract_tasks": 1, "groups": [{"id": "root-delivery", "present": True, "count": 2}]},
+    )
+    docker = mapped.backends["docker"]
+    assert docker.roles["grader"] == {FitSupport.UNSUPPORTED: 3}

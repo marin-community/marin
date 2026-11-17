@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import subprocess
+import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import replace
@@ -24,6 +25,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.disk import LocalDiskPool
+from shellbox.image import DockerfileSource
 from shellbox.machine import (
     BACKEND_DEPLOYMENT,
     DeploymentClass,
@@ -44,7 +46,9 @@ from taskcompendium.backend_requirements import (
     execution_resource_shape,
     task_demands,
 )
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.catalog_identity import canonical_backend_survey, canonical_snapshot_source
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
@@ -67,6 +71,8 @@ def environment_kind(source) -> Requirement:
         return Requirement.PACKAGE_SPEC
     if isinstance(source, RegistryImage):
         return Requirement.DOCKER_IMAGE
+    if isinstance(source, DockerfileSource):
+        return Requirement.DOCKER_BUILD
     raise ValueError(
         f"Converted environments resolve to RegistryImage, HostImage or PackageSpec, not {type(source).__name__}"
     )
@@ -206,6 +212,42 @@ def combined_support(values: Iterable[Support]) -> Support:
     return max(values, key=SUPPORT_ORDER.index, default=Support.SUPPORTED)
 
 
+_DELIVERY_CONTRACT_KINDS = frozenset({"root-delivery", "multi-swe-delivery"})
+_SHIPPED_CONTEXT_CACHE: dict[str, DockerfileSource] = {}
+
+
+def _contract_covered(contract: dict | None) -> bool:
+    """Whether the task carries a matched delivery contract (ruled kinds only)."""
+    return isinstance(contract, dict) and contract.get("id") in _DELIVERY_CONTRACT_KINDS
+
+
+def _shipped_build_source(requirements: EnvironmentRequirements) -> DockerfileSource:
+    """Materialize the task's shipped Docker build context for the survey.
+
+    A delivery contract ships its Docker build context declaratively (the
+    adapter accepts DockerBuildExecution.DECLARATIVE under the contract): the
+    shared machine builds it from the shipped files at runtime, so the survey
+    measures the backend's build capability against the shipped recipe.
+    """
+    context = requirements.docker_build
+    assert context is not None
+    key = canonical_sha256([resource.model_dump(mode="json") for resource in context.files])
+    source = _SHIPPED_CONTEXT_CACHE.get(key)
+    if source is not None:
+        return source
+    root = Path(tempfile.mkdtemp(prefix="atlas-contract-build-"))
+    for resource in context.files:
+        target = root / resource.path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(resource_bytes(resource))
+    dockerfile = root / "Dockerfile"
+    if not dockerfile.is_file():
+        raise UnsupportedMachineSpec("The shipped Docker build context carries no Dockerfile")
+    source = DockerfileSource(context=root, dockerfile=dockerfile)
+    _SHIPPED_CONTEXT_CACHE[key] = source
+    return source
+
+
 def source_map(
     source_id: str,
     documents: Iterable[Mapping],
@@ -232,6 +274,17 @@ def source_map(
     exclusions = defaultdict(Counter)
     errors = defaultdict(Counter)
     assignments = defaultdict(Counter)
+    # Role-scoped delivery-contract handling (coordinator ruling): a task
+    # whose role carries a complete matched delivery contract does not need a
+    # resolved docker_build for that role — the contract ships the build
+    # context declaratively and the shared agent machine builds it at
+    # runtime. Coverage reads the source's contract census (zero extra
+    # streaming): absent_contract_tasks == 0 with a named matched group means
+    # every task is contracted; a partial or unnamed contract fails closed.
+    census = integrity_contracts or {}
+    contracts_complete = census.get("absent_contract_tasks") == 0 and any(
+        group.get("id") in _DELIVERY_CONTRACT_KINDS and group.get("present") for group in census.get("groups") or []
+    )
     count = 0
     for document in documents:
         count += 1
@@ -281,7 +334,16 @@ def source_map(
                 requirements = EnvironmentRequirements.model_validate(declared)
                 settings = MachineRuntimeSpec.model_validate({**shape, "backend": backend})
                 try:
-                    spec = _machine_spec(requirements, settings)
+                    contract = task.get("integrity_contract")
+                    if contracts_complete and _contract_covered(contract) and requirements.docker_build is not None:
+                        # the contract ships the build context declaratively: the
+                        # shared agent machine builds it at runtime, so the cell
+                        # measures the backend's build capability
+                        spec = _machine_spec(
+                            requirements, settings, docker_build_source=_shipped_build_source(requirements)
+                        )
+                    else:
+                        spec = _machine_spec(requirements, settings)
                 except UnsupportedMachineSpec as error:
                     role_counts[backend][role][FitSupport.UNSUPPORTED] += 1
                     errors[backend][f"{role}: {error}"] += 1
