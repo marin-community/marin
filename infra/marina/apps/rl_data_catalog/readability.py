@@ -59,12 +59,13 @@ def inspect_status_focus(page: Page) -> dict[str, Any]:
         # Tab from the preceding control so native scrolling and :focus-visible
         # are exercised. The representative gate must reach deep table rows too.
         target.evaluate(
-            """e => {
-            const controls=[...document.querySelectorAll('a[href],button,input,select,textarea,summary')]
+            """(e, selector) => {
+            const controls=[...document.querySelectorAll(selector)]
                 .filter(node => node.checkVisibility() && !node.disabled);
             const previous=controls[controls.indexOf(e)-1];
             previous.focus({preventScroll:true});
-        }"""
+        }""",
+            CONTROLS,
         )
         page.keyboard.press("Tab")
         page.evaluate("() => new Promise(resolve => requestAnimationFrame(resolve))")
