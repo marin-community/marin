@@ -4,7 +4,7 @@ name: Char n-gram spelling AttnRes source
 category: Embeddings and inputs
 summary: 'Track: speedrun'
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6940615855
@@ -12,3 +12,16 @@ intake:
   approved_by: ClassicLarry
 code_commits:
 - e7d3e8285dbda40ee06d0cfeb7b04632df0dd0d0
+trials:
+- id: t001
+  variant: char 1-4-gram spelling as own AttnRes source
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0232
+  date: '2026-11-17'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0232
+  wandb: []
+  settings:
+    spelling_ngram_source: 'true'
+  commit: e8d028048f
+  priority: batch
