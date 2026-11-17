@@ -9,19 +9,17 @@ from dataclasses import dataclass, replace
 from functools import partial
 
 from marin.execution.lazy import ArtifactStep, StepContext
-from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, ItemBuilder, chat_variant_item
+from taskcompendium.evaluation.corpus import ItemBuilder, chat_variant_item
 from taskcompendium.evaluation.spec import EvaluationProtocol, OperationKind
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.fingerprints import callable_identity
-from taskcompendium.pipeline.models import IntendedUse, SourceStatus
+from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.sources import source_files_identity
 
-from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
+from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
-from experiments.post_training.task_curation.evaluation import publish_dataset_corpus
 from experiments.post_training.task_curation.environment import Placement, placement
+from experiments.post_training.task_curation.evaluation import publish_dataset_corpus
 from experiments.post_training.task_curation.images.build import (
     EnvironmentArtifact,
     built_environment,
@@ -35,12 +33,9 @@ from experiments.post_training.task_curation.pipeline import (
     RecipeSource,
     download_identity,
     environment_record,
-    environment_requirements,
-    input_file_overrides,
     input_overrides_identity,
     source_downloads,
     source_recipe,
-    validate_input_identity,
 )
 from experiments.post_training.task_curation.source import RlDataSource
 
