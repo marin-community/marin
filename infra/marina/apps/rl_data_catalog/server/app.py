@@ -35,6 +35,7 @@ from .identity_measurements import IDENTITY_REVIEWS_SQL, IDENTITY_SURVEY_SQL
 from .licensing import license_projection
 from .quality import intended_use, issue_rate, quality_display, result, review_coverage
 from .schema import SCHEMA_SQL
+from .source_areas import materialize_source_areas
 from .source_counts import SourceCounts
 from .source_identity import canonical_source_id, original_source_id
 
@@ -71,6 +72,11 @@ def migrate(connection: Connection) -> None:
     selected = connection.execute(text("SELECT load_id FROM atlas_current WHERE name='latest'")).scalar_one_or_none()
     if selected is not None:
         materialize_cohort_summaries(rows, selected)
+    curriculum = connection.execute(
+        text("SELECT load_id FROM curriculum_current WHERE name='latest'")
+    ).scalar_one_or_none()
+    if curriculum is not None:
+        materialize_source_areas(rows, curriculum)
     connection.execute(
         text(
             """
@@ -338,7 +344,6 @@ def create_api(services: AppletServices) -> FastAPI:
     def sources() -> dict[str, Any]:
         with engine.connect() as connection:
             metadata = loaded_catalog(connection)
-            coverage = source_coverage(connection)
             measurements = difficulty_records(connection)
             contracts = contract_records(connection)
             rows = [
@@ -368,6 +373,7 @@ def create_api(services: AppletServices) -> FastAPI:
                     {"load_id": metadata["load_id"]},
                 ).mappings()
             ]
+            coverage = source_coverage(connection, {canonical_source_id(row["id"]): row["declaration"] for row in rows})
             cohorts: dict[str, Any] = {}
             for summary in connection.execute(
                 text(
@@ -724,7 +730,9 @@ def create_api(services: AppletServices) -> FastAPI:
             ).scalar_one_or_none()
             groups, overlaps = loaded_duplicate_projection(connection, source["load_id"])
             load = loaded_catalog(connection)
-            coverage = source_coverage(connection).get(canonical_source_id(source_id))
+            coverage = source_coverage(connection, {canonical_source_id(source_id): source["declaration"]}).get(
+                canonical_source_id(source_id)
+            )
             difficulty = difficulty_summary(
                 source["declaration"], difficulty_records(connection, source_id).get(canonical_source_id(source_id), [])
             )

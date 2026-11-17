@@ -27,6 +27,13 @@ Archived reviews and packets stay unchanged. The Status page requests only
 `api/source-statuses`; that endpoint reads source metadata without task,
 difficulty or backend evidence.
 
+The By source top-area lookup reads `curriculum_source_areas`, populated before
+making each imported curriculum load current. App migration backfills the
+currently loaded release; rerunning the loader with the same release also repairs
+missing or obsolete summaries. Increment
+`SOURCE_AREA_VERSION` when changing subject selection or tie ordering. The
+stored statistics, samples and release pointers remain unchanged.
+
 The By source query selects fingerprint version, seed, task count, duplicate
 count, sample hash and lineage in PostgreSQL. It leaves fingerprint samples and
 hash arrays in storage; `api/source-fingerprint` returns the full evidence on

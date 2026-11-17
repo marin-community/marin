@@ -72,6 +72,10 @@ CREATE TABLE IF NOT EXISTS curriculum_statistics (
     PRIMARY KEY (load_id, source_id, metric, subject_id, node_id),
     FOREIGN KEY (load_id, source_id) REFERENCES curriculum_sources (load_id, source_id)
 );
+CREATE TABLE IF NOT EXISTS curriculum_source_areas (
+    load_id TEXT NOT NULL, source_id TEXT NOT NULL, version INTEGER NOT NULL, area JSONB,
+    PRIMARY KEY (load_id,source_id)
+);
 CREATE TABLE IF NOT EXISTS curriculum_confidence (
     load_id TEXT NOT NULL, scope_id TEXT NOT NULL, metric TEXT NOT NULL,
     subject_id TEXT NOT NULL, node_id TEXT NOT NULL, instances BIGINT[] NOT NULL,

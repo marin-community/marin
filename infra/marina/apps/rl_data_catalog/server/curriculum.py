@@ -16,6 +16,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
+from .source_areas import SOURCE_AREA_VERSION
 from .source_identity import canonical_source_id, original_source_id
 
 TOTAL_METRICS = ("denominator", "assigned", "subject_only", "out_of_scope", "insufficient_context", "skipped")
@@ -59,19 +60,8 @@ def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
     return dict(row)
 
 
-def source_coverage(connection: Connection) -> dict[str, dict[str, Any]]:
+def source_coverage(connection: Connection, current: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Read leading subjects only when the compact release matches the current input."""
-    current = {
-        canonical_source_id(row["id"]): row["declaration"]
-        for row in connection.execute(
-            text(
-                "SELECT s.id,jsonb_build_object('dataset_id',s.declaration->'dataset_id',"
-                "'dataset_revision',s.declaration->'dataset_revision','pipeline',s.declaration->'pipeline') "
-                "AS declaration FROM atlas_sources s JOIN atlas_current c USING (load_id) "
-                "WHERE c.name='latest'"
-            )
-        ).mappings()
-    }
     rows = connection.execute(
         text(
             """
@@ -80,31 +70,20 @@ def source_coverage(connection: Connection) -> dict[str, dict[str, Any]]:
             (s.alignment->>'task_count')::bigint AS example_count,
             s.alignment->>'intended_use' AS intended_use,
             s.alignment->>'basis' AS basis,
-            area.subject_id, area.node_id, area.name, area.instances
+            a.area
         FROM curriculum_sources s JOIN curriculum_current c USING (load_id)
-        LEFT JOIN (
-            SELECT DISTINCT ON (statistics.load_id,statistics.source_id)
-                statistics.load_id,statistics.source_id,n.subject_id,n.node_id,n.name,statistics.instances
-            FROM curriculum_statistics statistics JOIN curriculum_nodes n
-                USING (load_id, subject_id, node_id)
-            JOIN curriculum_current selected ON selected.load_id=statistics.load_id AND selected.name='latest'
-            WHERE statistics.metric='placement' AND n.kind='subject' AND statistics.instances>0
-            ORDER BY statistics.load_id,statistics.source_id,statistics.instances DESC,n.subject_id
-        ) area ON area.load_id=s.load_id AND area.source_id=s.source_id
+        LEFT JOIN curriculum_source_areas a ON a.load_id=s.load_id AND a.source_id=s.source_id AND a.version=:version
         WHERE c.name='latest' AND s.alignment IS NOT NULL
         """
-        )
+        ),
+        {"version": SOURCE_AREA_VERSION},
     ).mappings()
     return {
         canonical_source_id(row["source_id"]): {
             "example_count": row["example_count"],
             "intended_use": row["intended_use"],
             "basis": row["basis"],
-            "top_area": (
-                {key: row[key] for key in ("subject_id", "node_id", "name", "instances")}
-                if row["subject_id"] is not None
-                else None
-            ),
+            "top_area": row["area"],
         }
         for row in rows
         if canonical_source_id(row["source_id"]) in current

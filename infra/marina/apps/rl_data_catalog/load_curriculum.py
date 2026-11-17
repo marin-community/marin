@@ -28,6 +28,7 @@ from infra.marina.apps.rl_data_catalog.role_projection import (
     manifest_documents,
     validated_role_projection,
 )
+from infra.marina.apps.rl_data_catalog.server.source_areas import materialize_source_areas
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 DELETE_BATCH_SIZE = 10_000
@@ -162,7 +163,7 @@ def load_curriculum(
     )
     recorded_uses = {change.source_id: change.recorded_use for change in projection.changes} if projection else {}
     current = query(
-        "SELECT l.release_id,l.release_uri,l.manifest->'confidence' AS confidence "
+        "SELECT l.load_id,l.release_id,l.release_uri,l.manifest->'confidence' AS confidence "
         "FROM curriculum_current c JOIN curriculum_loads l USING(load_id) WHERE c.name='latest'",
         {},
     )["rows"]
@@ -170,6 +171,8 @@ def load_curriculum(
         previous_reference = (current[0]["confidence"] or {}).get("reference")
         if previous_reference != (confidence.model_dump(mode="json") if confidence else None):
             raise ValueError("The selected coverage ID already binds different confidence evidence")
+        ensure_tables(query, ("curriculum_source_areas",))
+        materialize_source_areas(lambda sql, bound: query(sql, bound).get("rows", []), current[0]["load_id"])
         return {"changed": False, "release_id": coverage.coverage_id}
     load_id = uuid.uuid4().hex
     requests = 1
@@ -295,6 +298,8 @@ def load_curriculum(
     reconcile_population_counts(selected, full_counts, release.task_count)
     if confidence:
         counts["confidence"] = insert("confidence", vectors)
+    ensure_tables(execute, ("curriculum_source_areas",))
+    materialize_source_areas(lambda sql, bound: execute(sql, bound).get("rows", []), load_id)
     execute(
         "UPDATE curriculum_current SET previous_load_id=load_id, load_id=:load_id WHERE name='latest'",
         {"load_id": load_id},

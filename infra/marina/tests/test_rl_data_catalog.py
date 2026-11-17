@@ -1041,6 +1041,77 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         assert client.get("/curriculum").json()["totals"] == first["totals"]
 
 
+@pytest.mark.parametrize("upgrade", ["missing", "obsolete"])
+def test_source_area_summaries_upgrade_without_rewriting_curriculum(catalog_database, catalog_query, tmp_path, upgrade):
+    path = curriculum_release(tmp_path)
+    coverage = tmp_path / "coverage.json"
+    load_curriculum(str(path), str(coverage), catalog_query)
+    with catalog_database.begin() as connection:
+        expected = [
+            dict(row)
+            for row in connection.execute(text("SELECT * FROM curriculum_source_areas ORDER BY source_id")).mappings()
+        ]
+        statistics = [
+            dict(row)
+            for row in connection.execute(
+                text("SELECT * FROM curriculum_statistics ORDER BY source_id,metric,subject_id,node_id")
+            ).mappings()
+        ]
+        selected = connection.execute(text("SELECT load_id FROM curriculum_current WHERE name='latest'")).scalar_one()
+        assert next(row for row in expected if row["source_id"] == "Marin:inventory")["area"] is None
+        if upgrade == "missing":
+            connection.execute(text("DELETE FROM curriculum_source_areas"))
+        else:
+            connection.execute(text("UPDATE curriculum_source_areas SET version=0,area=NULL"))
+    if upgrade == "missing":
+        with catalog_database.begin() as connection:
+            migrate(connection)
+    else:
+        assert load_curriculum(str(path), str(coverage), catalog_query)["changed"] is False
+    with catalog_database.connect() as connection:
+        assert [
+            dict(row)
+            for row in connection.execute(text("SELECT * FROM curriculum_source_areas ORDER BY source_id")).mappings()
+        ] == expected
+        assert [
+            dict(row)
+            for row in connection.execute(
+                text("SELECT * FROM curriculum_statistics ORDER BY source_id,metric,subject_id,node_id")
+            ).mappings()
+        ] == statistics
+        assert (
+            connection.execute(text("SELECT load_id FROM curriculum_current WHERE name='latest'")).scalar_one()
+            == selected
+        )
+
+
+def test_source_list_reads_materialized_areas_while_statistics_are_locked(catalog_database, catalog_query, tmp_path):
+    path = curriculum_release(tmp_path)
+    load_curriculum(str(path), str(tmp_path / "coverage.json"), catalog_query)
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "graded", source_id="Marin:a")
+    load_catalog(CurationCatalog(root), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        before = client.get("/sources").json()
+        assert before["sources"][0]["coverage"]["top_area"] == {
+            "subject_id": "D01",
+            "node_id": "subject:D01",
+            "name": "Mathematics",
+            "instances": 200,
+        }
+
+        def bounded_lock_wait(connection):
+            connection.exec_driver_sql("SET LOCAL lock_timeout='1s'")
+
+        event.listen(catalog_database, "begin", bounded_lock_wait)
+        try:
+            with catalog_database.begin() as blocker:
+                blocker.execute(text("LOCK TABLE curriculum_statistics IN ACCESS EXCLUSIVE MODE"))
+                assert client.get("/sources").json() == before
+        finally:
+            event.remove(catalog_database, "begin", bounded_lock_wait)
+
+
 def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
     catalog_database, catalog_query, tmp_path: Path
 ) -> None:
