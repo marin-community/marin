@@ -28,6 +28,7 @@ from experiments.grug.moe_hero_ep.launch_hero_sft import (
     SFT_COMPONENT_PREFIX,
     SFT_POOLED_COMPONENT,
     SftStore,
+    load_sft_stores,
     one_epoch_weight_stages,
     placement_applies,
     plan_sft_mixture,
@@ -493,12 +494,17 @@ def test_placement_applies_to_its_source_and_to_saves_that_record_it(tmp_path):
 def test_fresh_optimizer_state_keeps_weights_and_zeroes_moments_and_counts_at_the_start_step_only():
     mesh = _one_device_mesh()
     optimizer = _optimizer()
-    with jax.set_mesh(mesh):
+
+    def restored():
         state = _with_counts(_trained_state(_tiny_config(), optimizer, mesh), 400_407)
-        state = state.__class__(**{**vars(state), "step": jnp.array(400_407, dtype=jnp.int32)})
-        fresh = prepare_start_state(
-            state, optimizer, special_tokens=None, fresh_optimizer_state_at_step=400_407, offload_opt_state=False
-        )
+        return state.__class__(**{**vars(state), "step": jnp.array(400_407, dtype=jnp.int32)})
+
+    def host(tree):
+        return jax.tree.map(np.asarray, tree)
+
+    with jax.set_mesh(mesh):
+        state = restored()
+        trained = host(state.opt_state)
         carried = prepare_start_state(
             state, optimizer, special_tokens=None, fresh_optimizer_state_at_step=None, offload_opt_state=False
         )
@@ -506,31 +512,50 @@ def test_fresh_optimizer_state_keeps_weights_and_zeroes_moments_and_counts_at_th
         resumed = prepare_start_state(
             state, optimizer, special_tokens=None, fresh_optimizer_state_at_step=400_000, offload_opt_state=False
         )
-        expected = optimizer.init(state.params)
+        _assert_trees_equal(carried.opt_state, trained)
+        _assert_trees_equal(resumed.opt_state, trained)
 
-    _assert_trees_equal(fresh.params, state.params)
+        state = restored()
+        params = host(state.params)
+        expected = host(optimizer.init(state.params))
+        old_leaves = jax.tree.leaves(state.opt_state)
+        old_shardings = [leaf.sharding for leaf in old_leaves]
+        fresh = prepare_start_state(
+            state, optimizer, special_tokens=None, fresh_optimizer_state_at_step=400_407, offload_opt_state=False
+        )
+
+    _assert_trees_equal(fresh.params, params)
     _assert_trees_equal(fresh.opt_state, expected)
-    floats = [leaf for leaf in jax.tree.leaves(fresh.opt_state) if jnp.issubdtype(leaf.dtype, jnp.floating)]
     counts = [leaf for leaf in jax.tree.leaves(fresh.opt_state) if jnp.issubdtype(leaf.dtype, jnp.integer)]
     assert counts and all(int(c) == 0 for c in counts)
-    assert any(np.any(np.asarray(leaf) != 0) for leaf in jax.tree.leaves(state.opt_state) if leaf.dtype.kind == "f")
-    assert all(np.all(np.asarray(leaf) == 0) for leaf in floats if leaf.ndim > 0)
-    _assert_trees_equal(carried.opt_state, state.opt_state)
-    _assert_trees_equal(resumed.opt_state, state.opt_state)
+    assert any(np.any(leaf != 0) for leaf in jax.tree.leaves(trained) if leaf.dtype.kind == "f")
+    # The restored buffers are freed before the fresh state is built, and the fresh state takes their layout.
+    assert all(leaf.is_deleted() for leaf in old_leaves)
+    assert [leaf.sharding for leaf in jax.tree.leaves(fresh.opt_state)] == old_shardings
 
 
-def test_sft_schedule_follows_the_update_count_and_is_flat_for_a_short_continuation():
+@pytest.mark.parametrize("dp_racks", [2, 11])
+def test_sft_schedule_is_the_same_flat_lr_for_carried_and_fresh_counts_over_a_short_continuation(dp_racks):
+    # The step-400407 checkpoint records step 400407 and optimizer counts 400407 (read from its arrays).
+    start, updates, lr = 400_407, 15, 1.32e-5
+    plan = plan_sft_mixture(load_sft_stores(), batch_size=16 * dp_racks, replay_fraction=0.2035)
+    config = sft_optimizer_config(muon_lr=lr, adam_lr=lr, decay_steps=plan.decay_steps)
+    # The schedule spans the whole epoch even when `stop_after_steps` ends the run after 15 updates.
+    muon = config.lr_scheduler(start + plan.steps)
+    adam = config.lr_scheduler(start + plan.steps, override_lr=config.adam_lr)
+    carried = [float(muon(count)) for count in range(start, start + updates)]
+    fresh = [float(muon(count)) for count in range(updates)]
+    assert carried == fresh == [pytest.approx(lr, rel=1e-6)] * updates
+    assert [float(adam(count)) for count in range(start, start + updates)] == carried
+    # The decay sits at the end of the absolute schedule.
+    assert float(muon(start + plan.steps)) == pytest.approx(0.1 * lr, rel=1e-5)
+    assert plan.steps - plan.decay_steps > updates
+
+
+def test_sft_schedule_follows_the_update_count():
     start, epoch, decay = 400_407, 6_916, 692
     config = sft_optimizer_config(muon_lr=1.32e-5, adam_lr=1.32e-5, decay_steps=decay)
     muon = config.lr_scheduler(start + epoch)
-    adam = config.lr_scheduler(start + epoch, override_lr=config.adam_lr)
-    # Fresh state counts from 0; a carried state counts on from the checkpoint's step. Both are flat for 15 updates.
-    for count in [*range(0, 15), *range(start, start + 15)]:
-        assert float(muon(count)) == pytest.approx(1.32e-5, rel=1e-6)
-        assert float(adam(count)) == pytest.approx(1.32e-5, rel=1e-6)
-    # The decay sits at the end of the absolute schedule.
-    assert float(muon(start + epoch)) == pytest.approx(1.32e-6, rel=1e-5)
-
     # The schedule input is the optimizer's own count, which grows by one per trainer step from its initial value.
     # GrugMoeMuonH wraps its transform in `optax.inject_hyperparams` (optimizer.py); the tiny CPU mesh cannot run
     # Muon-H's sharded Newton-Schulz, so the same wrapper drives Adam here with the SFT schedule.

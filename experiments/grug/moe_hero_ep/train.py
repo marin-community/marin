@@ -1229,12 +1229,20 @@ def prepare_start_state(
 def fresh_optimizer_state(
     state: "GrugTrainState", optimizer: optax.GradientTransformation, *, offload_opt_state: bool
 ) -> "GrugTrainState":
-    """Keep the weights and replace the optimizer state with ``optimizer.init`` of them (zero moments and counts)."""
+    """Keep the weights and replace the optimizer state with ``optimizer.init`` of them (zero moments and counts).
+
+    The restored state's buffers are freed first, and the fresh state is built directly in their shardings and
+    memory kinds, so at no point do two optimizer states coexist and the layout matches a carried state.
+    ``offload_opt_state`` is implied by those memory kinds.
+    """
+    del offload_opt_state
     if state.master_params is not None:
         raise ValueError("a fresh optimizer state supports only MasterParamMode.DEVICE")
-    opt_state = eqx.filter_jit(optimizer.init)(state.params)
-    if offload_opt_state:
-        opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
+    restored = state.opt_state
+    shardings = jax.tree.map(lambda leaf: leaf.sharding, restored)
+    for leaf in jax.tree.leaves(restored):
+        leaf.delete()
+    opt_state = jax.jit(optimizer.init, out_shardings=shardings)(state.params)
     return dataclasses.replace(state, opt_state=opt_state)
 
 

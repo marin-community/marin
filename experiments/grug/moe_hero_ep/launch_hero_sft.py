@@ -641,7 +641,10 @@ def _grad_norm(value: str) -> float | None:
     "--special-token-reseed/--no-special-token-reseed",
     default=True,
     show_default=True,
-    help="Reseed the chat special-token LM-head columns at the start step. Turn off to continue a finished SFT.",
+    help=(
+        "Reseed the chat special-token LM-head columns at the start step. Turn off to continue a finished SFT; "
+        "the special-token learning-rate multiplier applies either way."
+    ),
 )
 @click.option(
     "--fresh-optimizer-state",
