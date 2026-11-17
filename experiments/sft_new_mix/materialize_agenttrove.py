@@ -24,7 +24,13 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from experiments.sft_new_mix.exp3_build import configure_storage, implementation_identity, process_shard, tokenizer_for
+from experiments.sft_new_mix.exp3_build import process_shard
+from experiments.sft_new_mix.exp3_runtime import (
+    BUILD_IMPLEMENTATION_FILES,
+    configure_storage,
+    implementation_identity,
+    tokenizer_for,
+)
 
 
 def materialize_file(job: dict) -> dict:
@@ -124,7 +130,7 @@ def materialize_file(job: dict) -> dict:
             "passed": True,
             "pass_receipt_sha256": hashlib.sha256(selection_bytes).hexdigest(),
             "output_prefix": str(StoragePath(job["output_prefix"]) / "candidate"),
-            "implementation_sha256": implementation_identity(),
+            "implementation_sha256": implementation_identity(BUILD_IMPLEMENTATION_FILES),
             **{key: job[key] for key in ("config_uri", "config_sha256", "tokenizer_uri", "tokenizer_sha256")},
         }
         built = process_shard(build_job)

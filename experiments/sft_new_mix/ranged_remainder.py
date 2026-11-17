@@ -4,7 +4,6 @@
 """Parallelize unfinished small-document caches without altering their population."""
 
 import argparse
-import hashlib
 import json
 import logging
 
@@ -16,7 +15,13 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from experiments.sft_new_mix.candidate_receipts import collect_inventory, expected_receipt
-from experiments.sft_new_mix.exp3_build import configure_storage, implementation_identity, process_shard
+from experiments.sft_new_mix.exp3_build import process_shard
+from experiments.sft_new_mix.exp3_runtime import (
+    BUILD_IMPLEMENTATION_FILES,
+    configure_storage,
+    implementation_identity,
+    read_pinned,
+)
 
 
 def main() -> None:
@@ -30,9 +35,7 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     configure_storage()
-    content = StoragePath(args.plan).read_bytes()
-    if hashlib.sha256(content).hexdigest() != args.plan_sha256:
-        raise ValueError("Frozen remainder input plan changed")
+    content = read_pinned(args.plan, args.plan_sha256)
     plan = json.loads(content)
     inventory = collect_inventory(plan, workers=args.workers)
     root = StoragePath(args.output_prefix)
@@ -62,7 +65,7 @@ def main() -> None:
                 "expected_rows": stop - start,
                 "expected_tokens": int(lengths[start:stop].sum()),
                 "output_prefix": args.output_prefix,
-                "implementation_sha256": implementation_identity(),
+                "implementation_sha256": implementation_identity(BUILD_IMPLEMENTATION_FILES),
             }
             children.append(child)
         if sum(child["expected_rows"] for child in children) != job["expected_rows"]:

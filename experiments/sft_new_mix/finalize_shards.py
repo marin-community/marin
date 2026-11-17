@@ -11,7 +11,6 @@ from collections import Counter, defaultdict
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from enum import StrEnum
-from pathlib import Path
 
 import numpy as np
 from fray.types import ResourceConfig
@@ -21,13 +20,26 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from experiments.sft_new_mix.exp3_build import build_config, configure_storage, count_stage, tokenizer_for
 from experiments.sft_new_mix.exp3_filters import MAX_TOKENS, Decision, Document, Stage, apply_stage
+from experiments.sft_new_mix.exp3_runtime import (
+    build_config,
+    configure_storage,
+    count_stage,
+    implementation_identity,
+    read_pinned,
+    tokenizer_for,
+)
 from experiments.sft_new_mix.job_manifests import read_job_manifest, stage_job_manifest
 from experiments.sft_new_mix.loss_modes import LossMode, prediction_weights
+from experiments.sft_new_mix.run_tool_payloads import JOB_MANIFEST_WRITE_WORKERS
 
 BATCH_ROWS = 128
-JOB_MANIFEST_WRITE_WORKERS = 16
+
+logger = logging.getLogger(__name__)
+
+# The files whose bytes determine final shard output; the shared runtime module
+# is included so helper drift changes the pin.
+FINALIZE_IMPLEMENTATION_FILES = ("exp3_runtime.py", "finalize_shards.py", "exp3_filters.py", "loss_modes.py")
 
 
 class DropStage(StrEnum):
@@ -35,17 +47,9 @@ class DropStage(StrEnum):
     EXACT_DUPLICATE = "atlas_exact_dedup"
 
 
-def implementation_identity() -> str:
-    digest = hashlib.sha256()
-    for name in ("finalize_shards.py", "exp3_filters.py", "loss_modes.py"):
-        digest.update(name.encode())
-        digest.update(Path(__file__).with_name(name).read_bytes())
-    return digest.hexdigest()
-
-
 def transform_shard(job: dict) -> dict:
     """Retain complete documents and preserve original rows without duplicate appends."""
-    if job["implementation_sha256"] != implementation_identity():
+    if job["implementation_sha256"] != implementation_identity(FINALIZE_IMPLEMENTATION_FILES):
         raise ValueError("Final candidate transformation implementation changed")
     identity = hashlib.sha256(json.dumps(job, sort_keys=True).encode()).hexdigest()
     root = StoragePath(job["output_prefix"]) / "shards" / identity
@@ -56,7 +60,11 @@ def transform_shard(job: dict) -> dict:
             raise ValueError("Final shard receipt identity mismatch")
         return {"receipt_uri": str(receipt_path)}
     if (root / "cache").exists():
-        raise ValueError("Unreceipted final cache preserved; choose a new output version")
+        # A preempted worker can leave the cache in place before its receipt
+        # lands; output is deterministic from the job identity, so the retry
+        # deletes it and rebuilds identical bytes.
+        logger.warning("Deleting unreceipted final cache from a preempted worker: %s", root / "cache")
+        (root / "cache").rmtree()
     source = job["source"]
     base = job["base_shard"]
     mode = LossMode(job["loss_mode"])
@@ -72,10 +80,7 @@ def transform_shard(job: dict) -> dict:
                 active_drops[index] = {"stage": stage, "reason": dispositions[stage]}
                 break
     if not active_drops and not job["overlays"] and not job["real_tools_enabled"]:
-        content = StoragePath(base["receipt_uri"]).read_bytes()
-        if hashlib.sha256(content).hexdigest() != base["receipt_sha256"]:
-            raise ValueError("Unchanged source receipt changed")
-        original = json.loads(content)
+        original = json.loads(read_pinned(base["receipt_uri"], base["receipt_sha256"]))
         if (original["output_rows"], original["output_tokens"]) != (base["rows"], base["tokens"]):
             raise ValueError("Unchanged source population disagrees with its receipt")
         stats = defaultdict(Counter)
@@ -170,10 +175,10 @@ def transform_shard(job: dict) -> dict:
                 overlay = retained_map.get(index)
                 replacement_uri = None
                 if overlay is not None:
-                    content = StoragePath(overlay["payload_uri"]).read_bytes()
-                    if hashlib.sha256(content).hexdigest() != overlay["export_manifest"]["files"]["input_ids.i32"]:
-                        raise ValueError("Verified replacement payload digest changed")
-                    token_ids = np.frombuffer(content, dtype="<i4")
+                    token_ids = np.frombuffer(
+                        read_pinned(overlay["payload_uri"], overlay["export_manifest"]["files"]["input_ids.i32"]),
+                        dtype="<i4",
+                    )
                     document = Document(
                         source, f"{identity}:{index}", tokenizer.decode(token_ids.tolist(), False), job["passed"]
                     )
@@ -314,7 +319,7 @@ def transform_shard(job: dict) -> dict:
         "lengths": lengths,
         "supervised_prediction_positions": supervised,
         "changed_documents": int(changed_rows),
-        "verified_modified_rows_selected": len(retained_map),
+        "verified_modified_rows_selected": sum(replacement is not None for _, replacement in selected),
         "verified_modified_rows_previously_filtered": len(overlays) - len(retained_map),
         "output_tokens_and_weights_sha256": expected_digest.hexdigest(),
         "stats": stats,

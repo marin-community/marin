@@ -25,8 +25,8 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from experiments.sft_new_mix.exp3_build import configure_storage, tokenizer_for
 from experiments.sft_new_mix.exp3_filters import BOS, EOS, MAX_TOKENS, MESSAGE, unquote_opencode_prompt
+from experiments.sft_new_mix.exp3_runtime import configure_storage, read_pinned, tokenizer_for
 from experiments.sft_new_mix.loss_modes import LossMode, prediction_weights
 from experiments.sft_new_mix.prepare_overlay_gates import pinned_json
 
@@ -136,11 +136,8 @@ def index_part(job: dict) -> dict:
 
 @cache
 def question_lookup(uri: str, sha: str) -> dict[str, tuple[str | None, list[str], str]]:
-    content = StoragePath(uri).read_bytes()
-    if hashlib.sha256(content).hexdigest() != sha:
-        raise ValueError("Question index changed")
     groups = defaultdict(list)
-    for row in pq.read_table(pa.BufferReader(content)).to_pylist():
+    for row in pq.read_table(pa.BufferReader(read_pinned(uri, sha))).to_pylist():
         groups[row["native_sha256"]].append(row)
     result = {}
     for key, rows in groups.items():
@@ -246,9 +243,7 @@ def repair_part(job: dict) -> dict:
     for item in job["bridges"]:
         if item["input_path"] != original["input_path"]:
             raise ValueError("Question bridge source mismatch")
-        content = StoragePath(item["pin"]["uri"]).read_bytes()
-        if hashlib.sha256(content).hexdigest() != item["pin"]["sha256"]:
-            raise ValueError("Bridge changed")
+        content = read_pinned(item["pin"]["uri"], item["pin"]["sha256"])
         for row in pq.read_table(pa.BufferReader(content)).to_pylist():
             if row["row"] in bridge:
                 raise ValueError("Overlapping question bridges")

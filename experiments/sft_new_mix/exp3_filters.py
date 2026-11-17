@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reversible, source-aware scripted filters for the November 15 SFT candidate."""
+"""Reversible, source-aware scripted filters for the SFT candidate pipeline."""
 
 import json
 import re
@@ -58,7 +58,6 @@ class Stage(StrEnum):
     SYSTEM_TURNS = "merge_system_turns"
     WARNINGS = "contradictory_parse_warnings"
     THINK_MODE = "spanless_think_mode"
-    OPENCODE_QUOTES = "opencode_user_quotes"
     GENERATOR_LINES = "generator_lines"
     MINI_JSON = "mini_swe_double_encoded_json"
     REPLAY_HEURISTICS = "replay_heuristics"
@@ -80,7 +79,6 @@ class Document:
     text: str
     # Only source-adapter outcomes or checked receipts may set this flag.
     passed: bool = False
-    raw_question: str | None = None
 
     @cached_property
     def messages(self) -> list[Turn]:
@@ -123,11 +121,12 @@ def turns(text: str) -> list[Turn]:
 
 
 def with_turns(document: Document, before: list[Turn], after: list[Turn]) -> Document:
-    """Splice edited turn bodies back into the original rendered text.
+    """Splice edited turns back into the original rendered text.
 
     Turn framing must keep matching MARIN_CHAT_TEMPLATE, which ends assistant
-    turns with <|eot_id|> and no newline, so framing bytes are preserved
-    verbatim and only changed turn bodies are replaced.
+    turns with <|eot_id|> and no newline. Each kept turn reuses its original
+    framing bytes; turns dropped or merged away vanish together with their
+    framing, so an assistant end-of-turn never gains a newline.
     """
     if before == after:
         return document
@@ -184,6 +183,7 @@ def unquote_opencode_prompt(content: str, question: str) -> str:
 
 
 def source_exclusion(source: str) -> str:
+    """Return "" to keep the source, or the exclusion reason code that drops it."""
     if source.startswith("nemotron_sft_v3/multilingual_v1/"):
         return "multilingual_v1"
     if source == "nemotron_sft_v3/math_v2/medium":
@@ -236,7 +236,10 @@ def protected_path(path: str, prefixes: tuple[str, ...]) -> bool:
 
 
 def replay_reason(text: str) -> str:
-    """Heuristic gates; thresholds require calibration before publication."""
+    """Heuristic gates; thresholds require calibration before publication.
+
+    Returns "" to keep the row, or the reason code that drops it.
+    """
     stripped = text.removeprefix(BOS).lstrip()
     if stripped.startswith(("This trajectory ", "# Repository Context")):
         return "embedded_trajectory_or_patch"
@@ -381,18 +384,6 @@ def apply_stage(document: Document, stage: Stage, config: FilterConfig, token_co
                 for turn in messages
             ]
             return Decision(with_turns(document, messages, cleaned))
-    if stage == Stage.OPENCODE_QUOTES and "opencode" in source:
-        if document.raw_question is None:
-            return Decision(document)
-        cleaned = [
-            (
-                replace(turn, content=unquote_opencode_prompt(turn.content, document.raw_question))
-                if turn.role == "user"
-                else turn
-            )
-            for turn in messages
-        ]
-        return Decision(with_turns(document, messages, cleaned))
     if stage == Stage.GENERATOR_LINES and "opencode" in source:
         cleaned = [
             (

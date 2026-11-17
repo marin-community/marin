@@ -13,16 +13,13 @@ from collections import Counter, defaultdict
 import ijson
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.sft_new_mix.exp3_build import configure_storage
-from experiments.sft_new_mix.finalize_shards import execute_plan, implementation_identity
+from experiments.sft_new_mix.exp3_runtime import configure_storage, implementation_identity, read_pinned
+from experiments.sft_new_mix.finalize_shards import FINALIZE_IMPLEMENTATION_FILES, execute_plan
 from experiments.sft_new_mix.tool_overlay import export_key
 
 
 def pinned_json(pin: dict) -> dict:
-    content = StoragePath(pin["uri"]).read_bytes()
-    if hashlib.sha256(content).hexdigest() != pin["sha256"]:
-        raise ValueError("Overlay preparation input digest changed")
-    return json.loads(content)
+    return json.loads(read_pinned(pin["uri"], pin["sha256"]))
 
 
 def main() -> None:
@@ -119,7 +116,7 @@ def main() -> None:
                     "output_prefix": str(
                         StoragePath(recipe["output_prefix"]) / "components" / hashlib.sha256(name.encode()).hexdigest()
                     ),
-                    "implementation_sha256": implementation_identity(),
+                    "implementation_sha256": implementation_identity(FINALIZE_IMPLEMENTATION_FILES),
                     "overlays": by_shard.pop(shard["original_input_path"], []),
                     "overlay_enabled": True,
                     "real_tools_enabled": True,

@@ -12,7 +12,7 @@ import json
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.sft_new_mix.candidate_receipts import catalog_from_inventory
-from experiments.sft_new_mix.exp3_build import configure_storage
+from experiments.sft_new_mix.exp3_runtime import configure_storage
 from experiments.sft_new_mix.mixture_weights import candidate_weights
 from experiments.sft_new_mix.prepare_overlay_gates import pinned_json
 

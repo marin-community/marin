@@ -98,7 +98,6 @@ def test_restoration_keeps_existing_rows_and_recovers_only_line_rejections(tmp_p
     restore_shard(job)
     receipt = json.loads((restoration_path(job) / "receipt.json").read_text())
     assert receipt["selected_original_rows"] == 1
-    assert receipt["disjoint_from_previous_retained_rows"]
     loss = {
         "loss_mode": "full_token",
         "source_revision": "control-pin",

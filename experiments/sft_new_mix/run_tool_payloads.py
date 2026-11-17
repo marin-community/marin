@@ -15,9 +15,9 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from experiments.sft_new_mix.exp3_build import configure_storage
+from experiments.sft_new_mix.exp3_runtime import configure_storage, implementation_identity, read_pinned
 from experiments.sft_new_mix.job_manifests import read_job_manifest, stage_job_manifest
-from experiments.sft_new_mix.tool_overlay import implementation_identity, materialize_archive
+from experiments.sft_new_mix.tool_overlay import VERIFIER_IMPLEMENTATION_FILES, materialize_archive
 
 JOB_MANIFEST_WRITE_WORKERS = 16
 
@@ -61,13 +61,9 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     configure_storage()
-    if implementation_identity() != args.verifier_sha256:
+    if implementation_identity(VERIFIER_IMPLEMENTATION_FILES) != args.verifier_sha256:
         raise ValueError("Payload verifier changed from the explicit run pin")
-    content = StoragePath(args.selection).read_bytes()
-    if hashlib.sha256(content).hexdigest() != args.selection_sha256:
-        raise ValueError("Frozen tool selection digest changed")
-    selection = json.loads(content)
-    del content
+    selection = json.loads(read_pinned(args.selection, args.selection_sha256))
     jobs = [
         {**job, "output_prefix": args.output_prefix, "implementation_sha256": args.verifier_sha256}
         for job in selection["jobs"]

@@ -3,10 +3,8 @@
 
 """Bind verified, actually modified tool exports to frozen candidate input rows."""
 
-import argparse
 import hashlib
 import json
-import logging
 import shutil
 import tarfile
 from collections import Counter, defaultdict
@@ -16,15 +14,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
-from fray.types import ResourceConfig
 from levanter.store.jagged_array import JaggedArrayStore
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset
 
-from experiments.sft_new_mix.exp3_build import configure_storage, tokenizer_for
+from experiments.sft_new_mix.exp3_runtime import configure_storage, implementation_identity, read_pinned, tokenizer_for
 
 EXPORT_FILES = ("input_ids.i32", "loss_mask.u8", "messages.json", "text.txt", "tools.json")
+
+# The files whose bytes determine verified tool payload receipts. run_tool_payloads
+# pins the same list before dispatching materialize_archive jobs.
+VERIFIER_IMPLEMENTATION_FILES = ("exp3_runtime.py", "tool_overlay.py")
 
 
 @dataclass(frozen=True)
@@ -46,19 +45,13 @@ def export_key(row: dict) -> ExportKey:
     )
 
 
-def implementation_identity() -> str:
-    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-
-
 @cache
 def equivalent_tokenizer_json(target_uri: str, target_sha256: str, export_uri: str, export_sha256: str) -> str:
     """Require exact parsed JSON equivalence, retaining both distinct file pins."""
-    values = []
-    for uri, sha256 in ((target_uri, target_sha256), (export_uri, export_sha256)):
-        content = StoragePath(uri).read_bytes()
-        if hashlib.sha256(content).hexdigest() != sha256:
-            raise ValueError("Tokenizer file SHA256 mismatch")
-        values.append(json.loads(content))
+    values = [
+        json.loads(read_pinned(uri, sha256))
+        for uri, sha256 in ((target_uri, target_sha256), (export_uri, export_sha256))
+    ]
     if values[0] != values[1]:
         raise ValueError("Tool export tokenizer is not JSON-equivalent to the candidate tokenizer")
     return hashlib.sha256(json.dumps(values[0], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -122,7 +115,7 @@ def select_records(
 def materialize_archive(job: dict) -> dict:
     """Verify compressed archive, every selected member and original cache row."""
     configure_storage()
-    if job["implementation_sha256"] != implementation_identity():
+    if job["implementation_sha256"] != implementation_identity(VERIFIER_IMPLEMENTATION_FILES):
         raise ValueError("Tool payload verifier implementation changed")
     root = StoragePath(job["output_prefix"]) / "archives" / job["archive_sha256"]
     receipt_path = root / "receipt.json"
@@ -204,43 +197,3 @@ def materialize_archive(job: dict) -> dict:
     }
     receipt_path.write_text(json.dumps(receipt, sort_keys=True))
     return {"receipt_uri": str(receipt_path), "records": len(selected)}
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--selection", required=True)
-    parser.add_argument("--workers", type=int, required=True)
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
-    configure_storage()
-    selection = json.loads(StoragePath(args.selection).read_text())
-    with ZephyrContext(
-        name="exp3-verified-tool-payloads",
-        max_workers=args.workers,
-        resources=ResourceConfig(cpu=2, ram="8g", disk="20g"),
-        chunk_storage_prefix=prefix_join(selection["output_prefix"], "zephyr"),
-        max_execution_retries=2,
-    ) as context:
-        result = context.execute(Dataset.from_list(selection["jobs"]).map(materialize_archive))
-    records = []
-    receipts = []
-    for value in result.results:
-        content = StoragePath(value["receipt_uri"]).read_bytes()
-        receipt = json.loads(content)
-        records.extend(receipt["records"])
-        receipts.append({"uri": value["receipt_uri"], "sha256": hashlib.sha256(content).hexdigest()})
-    (StoragePath(selection["output_prefix"]) / "manifest.json").write_text(
-        json.dumps(
-            {
-                "selection_uri": args.selection,
-                "selection_sha256": hashlib.sha256(StoragePath(args.selection).read_bytes()).hexdigest(),
-                "records": records,
-                "archive_receipts": receipts,
-            },
-            sort_keys=True,
-        )
-    )
-
-
-if __name__ == "__main__":
-    main()

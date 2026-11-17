@@ -11,8 +11,9 @@ from pathlib import Path
 from levanter.store.cache import CacheLedger
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.sft_new_mix.exp3_build import configure_storage, implementation_identity
 from experiments.sft_new_mix.exp3_filters import Stage
+from experiments.sft_new_mix.exp3_runtime import BUILD_IMPLEMENTATION_FILES, configure_storage, implementation_identity
+from experiments.sft_new_mix.score_replay import MODEL_DIR, model_digests
 
 OPENCODE_TOOLS = frozenset(
     (
@@ -90,7 +91,7 @@ def main() -> None:
         )
     }
     config = {
-        "version": "2026.11.15-scripted-v2",
+        "version": "2026.11.15-scripted-v3",
         "readiness": "intermediate; final decontamination, replacement overlay and full resolve required",
         "enabled": [
             stage.value
@@ -115,6 +116,11 @@ def main() -> None:
         "junkgate_cutoff": 0.32026717512511493,
         "junkgate_calibration": "junkgate-calibration-v1.json; heldout recall1/12, natural false-drop2/67",
     }
+    if args.junkgate == "enabled":
+        # The cutoff is calibrated for one specific set of model weights; freeze
+        # those bytes into the config so the build can verify them before scoring.
+        config["junkgate_model_dir"] = MODEL_DIR
+        config["junkgate_model_sha256"] = model_digests()
     config_bytes = json.dumps(config, sort_keys=True, indent=2).encode()
     config_sha = hashlib.sha256(config_bytes).hexdigest()
     config_uri = prefix_join(args.destination, "config.json")
@@ -124,7 +130,7 @@ def main() -> None:
         "output_prefix": args.destination,
         "config_uri": config_uri,
         "config_sha256": config_sha,
-        "implementation_sha256": implementation_identity(),
+        "implementation_sha256": implementation_identity(BUILD_IMPLEMENTATION_FILES),
         "tokenizer_uri": tokenizer_uri,
         "tokenizer_sha256": tokenizer_sha,
     }

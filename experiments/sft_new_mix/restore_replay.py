@@ -20,21 +20,23 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from experiments.sft_new_mix.candidate_receipts import collect_inventory, expected_receipt, read_receipt
-from experiments.sft_new_mix.exp3_build import (
-    BATCH_ROWS,
-    build_shard,
+from experiments.sft_new_mix.exp3_build import BATCH_ROWS, build_shard
+from experiments.sft_new_mix.exp3_filters import Stage, replay_reason
+from experiments.sft_new_mix.exp3_runtime import (
+    BUILD_IMPLEMENTATION_FILES,
     configure_storage,
     implementation_identity,
     tokenizer_for,
 )
-from experiments.sft_new_mix.exp3_filters import Stage, replay_reason
 from experiments.sft_new_mix.job_manifests import read_job_manifest, stage_job_manifest
 from experiments.sft_new_mix.prepare_overlay_gates import pinned_json
+
+logger = logging.getLogger(__name__)
 
 
 def restoration_identity() -> str:
     digest = hashlib.sha256(Path(__file__).read_bytes())
-    digest.update(implementation_identity().encode())
+    digest.update(implementation_identity(BUILD_IMPLEMENTATION_FILES).encode())
     return digest.hexdigest()
 
 
@@ -97,7 +99,10 @@ def restore_shard(job: dict) -> dict:
 
     raw_path = str(root / "selected-original-rows")
     if StoragePath(raw_path).exists():
-        raise ValueError("Unreceipted restoration output preserved; choose a new version")
+        # A preempted worker can leave this cache before the restoration receipt
+        # lands; the selection is deterministic from the base receipt pin.
+        logger.warning("Deleting unreceipted restoration cache: %s", raw_path)
+        StoragePath(raw_path).rmtree()
     result = write_levanter_cache(
         records(),
         raw_path,
@@ -118,7 +123,7 @@ def restore_shard(job: dict) -> dict:
         "expected_tokens": raw_tokens,
         "config_uri": job["config"]["uri"],
         "config_sha256": job["config"]["sha256"],
-        "implementation_sha256": implementation_identity(),
+        "implementation_sha256": implementation_identity(BUILD_IMPLEMENTATION_FILES),
         "output_prefix": str(root / "candidate"),
     }
     build_shard(candidate_job)

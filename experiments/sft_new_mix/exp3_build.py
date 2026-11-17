@@ -7,21 +7,16 @@ import argparse
 import hashlib
 import json
 import logging
-import os
 from collections import Counter, defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import cache
-from pathlib import Path
 
 import numpy as np
 from fray.types import ResourceConfig
 from levanter.store.cache import CacheLedger, write_levanter_cache
 from levanter.store.jagged_array import JaggedArrayStore
-from rigging.filesystem.cluster_config import StoreType, data_buckets
-from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from tokenizers import Tokenizer
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
@@ -31,14 +26,21 @@ from experiments.sft_new_mix.exp3_filters import (
     MAX_TOKENS,
     Decision,
     Document,
-    FilterConfig,
     Stage,
     apply_stage,
     needs_pass,
     source_exclusion,
 )
+from experiments.sft_new_mix.exp3_runtime import (
+    BUILD_IMPLEMENTATION_FILES,
+    build_config,
+    configure_storage,
+    count_stage,
+    implementation_identity,
+    tokenizer_for,
+)
 from experiments.sft_new_mix.loss_modes import LossMode, prediction_weights
-from experiments.sft_new_mix.score_replay import MODEL_DIR
+from experiments.sft_new_mix.score_replay import MODEL_DIR, model_digests
 
 logger = logging.getLogger(__name__)
 BATCH_ROWS = 512
@@ -64,61 +66,18 @@ class ShardJob:
     tokenizer_sha256: str
 
 
-def configure_storage() -> None:
-    configure_coreweave_s3()
-    os.environ["AWS_ACCESS_KEY_ID"], os.environ["AWS_SECRET_ACCESS_KEY"] = s3_credentials(StoreType.COREWEAVE)
-    os.environ["AWS_REGION"] = os.environ["AWS_DEFAULT_REGION"] = data_buckets()["marin-us-east-02a"].signing_region
-
-
-@cache
-def tokenizer_for(uri: str, sha256: str) -> Tokenizer:
-    content = StoragePath(uri).read_bytes()
-    if hashlib.sha256(content).hexdigest() != sha256:
-        raise ValueError("Tokenizer digest changed")
-    return Tokenizer.from_str(content.decode())
-
-
-@cache
-def build_config(uri: str, expected_sha256: str) -> tuple[dict, FilterConfig]:
-    content = StoragePath(uri).read_bytes()
-    if hashlib.sha256(content).hexdigest() != expected_sha256:
-        raise ValueError("Candidate filter configuration changed")
-    value = json.loads(content)
-    config = FilterConfig(
-        enabled=frozenset(Stage(stage) for stage in value["enabled"]),
-        think_limits=value["think_limits"],
-        tools_by_source={source: frozenset(tools) for source, tools in value["tools_by_source"].items()},
-        give_up_sources=frozenset(value["give_up_sources"]),
-    )
-    return value, config
-
-
 @cache
 def replay_scorer():
     return load_pooled_scorer(MODEL_DIR), load_calibration(MODEL_DIR)
 
 
-def implementation_identity() -> str:
-    digest = hashlib.sha256()
-    for filename in ("exp3_build.py", "exp3_filters.py", "loss_modes.py"):
-        digest.update(filename.encode())
-        digest.update(Path(__file__).with_name(filename).read_bytes())
-    return digest.hexdigest()
-
-
-def count_stage(
-    stats: dict[str, Counter], stage: str, before: int, after: int, reason: str = "", *, changed: bool = False
-) -> None:
-    row = stats[stage]
-    row["input_documents"] += 1
-    row["input_tokens"] += before
-    row["output_documents"] += not bool(reason)
-    row["output_tokens"] += after
-    row["dropped_documents"] += bool(reason)
-    row["dropped_tokens"] += before if reason else 0
-    row["changed_documents"] += not reason and changed
-    if reason:
-        row["drop_reason:" + reason] += 1
+def verified_replay_scorer(config_value: dict):
+    """Refuse to score with junkgate weights that moved after the cutoff was calibrated."""
+    if config_value.get("junkgate_model_dir") != MODEL_DIR:
+        raise ValueError("Junkgate model directory changed after cutoff calibration")
+    if config_value.get("junkgate_model_sha256") != model_digests(MODEL_DIR):
+        raise ValueError("Junkgate model weights changed after cutoff calibration")
+    return replay_scorer()
 
 
 def input_batches(
@@ -139,7 +98,7 @@ def process_shard(job_dict: dict) -> dict:
 def build_shard(job_dict: dict) -> dict:
     """Write one complete new shard; never publish a catalog from partial outputs."""
     job = ShardJob(**{**job_dict, "loss_mode": LossMode(job_dict["loss_mode"])})
-    if implementation_identity() != job.implementation_sha256:
+    if implementation_identity(BUILD_IMPLEMENTATION_FILES) != job.implementation_sha256:
         raise ValueError("Candidate implementation changed")
     config_value, config = build_config(job.config_uri, job.config_sha256)
     identity = hashlib.sha256(json.dumps(job_dict, sort_keys=True).encode()).hexdigest()
@@ -152,7 +111,11 @@ def build_shard(job_dict: dict) -> dict:
             raise ValueError("Shard receipt identity mismatch")
         return receipt
     if (root / "cache").exists():
-        raise ValueError("Unreceipted cache preserved; use a new build version after reconciliation")
+        # A preempted worker can leave the cache in place before its receipt
+        # lands; shard output is deterministic from the job identity, so the
+        # retry deletes it and rebuilds identical bytes.
+        logger.warning("Deleting unreceipted cache from a preempted worker: %s", root / "cache")
+        (root / "cache").rmtree()
     if job.passed and not job.pass_receipt_sha256:
         raise ValueError("A pass assertion requires a pinned source receipt")
     stats: dict[str, Counter] = defaultdict(Counter)
@@ -333,6 +296,9 @@ def build_shard(job_dict: dict) -> dict:
                     yield {"input_ids": token_ids, "loss_weights": weights}
 
     output_path = str(root / "cache")
+    if job.loss_mode == LossMode.FULL_TOKEN and job.source.startswith("replay/") and config_value["junkgate_enabled"]:
+        # Verify before the writer consumes the first batch that would score.
+        verified_replay_scorer(config_value)
     result = write_levanter_cache(
         records(),
         output_path,
