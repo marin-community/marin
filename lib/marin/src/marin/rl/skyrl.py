@@ -14,7 +14,7 @@ import tomllib
 import uuid
 from collections import deque
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
@@ -28,11 +28,13 @@ from finestore.rl.run_records import (
 )
 from iris.cli.connect import connect_controller, rpc_client
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, SCHEDULABLE_RACK_NODES, is_rack_based
 from iris.cluster.types import JobName, is_job_finished
 from iris.rpc import controller_pb2, job_pb2
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from skyrlrecipe.locality import RoleTopologyMode, plan_nvlink_roles
 
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
@@ -158,11 +160,36 @@ class SkyRLRolePlan(_InferenceGeometry):
         return self.reference_num_nodes is None
 
     @property
+    def uses_expert_parallel_placement(self) -> bool:
+        """Whether rollout uses cross-host, one-GPU expert-parallel workers."""
+        return (
+            not self.colocate_all
+            and self.inference_engine_tensor_parallel_size == 1
+            and self.inference_engine_pipeline_parallel_size == 1
+            and self.inference_engine_expert_parallel_size
+            == self.inference_engine_data_parallel_size
+            > self.policy_num_gpus_per_node
+        )
+
+    @property
     def num_nodes(self) -> int:
         """Count the nodes used by training and inference roles."""
         if self.colocate_all:
             return self.policy_num_nodes
-        return self.policy_num_nodes + (self.reference_num_nodes or 0) + _inference_nodes(self)
+        engine_gpus = (
+            self.inference_engine_tensor_parallel_size
+            * self.inference_engine_pipeline_parallel_size
+            * self.inference_engine_data_parallel_size
+        )
+        if self.uses_expert_parallel_placement:
+            rollout_gpus = self.num_inference_engines * engine_gpus
+            rollout_nodes = (rollout_gpus + self.policy_num_gpus_per_node - 1) // self.policy_num_gpus_per_node
+        else:
+            engines_per_node = self.policy_num_gpus_per_node // engine_gpus
+            if not engines_per_node:
+                raise ValueError("each SkyRL inference engine must fit on one node")
+            rollout_nodes = (self.num_inference_engines + engines_per_node - 1) // engines_per_node
+        return self.policy_num_nodes + (self.reference_num_nodes or 0) + rollout_nodes
 
     def config_values(self) -> dict[str, object]:
         """Canonical native placement, batch and inference settings."""
@@ -182,7 +209,7 @@ class SkyRLRolePlan(_InferenceGeometry):
     def validate(self, topology: SkyRLTopology) -> None:
         """Validate training geometry against the allocated topology."""
         _validate_inference_geometry(self)
-        if not self.colocate_all:
+        if not self.colocate_all and not self.uses_expert_parallel_placement:
             _validate_engine_fits_node(self, topology)
         tensor_pipeline_gpus = self.inference_engine_tensor_parallel_size * self.inference_engine_pipeline_parallel_size
         rollout_gpus = self.num_inference_engines * self.engine_gpus
@@ -240,6 +267,8 @@ class SkyRLRolePlan(_InferenceGeometry):
             raise ValueError("SkyRL policy_mini_batch_size must be divisible by micro_train_batch_size_per_gpu")
 
     def validate_recipe(self, config: dict[str, object], topology: SkyRLTopology) -> None:
+        if self.uses_expert_parallel_placement and _declared_config_value(config, "generator.backend") != "vllm":
+            raise ValueError("cross-host TP1/PP1 expert-parallel inference requires generator.backend=vllm")
         if _declared_config_value(config, "generator.weight_sync_transport") == "expert_block" and self.colocate_all:
             supported = (
                 self.entrypoint == "standard"
@@ -417,6 +446,12 @@ class ResolvedModelLocator:
     local_path: str
     tokenizer_uri: str | None
     tokenizer_revision: str | None
+
+
+@dataclass(frozen=True)
+class ResolvedNativeCheckpoint:
+    uri: str
+    identity: str
 
 
 @dataclass(frozen=True)
@@ -631,6 +666,7 @@ class SkyRLSpec:
     retention: SkyRLRetentionPolicy
     seed: int
     evaluation_data: tuple[tuple[str, tuple[SkyRLDataSource, ...]], ...] = ()
+    starting_checkpoint: ArtifactStep[Artifact] | None = None
 
     def __post_init__(self) -> None:
         _validate_skyrl_recipe(self.config_yaml, self.topology)
@@ -662,6 +698,7 @@ class IrisSkyRLExecution:
     job_timeout_seconds: int = 0
     required_env_vars: tuple[str, ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
+    role_topology: RoleTopologyMode | None = None
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
@@ -957,6 +994,7 @@ def _launch_config_yaml(
     evaluation_data: tuple[tuple[str, tuple[ResolvedDataSource, ...]], ...],
     output: SkyRLOutputPaths,
     coordinator_iris_job_id: str | None,
+    starting_checkpoint: ResolvedNativeCheckpoint | None,
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
     recipe["entrypoint"] = spec.topology.role_plan.entrypoint
@@ -964,6 +1002,25 @@ def _launch_config_yaml(
     for callback in recipe.get("trainer", {}).get("callbacks") or []:
         if callback["type"] == _BEST_CHECKPOINT_CALLBACK:
             callback["initial_model_uri"] = model.uri
+    num_nodes = spec.topology.num_nodes
+    if execution.role_topology is not None:
+        if not is_rack_based(spec.topology.gpu_variant) or spec.topology.gpus_per_node != NVL72_GPUS_PER_NODE:
+            raise ValueError("NVLink role placement requires four-GPU NVL72 hosts")
+        plan = spec.topology.role_plan
+        locality = plan_nvlink_roles(
+            policy_gpus=plan.policy_num_nodes * plan.policy_num_gpus_per_node,
+            num_inference_engines=plan.num_inference_engines,
+            tensor_parallel_size=plan.inference_engine_tensor_parallel_size,
+            pipeline_parallel_size=plan.inference_engine_pipeline_parallel_size,
+            data_parallel_size=plan.inference_engine_data_parallel_size,
+            expert_parallel_size=plan.inference_engine_expert_parallel_size,
+            inference_backend=cast(str, _declared_config_value(recipe, "generator.backend")),
+            colocate_all=plan.colocate_all,
+            colocate_policy_ref=plan.colocate_policy_ref,
+            gpus_per_node=spec.topology.gpus_per_node,
+            max_nodes_per_domain=SCHEDULABLE_RACK_NODES,
+        )
+        num_nodes = locality.num_nodes
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
@@ -989,8 +1046,9 @@ def _launch_config_yaml(
             "cluster_config": execution.cluster_config,
             "job_name": sanitize_job_name(f"{run_id}-{attempt_id}"),
             "wandb_entity": execution.wandb_entity,
+            "role_topology": execution.role_topology.value if execution.role_topology is not None else None,
             "allocation": {
-                "num_nodes": spec.topology.num_nodes,
+                "num_nodes": num_nodes,
                 "gpus_per_node": spec.topology.gpus_per_node,
                 "gpu_variant": spec.topology.gpu_variant,
                 "cpu": execution.cpu,
@@ -1032,6 +1090,8 @@ def _launch_config_yaml(
         launch["inputs"]["evaluation_data"] = {
             name: [_launch_data_source(source) for source in sources] for name, sources in evaluation_data
         }
+    if starting_checkpoint is not None:
+        launch["inputs"]["starting_checkpoint"] = asdict(starting_checkpoint)
     if execution.container_profile is not None:
         launch["iris"]["container_profile"] = job_pb2.ContainerProfile.Name(execution.container_profile)
     return yaml.safe_dump(launch, sort_keys=False)
@@ -1052,12 +1112,14 @@ def skyrl_step(
                 *(dep for source in spec.train_data for dep in source.deps()),
                 *(dep for source in spec.validation_data for dep in source.deps()),
                 *(dep for _, sources in spec.evaluation_data for source in sources for dep in source.deps()),
+                *((spec.starting_checkpoint,) if spec.starting_checkpoint is not None else ()),
             )
         )
     )
 
     def build_config(ctx: StepContext) -> SkyRLRunConfig:
-        attempt_id = "<attempt_id>" if ctx.is_fingerprint else uuid.uuid4().hex[:12]
+        # OmegaConf reads an unquoted id such as 104e63883176 as a float; a leading letter keeps it a string.
+        attempt_id = "<attempt_id>" if ctx.is_fingerprint else f"a{uuid.uuid4().hex[:11]}"
         if ctx.is_fingerprint:
             temporary_root = "<temporary_output_path>"
         else:
@@ -1088,6 +1150,14 @@ def skyrl_step(
         evaluation_data = tuple(
             (name, tuple(source.resolve(ctx) for source in sources)) for name, sources in spec.evaluation_data
         )
+        starting_checkpoint = (
+            ResolvedNativeCheckpoint(
+                uri=ctx.artifact_path(spec.starting_checkpoint),
+                identity=artifact_identity(spec.starting_checkpoint),
+            )
+            if spec.starting_checkpoint is not None
+            else None
+        )
         execution = (
             _FINGERPRINT_EXECUTION if ctx.is_fingerprint else cast(IrisSkyRLExecution, ctx.runtime_arg(_EXECUTION))
         )
@@ -1105,6 +1175,7 @@ def skyrl_step(
                 evaluation_data=evaluation_data,
                 output=output,
                 coordinator_iris_job_id=str(coordinator.job_id) if coordinator is not None else None,
+                starting_checkpoint=starting_checkpoint,
             ),
             run_id=run_id,
             attempt_id=attempt_id,
@@ -1114,7 +1185,7 @@ def skyrl_step(
             draft_checkpoint_root=draft_checkpoint_root,
         )
 
-    return ArtifactStep(
+    step = ArtifactStep(
         name=step_name,
         version=spec.version,
         artifact_type=SkyRLRun,
@@ -1123,6 +1194,8 @@ def skyrl_step(
         deps=deps,
         runtime_args={_EXECUTION: execution},
     )
+    # A completed training version must not serve another continuation's cached result.
+    return replace(step, expected_fingerprint=step.fingerprint())
 
 
 class SkyRLReceiptLookupError(ValueError):

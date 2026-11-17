@@ -46,6 +46,7 @@ from marinskyrl.runtime_options import (
 )
 from marinskyrl.resource_locator import RolloutModelLoading
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat
+from skyrl_train.tokenizer import validate_checkpoint_vocabulary
 
 if TYPE_CHECKING:
     from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
@@ -220,6 +221,9 @@ def create_ray_wrapped_inference_engines_from_config(
         role,
         engine_init_kwargs=engine_init_kwargs,
     )
+    selectors = OmegaConf.select(cfg, "runtime.placement.engines", default=None)
+    if selectors:
+        engine_kwargs["node_label_selectors"] = [dict(selector) for selector in selectors]
     if cfg.generator.weight_sync_transport == WeightSyncTransport.EXPERT_BLOCK:
         engine_kwargs["require_verified_placements"] = True
     if cfg.trainer.strategy == "megatron":
@@ -294,6 +298,17 @@ class BasePPOExp:
         self.sessions = {} if sessions is None else dict(sessions)
         self._configure_log_level()
         self.tokenizer = self.get_tokenizer()
+        model = cfg.trainer.policy.model
+        runtime = cfg.get("runtime") or {}
+        tokenizer_identity = runtime.get("tokenizer_identity") or str(model.tokenizer_path)
+        validate_checkpoint_vocabulary(
+            self.tokenizer,
+            checkpoint_path=model.path,
+            checkpoint_revision=model.get("revision"),
+            checkpoint_identity=runtime.get("checkpoint_identity") or model.get("source_identity") or model.path,
+            tokenizer_identity=tokenizer_identity,
+            disable_fast_tokenizer=cfg.trainer.disable_fast_tokenizer,
+        )
         self.train_dataset = self.get_train_dataset()
         self.eval_dataset = self.get_eval_dataset()
         self.colocate_pg = self.get_colocate_pg()
@@ -488,7 +503,8 @@ class BasePPOExp:
         )  # noqa: PLC0415
 
         timeout = int(self.cfg.trainer.distributed.placement_group_timeout_seconds) if timeout is None else timeout
-        if not policy_strict_spread_eligible(self.cfg):
+        selector = dict(OmegaConf.select(self.cfg, "runtime.placement.policy", default={}))
+        if not policy_strict_spread_eligible(self.cfg) and not selector:
             return None
 
         from ray.util.placement_group import placement_group as _placement_group
@@ -503,7 +519,9 @@ class BasePPOExp:
         # reservation ordering, not from the spread strategy. Whole-node bundles
         # keep STRICT_SPREAD (one whole-node bundle per node) as before.
         strategy = "PACK" if per_gpu else "STRICT_SPREAD"
-        pg = _placement_group(bundles, strategy=strategy)
+        pg = _placement_group(
+            bundles, strategy=strategy, bundle_label_selector=[selector] * len(bundles) if selector else None
+        )
         get_ray_pg_ready_with_timeout(pg, timeout=timeout)
         logger.info(
             f"Reserved dedicated policy placement group (strategy={strategy}, "

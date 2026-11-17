@@ -426,15 +426,22 @@ async def test_script_grader_reads_extracted_answer_and_conversation_at_declared
 """
     grader = ScriptGrader(
         argv=("sh", "-c", report),
-        environment=GRADER_ENVIRONMENT,
+        environment=GRADER_ENVIRONMENT.model_copy(
+            update={
+                "setup_commands": ('test "$(cat /submission/final.txt)" = 12 && echo setup > /submission/final.txt',)
+            }
+        ),
         answer_path="/submission/final.txt",
         conversation_path="/tests/transcript.json",
         reward=FileReward(files=(RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON),)),
     )
-    task = arithmetic_task(grader).model_copy(update={"answer_format": JsonAnswer()})
+    task = arithmetic_task(grader).model_copy(
+        update={"answer_format": JsonAnswer(), "output_paths": ("/submission/final.txt",)}
+    )
     final = json.dumps({"answer": "12"})
 
-    result = await grade_in_sandbox(task, answered(task, final), FixtureImageFactory(), GRADER_MACHINE)
+    attempt = replace(answered(task, final), files={"/submission/final.txt": b"captured"})
+    result = await grade_in_sandbox(task, attempt, FixtureImageFactory(), GRADER_MACHINE)
 
     assert result.status == Outcome.GRADED, result.error
     assert result.detail == {
@@ -610,7 +617,10 @@ async def test_script_grader_reward_kinds(reward, script, expected):
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
 @pytest.mark.asyncio
 async def test_verifyit_grader_with_environment_runs_verifyit_cli_in_grading_machine(answer, reward):
-    package = verifyit_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0), environment=GRADER_ENVIRONMENT)
+    environment = GRADER_ENVIRONMENT.model_copy(
+        update={"setup_commands": ("test -s /app/answer.txt && echo setup > /app/answer.txt",)}
+    )
+    package = verifyit_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0), environment=environment)
     task = arithmetic_task(package.grader)
 
     result = await grade_in_sandbox(task, answered(task, answer), FixtureImageFactory(), GRADER_MACHINE)

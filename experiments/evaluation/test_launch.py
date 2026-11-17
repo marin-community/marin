@@ -35,7 +35,7 @@ from experiments.evaluation.models import models
 @pytest.fixture
 def submitted_batches(monkeypatch):
     monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
-    monkeypatch.setenv("DAYTONA_API_KEY", "local-test-key")
+    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "local-test-key")
     monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     batches: list[EvaluationBatch] = []
 
@@ -192,6 +192,42 @@ def test_launch_selects_across_documents_and_adds_harbor_configs(
         "first-policy",
         "second-policy",
     }
+
+
+def test_daytona_launch_uses_the_eval_org_key_not_an_exported_daytona_key(tmp_path, monkeypatch, harbor_task_workspace):
+    monkeypatch.setenv("DAYTONA_API_KEY", "rl-org-key")
+    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "eval-org-key")
+    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
+    monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
+    submitted_env = []
+
+    class Client:
+        def submit(self, *, environment, **_kwargs):
+            submitted_env.append(environment.env_vars)
+            return SimpleNamespace(job_id="/test/eval")
+
+    @contextmanager
+    def client(**_kwargs):
+        yield Client()
+
+    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", client)
+    policy = harbor_task_workspace / "daytona-policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
+                "datasets": [{"path": "dataset"}],
+            }
+        )
+    )
+    command = _command(tmp_path)
+    command.extend(["--harbor-config", str(policy)])
+
+    result = CliRunner().invoke(cli, command)
+
+    assert result.exit_code == 0, result.output
+    assert submitted_env[0]["DAYTONA_API_KEY"] == "eval-org-key"
 
 
 @pytest.mark.parametrize("explicit_run_id", [True, False])

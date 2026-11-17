@@ -22,7 +22,8 @@ from skyrl_train.config.rollout_validation import EntrypointOperation
 from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_disk_load_request
 from skyrl_train.inference_engines.vllm.stats import IntervalReadMode
-from skyrl_train.inference_observability import trainer_metrics
+from skyrl_train.inference_observability import configured_inference_sinks, trainer_metrics
+from skyrl_train.telemetry import record_training_metrics
 from skyrl_train.metric_names import (
     PROMPTS_DROPPED_TOO_LONG_METRIC,
 )
@@ -69,6 +70,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
             tracker.start(resumed_step=None)
             results = asyncio.run(self._evaluate())
             tracker.log(results, step=0, commit=True)
+            record_training_metrics(results, step=0, kind="generate")
         return results
 
     async def _evaluate(self) -> dict[str, Any]:
@@ -115,6 +117,8 @@ class EvalOnlyEntrypoint(BasePPOExp):
             )
             if local_engines:
                 snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
+                for sink in configured_inference_sinks():
+                    sink.publish(snapshot, 0)
                 generated_tokens = sum(engine.cumulative.generation_tokens for engine in snapshot.engines)
                 results.update(
                     {

@@ -15,7 +15,7 @@ from cloud.iris.export_hf_checkpoint import (
     _run_export,
     checkpoint_export_launch_config,
 )
-from cloud.iris.launch_config import load_launch_config, validate_iris_allocation
+from cloud.iris.launch_config import derive_launch_topology, load_launch_config, validate_launch_config
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
@@ -81,9 +81,34 @@ def _spec(request: HFExportRequest) -> ExportJobSpec:
     )
 
 
-def test_checkpoint_export_config_carries_request_fields_as_data() -> None:
+@pytest.mark.parametrize("transport", ["broadcast", "expert_block"])
+def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path, transport: str) -> None:
+    raw = raw_launch_config()
+    raw["iris"]["allocation"]["gpus_per_node"] = 4
+    raw["skyrl"]["trainer"]["placement"]["policy_num_gpus_per_node"] = 4
+    raw["skyrl"]["trainer"]["policy"] = {
+        "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "expert_tensor_parallel_size": 1,
+            "expert_model_parallel_size": 4,
+        }
+    }
+    raw["skyrl"]["generator"].update(
+        weight_sync_transport=transport,
+        expert_block_sync={"verify": True},
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=4,
+        inference_engine_expert_parallel_size=4,
+        engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
+    )
+    path = tmp_path / "training.yaml"
+    OmegaConf.save(OmegaConf.create(raw), path)
+    training = load_launch_config(path)
     request = _request()
-    config = checkpoint_export_launch_config(_training_config(), request, _spec(request))
+    config = checkpoint_export_launch_config(training, request, _spec(request))
+    topology = validate_launch_config(config)
+    assert (topology.num_nodes, topology.gpus_per_node) == (request.num_nodes, request.gpus_per_node)
 
     assert config.run.mode == "checkpoint_export"
     assert config.runtime.entrypoint == "skyrl_train.entrypoints.checkpoint_export"
@@ -152,7 +177,7 @@ def test_checkpoint_export_allocation_excludes_unequal_reference_pool(policy_los
     request = replace(_request(), num_nodes=15, gpus_per_node=8)
     export = checkpoint_export_launch_config(training, request, _spec(request))
 
-    allocation = validate_iris_allocation(OmegaConf.to_container(export, resolve=True))
+    allocation = derive_launch_topology(OmegaConf.to_container(export, resolve=True))
 
     assert allocation.num_nodes * allocation.gpus_per_node == 120
     export_plan = derive_policy_export_role_plan(OmegaConf.to_container(export.skyrl, resolve=True))
