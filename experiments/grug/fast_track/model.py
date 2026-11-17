@@ -486,10 +486,16 @@ class GrugModelConfig:
     of its kept n-gram rows from one learned table plus ``spelling_byte_embeds``-style leading-space and case rows
     (all initialised like ``token_embed``), through its own RMS norm and gain. The result is a history source ahead
     of the token embedding, which every AttnRes gate and the final gate weight separately. Needs ``attn_res``."""
+    spelling_byte_source: bool = False
+    """``spelling_byte_embeds``'s byte, leading-space and case rows as their own AttnRes source: they sum into a
+    separate ``[V, D]`` table (rows initialised like ``token_embed``), whose gathered rows pass through their own
+    RMS norm and gain into a history source ahead of the token embedding. Needs ``attn_res``."""
 
     def __post_init__(self) -> None:
         if self.spelling_ngram_source and not self.attn_res:
             raise ValueError("spelling_ngram_source is an AttnRes source; it needs attn_res")
+        if self.spelling_byte_source and (not self.attn_res or self.spelling_byte_embeds):
+            raise ValueError("spelling_byte_source is an AttnRes source; it needs attn_res, not spelling_byte_embeds")
         if self.moe_lag_window and (self.dense_mlp or self.latent_dim is None):
             raise ValueError("moe_lag_window needs the routed MoE with a latent_dim")
         if self.lm_head_bilinear and self.cplm_plus:
@@ -556,8 +562,8 @@ class GrugModelConfig:
 
     @property
     def num_spelling_sources(self) -> int:
-        """AttnRes history sources ahead of the token embedding (``spelling_ngram_source``)."""
-        return int(self.spelling_ngram_source)
+        """AttnRes history sources ahead of the token embedding (``spelling_ngram_source``, ``spelling_byte_source``)."""
+        return int(self.spelling_ngram_source) + int(self.spelling_byte_source)
 
     @property
     def kv_source_layers(self) -> int:
@@ -1991,6 +1997,20 @@ def attn_res_block_starts(cfg: GrugModelConfig) -> tuple[int, ...]:
     return starts
 
 
+def _spelling_byte_rows(
+    byte_rows: Float[Array, "P 256 D"], space_row: Float[Array, " D"], case_rows: Float[Array, "C D"], vocab_size: int
+) -> Float[Array, "V D"]:
+    """Each token's sum of its ``spelling_bytes`` case row, leading-space row and per-position byte rows (float32)."""
+    tables = spelling_tables(vocab_size)
+    # Gather in float32 so the backward scatter-adds into float32 rows.
+    byte_rows = byte_rows.astype(jnp.float32)
+    extra = case_rows.astype(jnp.float32)[tables.case]
+    extra = extra + tables.leading_space[:, None] * space_row.astype(jnp.float32)
+    for position in range(BYTE_POSITIONS):
+        extra = extra + tables.byte_present[:, position, None] * byte_rows[position][tables.byte_ids[:, position]]
+    return extra
+
+
 class LayerSkip(NamedTuple):
     """An eval ablation: on ``layers``, tokens with ``keep`` False contribute no attention or MLP output. Their
     K/V are still computed (other tokens attend to them as before), so with ``attn_res_kv_layers`` on those
@@ -2033,6 +2053,11 @@ class Transformer(eqx.Module):
     token_embed_ngram_space: Float[Array, " D"] | None
     token_embed_ngram_case: Float[Array, "C D"] | None
     spelling_ngram_norm: RMSNorm | None
+    # cfg.spelling_byte_source: its own byte, leading-space and case rows and the source's norm.
+    token_embed_source_bytes: Float[Array, "P 256 D"] | None
+    token_embed_source_space: Float[Array, " D"] | None
+    token_embed_source_case: Float[Array, "C D"] | None
+    spelling_byte_norm: RMSNorm | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -2064,6 +2089,17 @@ class Transformer(eqx.Module):
                 _init_weight(k_case, (len(SpellingCase), cfg.hidden_dim), std), P(None, None)
             )
             spelling_ngram_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+        source_bytes = source_space = source_case = spelling_byte_norm = None
+        if cfg.spelling_byte_source:
+            # Not zero: the RMS norm of a zero row has an unbounded gradient.
+            k_bytes, k_space, k_case = random.split(random.fold_in(key, 14), 3)
+            std = cfg.initializer_std
+            source_bytes = reshard(
+                _init_weight(k_bytes, (BYTE_POSITIONS, 256, cfg.hidden_dim), std), P(None, None, None)
+            )
+            source_space = reshard(_init_weight(k_space, (cfg.hidden_dim,), std), P(None))
+            source_case = reshard(_init_weight(k_case, (len(SpellingCase), cfg.hidden_dim), std), P(None, None))
+            spelling_byte_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
 
         def stack(layers: tuple[int, ...], use_kda: bool) -> ArrayStacked[Block]:
             keys = jnp.stack([block_keys[i] for i in layers])
@@ -2123,6 +2159,10 @@ class Transformer(eqx.Module):
             token_embed_ngram_space=token_embed_ngram_space,
             token_embed_ngram_case=token_embed_ngram_case,
             spelling_ngram_norm=spelling_ngram_norm,
+            token_embed_source_bytes=source_bytes,
+            token_embed_source_space=source_space,
+            token_embed_source_case=source_case,
+            spelling_byte_norm=spelling_byte_norm,
             config=cfg,
         )
 
@@ -2145,14 +2185,23 @@ class Transformer(eqx.Module):
         """``token_embed``, plus each token's byte, space and case rows under ``spelling_byte_embeds``."""
         if self.token_embed_bytes is None:
             return self.token_embed
-        tables = spelling_tables(self.config.vocab_size)
-        # Gather in float32 so the backward scatter-adds into float32 rows.
-        byte_rows = self.token_embed_bytes.astype(jnp.float32)
-        extra = self.token_embed_case.astype(jnp.float32)[tables.case]
-        extra = extra + tables.leading_space[:, None] * self.token_embed_space.astype(jnp.float32)
-        for position in range(BYTE_POSITIONS):
-            extra = extra + tables.byte_present[:, position, None] * byte_rows[position][tables.byte_ids[:, position]]
+        assert self.token_embed_space is not None and self.token_embed_case is not None
+        extra = _spelling_byte_rows(
+            self.token_embed_bytes, self.token_embed_space, self.token_embed_case, self.config.vocab_size
+        )
         table = self.token_embed.astype(jnp.float32) + extra
+        return reshard(table.astype(self.token_embed.dtype), P(None, None))
+
+    def spelling_byte_table(self) -> Float[Array, "V D"]:
+        """Each token's ``spelling_byte_source`` feature before its norm: its byte, leading-space and case rows."""
+        assert self.token_embed_source_bytes is not None and self.token_embed_source_space is not None
+        assert self.token_embed_source_case is not None
+        table = _spelling_byte_rows(
+            self.token_embed_source_bytes,
+            self.token_embed_source_space,
+            self.token_embed_source_case,
+            self.config.vocab_size,
+        )
         return reshard(table.astype(self.token_embed.dtype), P(None, None))
 
     def spelling_ngram_table(self) -> Float[Array, "V D"]:
@@ -2176,9 +2225,12 @@ class Transformer(eqx.Module):
 
     def _spelling_sources(self, token_ids: Int[Array, "B S"]) -> tuple[Float[Array, "B S D"], ...]:
         """The AttnRes history sources ahead of the token embedding (``num_spelling_sources``)."""
-        if self.spelling_ngram_norm is None:
-            return ()
-        return (self.spelling_ngram_norm(_embedding_gather(self.spelling_ngram_table(), token_ids)),)
+        sources = []
+        if self.spelling_ngram_norm is not None:
+            sources.append(self.spelling_ngram_norm(_embedding_gather(self.spelling_ngram_table(), token_ids)))
+        if self.spelling_byte_norm is not None:
+            sources.append(self.spelling_byte_norm(_embedding_gather(self.spelling_byte_table(), token_ids)))
+        return tuple(sources)
 
     @property
     def Vocab(self) -> Axis:
