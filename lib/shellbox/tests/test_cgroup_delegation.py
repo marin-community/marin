@@ -87,7 +87,7 @@ def test_discovery_selects_the_pod_slice_over_the_container_scope(pod_tree, monk
     dedicated pod slice in both cases because the fallback parent is verified
     ahead of the worker's own cgroup.
     """
-    scope, slice_level = pod_tree
+    _scope, slice_level = pod_tree
 
     def probe(parent: Path, **_kwargs) -> bool:
         return scope_enforces or parent == slice_level
