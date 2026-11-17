@@ -192,9 +192,9 @@ def benchmarks() -> list[EvaluationBenchmark]:
         version=VERSION,
         operation=OperationKind.CHAT_GENERATION,
         sampling=Sampling(
-            temperature=0.7,
-            top_p=0.8,
-            top_k=20,
+            temperature=0.0,
+            top_p=None,
+            top_k=None,
             max_tokens=None,
             stop=(),
             chat_template_kwargs={"enable_thinking": False},

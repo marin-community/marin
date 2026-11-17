@@ -370,7 +370,7 @@ def launch(
         if no_wait:
             return
         if not wait_and_report([group]):
-            raise click.ClickException("one or more evaluations wrote no record")
+            raise click.ClickException("one or more evaluations failed or wrote no record")
 
 
 @cli.command()

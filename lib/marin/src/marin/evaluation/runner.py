@@ -758,8 +758,9 @@ def print_record(record: EvalRunRecord) -> None:
 def wait_and_report(batches: list[SubmittedEvaluationBatch]) -> bool:
     """Wait for submitted batches and print their durable records.
 
-    Returns whether every evaluation wrote a readable record. For one that did not, prints the
-    orchestrator job's terminal state and error, which explain rejections before any record exists.
+    Returns whether every evaluation wrote a record with succeeded status. For one that wrote no
+    record, prints the orchestrator job's terminal state and error, which explain rejections before
+    any record exists.
     """
     configure_coreweave_s3()
     complete = True
@@ -778,4 +779,5 @@ def wait_and_report(batches: list[SubmittedEvaluationBatch]) -> bool:
                 print(f"  record {path} is unreadable: {type(error).__name__}: {error}")
                 continue
             print_record(record)
+            complete = complete and record.status is RunStatus.SUCCEEDED
     return complete

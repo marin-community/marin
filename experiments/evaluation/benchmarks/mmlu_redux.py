@@ -9,8 +9,8 @@ annotators marked as erroneous removed. The Qwen2.5-Instruct MMLU-Redux scores i
 report track ZeroEval's published greedy scores for those models within 0.3 points at 3B to 32B.
 MMLU-Redux is CC-BY-4.0; ZeroEval is Apache-2.0.
 
-Sampling follows the Qwen3 technical report's non-thinking setting (temperature 0.7, top-p 0.8,
-top-k 20). The protocol cannot express its presence penalty of 1.5.
+Decoding is greedy, as in ZeroEval, so every model is scored under the same deterministic setting.
+The Qwen3 report instead samples at temperature 0.7, top-p 0.8, top-k 20 and presence penalty 1.5.
 """
 
 from taskcompendium.evaluation.spec import (
@@ -33,7 +33,7 @@ from experiments.post_training.task_curation.pipeline import HfSource
 ZEROEVAL_DATA_REVISION = "a100ff81ecec0ed983dd3f0038d6d6bb2ab3dc1c"
 MMLU_REDUX_FILE = "mmlu-redux/test-00000-of-00001.parquet"
 MMLU_REDUX_POPULATION = 2778
-VERSION = "2026.11.16"
+VERSION = "2026.11.17"
 
 
 def benchmarks() -> list[EvaluationBenchmark]:
@@ -42,9 +42,9 @@ def benchmarks() -> list[EvaluationBenchmark]:
         version=VERSION,
         operation=OperationKind.CHAT_GENERATION,
         sampling=Sampling(
-            temperature=0.7,
-            top_p=0.8,
-            top_k=20,
+            temperature=0.0,
+            top_p=None,
+            top_k=None,
             max_tokens=None,
             stop=(),
             chat_template_kwargs={"enable_thinking": False},
