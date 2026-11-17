@@ -7,6 +7,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from itertools import batched
 from typing import Any
 
 from taskcompendium.source_fingerprints import DuplicateReview
@@ -25,6 +26,7 @@ from .server.licensing import license_projection
 from .server.source_counts import SourceCounts
 
 SqlQuery = Callable[[str, dict[str, Any]], dict[str, Any]]
+HISTORY_PIPELINE_BATCH = 8
 
 
 def json_sha256(value: Any) -> str:
@@ -147,9 +149,36 @@ def stored_duplicate_groups(query: SqlQuery, load_id: str) -> list[dict[str, Any
     )
 
 
+def retained_packet_checksums(query: SqlQuery) -> list[dict[str, Any]]:
+    """Checksum all retained packet variants in bounded groups of pipelines."""
+    pipelines = query("SELECT DISTINCT pipeline_key FROM atlas_packets ORDER BY pipeline_key", {})["rows"]
+    packets = []
+    for group in batched(pipelines, HISTORY_PIPELINE_BATCH):
+        parameters = {f"pipeline_{index}": row["pipeline_key"] for index, row in enumerate(group)}
+        names = ",".join(":" + key for key in parameters)
+        packets.extend(
+            query(
+                "WITH records AS (SELECT DISTINCT pipeline_key,task_id,md5(packet) AS digest "
+                f"FROM atlas_packets WHERE pipeline_key IN ({names})) "
+                "SELECT pipeline_key,COUNT(*) AS packets,md5(string_agg(digest,'' ORDER BY task_id,digest)) AS checksum "
+                "FROM records GROUP BY pipeline_key ORDER BY pipeline_key",
+                parameters,
+            )["rows"]
+        )
+    return packets
+
+
 def catalog_state(query: SqlQuery) -> dict[str, Any]:
     """Snapshot selected pointers and every retained load's assessment/packet contents."""
-    current = query(
+
+    def read(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return query(sql, parameters)
+        except Exception as error:
+            details = json.dumps({"sql": sql, "parameters": parameters}, sort_keys=True)
+            raise RuntimeError(f"Catalog history readback failed: {details}: {error}") from error
+
+    current = read(
         "SELECT c.load_id,l.snapshot_id FROM atlas_current c JOIN atlas_loads l USING(load_id) " "WHERE c.name='latest'",
         {},
     )["rows"]
@@ -161,10 +190,10 @@ def catalog_state(query: SqlQuery) -> dict[str, Any]:
     # keeps the identical row shape, ordering and checksum semantics (each
     # original correlated subquery was already scoped to one load).
     archives = []
-    for load_row in query("SELECT load_id FROM atlas_loads ORDER BY load_id", {})["rows"]:
+    for load_row in read("SELECT load_id FROM atlas_loads ORDER BY load_id", {})["rows"]:
         load_id = load_row["load_id"]
         archives.append(
-            query(
+            read(
                 "SELECT :load_id AS load_id, "
                 "(SELECT COUNT(*) FROM atlas_sources s WHERE s.load_id=:load_id) AS sources, "
                 "(SELECT md5(COALESCE(string_agg(md5(s.declaration::text),'' ORDER BY s.id),'')) "
@@ -185,26 +214,21 @@ def catalog_state(query: SqlQuery) -> dict[str, Any]:
                 {"load_id": load_id},
             )["rows"][0]
         )
-    assessments = query(
+    assessments = read(
         "WITH records AS (SELECT DISTINCT pipeline_key,md5((to_jsonb(a)-'load_id')::text) AS digest "
         "FROM atlas_assessments a) SELECT pipeline_key,COUNT(*) AS records,"
         "md5(string_agg(digest,'' ORDER BY digest)) AS checksum "
         "FROM records GROUP BY pipeline_key ORDER BY pipeline_key",
         {},
     )["rows"]
-    packets = query(
-        "WITH records AS (SELECT DISTINCT pipeline_key,task_id,md5(packet) AS digest FROM atlas_packets) "
-        "SELECT pipeline_key,COUNT(*) AS packets,md5(string_agg(digest,'' ORDER BY task_id,digest)) AS checksum "
-        "FROM records GROUP BY pipeline_key ORDER BY pipeline_key",
-        {},
-    )["rows"]
-    curriculum = query("SELECT * FROM curriculum_current ORDER BY name", {})["rows"]
-    releases = query(
+    packets = retained_packet_checksums(read)
+    curriculum = read("SELECT * FROM curriculum_current ORDER BY name", {})["rows"]
+    releases = read(
         "SELECT load_id,release_id,release_uri,md5(manifest::text) AS manifest_checksum "
         "FROM curriculum_loads ORDER BY load_id",
         {},
     )["rows"]
-    identity_measurements = query(
+    identity_measurements = read(
         """SELECT m.load_id || '/' || m.measurement_id AS id,
         md5(m.metadata::text) AS metadata_checksum,
         (SELECT COUNT(*) FROM atlas_identity_measurement_reviews r
@@ -215,15 +239,15 @@ def catalog_state(query: SqlQuery) -> dict[str, Any]:
         FROM atlas_identity_measurements m ORDER BY id""",
         {},
     )["rows"]
-    identity_selection = query("SELECT * FROM atlas_identity_measurement_current ORDER BY load_id", {})["rows"]
-    derived_contracts = query(
+    identity_selection = read("SELECT * FROM atlas_identity_measurement_current ORDER BY load_id", {})["rows"]
+    derived_contracts = read(
         (
             "SELECT source_id || '/' || receipt_id AS id,md5(receipt::text) AS checksum FRO"
             "M atlas_derived_contracts ORDER BY id"
         ),
         {},
     )["rows"]
-    confidence_vectors = query(
+    confidence_vectors = read(
         """SELECT l.load_id,
         (SELECT COUNT(*) FROM curriculum_confidence v WHERE v.load_id=l.load_id) AS vectors,
         (SELECT md5(COALESCE(string_agg(md5(to_jsonb(v)::text),'' ORDER BY v.scope_id,v.metric,
@@ -232,7 +256,7 @@ def catalog_state(query: SqlQuery) -> dict[str, Any]:
         FROM curriculum_loads l ORDER BY l.load_id""",
         {},
     )["rows"]
-    end = query("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"]
+    end = read("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"]
     if end != [{"load_id": current[0]["load_id"]}]:
         raise ValueError("Catalog selection changed while recording the baseline")
     return {

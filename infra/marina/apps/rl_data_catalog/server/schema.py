@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS atlas_packets (
     packet TEXT NOT NULL,
     PRIMARY KEY (load_id, pipeline_key, task_id)
 );
+CREATE INDEX IF NOT EXISTS atlas_packets_pipeline_task ON atlas_packets (pipeline_key,task_id);
 CREATE TABLE IF NOT EXISTS atlas_backend_surveys (
     load_id TEXT PRIMARY KEY, survey_id TEXT NOT NULL, survey JSONB NOT NULL
 );

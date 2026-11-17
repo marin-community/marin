@@ -172,6 +172,13 @@ from their subjects. Source geometry is checked after column resizing as well as
 at automatic widths. Package verification compares every tracked packaged input
 against the landed cut, applying only the preview preparation transformations.
 
+Preflight and hosted verification check history before and after browser work
+as blocking gates. Retained packet checksums execute in bounded groups of pipeline keys, preserving all
+distinct task/content variants across loads. Failure receipts identify whether
+the baseline or final readback failed and retain the failing SQL and parameter
+bindings. Database timeouts fail the release check, including those
+after page checks finish.
+
 Code-only history checks also checksum stored source fingerprints, duplicate
 groups, identity survey records and pair reviews. Recomputing display groups from
 those records must preserve their archived bytes. A filtered-out canonical source

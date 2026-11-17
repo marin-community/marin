@@ -17,7 +17,7 @@ from experiments.post_training.task_curation.tests.admission_fixtures import wit
 from infra.marina.apps.rl_data_catalog import release_check
 from infra.marina.apps.rl_data_catalog.release_browser import verify_rendered_partition
 from infra.marina.apps.rl_data_catalog.release_check import main
-from infra.marina.apps.rl_data_catalog.release_evidence import projected_sources, task_totals
+from infra.marina.apps.rl_data_catalog.release_evidence import catalog_state, projected_sources, task_totals
 from infra.marina.apps.rl_data_catalog.server.source_counts import SourceCounts
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_evidence, filtered_declaration
@@ -212,3 +212,45 @@ def test_cli_records_nonblocking_audit_separately_from_hosted_success(tmp_path, 
     assert recorded["blocking"] is (not full)
     assert recorded["phase"] == ("postpublish" if full else "hosted")
     assert recorded["postpublish_job"] == (None if full else {"blocking": False, "launch_error": "unavailable"})
+
+
+def test_release_cli_fails_closed_with_history_timeout_sql_and_bindings(tmp_path, monkeypatch):
+    receipt_path = tmp_path / "receipt.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "release_check",
+            "--revision",
+            "2",
+            "--baseline",
+            str(tmp_path / "baseline.json"),
+            "--production-version",
+            "76",
+            "--receipt",
+            str(receipt_path),
+        ],
+    )
+
+    def query(sql, parameters):
+        if sql.startswith("SELECT c.load_id"):
+            return {"rows": [{"load_id": "fixture", "snapshot_id": "frozen"}]}
+        if sql.startswith("SELECT DISTINCT pipeline_key FROM atlas_packets"):
+            return {"rows": [{"pipeline_key": "retained-source"}]}
+        if "md5(packet)" in sql and parameters:
+            raise MarinaRequestError(504, "query exceeded its statement timeout")
+        return {"rows": []}
+
+    def checked(args, artifacts, receipt):
+        receipt.gate = "catalog-history-readback"
+        catalog_state(query)
+
+    monkeypatch.setattr(release_check, "run_checks", checked)
+    with pytest.raises(SystemExit) as exit_code:
+        main()
+    recorded = json.loads(receipt_path.read_text())
+    assert exit_code.value.code == 1 and not recorded["passed"] and recorded["blocking"]
+    assert recorded["error"]["gate"] == "catalog-history-readback"
+    message = recorded["error"]["message"]
+    assert "504" in message and "query exceeded its statement timeout" in message
+    assert "pipeline_0" in message and "retained-source" in message and "md5(packet)" in message

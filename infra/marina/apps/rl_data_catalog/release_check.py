@@ -515,6 +515,7 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
         reader = CatalogReader(
             f"{args.app_origin.rstrip('/')}/a/{PREVIEW_APP_ID}/v/{revision}/", session, query if package else None
         )
+        receipt.gate = "catalog-history-baseline"
         before = catalog_state(query)
         if args.identity_measurement:
             selected = [row for row in before["identity_selection"] if row["load_id"] == before["selected"]["load_id"]]
@@ -574,6 +575,7 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
             )
             if receipt.browser["inventory_sha256"] != baseline.browser["inventory_sha256"]:
                 raise ValueError("Hosted oracle inventory differs from the preflight input")
+        receipt.gate = "catalog-history-readback"
         after = catalog_state(query)
         receipt.gate = "history-preservation"
         verify_preservation(before, after)

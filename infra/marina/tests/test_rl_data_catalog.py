@@ -119,8 +119,10 @@ from infra.marina.apps.rl_data_catalog.load_identity import load_identity
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, PRODUCTION_APP_ID, prepare_preview
 from infra.marina.apps.rl_data_catalog.release_curriculum import check_curriculum_document
 from infra.marina.apps.rl_data_catalog.release_evidence import (
+    HISTORY_PIPELINE_BATCH,
     catalog_state,
     projected_duplicate_inventory,
+    retained_packet_checksums,
     stored_duplicate_groups,
     verify_preservation,
 )
@@ -169,6 +171,53 @@ def test_release_gate_preserves_archived_packets_even_during_an_explicit_catalog
         connection.execute(text("UPDATE atlas_packets SET packet=packet || ' '"))
     with pytest.raises(ValueError):
         verify_preservation(before, catalog_state(catalog_query), refresh_snapshot="after")
+
+
+def test_history_packet_batches_preserve_distinct_variants_across_loads(catalog_database, catalog_query):
+    packets = []
+    for pipeline in range(HISTORY_PIPELINE_BATCH + 3):
+        for load in ("older", "current"):
+            packets.extend(
+                [
+                    {
+                        "load_id": load,
+                        "pipeline_key": f"pipeline-{pipeline:02}",
+                        "task_id": "same",
+                        "packet": "identical",
+                    },
+                    {"load_id": load, "pipeline_key": f"pipeline-{pipeline:02}", "task_id": "changed", "packet": load},
+                ]
+            )
+    with catalog_database.begin() as connection:
+        connection.execute(text("INSERT INTO atlas_packets VALUES (:load_id,:pipeline_key,:task_id,:packet)"), packets)
+    statements = []
+
+    def query(sql, parameters):
+        statements.append((sql, parameters))
+        return catalog_query(sql, parameters)
+
+    actual = retained_packet_checksums(query)
+    expected = []
+    for pipeline in sorted({row["pipeline_key"] for row in packets}):
+        variants = sorted(
+            {
+                (row["task_id"], hashlib.md5(row["packet"].encode()).hexdigest())
+                for row in packets
+                if row["pipeline_key"] == pipeline
+            }
+        )
+        expected.append(
+            {
+                "pipeline_key": pipeline,
+                "packets": len(variants),
+                "checksum": hashlib.md5("".join(digest for _, digest in variants).encode()).hexdigest(),
+            }
+        )
+    assert actual == expected
+    checksums = [(sql, values) for sql, values in statements if "md5(packet)" in sql]
+    assert len(checksums) == 2
+    assert all(0 < len(values) <= HISTORY_PIPELINE_BATCH for _, values in checksums)
+    assert {key for _, values in checksums for key in values.values()} == {row["pipeline_key"] for row in packets}
 
 
 def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
