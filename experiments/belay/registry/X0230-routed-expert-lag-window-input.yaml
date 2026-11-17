@@ -1,0 +1,12 @@
+id: X0230
+slug: routed-expert-lag-window-input
+name: Routed-expert lag window input
+category: MoE and routing
+summary: 'Track: speedrun'
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6940793257
+  author: armorfaye
+  approved_by: ClassicLarry
