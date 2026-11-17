@@ -80,6 +80,11 @@ A human then decides what happens. Never work around a refusal.
    - **If the idea leaves a setting open** (a value, a range, a schedule length), choose a sensible value and list it
      in `--defaults`, for example `--defaults "final momentum 0.98; warmup over the first 10% (idea suggests 10-20%;
      chose 10%)"`. Escalate only when no sensible value exists. With nothing left open, pass `--defaults none`.
+   - **If the idea asks for several values of one setting** (for example "try caps of 22.6, 15 and 30"), sweep it:
+     add `--sweep-model-set <name>=<v1>,<v2>[,...]` (or `--sweep-opt-set`), 2 to 4 values, and leave that setting
+     out of the plain `--model-set` / `--opt-set` flags. Each value becomes its own variant (`X####v1`, `v2`, ...)
+     with its own trial, all launched together against one shared control. A sweep runs on one Track, never a
+     ladder; to take a value up the ladder, the approver names it in a new idea.
 5. **Run:** `B new-idea --idea-id <N> --name "<short name>" --category "<category>" --variant "<what changes>"
    --defaults "<chosen values, or none>" --opt-set <name>=<value>`. Give one `--opt-set` or `--model-set` per
    setting. `--name` is the registry title, at most 50 characters, such as "MuonH momentum warmup"; an idea that
@@ -95,7 +100,8 @@ A human then decides what happens. Never work around a refusal.
      4. `wrote the X#### thread: ...` (the idea's post on the page's agent log: status `plan`, the planned runs
         with their steps);
      5. one `launching belay-<id>-<run>` per run it starts;
-     6. on a ladder, items 2 to 5 once per rung (ids `X####d512` ... `X####d1280`);
+     6. on a ladder, items 2 to 5 once per rung (ids `X####d512` ... `X####d1280`); on a sweep, once per value
+        (ids `X####v1`, `v2`, ...), every value after the first `reusing the running control belay-X####v1-control`;
      7. `next: stop (...)`.
    - **If it refuses because of the priority grant** (a grant below the Track's band), or Iris refuses the band
      (`priority X not allowed for user Y`): run the escalate command it prints and stop. Never relaunch at a lower
@@ -140,7 +146,7 @@ The change goes straight onto this week's branch. No human reviews it: passing `
    6. **`./infra/pre-commit.py`** passes on the changed files.
    - **Expect:** six numbered `ok` lines, then the commit `X####: <flag> (default off)` pushed to the weekly branch,
      and `next: B new-idea --idea-id <N> ... --model-set <flag>=<on value>`. Fill in the category and the variant,
-     then run it (section 1, step 5).
+     then run it (section 1, step 5). For a sweep, replace that `--model-set` with the sweep over the idea's values.
    - **If it refuses:** follow its `next:` line. It never commits a failing change. To give up on the change, run
      `git checkout -- .` and `git clean -fd experiments/grug/fast_track tests/grug`, then run section 6.
 
@@ -400,6 +406,13 @@ go on the one `X####` entry and thread. The idea stays running until its last ru
 form (`config.PROJECTION_BASIS`), records the projected Δ, compute multiplier and fitted exponent on the entry as
 its `projection`, and judges the ladder by the projected Δ, not by any one rung. `B project X####` records it for a
 ladder finished before this rule.
+
+**Sweep.** A sweep (`--sweep-model-set` / `--sweep-opt-set` on `new-idea`) runs one value per spec, with the value's
+number in its id (`runs/X0229v2.yaml`, `belay-X0229v2-seed0`), all on one Track. The first value launches the
+control and the rest reuse it. Each value goes through its Track's stages on its own (on `speedrun`, its own timing
+probe and equal-time run when its step time calls for one) and records its own trial on the one `X####` entry and
+thread. The idea stays running until no value has a live run or an unrecorded trial; the last value's `run-finished`
+judges the sweep by its best value (a win if any value won) and names that value in the status.
 
 **Ladders and hero-mfu.** An idea usually goes `speedrun` first (a quick compatibility check), then `hero-mfu`
 when it will move MFU a lot (a maintainer runs it), then `ladder`. A radical idea, or one that needs a stronger

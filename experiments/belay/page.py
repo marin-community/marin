@@ -263,6 +263,14 @@ def expect_finish(run_name: str, expected_at: datetime.datetime, *, dry_run: boo
     call("agent/runs/expected", {"name": run_name, "expected_at": expected_at.isoformat()})
 
 
+def report_launched(run_name: str, job_id: str, nodes: int) -> None:
+    """Tell the app a run was just submitted, so its idea shows running now rather than at the watcher's next pass
+    (until then a launched idea would look planned with no run, and so re-queueable)."""
+    submitted_at = datetime.datetime.now(datetime.UTC).isoformat()
+    run = {"name": run_name, "job_id": job_id, "state": "pending", "nodes": nodes, "submitted_at": submitted_at}
+    call("agent/sync/runs", {"runs": [run]})
+
+
 def report_idea(idea_id: int, report: dict, *, dry_run: bool) -> None:
     """Update an idea on the page with any of ``state``, ``registry_id``, ``registry_url``, ``plan``, ``result``,
     ``note``."""
