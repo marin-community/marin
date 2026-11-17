@@ -263,6 +263,12 @@ class ModelRef(BaseModel):
     config_digest: str | None = None
 
 
+def eval_task_directory(name: str, num_fewshot: int | None, task_alias: str | None) -> str:
+    """Return the durable results-directory identity for an eval task."""
+    shots = "default" if num_fewshot is None else str(num_fewshot)
+    return task_alias or f"{name}_{shots}shot"
+
+
 class EvalTaskRef(BaseModel):
     """One evaluator task and the routing options that affect its result."""
 
