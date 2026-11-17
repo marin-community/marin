@@ -3,17 +3,40 @@
 
 import json
 import traceback
+from urllib.parse import urlencode
 
 import click
 from marin.rl.rl_progress import Verdict
 from marin.rl.skyrl import SkyRLReceiptLookupError
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
+from experiments.post_training.rl_recipe import utc_millis
 from experiments.post_training.rl_scoring import InvalidComparison
 
 EXIT_CODES = {Verdict.PASS: 0, Verdict.FAIL: 1, Verdict.INVALID: 2, None: 3}
 REFUSAL_EXIT_CODE = 4
 GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
+
+
+def grafana_url(
+    run_id: str, cluster: str, training_type: str | None, started_at: str, finished_at: str | None = None
+) -> str:
+    """Link a native run to its UTC submission or execution window."""
+    query = urlencode(
+        {
+            "orgId": 1,
+            "timezone": "utc",
+            "from": utc_millis(started_at),
+            "to": utc_millis(finished_at) if finished_at else "now",
+            "var-training_type": training_type or "$__all",
+            "var-cluster": cluster,
+            "var-run": run_id,
+            "var-job": "$__all",
+            "var-execution": "$__all",
+        },
+        safe="$",
+    )
+    return f"{GRAFANA_URL}?{query}"
 
 
 class RLCommand(click.Command):

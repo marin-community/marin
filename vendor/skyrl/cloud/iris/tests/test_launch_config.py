@@ -359,6 +359,7 @@ def test_launch_config_composes_and_loads_as_structured_hydra(
 ) -> None:
     path = tmp_path / "resolved-launch.yaml"
     raw = raw_launch_config()
+    raw["run"]["export_hf"] = not probe_enabled
     raw["skyrl"]["trainer"]["algorithm"].update(policy_loss_type=loss, loss_reduction=reduction)
     trainer = raw["skyrl"]["trainer"]
     trainer["resume_mode"] = "from_path"
@@ -385,6 +386,11 @@ def test_launch_config_composes_and_loads_as_structured_hydra(
     assert config.skyrl.trainer.resume_path == f"{storage_prefix}/checkpoints/global_step_1"
     assert config.skyrl.trainer.mismatch_probe.archive_uri == f"{storage_prefix}/mismatch_probe"
     assert config.skyrl.trainer.mismatch_probe.reuse_probe == f"{storage_prefix}/source/mismatch_probe"
+    if probe_enabled:
+        config.run.export_hf = True
+        OmegaConf.save(config, path)
+        with pytest.raises(ValueError, match="mismatch_probe requires the synchronous trainer"):
+            load_launch_config(path)
     if loss == "gspo":
         config.skyrl.trainer.algorithm.loss_reduction = "token_mean"
         with pytest.raises(ValueError, match="gspo requires trainer.algorithm.loss_reduction=sequence_mean"):

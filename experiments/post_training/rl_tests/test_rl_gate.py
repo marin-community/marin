@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlparse, urlsplit
 
 import click
 import pyarrow as pa
@@ -405,6 +405,9 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
         ("train-pass", 0),
         ("train-local-origin", 0),
         ("train-entry-override", 0),
+        ("train-low-intermediate", 1),
+        ("train-missing-intermediate", 1),
+        ("train-best-checkpoint", 0),
         ("train-failed", 3),
         ("malformed-control", 4),
         ("malformed-status", 4),
@@ -510,6 +513,18 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         ]
     )
     source = sources[0] if sources else None
+    if case in ("train-low-intermediate", "train-missing-intermediate"):
+        directory = source / "exports/dumped_evals/global_step_10_evals"
+        if case == "train-missing-intermediate":
+            shutil.rmtree(directory)
+        else:
+            answers = directory / "task_set.jsonl"
+            rows = [json.loads(line) for line in answers.read_text().splitlines()]
+            for row in rows[:2]:
+                row["verification"]["status"] = "error"
+            answers.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    if case == "train-best-checkpoint":
+        _json(source / "exports/best_checkpoint.json", {"step": 10, "mean": 0.5})
     if case in {"native-failed", "train-failed", "invalid", "invalid-no-login"} or case.startswith(
         ("malformed-", "stale-control")
     ):
@@ -550,7 +565,18 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         summary.pop("grader_kind_counts")
         path.write_text(json.dumps(summary))
 
+    def assert_submission_link():
+        output = click.get_binary_stream("stdout").getvalue().decode()
+        urls = [
+            line.split("run: ", 1)[1].strip() for line in output.splitlines() if "run: https://grafana.oa.dev/" in line
+        ]
+        query = next(parse_qs(urlparse(url).query) for url in urls if parse_qs(urlparse(url).query)["to"] == ["now"])
+        assert query["var-run"] == [built.runs[0].name + "-" + preset.revision]
+        assert query["var-cluster"] == [preset.recipe.layout.cluster]
+        assert int(query["from"][0]) > 0
+
     def finish(*args, **kwargs):
+        assert_submission_link()
         for path, data in pending.items():
             path.write_bytes(data)
         if case == "mixed-native-failed":
@@ -739,6 +765,17 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         assert restored_config["inputs"]["model"]["tokenizer_uri"] == "tests/python-tokenizer"
         assert "test-initializer-credential" not in result.output
         assert "test-initializer-credential" not in json.dumps(restored_config)
+    if case in ("train-low-intermediate", "train-missing-intermediate"):
+        assert f"{preset.evaluations[0].name}/step-10/" in result.output and "holds: false" in result.output
+        assert "state: succeeded" in result.output
+    if case == "train-best-checkpoint":
+        assert "best_checkpoint_step: 10" in result.output
+        assert (
+            f"{preset.evaluations[0].name}@100/scored" in result.output
+            and f"{preset.evaluations[0].name}@100/attempted" in result.output
+        )
+    if case == "train-pass":
+        assert "best_checkpoint_step: none eligible" in result.output
     if case.startswith("malformed-"):
         assert "malformed recorded configuration" in result.output and "seed" in result.output
     if case.startswith("stale-control"):
@@ -1061,6 +1098,8 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         "all_right_fraction": 1 / 3,
         "all_wrong_fraction": 0.5,
         "scored_fraction": 0.75,
+        "scored": 9,
+        "attempted": 12,
         "aai_category/format/mean": 0.375,
         "difficulty/hard/mean": 0.25,
         "aai_weighted_mean": 0.72,
