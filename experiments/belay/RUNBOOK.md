@@ -280,9 +280,30 @@ sessions run it only when a maintainer asks. Each post shows a `Reproduce:` line
 
 ## 3. run-failed (event `run_finished` for a run that did not succeed)
 
-1. **Run:** `B run-failed X#### --run <run>`
-   - **Expect:** an escalation posted with the run's state and its log command, then `next: stop`.
-   - Never relaunch a failed run. A human reads the logs and decides.
+1. **Run:** `B run-failed X#### --run <run>` (`X####` is the spec's id: a registry id, or a rung's or sweep value's).
+   - **If it escalates** (a control failed, the run was stopped or never placed, the Track is run by a maintainer, or
+     the idea has used its 4 repair attempts): stop.
+   - **Expect otherwise:** the run's step, the attempts used, its log command, and
+     `next: B repair X#### --run <run> --start`. Do steps 2 to 4.
+2. **Read the logs** with the command it printed (`... | tail -300`; search further up for the first `Error` or
+   `Traceback`). Find the cause: a crash or hang in the idea's own code (a compile error, a sharding or shape error,
+   an eval that never finishes), or a transient fault outside it.
+3. **Run:** `B repair X#### --run <run> --start`. It prints the rules and the run's flags. Then:
+   - **A fault in the idea's code:** fix it in the checkout it names, by the rules: only code behind the idea's own
+     flag, no new or changed config field, and a test that exercises the fixed path. Fix what failed; do not
+     redesign the idea or change its settings.
+   - **No fault in the idea's code** (a transient error): change nothing.
+4. **Run:** `B repair X#### --run <run> --finish --reason "<the cause and the fix, one line>"`.
+   - **Expect:** for a code fix, six numbered `ok` lines and the commit `X####: repair <n> of <run> (...)`; then the
+     spec updated (the failed run moved under `failed:`, its relaunch added as `<run>-r<n>`), one
+     `launching belay-<id>-<run>-r<n>`, `posted repair: ...`, and `next: stop (...)`.
+   - **If a gate refuses:** follow its `next:` line or fix what it names and run `--finish` again. To give up, revert
+     the checkout (`git checkout -- .` and `git clean -fd experiments/grug/fast_track tests/grug`) and run
+     `B escalate` with the cause you found.
+
+The relaunch reuses the run's control: with every flag off the model is bit-identical, so only the failed run
+reruns. Each relaunch, with or without a code change, uses one of the idea's 4 attempts; the next failure after the
+fourth goes to a maintainer.
 
 ## 4. weekly-rollover (when start prints `next: B weekly-rollover`)
 
