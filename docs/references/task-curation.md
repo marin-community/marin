@@ -1996,6 +1996,88 @@ in a private remediation version. Never exclude on oversight-level grounds:
 QUICK oversight admits a source while hiding it from the default view and
 default training selections.
 
+### Running measurement rounds
+
+`experiments/post_training/task_curation/difficulty_rounds.py` is the operating
+layer for launches, polling, seal detection, coverage recomputes and qualified
+snapshot exports. Run it from a worktree on the rounds' code lineage with a clean
+tree, and source the credentials first — the S3 and serving probes read them from
+the environment and nothing is ever printed:
+
+```bash
+set -a; source /Users/benfeuer/Documents/secrets.env; set +a
+export DAYTONA_EVAL_API_KEY="$(gcloud secrets versions access latest \
+  --project=hai-gcp-models --secret=DAYTONA_EVAL_API_KEY)"
+```
+
+Submit one round (fresh or continuation) with every launch parameter explicit.
+The root job federates to the serving peer, runs privileged under the cluster
+egress policy, forwards the serving secrets, and maps the Daytona eval key onto
+the names Harbor reads:
+
+```bash
+uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds launch \
+  --solver small --priority interactive \
+  --job-name atlas-difficulty-small-20261116-v17a11 \
+  --output-root s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.17.2/small-v17a \
+  --local-root /tmp/atlas-difficulty-small-20261116-v17a11 \
+  --source-ids-file /tmp/v17a-source-ids.txt \
+  --previous-campaign s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.17.1/small-v17a \
+  --previous-serving-sha256 <sealed serving.json sha256> \
+  --dry-run   # drop for the real submission
+```
+
+`--previous-serving-sha256` is the previous run's own sealed `serving.json`
+SHA-256, never an inherited pointer (see
+[rl-data-atlas.md](rl-data-atlas.md)). `launch` refuses when the output root
+exists or an Iris job with the same name is already live, and records the
+submit command in its state output. `--daytona-api-url` and `--daytona-target`
+default to the documented eval-account values (`https://app.daytona.io/api`,
+`us`); keep them explicit when a round runs against a different account.
+
+Poll primary evidence, check a seal, and recompute coverage in file mode:
+
+```bash
+uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds poll \
+  --campaign hosted=atlas-difficulty-hosted-20261114-v12,s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.14.44/hosted-v12
+uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds seal \
+  --output-root s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.17.1/small-v17a \
+  --job-id /benfeuer/atlas-difficulty-small-20261116-v17a10
+uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds coverage \
+  --measurements s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.14.47/qualified-v1 \
+  --measurements s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.16.62/small-v17b \
+  --output-dir /tmp/coverage-20261117
+```
+
+`coverage` groups observations per canonical source id (stripping the selected
+task lists exactly like the app's loader) and writes the coverage document, the
+declarations and the campaign queue beside each other. The applet query mode
+(`--applet-id`) becomes available once the `atlas_difficulty_coverage` load
+runs; until then the file mode above is the supported path.
+
+Chain a sealed round into the next one. `next-round` waits for the seal,
+recomputes coverage over the configured measurement roots plus the sealed round,
+emits the queue, and refuses to submit when the queue digest is already in the
+ledger — the idempotency guard against double-submitting a round:
+
+```bash
+uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds next-round \
+  --watch-job-id /benfeuer/atlas-difficulty-small-20261116-v17a10 \
+  --watch-output-root s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.17.1/small-v17a \
+  --job-name atlas-difficulty-small-20261116-v17a11 \
+  --output-root s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.17.2/small-v17a \
+  --measurements s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.14.47/qualified-v1 \
+  --measurements s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.16.62/small-v17b \
+  --measurements s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.16.65/small-v17c \
+  --ledger /Users/benfeuer/Documents/experiments/active/atlas-difficulty/round-ledger.jsonl \
+  --priority interactive --dry-run
+```
+
+Round sequencing follows the standing rulings: canary before rounds, one round
+per solver chain at a time, continuations bind to their parent's frozen source
+queue, and a mid-flight coverage snapshot never doubles as the final queue —
+recompute after the round seals.
+
 ## Sources without oracle solutions
 
 Some sources ship no oracle solution: every row has `has_solution` false, or its
