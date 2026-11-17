@@ -532,6 +532,27 @@ Kueue to account for transient overlap during rollout. Verify a separately
 authorized CPU SANDBOX canary receives an `iris-cpu` assignment, starts its
 process and exits successfully; admission alone does not verify the runtime.
 
+### CoreWeave sandbox RuntimeClass RBAC
+
+Before deploying this Iris revision to any CoreWeave cluster, apply the
+Pulumi-owned controller ClusterRole rule granting `get` on
+`runtimeclasses.node.k8s.io`. This includes clusters using the default `gvisor`
+class. `IrisRbac` in `infra/pulumi` owns the ClusterRole; the controller rollout
+does not update it. For each stack, review a targeted preview containing only
+this rule, then replace `preview` with `up` after approval:
+
+```bash
+stack=cw-us-east-08a # repeat for each CoreWeave stack before its controller rollout
+role_urn="urn:pulumi:${stack}::marin-iac::marin:coreweave:IrisRbac\$kubernetes:rbac.authorization.k8s.io/v1:ClusterRole::cluster-role"
+PULUMI_PYTHON_CMD="$PWD/.venv/bin/python" KUBECONFIG="$HOME/.kube/coreweave-iris" \
+  pulumi -C infra/pulumi preview --stack "$stack" --target "$role_urn"
+```
+
+The deployment preflight reads the RuntimeClass before creating the controller
+Deployment. A 403 on this GET raises a `KubectlError` with the API status and
+reason; only a 404 is reported as a missing class. On 02a, include the
+RuntimeClass target in the same preview and apply as shown below.
+
 ### 02a sandbox runtime rollout
 
 The 02a sandbox RuntimeClass requests CoreWeave's `cw-gvisor-cpu` handler and
