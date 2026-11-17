@@ -63,10 +63,15 @@ def verification_result(grade: GradeResult) -> VerificationResult:
     """Preserve the task verdict and its availability in the training contract."""
     if grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}:
         assert grade.reward is not None
+        diagnostics = grade.diagnostics
+        if grade.status == Outcome.SUBMISSION_FAILURE:
+            diagnostics = {**diagnostics, "grade_status": grade.status.value}
+            if grade.error is not None:
+                diagnostics["grade_error"] = grade.error
         return VerificationResult.verified(
             grade.reward,
             passed=grade.passed,
-            diagnostics=grade.diagnostics,
+            diagnostics=diagnostics,
             score_min=grade.score_min,
             score_max=grade.score_max,
         )
