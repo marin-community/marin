@@ -26,3 +26,9 @@ trials:
     spelling_byte_source: 'true'
   commit: 8b0faf8728
   priority: batch
+potential:
+  score: 5
+  rationale: 'No result yet: variant preempted at ~step 268, restarted from step 0 and still running -> 5'
+  model: claude-opus-5-5
+  date: '2026-11-17'
+  inputs_digest: 4b5b1b0bf6df
