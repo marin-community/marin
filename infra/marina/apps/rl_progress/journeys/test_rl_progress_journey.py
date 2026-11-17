@@ -13,7 +13,8 @@ from infra.marina.tests.rl_progress_fixtures import APPLET_ID, progress_record
 def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> None:
     api = f"{journey.origin}/a/{APPLET_ID}/api/runs"
     record = progress_record() | {
-        "run_id": "journey/run", "label": "Learning fixture",
+        "run_id": "journey/run",
+        "label": "Learning fixture",
         "grafana_url": "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training?from=1&to=now&var-run=journey%2Frun",
         "evaluations": [
             {"metric": metric, "role": "slice", "run": value, "tasks": 2, "n_run": 1, "n_control": 0}
@@ -32,8 +33,11 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
 
     assert publish(record) == record
     second = record | {
-        "attempt_id": "native-second", "status": "failed", "gate_result": None,
-        "started_at": "2026-11-03T00:00:00Z", "completed_at": "2026-11-03T01:00:00Z",
+        "attempt_id": "native-second",
+        "status": "failed",
+        "gate_result": None,
+        "started_at": "2026-11-03T00:00:00Z",
+        "completed_at": "2026-11-03T01:00:00Z",
         "failed_facts": ["eval_lite_100@25/scored_fraction"],
     }
     publish(second)
@@ -44,7 +48,9 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
     expect(dialog.get_by_role("link", name="Grafana")).to_have_attribute("href", record["grafana_url"])
     for metric, value in (("family/small", "0.2500"), ("aai_category/coding", "0.3750"), ("difficulty/hard", "0.5000")):
         expect(dialog.get_by_text(f"eval_lite_100@25/{metric}/mean: {value}", exact=False)).to_be_visible()
-    expect(journey.page.locator("#attempts").get_by_role("link", name="Grafana")).to_have_attribute("href", record["grafana_url"])
+    expect(journey.page.locator("#attempts").get_by_role("link", name="Grafana")).to_have_attribute(
+        "href", record["grafana_url"]
+    )
     dialog.get_by_text("eval_lite_100@25/difficulty/hard/mean: 0.5000", exact=False).scroll_into_view_if_needed()
     journey.shoot("stored-attempt-breakdowns")
     journey.page.keyboard.press("Escape")
