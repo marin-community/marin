@@ -195,8 +195,20 @@ def crosscheck_allocations(root: Path, family: str, row: dict, phase: str) -> di
         expected, resolved = actor_budget.get(name), environment.get(name)
         checks[f"actor_{name}"] = {"expected": expected, "resolved": resolved, "ok": expected == resolved}
     for name in ("agent_timeout_sec", "verifier_timeout_sec"):
-        expected, resolved = actor_budget.get(name), execution.get(name)
+        # The canonical phase deadlines are the executor's resolved shape:
+        # TaskSpecTrial builds shape from the native task.toml agent/verifier
+        # timeouts and raises unless the verifier shape matches, so the
+        # persisted config.task.verifier_execution_requirements is the
+        # executor-validated value. The baseline task-spec.json
+        # execution_requirements is a different field (None on Multi rows)
+        # and is informational only.
+        expected = actor_budget.get(name)
+        resolved = (resolved_verifier or {}).get(name)
         checks[f"deadline_{name}"] = {"expected": expected, "resolved": resolved, "ok": expected == resolved}
+    checks["baseline_spec_execution_requirements"] = {
+        "resolved": execution,
+        "note": "informational; not the deadline source for native task.toml trials",
+    }
     for name in ("cpus", "memory_mb", "storage_mb", "agent_timeout_sec", "verifier_timeout_sec"):
         expected, resolved = verifier_budget.get(name), (resolved_verifier or {}).get(name)
         checks[f"verifier_{name}"] = {"expected": expected, "resolved": resolved, "ok": expected == resolved}
