@@ -3,11 +3,11 @@
 
 """Six-row corrected SWE QA consuming the frozen v2026.11.16.2 TaskSpec packets.
 
-Per the ingest lane's sealed map (e4df094e...): download each row's actual
-frozen TaskSpec JSON, verify its SHA, reconstruct the native packet directory
-verbatim from the TaskSpec resources, and run the three real trials (nop,
-oracle, tamper) on those exact packet bytes through the Daytona EVAL
-declarative route. Peak two physical sandboxes; bounded row batches; no
+Per the ingest lane's sealed freeze map (574e2b77..., seal 1cec1f22): download
+each row's actual frozen TaskSpec JSON, verify its SHA, reconstruct the native
+packet directory verbatim from the TaskSpec resources, and run the three real
+trials (nop, oracle, tamper) on those exact packet bytes through the Daytona
+EVAL declarative route. Peak two physical sandboxes; bounded row batches; no
 package reconstruction from a newer checkout. A blocked row records its
 error and the run continues; completed rows' records upload incrementally so
 a mid-run abort preserves evidence.
@@ -39,8 +39,8 @@ from rigging.secrets import get_secret
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOGGER = logging.getLogger("packet-qa-v2")
 
-MAP_URI = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.16.1/swe-adapter-v2-fidelity-v3/qa-map.json"
-MAP_SHA256 = "e4df094e298a0da3aef56de72428ee8c95a840c25598812979021a6a967ad7e7"
+MAP_URI = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.16.1/swe-v2-qa-freeze-v3/qa-map.json"
+MAP_SHA256 = "574e2b77e0602a57c931b867f10c5ba6d7cd9c32394a98cb3d171dcbffc72fa9"
 OUTPUT_ROOT = "s3://marin-us-east-02a/marin/rl-data/atlas/shared-grader-adapters/2026.11.16.1"
 ATTEMPT_TIMEOUT = 4 * 3600.0
 
@@ -250,7 +250,7 @@ def seal(run_name: str, root: Path, records: list, blocked: list) -> None:
 
 
 def main() -> None:
-    run_name = os.environ.get("QA_RUN_NAME", "swe-v2-packet-qa-v1")
+    run_name = os.environ.get("QA_RUN_NAME", "swe-v2-packet-qa-v2")
     root = Path(os.environ["IRIS_OUTPUT_DIR"]) / run_name
     root.mkdir(parents=True)
     configure_coreweave_s3()
