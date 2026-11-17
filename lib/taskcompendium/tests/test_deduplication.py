@@ -110,3 +110,21 @@ def test_quick_drops_duplicates_across_files_before_export(tmp_path):
         manifest["within_source_dedup"]["within_source_duplicates"],
     ) == (3, 2, 1)
     assert result.input_rows == 3
+
+
+@pytest.mark.parametrize("workers", [1, 4])
+def test_deduplication_partitions_by_population_size_and_preserves_payloads(tmp_path, workers):
+    tasks = [contract(f"task-{index:04d}", str(index)) for index in range(1000)]
+    tasks.append(tasks[0].model_copy(update={"id": "duplicate"}))
+    converted = [ConvertedRow(RawRow(task.id, task.source, {}), {}, None, NormalizedTask(task, ())) for task in tasks]
+    with ZephyrContext(max_workers=workers, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+        population = deduplicate_population(
+            Dataset.from_list([converted[::2], converted[1::2]]).flat_map(iter), context, str(tmp_path / "dedup")
+        )
+        retained = context.execute(population.rows()).results
+    assert len(list((tmp_path / "dedup/retained").glob("*.parquet"))) == 2
+    assert (population.input_rows, population.unique_count, population.within_source_duplicates) == (1001, 1000, 1)
+    expected = {task.id: task.model_dump(mode="json") for task in tasks if task.id != "task-0000"}
+    assert {row.raw.id: row.result.task.model_dump(mode="json") for row in retained} == expected
+    drops = [row for path in (tmp_path / "dedup/drops").glob("*.parquet") for row in pq.read_table(path).to_pylist()]
+    assert drops == [{"task_id": "task-0000", "kept_id": "duplicate", "reason": "DUPLICATE_WITHIN_SOURCE"}]

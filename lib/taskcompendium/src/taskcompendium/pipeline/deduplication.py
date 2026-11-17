@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from functools import partial
+from itertools import zip_longest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, TypedDict
@@ -37,6 +38,17 @@ RETAINED_SCHEMA = pa.schema(
         ("source_locator", pa.string()),
         ("raw_input_sha256", pa.string()),
         ("converted", pa.binary()),
+    ]
+)
+ROWS_PER_DEDUP_SHARD = 1000
+MAX_DEDUP_SHARDS = 64
+KEY_SCHEMA = pa.schema(
+    [
+        ("key", pa.string()),
+        ("task_id", pa.string()),
+        ("normalized", pa.bool_()),
+        ("payload", pa.string()),
+        ("row_index", pa.int64()),
     ]
 )
 DROP_SCHEMA = pa.schema([("task_id", pa.string()), ("kept_id", pa.string()), ("reason", pa.string())])
@@ -106,17 +118,97 @@ def converted_key(row: ConvertedRow) -> str:
     return task_identity(row.result.task) if isinstance(row.result, NormalizedTask) else row.raw.id
 
 
-def converted_order(row: ConvertedRow) -> str:
-    return row.raw.id
+class DeduplicationKey(TypedDict):
+    key: str
+    task_id: str
+    normalized: bool
+    payload: str
+    row_index: int
 
 
-def duplicate_group(_key: str, rows: Iterator[ConvertedRow]) -> Iterator[DeduplicationRecord]:
+class DeduplicationDecision(DeduplicationKey):
+    duplicate_of: str | None
+
+
+@dataclass(frozen=True)
+class PreparedShard:
+    keys: str
+    input_rows: int
+
+
+def prepared_payload(item: tuple[int, ConvertedRow]) -> dict[str, Any]:
+    record = retained_row({"row": item[1], "duplicate_of": None})
+    assert record is not None
+    return record
+
+
+def prepared_key(item: tuple[int, ConvertedRow], *, payload: str) -> DeduplicationKey:
+    index, row = item
+    return {
+        "key": converted_key(row),
+        "task_id": row.raw.id,
+        "normalized": isinstance(row.result, NormalizedTask),
+        "payload": payload,
+        "row_index": index,
+    }
+
+
+def prepare_deduplication(rows: Iterator[ConvertedRow], shard: ShardInfo, *, path: str) -> Iterator[PreparedShard]:
+    payload = str(StoragePath(path) / f"payload/part-{shard.shard_idx:05d}.parquet")
+    count = 0
+
+    def indexed() -> Iterator[tuple[int, ConvertedRow]]:
+        nonlocal count
+        for index, row in enumerate(rows):
+            count += 1
+            yield index, row
+
+    paths = write_shard_outputs(
+        indexed(),
+        shard,
+        [
+            ShardOutput(str(StoragePath(path) / "payload/part-{shard:05d}.parquet"), RETAINED_SCHEMA, prepared_payload),
+            ShardOutput(
+                str(StoragePath(path) / "keys/part-{shard:05d}.parquet"),
+                KEY_SCHEMA,
+                partial(prepared_key, payload=payload),
+            ),
+        ],
+    )
+    yield PreparedShard(paths[1], count)
+
+
+def key_identity(row: DeduplicationKey) -> str:
+    return row["key"]
+
+
+def key_order(row: DeduplicationKey) -> str:
+    return row["task_id"]
+
+
+def duplicate_group(_key: str, rows: Iterator[DeduplicationKey]) -> Iterator[DeduplicationDecision]:
     kept = None
     for row in rows:
-        duplicate = kept if isinstance(row.result, NormalizedTask) else None
-        if isinstance(row.result, NormalizedTask) and kept is None:
-            kept = row.raw.id
-        yield {"row": row, "duplicate_of": duplicate}
+        duplicate = kept if row["normalized"] else None
+        if row["normalized"] and kept is None:
+            kept = row["task_id"]
+        yield {**row, "duplicate_of": duplicate}
+
+
+def payload_identity(row: DeduplicationDecision) -> str:
+    return row["payload"]
+
+
+def payload_order(row: DeduplicationDecision) -> int:
+    return row["row_index"]
+
+
+def rejoin_payload(payload: str, decisions: Iterator[DeduplicationDecision]) -> Iterator[DeduplicationRecord]:
+    # Only compact references pass through either shuffle. Original payloads stream in source order.
+    for index, (row, decision) in enumerate(zip_longest(load_parquet(payload), decisions)):
+        if row is None or decision is None or decision["row_index"] != index or row["task_id"] != decision["task_id"]:
+            raise ValueError(f"Deduplication decisions do not cover their original payload exactly: {payload}")
+        yield {"row": pickle.loads(row["converted"]), "duplicate_of": decision["duplicate_of"]}
 
 
 def retained_row(record: DeduplicationRecord) -> dict[str, Any] | None:
@@ -167,20 +259,39 @@ def deduplicate_population(
         return DeduplicatedPopulation(**json.loads(manifest.read_text()))
     if StoragePath(path).exists():
         raise FileExistsError(f"Incomplete deduplication output requires a new artifact version: {path}")
+    prepared = execute_phase(
+        context,
+        rows.map_shard(partial(prepare_deduplication, path=path)),
+        telemetry=telemetry,
+        operation="deduplicate_prepare",
+    ).results
+    input_rows = sum(part.input_rows for part in prepared)
+    partitions = min(MAX_DEDUP_SHARDS, max(1, (input_rows + ROWS_PER_DEDUP_SHARD - 1) // ROWS_PER_DEDUP_SHARD))
     counts = Counter()
     result = execute_phase(
         context,
-        rows.group_by(
-            converted_key,
+        Dataset.from_list([part.keys for part in prepared])
+        .flat_map(load_parquet)
+        .group_by(
+            key_identity,
             reducer=duplicate_group,
-            sort_by=converted_order,
-            num_output_shards=min(64, context.max_workers or 1),
-        ).map_shard(partial(write_deduplicated, path=path)),
+            sort_by=key_order,
+            num_output_shards=partitions,
+        )
+        .group_by(
+            payload_identity,
+            reducer=rejoin_payload,
+            sort_by=payload_order,
+            num_output_shards=partitions,
+        )
+        .map_shard(partial(write_deduplicated, path=path)),
         telemetry=telemetry,
         operation="deduplicate",
     )
     for part in result.results:
         counts.update(part)
+    if counts["input_rows"] != input_rows:
+        raise ValueError("Deduplication output does not cover the prepared input population")
     population = DeduplicatedPopulation(
         path,
         counts["input_rows"],

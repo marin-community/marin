@@ -53,62 +53,73 @@ def collect_static_retention(
     digest = cohort_sha256(cohort)
     if digest != context.input_cohort_sha256 or cohort_evidence.sha256 != digest:
         raise ValueError("Static retention input differs from the independently frozen cohort")
-    table = pq.read_table(cohort)
-    tasks = {}
-    rows = table.to_pylist()
+    identifiers = set()
     blocked = {}
-    for row in rows:
-        task = row_task(row)
-        if task is None or task.id in tasks or has_oracle_solution(task):
-            raise ValueError("Static retention requires a complete, unique, known no-oracle population")
-        tasks[task.id] = task
-        blockers = task_blockers(task) - {"requires_calibration_solution_and_empty_liveness"}
-        if blockers - STATIC_REASONS.keys():
-            raise ValueError(f"Unclassified static blockers for {task.id}: {sorted(blockers)}")
-        if blockers:
-            # The persisted diagnostic preserves every reason. One deterministic
-            # primary reason partitions unique exclusions without double counting.
-            primary = next(reason for reason in STATIC_REASONS if reason in blockers)
-            blocked[task.id] = {"reason": STATIC_REASONS[primary], "blockers": sorted(blockers)}
-    if len(tasks) != context.current_input.measured_tasks:
-        raise ValueError("Static retention input does not cover the complete frozen source population")
-    checksums = native_task_checksums(task for task_id, task in tasks.items() if task_id not in blocked)
     entries = {}
-    for row in rows:
-        task = row_task(row)
-        assert task is not None
-        identity = {
-            "task_sha256": canonical_sha256(task.model_dump(mode="json")),
-            "runtime_sha256": row_runtime_hash(row),
-        }
-        entries[task.id] = (
-            MechanicalOracleTaskReceipt(
-                **identity, has_oracle=False, exclusion_reason=blocked[task.id]["reason"], evidence=(cohort_evidence,)
-            )
-            if task.id in blocked
-            else StaticRetainedTaskReceipt(
-                **identity,
-                native_task_checksum=checksums.get(task.id),
-                input_cohort_sha256=digest,
-                policy_sha256=context.policy.sha256,
-            )
-        )
+    kept = []
+    with pq.ParquetFile(cohort) as parquet:
+        schema = parquet.schema_arrow
+        offset = 0
+        for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_ROWS):
+            rows = batch.to_pylist()
+            tasks = []
+            for row in rows:
+                task = row_task(row)
+                if task is None or task.id in identifiers or has_oracle_solution(task):
+                    raise ValueError("Static retention requires a complete, unique, known no-oracle population")
+                identifiers.add(task.id)
+                tasks.append(task)
+                blockers = task_blockers(task) - {"requires_calibration_solution_and_empty_liveness"}
+                if blockers - STATIC_REASONS.keys():
+                    raise ValueError(f"Unclassified static blockers for {task.id}: {sorted(blockers)}")
+                if blockers:
+                    # Preserve all diagnostics; one deterministic primary reason partitions exclusions.
+                    primary = next(reason for reason in STATIC_REASONS if reason in blockers)
+                    blocked[task.id] = {"reason": STATIC_REASONS[primary], "blockers": sorted(blockers)}
+            checksums = native_task_checksums(task for task in tasks if task.id not in blocked)
+            for index, (row, task) in enumerate(zip(rows, tasks, strict=True)):
+                identity = {
+                    "task_sha256": canonical_sha256(task.model_dump(mode="json")),
+                    "runtime_sha256": row_runtime_hash(row),
+                }
+                entries[task.id] = (
+                    MechanicalOracleTaskReceipt(
+                        **identity,
+                        has_oracle=False,
+                        exclusion_reason=blocked[task.id]["reason"],
+                        evidence=(cohort_evidence,),
+                    )
+                    if task.id in blocked
+                    else StaticRetainedTaskReceipt(
+                        **identity,
+                        native_task_checksum=checksums.get(task.id),
+                        input_cohort_sha256=digest,
+                        policy_sha256=context.policy.sha256,
+                    )
+                )
+                if task.id not in blocked:
+                    kept.append(offset + index)
+            offset += batch.num_rows
+    if len(identifiers) != context.current_input.measured_tasks:
+        raise ValueError("Static retention input does not cover the complete frozen source population")
     receipt = OracleFilterReceipt(
         version=5,
         no_oracle_executability_policy=context.policy,
         no_oracle_source=context,
         recipe_identity=recipe_identity,
         input_cohort_sha256=digest,
-        input_rows=len(tasks),
+        input_rows=len(identifiers),
         conversion_rejections=0,
         tasks=entries,
     )
-    kept = [index for index, task_id in enumerate(tasks) if task_id not in blocked]
     output.mkdir(parents=True, exist_ok=False)
     # A whole-table take combines string chunks and can exceed Arrow's 2 GB offset limit.
     offset = 0
-    with pq.ParquetWriter(output / "tasks.parquet", table.schema, compression="zstd") as writer:
-        for batch in table.to_batches(max_chunksize=PARQUET_BATCH_ROWS):
+    with (
+        pq.ParquetFile(cohort) as parquet,
+        pq.ParquetWriter(output / "tasks.parquet", schema, compression="zstd") as writer,
+    ):
+        for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_ROWS):
             end = offset + batch.num_rows
             indices = [index - offset for index in kept[bisect_left(kept, offset) : bisect_left(kept, end)]]
             if indices:
@@ -120,7 +131,7 @@ def collect_static_retention(
     filter_hash = file_sha256(StoragePath(str(output / "oracle-filter.json")))
     summary = {
         "source": context.model_dump(mode="json"),
-        "input_rows": len(tasks),
+        "input_rows": len(identifiers),
         "static_retained_count": len(kept),
         "unique_static_excluded_count": len(blocked),
         "exclusion_counts": exclusion_counts,
@@ -137,7 +148,7 @@ def collect_static_retention(
         current_input=context.current_input,
         intended_use=context.intended_use,
         retained_cohort=cohort_evidence,
-        retained_count=len(tasks),
+        retained_count=len(identifiers),
         static_retained_count=len(kept),
         exclusion_counts=exclusion_counts,
         oracle_filter=ContentEvidenceReference(uri=str((output / "oracle-filter.json").resolve()), sha256=filter_hash),

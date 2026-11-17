@@ -246,3 +246,13 @@ def test_static_collection_rejects_oracle_bearing_or_unknown_population_before_w
     with pytest.raises(ValueError, match="complete, unique, known no-oracle population"):
         collect_static_retention(cohort, context, evidence, tmp_path / "retained")
     assert not (tmp_path / "retained").exists()
+
+
+def test_static_collection_rejects_duplicate_ids_across_batches_before_writing(tmp_path):
+    tasks = [no_oracle_answer(f"answer-{index}") for index in range(129)]
+    tasks.append(tasks[0])
+    cohort, _, context, evidence = frozen_cohort(tmp_path, tasks, row_group_size=7)
+    output = tmp_path / "retained"
+    with pytest.raises(ValueError, match="complete, unique, known no-oracle population"):
+        collect_static_retention(cohort, context, evidence, output)
+    assert not output.exists()
