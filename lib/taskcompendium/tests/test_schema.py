@@ -394,3 +394,20 @@ def test_explicit_literal_completion_protocol_round_trip(specification):
     assert null_spec.model_dump(mode="json")["completion_protocol"] is None
     absent = specification.model_dump(mode="json")
     assert "completion_protocol" not in absent
+
+
+def test_serializer_honors_caller_exclude_arguments(specification):
+    """model_dump(exclude=...) drops the field even when it is explicitly set."""
+    spec = specification.model_copy(update={"verifier_execution_requirements": None})
+    payload = spec.model_dump(mode="json", exclude={"verifier_execution_requirements"})
+    assert "verifier_execution_requirements" not in payload
+    payload_python = spec.model_dump(exclude={"verifier_execution_requirements"})
+    assert "verifier_execution_requirements" not in payload_python
+    # exclude_defaults keeps an explicitly-set None out as well
+    assert "verifier_execution_requirements" not in spec.model_dump(mode="json", exclude_defaults=True)
+    # a field set to a real value survives exclude_defaults and honors exclude
+    valued = specification.model_copy(update={"completion_protocol": "tool_free_single"})
+    assert "completion_protocol" not in valued.model_dump(mode="json", exclude={"completion_protocol"})
+    assert valued.model_dump(mode="json", exclude_defaults=True)["completion_protocol"] == "tool_free_single"
+    # absent fields stay absent with no arguments
+    assert "execution_requirements" not in specification.model_dump(mode="json")

@@ -1022,6 +1022,12 @@ class TaskSpec(BaseModel):
             if name not in self.model_fields_set:
                 payload.pop(name, None)
                 continue
+            # honor the caller's serialization arguments: an excluded or
+            # default-dropped field stays out even when explicitly set
+            if info.exclude and name in info.exclude:
+                continue
+            if info.exclude_defaults and getattr(self, name) is None:
+                continue
             value = getattr(self, name)
             if value is None:
                 payload[name] = None
