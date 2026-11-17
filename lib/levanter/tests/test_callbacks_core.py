@@ -7,11 +7,13 @@ import jax
 import jax.numpy as jnp
 import optax
 import pytest
+from chex import assert_trees_all_equal
 
 import haliax as hax
 
 from levanter.callbacks import JitCallback, LambdaCallback
-from levanter.checkpoint import CheckpointerConfig
+from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path, load_checkpoint
+from rigging.filesystem.storage_path import StoragePath
 from levanter.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig
 
@@ -96,3 +98,43 @@ def test_trainer_hooks_follow_completed_updates(tmp_path, every):
     else:
         assert steps == [2, 4, 4]
         assert gradients == [(2, -1.0), (4, -0.25)]
+
+
+def test_trainer_final_hook_keeps_completed_permanent_checkpoint_without_rewriting(tmp_path, monkeypatch):
+    batch = hax.Axis("batch", jax.device_count())
+    config = TrainerConfig(
+        id="final-checkpoint",
+        tracker=NoopConfig(),
+        train_batch_size=batch.size,
+        per_device_parallelism=1,
+        num_train_steps=2,
+        load_checkpoint=False,
+        require_accelerator=False,
+        checkpointer=CheckpointerConfig(
+            base_path=str(tmp_path), save_interval=None, keep=[{"every": 1}], append_run_id_to_base_path=False
+        ),
+    )
+
+    def loss_fn(model, examples, *, key):
+        return jnp.mean((model - examples.array) ** 2)
+
+    trainer = Trainer(config, optax.sgd(0.25), loss_fn)
+    write_text = StoragePath.write_text
+
+    def reject_manifest_write(path, data, **kwargs):
+        if str(path).endswith("/manifest.json"):
+            raise OSError("completed checkpoint cannot be rewritten")
+        return write_text(path, data, **kwargs)
+
+    @trainer.add_hook()
+    def reject_checkpoint_rewrite(info, *, force=False):
+        if not force and info.step == 1:
+            monkeypatch.setattr(StoragePath, "write_text", reject_manifest_write)
+
+    with trainer:
+        state = trainer.initial_state(jax.random.PRNGKey(0), model=jnp.array(0.0))
+        info = trainer.train(state, [hax.ones(batch)] * 2)
+
+    checkpoint_path = latest_checkpoint_path(str(tmp_path))
+    restored = load_checkpoint(info.state.saveable_state, checkpoint_path)
+    assert_trees_all_equal(restored, info.state.saveable_state)
