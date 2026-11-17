@@ -25,6 +25,7 @@ from rigging.timing import Timestamp
 
 from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.autoscaler.reclaim import ReclaimDecision
 from iris.cluster.controller.autoscaler.recovery import AutoscalerCheckpoint
 from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.autoscaler.status import PendingHint
@@ -244,6 +245,10 @@ class AutoscaleResult:
     autoscaler_state: AutoscalerState | None = None
     """The autoscaler's tracked state for the controller to persist; None when
     the backend manages its own capacity or did not provision this tick."""
+
+    reclaims: list[ReclaimDecision] = field(default_factory=list)
+    """Reservation reclaims decided this tick. The controller fails each victim's
+    workers and removes their slices (see ``autoscaler.reclaim``)."""
 
 
 @dataclass(frozen=True)

@@ -313,7 +313,10 @@ class RpcTaskBackend:
         self.autoscaler.refresh(request.worker_status)
         self.autoscaler.probe_health()
         self.autoscaler.update(request.residual_demand)
-        return AutoscaleResult(autoscaler_state=self.autoscaler.persistable_state())
+        return AutoscaleResult(
+            autoscaler_state=self.autoscaler.persistable_state(),
+            reclaims=self.autoscaler.take_reclaims(),
+        )
 
     def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
         if self.autoscaler is None or not request.worker_ids:

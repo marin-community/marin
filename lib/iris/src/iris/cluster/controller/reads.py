@@ -82,6 +82,7 @@ from iris.cluster.types import (
     WorkerUsability,
 )
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.proto_display import priority_band_order
 
 # ---------------------------------------------------------------------------
 # Query-result dataclasses (previously rows.py)
@@ -821,6 +822,31 @@ def building_counts(tx: Tx, worker_ids: Sequence[WorkerId]) -> dict[WorkerId, in
         {"worker_ids": list(worker_ids), "states": sorted(DISPATCHED_TASK_STATES)},
     ).all()
     return {row.worker_id: int(row.cnt) for row in rows}
+
+
+_RUNNING_TASK_BANDS_BY_WORKER_STMT = select(
+    tasks_table.c.current_worker_id.label("worker_id"), tasks_table.c.priority_band
+).where(
+    tasks_table.c.current_worker_id.in_(bindparam("worker_ids", expanding=True)),
+    tasks_table.c.state.in_(bindparam("states", expanding=True)),
+)
+
+
+def top_running_band_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId, int]:
+    """Return the highest-priority band among each busy worker's running tasks (idle workers are absent)."""
+    if not worker_ids:
+        return {}
+    rows = tx.execute(
+        _RUNNING_TASK_BANDS_BY_WORKER_STMT,
+        {"worker_ids": list(worker_ids), "states": sorted(ACTIVE_TASK_STATES)},
+    ).all()
+    top: dict[WorkerId, int] = {}
+    for row in rows:
+        band = int(row.priority_band)
+        current = top.get(row.worker_id)
+        if current is None or priority_band_order(band) < priority_band_order(current):
+            top[row.worker_id] = band
+    return top
 
 
 def running_tasks_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:

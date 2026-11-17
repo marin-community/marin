@@ -45,6 +45,7 @@ from iris.cluster.controller.autoscaler.backoff_detector import (
     GroupHealth,
     SliceFate,
 )
+from iris.cluster.controller.autoscaler.reclaim import PoolSlice
 from iris.cluster.controller.autoscaler.state import GroupPersist, SlicePersist
 from iris.cluster.platforms.protocols import WorkerInfraProvider
 from iris.cluster.platforms.types import Labels, QuotaExhaustedError, SliceHandle
@@ -711,6 +712,27 @@ class ScalingGroup:
                 for slice_id, state in self._slices.items()
                 if state.lifecycle in (SliceLifecycleState.BOOTING, SliceLifecycleState.INITIALIZING)
                 or (state.lifecycle == SliceLifecycleState.READY and not state.worker_ids)
+            ]
+
+    def pool_slices(self) -> list[PoolSlice]:
+        """This group's slices as reservation-reclaim inputs; empty unless the group is a reserved pool member."""
+        resources = self._config.resources
+        if not self._config.quota_pool or resources is None or resources.capacity_type != CapacityType.RESERVED:
+            return []
+        chips = resources.device_count * self.num_vms
+        with self._slices_lock:
+            return [
+                PoolSlice(
+                    slice_id=slice_id,
+                    group=self.name,
+                    quota_pool=self._config.quota_pool,
+                    chips=chips,
+                    ready=state.lifecycle == SliceLifecycleState.READY,
+                    waiting=state.lifecycle == SliceLifecycleState.BOOTING,
+                    created_at=state.handle.created_at,
+                    worker_ids=tuple(state.worker_ids),
+                )
+                for slice_id, state in self._slices.items()
             ]
 
     def slice_count(self) -> int:
