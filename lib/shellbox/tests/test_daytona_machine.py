@@ -415,7 +415,8 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
 
 
 @pytest.mark.requires_host_setsid
-def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path) -> None:
+@pytest.mark.parametrize("inherit_image_workdir", [False, True])
+def test_daytona_recreated_workdir_reopens_path_for_next_command(tmp_path: Path, inherit_image_workdir: bool) -> None:
     workdir = tmp_path / "work"
     workdir.mkdir()
     original_inode = workdir.stat().st_ino
@@ -426,8 +427,10 @@ def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path) -> N
             self.workdir_replaced = False
 
         async def exec(self, command, cwd=None, env=None, timeout=None):
-            if self.workdir_replaced and cwd is None:
-                raise OSError("Provider process retained the deleted working directory")
+            if cwd is None:
+                if self.workdir_replaced:
+                    raise OSError("Provider process retained the deleted working directory")
+                cwd = str(workdir)
             result = await super().exec(command, cwd=cwd, env=env, timeout=timeout)
             self.workdir_replaced = workdir.stat().st_ino != original_inode
             return result
@@ -436,13 +439,13 @@ def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path) -> N
         client = LocalDaytona()
         client.sandbox.process = StaleWorkdirProcess()
         machine = await DaytonaMachineFactory(lambda: client).create(
-            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir="" if inherit_image_workdir else str(workdir))
         )
         try:
             replaced = await machine.run(Command(("sh", "-c", 'rm -rf "$PWD" && mkdir -p "$PWD" && printf recreated')))
             assert (replaced.exit_code, replaced.stdout) == (0, b"recreated")
-            following = await machine.run(Command(("printf", "ready")))
-            assert (following.exit_code, following.stdout) == (0, b"ready")
+            following = await machine.run(Command((sys.executable, "-c", "import os; print(os.getcwd())")))
+            assert (following.exit_code, following.stdout) == (0, f"{workdir}\n".encode())
             assert workdir.stat().st_ino != original_inode
         finally:
             await machine.close()
