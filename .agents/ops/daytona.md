@@ -74,12 +74,12 @@ requirement. See the source Jupiter runbook below for that workflow.
 ## Pi HTTP idle timeout
 
 Pi's HTTP idle timeout is separate from Harbor task and agent deadlines and
-provider execution deadlines. For a slow model endpoint, pass the optional
-`http_idle_timeout` agent kwarg in seconds:
+provider execution deadlines. For a prepared policy that already selects Pi,
+pass the optional `http_idle_timeout` agent kwarg in seconds:
 
 ```bash
 uv run --isolated --project vendor/harbor --frozen --extra runtime \
-  harbor run --config prepared-policy.yaml --agent pi \
+  harbor run --config prepared-policy.yaml \
   --agent-kwarg http_idle_timeout=360
 ```
 
