@@ -1,0 +1,7 @@
+applet_id = "3a6b5a5c-c852-410f-9de5-72708b0baa2f"
+source_paths = ["infra/marina/apps/forge_tasks/static"]
+
+title = "Forge tasks"
+description = "4,000 verified tasks built by the forge pipeline from a 1,999-skill catalog: how each was validated, how hard it is, what validation caught, with every grader, control and solver transcript."
+python_entrypoint = "server.app:create_api"
+build_command = "sh build.sh"

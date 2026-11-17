@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forge tasks</title>
+<link rel="preload" href="data/meta.json" as="fetch" crossorigin="anonymous">
+<link rel="preload" href="data/tasks.json" as="fetch" crossorigin="anonymous">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" id="hljs-light" href="vendor/hljs-github.min.css">
+<link rel="stylesheet" id="hljs-dark" href="vendor/hljs-github-dark.min.css" disabled>
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/purify.min.js"></script>
+<script src="vendor/highlight.min.js"></script>
+<script src="vendor/hljs-python.min.js"></script>
+<script src="vendor/hljs-bash.min.js"></script>
+<script src="vendor/hljs-json.min.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/">Forge <span>tasks</span></a>
+  <nav class="crumbs" id="crumbs"></nav>
+  <nav class="topnav">
+    <a href="#/" data-nav="overview">Overview</a>
+    <a href="#/subjects" data-nav="subjects">Subjects</a>
+    <a href="#/tasks" data-nav="tasks">All tasks</a>
+    <a href="#/method" data-nav="method">How tasks are made</a>
+  </nav>
+  <div class="topbar-actions">
+    <button class="ghost" id="theme" title="Toggle light and dark">Theme</button>
+  </div>
+</header>
+<main id="app"><div class="loading">Loading tasks…</div></main>
+<div class="tooltip" id="tooltip" role="tooltip"></div>
+<div class="toast" id="toast"></div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
