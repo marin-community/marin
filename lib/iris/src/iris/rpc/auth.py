@@ -200,13 +200,12 @@ def job_prefix_user(prefix: str) -> str:
 
 
 def authorize_job_prefix(job_wire_name: str) -> None:
-    """Refuse a prefix-scoped identity whose token's prefix excludes ``job_wire_name``.
+    """Refuse the current identity when it is prefix-scoped and ``job_wire_name``
+    falls outside its prefix.
 
-    Owner-gated RPCs call this beside ``authorize_resource_owner``. An identity
-    with no prefix claim — unscoped user, admin, worker, task without a scoped
-    parent, federation peer, or any non-JWT authenticator — passes unchanged.
-    Fail closed: the claim is validated at verify time, so a scoped identity
-    always carries a well-formed prefix.
+    An identity with no prefix claim — unscoped user, admin, worker, task, or
+    federation peer — passes unchanged. The prefix claim is validated at token
+    verify time, so a scoped identity always carries a well-formed prefix.
     """
     identity = get_verified_identity()
     if identity is None or not identity.prefix:

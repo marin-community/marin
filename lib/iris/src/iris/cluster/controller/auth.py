@@ -36,6 +36,7 @@ from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from urllib.parse import unquote
 
+from google.protobuf.message import Message
 from rigging.auth import RefreshingTokenProvider, TokenProvider
 from rigging.server_auth import (
     ANONYMOUS_ADMIN,
@@ -63,9 +64,11 @@ from iris.rpc.auth import (
     FEDERATION_PEER_ROLE,
     JOB_PREFIX_CLAIM,
     SESSION_COOKIE,
+    authorize_job_prefix,
     authorize_resource_owner,
     validate_job_prefix,
 )
+from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
@@ -320,7 +323,8 @@ class JwtTokenManager:
         it pass the parent's elevated band or profile only to ``job_id``'s children.
         ``prefix`` inherits a scoped submitter's job-name prefix: a job submitted
         under a prefix-scoped token cannot act outside that prefix, so its tasks
-        are minted with the same claim. ``None`` keeps today's unscoped behavior.
+        are minted with the same claim. ``None`` mints no prefix claim, so the
+        token carries no prefix scope.
         """
         claims = {
             "sub": job_id.user,
@@ -602,6 +606,28 @@ class ControllerAuth:
 def authorize_owner_if_configured(auth: ControllerAuth, owner: str) -> None:
     if auth.provider:
         authorize_resource_owner(owner)
+
+
+def authorize_job_owner(auth: ControllerAuth, job_id: JobName) -> None:
+    """Require the caller owns ``job_id`` (or is admin) and stays inside its prefix.
+
+    The one gate every owner-gated RPC on a job name goes through, so an
+    owner-passing prefix-scoped token cannot reach a job outside its prefix.
+    """
+    authorize_owner_if_configured(auth, job_id.user)
+    authorize_job_prefix(job_id.to_wire())
+
+
+def clamped_mint_ttl(request: Message, *, default_seconds: int, max_seconds: int) -> int:
+    """Resolve a mint request's optional ``ttl`` duration field.
+
+    Returns ``default_seconds`` when unset, else the requested seconds clamped
+    to ``[1, max_seconds]``. Minted tokens are not revocable, so every mint
+    path clamps the caller's requested lifetime to its plane's ceiling.
+    """
+    if not request.HasField("ttl"):
+        return default_seconds
+    return max(1, min(int(duration_from_proto(request.ttl).to_seconds()), max_seconds))
 
 
 def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:

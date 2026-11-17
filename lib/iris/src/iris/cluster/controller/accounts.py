@@ -19,6 +19,7 @@ from iris.cluster.controller.auth import (
     DEFAULT_SCOPED_TOKEN_TTL_SECONDS,
     MAX_SCOPED_TOKEN_TTL_SECONDS,
     ControllerAuth,
+    clamped_mint_ttl,
 )
 from iris.cluster.controller.budget import compute_user_spend
 from iris.cluster.controller.db import ControllerDB
@@ -28,7 +29,7 @@ from iris.cluster.types import TERMINAL_JOB_STATES, USER_JOB_STATES
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthzAction, authorize, job_prefix_user, validate_job_prefix
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
-from iris.time_proto import duration_from_proto, timestamp_to_proto
+from iris.time_proto import timestamp_to_proto
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,10 +137,9 @@ def mint_scoped_token(
             f"User '{identity.user_id}' cannot mint a token scoped to '{prefix}': the prefix's user is '{owner}'",
         )
 
-    if request.HasField("ttl"):
-        ttl = max(1, min(int(duration_from_proto(request.ttl).to_seconds()), MAX_SCOPED_TOKEN_TTL_SECONDS))
-    else:
-        ttl = DEFAULT_SCOPED_TOKEN_TTL_SECONDS
+    ttl = clamped_mint_ttl(
+        request, default_seconds=DEFAULT_SCOPED_TOKEN_TTL_SECONDS, max_seconds=MAX_SCOPED_TOKEN_TTL_SECONDS
+    )
     now = Timestamp.now()
     expires_at = Timestamp.from_ms(now.epoch_ms() + ttl * 1000)
     token = jwt_manager.create_scoped_token(owner, prefix, f"iris_scoped_{secrets.token_urlsafe(8)}", ttl_seconds=ttl)

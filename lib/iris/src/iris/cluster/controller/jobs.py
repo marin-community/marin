@@ -27,7 +27,7 @@ from iris.cluster.constraints import (
     validate_tpu_request,
 )
 from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.auth import ADMIN_ROLE, TASK_ROLE, ControllerAuth, authorize_owner_if_configured
+from iris.cluster.controller.auth import ADMIN_ROLE, TASK_ROLE, ControllerAuth, authorize_job_owner
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import (
     BackendCapability,
@@ -66,7 +66,6 @@ from iris.rpc.auth import (
     AuthzAction,
     authorize,
     authorize_job_prefix,
-    authorize_resource_owner,
     validate_job_prefix,
 )
 from iris.rpc.proto_display import (
@@ -417,8 +416,7 @@ def _authorize_job_actor(dependencies: JobDependencies, job_id: JobName) -> None
         if handoff is not None and handoff.requester_id == identity.user_id:
             return
         raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {job_id}")
-    authorize_resource_owner(job_id.user)
-    authorize_job_prefix(job_id.to_wire())
+    authorize_job_owner(dependencies.auth, job_id)
 
 
 def _wait_until_job_drained(dependencies: JobDependencies, job_id: JobName, wait: Duration) -> bool:
@@ -558,9 +556,10 @@ def _launch_job_id(
     ):
         job_id = JobName.root(identity.user_id, job_id.name)
     if dependencies.auth.provider and identity is not None and not job_id.is_root:
-        authorize_owner_if_configured(dependencies.auth, job_id.user)
-    # A prefix-scoped token submits, cancels, and controls only inside its
-    # prefix — including the resolved root name, which the caller chose.
+        authorize_job_owner(dependencies.auth, job_id)
+        return job_id
+    # A prefix-scoped token also submits only inside its prefix, including the
+    # resolved root name, which the caller chose.
     authorize_job_prefix(job_id.to_wire())
     return job_id
 

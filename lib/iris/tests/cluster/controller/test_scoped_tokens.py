@@ -35,7 +35,6 @@ from iris.time_proto import duration_to_proto
 from rigging.server_auth import AuthDecision, AuthRequest, VerifiedIdentity, identity_scope
 from rigging.timing import Duration, Timestamp
 from rigging.token_authority import JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem
-from iris.time_proto import duration_to_proto
 
 _ALICE = "alice"
 _PREFIX = "/alice/exp2-"
@@ -103,9 +102,7 @@ def _job_state(state, job_wire: str) -> int:
 
 def test_mint_scoped_token_returns_a_token_for_the_callers_own_prefix(auth_service, scoped_auth):
     with identity_scope(VerifiedIdentity(user_id=_ALICE, role="user")):
-        resp = auth_service.mint_scoped_token(
-            controller_pb2.Controller.MintScopedTokenRequest(prefix=_PREFIX), None
-        )
+        resp = auth_service.mint_scoped_token(controller_pb2.Controller.MintScopedTokenRequest(prefix=_PREFIX), None)
 
     assert resp.prefix == _PREFIX
     assert resp.HasField("expires_at")
@@ -121,9 +118,7 @@ def test_mint_scoped_token_denies_a_prefix_owned_by_another_user(auth_service):
 
 def test_mint_scoped_token_lets_an_admin_mint_for_another_user(auth_service, scoped_auth):
     with identity_scope(VerifiedIdentity(user_id="operator", role="admin")):
-        resp = auth_service.mint_scoped_token(
-            controller_pb2.Controller.MintScopedTokenRequest(prefix=_PREFIX), None
-        )
+        resp = auth_service.mint_scoped_token(controller_pb2.Controller.MintScopedTokenRequest(prefix=_PREFIX), None)
 
     identity = scoped_auth.jwt_manager.verify(resp.token)
     # The token acts as the prefix's user, never as an admin identity.
@@ -175,9 +170,7 @@ def test_scoped_token_with_malformed_prefix_claim_is_rejected(scoped_auth):
 
 def test_foreign_signed_scoped_token_is_rejected(scoped_auth):
     """A scoped token minted by another cluster's key never verifies here."""
-    stranger = JwtSigner(
-        signing_key_from_private_pem(generate_ed25519_keypair().private_pem), issuer="other-cluster"
-    )
+    stranger = JwtSigner(signing_key_from_private_pem(generate_ed25519_keypair().private_pem), issuer="other-cluster")
     token = stranger.mint(
         {"sub": _ALICE, "role": "user", "jti": "k", "prefix": _PREFIX}, audience="iris", ttl_seconds=60
     )
@@ -211,9 +204,7 @@ def test_native_stamp_with_malformed_prefix_is_rejected():
 
 
 def test_native_stamp_without_a_prefix_stays_unscoped():
-    outcome = NativeProxyIdentityAuthenticator().authenticate(
-        _stamp_request({"user_id": _ALICE, "role": "user"})
-    )
+    outcome = NativeProxyIdentityAuthenticator().authenticate(_stamp_request({"user_id": _ALICE, "role": "user"}))
     assert outcome.decision == AuthDecision.AUTHENTICATED
     assert outcome.identity.prefix is None
 
