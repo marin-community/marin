@@ -249,6 +249,25 @@ def test_visual_judge_missing_completions_remain_ungraded(indices, texts):
             score_figure(client, "prompt fixture", "cHJlZA==", "Z29sZA==")
 
 
+@pytest.mark.parametrize("choices", [None, [{"index": 0, "finish_reason": "stop", "message": None}]])
+def test_visual_judge_malformed_api_response_is_not_a_candidate_failure(choices):
+    def respond(request):
+        return httpx.Response(
+            200,
+            json={
+                "id": "test-malformed",
+                "created": 0,
+                "object": "chat.completion",
+                "model": "gpt-4o-2024-05-13",
+                "choices": choices,
+            },
+        )
+
+    with OpenAI(api_key="fixture", http_client=httpx.Client(transport=httpx.MockTransport(respond))) as client:
+        with pytest.raises(RuntimeError):
+            score_figure(client, "prompt fixture", "cHJlZA==", "Z29sZA==")
+
+
 def test_visual_judge_service_failure_propagates_without_hidden_retries():
     requests = []
 

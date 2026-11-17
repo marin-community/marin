@@ -10,6 +10,8 @@ module runs only in the grading environment, after candidate replay closes.
 import re
 
 from openai import OpenAI
+from openai.types.chat import ChatCompletion
+from pydantic import ValidationError
 
 MODEL = "gpt-4o-2024-05-13"
 COMPLETIONS = 3
@@ -45,6 +47,12 @@ def score_figure(client: OpenAI, prompt: str, predicted_image: str, gold_image: 
         frequency_penalty=0,
         presence_penalty=0,
     )
+    # The SDK constructs responses without validating the provider's JSON schema.
+    # Keep protocol errors distinct from candidate-output ValueError failures.
+    try:
+        response = ChatCompletion.model_validate(response.model_dump(), strict=True)
+    except ValidationError as error:
+        raise RuntimeError("Visual judge returned an invalid completion response") from error
     if len(response.choices) != COMPLETIONS or {choice.index for choice in response.choices} != set(range(COMPLETIONS)):
         raise RuntimeError("Visual judge did not return all three distinct completions")
     texts = []
