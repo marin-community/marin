@@ -439,7 +439,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
             ArtifactStep.adopt(
                 "tests/python-init",
                 "2026.11.17",
-                str(Path(recipe.artifact_prefix(preset.recipe.layout.cluster)) / "python-init"),
+                "s3://marin-test/models/python-init",
                 kind=preset.model.step.artifact_type,
             ),
             "tests/python-tokenizer",
@@ -450,10 +450,10 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         else None
     )
     if initializer is not None:
-        model_root = Path(initializer.step.path())
-        model_root.mkdir(parents=True)
-        for filename in ("config.json", "tokenizer_config.json"):
-            (model_root / filename).write_text("{}")
+        monkeypatch.setattr(
+            "s3fs.S3FileSystem.exists",
+            lambda self, path, **kwargs: str(path).removeprefix("s3://") == "marin-test/models/python-init",
+        )
     built = snowball.build_run(preset, table=snowball_model.SNOWBALL, init=initializer)
     source = (
         None
@@ -524,6 +524,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         query = next(parse_qs(urlparse(url).query) for url in urls if parse_qs(urlparse(url).query)["to"] == ["now"])
         assert query["var-run"] == [built.runs[0].name + "-" + preset.revision]
         assert query["var-cluster"] == [preset.recipe.layout.cluster]
+        if preset.name == "train-long":
+            assert query["var-training_type"] == ["async"]
         assert int(query["from"][0]) > 0
 
     def finish(*args, **kwargs):
