@@ -12,7 +12,7 @@ Campaign datasets stay private until release, so the repo is created private and
 artifact is verified by reading it back through the cached login and comparing hashes.
 Run it with that login (``HfApi()``/``hf_hub_download`` need no explicit token)::
 
-    uv run python -m experiments.post_training.task_curation.calibforge_publish \
+    uv run python -m experiments.post_training.task_curation.cohort_publish \
         --tasks /path/to/lowered-tasks.parquet \
         --card experiments/post_training/task_curation/datasets/calibforge_rebuilt_card.md \
         --repo open-athena/calibforge-v1-rebuilt-taskcompendium-20261111
@@ -34,7 +34,7 @@ CARD_FILENAME = "README.md"
 def publish(tasks: Path, card: Path, repo: str) -> str:
     """Upload ``tasks`` and ``card`` to a private ``repo`` and return the commit revision."""
     api = HfApi()
-    with tempfile.TemporaryDirectory(prefix="calibforge-publish-") as directory:
+    with tempfile.TemporaryDirectory(prefix="cohort-publish-") as directory:
         staging = Path(directory)
         shutil.copyfile(tasks, staging / TASKS_FILENAME)
         shutil.copyfile(card, staging / CARD_FILENAME)
@@ -43,7 +43,7 @@ def publish(tasks: Path, card: Path, repo: str) -> str:
             repo_id=repo,
             repo_type="dataset",
             folder_path=staging,
-            commit_message="Publish the rebuilt CalibForge TaskCompendium cohort",
+            commit_message=f"Publish the {repo} TaskCompendium cohort",
         )
     revision = commit.oid
     # Read the artifact back through the login that uploaded it and compare hashes, so

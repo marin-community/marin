@@ -140,6 +140,48 @@ def sources() -> list[RlDataSource]:
     staged_v1 = _public_release("smartie-swesmith-staged-v1", PUBLIC_STAGED_REVISION)
     staged_v2 = _public_release("smartie-swesmith-staged-v2", PUBLIC_STAGED_REVISION)
     return [
+        _rebuilt_cohort(
+            config=PrebuiltCohort(
+                name="forge-main-20261117",
+                version="2026.11.17.1",
+                repo="open-athena/forge-main-taskcompendium-20261117",
+                revision="b1b068746e202bbb4153734211bd39c117ba36b0",
+                expected_rows=4000,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:forge-main-20261117",
+                title="Forge main split, 2026-11-17 (TaskCompendium)",
+                origin="Forge",
+                family="synthetic-cross-domain",
+                tags=("rlvr", "agentic", "multi-turn", "synthetic", "campaign-release"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                oracle_validation=OracleValidation.EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="Forge re-validation campaign 2026-11-13",
+                    recipe_revision="forge_release.py; forge @ be691e29b0",
+                    verification=(
+                        "Measured on all 4,000 tasks from their exported records, in forge's own sandboxes: "
+                        "95,706 authored controls (21,996 correct answers, at least one per task) all graded as "
+                        "expected at confirmation; both adversaries finished on the accepted version without a "
+                        "reproduced grader flaw; the final review of eight GLM-5.3 trials finished with no defect. "
+                        "Grader-base machines (670 task machines, all 3,293 graders) ran under forge's local "
+                        "bubblewrap sandbox, not in the digest-pinned image this cohort declares for them"
+                    ),
+                    reviewed=4378,
+                    admitted=4000,
+                    level=OversightLevel.FULL,
+                ),
+                notes=(
+                    "4,000 synthetic tasks written by forge from a 1,999-skill, 45-subject catalog (1,598 skills "
+                    "covered), selected coverage first from 4,378 accepts after dropping 244 that carried a "
+                    "reviewer note or missing evidence. 955 in band, 3,021 too easy and 24 too hard for GLM-5.3 "
+                    "over eight trials; 2,978 answer-only, 670 Linux and 352 simulated-shell tasks. Machines that "
+                    "forge's local sandbox recorded without an image are restored to the image their authors "
+                    "declared. Not re-executed through the Atlas rollout path; the Daytona snapshot identity is "
+                    "unmeasured. The repository is private pending release."
+                ),
+            ),
+        ),
         RlDataSource(
             info=SourceInfo(
                 id="Campaign Release:smartie-calibforge-admitted",

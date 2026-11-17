@@ -102,6 +102,9 @@ def missing_environment(task: TaskSpec) -> str | None:
     )
     if any(item is not None for item in declared):
         return None
+    # A shell-simulator task runs on the simulator its semantics name, not on the host image.
+    if requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR:
+        return None
     if not requirements.capabilities:
         return None
     return "agentic task declares no environment"
