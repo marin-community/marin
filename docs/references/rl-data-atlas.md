@@ -1197,13 +1197,17 @@ run prefixes immutable.
 To continue a campaign after its worker has stopped and sealed
 `trials/model-requests-final.json`, select a new output prefix and add
 `--previous-campaign <old-run-prefix> --previous-serving-sha256 <old-serving.json-sha256>`.
-Use the same frozen source queue. The worker verifies the source selection,
-model revision, tokenizer, template, sampling and runtime before reading the
-previous attempt receipts. It verifies each scored archive and rechecks TaskSpec
-network qualification. A task's first valid score, including zero, is retained;
-blocked tasks are not retried. Individual attempt receipts also survive a source
-aggregate interrupted by a framework failure. Every continuation writes a new
-catalog and retains references to the previous attempts.
+The digest is the previous run's own sealed `serving.json` SHA-256 — the file
+that run wrote, never that run's inherited `--previous-serving-sha256` pointer:
+a continuation of a v16 chain binds to v16's digest, and v16's own binding to
+v15's remains in v16's record. Use the same frozen source queue. The worker
+verifies the source selection, model revision, tokenizer, template, sampling
+and runtime before reading the previous attempt receipts. It verifies each
+scored archive and rechecks TaskSpec network qualification. A task's first
+valid score, including zero, is retained; blocked tasks are not retried.
+Individual attempt receipts also survive a source aggregate interrupted by a
+framework failure. Every continuation writes a new catalog and retains
+references to the previous attempts.
 A continuation records its parent serving and source-queue bindings before
 dispatch. Later runs verify this ancestry even when an interrupted worker never
 visited a source or wrote its aggregate; inherited scores remain reusable once.
