@@ -338,6 +338,10 @@ def dump_per_dataset_eval_results(
     concat_all_envs: List[str],
     eval_metrics: Dict[str, float],
     uids: List[str],
+    *,
+    attempt_id: str,
+    step: int,
+    ordinals: List[int],
 ):
     """Dump evaluation results per dataset and overall aggregated results."""
 
@@ -364,6 +368,11 @@ def dump_per_dataset_eval_results(
                 verification = (trajectory_batch.get("verification_results") or [None] * len(input_prompts))[i]
                 entry = {
                     "uid": uids[i],
+                    "attempt_id": attempt_id,
+                    "step": step,
+                    "ordinal": ordinals[i],
+                    "is_last_step": (trajectory_batch.get("is_last_step") or [True] * len(input_prompts))[i],
+                    "identity_disposition": "task_spec" if trajectory_batch.get("task_ids") else "preference_input",
                     "task_id": (trajectory_batch.get("task_ids") or [None] * len(input_prompts))[i],
                     "prompt_token_ids": trajectory_batch["prompt_token_ids"][i],
                     "response_token_ids": trajectory_batch["response_ids"][i],

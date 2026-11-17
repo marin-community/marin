@@ -6,6 +6,13 @@ from typing import Dict, List, Protocol
 from loguru import logger
 from collections import defaultdict
 from dataclasses import dataclass, replace
+from math import fsum
+import numpy as np
+
+from finestore.rl.run_records import EvaluationAnswerRow, EvaluationTaskRow, write_evaluations
+from finestore.rl.strata import TaskEvaluationIdentity
+from skyrl_train.task_inputs import TrajectoryMetadata
+from skyrl_train.trajectory_runners.types import TaskRequestBatch
 
 from skyrl_train.utils import Timer
 from skyrl_train.evaluation_pool import EvaluationPool
@@ -16,6 +23,7 @@ from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.trajectory_runners.trajectory_processing import (
     concatenate_trajectory_batches,
     get_metrics_from_trajectory_batch,
+    get_trajectory_passes,
     normalized_verifier_scores,
     prepare_trajectory_request,
     verifier_score_summary,
@@ -50,6 +58,8 @@ class _EvaluationRollouts:
     env_classes: List[str]
     data_sources: List[str | None]
     uids: List[str]
+    metadata: List[TrajectoryMetadata]
+    ordinals: List[int]
     example_prompt: ConversationType
     example_batch: TrajectoryBatch
 
@@ -58,14 +68,15 @@ class _EvaluationAccumulator(Protocol):
     env_classes: List[str]
     data_sources: List[str | None]
     uids: List[str]
+    metadata: List[TrajectoryMetadata]
 
     def record(self, request: TrajectoryRequestBatch, batch: TrajectoryBatch, uids: List[str]) -> None: ...
 
 
-def evaluation_dump_dir(export_path: str, global_step: int | None) -> str:
+def evaluation_dump_dir(export_path: str, global_step: int | None, *, attempt_id: str) -> str:
     """Return the directory containing one evaluation session's persisted results."""
     session = "eval_only" if global_step is None else f"global_step_{global_step}_evals"
-    return join_resource_path(export_path, "dumped_evals", session)
+    return join_resource_path(export_path, "dumped_evals", attempt_id, session)
 
 
 @dataclass
@@ -73,12 +84,18 @@ class _WholeTrajectoryAccumulator:
     env_classes: List[str]
     data_sources: List[str | None]
     uids: List[str]
+    metadata: List[TrajectoryMetadata]
 
     def record(self, request: TrajectoryRequestBatch, batch: TrajectoryBatch, uids: List[str]) -> None:
         validate_trajectory_batch(len(request.metadata), batch)
         self.env_classes.extend(row.metric_class for row in request.metadata)
         self.data_sources.extend(row.data_source for row in request.metadata)
         self.uids.extend(uids)
+        self.metadata.extend(request.metadata)
+        if isinstance(request, TaskRequestBatch):
+            expected = [row.spec.task.id for row in request.rows]
+            if batch.get("task_ids") != expected:
+                raise ValueError("evaluation output task IDs differ from request TaskSpecs")
 
 
 @dataclass
@@ -86,6 +103,7 @@ class _StepWiseAccumulator:
     env_classes: List[str]
     data_sources: List[str | None]
     uids: List[str]
+    metadata: List[TrajectoryMetadata]
 
     def record(self, request: TrajectoryRequestBatch, batch: TrajectoryBatch, uids: List[str]) -> None:
         del uids
@@ -94,15 +112,27 @@ class _StepWiseAccumulator:
         if trajectory_ids is None or output_ids is None:
             raise ValueError("step-wise evaluation requires trajectory IDs")
         inputs_by_id = {
-            trajectory_id.instance_id: (row.metric_class, row.data_source)
-            for trajectory_id, row in zip(trajectory_ids, request.metadata, strict=True)
+            trajectory_id.instance_id: row for trajectory_id, row in zip(trajectory_ids, request.metadata, strict=True)
         }
+        expected_ids = (
+            {
+                trajectory_id.instance_id: row.spec.task.id
+                for trajectory_id, row in zip(trajectory_ids, request.rows, strict=True)
+            }
+            if isinstance(request, TaskRequestBatch)
+            else None
+        )
+        if expected_ids is not None and batch.get("task_ids") != [
+            expected_ids[item.instance_id] for item in output_ids
+        ]:
+            raise ValueError("step-wise evaluation output task IDs differ from request TaskSpecs")
         for trajectory_id in output_ids:
             if trajectory_id.instance_id not in inputs_by_id:
                 raise ValueError(f"Trajectory ID {trajectory_id.instance_id} not found in input")
-            env_class, data_source = inputs_by_id[trajectory_id.instance_id]
-            self.env_classes.append(env_class)
-            self.data_sources.append(data_source)
+            metadata = inputs_by_id[trajectory_id.instance_id]
+            self.metadata.append(metadata)
+            self.env_classes.append(metadata.metric_class)
+            self.data_sources.append(metadata.data_source)
             self.uids.append(trajectory_id.instance_id)
 
 
@@ -172,6 +202,8 @@ async def _collect_evaluation_rollouts(
         env_classes=accumulator.env_classes,
         data_sources=accumulator.data_sources,
         uids=accumulator.uids,
+        metadata=accumulator.metadata,
+        ordinals=list(range(len(accumulator.uids))),
         example_prompt=last_request.public_prompts[0],
         example_batch=last_batch,
     )
@@ -227,6 +259,88 @@ def _calculate_eval_metrics(
     return metrics
 
 
+def _evaluation_task_rows(
+    rollouts: _EvaluationRollouts, *, attempt_id: str, step: int, evaluation: str
+) -> list[EvaluationTaskRow]:
+    batch = rollouts.batch
+    count = len(batch["response_ids"])
+    normalized = normalized_verifier_scores(batch) or [None] * count
+    passes = get_trajectory_passes(batch)
+    groups: dict[str, list[EvaluationAnswerRow]] = defaultdict(list)
+    identities: dict[str, TaskEvaluationIdentity] = {}
+    sources: dict[str, str | None] = {}
+    for index, (metadata, uid, ordinal) in enumerate(
+        zip(rollouts.metadata, rollouts.uids, rollouts.ordinals, strict=True)
+    ):
+        task_id = (batch.get("task_ids") or [None] * count)[index]
+        if task_id is None:
+            continue
+        identity = metadata.evaluation_identity or TaskEvaluationIdentity()
+        if task_id in identities and identities[task_id] != identity:
+            raise ValueError(f"evaluation task has conflicting panel strata: {task_id}")
+        identities[task_id] = identity
+        sources[task_id] = metadata.data_source
+        verification = (batch.get("verification_results") or [None] * count)[index]
+        reward = batch["rewards"][index]
+        groups[task_id].append(
+            EvaluationAnswerRow(
+                ordinal=ordinal,
+                native_uid=uid,
+                optimization_reward=fsum(reward) if isinstance(reward, list) else float(reward),
+                verifier_score=normalized[index],
+                raw_verifier_score=verification.score if verification is not None else None,
+                score_min=verification.score_min if verification is not None else None,
+                score_max=verification.score_max if verification is not None else None,
+                verification_status=verification.status.value if verification is not None else None,
+                passed=passes[index],
+                outcome=batch["task_outcomes"][index].value,
+                error_type=(batch.get("exception_types") or [None] * count)[index],
+                error_treatment=(batch.get("error_treatments") or [None] * count)[index],
+            )
+        )
+    rows = []
+    for task_id, answers in groups.items():
+        identity = identities[task_id]
+        scores = [answer.verifier_score for answer in answers if answer.verifier_score is not None]
+        outcomes = {answer.outcome for answer in answers}
+        errors = {answer.error_type for answer in answers}
+        rows.append(
+            EvaluationTaskRow(
+                attempt_id=attempt_id,
+                step=step,
+                evaluation=evaluation,
+                panel_name=identity.panel_name,
+                panel_version=identity.panel_version,
+                task_id=task_id,
+                data_source=sources[task_id],
+                strata=identity.strata,
+                agentic=identity.agentic,
+                score=float(np.mean(scores)) if scores else None,
+                outcome=next(iter(outcomes)) if len(outcomes) == 1 else "mixed",
+                error_type=next(iter(errors)) if len(errors) == 1 else "multiple",
+                answers=answers,
+            )
+        )
+    return rows
+
+
+def _persist_evaluation(
+    cfg: DictConfig,
+    global_step: int | None,
+    val_set_name: str | None,
+    rollouts: _EvaluationRollouts,
+    records_export_root: str | None,
+) -> None:
+    rows = _evaluation_task_rows(
+        rollouts,
+        attempt_id=str(cfg.runtime.attempt_id),
+        step=global_step if global_step is not None else -1,
+        evaluation="eval/" if val_set_name is None else f"eval/{val_set_name}/",
+    )
+    if rows:
+        write_evaluations(records_export_root or str(cfg.trainer.export_path), rows)
+
+
 def _dump_eval_results(
     cfg: DictConfig,
     global_step: int | None,
@@ -238,7 +352,9 @@ def _dump_eval_results(
     if not cfg.trainer.dump_eval_results:
         return
     with Timer("dump_eval_results"):
-        data_save_dir = evaluation_dump_dir(str(cfg.trainer.export_path), global_step)
+        data_save_dir = evaluation_dump_dir(
+            str(cfg.trainer.export_path), global_step, attempt_id=str(cfg.runtime.attempt_id)
+        )
         io.makedirs(data_save_dir, exist_ok=True)
         dump_per_dataset_eval_results(
             data_save_dir,
@@ -248,6 +364,9 @@ def _dump_eval_results(
             rollouts.env_classes,
             metrics,
             rollouts.uids,
+            attempt_id=str(cfg.runtime.attempt_id),
+            step=global_step if global_step is not None else -1,
+            ordinals=rollouts.ordinals,
         )
 
 
@@ -261,6 +380,8 @@ async def evaluate(
     val_set_name: str | None = None,
     trajectory_sink: RetentionSink | None = None,
     evaluation_pool: EvaluationPool | None = None,
+    *,
+    records_export_root: str | None = None,
 ) -> Dict[str, float]:
     """Runs generation and evaluation of trajectories.
 
@@ -281,7 +402,7 @@ async def evaluate(
     owns_sink = trajectory_sink is None
     active_sink = trajectory_sink or make_trajectory_sink(cfg.generator, tokenizer)
     try:
-        accumulator = _WholeTrajectoryAccumulator([], [], [])
+        accumulator = _WholeTrajectoryAccumulator([], [], [], [])
         session = (
             nullcontext(evaluation_pool)
             if evaluation_pool is not None
@@ -307,6 +428,7 @@ async def evaluate(
             concat_data_sources,
             cfg.generator.eval_n_samples_per_prompt,
         )
+        _persist_evaluation(cfg, global_step, val_set_name, rollouts, records_export_root)
         _dump_eval_results(cfg, global_step, tokenizer, rollouts, concat_data_sources, eval_metrics)
 
         return eval_metrics
@@ -325,6 +447,8 @@ async def evaluate_step_wise(
     trajectory_sink: RetentionSink,
     val_set_name: str | None = None,
     evaluation_pool: EvaluationPool | None = None,
+    *,
+    records_export_root: str | None = None,
 ) -> Dict[str, float]:
     """Runs generation and evaluation of trajectories for step-wise training.
 
@@ -344,7 +468,7 @@ async def evaluate_step_wise(
     Returns:
         Dict[str, float]: evaluation metrics
     """
-    accumulator = _StepWiseAccumulator([], [], [])
+    accumulator = _StepWiseAccumulator([], [], [], [])
     session = (
         nullcontext(evaluation_pool)
         if evaluation_pool is not None
@@ -380,6 +504,16 @@ async def evaluate_step_wise(
         data_sources_last_step,
         cfg.generator.eval_n_samples_per_prompt,
     )
+    final_rollouts = replace(
+        rollouts,
+        batch=trajectory_batch_last_step,
+        uids=uids_last_step,
+        data_sources=data_sources_last_step,
+        metadata=[row for row, final in zip(rollouts.metadata, is_last_step_mask, strict=True) if final],
+        ordinals=[ordinal for ordinal, final in zip(rollouts.ordinals, is_last_step_mask, strict=True) if final],
+        env_classes=[env for env, final in zip(rollouts.env_classes, is_last_step_mask, strict=True) if final],
+    )
+    _persist_evaluation(cfg, global_step, val_set_name, final_rollouts, records_export_root)
     _dump_eval_results(cfg, global_step, tokenizer, rollouts, concat_data_sources, eval_metrics)
 
     return eval_metrics

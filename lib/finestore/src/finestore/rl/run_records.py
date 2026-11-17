@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Attempt receipts and numeric metrics shared by RL writers and readers.
+"""Attempt receipts, numeric metrics and task evaluations shared by RL writers and readers.
 
 Metrics are keyed by attempt, step and name. A resumed history contains only its
 recorded checkpoint ancestors, bounded by each continuation's starting step.
@@ -10,22 +10,24 @@ recorded checkpoint ancestors, bounded by each continuation's starting step.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import prefix_join
 
 from finestore.layout import OnConflict
 from finestore.reader import ReadView
+from finestore.rl.strata import TaskStrata
 from finestore.schema import arrow_schema
 from finestore.store import DataStore, DataTable
 
 RUN_RECORDS_SUBDIRECTORY = "run-records"
 METRICS_TABLE = "metrics"
 ATTEMPTS_TABLE = "attempts"
+EVALUATIONS_TABLE = "evaluations"
 METRIC_ATTEMPT_IDS = "metric_attempt_ids"
 METRIC_METADATA_KEYS = frozenset(("step", "attempt_id", METRIC_ATTEMPT_IDS))
 
@@ -82,6 +84,7 @@ class AttemptRecord(BaseModel):
     iris_job_id: str | None = None
     vllm_version: str | None = None
     metrics_started_at: str | None = None
+    evaluation_storage_version: Literal[1] | None = None
     resumed_step: int | None = None
     parent: CheckpointReference | None = None
     config: dict[str, Any] | None = None
@@ -115,14 +118,54 @@ class AttemptRow(BaseModel):
     value_json: str
 
 
-ROW_MODELS: dict[str, type[BaseModel]] = {METRICS_TABLE: MetricRow, ATTEMPTS_TABLE: AttemptRow}
-PRIMARY_KEYS = {METRICS_TABLE: ("attempt_id", "step", "name"), ATTEMPTS_TABLE: ("attempt_id", "field")}
+class EvaluationAnswerRow(BaseModel):
+    ordinal: int
+    native_uid: str
+    optimization_reward: float
+    verifier_score: float | None
+    raw_verifier_score: float | None
+    score_min: float | None
+    score_max: float | None
+    verification_status: str | None
+    passed: bool
+    outcome: str
+    error_type: str | None
+    error_treatment: str | None
+
+
+class EvaluationTaskRow(BaseModel):
+    attempt_id: str
+    step: int
+    evaluation: str
+    panel_name: str | None
+    panel_version: str | None
+    task_id: str
+    data_source: str | None
+    strata: TaskStrata
+    agentic: bool | None
+    score: float | None
+    outcome: str
+    error_type: str | None
+    answers: list[EvaluationAnswerRow]
+
+
+ROW_MODELS: dict[str, type[BaseModel]] = {
+    METRICS_TABLE: MetricRow,
+    ATTEMPTS_TABLE: AttemptRow,
+    EVALUATIONS_TABLE: EvaluationTaskRow,
+}
+PRIMARY_KEYS = {
+    METRICS_TABLE: ("attempt_id", "step", "name"),
+    ATTEMPTS_TABLE: ("attempt_id", "field"),
+    EVALUATIONS_TABLE: ("attempt_id", "step", "evaluation", "task_id"),
+}
 
 
 @dataclass(frozen=True)
 class RunTables:
     metrics: DataTable
     attempts: DataTable
+    evaluations: DataTable
 
 
 @dataclass(frozen=True)
@@ -137,7 +180,7 @@ def run_records_root(export_root: str) -> str:
 
 
 def register_run_tables(store: DataStore) -> RunTables:
-    """Register metrics and attempts with their shared schemas and primary keys."""
+    """Register the run tables with their shared schemas and primary keys."""
     tables = {
         name: store.table(
             name,
@@ -147,7 +190,7 @@ def register_run_tables(store: DataStore) -> RunTables:
         )
         for name, model in ROW_MODELS.items()
     }
-    return RunTables(tables[METRICS_TABLE], tables[ATTEMPTS_TABLE])
+    return RunTables(tables[METRICS_TABLE], tables[ATTEMPTS_TABLE], tables[EVALUATIONS_TABLE])
 
 
 def update_attempt(store: DataStore, record: AttemptRecord) -> None:
@@ -241,3 +284,21 @@ def read_attempt_metrics(export_root: str, attempt_id: str) -> dict[int, dict[st
             values[METRIC_ATTEMPT_IDS][row["name"]] = entry.record.attempt_id
             values[row["name"]] = row["value"]
     return dict(sorted(metrics.items()))
+
+
+def write_evaluations(export_root: str, rows: Sequence[EvaluationTaskRow]) -> None:
+    """Commit one evaluation's task answers in the run's canonical records store."""
+    with DataStore.open(run_records_root(export_root)) as store:
+        register_run_tables(store).evaluations.extend(row.model_dump(mode="json") for row in rows)
+        store.flush()
+
+
+def read_evaluations(
+    export_root: str, *, attempt_id: str, evaluation: str, step: int | None = None
+) -> list[EvaluationTaskRow]:
+    """Read one attempt and evaluation without combining retries or other profiles."""
+    view = ReadView(run_records_root(export_root))
+    where = [("attempt_id", "==", attempt_id), ("evaluation", "==", evaluation)]
+    if step is not None:
+        where.append(("step", "==", step))
+    return [EvaluationTaskRow.model_validate(row) for row in view.iter_rows(EVALUATIONS_TABLE, where=where)]

@@ -297,6 +297,7 @@ class _RecordsAdapter(_TrackingAdapter):
                 run_id=self.run_id,
                 attempt_id=self.attempt_id,
                 metrics_started_at=datetime.now(timezone.utc).isoformat(),
+                evaluation_storage_version=1,
                 resumed_step=resumed_step,
                 parent=checkpoint,
             ),

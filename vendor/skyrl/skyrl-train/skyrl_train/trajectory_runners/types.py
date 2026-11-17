@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Literal, NotRequired, Optional, TypedDict, U
 import numpy as np
 
 from skyrl_gym.verification import VerificationResult
+from taskcompendium.grading_result import Outcome
 from skyrl_train.distillation import PreparedTeacherInput, TeacherEvidenceBatch
 from skyrl_train.inference_engines.base import ConversationType
 from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
@@ -150,3 +151,4 @@ class TrajectoryBatch(TypedDict):
     # DPO pairing evidence: +1 chosen / -1 rejected per row, emitted as adjacent pairs.
     pair_roles: NotRequired[List[int]]
     task_ids: NotRequired[List[str]]
+    task_outcomes: NotRequired[List[Outcome]]
