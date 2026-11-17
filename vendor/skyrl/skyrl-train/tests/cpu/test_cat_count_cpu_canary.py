@@ -354,7 +354,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         cfg.data.train_data, cfg.data.val_data = paths[:1], paths[1:]
         math_file = write_gsm8k_dataset(root / "data/math.jsonl", 1, max_turns=2)
         math_row = json.loads(math_file.read_text())
-        math_row["prompt"] = [{"role": "user", "content": PROMPT.format(N=1)}]
+        math_row["prompt"] = [{"role": "user", "content": PROMPT.format(N=2)}]
         full_task = source_row_task(math_row, 0, source_name="two-turn-math", environment_configs=environment_configs)
         full_task = full_task.model_copy(
             update={"task": full_task.task.model_copy(update={"id": "full-task_set-only"})}
@@ -690,6 +690,16 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
             else:
                 assert answer.verifier_score is None and not answer.passed and answer.outcome == "unavailable"
         assert task_row.score == (sum(normalized) / len(normalized) if normalized else None)
+    bounded = [
+        answer
+        for row in task_rows
+        if row.task_id in {"stable-cat-count-4", "stable-cat-count-2"}
+        for answer in row.answers
+    ]
+    assert len(bounded) == 4
+    assert {
+        (answer.raw_verifier_score, answer.score_min, answer.score_max, answer.verifier_score) for answer in bounded
+    } == {(3.0, 1.0, 5.0, 0.5)}
     error_task = next(row for row in task_rows if row.task_id == "rollout-error")
     assert error_task.score is None and error_task.outcome == "unavailable"
     verifier_family = [row for row in task_rows if row.strata.family == "verifier"]
