@@ -14,6 +14,7 @@ from finestore.rl.curation import DatasetRelease
 from finestore.rl.difficulty import (
     PROTOCOL_ID,
     DifficultyGap,
+    DifficultyMeasurement,
     DifficultyObservation,
     MeasurementStatus,
     Solver,
@@ -21,7 +22,7 @@ from finestore.rl.difficulty import (
 )
 
 import infra.marina.apps.rl_data_catalog.load_difficulty as load_difficulty
-from infra.marina.apps.rl_data_catalog.load_difficulty import publish_coverage
+from infra.marina.apps.rl_data_catalog.load_difficulty import load_measurements, publish_coverage
 from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import (
     CoverageStatus,
     DifficultyCoverage,
@@ -385,3 +386,80 @@ def test_publish_coverage_paginates_bulk_reads_under_the_transport_bound(monkeyp
     # the load id and generation timestamp differ; the document does not
     assert stored["load-2"]["sources"] == unbatched["sources"]
     assert stored["load-2"]["counts"] == unbatched["counts"]
+
+
+def _measurement_record(index: int) -> DifficultyMeasurement:
+    payload = {
+        "measurement_id": f"m{index}",
+        "protocol_id": "atlas-difficulty-v3",
+        "created_at": "2026-11-16T00:00:00+00:00",
+        "source_id": "Example:example",
+        "release": {"repo": "fixture/repo", "revision": "r1", "url": "https://example.invalid/r1"},
+        "converter_version": "1",
+        "solver": "small",
+        "status": "not_measured",
+        "reason": "Awaiting scored coverage",
+        "sample": None,
+        "sample_receipt": None,
+        "model": None,
+        "settings": None,
+        "n": 0,
+        "solved": 0,
+        "wilson_95": None,
+        "infrastructure_attempts": 0,
+        "pending_tasks": 0,
+        "blocked_tasks": 0,
+        "attempts_receipt": None,
+        "gpu_hours": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
+    return DifficultyMeasurement.model_validate(payload)
+
+
+def test_load_measurements_batches_inserts_and_readbacks(monkeypatch):
+    """Bounded recordset inserts plus a paged typed readback verify every record."""
+    monkeypatch.setattr(load_difficulty, "MEASUREMENT_READBACK_BATCH", 2)
+    table: dict[str, dict] = {}
+    requests: list[str] = []
+
+    class Store:
+        def __call__(self, sql: str, parameters: dict):
+            requests.append("insert" if "INSERT INTO atlas_difficulty" in sql else "readback")
+            if "INSERT INTO atlas_difficulty" in sql:
+                rows = json.loads(parameters["rows"])
+                inserted = 0
+                for row in rows:
+                    if row["measurement_id"] not in table:
+                        table[row["measurement_id"]] = json.loads(row["measurement"])
+                        inserted += 1
+                return {"row_count": inserted}
+            if "WHERE measurement_id IN" in sql:
+                ids = [row["measurement_id"] for row in json.loads(parameters["ids"])]
+                assert len(ids) <= 2, "the readback must page under its bound"
+                return {
+                    "rows": [
+                        {"measurement_id": measurement_id, "measurement": table[measurement_id]}
+                        for measurement_id in ids
+                        if measurement_id in table
+                    ]
+                }
+            raise AssertionError(f"Unexpected query: {sql[:60]}")
+
+    records = [_measurement_record(index) for index in range(3)]
+    assert load_measurements(records, Store()) == {"inserted": len(records), "records": len(records)}
+    # idempotent: a rerun inserts nothing and still verifies every record
+    assert load_measurements(records, Store()) == {"inserted": 0, "records": len(records)}
+    # a pre-existing ID naming different evidence raises
+    clash = records[0].model_copy(update={"source_id": "Example:other"})
+    with pytest.raises(ValueError, match="already names different evidence"):
+        load_measurements([clash], Store())
+    # a handful of requests across all three invocations (two per record
+    # before), far below the per-record round-trips the transport cost
+    assert len(requests) <= 8
+
+
+def test_load_measurements_rejects_duplicate_ids():
+    records = [_measurement_record(index) for index in range(3)]
+    with pytest.raises(ValueError, match="Duplicate difficulty measurement IDs"):
+        load_measurements([*records, records[0]], None)

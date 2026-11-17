@@ -13,6 +13,7 @@ from finestore.rl.difficulty import MEASUREMENTS, DifficultyMeasurement, Difficu
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
+from infra.marina.apps.rl_data_catalog.load import batches
 from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import DifficultyCoverage, difficulty_coverage
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
@@ -20,6 +21,7 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_s
 # under that bound with these batch sizes.
 DIFFICULTY_READ_BATCH = 50
 DECLARATION_READ_BATCH = 100
+MEASUREMENT_READBACK_BATCH = 500
 
 
 def read_measurements(view: ReadView) -> list[DifficultyMeasurement]:
@@ -31,31 +33,49 @@ def read_measurements(view: ReadView) -> list[DifficultyMeasurement]:
 
 
 def load_measurements(records: list[DifficultyMeasurement], query: AppletQuery) -> dict[str, Any]:
-    """Insert each measurement once; reject an existing ID with different evidence."""
+    """Insert measurements in bounded batches; reject an existing ID with different evidence.
+
+    Each batch inserts through a bounded JSONB recordset and the typed readback
+    pages the inserted ids, so a full campaign costs a handful of requests
+    instead of an insert plus a readback per record.
+    """
     if len({record.measurement_id for record in records}) != len(records):
         raise ValueError("Duplicate difficulty measurement IDs")
     inserted = 0
-    for record in records:
-        payload = record.model_dump(mode="json")
+    for body in batches(
+        {
+            "measurement_id": record.measurement_id,
+            "source_id": canonical_source_id(record.source_id),
+            "protocol_id": record.protocol_id,
+            "created_at": record.created_at,
+            "measurement": json.dumps(record.model_dump(mode="json"), allow_nan=False),
+        }
+        for record in records
+    ):
         result = query(
             """
             INSERT INTO atlas_difficulty (measurement_id, source_id, protocol_id, created_at, measurement)
-            VALUES (:id, :source, :protocol, :created, CAST(:measurement AS JSONB))
+            SELECT r.measurement_id, r.source_id, r.protocol_id, r.created_at, r.measurement
+            FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS r(
+                measurement_id TEXT, source_id TEXT, protocol_id TEXT, created_at TIMESTAMPTZ, measurement JSONB)
             ON CONFLICT (measurement_id) DO NOTHING
             """,
-            {
-                "id": record.measurement_id,
-                "source": canonical_source_id(record.source_id),
-                "protocol": record.protocol_id,
-                "created": record.created_at,
-                "measurement": json.dumps(payload, allow_nan=False),
-            },
+            {"rows": body},
         )
         inserted += result["row_count"]
-        stored = query(
-            "SELECT measurement FROM atlas_difficulty WHERE measurement_id = :id", {"id": record.measurement_id}
-        )["rows"]
-        if len(stored) != 1 or DifficultyMeasurement.model_validate(stored[0]["measurement"]) != record:
+    stored = {}
+    ids = sorted({record.measurement_id for record in records})
+    for start in range(0, len(ids), MEASUREMENT_READBACK_BATCH):
+        chunk = ids[start : start + MEASUREMENT_READBACK_BATCH]
+        for row in query(
+            "SELECT measurement_id, measurement FROM atlas_difficulty WHERE measurement_id IN "
+            "(SELECT r.measurement_id FROM jsonb_to_recordset(CAST(:ids AS JSONB)) AS r(measurement_id TEXT))",
+            {"ids": json.dumps([{"measurement_id": value} for value in chunk], separators=(",", ":"))},
+        )["rows"]:
+            stored[row["measurement_id"]] = row["measurement"]
+    for record in records:
+        measurement = stored.get(record.measurement_id)
+        if measurement is None or DifficultyMeasurement.model_validate(measurement) != record:
             raise ValueError(f"Difficulty measurement ID already names different evidence: {record.measurement_id}")
     return {"inserted": inserted, "records": len(records)}
 
