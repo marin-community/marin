@@ -19,6 +19,7 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit import decon
 from marin.datakit.decon import (
+    BestEffortEvalSuite,
     EvalBloom,
     NGramConfig,
     RequiredEvalSuite,
@@ -1210,8 +1211,7 @@ def test_build_eval_bloom_uses_only_manifested_best_effort_artifacts(tmp_path: P
         output_path=str(tmp_path / "bloom"),
         required_eval_suites=(RequiredEvalSuite(str(required_manifest), ("Required Eval",)),),
         required_eval_corpus_version="test-corpus-v1",
-        best_effort_eval_manifest_path=str(best_effort_manifest),
-        best_effort_eval_corpus_version="test-corpus-v1",
+        best_effort_eval_suite=BestEffortEvalSuite(str(best_effort_manifest), "test-corpus-v1"),
     )
 
     assert result.n_eval_records == 2
@@ -1251,9 +1251,7 @@ def test_build_eval_bloom_requires_best_effort_required_tasks(
         build_eval_bloom(
             eval_data_sources=str(best_effort_root),
             output_path=str(tmp_path / "bloom"),
-            best_effort_eval_manifest_path=str(best_effort_manifest),
-            best_effort_eval_corpus_version="test-corpus-v1",
-            best_effort_required_tasks=("required",),
+            best_effort_eval_suite=BestEffortEvalSuite(str(best_effort_manifest), "test-corpus-v1", ("required",)),
         )
 
     assert not Path(bloom_paths(str(tmp_path / "bloom"))[0]).exists()

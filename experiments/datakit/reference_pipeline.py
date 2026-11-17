@@ -119,6 +119,7 @@ from dataclasses import dataclass, field, replace
 from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.decon import (
+    BestEffortEvalSuite,
     DeconAttributes,
     DropSetSource,
     RequiredEvalManifest,
@@ -830,9 +831,9 @@ def decontamination_steps(
                 source_catalog_sha256=reference_sources_sha256(reference_catalog()),
             ),
         ),
-        best_effort_eval_manifest_path=f"{eval_root}/{LMH_MANIFEST_RELATIVE}",
-        best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
-        best_effort_required_tasks=REQUIRED_LMH_TASKS,
+        best_effort_eval_suite=BestEffortEvalSuite(
+            f"{eval_root}/{LMH_MANIFEST_RELATIVE}", EVAL_CORPUS_VERSION, REQUIRED_LMH_TASKS
+        ),
         worker_resources=worker_resources,
         max_workers=scale.pool.n_workers,
         zephyr_context=zephyr_context,

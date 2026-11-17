@@ -51,6 +51,7 @@ import dataclasses
 import io as io_mod
 import json
 import logging
+import os
 import zipfile
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from enum import StrEnum
@@ -62,7 +63,7 @@ from datasets import Image as DatasetsImage
 from datasets import load_dataset
 from marin.datakit.download.http_session import build_retrying_session
 from rigging.filesystem.cluster_config import marin_prefix
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
@@ -641,10 +642,10 @@ def _prepare_required_suite(
             return existing_manifest
 
     _write_json(manifest_path, manifest("building"))
-    suite_root = manifest_path.rsplit("/", 1)[0]
+    suite_root = os.path.dirname(manifest_path)
     benchmarks = manifest("complete")["benchmarks"]
     for entry in benchmarks:
-        out_path = f"{suite_root}/{entry['artifact']}"
+        out_path = prefix_join(suite_root, entry["artifact"])
         sidecar_path = f"{out_path.removesuffix('.parquet')}.source.json"
         if _staged_artifact_is_current(out_path, sidecar_path, entry):
             logger.info("%s/%s: validated existing artifact", label, entry["artifact"])
@@ -684,7 +685,13 @@ UNCHEATABLE_RECORDS: dict[str, int] = {
 }
 if UNCHEATABLE_RECORDS.keys() != UNCHEATABLE_SUBSETS.keys():
     raise ValueError("UNCHEATABLE_RECORDS must list exactly the evaluated UNCHEATABLE_SUBSETS")
-UNCHEATABLE_BENCHMARK_NAMES: tuple[str, ...] = tuple(f"Uncheatable Eval {subset}" for subset in UNCHEATABLE_RECORDS)
+
+
+def _uncheatable_name(subset: str) -> str:
+    return f"Uncheatable Eval {subset}"
+
+
+UNCHEATABLE_BENCHMARK_NAMES: tuple[str, ...] = tuple(_uncheatable_name(subset) for subset in UNCHEATABLE_RECORDS)
 
 
 def _uncheatable_url(subset: str) -> str:
@@ -704,7 +711,7 @@ def _uncheatable_manifest(status: str) -> dict[str, Any]:
         "status": status,
         "benchmarks": [
             {
-                "name": f"Uncheatable Eval {subset}",
+                "name": _uncheatable_name(subset),
                 "artifact": f"{subset}/test.parquet",
                 "source": _uncheatable_url(subset),
                 "source_revision": UNCHEATABLE_COMMIT,
@@ -718,7 +725,7 @@ def _uncheatable_manifest(status: str) -> dict[str, Any]:
 def _uncheatable_records(subset: str) -> list[dict[str, str]]:
     texts = json.loads(_download(_uncheatable_url(subset)))
     if not isinstance(texts, list) or not all(isinstance(text, str) for text in texts):
-        raise ValueError(f"Uncheatable Eval {subset}: expected a JSON list of strings")
+        raise ValueError(f"{_uncheatable_name(subset)}: expected a JSON list of strings")
     return [{"id": f"uncheatable-{subset}-{i}", "text": text} for i, text in enumerate(texts)]
 
 
@@ -728,7 +735,7 @@ def _prepare_uncheatable() -> dict[str, Any]:
         UNCHEATABLE_MANIFEST_RELATIVE,
         _uncheatable_manifest,
         {
-            f"Uncheatable Eval {subset}": lambda subset=subset: _uncheatable_records(subset)
+            _uncheatable_name(subset): lambda subset=subset: _uncheatable_records(subset)
             for subset in UNCHEATABLE_RECORDS
         },
     )
