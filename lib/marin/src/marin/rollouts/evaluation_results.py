@@ -117,6 +117,142 @@ def _reduce(values: list[tuple[str, float, float]], kind: SummaryKind) -> tuple[
     return mean, stderr
 
 
+def _benchmark_summary(
+    protocol: EvaluationProtocol,
+    datasets: list[str],
+    attempts: dict[tuple[str, str, int], dict],
+    samples: dict[tuple[str, str], dict],
+    results_path: str,
+) -> dict[str, float]:
+    """Reduce one benchmark's declared metrics, with standard errors and per-group scores."""
+    log_likelihoods = {metric.name for metric in protocol.likelihood_metrics if metric.scoring == "log_likelihood"}
+    if protocol.summary is SummaryKind.PERPLEXITY and not log_likelihoods:
+        raise ValueError(f"Perplexity summary requires declared log-likelihood metrics for {protocol.benchmark}")
+    reductions = {
+        metric.name: (
+            SummaryKind.MEAN
+            if protocol.summary is SummaryKind.PERPLEXITY and metric.name not in log_likelihoods
+            else protocol.summary
+        )
+        for metric in protocol.metrics
+    }
+    values = defaultdict(list)
+    group_values = defaultdict(lambda: defaultdict(list))
+    for attempt in attempts.values():
+        if attempt["dataset"] not in datasets or attempt["outcome"] not in SCORED_OUTCOMES:
+            continue
+        sample = samples[(f"{attempt['dataset']}/{attempt['trial']}/{attempt['retry']}", attempt["task_id"])]
+        observed = dict(sample["metrics"] or {})
+        if protocol.primary_metric not in observed:
+            score = (sample["grading"] or {}).get("score")
+            if score is None:
+                continue
+            observed[protocol.primary_metric] = score
+        weights = {}
+        if protocol.summary is SummaryKind.WEIGHTED_MEAN:
+            grade = json.loads(sample["grading"]["detail"])
+            weights = grade["detail"].get("metric_weights", {})
+        sample_groups = json.loads(sample["doc"] or "{}").get("groups", {})
+        for metric in protocol.metrics:
+            if metric.name not in observed:
+                continue
+            value = observed[metric.name]
+            if not math.isfinite(value):
+                raise ValueError(f"Non-finite metric {metric.name} in {results_path}")
+            weight = weights.get(metric.name, 1) if protocol.summary is SummaryKind.WEIGHTED_MEAN else 1
+            if weight <= 0:
+                raise ValueError(f"Non-positive metric weight for {metric.name}")
+            datum = (attempt["dataset"] + ":" + attempt["source_row"], value, weight)
+            values[metric.name].append(datum)
+            for group, label in sample_groups.items():
+                group_values[f"{group}={label}"][metric.name].append(datum)
+    summary = {}
+    for metric, observations in values.items():
+        summary[metric], stderr = _reduce(observations, reductions[metric])
+        if stderr is not None:
+            summary[metric + "_stderr"] = stderr
+    if protocol.summary is SummaryKind.CLASSIFICATION and values:
+        attempted = summary.get("accuracy", 0) + summary.get("incorrect", 0)
+        accuracy = summary.get("accuracy", 0)
+        summary["accuracy_given_attempted"] = accuracy / attempted if attempted else 0
+        summary["f1"] = 2 * accuracy / (1 + attempted)
+    for group, group_metrics in group_values.items():
+        for metric, observations in group_metrics.items():
+            summary[f"{group}/{metric}"] = _reduce(observations, reductions[metric])[0]
+    return summary
+
+
+def _task_ref(name: str, protocol: EvaluationProtocol, manifests: list[dict], coverage: TaskCoverage) -> EvalTaskRef:
+    """Describe one benchmark's metrics, population and corpus identity for comparison."""
+    primary = next(metric for metric in protocol.metrics if metric.name == protocol.primary_metric)
+    # Physical manifests include regional paths and conversion timing. The curation
+    # identity binds source, compiler, grader and protocol independently of placement.
+    identities = [manifest.get("curation_identity") for manifest in manifests]
+    known = sorted(identity for identity in identities if identity is not None)
+    return EvalTaskRef(
+        name=name,
+        num_fewshot=protocol.num_fewshot,
+        benchmark=BenchmarkMetadataRef(
+            schema_version=1,
+            task=name,
+            primary_metric=protocol.primary_metric,
+            metric_kind=MetricKind(primary.kind),
+            metrics=tuple(
+                BenchmarkMetricRef(
+                    name=metric.name,
+                    source_name=metric.name,
+                    kind=MetricKind(metric.kind),
+                    higher_is_better=metric.higher_is_better,
+                )
+                for metric in protocol.metrics
+            ),
+            n_benchmark=coverage.n_benchmark,
+            n_attempted=coverage.n_attempted,
+            requires_judge=protocol.requires_judge,
+            identity=(
+                canonical_sha256({"corpora": known, "summary_revision": SUMMARY_REVISION})
+                if len(known) == len(identities)
+                else None
+            ),
+            source={
+                "dataset": ",".join(manifest["source_dataset"] for manifest in manifests),
+                "revision": ",".join(manifest["source_revision"] for manifest in manifests),
+                "split": "eval",
+            },
+        ),
+    )
+
+
+def _published_selection(
+    selection: ResolvedEvaluationSelection | None,
+    protocols: dict[str, EvaluationProtocol],
+    manifests: dict[str, dict],
+    groups: dict[str, list[str]],
+) -> ResolvedEvaluationSelection | None:
+    """Check a recorded selection against its single published benchmark, or recover it from the corpus."""
+    if selection is not None and len(groups) != 1:
+        raise ValueError("A benchmark selection requires exactly one declared benchmark")
+    if len(groups) != 1:
+        return selection
+    benchmark, datasets = next(iter(groups.items()))
+    protocol = protocols[datasets[0]]
+    presets = {manifests[dataset].get("protocol_name") for dataset in datasets}
+    if len(presets) != 1 or None in presets:
+        return selection
+    form = {"chat_generation": PromptFormat.CHAT, "text_generation": PromptFormat.COMPLETION}.get(protocol.operation)
+    published = ResolvedEvaluationSelection(
+        benchmark=benchmark, protocol=next(iter(presets)), num_fewshot=protocol.num_fewshot, prompt_format=form
+    )
+    if selection is not None and (
+        selection.benchmark,
+        selection.protocol,
+        selection.num_fewshot,
+        selection.prompt_format,
+    ) != (published.benchmark, published.protocol, published.num_fewshot, published.prompt_format):
+        raise ValueError("Recorded evaluation selection differs from the published corpus protocol")
+    return selection or published
+
+
 def score_curated_record(record: EvalRunRecord) -> EvalRunRecord:
     """Derive benchmark scores from one FineStore snapshot, leaving the producer record unchanged.
 
@@ -134,135 +270,20 @@ def score_curated_record(record: EvalRunRecord) -> EvalRunRecord:
     manifests = {entry["dataset"]: entry["manifest"] for entry in run["datasets"]}
     attempts = terminal_attempts(reader)
     samples = {(row["trial_id"], row["doc_id"]): row for row in logical_samples(reader)}
-    metrics, tasks = {}, []
     coverage = evaluation_coverage(reader)
     groups = defaultdict(list)
     for dataset, protocol in protocols.items():
         groups[protocol.benchmark].append(dataset)
+    metrics, tasks = {}, []
     for name, datasets in groups.items():
         protocol = protocols[datasets[0]]
         for dataset in datasets[1:]:
             other = protocols[dataset]
             if other.model_dump(exclude={"expected_population"}) != protocol.model_dump(exclude={"expected_population"}):
                 raise ValueError(f"Inconsistent summary protocols for benchmark {name}")
-        log_likelihoods = {metric.name for metric in protocol.likelihood_metrics if metric.scoring == "log_likelihood"}
-        if protocol.summary is SummaryKind.PERPLEXITY and not log_likelihoods:
-            raise ValueError(f"Perplexity summary requires declared log-likelihood metrics for {name}")
-        reductions = {
-            metric.name: (
-                SummaryKind.MEAN
-                if protocol.summary is SummaryKind.PERPLEXITY and metric.name not in log_likelihoods
-                else protocol.summary
-            )
-            for metric in protocol.metrics
-        }
-        rows = [row for row in attempts.values() if row["dataset"] in datasets]
-        values = defaultdict(list)
-        group_values = defaultdict(lambda: defaultdict(list))
-        for attempt in rows:
-            if attempt["outcome"] not in SCORED_OUTCOMES:
-                continue
-            sample = samples[(f"{attempt['dataset']}/{attempt['trial']}/{attempt['retry']}", attempt["task_id"])]
-            observed = dict(sample["metrics"] or {})
-            if protocol.primary_metric not in observed:
-                score = (sample["grading"] or {}).get("score")
-                if score is None:
-                    continue
-                observed[protocol.primary_metric] = score
-            weights = {}
-            if protocol.summary is SummaryKind.WEIGHTED_MEAN:
-                grade = json.loads(sample["grading"]["detail"])
-                weights = grade["detail"].get("metric_weights", {})
-            sample_groups = json.loads(sample["doc"] or "{}").get("groups", {})
-            for metric in protocol.metrics:
-                if metric.name not in observed:
-                    continue
-                value = observed[metric.name]
-                if not math.isfinite(value):
-                    raise ValueError(f"Non-finite metric {metric.name} in {record.results_path}")
-                weight = weights.get(metric.name, 1) if protocol.summary is SummaryKind.WEIGHTED_MEAN else 1
-                if weight <= 0:
-                    raise ValueError(f"Non-positive metric weight for {metric.name}")
-                datum = (attempt["dataset"] + ":" + attempt["source_row"], value, weight)
-                values[metric.name].append(datum)
-                for group, label in sample_groups.items():
-                    group_values[f"{group}={label}"][metric.name].append(datum)
-        summary = {}
-        for metric, observations in values.items():
-            summary[metric], stderr = _reduce(observations, reductions[metric])
-            if stderr is not None:
-                summary[metric + "_stderr"] = stderr
-        if protocol.summary is SummaryKind.CLASSIFICATION and values:
-            attempted = summary.get("accuracy", 0) + summary.get("incorrect", 0)
-            accuracy = summary.get("accuracy", 0)
-            summary["accuracy_given_attempted"] = accuracy / attempted if attempted else 0
-            summary["f1"] = 2 * accuracy / (1 + attempted)
-        for group, group_metrics in group_values.items():
-            for metric, observations in group_metrics.items():
-                summary[f"{group}/{metric}"] = _reduce(observations, reductions[metric])[0]
-        metrics[name] = summary
-        primary = next(metric for metric in protocol.metrics if metric.name == protocol.primary_metric)
-        # Physical manifests include regional paths and conversion timing. The curation
-        # identity binds source, compiler, grader and protocol independently of placement.
-        identities = [manifests[dataset].get("curation_identity") for dataset in datasets]
-        tasks.append(
-            EvalTaskRef(
-                name=name,
-                num_fewshot=protocol.num_fewshot,
-                benchmark=BenchmarkMetadataRef(
-                    schema_version=1,
-                    task=name,
-                    primary_metric=protocol.primary_metric,
-                    metric_kind=MetricKind(primary.kind),
-                    metrics=tuple(
-                        BenchmarkMetricRef(
-                            name=metric.name,
-                            source_name=metric.name,
-                            kind=MetricKind(metric.kind),
-                            higher_is_better=metric.higher_is_better,
-                        )
-                        for metric in protocol.metrics
-                    ),
-                    n_benchmark=coverage[name].n_benchmark,
-                    n_attempted=coverage[name].n_attempted,
-                    requires_judge=protocol.requires_judge,
-                    identity=(
-                        canonical_sha256({"corpora": sorted(identities), "summary_revision": SUMMARY_REVISION})
-                        if all(identities)
-                        else None
-                    ),
-                    source={
-                        "dataset": ",".join(manifests[dataset]["source_dataset"] for dataset in datasets),
-                        "revision": ",".join(manifests[dataset]["source_revision"] for dataset in datasets),
-                        "split": "eval",
-                    },
-                ),
-            )
-        )
-    selection = record.evaluation.curated.selection
-    if selection is not None and len(groups) != 1:
-        raise ValueError("A benchmark selection requires exactly one declared benchmark")
-    if len(groups) == 1:
-        benchmark = next(iter(groups))
-        datasets = groups[benchmark]
-        protocol = protocols[datasets[0]]
-        presets = {manifests[dataset].get("protocol_name") for dataset in datasets}
-        if len(presets) == 1 and None not in presets:
-            preset = next(iter(presets))
-            form = {"chat_generation": PromptFormat.CHAT, "text_generation": PromptFormat.COMPLETION}.get(
-                protocol.operation
-            )
-            published = ResolvedEvaluationSelection(
-                benchmark=benchmark, protocol=preset, num_fewshot=protocol.num_fewshot, prompt_format=form
-            )
-            if selection is not None and (
-                selection.benchmark,
-                selection.protocol,
-                selection.num_fewshot,
-                selection.prompt_format,
-            ) != (published.benchmark, published.protocol, published.num_fewshot, published.prompt_format):
-                raise ValueError("Recorded evaluation selection differs from the published corpus protocol")
-            selection = selection or published
+        metrics[name] = _benchmark_summary(protocol, datasets, attempts, samples, record.results_path)
+        tasks.append(_task_ref(name, protocol, [manifests[dataset] for dataset in datasets], coverage[name]))
+    selection = _published_selection(record.evaluation.curated.selection, protocols, manifests, groups)
     return record.model_copy(
         update={
             "metrics": metrics,

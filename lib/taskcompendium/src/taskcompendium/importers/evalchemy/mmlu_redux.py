@@ -5,7 +5,7 @@
 
 The prompt is ZeroEval's ``MCQA`` template (``src/templates/MCQA.py`` in WildEval/ZeroEval,
 Apache-2.0, at 8c1485edf12c6efb5f69135a562927c5ad484059), filled with ``str.replace`` in the same
-order as its ``apply_mc_template``, including the trailing spaces on three of its lines.
+order as its ``apply_mc_template``, including the trailing spaces on four of its lines.
 """
 
 import string
