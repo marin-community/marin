@@ -40,8 +40,48 @@ def check_cgroup_parent(parent: Path) -> None:
         raise UnsupportedMachineSpec("Run the local worker inside a writable delegated cgroup hierarchy")
 
 
+def cgroup_limits_applied(path: Path, *, cpus: int, memory_mb: int) -> bool:
+    """Whether the kernel actually applied the demanded limits to a machine cgroup."""
+    try:
+        quota, period = (path / "cpu.max").read_text().split()[:2]
+        cpu_applied = int(quota) == cpus * CPU_PERIOD and int(period) == CPU_PERIOD
+        memory_applied = int((path / "memory.max").read_text()) == memory_mb * 1024 * 1024
+        return cpu_applied and memory_applied
+    except (OSError, ValueError):
+        return False
+
+
+def probe_cgroup_limits(parent: Path, *, cpus: int = 1, memory_mb: int = 1024) -> bool:
+    """Create a throwaway machine cgroup and verify the kernel applied its limits.
+
+    Container scopes cannot enable domain controllers while the worker's own
+    process stays inside them (cgroup v2's no-internal-process rule), and some
+    runtimes also refuse the memory controller outright; a candidate that
+    silently drops limits is worse than no candidate, so this probes and reads
+    back instead of trusting the writes.
+    """
+    try:
+        cgroup = MachineCgroup.create(parent, cpus=cpus, memory_mb=memory_mb)
+    except (OSError, UnsupportedMachineSpec):
+        return False
+    try:
+        return cgroup_limits_applied(cgroup.path, cpus=cpus, memory_mb=memory_mb)
+    finally:
+        cgroup.kill()
+        cgroup.remove_if_empty()
+
+
 def delegated_cgroup_parent() -> Path | None:
-    """Find writable delegation within the worker's own cgroup or systemd unit."""
+    """Find a writable delegation that can actually enforce resource limits.
+
+    Candidates are the worker's own cgroup and its parent unit: systemd
+    DelegateSubgroup setups keep the worker below its unit (whose subtree can
+    then take controllers), while container runtimes scope the worker into a
+    ``cri-containerd`` scope whose subtree cannot enable domain controllers
+    until the worker moves out — the wrapping pod slice can. Each candidate is
+    verified by applying and reading back limits in a throwaway machine cgroup,
+    so a delegation that silently drops limits never becomes the parent.
+    """
     if not (CGROUP_ROOT / "cgroup.controllers").is_file():
         return None
     current = _current_cgroup()
@@ -54,10 +94,15 @@ def delegated_cgroup_parent() -> Path | None:
     if not current.name.endswith(unit_suffixes) and current.parent.name.endswith(unit_suffixes):
         if not (current.parent / "cgroup.procs").read_text().strip():
             candidates.insert(0, current.parent)
+    if current.parent != current and current.parent.is_relative_to(CGROUP_ROOT):
+        if current.parent not in candidates:
+            candidates.append(current.parent)
     for parent in candidates:
         try:
             check_cgroup_parent(parent)
         except UnsupportedMachineSpec:
+            continue
+        if not probe_cgroup_limits(parent):
             continue
         return parent
     return None
