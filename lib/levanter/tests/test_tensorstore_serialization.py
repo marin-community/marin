@@ -642,6 +642,16 @@ def test_processes_sharing_a_local_checkpoint_lock_with_lock_files():
     assert eight_device_checkpoints.commit_waits_for_held_lock_across_processes()
 
 
+def test_ranks_on_opposite_sides_of_the_budget_finish_one_save():
+    """Process 0's host leaf must not send only that process into the wave barrier."""
+    results = eight_device_checkpoints.uneven_staged_bytes_save_across_processes()
+    shared = np.arange(eight_device_checkpoints._UNEVEN_SHARED, dtype=np.float32)
+    host = np.arange(eight_device_checkpoints._UNEVEN_HOST, dtype=np.float32)
+    for restored_shared, restored_host in results:
+        np.testing.assert_array_equal(restored_shared, shared)
+        np.testing.assert_array_equal(restored_host, host)
+
+
 def test_a_save_after_an_interrupted_save_to_the_same_directory_commits():
     """A lock file left by a crashed save would otherwise block every later save to that step."""
     results = eight_device_checkpoints.resave_after_interrupted_save_across_processes()

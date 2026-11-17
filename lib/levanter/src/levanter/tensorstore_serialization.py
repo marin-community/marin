@@ -1033,11 +1033,33 @@ def _uses_manifest_waves(
     waves commits once per wave. A save that fits in the budget commits each chunk as it is
     staged: one transaction would defer all of its I/O to the commit. Other locking modes
     always commit per chunk, because TensorStore already batches those commits.
+
+    Process 0 also writes unsharded host leaves the others skip, so the local totals differ.
+    The wave path waits at a barrier and the per-chunk path does not, and every process has
+    to take the same one. The decision uses the largest total.
     """
     if file_io_locking != "lockfile":
         return False
     staged = sum(job.num_bytes for job in jobs)
+    if jax.process_count() > 1:
+        staged = max(jax_utils.multihost_allgather_sync(staged))
     return staged > config.max_staged_host_bytes
+
+
+def _publish_array_metadata(checkpoint_dir: str, context: ts.Context, tspecs: Sequence[dict]) -> None:
+    """Process 0 commits every array's metadata, and the others wait before opening it.
+
+    Opening ``zarr.json`` reads the manifest without the lock. On NFS that read fails with
+    ESTALE when another client's commit replaces the manifest, so the others then open with
+    the metadata this published instead of reading it back.
+    """
+    if jax.process_index() == 0:
+        base = ts.KvStore.open(
+            {"driver": KVSTORE_DRIVER, "base": build_kvstore_spec(checkpoint_dir)},
+            context=context,
+        ).result()
+        _commit_array_metadata(base, context, tspecs)
+    jax_utils.barrier_sync()
 
 
 def _write_each_chunk(
@@ -1045,17 +1067,27 @@ def _write_each_chunk(
     tspecs: Sequence[dict],
     config: TensorStoreWriteConfig,
     context: ts.Context,
+    checkpoint_dir: str,
+    *,
+    published_metadata: bool,
 ) -> tuple[HostByteBudget, list[ts.Future]]:
     """Commit every chunk on its own as soon as it is staged."""
     gate = HostByteBudget(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
     tspec_by_path = {tspec["kvstore"].get("path", ""): tspec for tspec in tspecs}
     stores: dict[str, ts.Future] = {}
+    base: ts.KvStore | None = None
 
     def store_for(path: str) -> ts.Future:
         store = stores.get(path)
         if store is None:
-            store = ts.open(ts.Spec(tspec_by_path[path]), create=True, open=True, context=context)
+            if base is None:
+                store = ts.open(ts.Spec(tspec_by_path[path]), create=True, open=True, context=context)
+            else:
+                # The trailing slash is the OCDBT path separator. assume_metadata skips the
+                # unlocked manifest read that fails with ESTALE while another client commits.
+                spec = {"driver": ARRAY_DRIVER, "metadata": tspec_by_path[path]["metadata"]}
+                store = ts.open(spec, kvstore=base / f"{path}/", assume_metadata=True, context=context)
             # Start I/O without waiting; staging never depends on open completion.
             store.force()
             stores[path] = store
@@ -1097,8 +1129,14 @@ def _write_each_chunk(
         store_future.add_done_callback(store_opened)
 
     async def write_all():
+        nonlocal base
         # Open every store before any staging wait, so one array's open never queues behind
         # another array's budget wait.
+        if published_metadata:
+            base = await ts.KvStore.open(
+                {"driver": KVSTORE_DRIVER, "base": build_kvstore_spec(checkpoint_dir)},
+                context=context,
+            )
         for job in jobs:
             store_for(job.path)
         await asyncio.gather(*(issue_write(job) for job in jobs))
@@ -1195,7 +1233,14 @@ def _serialize_arrays(
     if _uses_manifest_waves(file_io_locking, jobs, config):
         gate, commit_futures = _write_in_manifest_waves(jobs, tspecs, config, checkpoint_dir, context)
     else:
-        gate, commit_futures = _write_each_chunk(jobs, tspecs, config, context)
+        # A fitting multi-process save still commits each chunk on its own, and those commits
+        # replace the manifest while another process may be opening it.
+        published_metadata = file_io_locking == "lockfile" and jax.process_count() > 1 and bool(tspecs)
+        if published_metadata:
+            _publish_array_metadata(checkpoint_dir, context, tspecs)
+        gate, commit_futures = _write_each_chunk(
+            jobs, tspecs, config, context, checkpoint_dir, published_metadata=published_metadata
+        )
     logger.info(
         "Checkpoint staged %.2f GiB peak against a %.2f GiB budget across %d writes "
         "in %d manifest commits (about %.0f GiB of host memory while in flight)",

@@ -15,7 +15,6 @@ import os
 import pathlib
 import socket
 import threading
-import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from tempfile import TemporaryDirectory
@@ -52,8 +51,16 @@ _PROXY_ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
 _PINNED_HOST_MEMORY_KIND = "pinned_host"
 _SHARED_ARRAY_NAMES = ("a", "b", "c")
 _MANIFEST_LOCK = f"manifest.ocdbt{tensorstore_serialization._LOCK_FILE_SUFFIX}"
-# Long enough that a commit ignoring the lock lands well before the lock is released.
-_HELD_LOCK_SECONDS = 2.0
+# A 4-byte commit that ignores the lock finishes within this. The commit future does not
+# report when TensorStore's own retry has reached the lock file, so this is the deadline
+# for which the commit must still be pending. A hang past it fails the test.
+_LOCK_CONTENTION_DEADLINE_SECONDS = 2.0
+_COMMIT_DEADLINE_SECONDS = 30.0
+# Process 0 writes this host leaf and its half of the shared array. The other process writes
+# only its half, which is under the budget, so a per-process decision would split the barrier.
+_UNEVEN_SHARED = 8
+_UNEVEN_HOST = 16
+_UNEVEN_BUDGET = 32
 # Small enough that every array is worth splitting, so these exercise the split path.
 SPLIT_CONFIG = TensorStoreWriteConfig(min_replica_slice_bytes=1, max_chunk_bytes=4096)
 
@@ -222,19 +229,68 @@ def _commit_waits_for_held_lock(process_id: int, coordinator: str, checkpoint_pa
         # Another node's commit holds the manifest lock, which this node cannot see as an OS lock.
         lock = pathlib.Path(checkpoint_path, _MANIFEST_LOCK)
         lock.touch()
-        released = threading.Event()
+        started = threading.Event()
+        finished = threading.Event()
 
-        def release():
-            time.sleep(_HELD_LOCK_SECONDS)
-            released.set()
-            lock.unlink()
+        def commit():
+            started.set()
+            store.write(np.ones(1, np.float32)).result()
+            finished.set()
 
-        releaser = threading.Thread(target=release)
-        releaser.start()
-        store.write(np.ones(1, np.float32)).result()
-        committed_after_release = released.is_set()
-        releaser.join()
-        return committed_after_release
+        writer = threading.Thread(target=commit)
+        writer.start()
+        if not started.wait(timeout=_COMMIT_DEADLINE_SECONDS):
+            writer.join(timeout=1)
+            return False
+        # Still pending when this returns: the commit did not finish while the lock file existed.
+        # A commit that ignores the lock and is slower than the deadline can still look pending.
+        blocked = not finished.wait(timeout=_LOCK_CONTENTION_DEADLINE_SECONDS)
+        if not blocked or not lock.exists():
+            writer.join()
+            return False
+        lock.unlink()
+        committed = finished.wait(timeout=_COMMIT_DEADLINE_SECONDS)
+        writer.join()
+        return committed
+
+
+def _save_uneven_staged_bytes(
+    process_id: int, coordinator: str, checkpoint_path: str
+) -> tuple[np.ndarray, np.ndarray]:
+    with _distributed_process(process_id, coordinator):
+        mesh = Mesh(np.array(jax.devices()), ("replica",))
+        split = NamedSharding(mesh, P("replica"))
+        values = np.arange(_UNEVEN_SHARED, dtype=np.float32)
+        host = np.arange(_UNEVEN_HOST, dtype=np.float32)
+        source = {
+            "shared": jax.make_array_from_callback(values.shape, split, lambda index: values[index]),
+            "host": host,
+        }
+        with jax.set_mesh(mesh):
+            tree_serialize_leaves_tensorstore(
+                checkpoint_path,
+                source,
+                write_config=TensorStoreWriteConfig(max_staged_host_bytes=_UNEVEN_BUDGET),
+            )
+            restored = tree_deserialize_leaves_tensorstore(
+                checkpoint_path,
+                {
+                    "shared": jax.ShapeDtypeStruct(values.shape, values.dtype, sharding=split),
+                    "host": jax.ShapeDtypeStruct(host.shape, host.dtype, sharding=NamedSharding(mesh, P())),
+                },
+            )
+            shared = np.asarray(multihost_utils.process_allgather(restored["shared"], tiled=True))
+            return shared, np.asarray(restored["host"])
+
+
+def uneven_staged_bytes_save_across_processes() -> list[tuple[np.ndarray, np.ndarray]]:
+    """Save from two processes whose staged bytes fall on opposite sides of the budget.
+
+    Process 0 writes a host leaf the other process skips. Deciding the manifest-wave path
+    from each process's own total would send only process 0 into the barrier.
+    """
+    with TemporaryDirectory() as tmpdir:
+        return _run_on_distributed_processes(_save_uneven_staged_bytes, f"{tmpdir}/step")
 
 
 def commit_waits_for_held_lock_across_processes() -> bool:
