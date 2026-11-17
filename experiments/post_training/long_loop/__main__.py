@@ -27,6 +27,7 @@ from rigging.secrets import require_secret
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.nvl72 import PROFILES, NVL72RunSpec, run_from_spec, validate_model_geometry
+from experiments.post_training.long_loop.nvl72_evaluation import NVL72EvaluationSpec, evaluation_from_spec
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.run_spec import resolve_spec, stage_blockers
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
@@ -63,7 +64,7 @@ def validate_graph(
 @click.command(help=__doc__)
 @click.option("--spec", required=True, help="Pinned local run spec or regional S3 NVL72 spec URI.")
 @click.option("--smoke", is_flag=True, help="Apply only the spec's explicit scale overrides.")
-@click.option("--through", type=click.Choice(["sft", "rl", "archive"]), default="archive", show_default=True)
+@click.option("--through", type=click.Choice(["sft", "rl", "eval", "archive"]), default="archive", show_default=True)
 @click.option("--validation-output", type=click.Path(path_type=Path), required=True)
 @click.option("--i-know-i-am-using-a-deprecated-config-format", is_flag=True)
 @click.option("--i-know-i-am-breaking-experimental-controls", is_flag=True)
@@ -82,6 +83,25 @@ def main(
 ) -> ArtifactStep:
     configure_coreweave_s3()
     document = yaml.safe_load(StoragePath(spec).read_bytes())
+    if document.get("format") == "nvl72_eval":
+        if through != "eval" or smoke:
+            raise click.UsageError("An NVL72 evaluation requires --through eval without --smoke")
+        evaluation = draccus.decode(NVL72EvaluationSpec, document)
+        if not evaluation.output_prefix.startswith("s3://marin-us-east-08a/"):
+            raise ValueError("NVL72 outputs must use regional S3 in us-east-08a")
+        if not evaluation.model_uri.startswith("s3://marin-us-east-08a/"):
+            raise ValueError("NVL72 evaluation requires a regional model")
+        os.environ["MARIN_PREFIX"] = evaluation.output_prefix
+        if get_job_info() is None:
+            require_clean_revision(Path(__file__).resolve().parents[3], evaluation.marin_revision)
+        validation_output.mkdir(parents=True, exist_ok=True)
+        terminal = evaluation_from_spec(evaluation, validation_output / "launch.yaml")
+        model_config = (StoragePath(evaluation.model_uri) / "config.json").read_bytes()
+        validate_graph(
+            terminal, validation_output / terminal.version, evaluation.output_prefix, model_config=model_config
+        )
+        (validation_output / "resolved-plan.json").write_text(json.dumps(asdict(evaluation), indent=2))
+        return terminal
     if document.get("format") == "nvl72_rl":
         if through != "rl":
             raise click.UsageError("An adopted NVL72 RL input requires --through rl")

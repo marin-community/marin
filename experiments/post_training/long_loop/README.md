@@ -614,3 +614,20 @@ and pass its immutable URI to `--spec`. The coordinator replays this argument on
 Iris; a Mac-local absolute path is not available there. Keep `--validation-output`
 under `/tmp` when submitting. Save its local preflight receipts in the experiment
 record before launch.
+
+### Adopted NVL72 policy evaluation
+
+Use the same main with `format: nvl72_eval` and `--through eval` to evaluate an
+existing HF export. Omit `--smoke`; the supplied micro dataset defines the scope.
+Run without `--run` first. The spec pins the export manifest, model config,
+checkpoint step, tokenizer revision and evaluation Parquet SHA. A changed pin
+fails before allocation. `NVL72EvaluationSpec` in `nvl72_evaluation.py` defines
+all required fields.
+
+This path uses SkyRL's generation entrypoint with no training dataset. The
+policy uses one EP12 inference pool on three four-GPU GB200 hosts. The shared
+judge uses TP4/PP2 on two further hosts. Both use production priority in 08a;
+compilation and CUDA graphs stay enabled. The ordinary GB200 gang placement
+binds each pool to an NVLink domain. Keep the same context, sampling, task
+selection and judge pins when comparing two policies. The result has no RL
+checkpoint or synthetic training-completion marker.
