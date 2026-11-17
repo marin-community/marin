@@ -134,7 +134,10 @@ def test_full_task_text_marks_public_eval_copy_and_excludes_private_reference(tm
     assert {json.loads(r["task_spec"])["id"] for r in specs} == {"public-copy", "private-only"}
     evals = tmp_path / "evals"
     evals.mkdir()
-    pq.write_table(pa.Table.from_pylist([{"id": "eval-control", "text": leaked}]), evals / "eval.parquet")
+    pq.write_table(
+        pa.Table.from_pylist([{"id": name, "text": leaked} for name in ("eval-control", "eval-control-second")]),
+        evals / "eval.parquet",
+    )
     config = NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features=2)
     with ExitStack() as cleanup:
         client = LocalClient()
@@ -225,7 +228,7 @@ def test_full_task_text_marks_public_eval_copy_and_excludes_private_reference(tm
         assert evidence["contaminated_fraction"] == 0.5 and evidence["receipt"] is None
         attributed = pq.read_table(next((tmp_path / "report").glob("*/task_flags/*.parquet"))).to_pylist()
         assert {row["id"]: row["matched_eval_ids"] for row in attributed} == {
-            "public-copy": ["eval-control"],
+            "public-copy": ["eval-control", "eval-control-second"],
             "private-only": [],
         }
         dropped = pq.read_table(next((tmp_path / "report").glob("*/drop_manifest.parquet"))).to_pylist()

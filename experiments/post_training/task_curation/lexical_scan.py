@@ -156,6 +156,13 @@ def measure_marks(config: ReportConfig) -> LexicalMeasurements:
     logger.info("Joining %d distinct causal hashes against the complete eval index", len(needed_hashes))
     # Reuse the reference report's full streaming index join, never its sampled gallery.
     hash_evals = _hash_to_evals(index_path, needed_hashes) if needed_hashes else {}
+    # Sharing equal immutable sets avoids repeating their union for each feature in a task.
+    eval_groups: dict[frozenset[str], frozenset[str]] = {}
+    hash_groups: dict[int, frozenset[str]] = {}
+    for feature_hash, eval_ids in hash_evals.items():
+        group = frozenset(eval_ids)
+        hash_groups[feature_hash] = eval_groups.setdefault(group, group)
+    del hash_evals
     drops = read_artifact(config.drop_path, LexicalDropSets).attributes
     measurements = {}
     drop_manifests = {}
@@ -178,7 +185,11 @@ def measure_marks(config: ReportConfig) -> LexicalMeasurements:
                                 for batch in pq.ParquetFile(stream).iter_batches(batch_size=4096):
                                     rows = batch.to_pylist()
                                     eval_ids = [
-                                        sorted({e for h in row["matched_hashes"] for e in hash_evals.get(h, ())})
+                                        sorted(
+                                            set().union(
+                                                *{hash_groups[h] for h in row["matched_hashes"] if h in hash_groups}
+                                            )
+                                        )
                                         for row in rows
                                     ]
                                     families = [sorted({_eval_family(e) for e in ids}) for ids in eval_ids]
