@@ -4,7 +4,7 @@ Update the Google Sheet of old active Iris jobs and cancel the jobs that their o
 
    ```bash
    uv run python scripts/ops/old_iris_jobs.py --min-age-days 7 --cluster marin \
-     --sheet-id SHEET_ID_PENDING \
+     --sheet-id 1SfkYKDn4hnORr9vSVfRUlHYYJWnhOm-xSygbAlptELI \
      --impersonate loom-vm@hai-gcp-models.iam.gserviceaccount.com
    ```
 
