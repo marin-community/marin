@@ -20,9 +20,14 @@ from finestore.rl.difficulty import (
     Solver,
     difficulty_gap_reason,
 )
+from sqlalchemy import create_engine, text
 
 import infra.marina.apps.rl_data_catalog.load_difficulty as load_difficulty
-from infra.marina.apps.rl_data_catalog.load_difficulty import load_measurements, publish_coverage
+from infra.marina.apps.rl_data_catalog.load_difficulty import (
+    difficulty_records_from_query,
+    load_measurements,
+    publish_coverage,
+)
 from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import (
     CoverageStatus,
     DifficultyCoverage,
@@ -31,6 +36,7 @@ from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import (
     document_digest,
     source_coverage,
 )
+from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
 RELEASE = DatasetRelease(
     repo="open-athena/example-retained",
@@ -465,3 +471,42 @@ def test_load_measurements_rejects_duplicate_ids():
     records = [_measurement_record(index) for index in range(3)]
     with pytest.raises(ValueError, match="Duplicate difficulty measurement IDs"):
         load_measurements([*records, records[0]], None)
+
+
+def test_loader_reads_stored_measurements_with_sample_tasks(database_url):
+    """The loader projects stored measurements exactly like the server's summary shape."""
+    record = observation(Solver.SMALL)
+    payload = record.model_dump(mode="json")
+    # the stored measurement carries the real per-task sample rows
+    payload["sample"]["tasks"] = [{"task_id": f"t{index}", "task_sha256": f"{index:064x}"} for index in range(100)]
+    measurement = DifficultyMeasurement.model_validate(payload)
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        for statement in SCHEMA_SQL.split(";"):
+            if statement.strip():
+                connection.execute(text(statement))
+
+    def query(sql: str, parameters: dict) -> dict:
+        with engine.begin() as connection:
+            result = connection.execute(text(sql), parameters)
+            if result.returns_rows:
+                rows = [dict(row) for row in result.mappings()]
+                return {"rows": rows, "row_count": len(rows)}
+            return {"rows": [], "row_count": result.rowcount}
+
+    assert load_measurements([measurement], query) == {"inserted": 1, "records": 1}
+    with engine.begin() as connection:
+        (kind,) = connection.execute(
+            text("SELECT jsonb_typeof(measurement->'sample'->'tasks') FROM atlas_difficulty")
+        ).one()
+    assert kind == "array", "the stored measurement keeps its immutable sample tasks"
+    grouped = difficulty_records_from_query(query)
+    (read_back,) = grouped["Example:example"]
+    assert read_back.measurement_id == measurement.measurement_id
+    assert (read_back.sample is not None and not hasattr(read_back.sample, "tasks")) or read_back.sample.tasks is None
+    # the coverage consumes the projected observations over the real rows
+    # without the sample.tasks rejection (the pre-fix failure mode)
+    result = publish_coverage(query, "load-diff-projection")
+    assert result["load_id"] == "load-diff-projection"
+    engine.dispose()

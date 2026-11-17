@@ -83,14 +83,17 @@ def load_measurements(records: list[DifficultyMeasurement], query: AppletQuery) 
 def difficulty_records_from_query(query: AppletQuery) -> dict[str, list[DifficultyObservation]]:
     """The stored difficulty observations, grouped by canonical source id.
 
-    The read paginates by measurement id: the applet transport rejects single
-    responses over 5 MiB, and one measurement row can carry a full sample.
+    The read paginates by measurement id and projects the stored measurement
+    with the server's summary shape (`#- '{sample,tasks}'`): the observation
+    model summarizes the sample without its per-task rows, which stay
+    immutable in storage.
     """
     records: dict[str, list[DifficultyObservation]] = {}
     offset = 0
     while True:
         rows = query(
-            "SELECT measurement FROM atlas_difficulty ORDER BY measurement_id LIMIT :limit OFFSET :offset",
+            "SELECT measurement #- '{sample,tasks}' AS measurement FROM atlas_difficulty "
+            "ORDER BY measurement_id LIMIT :limit OFFSET :offset",
             {"limit": DIFFICULTY_READ_BATCH, "offset": offset},
         )["rows"]
         for row in rows:
