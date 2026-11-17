@@ -133,6 +133,9 @@ clients and machine factories to
 Concurrency defaults to 64 attempts across generation and grading. The explicit
 run `max_tokens` is further bounded by the protocol and available context. A null
 run seed preserves source trial seeds; an explicit seed uses base-plus-trial.
+The `experiments.evaluation` launcher sets run seed 0 when none is given and the
+model is served where per-request seeds are accepted. TPU vLLM rejects a seed
+on sampled requests, so those runs stay unseeded unless a seed is given.
 Omitted source sampling options stay omitted: for example, `top_p: null` lets the
 served generation configuration apply. Record those serving defaults with the
 model identity.
@@ -312,16 +315,16 @@ fit. A result with any excluded or missing row is not a full GenomeQA result.
 
 The grader uses final content only, removes completed thinking blocks, and reads
 the last `### Answer` section or explicit `Answer:` declarations. Missing,
-conflicting, invalid, and length-limited answers receive zero. A provider's explicit
-refusal field suppresses answer content; only the `content_filter` stop reason
-is separately classified as refusal by the script grader. Other explicit refusals
-are recorded as missing answers, with the original message retained in the raw
-attempt archive.
+conflicting, invalid, and length-limited answers receive zero. The `content_filter`
+stop reason is classified as refusal. The shared `final_only` selector returns
+the final content without falling back to reasoning; the original message remains
+in the raw attempt archive.
 
 Each verdict carries `accuracy`, `genomeqa_macro`, and parsing diagnostics. The
 macro metric gives motif questions weight 5 and other questions weight 1, so
 each of the six biological subtasks and its two formats contributes equally.
 Accuracy remains unweighted for actual correct counts. Evaluation items retain
-subtask, format, and cell groups for downstream reporting. Headline summary
-computation and public launcher registration remain separate work. Keep question,
+subtask, format, and cell groups for downstream reporting. EvalDash's native
+importer computes the weighted headline and grouped metrics from these verdicts.
+Public launcher registration remains separate work. Keep question,
 prompt, and response artifacts in restricted storage pending sample-access controls.

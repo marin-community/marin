@@ -152,16 +152,35 @@
             "kind": "evaldash",
             "url": "https://marina.oa.dev/evaldash/runs/20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-financebench-15102163af7c5400b8acc671245f5b27"
           },
-          "run_id": "20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-financebench-15102163af7c5400b8acc671245f5b27"
+          "run_id": "20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-financebench-15102163af7c5400b8acc671245f5b27",
+          "note": "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"
         },
         "ifbench": {
-          "missing": "Pending: run in progress"
+          "score": 38.0,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-ifbench-46228c701fa358689706496d3846d72b"
+          },
+          "run_id": "20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-ifbench-46228c701fa358689706496d3846d72b"
         },
         "mrcr": {
-          "missing": "Pending: run in progress"
+          "score": 37.15,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-mrcr-6ea7338c72a054f0be52c877c8baa96f"
+          },
+          "run_id": "20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-mrcr-6ea7338c72a054f0be52c877c8baa96f"
         },
         "nupa": {
-          "missing": "Pending: run in progress"
+          "score": 90.22,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-nupa-1011c7e39c0c5f9eb6507421dcaafb90"
+          },
+          "run_id": "20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-nupa-1011c7e39c0c5f9eb6507421dcaafb90"
         }
       }
     },
@@ -299,7 +318,8 @@
             "kind": "evaldash",
             "url": "https://marina.oa.dev/evaldash/runs/20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-financebench-aea3c2b0a3c8556b941b5157b46efd0a"
           },
-          "run_id": "20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-financebench-aea3c2b0a3c8556b941b5157b46efd0a"
+          "run_id": "20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-financebench-aea3c2b0a3c8556b941b5157b46efd0a",
+          "note": "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"
         },
         "ifbench": {
           "score": 40.0,
@@ -314,7 +334,13 @@
           "missing": "Not scored: Evalchemy's MRCR applies a Hugging Face chat template locally, and this model ships none"
         },
         "nupa": {
-          "missing": "Pending: run in progress"
+          "score": 74.98,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-nupa-2fc3e046d79d535e87ebacff45c0d854"
+          },
+          "run_id": "20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-nupa-2fc3e046d79d535e87ebacff45c0d854"
         }
       }
     },
@@ -342,19 +368,37 @@
           "run_id": "20261111-231015-meta-models-Muse-Glimmer-30B-5aa4022255034502bbeeeb9e108be950-humanevalplus-67cef8d99f3a5cb89b7c6b411c31d289"
         },
         "mbppplus": {
-          "missing": "Pending: run in progress"
+          "score": 80.95,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-mbppplus-10d30cc9cdb754aa8d0f3f2cb3b54b23"
+          },
+          "run_id": "20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-mbppplus-10d30cc9cdb754aa8d0f3f2cb3b54b23"
         },
         "olympiadbench": {
-          "missing": "Pending: run in progress"
+          "missing": "Held back: 227 of 300 attempts end without a final answer in the format the grader extracts"
         },
         "gsm8k-0shot": {
-          "missing": "Pending: run in progress; its score will be affected by scorer bug #11226"
+          "missing": "Held back: the run finished, but scorer bug #11226 affects its score"
         },
         "piqa": {
-          "missing": "Pending: run in progress"
+          "score": 82.92,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-piqa-95247f90f998500bb38faffa46b89d3e"
+          },
+          "run_id": "20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-piqa-95247f90f998500bb38faffa46b89d3e"
         },
         "winogrande": {
-          "missing": "Pending: run in progress"
+          "score": 78.77,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-winogrande-271b780c5954593c989661585cba3816"
+          },
+          "run_id": "20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-winogrande-271b780c5954593c989661585cba3816"
         },
         "boolq": {
           "score": 88.13,
@@ -366,10 +410,16 @@
           "run_id": "20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-boolq-23d83afca89a5fc1b3046f05413ea6b4"
         },
         "truthfulqa": {
-          "missing": "Pending: run in progress"
+          "score": 61.6,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-truthfulqa-83006148d9d35e34b99d37c6ea3d089b"
+          },
+          "run_id": "20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-truthfulqa-83006148d9d35e34b99d37c6ea3d089b"
         },
         "triviaqa": {
-          "missing": "Pending: run in progress"
+          "missing": "Held back: Glimmer's outputs often restate a question and a stray answer before the real one, and the exact-match extractor picks the wrong one"
         },
         "aime24": {
           "score": 92.33,
@@ -381,25 +431,215 @@
           "run_id": "20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-aime24-e8452634e2ea54b698f3d72ea6ad98da"
         },
         "mmlu-pro": {
-          "missing": "Pending: run in progress"
+          "score": 83.82,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-mmlu-pro-113a0d61a3155890af5d74d5dd8ded53"
+          },
+          "run_id": "20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-mmlu-pro-113a0d61a3155890af5d74d5dd8ded53"
         },
         "gpqa-diamond": {
           "missing": "Pending: the gated GPQA dataset was not readable"
         },
         "cruxeval": {
-          "missing": "Pending: run in progress"
+          "score": 88.06,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-cruxeval-3f2b9963b88d52a18d9c7aafa4179b8b"
+          },
+          "run_id": "20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-cruxeval-3f2b9963b88d52a18d9c7aafa4179b8b"
         },
         "financebench": {
-          "missing": "Pending: run in progress"
+          "score": 52.0,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-financebench-651c3b4fddbc530eba27f457620c4996"
+          },
+          "run_id": "20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-financebench-651c3b4fddbc530eba27f457620c4996",
+          "note": "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"
         },
         "ifbench": {
-          "missing": "Pending: run in progress"
+          "missing": "Held back: Glimmer's reasoning text reaches the scorer with its answer, so this format-sensitive score is not meaningful"
         },
         "mrcr": {
-          "missing": "Pending: run in progress"
+          "missing": "Held back: Glimmer's reasoning text reaches the scorer with its answer, so this format-sensitive score is not meaningful"
         },
         "nupa": {
-          "missing": "Pending: run in progress"
+          "score": 83.18,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-nupa-04b804e787e55b419dda140f1c17427f"
+          },
+          "run_id": "20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-nupa-04b804e787e55b419dda140f1c17427f"
+        }
+      }
+    },
+    {
+      "name": "Qwen 3.6 35B-A3B",
+      "hf_repo": "Qwen/Qwen3.6-35B-A3B",
+      "url": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B/tree/995ad96eacd98c81ed38be0c5b274b04031597b0",
+      "cells": {
+        "math500": {
+          "score": 99.2,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-math500-7380a099b3a25603bc62835a4137fdd5"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-math500-7380a099b3a25603bc62835a4137fdd5"
+        },
+        "humanevalplus": {
+          "score": 89.63,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-humanevalplus-86fcdd5f457158119d1514ac087a7293"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-humanevalplus-86fcdd5f457158119d1514ac087a7293"
+        },
+        "mbppplus": {
+          "score": 81.22,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-mbppplus-c6b70a85def15b3fad167366fa912b37"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-mbppplus-c6b70a85def15b3fad167366fa912b37"
+        },
+        "olympiadbench": {
+          "score": 36.0,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-olympiadbench-92441062476859a58360a429e42d7418"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-olympiadbench-92441062476859a58360a429e42d7418",
+          "note": "106 of 300 attempts unanswered, a rate similar to its policy runs"
+        },
+        "gsm8k-0shot": {
+          "score": 90.52,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-gsm8k-0shot-fc4b959f9b095511a6da121ca456f7fb"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-gsm8k-0shot-fc4b959f9b095511a6da121ca456f7fb"
+        },
+        "piqa": {
+          "score": 82.75,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-piqa-e45a070ebe235888a580002fbbbda8f0"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-piqa-e45a070ebe235888a580002fbbbda8f0"
+        },
+        "winogrande": {
+          "score": 76.01,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-winogrande-9702f5ab0e305ad48e4bb461fa9a8b2e"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-winogrande-9702f5ab0e305ad48e4bb461fa9a8b2e"
+        },
+        "boolq": {
+          "score": 85.11,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-boolq-444e12a28d255c41bcf3bce28b375c59"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-boolq-444e12a28d255c41bcf3bce28b375c59"
+        },
+        "truthfulqa": {
+          "score": 54.35,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-truthfulqa-1edadd39ffca597ca8ec5662fb238132"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-truthfulqa-1edadd39ffca597ca8ec5662fb238132"
+        },
+        "triviaqa": {
+          "score": 66.62,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-triviaqa-30a18d53cac4503f8b4cd9dca7e2efd4"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-triviaqa-30a18d53cac4503f8b4cd9dca7e2efd4"
+        },
+        "aime24": {
+          "score": 94.0,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-aime24-dc6ac4719c86509a8b13faadaa51b130"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-aime24-dc6ac4719c86509a8b13faadaa51b130"
+        },
+        "mmlu-pro": {
+          "score": 85.04,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-mmlu-pro-ae4ddcdd708751019588a5c91d0583a9"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-mmlu-pro-ae4ddcdd708751019588a5c91d0583a9"
+        },
+        "gpqa-diamond": {
+          "missing": "Pending: the gated GPQA dataset was not readable"
+        },
+        "cruxeval": {
+          "score": 92.38,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-cruxeval-36d2e3fd43535ce890a9be2b96bf4138"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-cruxeval-36d2e3fd43535ce890a9be2b96bf4138"
+        },
+        "financebench": {
+          "score": 42.0,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-financebench-0f744332780f532381e8cbacc8caa681"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-financebench-0f744332780f532381e8cbacc8caa681",
+          "note": "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"
+        },
+        "ifbench": {
+          "score": 36.33,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-ifbench-d0cde4316c1959fba4a8599a89c9f8c0"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-ifbench-d0cde4316c1959fba4a8599a89c9f8c0"
+        },
+        "mrcr": {
+          "score": 92.01,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-mrcr-c1cfa24e65b9553694dbb06cdfa984c8"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-mrcr-c1cfa24e65b9553694dbb06cdfa984c8"
+        },
+        "nupa": {
+          "score": 83.02,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-nupa-eeb49865a9e4540780dfada8705a1741"
+          },
+          "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-nupa-eeb49865a9e4540780dfada8705a1741"
         }
       }
     }

@@ -3,9 +3,9 @@
 
 """Checkpoint evaluation menus using exact curated protocol variants."""
 
+from evalrecords.records import EvaluationSelection
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import ServeConfig
-from marin.evaluation.records import EvaluationSelection
 
 from experiments.evals.evaluation import DEFAULT_ACCELERATOR, EvalGroup
 

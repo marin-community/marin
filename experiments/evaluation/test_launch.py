@@ -14,11 +14,11 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
+from evalrecords.records import RunStatus
 from iris.client.client import IrisClient
 from iris.cluster.client import remote_client
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation.hardware import Platform
-from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationBatch, EvaluationError, _record
 from marin.execution.step_runner import StepRunner
 from marin.inference.iris import RemoteInferenceStartupError
@@ -35,7 +35,7 @@ from experiments.evaluation.models import models
 @pytest.fixture
 def submitted_batches(monkeypatch):
     monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
-    monkeypatch.setenv("DAYTONA_API_KEY", "local-test-key")
+    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "local-test-key")
     monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     batches: list[EvaluationBatch] = []
 
@@ -194,6 +194,42 @@ def test_launch_selects_across_documents_and_adds_harbor_configs(
     }
 
 
+def test_daytona_launch_uses_the_eval_org_key_not_an_exported_daytona_key(tmp_path, monkeypatch, harbor_task_workspace):
+    monkeypatch.setenv("DAYTONA_API_KEY", "rl-org-key")
+    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "eval-org-key")
+    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
+    monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
+    submitted_env = []
+
+    class Client:
+        def submit(self, *, environment, **_kwargs):
+            submitted_env.append(environment.env_vars)
+            return SimpleNamespace(job_id="/test/eval")
+
+    @contextmanager
+    def client(**_kwargs):
+        yield Client()
+
+    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", client)
+    policy = harbor_task_workspace / "daytona-policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
+                "datasets": [{"path": "dataset"}],
+            }
+        )
+    )
+    command = _command(tmp_path)
+    command.extend(["--harbor-config", str(policy)])
+
+    result = CliRunner().invoke(cli, command)
+
+    assert result.exit_code == 0, result.output
+    assert submitted_env[0]["DAYTONA_API_KEY"] == "eval-org-key"
+
+
 @pytest.mark.parametrize("explicit_run_id", [True, False])
 def test_relaunch_reuses_completed_steps_and_preserves_partial_archive(tmp_path, submitted_batches, explicit_run_id):
     runner = CliRunner()
@@ -279,6 +315,47 @@ def test_relaunch_changed_request_concurrency_preserves_identity(tmp_path, cache
     StepRunner().run(build_evaluation_steps(after, execute))
 
     assert executed == []
+
+
+@pytest.mark.parametrize(
+    "platform, launch_seed, expected",
+    [
+        (Platform.GPU, None, {"default": 0, "configured": 5}),
+        (Platform.GPU, 7, {"default": 7, "configured": 7}),
+        # TPU vLLM rejects seeded sampling, so only an explicit seed is sent there.
+        (Platform.TPU, None, {"default": None, "configured": 5}),
+        (Platform.TPU, 7, {"default": 7, "configured": 7}),
+    ],
+)
+def test_run_seed_defaults_only_where_the_backend_accepts_request_seeds(tmp_path, platform, launch_seed, expected):
+    config = tmp_path / "custom.yaml"
+    config.write_text(
+        "evaluations:\n"
+        "  default:\n    benchmark: gsm8k\n"
+        "  configured:\n    benchmark: gsm8k\n    num_fewshot: 0\n    run:\n      seed: 5\n"
+    )
+    gpu = platform is Platform.GPU
+    spec = LaunchSpec(
+        evals=load_evaluations(config),
+        model=models()["qwen3-8b"],
+        platform=platform,
+        accelerator="H100x1" if gpu else None,
+        limit=None,
+        seed=launch_seed,
+        records_prefix=str(tmp_path / "records"),
+        submission_cluster="marin",
+        federated_cluster="cw-rno2a" if gpu else None,
+        priority_band=0,
+        run_id="seed-defaults",
+    )
+
+    batch = prepare_evaluation_batch(spec)
+
+    seeds = {
+        evaluation.identity.eval_ref.name: evaluation.identity.eval_ref.curated.settings.seed
+        for evaluation in batch.evaluations
+    }
+    assert seeds == expected
 
 
 def _pipeline_spec(tmp_path):

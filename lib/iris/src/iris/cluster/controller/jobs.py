@@ -54,6 +54,7 @@ from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
     USER_JOB_STATES,
+    CoschedulingConfig,
     JobName,
     is_federated,
     is_job_finished,
@@ -501,11 +502,14 @@ def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest
             raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from None
     if not request.name:
         raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
-    if request.HasField("coscheduling") and not request.coscheduling.group_by:
-        raise ConnectError(
-            Code.INVALID_ARGUMENT,
-            "coscheduling requires a non-empty group_by (the topology level to gang on)",
-        )
+    if request.HasField("coscheduling"):
+        try:
+            CoschedulingConfig(
+                group_by=request.coscheduling.group_by,
+                group_sizes=tuple(request.coscheduling.group_sizes),
+            ).validate(request.replicas)
+        except ValueError as error:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from None
     return JobName.from_wire(request.name)
 
 
@@ -1007,6 +1011,8 @@ def launch_job(
     plan = _plan_launch(dependencies, request, launch)
     if plan.disposition == SubmitDisposition.LOCAL:
         _resolve_egress(dependencies, request, launch)
+        if request.coscheduling.group_sizes and dependencies.runtime.backend.descriptor.kind != BackendKind.KUBERNETES:
+            raise ConnectError(Code.INVALID_ARGUMENT, "coscheduling group_sizes requires the Kubernetes backend")
         error = dependencies.runtime.backend.validate_job(request)
         if error:
             raise ConnectError(Code.INVALID_ARGUMENT, error)

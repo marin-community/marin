@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import reasoning_gym
+from verifyit.modes.grade_reasoning_gym import score_reasoning_gym_answer
 
 sys.path.insert(0, "/tests")
 
@@ -54,8 +55,7 @@ def main() -> None:
         entry = regenerated_entry(generation)
         if encoded(entry) != contract["entry"]:
             raise ValueError("Regenerated entry differs from the recorded entry")
-        scorer = reasoning_gym.get_score_answer_fn(generation["task"])
-        reward = float(scorer(candidate(ANSWER.read_text(errors="replace")), entry))
+        reward = score_reasoning_gym_answer(generation["task"], entry, candidate(ANSWER.read_text(errors="replace")))
     print(reward)
 
 
