@@ -73,3 +73,9 @@ trials:
   steps: 3030
   baseline: belay-X0229v1-control 3.0457 (same commit, seed 0)
   step_time_change: 0%
+potential:
+  score: 3
+  rationale: 'Sweep caps 22.6/15/30: all noise (+0.0011/+0.0034/+0.0048) at equal time, none a win → 3'
+  model: claude-opus-5-5
+  date: '2026-11-17'
+  inputs_digest: 678f71c44dfc
