@@ -1186,8 +1186,15 @@ def check_local_environment(
     *,
     cgroup_parent: Path | None = None,
     disk_pool: LocalDiskPool | None = None,
+    resource_evidence: object | None = None,
 ) -> None:
-    """Check local execution support without acquiring a bubblewrap sandbox."""
+    """Check local execution support without acquiring a bubblewrap sandbox.
+
+    ``resource_evidence`` carries the survey's verified enforcement machinery
+    (:class:`shellbox.survey.LocalResourceEvidence`) for the capability matrix to
+    grade; the checker itself accepts or rejects on the spec alone, matching
+    production, which degrades gracefully when limits cannot be enforced.
+    """
     source = _check_spec(spec, disk_pool)
     origin = source.source if isinstance(source, PreparedImage) else source
     reference = origin.reference if isinstance(origin, RegistryImage) else None

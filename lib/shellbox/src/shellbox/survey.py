@@ -4,6 +4,7 @@
 """Offline capability survey using production factory validation; never acquire machines."""
 
 import importlib
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import partial
@@ -11,6 +12,11 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from shellbox.backends.local.cgroup import (
+    CPU_PERIOD,
+    MachineCgroup,
+    delegated_cgroup_parent,
+)
 from shellbox.backends.local.disk import LocalDiskPool
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage
 from shellbox.machine import (
@@ -26,6 +32,9 @@ from shellbox.machine import (
 from shellbox.requirements import Requirement, Support
 
 PROBE_IMAGE = "docker.io/library/python@sha256:" + "0" * 64
+PROBE_CPUS = 1
+PROBE_MEMORY_MB = 1024
+PROBE_STORAGE_MB = 1024
 Checker = Callable[[ExecutionRequirements, MachineSpec], None]
 
 
@@ -46,6 +55,66 @@ class ProbeRequirements:
     docker_image: str | None = None
 
 
+@dataclass(frozen=True)
+class LocalResourceEvidence:
+    """This worker's verified LOCAL enforcement machinery, probed once per survey.
+
+    ``storage_enforced``: a LocalDiskPool was constructed on this privileged Linux
+    worker (its construction probe verifies ENOSPC on a fixed-size ext4 loop
+    filesystem) and the pool has free capacity for the survey probe size.
+    ``cgroup_verified``: a probe machine cgroup applied and read back cpu.max and
+    memory.max in the delegated cgroup v2 hierarchy that production machine
+    creation uses.
+    """
+
+    storage_enforced: bool
+    cgroup_verified: bool
+    cgroup_parent: Path | None = None
+
+
+def cgroup_limits_applied(path: Path, *, cpus: int, memory_mb: int) -> bool:
+    """Whether the kernel actually applied the demanded limits to a machine cgroup."""
+    try:
+        quota, period = (path / "cpu.max").read_text().split()[:2]
+        cpu_applied = int(quota) == cpus * CPU_PERIOD and int(period) == CPU_PERIOD
+        memory_applied = int((path / "memory.max").read_text()) == memory_mb * 1024 * 1024
+        return cpu_applied and memory_applied
+    except (OSError, ValueError):
+        return False
+
+
+def _cgroup_limits_verified(parent: Path) -> Path | None:
+    """Apply and read back survey-sized limits in a probe machine cgroup."""
+    try:
+        cgroup = MachineCgroup.create(parent, cpus=PROBE_CPUS, memory_mb=PROBE_MEMORY_MB)
+    except (OSError, UnsupportedMachineSpec):
+        return None
+    try:
+        if not cgroup_limits_applied(cgroup.path, cpus=PROBE_CPUS, memory_mb=PROBE_MEMORY_MB):
+            return None
+        return parent
+    finally:
+        cgroup.kill()
+        cgroup.remove_if_empty()
+
+
+def local_resource_evidence(disk_pool: LocalDiskPool | None) -> LocalResourceEvidence:
+    """Verify this worker's LOCAL storage and cgroup enforcement once, without machines."""
+    storage_enforced = False
+    if disk_pool is not None:
+        try:
+            storage_enforced = shutil.disk_usage(disk_pool.root).free >= PROBE_STORAGE_MB * 1024 * 1024
+        except OSError:
+            storage_enforced = False
+    parent = None
+    discovered = delegated_cgroup_parent()
+    if discovered is not None:
+        parent = _cgroup_limits_verified(discovered)
+    return LocalResourceEvidence(
+        storage_enforced=storage_enforced, cgroup_verified=parent is not None, cgroup_parent=parent
+    )
+
+
 def production_checkers(*, local_disk_pool: LocalDiskPool | None = None) -> dict[str, Checker]:
     """Return all production validators without acquiring machines or provider clients."""
     checkers = {}
@@ -62,7 +131,11 @@ def production_checkers(*, local_disk_pool: LocalDiskPool | None = None) -> dict
         factory = factory_type(controller_url="http://survey.invalid") if backend == "iris" else factory_type()
         checkers[backend] = factory.check_environment
     module = importlib.import_module("shellbox.backends.local.machine")
-    checkers["local"] = partial(module.check_local_environment, disk_pool=local_disk_pool)
+    checkers["local"] = partial(
+        module.check_local_environment,
+        disk_pool=local_disk_pool,
+        resource_evidence=local_resource_evidence(local_disk_pool),
+    )
     return checkers
 
 

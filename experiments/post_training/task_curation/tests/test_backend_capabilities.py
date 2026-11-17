@@ -7,6 +7,7 @@ import ast
 import json
 import sys
 from dataclasses import fields
+from functools import partial
 from pathlib import Path
 from typing import get_args, get_type_hints
 
@@ -24,7 +25,7 @@ from shellbox.requirements import (
     Requirement,
     Support,
 )
-from shellbox.survey import Checker, capability_matrix
+from shellbox.survey import Checker, LocalResourceEvidence, capability_matrix
 from taskcompendium.backend_fields import (
     ENVIRONMENT_FIELDS,
     EXECUTION_FIELDS,
@@ -173,6 +174,117 @@ def test_underspecified_environment_stays_a_typed_blocker_on_every_backend():
         assert fit.roles["grader"] == {FitSupport.UNSUPPORTED: 1}, backend
         assert fit.not_applicable == {}, backend
         assert fit.validation_errors, backend
+
+
+def _verified_local_checkers() -> dict[str, Checker]:
+    """The LOCAL checker as the privileged worker presents it: probes accepted, machinery verified."""
+
+    def accepting(requirements, spec, **kwargs) -> None:
+        pass
+
+    return {
+        **_unit_checkers(),
+        "local": partial(
+            accepting,
+            resource_evidence=LocalResourceEvidence(storage_enforced=True, cgroup_verified=True, cgroup_parent=None),
+        ),
+    }
+
+
+PDB_SHAPE = "docker.io/library/python@sha256:" + "0" * 64
+
+
+def _pdb_grader_document() -> dict:
+    """One converted PDBThink-shaped task: the grader profile its admission rules require."""
+    return {
+        "task": {
+            "grader": {
+                "environment": {
+                    "command_semantics": "linux_process",
+                    "docker_image": PDB_SHAPE,
+                    "setup_commands": ["mkdir -p /opt/grade"],
+                    "working_directory": "/workspace",
+                },
+                "timeout": 600,
+            },
+            "resources": {
+                "verifier": [
+                    {
+                        "path": "grade.py",
+                        "source": {"kind": "inline_file", "content_base64": "cHJpbnQoJ2dyYWRlZCcp"},
+                        "mode": "640",
+                        "mtime_ns": 1700000000123456789,
+                    }
+                ]
+            },
+        },
+        "runtime": {
+            "verifier_machine": {
+                "network": "deny",
+                "cpus": 1,
+                "memory_mb": 512,
+                "storage_mb": 1024,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 60,
+                "cleanup_timeout": 30,
+            }
+        },
+    }
+
+
+def test_local_resource_cells_reflect_the_survey_evidence():
+    """Resource cells upgrade only when the worker's enforcement machinery verified."""
+    unverified = production_matrix(_unit_checkers())
+    verified = production_matrix(_verified_local_checkers())
+    for requirement in (Requirement.CPUS, Requirement.MEMORY, Requirement.STORAGE):
+        base = next(cell for cell in unverified if cell.backend == "local" and cell.requirement == requirement)
+        # without a pool the storage probe rejects outright; cpu/memory stay tolerated-partial
+        expected_base = Support.UNSUPPORTED if requirement == Requirement.STORAGE else Support.PARTIAL
+        assert base.support == expected_base, requirement
+        upgraded = next(cell for cell in verified if cell.backend == "local" and cell.requirement == requirement)
+        assert upgraded.support == Support.SUPPORTED, requirement
+        assert "verified on this worker" in upgraded.note, requirement
+
+
+def test_local_orchestrated_requirements_carry_production_evidence():
+    """Setup, uploads, deadlines and file metadata are production guarantees on LOCAL."""
+    matrix = production_matrix(_unit_checkers())
+    for requirement in (
+        Requirement.SETUP,
+        Requirement.FILE_UPLOAD,
+        Requirement.COMMAND_TIMEOUT,
+        Requirement.FILE_MODE,
+        Requirement.FILE_MTIME,
+    ):
+        cell = next(cell for cell in matrix if cell.backend == "local" and cell.requirement == requirement)
+        assert cell.support == Support.SUPPORTED, requirement
+        assert any("_prepare_machine" in path or "taskcompendium" in path for path in cell.evidence), requirement
+    docker_setup = next(cell for cell in matrix if cell.backend == "docker" and cell.requirement == Requirement.SETUP)
+    assert docker_setup.support == Support.PARTIAL
+
+
+def test_pdb_shaped_grader_fits_local_with_verified_enforcement_machinery():
+    """The native PDBThink grader profile fits LOCAL once storage and cgroups verify."""
+    checkers = _verified_local_checkers()
+    mapped = source_map(
+        "pdbthink",
+        [_pdb_grader_document() for _ in range(3)],
+        production_matrix(checkers),
+        checkers,
+        {},
+        {"agent": RUNTIME, "grader": RUNTIME},
+    )
+    local = mapped.backends["local"]
+    assert local.support == FitSupport.SUPPORTED
+    assert local.task_counts == {FitSupport.SUPPORTED: 3}
+    assert local.roles["grader"] == {FitSupport.SUPPORTED: 3}
+    assert local.blockers == {} and local.validation_errors == {}
+    # the measured resource ranges record the profile exactly as declared
+    grader_ranges = mapped.resource_ranges["grader"]
+    assert grader_ranges["cpus"] == (1, 1)
+    assert grader_ranges["memory_mb"] == (512, 512)
+    assert grader_ranges["storage_mb"] == (1024, 1024)
 
 
 def test_conversation_only_census_needs_no_backend_despite_deployment_defaults():

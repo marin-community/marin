@@ -73,6 +73,18 @@ def combined_fit(values: Iterable[FitSupport]) -> FitSupport:
     return FitSupport.NOT_APPLICABLE if FitSupport.NOT_APPLICABLE in values else FitSupport.ROLE_ABSENT
 
 
+LOCAL_ORCHESTRATED_REQUIREMENTS = frozenset(
+    {
+        Requirement.SETUP,
+        Requirement.FILE_UPLOAD,
+        Requirement.COMMAND_TIMEOUT,
+        Requirement.FILE_MODE,
+        Requirement.FILE_MTIME,
+    }
+)
+LOCAL_RESOURCE_REQUIREMENTS = frozenset({Requirement.CPUS, Requirement.MEMORY, Requirement.STORAGE})
+
+
 def production_matrix(checkers: dict[str, Checker]) -> list[CapabilityCell]:
     """Combine factory evidence with production setup, startup and cleanup orchestration."""
     orchestrated = {
@@ -86,6 +98,7 @@ def production_matrix(checkers: dict[str, Checker]) -> list[CapabilityCell]:
             "Daytona also enforces it at creation.",
         ),
     }
+    local_evidence = getattr(checkers.get("local"), "keywords", {}).get("resource_evidence")
     cells = []
     for cell in capability_matrix(checkers):
         upgrade = orchestrated.get(cell.requirement)
@@ -94,6 +107,21 @@ def production_matrix(checkers: dict[str, Checker]) -> list[CapabilityCell]:
             cells.append(
                 cell.model_copy(
                     update={"support": Support.SUPPORTED, "evidence": (*cell.evidence, evidence), "note": note}
+                )
+            )
+        elif cell.backend == "local" and cell.requirement in LOCAL_ORCHESTRATED_REQUIREMENTS:
+            cells.append(
+                cell.model_copy(
+                    update={
+                        "support": Support.SUPPORTED,
+                        "evidence": (*cell.evidence, "lib/rolloutengine/src/rolloutengine/machines.py:_prepare_machine"),
+                        "note": (
+                            "Production LOCAL grading trials run each declared setup command via sh -c inside "
+                            "the startup deadline (failing the task on failure), upload grader inputs, enforce "
+                            "command deadlines, and the pax tar transfer restores permission bits and "
+                            "sub-second modification times."
+                        ),
+                    }
                 )
             )
         elif cell.requirement == Requirement.SETUP:
@@ -111,13 +139,37 @@ def production_matrix(checkers: dict[str, Checker]) -> list[CapabilityCell]:
                     }
                 )
             )
-        elif cell.requirement in {Requirement.FILE_UPLOAD, Requirement.COMMAND_TIMEOUT} and cell.backend == "local":
+        elif cell.backend == "local" and cell.requirement in LOCAL_RESOURCE_REQUIREMENTS:
+            verified = (
+                cell.requirement == Requirement.STORAGE
+                and local_evidence is not None
+                and local_evidence.storage_enforced
+            ) or (
+                cell.requirement in {Requirement.CPUS, Requirement.MEMORY}
+                and local_evidence is not None
+                and local_evidence.cgroup_verified
+            )
+            if not verified:
+                cells.append(cell)
+                continue
+            if cell.requirement == Requirement.STORAGE:
+                note = (
+                    "LOCAL storage enforcement verified on this worker: the disk pool's construction probe "
+                    "returned ENOSPC on a fixed-size ext4 loop filesystem and the pool holds free capacity "
+                    "for the probe size; production allocations provision exactly the declared storage_mb."
+                )
+            else:
+                note = (
+                    f"LOCAL {'cpu' if cell.requirement == Requirement.CPUS else 'memory'} enforcement verified on "
+                    "this worker: a probe machine cgroup applied and read back the limit in the delegated "
+                    "cgroup v2 hierarchy production machine creation uses."
+                )
             cells.append(
                 cell.model_copy(
                     update={
                         "support": Support.SUPPORTED,
-                        "evidence": (*cell.evidence, "vendor/harbor/src/harbor/trial/taskcompendium.py"),
-                        "note": "Production LOCAL grading trials upload grader inputs and enforce command deadlines.",
+                        "evidence": (*cell.evidence, "lib/shellbox/src/shellbox/survey.py:local_resource_evidence"),
+                        "note": note,
                     }
                 )
             )
