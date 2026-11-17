@@ -1,0 +1,13 @@
+experiment: X0231
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: lm_head reads [h, g*rms_norm(hA*hB)], widened by d/4
+    flags:
+    - --model-set
+    - lm_head_bilinear=true
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
