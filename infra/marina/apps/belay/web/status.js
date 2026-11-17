@@ -48,23 +48,38 @@ function denseGate(idea, cfg) {
   return { kind, short: signed(d), text: `${kind} at ${where}, Δ ${signed(d)} · ${t.rung.replace('vanilla-', '')}`, title: `${t.variant} (${t.rung}, ${t.date})` }
 }
 
-// A gate with a run in flight: its progress and, from the W&B step rate or the expected finish, the time left.
-function runningGate(run) {
+// One run's state for a gate's details: queued, starting, or its step.
+function runStatus(run) {
+  if (run.state === 'pending') return 'queued, waiting for GPUs'
+  return run.total_steps ? `step ${(run.step ?? 0).toLocaleString()} of ${run.total_steps.toLocaleString()}` : 'starting'
+}
+
+// A gate with runs in flight: the furthest run's progress and, from the W&B step rate or the expected finish, the time
+// left; its details list every run, each linked to W&B once it has started.
+function runningGate(runs) {
+  const started = runs.filter((r) => r.state !== 'pending')
+  const lines = runs.map((r) => `${runLabel(r)}: ${runStatus(r)}`)
+  const links = el(
+    'span',
+    { class: 'gate-links' },
+    started.map((r) => link(wandbUrl(r), `${runLabel(r)} W&B ↗`)),
+  )
+  if (!started.length) return { kind: 'running', short: 'queued', text: 'queued · waiting for GPUs', title: lines.join('\n'), links }
+  const run = started.reduce((a, b) => ((b.step ?? 0) > (a.step ?? 0) ? b : a))
   const pct = run.total_steps ? Math.floor((100 * Math.min(run.step ?? 0, run.total_steps)) / run.total_steps) : null
   const left = eta(run) ?? (run.expected_at ? `due ${relative(run.expected_at)}` : null)
   const text = ['running', pct !== null ? `${pct}%` : null, left ? `${left}${left.startsWith('due') ? '' : ' left'}` : null]
-  const step = run.total_steps ? `step ${(run.step ?? 0).toLocaleString()} of ${run.total_steps.toLocaleString()}` : 'starting'
-  return { kind: 'running', short: pct !== null ? `${pct}%` : '', text: text.filter(Boolean).join(' · '), title: `${run.name}: ${step}` }
+  return { kind: 'running', short: pct !== null ? `${pct}%` : '', text: text.filter(Boolean).join(' · '), title: lines.join('\n'), links }
 }
 
 // Gate 2, the 8-minute speedrun: the speedrun track's stages, or a legacy d512 trial from before Tracks existed.
-function speedrunGate(idea, liveRun, cfg) {
+function speedrunGate(idea, liveRuns, cfg) {
   const sr = trackInfo(cfg, 'speedrun')
   const ours = counted(idea.trials.filter((t) => t.rung === 'speedrun'))
   const legacy = counted(idea.trials.filter((t) => t.rung === 'd512'))
   const data = ours.filter((t) => t.protocol === 'equal_steps').at(-1)
   const time = ours.filter((t) => t.protocol === 'fixed_time').at(-1)
-  if (liveRun) return runningGate(liveRun)
+  if (liveRuns.length) return runningGate(liveRuns)
   if (idea.track && idea.track !== 'speedrun' && !ours.length) return { kind: 'na', text: `n/a (track ${idea.track})`, title: '' }
   const final = time ?? data ?? legacy.at(-1)
   if (!final) return { kind: 'none', text: 'not run', title: '' }
@@ -94,7 +109,7 @@ function gateChip(g, more = null) {
   const shown = ['win', 'loss', 'running', 'partial', 'failed'].includes(g.kind) && g.short ? ` ${g.short}` : ''
   const chip = el('span', { class: `gate-chip ${look.cls}${g.provisional ? ' provisional' : ''}` }, el('b', {}, look.icon), shown)
   const lines = [g.text, ...(g.title ? g.title.split('\n') : [])].filter((x, i, a) => x && a.indexOf(x) === i)
-  const tip = el('span', { class: 'gate-tip', role: 'tooltip' }, ...lines.map((x) => el('span', {}, x)), more)
+  const tip = el('span', { class: 'gate-tip', role: 'tooltip' }, ...lines.map((x) => el('span', {}, x)), g.links ?? null, more)
   const cell = el('span', { class: 'gcell', tabindex: '0', 'aria-expanded': 'false', 'aria-label': g.text }, chip, tip)
   cell.addEventListener('click', (e) => {
     if (e.target.closest('a')) return
@@ -154,7 +169,15 @@ function miniRuns(runs) {
     'div',
     { class: 'mini-runs' },
     runs.map((r) =>
-      el('div', { class: 'mini-run' }, el('code', {}, r.name), runPill(r), progress(r), el('span', { class: 'mono' }, loss(r.loss)), link(wandbUrl(r), 'W&B ↗')),
+      el(
+        'div',
+        { class: 'mini-run' },
+        el('code', {}, r.name),
+        runPill(r),
+        progress(r),
+        el('span', { class: 'mono' }, loss(r.loss)),
+        r.state === 'pending' ? el('span', { class: 'hint' }, 'W&B once started') : link(wandbUrl(r), 'W&B ↗'),
+      ),
     ),
   )
 }
@@ -356,10 +379,12 @@ function approvalDate(idea, pageIdea) {
 }
 
 function checklistRows(cfg) {
-  // The speedrun gate's run in flight: a live run of the idea itself, not of one of its ladder rungs.
-  const live = new Map(state.runs.filter((r) => !TERMINAL.has(r.state) && r.experiment === r.registry_id).map((r) => [r.registry_id, r]))
-  // An idea's latest launch of ladder rungs: its runs whose experiment carries a rung tag.
-  const rungRuns = (xid) => launches(state.runs.filter((r) => r.registry_id === xid && r.experiment !== r.registry_id)).latest
+  // A ladder rung's run carries the rung in its experiment id (X0037d768); a sweep value's (X0229v2) does not.
+  const isRung = (r) => r.registry_id && LADDER_RUNGS.includes((r.experiment ?? '').slice(r.registry_id.length))
+  // The speedrun gate's runs in flight: the idea's own live runs (a sweep's values included), not its ladder rungs'.
+  const live = (xid) => state.runs.filter((r) => r.registry_id === xid && !TERMINAL.has(r.state) && !isRung(r))
+  // An idea's latest launch of ladder rungs.
+  const rungRuns = (xid) => launches(state.runs.filter((r) => r.registry_id === xid && isRung(r))).latest
   return registry.ideas.map((idea) => {
     const pageIdea = state.ideas.find((i) => i.registry_id === idea.xid)
     // A link from before the agent log: an idea's post on the old running issue, kept in place there.
@@ -374,7 +399,7 @@ function checklistRows(cfg) {
       accepted: inLiveRecipe(idea, cfg.recipe_tag),
       score: idea.potential?.score ?? null,
       dense: denseGate(idea, cfg),
-      speedrun: speedrunGate(idea, live.get(idea.xid), cfg),
+      speedrun: speedrunGate(idea, live(idea.xid), cfg),
       hero: heroGate(idea, cfg),
       scaling: scalingGate(idea, cfg, rungRuns(idea.xid)),
     }
