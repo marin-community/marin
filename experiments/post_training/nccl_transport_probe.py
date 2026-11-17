@@ -3,28 +3,36 @@
 
 """Probe which network transport NCCL picks between two Iris GPU tasks.
 
-Run as a two-task gang Iris job (``--replicas 2 --gpu H100x2``). Every task runs
-the same command. Task 0 publishes a rendezvous endpoint through the Iris
-endpoint registry; both tasks then run the same sequence of environment
-variants, each spawning one NCCL worker per local GPU for an all-reduce and an
-all-to-all benchmark with ``NCCL_DEBUG=INFO``. The launcher parses each worker's
-captured stderr for the transport NCCL selected (``via NET/IB/...`` versus
+Run as a two-task gang Iris job (``--replicas 2``). Every task runs the same
+command. Task 0 publishes a rendezvous endpoint through the Iris endpoint
+registry; both tasks then run the same sequence of environment variants, each
+spawning one NCCL worker per local GPU for an all-reduce and an all-to-all
+benchmark with ``NCCL_DEBUG=INFO``. The launcher parses each worker's captured
+stderr for the transport NCCL selected (``via NET/IB/...`` versus
 ``via NET/Socket``) and reports bandwidth and pass/fail per variant as one JSON
-object on stdout. A failing variant records the NCCL error tail instead of
+object on stdout. A failing variant records the worker log tail instead of
 aborting the run.
 
-Example submission (the vendored SkyRL environment provides torch with NCCL):
+Example submission (the vendored SkyRL runtime image and its megatron profile
+provide torch with the production NCCL build):
 
     iris --config lib/iris/config/marin.yaml job run \
-        --target-cluster cw-rno2a --gpu H100x2 --enable-extra-resources \
+        --target-cluster cw-rno2a --gpu H100x1 --enable-extra-resources \
         --replicas 2 --priority production \
-        --job-name ib-audit-nccl-probe-rno2a-1 --timeout 5400 --no-wait -- \
-        uv run --project vendor/skyrl --frozen --no-dev \
-        python experiments/post_training/nccl_transport_probe.py
+        --job-name ib-audit-nccl-probe-rno2a-1 --timeout 5400 --no-wait \
+        --task-image ghcr.io/marin-community/iris-task@sha256:13519c59 \
+        --no-sync -- \
+        bash -c 'cd /app/vendor/skyrl && \
+        bash cloud/iris/bootstrap_runtime.sh /app/vendor/skyrl "$IRIS_VENV" \
+        /app/vendor/skyrl/.iris-runtime-env megatron production && \
+        source /app/vendor/skyrl/.iris-runtime-env && \
+        exec python /app/experiments/post_training/nccl_transport_probe.py'
 
 The variants cover the recipe workaround (`NCCL_NET=Socket`,
-`NCCL_IB_DISABLE=1`, `NCCL_SOCKET_FAMILY=AF_INET`), each variable alone, and
-InfiniBand hints (`NCCL_IB_HCA`, `NCCL_IB_GID_INDEX`, `NCCL_SOCKET_IFNAME`).
+`NCCL_IB_DISABLE=1`, `NCCL_SOCKET_FAMILY=AF_INET`) as one overlay and each
+variable alone, the exact production overlay that also pins
+`NCCL_SOCKET_IFNAME`, and InfiniBand hints (`NCCL_IB_HCA`,
+`NCCL_IB_GID_INDEX`).
 """
 
 from __future__ import annotations
@@ -54,6 +62,7 @@ WARMUP_ITERATIONS = 3
 ALLREDUCE_ITERATIONS = 10
 ALLTOALL_ITERATIONS = 8
 MAX_LOCAL_GPUS = 2
+ERROR_TAIL_LINES = 12
 ENDPOINT_BASE_NAME = "nccl-probe"
 
 NCCL_VERSION_RE = re.compile(r"NCCL version ([0-9.]+)")
@@ -68,6 +77,28 @@ class Variant:
 
     name: str
     env: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class NcclCensus:
+    """Transport facts parsed from one worker's NCCL INFO output."""
+
+    nccl_version: str
+    transports: list[str]
+
+
+@dataclass(frozen=True)
+class RankResult:
+    """Outcome of one rank's benchmark within a variant."""
+
+    variant: str
+    rank: int
+    passed: bool
+    returncode: int
+    duration: float
+    error_tail: list[str]
+    worker: dict | None
+    census: NcclCensus
 
 
 def build_variants() -> list[Variant]:
@@ -90,7 +121,7 @@ def build_variants() -> list[Variant]:
     ]
 
 
-def parse_nccl_transport(lines: list[str]) -> dict[str, object]:
+def parse_nccl_census(lines: list[str]) -> NcclCensus:
     """Extract the NCCL version and selected transports from NCCL INFO output."""
     version = ""
     transports: list[str] = []
@@ -102,12 +133,7 @@ def parse_nccl_transport(lines: list[str]) -> dict[str, object]:
         match = TRANSPORT_RE.search(line)
         if match and match.group(1) not in transports:
             transports.append(match.group(1))
-    return {"nccl_version": version, "transports": transports}
-
-
-def error_tail(lines: list[str], limit: int = 12) -> list[str]:
-    """Keep the last lines of a worker log for the report."""
-    return lines[-limit:]
+    return NcclCensus(nccl_version=version, transports=transports)
 
 
 def allocate_port_block(count: int) -> int:
@@ -138,22 +164,15 @@ def wait_for_rendezvous(resolver, endpoint_name: str) -> tuple[str, int]:
                 url = resolved.first().url
                 host, _, port = url.rpartition(":")
                 return host, int(port)
-        except Exception as error:  # noqa: BLE001 - the endpoint may not exist yet
+        except Exception as error:
             last_error = str(error)
         time.sleep(2)
     raise TimeoutError(f"No rendezvous endpoint {endpoint_name!r} after {RENDEZVOUS_TIMEOUT_SECONDS}s ({last_error})")
 
 
 def run_worker(
-    variant: Variant,
-    index: int,
-    local_rank: int,
-    master: str,
-    port: int,
-    world_size: int,
-    backend: str,
-    log_dir: Path,
-) -> dict:
+    variant: Variant, index: int, local_rank: int, master: str, port: int, world_size: int, log_dir: Path
+) -> RankResult:
     """Spawn one benchmark worker process and return its parsed result."""
     log_path = log_dir / f"{variant.name}-rank{index}.log"
     env = dict(os.environ)
@@ -165,40 +184,43 @@ def run_worker(
             "RANK": str(index),
             "LOCAL_RANK": str(local_rank),
             "NCCL_DEBUG": "INFO",
-            "PROBE_BACKEND": backend,
             **variant.env,
         }
     )
-    cmd = [sys.executable, str(Path(__file__).resolve()), "--mode", "worker"]
+    cmd = [sys.executable, str(Path(__file__).resolve()), "--mode", "worker", "--variant", variant.name]
     started = time.time()
     with open(log_path, "wb") as log_file:
         try:
             process = subprocess.run(
-                cmd, env=env, stdout=subprocess.PIPE, stderr=log_file, text=True, check=False,
+                cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=log_file,
+                text=True,
+                check=False,
                 timeout=VARIANT_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired:
             process = subprocess.CompletedProcess(cmd, returncode=124, stdout="")
     duration = time.time() - started
     lines = log_path.read_text(errors="replace").splitlines()
-    parsed = parse_nccl_transport(lines)
+    census = parse_nccl_census(lines)
     payload = None
     for line in process.stdout.splitlines():
         stripped = line.strip()
         if stripped.startswith("{"):
             payload = json.loads(stripped)
             break
-    failed = process.returncode != 0 or payload is None
-    return {
-        "variant": variant.name,
-        "rank": index,
-        "pass": not failed,
-        "returncode": process.returncode,
-        "duration_s": round(duration, 2),
-        "error_tail": error_tail(lines),
-        "worker": payload,
-        **parsed,
-    }
+    return RankResult(
+        variant=variant.name,
+        rank=index,
+        passed=process.returncode == 0 and payload is not None,
+        returncode=process.returncode,
+        duration=round(duration, 2),
+        error_tail=lines[-ERROR_TAIL_LINES:],
+        worker=payload,
+        census=census,
+    )
 
 
 def run_variant(
@@ -208,28 +230,41 @@ def run_variant(
     world_size: int,
     master: str,
     port: int,
-    backend: str,
     log_dir: Path,
 ) -> dict:
     """Run one variant on this task's local GPUs and summarize the ranks."""
     ranks = [
-        run_worker(variant, task_index * local_gpus + local, local, master, port, world_size, backend, log_dir)
+        run_worker(variant, task_index * local_gpus + local, local, master, port, world_size, log_dir)
         for local in range(local_gpus)
     ]
     return {
         "variant": variant.name,
         "env_overlay": variant.env,
-        "pass": all(item["pass"] for item in ranks),
+        "pass": all(rank.passed for rank in ranks),
         "world_size": world_size,
-        "ranks": ranks,
-        "transports": sorted({transport for rank in ranks for transport in rank["transports"]}),
+        "ranks": [asdict_without_worker_noise(rank) for rank in ranks],
+        "transports": sorted({transport for rank in ranks for transport in rank.census.transports}),
+    }
+
+
+def asdict_without_worker_noise(rank: RankResult) -> dict:
+    """Flatten a rank result into the report schema."""
+    return {
+        "variant": rank.variant,
+        "rank": rank.rank,
+        "pass": rank.passed,
+        "returncode": rank.returncode,
+        "duration": rank.duration,
+        "error_tail": rank.error_tail,
+        "worker": rank.worker,
+        "nccl_version": rank.census.nccl_version,
+        "transports": rank.census.transports,
     }
 
 
 def run_launcher(args: argparse.Namespace) -> None:
     """Run every variant on this task and print the aggregate JSON report."""
     import torch  # noqa: PLC0415 - GPU probe needs torch; keep startup fast otherwise
-
     from iris.client.client import iris_ctx  # noqa: PLC0415
     from iris.cluster.client.job_info import get_job_info  # noqa: PLC0415
 
@@ -263,7 +298,7 @@ def run_launcher(args: argparse.Namespace) -> None:
             continue
         logger.info("[task %s] variant %s starting", task_index, variant.name)
         results.append(
-            run_variant(variant, task_index, local_gpus, world_size, master_host, base_port + 1 + offset, "nccl", log_dir)
+            run_variant(variant, task_index, local_gpus, world_size, master_host, base_port + 1 + offset, log_dir)
         )
         logger.info("[task %s] variant %s finished pass=%s", task_index, variant.name, results[-1]["pass"])
 
@@ -287,29 +322,20 @@ def run_worker_mode(args: argparse.Namespace) -> None:
     import torch  # noqa: PLC0415
     import torch.distributed as dist  # noqa: PLC0415
 
-    backend = os.environ.get("PROBE_BACKEND", "nccl")
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
-    dist.init_process_group(
-        backend,
-        timeout=datetime.timedelta(seconds=PROCESS_GROUP_TIMEOUT_SECONDS),
-    )
-    if backend == "nccl":
-        torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
-        device = torch.device("cuda", torch.cuda.current_device())
-    else:
-        device = torch.device("cpu")
+    dist.init_process_group("nccl", timeout=datetime.timedelta(seconds=PROCESS_GROUP_TIMEOUT_SECONDS))
+    torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
+    device = torch.device("cuda", torch.cuda.current_device())
 
     def bench(collective, iterations: int) -> float:
         for _ in range(WARMUP_ITERATIONS):
             collective()
-        if device.type == "cuda":
-            torch.cuda.synchronize()
+        torch.cuda.synchronize()
         start = time.perf_counter()
         for _ in range(iterations):
             collective()
-        if device.type == "cuda":
-            torch.cuda.synchronize()
+        torch.cuda.synchronize()
         return (time.perf_counter() - start) / iterations
 
     tensor = torch.empty(ALLREDUCE_BYTES // 2, dtype=torch.bfloat16, device=device)
@@ -318,9 +344,7 @@ def run_worker_mode(args: argparse.Namespace) -> None:
         dist.all_reduce(tensor)
 
     all_reduce_seconds = bench(run_all_reduce, ALLREDUCE_ITERATIONS)
-    all_reduce_busbw = (
-        ALLREDUCE_BYTES / all_reduce_seconds * 2 * (world_size - 1) / world_size / 1e9
-    )
+    all_reduce_bandwidth = ALLREDUCE_BYTES / all_reduce_seconds * 2 * (world_size - 1) / world_size / 1e9
 
     a2a_input = torch.empty(ALLTOALL_BYTES // 2, dtype=torch.bfloat16, device=device)
     a2a_output = torch.empty_like(a2a_input)
@@ -329,17 +353,16 @@ def run_worker_mode(args: argparse.Namespace) -> None:
         dist.all_to_all_single(a2a_output, a2a_input)
 
     all_to_all_seconds = bench(run_all_to_all, ALLTOALL_ITERATIONS)
-    all_to_all_busbw = ALLTOALL_BYTES / all_to_all_seconds * (world_size - 1) / world_size / 1e9
+    all_to_all_bandwidth = ALLTOALL_BYTES / all_to_all_seconds * (world_size - 1) / world_size / 1e9
 
     payload = {
         "variant": args.variant,
         "rank": rank,
         "host": socket.gethostname(),
-        "gpu": torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
+        "gpu": torch.cuda.get_device_name(device),
         "world_size": world_size,
-        "backend": backend,
-        "allreduce_busbw_gbps": round(all_reduce_busbw, 2),
-        "alltoall_busbw_gbps": round(all_to_all_busbw, 2),
+        "allreduce_busbw_gigabytes_per_second": round(all_reduce_bandwidth, 2),
+        "alltoall_busbw_gigabytes_per_second": round(all_to_all_bandwidth, 2),
     }
     dist.barrier()
     dist.destroy_process_group()
