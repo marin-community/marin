@@ -208,7 +208,8 @@ Train-long-harbor adds 30 pinned BFCL, 30 SWE-bench Verified and 30 OpenThoughts
 on Daytona at each evaluation. Each sandbox builds its pinned task environment in declarative mode.
 Set `DAYTONA_EVAL_API_KEY` and `DAYTONA_TARGET` before submission. Checkpoint choice
 requires at least 99% native coverage and 90% in each Harbor cohort; `eval/all` pools native and
-Harbor scored rewards. Per-cohort metrics are `eval/harbor/<cohort>/*`; trial artifacts live under
+Harbor scored rewards. Per-cohort metrics are `eval/harbor/<cohort>/*`; `eval/harbor/wall_seconds` measures the
+complete Harbor collection callback. Trial artifacts live under
 `exports/inline_harbor/`. A Harbor error stops training; rerunning the same command resumes from
 the latest checkpoint. `best_checkpoint.json` records the selected checkpoint evidence. The native result records
 the HF export and its model files. This runtime evaluates the current training weights; the separate

@@ -23,6 +23,7 @@ import contextlib
 import json
 import math
 import os
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
@@ -331,6 +332,7 @@ class HarborEvaluationCallback(TrainerCallback):
         self.daytona_api_key_env = daytona_api_key_env
 
     async def collect_evaluation(self, state, *, trainer, pool):
+        started_at = time.perf_counter()
         client = trainer.inference_engine_client
         if not client.enable_http_endpoint:
             raise ValueError("Harbor validation requires generator.enable_http_endpoint")
@@ -365,7 +367,9 @@ class HarborEvaluationCallback(TrainerCallback):
                     for cohort in cohorts:
                         cohort["job"]["telemetry"] = telemetry
             results = await collect_harbor(cohorts, pool, environment)
-        return {f"eval/harbor/{name}/{key}": value for name, result in results.items() for key, value in result.items()}
+        metrics = {f"eval/harbor/{name}/{key}": value for name, result in results.items() for key, value in result.items()}
+        metrics["eval/harbor/wall_seconds"] = time.perf_counter() - started_at
+        return metrics
 
     async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
         attempted = metrics["eval/all/num_attempted"]
