@@ -70,7 +70,7 @@ def training_recipe(steps: int, max_turns: int = 1) -> dict:
             "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": JUDGE_API_KEY_ENV},
             "task_spec": {
                 "session": {"max_turns": max_turns},
-                "image_verifier_overrides": {TASKFORGE_IMAGE: {"storage_mb": None}},
+                "image_verifier_overrides": [{"image": TASKFORGE_IMAGE, "runtime": {"storage_mb": None}}],
             },
         }
     }

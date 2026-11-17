@@ -45,7 +45,7 @@ class LocalAdmissionFactory:
         raise AssertionError(f"Admission must not acquire a machine: {spec}")
 
 
-def _loaded_specs(tmp_path: Path, tasks: list[TaskSpec], *, image_verifier_overrides: dict | None = None) -> list:
+def _loaded_specs(tmp_path: Path, tasks: list[TaskSpec], *, image_verifier_overrides: list[dict] | None = None) -> list:
     path = tmp_path / "tasks.parquet"
     pq.write_table(pa.Table.from_pylist([{"task_spec": task.model_dump_json()} for task in tasks]), path)
     tokenizer = PreTrainedTokenizerFast(
@@ -177,7 +177,9 @@ def test_image_verifier_resource_override_is_scoped_to_exact_image(tmp_path: Pat
         )
         for name, image in (("candidate", candidate_image), ("baseline", baseline_image))
     ]
-    loaded = _loaded_specs(tmp_path, tasks, image_verifier_overrides={candidate_image: {"storage_mb": None}})
+    loaded = _loaded_specs(
+        tmp_path, tasks, image_verifier_overrides=[{"image": candidate_image, "runtime": {"storage_mb": None}}]
+    )
     assert loaded[0].verifier_machine.storage_mb is None
     assert loaded[1].verifier_machine.storage_mb == 10240
     assert loaded[0].verifier_machine.cpus == loaded[1].verifier_machine.cpus == 2

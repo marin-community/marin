@@ -202,7 +202,14 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
         and not grades_with_judge(grader)
     ):
         if grader.environment.docker_image is not None:
-            overrides = config.get("image_verifier_overrides", {}).get(grader.environment.docker_image, {})
+            overrides = next(
+                (
+                    entry["runtime"]
+                    for entry in config.get("image_verifier_overrides", [])
+                    if entry["image"] == grader.environment.docker_image
+                ),
+                {},
+            )
             machine = {**config["image_verifier"], **overrides}
         else:
             machine = config["package_verifier"]

@@ -60,7 +60,7 @@ task_spec:
     user: null
     startup_timeout: 600
     cleanup_timeout: 60
-  image_verifier_overrides: {}
+  image_verifier_overrides: []
   image_verifier:
     backend: daytona
     cpus: 2
