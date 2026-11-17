@@ -16,7 +16,7 @@ an edit that an owner makes during a run can be lost.
 
 import datetime
 from collections import Counter, defaultdict
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 import click
@@ -104,18 +104,16 @@ def find_old_jobs(
     running_jobs: Iterable[JobStatus],
     cutoff_ms: int,
     task_resources: Callable[[JobName], ResourceRequest],
-    excluded_owners: Collection[str],
 ) -> list[OldJob]:
     """Group running jobs by the cluster that runs them and their root; keep the trees started before ``cutoff_ms``.
 
     ``task_resources`` gives a job's per-task request; only jobs with an active task need it.
-    Jobs of ``excluded_owners`` are left out.
     """
     # Offset paging over a changing job set can return a job twice.
     unique = {job.job_id: job for job in running_jobs}
     trees: dict[tuple[str, JobName], list[tuple[int, JobStatus]]] = defaultdict(list)
     for job in unique.values():
-        if job.started_at is None or job.job_id.user in excluded_owners:
+        if job.started_at is None:
             continue
         cluster = scanned_cluster if job.execution_cluster_id == LOCAL_CLUSTER else job.execution_cluster_id
         trees[(cluster, job.job_id.root_job)].append((job.started_at.epoch_ms(), job))
@@ -138,7 +136,7 @@ def tab_title(owner: str) -> str:
 
 
 def _decided_row(row: SheetRow, today: datetime.date) -> SheetRow:
-    """Apply the owner's decision to the cells that the script owns."""
+    """Apply the owner's decision to the Keep until and Status cells; an expired keep clears the decision."""
     if row.decision == KILL_DECISION:
         # The date of the first request stays while the job shuts down.
         status = row.status if row.status.startswith(CANCEL_REQUESTED_STATUS) else f"{CANCEL_REQUESTED_STATUS} {today}"
@@ -147,6 +145,7 @@ def _decided_row(row: SheetRow, today: datetime.date) -> SheetRow:
         try:
             keep_until = datetime.date.fromisoformat(row.keep_until)
         except ValueError:
+            # The cell is empty for a new decision. An owner's edit that is not an ISO date starts the period again.
             keep_until = today + datetime.timedelta(days=KEEP_DAYS)
         if keep_until <= today:
             return replace(row, decision="", keep_until="", status="")
@@ -310,12 +309,6 @@ def write_owner_tabs(session: AuthorizedSession, sheet_id: str, tabs: Mapping[st
     required=True,
     help="List root jobs whose running tree started more than this many days ago.",
 )
-@click.option(
-    "--exclude-owner",
-    "excluded_owners",
-    multiple=True,
-    help="Owner whose jobs the sheet leaves out. Repeat for each owner.",
-)
 @click.option("--sheet-id", required=True, help="ID of the Google Sheet that holds one tab per owner.")
 @click.option(
     "--impersonate",
@@ -327,7 +320,6 @@ def write_owner_tabs(session: AuthorizedSession, sheet_id: str, tabs: Mapping[st
 def main(
     cluster: str,
     min_age_days: float,
-    excluded_owners: tuple[str, ...],
     sheet_id: str,
     service_account: str,
     dry_run: bool,
@@ -343,7 +335,6 @@ def main(
             client.list_jobs(state=JobState.RUNNING),
             cutoff_ms,
             lambda job_id: client.job_status(job_id).resources,
-            excluded_owners,
         )
         planned, cancels = plan_tabs(old_jobs, tabs, now_ms)
         if dry_run:

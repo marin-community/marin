@@ -58,7 +58,6 @@ def test_find_old_jobs_counts_active_tasks_of_each_tree_on_the_cluster_that_runs
         _running_job("/bob/fresh", started_days_ago=2, task_states={"running": 1}),
         _running_job("/carol/preempted", started_days_ago=10, task_states={"pending": 2}),
         _running_job("/dave/gang", started_days_ago=9, task_states={"running": 8}, cluster="cw-rno2a"),
-        _running_job("/erin/excluded", started_days_ago=30, task_states={"running": 1}),
     ]
     # The lookup fails for any job without an active task, so it also checks those are skipped.
     requests = {
@@ -67,7 +66,7 @@ def test_find_old_jobs_counts_active_tasks_of_each_tree_on_the_cluster_that_runs
         JobName.from_wire("/dave/gang"): GPU_TASK,
     }
 
-    old_jobs = find_old_jobs("marin", jobs, CUTOFF_MS, requests.__getitem__, excluded_owners={"erin"})
+    old_jobs = find_old_jobs("marin", jobs, CUTOFF_MS, requests.__getitem__)
 
     assert sorted(old_jobs, key=lambda job: (job.cluster, str(job.root))) == [
         OldJob("cw-rno2a", JobName.from_wire("/dave/gang"), NOW_MS - 9 * MS_PER_DAY, {GPU_TASK: 8}),
@@ -132,6 +131,16 @@ def test_plan_asks_again_when_a_keep_decision_expires():
     assert (still_kept["alice"][0].decision, still_kept["alice"][0].keep_until) == (KEEP_DECISION, "2027-02-14")
     assert (expired["alice"][0].decision, expired["alice"][0].keep_until) == ("", "")
     assert expired["alice"][0].listed == TODAY
+
+
+def test_plan_starts_the_keep_period_again_when_the_owner_writes_a_keep_until_that_is_not_a_date():
+    job = _old_job("/alice/long", 9)
+    listed, _ = _replan([job], {})
+    edited = {"alice": [replace(listed["alice"][0], decision=KEEP_DECISION, keep_until="next spring")]}
+
+    tabs, _ = _replan([job], edited)
+
+    assert (tabs["alice"][0].decision, tabs["alice"][0].keep_until) == (KEEP_DECISION, "2027-02-14")
 
 
 def test_plan_flags_an_unknown_decision_without_a_cancel():
