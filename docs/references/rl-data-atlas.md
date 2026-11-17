@@ -243,7 +243,12 @@ filtration, plus nop negative controls on workspace-graded tasks, after
 within-source duplicates and TRAIN lexical overlap have been removed. For a
 source without oracles it is the retained count minus tasks with typed static
 blockers; no per-task executability proof is required. Total Atlas admission
-includes TRAIN and EVAL tasks, with EVAL excluded from TRAIN selection. Without
+includes TRAIN and EVAL tasks, with EVAL excluded from TRAIN selection. Only
+Available sources contribute admitted tasks; Pending, Excluded and Deprecated
+sources contribute zero. A new Available admission needs an explicit Use and its
+lexical clearance (`require_available_lexical_clearance`): TRAIN needs the
+decontaminated private-release receipt at its pin, and EVAL needs the measured
+benchmark receipt at its pin. EVAL sources are never lexically remediated. Without
 a current-pin admission receipt, Examples remains pending. Totals report known
 admitted tasks alongside tasks pending oracle filtration or other admission proof. Evidence and
 curriculum coverage separately show the retained converted population; content QA
@@ -448,7 +453,12 @@ offline survey cannot observe — memory, CPU and disk enforcement, disk quotas,
 network deny, and file mode and mtime restoration — grade as `verify`, never
 partial or unsupported: a live probe on the real backend resolves each cell, and
 admission gates wait on that live evidence instead of blocking. `unsupported` is
-reserved for a capability the backend's code demonstrably lacks.
+reserved for a capability the backend's code demonstrably lacks. A source that is
+already Available stays Available with a backend-verification-pending marker
+while its probe runs; a new admission waits for the result. Each backend carries a
+deployment class: production backends count toward admission, and
+development-only backends such as local `docker-gvisor` are shown with their own
+style and never count.
 
 Prepare `survey-inputs.json` with `inputs` entries containing `source_id`, local
 Parquet `paths`, JSON spec `column` and `expected_tasks`. A `runtime_column`

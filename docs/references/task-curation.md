@@ -78,7 +78,10 @@ PASS. Model-generated outputs from a named teacher whose license allows training
 use are not doubt; record the teacher and its license evidence in the receipt.
 Our own repackaged containers carry their upstream's license: an aggregate
 container card listing several licenses, or a revision-bookkeeping mismatch in
-our own metadata, is not doubt. Marin's own converted and structure datasets are
+our own metadata, is not doubt. A third-party repackager that collects other
+projects' data is checked per folder: each folder's license follows its original
+upstream, and the repackager's own empty or missing card never bans the whole
+dataset. A restrictive license that the repackager declares stays binding. Marin's own converted and structure datasets are
 released under OpenMDW 1.1. Dependency folders such as `node_modules`, `vendor`
 and virtual environments are not task-license roots.
 
