@@ -14,12 +14,12 @@ import click
 import draccus
 import yaml
 from iris.cluster.client.job_info import get_job_info
-from levanter.checkpoint import LevanterCheckpoint
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, SkyRLRolePlan, SkyRLRunConfig
+from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
