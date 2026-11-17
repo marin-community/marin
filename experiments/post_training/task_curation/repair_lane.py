@@ -131,10 +131,12 @@ class TrackedPopulation(BaseModel):
     conversion for the tracked side.
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     source_id: str
     shape: Literal["specs", "archives", "prepared"]
     tasks: dict[str, TaskSpec]
-    index: Any
+    index: PopulationIndex
 
 
 def load_tracked_specs(uris: tuple[str, ...]) -> dict[str, TaskSpec]:
