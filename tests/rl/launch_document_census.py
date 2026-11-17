@@ -8,6 +8,8 @@ from itertools import product
 from pathlib import Path
 from typing import Any
 
+from fsspec import get_filesystem_class, register_implementation
+from fsspec.implementations.memory import MemoryFileSystem
 from marin.execution.artifact import write_artifact
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, materialized_config
@@ -23,6 +25,17 @@ from experiments.post_training.mismatch_probe import launch as mismatch
 from experiments.post_training.task_sessions import validation
 
 VERSION = "2026.10.24"
+
+
+class _MemoryObjectStore(MemoryFileSystem):
+    protocol = "s3"
+
+    @classmethod
+    def _strip_protocol(cls, path):
+        return super()._strip_protocol(str(path).removeprefix("s3://"))
+
+    def glob(self, path, **kwargs):
+        return [match.lstrip("/") for match in super().glob(path, **kwargs)]
 
 
 def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
@@ -135,44 +148,48 @@ def launch_builders(
     return builders
 
 
-def _seed_dependency_metadata(step: ArtifactStep[SkyRLRun], artifact_root: Path) -> None:
+def _seed_dependency_metadata(step: ArtifactStep[SkyRLRun], artifact_root: str) -> None:
     for dependency in step.deps:
         if issubclass(dependency.artifact_type, SkyRLRun):
             write_artifact(
                 {
-                    "hf_model_uri": str(artifact_root / "policy"),
+                    "hf_model_uri": "s3://launch-census/policy",
                     "global_step": 2,
                     "tokenizer_uri": "Qwen/Qwen2.5-0.5B-Instruct",
                     "tokenizer_revision": "pinned",
-                    "checkpoint_root": str(artifact_root / "saved-checkpoints"),
+                    "checkpoint_root": str(StoragePath(artifact_root) / "saved-checkpoints"),
                     "draft_checkpoint_root": None,
-                    "terminal_manifest_uri": str(artifact_root / "terminal.json"),
+                    "terminal_manifest_uri": str(StoragePath(artifact_root) / "terminal.json"),
                     "iris_job_id": "/test/train",
                 },
                 dependency.path(str(artifact_root)),
             )
         elif issubclass(dependency.artifact_type, LevanterCheckpoint):
             location = StoragePath(dependency.path(str(artifact_root)))
-            if location.is_remote:
-                continue
-            checkpoint = Path(str(location)) / "hf"
-            checkpoint.mkdir(parents=True, exist_ok=True)
+            checkpoint = location / "hf"
+            checkpoint.mkdirs()
             (checkpoint / "config.json").write_text("{}")
             (checkpoint / "tokenizer_config.json").write_text("{}")
 
 
 def render_launch_census(artifact_root: Path) -> tuple[dict[str, str], dict[str, str]]:
-    """Render runtime documents using local metadata without running steps."""
+    """Render runtime documents using seeded artifact metadata without running steps."""
     builders = launch_builders(artifact_root)
     documents = {}
     failures = {}
-    with build_context(BuildContext(versions=VersionCodex(default=VERSION))):
-        for name, build in builders.items():
-            try:
-                step = build()
-                _seed_dependency_metadata(step, artifact_root)
-                config = materialized_config(step, str(artifact_root))
-                documents[name] = config.launch_config_yaml
-            except Exception as error:
-                failures[name] = f"{type(error).__name__}: {error}"
+    source_class = get_filesystem_class("s3")
+    register_implementation("s3", _MemoryObjectStore, clobber=True)
+    prefix = "s3://launch-census/" + artifact_root.name
+    try:
+        with build_context(BuildContext(versions=VersionCodex(default=VERSION))):
+            for name, build in builders.items():
+                try:
+                    step = build()
+                    _seed_dependency_metadata(step, prefix)
+                    config = materialized_config(step, prefix)
+                    documents[name] = config.launch_config_yaml
+                except Exception as error:
+                    failures[name] = f"{type(error).__name__}: {error}"
+    finally:
+        register_implementation("s3", source_class, clobber=True)
     return documents, failures
