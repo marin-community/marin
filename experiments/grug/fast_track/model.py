@@ -456,8 +456,15 @@ class GrugModelConfig:
     """Spelling-normalised byte embeddings (``spelling_bytes.py``): each input embedding row adds zero-initialised
     rows for its token's first 8 lowercased, space-stripped UTF-8 bytes, its leading space and its case. Input side
     only; the vocabulary is the hero 16k BPE tokenizer's."""
+    lm_head_bilinear: bool = False
+    """Lift the lm_head rank above ``hidden_dim`` with bilinear features of the final-normed hidden state ``h``:
+    the head reads ``[h, g * rms_norm((h @ A) * (h @ B))]`` through ``output_proj`` widened by ``D/4`` input rows
+    (AdamH like the rest of the head), with ``A`` and ``B`` ``[D, D/4]`` on MuonH and a zero-init ``[D/4]`` gain
+    ``g`` on Adam. The soft cap, z-loss and fused CE apply to the widened head."""
 
     def __post_init__(self) -> None:
+        if self.lm_head_bilinear and self.cplm_plus:
+            raise ValueError("lm_head_bilinear widens the vocabulary head that cplm_plus reads at hidden_dim")
         if self.cplm_plus and self.logit_soft_cap is not None:
             raise ValueError("cplm_plus mixes uncapped vocabulary logits; set logit_soft_cap=None")
         if self.lm_head_grad_dump_every and not self.lm_head_grad_probe:
@@ -500,6 +507,11 @@ class GrugModelConfig:
     def expert_in_dim(self) -> int:
         """Width the routed experts read and write: the MoE latent, or the hidden dim without one."""
         return self.latent_dim if self.latent_dim is not None else self.hidden_dim
+
+    @property
+    def head_bilinear_dim(self) -> int:
+        """Width of the ``lm_head_bilinear`` features (0 when off): the rows it adds to ``output_proj``."""
+        return self.hidden_dim // 4 if self.lm_head_bilinear else 0
 
     @property
     def kv_source_layers(self) -> int:
@@ -1864,6 +1876,10 @@ class Transformer(eqx.Module):
     token_embed_bytes: Float[Array, "P 256 D"] | None
     token_embed_space: Float[Array, " D"] | None
     token_embed_case: Float[Array, "C D"] | None
+    # cfg.lm_head_bilinear: the bilinear feature projections and their zero-init gain.
+    head_bilinear_a: Float[Array, "D F"] | None
+    head_bilinear_b: Float[Array, "D F"] | None
+    head_bilinear_gain: Float[Array, " F"] | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -1873,9 +1889,17 @@ class Transformer(eqx.Module):
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), P(None, None)
         )
+        head_rows = cfg.hidden_dim + cfg.head_bilinear_dim
         output_proj = reshard(
-            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
+            _init_weight(out_key, (head_rows, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
         )
+        head_bilinear_a = head_bilinear_b = head_bilinear_gain = None
+        if cfg.lm_head_bilinear:
+            k_a, k_b = random.split(random.fold_in(key, 12), 2)
+            shape = (cfg.hidden_dim, cfg.head_bilinear_dim)
+            head_bilinear_a = reshard(_init_weight(k_a, shape, cfg.initializer_std), P(_FSDP_AXES, None))
+            head_bilinear_b = reshard(_init_weight(k_b, shape, cfg.initializer_std), P(_FSDP_AXES, None))
+            head_bilinear_gain = reshard(jnp.zeros((cfg.head_bilinear_dim,), jnp.float32), P(None))
 
         def stack(layers: tuple[int, ...], use_kda: bool) -> ArrayStacked[Block]:
             keys = jnp.stack([block_keys[i] for i in layers])
@@ -1928,6 +1952,9 @@ class Transformer(eqx.Module):
                 if cfg.spelling_byte_embeds
                 else None
             ),
+            head_bilinear_a=head_bilinear_a,
+            head_bilinear_b=head_bilinear_b,
+            head_bilinear_gain=head_bilinear_gain,
             config=cfg,
         )
 
@@ -2237,6 +2264,16 @@ class Transformer(eqx.Module):
             keep = ((h ^ (h >> 13)).astype(jnp.float32) / jnp.float32(1 << 32)) < frac
         return pred, keep & jnp.asarray(active)
 
+    def _head_input(self, hidden: Float[Array, "B S D"]) -> Float[Array, "B S E"]:
+        """The lm_head input: ``hidden``, followed under ``lm_head_bilinear`` by ``g * rms_norm((h A) * (h B))``."""
+        if self.head_bilinear_a is None or self.head_bilinear_b is None or self.head_bilinear_gain is None:
+            return hidden
+        replicated = P(None, None)
+        left = _proj(hidden, reshard(self.head_bilinear_a.astype(hidden.dtype), replicated))
+        right = _proj(hidden, reshard(self.head_bilinear_b.astype(hidden.dtype), replicated))
+        features = self.head_bilinear_gain.astype(hidden.dtype) * rms_norm(left * right)
+        return jnp.concatenate([hidden, features], axis=-1)
+
     def next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
@@ -2278,6 +2315,7 @@ class Transformer(eqx.Module):
             # The loss is a mean over loss tokens, so the raw per-token gradient is the per-token one / N.
             raw_clip = jnp.inf if clip is None else clip / jnp.maximum(jnp.sum(loss_weight.astype(jnp.float32)), 1.0)
             head_in = lm_head_grad_probe(hidden, head_grad_probe, jnp.asarray(raw_clip, jnp.float32))
+        head_in = self._head_input(head_in)
         copy_metrics: dict[str, jax.Array] = {}
         if self.copy_head is None:
             cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
@@ -2300,7 +2338,7 @@ class Transformer(eqx.Module):
         loss = cross_entropy_loss
         entropy_metrics: dict[str, jax.Array] = {}
         if entropy_pred is not None and train_terms:
-            target = _vocab_entropy(hidden, self.output_proj, self.config.logit_soft_cap)
+            target = _vocab_entropy(self._head_input(hidden), self.output_proj, self.config.logit_soft_cap)
             weight = loss_weight.astype(jnp.float32)
             count = jnp.maximum(jnp.sum(weight), 1.0)
             err = entropy_pred - target
