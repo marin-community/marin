@@ -13,7 +13,6 @@ from experiments.post_training.task_curation.datasets import (
     campaign_releases,
     crosscode_python_repair,
     native_releases,
-    rst,
     structure_closure,
     terminus_pivot,
     thoughtcrime,
@@ -102,7 +101,6 @@ PENDING_MEASUREMENT_SOURCES = (
     *lean_proofs.sources(),
     *lean_numina.sources(),
     *prime_swe.sources(),
-    *rst.sources(),
 )
 
 
