@@ -594,7 +594,21 @@ export default function (pi) {
         with tempfile.TemporaryDirectory() as temp_dir:
             local_path = Path(temp_dir) / "endpoint.env"
             local_path.write_text(contents)
-            await environment.upload_file(local_path, str(target_path))
+            await self._upload_staged_file(environment, local_path, target_path)
+
+    async def _upload_staged_file(
+        self, environment: BaseEnvironment, source_path: Path, target_path: PurePosixPath
+    ) -> None:
+        await environment.upload_file(source_path, str(target_path))
+        # The parent was created by the task user; uploads can be root-owned.
+        quoted_path = shlex.quote(str(target_path))
+        await self.exec_as_root(
+            environment,
+            command=(
+                f"chown --reference={shlex.quote(str(target_path.parent))} -- {quoted_path} && "
+                f"chmod 600 -- {quoted_path}"
+            ),
+        )
 
     async def _stage_context_budget_extension(
         self, environment: BaseEnvironment, target_path: PurePosixPath
@@ -613,9 +627,7 @@ export default function (pi) {
         with tempfile.TemporaryDirectory() as temp_dir:
             local_path = Path(temp_dir) / "harbor-pi-context-budget.js"
             local_path.write_text(extension)
-            await environment.upload_file(
-                local_path, str(target_path)
-            )
+            await self._upload_staged_file(environment, local_path, target_path)
 
     @with_prompt_template
     async def run(

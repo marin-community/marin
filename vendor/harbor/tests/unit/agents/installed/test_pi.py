@@ -35,6 +35,7 @@ def temp_dir(tmp_path):
 
 def _local_pi_shell(temp_dir, monkeypatch, pi_script):
     uploads = []
+    file_metadata = {}
     shared_tmp = temp_dir / "tmp"
     shared_tmp.mkdir()
     shared_tmp.chmod(0o1777)
@@ -71,6 +72,12 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
             uploads.append(Path(target_path))
 
         async def exec(self, command, **kwargs):
+            if kwargs.get("user") != "root":
+                file_metadata.update(
+                    (path.name, (path.stat().st_uid, stat.S_IMODE(path.stat().st_mode)))
+                    for path in uploads
+                    if path.exists()
+                )
             completed = subprocess.run(
                 [bash, "-c", command],
                 capture_output=True,
@@ -87,6 +94,7 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
         environment=LocalShellEnvironment(),
         artifact_dir=artifact_dir,
         uploads=uploads,
+        file_metadata=file_metadata,
     )
 
 
@@ -455,6 +463,7 @@ async def test_hosted_vllm_request_budget_uses_exact_server_token_count(
         thinking_format="chat-template",
     )
     environment = AsyncMock()
+    environment.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
 
     async def copy_extension(source_path, target_path):
         assert target_path == str(extension_path)
@@ -528,6 +537,7 @@ async def test_hosted_vllm_request_budget_truncates_token_dense_tool_output(
         thinking_format="chat-template",
     )
     environment = AsyncMock()
+    environment.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
 
     async def copy_extension(source_path, target_path):
         assert target_path == str(extension_path)
@@ -827,6 +837,10 @@ fetch(`${provider.baseUrl}/chat/completions`, {
         {"type": "text", "text": "roundtrip complete"}
     ]
     assert event["message"]["stopReason"] == "stop"
+    assert shell.file_metadata == {
+        "harbor-pi-endpoint.env": (os.getuid(), 0o600),
+        "harbor-pi-context-budget.js": (os.getuid(), 0o600),
+    }
     assert not any((temp_dir / "tmp").iterdir())
     assert not (temp_dir / ".pi/agent/models.json").exists()
 
