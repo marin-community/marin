@@ -99,9 +99,7 @@ def passing_proofs() -> frozenset[str]:
     """Proof keys whose human proof compiles as the golden control submits it.
 
     A row becomes a task only when its key is in this set, so every task has a
-    working golden control. The set is read from the referenced derived-data
-    registry; the read is lazy so importing this module never touches the
-    network, and unit isolation swaps the reader before any call.
+    working golden control.
     """
     return frozenset(load_referenced_document(DERIVED_INDEX, "lean/numina_proofs.json").get("passing", ()))
 

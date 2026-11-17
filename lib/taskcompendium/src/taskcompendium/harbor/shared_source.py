@@ -254,11 +254,7 @@ def source_bootstrap_command(setup: str) -> str:
 
 
 def source_grader_script(contract: SharedIntegrityContract) -> bytes:
-    """Run the pinned controller's grader on the protected contract.
-
-    The fixed interpreter flags keep the protected root free of import
-    bytecode caches and the environment isolated from the task's site packages.
-    """
+    """Run the pinned controller's grader on the protected contract."""
     return (
         "#!/bin/bash\nset -euo pipefail\n"
         f'exec "{BOOTSTRAP_DIRECTORY}/python" -I -S -B {contract.harness} grade '

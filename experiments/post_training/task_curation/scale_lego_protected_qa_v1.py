@@ -111,13 +111,6 @@ LAYER_SETUP = (
 )
 
 
-def qa_environment_kind() -> str:
-    kind = os.environ.get("QA_ENVIRONMENT", "daytona")
-    if kind not in ("daytona", "local"):
-        raise ValueError(f"Unsupported QA environment: {kind}")
-    return kind
-
-
 def adapt_for_local(files: dict[str, bytes], workdir: str, pinned_reference: str) -> None:
     """Move the landed image layer into the pre-agent setup and declare the source image."""
     dockerfile = files["environment/Dockerfile"].decode()
@@ -356,7 +349,9 @@ def qa_task(root: Path, family: str, row: dict, kind: str, limits: dict) -> dict
 
 def main() -> None:
     run = os.environ.get("QA_RUN_NAME", "local")
-    kind = qa_environment_kind()
+    kind = os.environ.get("QA_ENVIRONMENT", "daytona")
+    if kind not in ("daytona", "local"):
+        raise ValueError(f"Unsupported QA environment: {kind}")
     root = Path(os.environ["IRIS_OUTPUT_DIR"]) / "scale-lego-protected-qa-v1"
     limits = worker_limits(root) if kind == "local" else {}
     output = str(StoragePath(OUTPUT_ROOT) / run)

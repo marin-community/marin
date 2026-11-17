@@ -3,7 +3,6 @@
 
 """Regressions for grading-time host delivery of hidden root-actor verifiers."""
 
-import base64
 import io
 import os
 import shutil
@@ -42,14 +41,29 @@ def test_quiesce_command_runs_isolated_python() -> None:
     assert command.cwd == "/"
 
 
-def test_delivery_commands_embed_and_execute_the_original_script() -> None:
-    (delivery,) = delivery_commands(delivered(), cwd="/app")
-    script = delivery.argv[-1]
-    assert base64.b64encode(VERIFIER_TEST).decode() in script
-    assert base64.b64encode(VERIFIER_STATE).decode() in script
-    assert "chmod 755 /tests/test.sh" in script
-    assert "chmod 644 /tests/test_state.py" in script
-    assert "bash /tests/test.sh" in script
+def test_delivery_commands_embed_and_execute_the_original_script(tmp_path, monkeypatch):
+    """The delivery command writes the files and runs the entry script for real."""
+    delivery_root = tmp_path / "tests"
+    reward_path = tmp_path / "logs" / "verifier" / "reward.txt"
+    monkeypatch.setattr(root_delivery, "DELIVERY_ROOT", str(delivery_root))
+    monkeypatch.setattr(root_delivery, "REWARD_PATH", str(reward_path))
+    verifier = DeliveredVerifier(
+        files={
+            "test.sh": (
+                f"#!/bin/bash\npython3 -m pytest {delivery_root}/test_state.py -rA\necho 1 > {reward_path}\n".encode()
+            ),
+            "test_state.py": VERIFIER_STATE,
+        }
+    )
+    (delivery,) = delivery_commands(verifier, cwd="/app")
+    result = subprocess.run(delivery.argv, check=False, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert (delivery_root / "test.sh").read_bytes().startswith(b"#!/bin/bash")
+    assert (delivery_root / "test_state.py").read_bytes() == VERIFIER_STATE
+    assert stat.S_IMODE((delivery_root / "test.sh").stat().st_mode) & 0o111
+    assert not stat.S_IMODE((delivery_root / "test_state.py").stat().st_mode) & 0o111
+    # the entry script ran verbatim and wrote its own reward
+    assert reward_path.read_text().strip() == "1"
     assert delivery.cwd == "/app"
 
 

@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Iterable
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import click
 import pyarrow.parquet as pq
@@ -184,9 +184,16 @@ def full_review_items(pipeline_key: str, records: list[ReviewRecord]) -> list[As
     return items
 
 
-def stage_full_review(
-    source_id: str, binding: FullContentResultBinding
-) -> tuple[Assessment, list[AssessmentPopulation], list[AssessmentItem], dict[str, Any]]:
+class StagedFullReview(NamedTuple):
+    """The staged records for one pinned whole-source binding."""
+
+    assessment: Assessment
+    populations: list[AssessmentPopulation]
+    items: list[AssessmentItem]
+    metadata: dict[str, Any]
+
+
+def stage_full_review(source_id: str, binding: FullContentResultBinding) -> StagedFullReview:
     """Validate one pinned whole-source binding and stage its per-task review rows.
 
     Every check fails loudly: the loader never fabricates typed fields or maps
@@ -263,7 +270,9 @@ def stage_full_review(
     ]
     items = full_review_items(pipeline_key, records)
     validate_items(populations, items)
-    return assessment, populations, items, {"reviewed": recomputed.reviewed, "unavailable": unavailable}
+    return StagedFullReview(
+        assessment, populations, items, {"reviewed": recomputed.reviewed, "unavailable": unavailable}
+    )
 
 
 def load_catalog(

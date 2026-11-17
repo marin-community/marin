@@ -234,13 +234,7 @@ def read_map(root: Path, map_uri: str, map_sha256: str) -> dict:
 
 
 def artifact_path(root: Path, row: dict, kind: str, uri: str) -> Path:
-    """Row-unique local path for a sealed artifact download.
-
-    Sealed URIs share basenames across rows (package.tar.gz,
-    source-runtime.json), so download paths key on the row identity rather
-    than the basename; a basename key with no-clobber copy would leave a
-    sibling row's bytes in place.
-    """
+    """Row-unique local path for a sealed artifact download; sealed URIs share basenames across rows."""
     suffix = PurePosixPath(uri).suffix or ".bin"
     return root / "packets" / f"{row['instance_id']}-{kind}{suffix}"
 
@@ -451,7 +445,7 @@ def qa_row(root: Path, family: str, row: dict) -> dict:
     return record
 
 
-def seal(run_name: str, root: Path, records: list, blocked: list, map_uri: str, map_sha256: str) -> None:
+def seal(run_name: str, root: Path, records: list, blocked: list) -> None:
     """Write verdicts and upload the evidence bundle before any exit."""
     verdicts = {}
     for record in records:
@@ -549,7 +543,7 @@ def main() -> None:
             (root / "qa-records.json").write_text(json.dumps(records, indent=2) + "\n")
             # Durable incremental evidence: survive a mid-run abort.
             copy(str(root / "qa-records.json"), str(StoragePath(OUTPUT_ROOT) / run_name / "qa-records.json"))
-    seal(run_name, root, records, blocked, map_uri, map_sha256)
+    seal(run_name, root, records, blocked)
     failed = [record["instance_id"] for record in records if not row_qualified(record)]
     failed += [entry["instance_id"] for entry in blocked]
     if failed:
