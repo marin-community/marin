@@ -3515,6 +3515,9 @@ counts, admissions, control outcomes, phase evidence and output pointers.
 `phases` records wall times and Zephyr execution counters. Exact manifest,
 telemetry, identity and filter-count snapshots are named FineStore objects with
 SHA-256 digests. Failed sources remain visible; missing statistics are null.
+Campaign evidence uses FineStore's atomic chunked-object transaction even when
+one exact manifest exceeds the ordinary transaction buffer limit. The run rows
+and archived bytes become visible together; evidence is not truncated.
 QUICK does not imply review or verification. A QUICK source is admitted but hidden from the Atlas default view.
 
 The typed `CurationCatalog` reader exposes source declarations, assessment
