@@ -13,14 +13,14 @@ the task's Running pod, because Iris can retry the holder onto a new pod at any 
 import json
 import logging
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import click
 from iris.cli.job import validate_system_reason
 from iris.client.client import IrisClient, Job, JobAlreadyExists
 from iris.cluster.config import load_config
-from iris.cluster.constraints import Constraint, preemptible_constraint
+from iris.cluster.constraints import preemptible_constraint
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec
 from iris.rpc import job_pb2
@@ -52,6 +52,9 @@ STATE_DIR = Path.home() / ".cache" / "marin" / "dev_cpu_iris"
 POD_RESOLVE_TIMEOUT = 120
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class HolderJob:
     """The Iris submission that holds a dev box: a sleeping, privileged, non-preemptible CPU task."""
@@ -65,15 +68,12 @@ class HolderJob:
     def job_name(self) -> str:
         return f"dev-cpu-{self.name}"
 
-    def constraints(self) -> list[Constraint]:
-        return [preemptible_constraint(False)]
-
     def submit(self, client: IrisClient) -> Job:
         return client.submit(
             entrypoint=Entrypoint.from_command("python", "-c", HOLDER_COMMAND),
             name=self.job_name,
             resources=self.resources,
-            constraints=self.constraints(),
+            constraints=[preemptible_constraint(False)],
             timeout=Duration.from_seconds(self.max_lifetime),
             priority_band=PRIORITY_BANDS[self.priority],
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
@@ -91,6 +91,8 @@ class DevCpuState:
     task_id: str
     priority: Priority
     target: CoreweaveTarget
+    last_pod_name: str | None = None
+    """The pod resolved most recently, so a holder retry is visible to the user."""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -105,12 +107,32 @@ class DevCpuState:
             task_id=data["task_id"],
             priority=Priority(data["priority"]),
             target=CoreweaveTarget(**data["target"]),
+            last_pod_name=data.get("last_pod_name"),
         )
 
 
-def current_pod(state: DevCpuState, *, timeout: int = POD_RESOLVE_TIMEOUT) -> PodRef:
-    """Resolve the task's Running pod afresh; a retried holder moves to a new pod."""
-    return wait_for_running_pod(state.target, state.task_id, timeout=timeout)
+def save_state(state_dir: Path, state: DevCpuState) -> None:
+    path = state_path(state_dir, state.session_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(state.to_json())
+
+
+def resolve_pod(state: DevCpuState, state_dir: Path, *, timeout: int = POD_RESOLVE_TIMEOUT) -> PodRef:
+    """Resolve the task's Running pod afresh; a retried holder moves to a new pod.
+
+    A moved pod loses the old pod's files and shell state, so the change is
+    logged and recorded for the next command.
+    """
+    pod = wait_for_running_pod(state.target, state.task_id, timeout=timeout)
+    if pod.pod_name != state.last_pod_name:
+        if state.last_pod_name is not None:
+            logger.warning(
+                "The holder task moved from pod %s to %s; files written to the old pod are gone.",
+                state.last_pod_name,
+                pod.pod_name,
+            )
+        save_state(state_dir, replace(state, last_pod_name=pod.pod_name))
+    return pod
 
 
 def job_is_active(state: DevCpuState) -> bool:
@@ -141,7 +163,7 @@ def load_state(path: Path) -> DevCpuState:
 class Context:
     config_file: str | None
     session_name: str
-    state_dir: Path = STATE_DIR
+    state_dir: Path = field(default_factory=lambda: STATE_DIR)
 
     def state(self) -> DevCpuState:
         return load_state(state_path(self.state_dir, self.session_name))
@@ -152,7 +174,9 @@ def load_active_pod(obj: Context) -> tuple[DevCpuState, PodRef]:
     state = obj.state()
     if not job_is_active(state):
         raise click.ClickException(f"Dev CPU box '{state.session_name}' has ended; release it")
-    return state, current_pod(state)
+    if not state.task_id:
+        raise click.ClickException(f"Dev CPU box '{state.session_name}' has not started its task yet")
+    return state, resolve_pod(state, obj.state_dir)
 
 
 @click.group()
@@ -221,23 +245,40 @@ def allocate(
         try:
             job = holder.submit(client)
         except JobAlreadyExists as exc:
-            raise click.ClickException(f"Job already exists for dev CPU box '{obj.session_name}': {exc}") from exc
+            raise click.ClickException(
+                f"A holder job already exists for dev CPU box '{obj.session_name}' ({holder.job_name})."
+                f" If its session file is gone, stop it with: uv run iris job cancel {holder.job_name}"
+            ) from exc
+        # The job id exists from submission on, so the state file is written
+        # immediately: an interrupted allocate always leaves a recoverable box.
+        state = DevCpuState(
+            session_name=obj.session_name,
+            config_file=obj.config_file,
+            job_id=str(job.job_id),
+            task_id="",
+            priority=holder.priority,
+            target=target,
+        )
+        save_state(obj.state_dir, state)
         try:
             (task_id,) = wait_for_running_tasks(job, node_count=1, timeout=timeout)
             pod = wait_for_running_pod(target, task_id, timeout=pod_timeout)
         except BaseException:
-            client.cancel_job(JobName.from_wire(str(job.job_id)))
+            try:
+                client.cancel_job(JobName.from_wire(str(job.job_id)))
+            except Exception:
+                # The holder may still run; keep the state file so `release` can stop it.
+                logger.warning(
+                    "Failed to cancel holder job %s after a failed allocation; the box may still hold its"
+                    " resources. Run `release` to stop it.",
+                    job.job_id,
+                    exc_info=True,
+                )
+                raise
+            state_file.unlink(missing_ok=True)
             raise
-    state = DevCpuState(
-        session_name=obj.session_name,
-        config_file=obj.config_file,
-        job_id=str(job.job_id),
-        task_id=task_id,
-        priority=holder.priority,
-        target=target,
-    )
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(state.to_json())
+    state = replace(state, task_id=task_id)
+    save_state(obj.state_dir, state)
     print(session_summary(state, pod))
 
 
@@ -284,7 +325,7 @@ def status(obj: Context) -> None:
     """Show the session and whether its holder job is still active."""
     state = obj.state()
     active = job_is_active(state)
-    pod = current_pod(state) if active else None
+    pod = resolve_pod(state, obj.state_dir) if active and state.task_id else None
     print(session_summary(state, pod))
     print(f"Active: {active}")
 

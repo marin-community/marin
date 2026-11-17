@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+from types import SimpleNamespace
 
 from click.testing import CliRunner
 from iris.cluster.types import ResourceSpec
+from iris.resources.state import JobState
 from iris.rpc import job_pb2
 
 from scripts.iris.coreweave_dev_pod import CoreweaveTarget, PodRef, Priority, state_path
@@ -51,10 +53,8 @@ def test_status_reports_an_ended_box_without_resolving_a_pod(tmp_path, monkeypat
         priority=Priority.PRODUCTION,
         target=TARGET,
     )
-    state_file = state_path(tmp_path, "ingest-debug")
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(state.to_json())
-    monkeypatch.setattr("scripts.iris.dev_cpu.load_state", lambda path: state)
+    monkeypatch.setattr("scripts.iris.dev_cpu.STATE_DIR", tmp_path)
+    state_path(tmp_path, "ingest-debug").write_text(state.to_json())
     monkeypatch.setattr("scripts.iris.dev_cpu.controller_client", lambda config_file: contextlib.nullcontext(object()))
     monkeypatch.setattr("scripts.iris.dev_cpu.is_job_active", lambda client, job_id: False)
     resolved = []
@@ -66,6 +66,115 @@ def test_status_reports_an_ended_box_without_resolving_a_pod(tmp_path, monkeypat
     assert "Active: False" in result.output
     assert "Pod: none" in result.output
     assert resolved == []
+
+
+def test_exec_refuses_an_ended_box(tmp_path, monkeypatch):
+    state = DevCpuState(
+        session_name="ingest-debug",
+        config_file="/k/iris.yaml",
+        job_id="job-1",
+        task_id="task-9",
+        priority=Priority.PRODUCTION,
+        target=TARGET,
+    )
+    monkeypatch.setattr("scripts.iris.dev_cpu.STATE_DIR", tmp_path)
+    state_path(tmp_path, "ingest-debug").write_text(state.to_json())
+    monkeypatch.setattr("scripts.iris.dev_cpu.controller_client", lambda config_file: contextlib.nullcontext(object()))
+    monkeypatch.setattr("scripts.iris.dev_cpu.is_job_active", lambda client, job_id: False)
+
+    result = CliRunner().invoke(cli, ["--name", "ingest-debug", "exec", "--", "bwrap", "--version"])
+
+    assert result.exit_code != 0
+    assert "has ended; release it" in result.output
+
+
+def test_failed_allocation_cancels_the_holder_and_leaves_no_state(tmp_path, monkeypatch):
+    cancelled = []
+
+    class FailingJob:
+        # The wire format prefixes the user namespace, as real Job objects do.
+        job_id = "/ben/dev-cpu-ingest-debug"
+
+        def state_only(self):
+            return JobState.FAILED
+
+        def status(self):
+            return SimpleNamespace(error_message="scheduling rejected the task")
+
+        def tasks(self):
+            return []
+
+    class FailingClient:
+        def submit(self, **kwargs):
+            return FailingJob()
+
+        def cancel_job(self, job_name):
+            cancelled.append(job_name)
+
+    monkeypatch.setattr("scripts.iris.dev_cpu.STATE_DIR", tmp_path)
+    monkeypatch.setattr("scripts.iris.dev_cpu.load_config", lambda path: None)
+    monkeypatch.setattr("scripts.iris.dev_cpu.require_coreweave_platform", lambda config: TARGET)
+    monkeypatch.setattr(
+        "scripts.iris.dev_cpu.controller_client", lambda config_file: contextlib.nullcontext(FailingClient())
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--config",
+            "/k/iris.yaml",
+            "--name",
+            "ingest-debug",
+            "allocate",
+            "--cpu",
+            "16",
+            "--memory",
+            "64GB",
+            "--disk",
+            "200GB",
+            "--priority",
+            "interactive",
+            "--max-lifetime",
+            "259200",
+            "--timeout",
+            "2",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert len(cancelled) == 1 and "dev-cpu-ingest-debug" in str(cancelled[0])
+    assert not state_path(tmp_path, "ingest-debug").exists()
+
+
+def test_release_keeps_the_state_file_when_the_cancel_fails(tmp_path, monkeypatch):
+    state = DevCpuState(
+        session_name="ingest-debug",
+        config_file="/k/iris.yaml",
+        job_id="job-1",
+        task_id="task-9",
+        priority=Priority.PRODUCTION,
+        target=TARGET,
+    )
+    monkeypatch.setattr("scripts.iris.dev_cpu.STATE_DIR", tmp_path)
+    state_file = state_path(tmp_path, "ingest-debug")
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(state.to_json())
+
+    class FailingCancelClient:
+        def cancel_job(self, job_name):
+            raise RuntimeError("tunnel dropped")
+
+    monkeypatch.setattr(
+        "scripts.iris.dev_cpu.controller_client", lambda config_file: contextlib.nullcontext(FailingCancelClient())
+    )
+
+    result = CliRunner().invoke(cli, ["--name", "ingest-debug", "release"])
+    assert result.exit_code != 0
+    assert state_file.exists()
+
+    forced = CliRunner().invoke(cli, ["--name", "ingest-debug", "release", "--force"])
+    assert forced.exit_code == 0
+    assert not state_file.exists()
 
 
 def test_recorded_state_round_trips_through_json():

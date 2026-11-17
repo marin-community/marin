@@ -14,7 +14,7 @@ import os
 import shlex
 import subprocess
 import time
-from collections.abc import Iterable
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
@@ -143,9 +143,17 @@ def kubectl_copy_from_cmd(target: CoreweaveTarget, pod: PodRef, remote: str, loc
 
 
 def parse_running_pod(pods_json: dict) -> str | None:
-    """Return the lexicographically-first Running pod name, or None."""
+    """Return the lexicographically-first Running pod name, or None.
+
+    Pods whose deletion has started still report Running until their containers
+    stop; skipping them keeps a retry from resolving the dying pod.
+    """
     items = pods_json.get("items", [])
-    running = [p for p in items if p.get("status", {}).get("phase") == "Running"]
+    running = [
+        p
+        for p in items
+        if p.get("status", {}).get("phase") == "Running" and not p.get("metadata", {}).get("deletionTimestamp")
+    ]
     if not running:
         return None
     return min(running, key=lambda p: p.get("metadata", {}).get("name", ""))["metadata"]["name"]
@@ -165,7 +173,7 @@ def find_workspace_root(start: Path) -> Path | None:
 
 
 @contextmanager
-def controller_client(config_file: str) -> Iterable[IrisClient]:
+def controller_client(config_file: str) -> Iterator[IrisClient]:
     iris_config = load_config(config_file)
     controller_address = iris_config.controller_address()
     providers = provider_bundle(iris_config)
