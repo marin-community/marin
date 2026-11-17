@@ -4,6 +4,7 @@
 """Exact-input final content Results and their immutable evidence references."""
 
 from finestore.rl.curation import (
+    FULL_WAIVER_MAX_UNREVIEWED_FRACTION,
     ActorCensusInput,
     ContentEvidenceReference,
     QualityResultFinalization,
@@ -38,4 +39,10 @@ class FullContentResultBinding(BaseModel):
                 raise ValueError("Complete finalization requires complete coverage without a waiver")
         elif self.coverage_complete or self.waiver is None:
             raise ValueError("Accepted incomplete finalization requires missing reviews and waiver evidence")
+        elif self.result.unavailable_count * 100 > self.result.sample_count:
+            raise ValueError(
+                f"Accepted incomplete finalization waives {self.result.unavailable_count} of "
+                f"{self.result.sample_count} retained tasks, above the "
+                f"{FULL_WAIVER_MAX_UNREVIEWED_FRACTION:.0%} unreviewed bound"
+            )
         return self

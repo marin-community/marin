@@ -297,6 +297,14 @@ class QualityResultFinalization(StrEnum):
     ACCEPTED_INCOMPLETE = "accepted_incomplete"
 
 
+FULL_WAIVER_MAX_UNREVIEWED_FRACTION = 0.01
+"""A FULL review may finalize under a pinned waiver when at most 1% of retained tasks are unreviewed.
+
+Standing whole-source finality policy. The gates compare with integer arithmetic
+(`unavailable * 100 <= retained`) so the bound never depends on float rounding.
+"""
+
+
 class SourceQualityResult(CatalogRecord):
     """Informational Result over conclusive reviewed tasks; exclusions are separate."""
 

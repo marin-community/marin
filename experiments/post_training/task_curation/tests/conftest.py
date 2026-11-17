@@ -81,8 +81,8 @@ def qa_reviewer(review_server, monkeypatch):
     return spec
 
 
-@pytest.fixture
-def qc_inputs(tmp_path):
+def fixture_qc_inputs(tmp_path, extra_documents=()):
+    """A frozen retained population with one dropped task; extra documents widen it."""
     documents = [
         json.loads(prebuilt_task(name)["lowered_task_spec"])["task"] for name in ("kept", "dropped", "unshaped")
     ]
@@ -93,6 +93,7 @@ def qc_inputs(tmp_path):
         }
     ).model_dump(mode="json")
     documents[2]["execution_requirements"] = None
+    documents.extend(extra_documents)
     files = write_text_population(((task, {"deployment": 1}) for task in documents), str(tmp_path / "population"))
     population = SourceTextPopulation(
         path=str(tmp_path / "population"),
@@ -127,9 +128,9 @@ def qc_inputs(tmp_path):
         converter_version=population.source_version,
         input_artifact=population.path,
         task_specs_sha256=population.task_specs_sha256,
-        raw_count=3,
+        raw_count=len(documents),
         combined_drop_count=1,
-        retained_count=2,
+        retained_count=len(documents) - 1,
         combined_drop_manifest_uri=str(drop_path),
         lexical_use="train",
     )
@@ -137,6 +138,11 @@ def qc_inputs(tmp_path):
         InputConfig(population.path, plan, file_sha256(StoragePath(str(drop_path))), str(tmp_path / "prepared")),
         documents,
     )
+
+
+@pytest.fixture
+def qc_inputs(tmp_path):
+    return fixture_qc_inputs(tmp_path)
 
 
 @pytest.fixture

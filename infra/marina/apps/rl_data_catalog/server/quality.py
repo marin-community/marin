@@ -119,7 +119,15 @@ def final_whole_source_result(declaration: dict[str, Any]) -> bool:
     waiver = declaration.get("quality_result_waiver")
     if finalization == QualityResultFinalization.COMPLETE:
         return unavailable == 0 and waiver is None
-    return finalization == QualityResultFinalization.ACCEPTED_INCOMPLETE and unavailable > 0 and waiver is not None
+    # An accepted waiver may cover at most 1% of the retained population
+    # (FULL_WAIVER_MAX_UNREVIEWED_FRACTION); a larger waiver is not whole-source
+    # finality and displays as its measured coverage. Integer math keeps the exact bound.
+    return (
+        finalization == QualityResultFinalization.ACCEPTED_INCOMPLETE
+        and unavailable > 0
+        and waiver is not None
+        and unavailable * 100 <= retained
+    )
 
 
 def review_coverage(declaration: dict[str, Any], completeness: dict[str, Any] | None) -> dict[str, Any]:

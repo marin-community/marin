@@ -239,7 +239,8 @@ when at least 50% have issues, and SOME_ISSUES otherwise. QC never rejects a
 task or a source by itself: a BAD-quality source can be admitted as-is with its
 weakness documented, as with Terminal-Pivot's original weak grader. A FULL
 review may be finalized under a pinned waiver when at most 1% of retained tasks
-are unreviewed. LLM judges run at temperature 0.7 through the production judge
+are unreviewed; both the final binding and the Atlas display refuse a waiver above
+that bound. LLM judges run at temperature 0.7 through the production judge
 service. Every recorded review carries typed defects from the shared `Defect`
 enum (`missing_context`, `ambiguity`, `wrong_reference`, `answer_leakage`,
 `malformed`, `rubric_mismatch`) beside its verdict, confidence and reference

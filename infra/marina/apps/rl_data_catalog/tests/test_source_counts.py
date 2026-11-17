@@ -67,3 +67,8 @@ def test_sample_tolerance_display_preserves_counts_and_full_finality(provisional
     if declaration.name.startswith("sample-missing-"):
         assert quality_display(declaration.model_dump(mode="json"), None, None).quality.value == "SAMPLE"
         assert not completeness["coverage_complete"]
+    if declaration.name == "full-waiver-over-cap":
+        # Above the 1% unreviewed bound the waiver is not whole-source finality.
+        displayed = quality_display(declaration.model_dump(mode="json"), None, None)
+        assert displayed.quality.value != "FULL"
+        assert displayed.quality.value == "SAMPLE"

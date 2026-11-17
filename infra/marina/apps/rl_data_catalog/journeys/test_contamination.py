@@ -1179,11 +1179,11 @@ FULL_BROWSE_CYCLE = ["missing_context", "wrong_reference", "answer_leakage", "ma
 
 
 def full_browse_records() -> list:
-    """One whole-population FULL panel: 260 typed reviews, five unavailable, no packets."""
+    """One whole-population FULL panel: 260 typed reviews, two unavailable, no packets."""
     records = []
     for index in range(FULL_BROWSE_POPULATION):
         task_id = f"task-{index:04d}"
-        if index % 52 == 51:
+        if index % 130 == 129:
             records.append(
                 ReviewRecord(task_id=task_id, status="unavailable", verdict=None, detail="Response truncated.")
             )

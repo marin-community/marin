@@ -52,7 +52,9 @@ from experiments.post_training.task_curation.sample_qc_binding import (
 )
 from experiments.post_training.task_curation.source import SourceReference
 from experiments.post_training.task_curation.tests.admission_fixtures import actor_census_input
+from experiments.post_training.task_curation.tests.conftest import fixture_qc_inputs
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
 from infra.marina.apps.rl_data_catalog.server.quality import quality, review_completeness
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
@@ -82,9 +84,9 @@ def whole_source_binding(source, finalization):
         review_receipt=reference,
         records=reference,
         result=SourceQualityResult(
-            reviewed=190 if incomplete else 194,
+            reviewed=192 if incomplete else 194,
             uncertain_count=7,
-            unavailable_count=4 if incomplete else 0,
+            unavailable_count=2 if incomplete else 0,
             issue_count=42,
             issues=[],
             repair_recommendation="Inspect pinned task evidence",
@@ -204,6 +206,40 @@ def test_changed_input_or_missing_binding_clears_stale_finality_before_fresh_sam
             bind_full_content_result(bound, binding)
 
 
+def waived_binding(unavailable: int) -> FullContentResultBinding:
+    """A waiver binding over a 100-task retained population with one uncertain row."""
+    reference = ContentEvidenceReference(uri="memory://verified/waiver", sha256="e" * 64)
+    return FullContentResultBinding(
+        source_id="Marin:fixture",
+        input=actor_census_input("open-athena/fixture", "a" * 40, "1", 100),
+        contract_index=reference,
+        review_receipt=reference,
+        records=reference,
+        result=SourceQualityResult(
+            reviewed=99 - unavailable,
+            uncertain_count=1,
+            unavailable_count=unavailable,
+            issue_count=0,
+            issues=[],
+            repair_recommendation="No repairs indicated by conclusive reviews.",
+        ),
+        coverage_complete=False,
+        finalization=QualityResultFinalization.ACCEPTED_INCOMPLETE,
+        waiver=reference,
+    )
+
+
+def test_full_waiver_at_the_one_percent_bound_is_accepted():
+    binding = waived_binding(1)
+    assert binding.result.sample_count == 100
+    assert binding.waiver is not None
+
+
+def test_full_waiver_above_the_one_percent_bound_is_rejected():
+    with pytest.raises(ValueError, match="1% unreviewed bound"):
+        waived_binding(2)
+
+
 def test_retained_gym_3939_result_cannot_bind_to_raw_3941_population(content_source):
     actor = content_source.info.actor_census_input.model_copy(update={"measured_tasks": 3939})
     reference = ContentEvidenceReference(uri="memory://verified/gym", sha256="e" * 64)
@@ -240,46 +276,68 @@ def test_retained_gym_3939_result_cannot_bind_to_raw_3941_population(content_sou
 
 
 @pytest.mark.parametrize("finalization", list(QualityResultFinalization))
-def test_final_binding_verifies_records_and_preserves_exact_retained_runtime(qc_inputs, tmp_path, finalization):
-    config, documents = qc_inputs
+def test_final_binding_verifies_records_and_preserves_exact_retained_runtime(tmp_path, finalization):
+    # One waived task must stay within the 1% unreviewed bound, so the retained
+    # population here is large enough that its single invalid row qualifies.
+    # Within-source deduplication drops identical contracts, so every extra task
+    # carries its own prompt text to survive as a distinct retained task.
+    extra_documents = []
+    for index in range(119):
+        document = json.loads(prebuilt_task(f"extra-{index}")["lowered_task_spec"])["task"]
+        document["context"]["events"][0]["content"] = f"Do the task {index}."
+        extra_documents.append(document)
+    config, documents = fixture_qc_inputs(tmp_path, extra_documents=extra_documents)
+    retained_documents = [document for index, document in enumerate(documents) if index != 1]
+    retained_count = len(retained_documents)
+    incomplete = finalization is QualityResultFinalization.ACCEPTED_INCOMPLETE
     inputs = prepare_inputs(config)
     batches = list(contract_batches(inputs))
-    incomplete = finalization is QualityResultFinalization.ACCEPTED_INCOMPLETE
-    observations = [
-        (
-            ReviewRecord(task_id=contract["task_id"], status=ReviewStatus.INVALID, verdict=None, detail="Truncated")
-            if incomplete and index == 1
-            else ReviewRecord(
-                task_id=contract["task_id"],
-                status=ReviewStatus.REVIEWED,
-                detail="",
-                verdict=ReviewVerdict(
-                    task_id=contract["task_id"],
-                    quality=Quality.BAD,
-                    confidence=Confidence.HIGH,
-                    reference_status=ReferenceStatus.CONFLICT,
-                    defects=[],
-                    evidence="Reference conflicts with the task",
-                ),
-            )
-        )
-        for index, contract in enumerate(batches[0].contracts)
-    ]
+    observations = []
+    retained_index = 0
+    for batch in batches:
+        batch_observations = []
+        for contract in batch.contracts:
+            if incomplete and retained_index == 1:
+                batch_observations.append(
+                    ReviewRecord(
+                        task_id=contract["task_id"], status=ReviewStatus.INVALID, verdict=None, detail="Truncated"
+                    )
+                )
+            else:
+                batch_observations.append(
+                    ReviewRecord(
+                        task_id=contract["task_id"],
+                        status=ReviewStatus.REVIEWED,
+                        detail="",
+                        verdict=ReviewVerdict(
+                            task_id=contract["task_id"],
+                            quality=Quality.BAD,
+                            confidence=Confidence.HIGH,
+                            reference_status=ReferenceStatus.CONFLICT,
+                            defects=[],
+                            evidence="Reference conflicts with the task",
+                        ),
+                    )
+                )
+            retained_index += 1
+        observations.append(batch_observations)
+    assert retained_index == retained_count
     reviewer = local_reviewer(ReviewerVersion.V2)
     review = write_review_result(
         inputs,
         {"mode": "chat", **reviewer.identity},
         REVIEW_RUBRIC,
         str(tmp_path / "reviews"),
-        [(batches[0], observations, "memory://batch")],
+        [
+            (batch, batch_observations, "memory://batch")
+            for batch, batch_observations in zip(batches, observations, strict=True)
+        ],
     )
-    files = write_text_population(
-        ((doc, {"deployment": 1}) for doc in (documents[0], documents[2])), str(tmp_path / "retained")
-    )
+    files = write_text_population(((doc, {"deployment": 1}) for doc in retained_documents), str(tmp_path / "retained"))
     population = inputs.population.model_copy(
         update={
             "path": str(tmp_path / "retained"),
-            "task_count": 2,
+            "task_count": retained_count,
             "task_specs_sha256": files.task_specs_sha256,
             "specs_output_dir": files.specs_output_dir,
             "main_output_dir": files.main_output_dir,
@@ -294,13 +352,13 @@ def test_final_binding_verifies_records_and_preserves_exact_retained_runtime(qc_
             json.dumps(
                 {
                     "source_id": review.source_id,
-                    "retained_count": 2,
+                    "retained_count": retained_count,
                     "contract_index_sha256": inputs.index_sha256,
                     "review_artifact_sha256": receipt.sha256,
                     "records_sha256": review.records_sha256,
                     "qc_unreviewed": [
                         {"task_id": row.task_id, "reason": f"QC unreviewed: {row.detail}"}
-                        for row in observations
+                        for row in observations[0]
                         if row.status is not ReviewStatus.REVIEWED
                     ],
                     "result": review.result.model_dump(mode="json"),
@@ -318,8 +376,9 @@ def test_final_binding_verifies_records_and_preserves_exact_retained_runtime(qc_
         evidence_url="memory://actor-census/immutable/.artifact.json",
     )
     binding = full_content_result_binding(receipt, finalization, waiver, reviewer, actor_input, population)
-    assert binding.input.measured_tasks == 2 and binding.input.task_specs_sha256 == files.task_specs_sha256
-    assert binding.result.issue_count == (1 if incomplete else 2)
+    assert binding.input.measured_tasks == retained_count
+    assert binding.input.task_specs_sha256 == files.task_specs_sha256
+    assert binding.result.issue_count == (retained_count - 1 if incomplete else retained_count)
     assert binding.result.unavailable_count == int(incomplete)
     assert binding.records.sha256 == review.records_sha256 and binding.contract_index.sha256 == inputs.index_sha256
     assert binding.result.issues == []
