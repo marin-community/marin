@@ -16,7 +16,7 @@ from sqlalchemy.pool import NullPool
 
 @pytest.fixture
 def openfga_http(tmp_path):
-    """Canned remote decisions test the adapter; prove.py exercises the real engine."""
+    """Serve configurable authorization decisions and capture adapter requests."""
     state = {"allowed": True, "status": 200, "requests": []}
 
     class Handler(BaseHTTPRequestHandler):

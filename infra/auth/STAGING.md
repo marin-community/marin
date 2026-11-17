@@ -417,8 +417,8 @@ stores; old SQL-backed grant IDs fail closed and must be reissued. Keep the old
 ledger only as a private migration record. No runtime code consults it. Complete
 Loom lifecycle cleanup before switching stores; a leftover row cannot retire
 its old grant through the new store. For an interrupted pilot, verify its old
-grant is revoked and expired and its session is archived before marking that
-specific lifecycle row cleaned.
+grant is revoked and expired and its session is archived (or its disposable
+Loom instance has been removed) before marking that specific lifecycle row cleaned.
 
 ## Google SSO execution smoke
 
