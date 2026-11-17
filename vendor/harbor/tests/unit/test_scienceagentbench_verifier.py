@@ -24,12 +24,12 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource
 
 from harbor.environments.daytona import DaytonaEnvironment
-from harbor.models.task.config import EnvironmentConfig, TaskConfig
-from harbor.models.task.task import Task
+from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import VerifierConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.verifier.factory import VerifierFactory
 from harbor.verifier.verifier import VerifierRuntimeError
+from experiments.evaluation.scienceagentbench_tasks import VERIFIER_IMPORT_PATH, write_harbor_task
 from lib.taskcompendium.tests.grading_machines import GRADER_IMAGE, REPLAY_IMAGE, ReplayMachine, ReplayMachines
 
 
@@ -90,15 +90,14 @@ print(float(Path('pred_results/result.txt').read_text() == Path('../tests/gold.t
         ),
     )
     task_dir = tmp_path / "task"
-    (task_dir / "tests").mkdir(parents=True)
-    (task_dir / "environment").mkdir()
-    (task_dir / "instruction.md").write_text("Write solution.py.")
-    (task_dir / "task.toml").write_text(
-        TaskConfig(environment=EnvironmentConfig(docker_image=REPLAY_IMAGE, workdir="/testbed")).model_dump_toml()
+    harbor_task = write_harbor_task(
+        task,
+        task_dir,
+        environment=EnvironmentConfig(docker_image=REPLAY_IMAGE, workdir="/testbed"),
+        agent_timeout=3600,
     )
-    (task_dir / "tests" / "task.json").write_text(task.model_dump_json())
-    (task_dir / "tests" / "test.sh").write_text("exit 1\n")
-    harbor_task = Task(task_dir)
+    assert harbor_task.instruction == "Write solution.py."
+    assert [path.name for path in harbor_task.paths.tests_dir.iterdir()] == ["test.sh"]
     paths = TrialPaths(tmp_path / "trial")
     paths.mkdir()
     environment = DaytonaEnvironment(
@@ -130,7 +129,7 @@ Path('pred_results/result.txt').write_text({candidate!r})
     machines = ReplayMachines(tmp_path / "grading-machines")
     environment.factory = machines
     verifier = VerifierFactory.create_verifier_from_config(
-        VerifierConfig(import_path="experiments.evaluation.scienceagentbench_verifier:ScienceAgentBenchVerifier"),
+        VerifierConfig(import_path=VERIFIER_IMPORT_PATH),
         task=harbor_task,
         trial_paths=paths,
         environment=environment,

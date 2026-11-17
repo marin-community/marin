@@ -3,7 +3,7 @@
 
 """Run ScienceAgentBench's isolated grading stages behind Harbor's verifier hook.
 
-The prepared Harbor task keeps its TaskSpec in tests/task.json on the evaluator
+The prepared Harbor task keeps its TaskSpec in grading.json on the evaluator
 host. This verifier captures only solution.py from the actor and does not upload
 the tests directory there. Harbor retains the Pi agent loop and result reporting.
 """
@@ -24,6 +24,8 @@ from taskcompendium.models import ConversationTrace, GradingAttempt, ScriptGrade
 from taskcompendium.runtime.output_capture import MAX_OUTPUT_BYTES, captured_output_files
 from taskcompendium.runtime.task_grading import sandbox_grade
 from verifyit.modes.grade_judge import JudgeConnection
+
+from experiments.evaluation.scienceagentbench_tasks import TASK_SPEC_FILENAME
 
 CAPTURE_TIMEOUT = 60.0
 
@@ -46,7 +48,7 @@ class ScienceAgentBenchVerifier(BaseVerifier):
             raise ValueError(
                 "Pass judge connection declarations through verifier kwargs, not guest environment overrides"
             )
-        task = TaskSpec.model_validate_json((self.task.paths.tests_dir / "task.json").read_text())
+        task = TaskSpec.model_validate_json((self.task.paths.task_dir / TASK_SPEC_FILENAME).read_text())
         if not isinstance(task.grader, ScriptGrader) or task.grader.replay is None:
             raise ValueError("ScienceAgentBench requires a replay-enabled script grader")
         if task.grader.environment is None or task.grader.environment.docker_image is None:
