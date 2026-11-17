@@ -6,6 +6,7 @@ import pyarrow.parquet as pq
 import pytest
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import DockerImage, MachineSpec
+from verifyit.modes.grade_judge import JudgeConnection
 
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import Outcome
@@ -16,7 +17,7 @@ from taskcompendium.importers.scienceagentbench import (
     read_verified_annotations,
     scienceagentbench_task,
 )
-from taskcompendium.importers.scienceagentbench_grading import deterministic_grader
+from taskcompendium.importers.scienceagentbench_grading import deterministic_grader, visual_grader
 from taskcompendium.models import (
     CommandSemantics,
     EnvironmentRequirements,
@@ -158,3 +159,83 @@ Path('pred_results/output.csv').write_text({prediction!r})
         )
         assert (result.status, result.reward) == (Outcome.GRADED, expected), result
     assert all(machine.closed for machine in machines.machines)
+
+
+@pytest.mark.parametrize(
+    "reply,status,expected",
+    [
+        ("[FINAL SCORE]: 90", 200, 1.0),
+        ("no marker", 200, 0.0),
+        ("[FINAL SCORE]: 90", 503, None),
+    ],
+)
+def test_visual_package_replays_then_grades_both_figures(tmp_path, annotation, judge_server, reply, status, expected):
+    judge_server.reply = reply
+    judge_server.status_code = status
+    replay = EnvironmentRequirements(
+        docker_image=REPLAY_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS, working_directory="/testbed"
+    )
+    evaluator = b"""
+from gpt4_visual_judge import encode_image, score_figure
+
+def eval():
+    results = []
+    responses = []
+    for figure in ('one', 'two'):
+        texts, score = score_figure(
+            encode_image(f'pred_results/{figure}.png'), encode_image(f'../tests/gold/{figure}.png')
+        )
+        results.append(score >= 60)
+        responses.extend(texts)
+    return int(all(results)), responses
+"""
+    package = visual_grader(
+        annotation.model_copy(update={"output_fname": "pred_results/one.png"}),
+        environment=replay.model_copy(update={"docker_image": GRADER_IMAGE}),
+        replay_environment=replay,
+        evaluator_program=evaluator,
+        judge_prompt="pinned prompt fixture",
+        replay_timeout=10,
+        verifier_timeout=30,
+    )
+    package = GraderPackage(
+        package.grader,
+        (*package.resources, inline_resource("gold/one.png", b"gold one"), inline_resource("gold/two.png", b"gold two")),
+    )
+    task = scienceagentbench_task(
+        annotation.model_copy(update={"output_fname": "pred_results/one.png"}),
+        condition=KnowledgeCondition.OFF,
+        environment=replay,
+        package=package,
+        reference_program=b"reference fixture",
+        importer_revision="test-visual",
+    )
+    program = b"""
+import os
+from pathlib import Path
+assert 'VERIFYIT_JUDGE_API_KEY' not in os.environ
+assert not Path('../tests/gold/one.png').exists()
+Path('pred_results').mkdir()
+Path('pred_results/one.png').write_bytes(b'candidate one')
+Path('pred_results/two.png').write_bytes(b'candidate two')
+"""
+    machines = ReplayMachines(tmp_path / "machines")
+    result = grade_task(
+        TaskSpec.model_validate_json(task.model_dump_json()),
+        GradingAttempt(completed_trace(task), {"/testbed/solution.py": program}),
+        machine_factory=machines,
+        machine_spec=MachineSpec(DockerImage(GRADER_IMAGE)),
+        judge_connection=JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "judge-fixture-key"),
+    )
+    assert (result.status, result.reward) == (
+        Outcome.INFRA_ERROR if expected is None else Outcome.GRADED,
+        expected,
+    ), result
+    assert len(judge_server.requests) == (1 if expected is None else 6)
+    for request in judge_server.requests:
+        assert request["n"] == 1
+        assert request["model"] == "openai/gpt-4o-2024-05-13"
+        assert request["provider"] == {"order": ["Azure"], "allow_fallbacks": False, "require_parameters": True}
+    assert len(machines.machines) == 2 and all(machine.closed for machine in machines.machines)
+    assert "VERIFYIT_JUDGE_API_KEY" not in machines.machines[0].env
+    assert machines.machines[1].env["VERIFYIT_JUDGE_API_KEY"] == "judge-fixture-key"

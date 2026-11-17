@@ -7,7 +7,17 @@ The caller supplies the prompt from the pinned upstream judge source. This
 module runs only in the grading environment, after candidate replay closes.
 """
 
+import argparse
+import base64
+import json
+import os
 import re
+import runpy
+import sys
+from collections.abc import Callable
+from functools import partial
+from pathlib import Path
+from types import ModuleType
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
@@ -19,7 +29,15 @@ REQUEST_TIMEOUT = 120.0
 SCORE_PATTERN = re.compile(r"\[FINAL SCORE\]: (\d{1,3})", re.DOTALL)
 
 
-def score_figure(client: OpenAI, prompt: str, predicted_image: str, gold_image: str) -> tuple[list[str], float]:
+def score_figure(
+    client: OpenAI,
+    prompt: str,
+    predicted_image: str,
+    gold_image: str,
+    *,
+    model: str = MODEL,
+    record_response: Callable[[ChatCompletion], None] | None = None,
+) -> tuple[list[str], float]:
     """Compare base64 PNGs, scoring text without a matching score marker as zero.
 
     Transport errors and absent completions propagate as infrastructure errors.
@@ -30,11 +48,13 @@ def score_figure(client: OpenAI, prompt: str, predicted_image: str, gold_image: 
     batching because the selected endpoint does not honor n=3. All three must
     succeed before returning a score. Retries belong to the caller.
     """
+    if model not in (MODEL, f"openai/{MODEL}"):
+        raise RuntimeError("ScienceAgentBench requires the pinned visual judge snapshot")
     texts = []
     scores = []
     for _ in range(COMPLETIONS):
         response = client.with_options(timeout=REQUEST_TIMEOUT, max_retries=0).chat.completions.create(
-            model=MODEL,
+            model=model,
             messages=[
                 {
                     "role": "user",
@@ -51,6 +71,11 @@ def score_figure(client: OpenAI, prompt: str, predicted_image: str, gold_image: 
             top_p=0.95,
             frequency_penalty=0,
             presence_penalty=0,
+            extra_body=(
+                {"provider": {"order": ["Azure"], "allow_fallbacks": False, "require_parameters": True}}
+                if model == f"openai/{MODEL}"
+                else None
+            ),
         )
         # The SDK constructs responses without validating the provider's JSON schema.
         # Keep protocol errors distinct from candidate-output ValueError failures.
@@ -58,6 +83,8 @@ def score_figure(client: OpenAI, prompt: str, predicted_image: str, gold_image: 
             response = ChatCompletion.model_validate(response.model_dump(), strict=True)
         except ValidationError as error:
             raise RuntimeError("Visual judge returned an invalid completion response") from error
+        if record_response is not None:
+            record_response(response)
         if len(response.choices) != 1 or response.choices[0].index != 0:
             raise RuntimeError("Visual judge did not return exactly one completion")
         text = response.choices[0].message.content
@@ -67,3 +94,52 @@ def score_figure(client: OpenAI, prompt: str, predicted_image: str, gold_image: 
         match = SCORE_PATTERN.search(text)
         scores.append(int(match.group(1)) if match else 0)
     return texts, sum(scores) / COMPLETIONS
+
+
+def encode_image(path: str) -> str:
+    """Encode a source evaluator's PNG without decoding candidate image content."""
+    return base64.b64encode(Path(path).read_bytes()).decode("ascii")
+
+
+def record_completion(response: ChatCompletion) -> None:
+    """Preserve each response in grader stdout even if a later call fails."""
+    print(json.dumps({"judge_response": response.model_dump(mode="json")}), flush=True)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("prompt", type=Path)
+    parser.add_argument("wrapper", type=Path)
+    parser.add_argument("evaluator", type=Path)
+    parser.add_argument("primary_output", type=Path)
+    parser.add_argument("candidate_directory", type=Path)
+    parser.add_argument("verdict", type=Path)
+    args = parser.parse_args()
+    with OpenAI(
+        base_url=os.environ["VERIFYIT_JUDGE_BASE_URL"],
+        api_key=os.environ["VERIFYIT_JUDGE_API_KEY"],
+        max_retries=0,
+    ) as client:
+        # Preserve the pinned evaluator's figure selection and success threshold.
+        # Only its judge transport is replaced; this module never runs in replay.
+        judge = ModuleType("gpt4_visual_judge")
+        judge.__dict__.update(
+            encode_image=encode_image,
+            score_figure=partial(
+                score_figure,
+                client,
+                args.prompt.read_text(),
+                model=os.environ["VERIFYIT_JUDGE_MODEL"],
+                record_response=record_completion,
+            ),
+        )
+        sys.modules[judge.__name__] = judge
+        sys.argv = [
+            str(path)
+            for path in (args.wrapper, args.evaluator, args.primary_output, args.candidate_directory, args.verdict)
+        ]
+        runpy.run_path(str(args.wrapper), run_name="__main__")
+
+
+if __name__ == "__main__":
+    main()

@@ -276,6 +276,7 @@ def test_visual_judge_malformed_api_response_is_not_a_candidate_failure(choices)
 @pytest.mark.parametrize("failed_request", [1, 3])
 def test_visual_judge_service_failure_propagates_without_hidden_retries(failed_request):
     requests = []
+    recorded = []
 
     def respond(request):
         requests.append(request)
@@ -300,5 +301,6 @@ def test_visual_judge_service_failure_propagates_without_hidden_retries(failed_r
 
     with OpenAI(api_key="fixture", http_client=httpx.Client(transport=httpx.MockTransport(respond))) as client:
         with pytest.raises(InternalServerError):
-            score_figure(client, "prompt fixture", "cHJlZA==", "Z29sZA==")
+            score_figure(client, "prompt fixture", "cHJlZA==", "Z29sZA==", record_response=recorded.append)
     assert len(requests) == failed_request
+    assert len(recorded) == failed_request - 1

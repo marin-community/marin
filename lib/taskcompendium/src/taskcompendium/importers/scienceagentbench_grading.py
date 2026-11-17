@@ -5,6 +5,8 @@
 
 from pathlib import Path, PurePosixPath
 
+from verifyit.spec import JudgeSpec
+
 from taskcompendium.grader import GraderPackage
 from taskcompendium.importers.scienceagentbench import SUBMISSION_PATH, WORKING_DIRECTORY, VerifiedAnnotation
 from taskcompendium.models import (
@@ -30,6 +32,9 @@ SOURCE_EVALUATOR = "source_evaluator.py"
 PAPYRUS_SCORER = "papyrus_rows.py"
 PAPYRUS_GOLD = "gold_rows.jsonl"
 PAPYRUS_DECODER = "decode_papyrus.py"
+VISUAL_JUDGE = "visual_judge.py"
+VISUAL_PROMPT = "visual_prompt.txt"
+VISUAL_MODEL = "openai/gpt-4o-2024-05-13"
 
 
 def deterministic_grader(
@@ -46,6 +51,75 @@ def deterministic_grader(
         raise ValueError("Task 22 requires the pickle-isolating Papyrus grader")
     if b"gpt4_visual_judge" in evaluator_program:
         raise ValueError("Visual tasks require an explicitly configured visual judge")
+    return _source_grader(
+        annotation,
+        environment=environment,
+        replay_environment=replay_environment,
+        evaluator_program=evaluator_program,
+        replay_timeout=replay_timeout,
+        verifier_timeout=verifier_timeout,
+    )
+
+
+def visual_grader(
+    annotation: VerifiedAnnotation,
+    *,
+    environment: EnvironmentRequirements,
+    replay_environment: EnvironmentRequirements,
+    evaluator_program: bytes,
+    judge_prompt: str,
+    replay_timeout: float,
+    verifier_timeout: float,
+) -> GraderPackage:
+    """Package a pinned figure evaluator with the three-call Azure/OpenRouter judge."""
+    if b"gpt4_visual_judge" not in evaluator_program:
+        raise ValueError("A visual grader requires an upstream figure evaluator")
+    package = _source_grader(
+        annotation,
+        environment=environment,
+        replay_environment=replay_environment,
+        evaluator_program=evaluator_program,
+        replay_timeout=replay_timeout,
+        verifier_timeout=verifier_timeout,
+    )
+    assert isinstance(package.grader, ScriptGrader)
+    grader = package.grader.model_copy(
+        update={
+            "argv": (
+                "python3",
+                "-I",
+                f"/tests/{VISUAL_JUDGE}",
+                f"/tests/{VISUAL_PROMPT}",
+                *package.grader.argv[2:],
+            ),
+            "judge": JudgeSpec(
+                model=VISUAL_MODEL,
+                rubric="checklist",
+                criteria=(judge_prompt,),
+                exact_gate=False,
+                max_completion_tokens=1000,
+            ),
+        }
+    )
+    return GraderPackage(
+        grader,
+        (
+            *package.resources,
+            inline_resource(VISUAL_JUDGE, (ASSETS / VISUAL_JUDGE).read_bytes()),
+            inline_resource(VISUAL_PROMPT, judge_prompt.encode("utf-8")),
+        ),
+    )
+
+
+def _source_grader(
+    annotation: VerifiedAnnotation,
+    *,
+    environment: EnvironmentRequirements,
+    replay_environment: EnvironmentRequirements,
+    evaluator_program: bytes,
+    replay_timeout: float,
+    verifier_timeout: float,
+) -> GraderPackage:
     output = PurePosixPath(annotation.output_fname)
     if ".." in output.parts or not output.is_relative_to(PurePosixPath(OUTPUT_DIRECTORY).name):
         raise ValueError("ScienceAgentBench outputs must be under pred_results")
