@@ -296,6 +296,10 @@ def load_launch_config(path: Path) -> DictConfig:
         validate_evaluation_schedule(
             config.skyrl, profiles, generation=config.runtime.entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
         )
+        if config.run.export_hf:
+            from cloud.iris.export_hf_checkpoint import validate_checkpoint_export  # noqa: PLC0415 - shared loader
+
+            validate_checkpoint_export(config)
     return config
 
 
