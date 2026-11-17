@@ -1,16 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""OpenAI-compatible proxy that records Harbor agent chat completions.
+"""OpenAI-compatible proxy that records every chat completion a Harbor agent makes.
 
-Point the agent's API base at ``build_proxy`` (serve with uvicorn). The proxy adds the backend's
-headers so credentials stay out of the sandbox, and logs the full reply, including reasoning.
-``rebuild_traces.py`` turns the request log into one row per conversation.
+Point the agent's API base at the app from ``build_proxy`` (serve it with uvicorn). The proxy forwards
+each request to a teacher backend, or, with a ``RelayPolicy``, routes it between a student and the
+teacher with ``relay.route``. For every chat completion it:
 
-The agents in ``harbor_agents/trial_agents.py`` send ``TRIAL_HEADER`` to group requests by trial.
-A request continues the longest conversation whose messages are a prefix of its own; otherwise it
-starts a new conversation. ``/tokenize`` counts the request with the backend's tokenizer and overrides
-for mini-swe-agent's context limiter. Streaming is not supported.
+- adds the backend's headers, so credentials stay in the proxy process and never reach the agent or
+  its sandbox. Read them from the environment; do not pass them on a command line;
+- appends one record to a JSONL ``RequestLog``: trial id, author, relay trigger, request settings, the
+  conversation the request continues and the messages it adds, usage, latency and the full reply,
+  reasoning included. ``rebuild_traces.py`` turns this log into one row per conversation.
+
+Records are grouped by the per-trial correlation header (``TRIAL_HEADER``) that the agents in
+``harbor_agents/trial_agents.py`` send. A request continues the trial's longest conversation whose
+messages are a prefix of its own. Otherwise it starts a new conversation. Relay state is per trial,
+so with a ``RelayPolicy`` a request without the header is refused.
+
+The proxy also serves vLLM's ``/tokenize`` (``count`` and ``max_model_len``), which Harbor's
+mini-swe-agent context limiter calls and many hosted APIs lack. Each backend counts the request it
+would receive, overrides applied, and the count is the largest over the backends, so the context
+limit holds for whichever model answers. Streaming is not supported.
 """
 
 import asyncio
@@ -29,6 +40,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from transformers import PreTrainedTokenizerBase
+
+from experiments.post_training.sft_shootout.relay import Author, TrialState, Trigger, is_completion_claim, route
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +69,12 @@ class Backend:
     headers: dict[str, str]
     retry_window: float = 0.0
     overrides: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RelayPolicy:
+    student: Backend
+    budget_tokens: int
 
 
 class RequestLog:
@@ -127,16 +146,25 @@ def continued_conversation(conversations: list[list[str]], keys: list[str]) -> i
 
 
 def build_proxy(
-    backend: Backend,
+    teacher: Backend,
     max_model_len: int,
     log: RequestLog,
+    relay: RelayPolicy | None,
     client: httpx.AsyncClient,
 ) -> Starlette:
     """Return the proxy app. ``max_model_len`` is the window ``/tokenize`` reports to agents."""
+    backends = {Author.TEACHER: teacher, **({Author.STUDENT: relay.student} if relay else {})}
+    states: dict[str, TrialState] = defaultdict(TrialState)
     conversations: dict[str, list[list[str]]] = defaultdict(list)
 
-    async def tokens(body: dict) -> int:
-        return await asyncio.to_thread(count_tokens, backend.tokenizer, backend_request(backend, body))
+    async def counts(body: dict) -> dict[Author, int]:
+        values = await asyncio.gather(
+            *(
+                asyncio.to_thread(count_tokens, backend.tokenizer, backend_request(backend, body))
+                for backend in backends.values()
+            )
+        )
+        return dict(zip(backends, values, strict=True))
 
     async def call(backend: Backend, body: dict) -> tuple[httpx.Response, float]:
         started = time.monotonic()
@@ -155,9 +183,12 @@ def build_proxy(
                 logger.warning("Backend model %s refused the connection; retrying", backend.model)
             await asyncio.sleep(RETRY_INTERVAL)
 
-    def turn_record(response: httpx.Response, latency: float) -> dict:
+    def turn_record(author: Author, trigger: Trigger | None, response: httpx.Response, latency: float) -> dict:
+        backend = backends[author]
         record: dict = {
+            "author": author.value,
             "model": backend.model,
+            "trigger": trigger,
             "status": response.status_code,
             "latency": latency,
         }
@@ -178,11 +209,11 @@ def build_proxy(
         return record
 
     async def tokenize(request: Request) -> Response:
-        count = await tokens(await request.json())
-        return JSONResponse({"count": count, "max_model_len": max_model_len})
+        tokens = await counts(await request.json())
+        return JSONResponse({"count": max(tokens.values()), "max_model_len": max_model_len})
 
     async def models(_request: Request) -> Response:
-        return JSONResponse({"object": "list", "data": [{"id": backend.model, "object": "model"}]})
+        return JSONResponse({"object": "list", "data": [{"id": teacher.model, "object": "model"}]})
 
     def track_conversation(trial: str, messages: list[dict]) -> tuple[int, int]:
         """Record ``messages`` in the trial's conversations; return its index and the first new message."""
@@ -201,6 +232,9 @@ def build_proxy(
         if body.get("stream"):
             return JSONResponse({"error": "streaming is not supported by this proxy"}, status_code=400)
         trial = request.headers.get(TRIAL_HEADER) or ""
+        if relay is not None and not trial:
+            logger.warning("refused a relay request without the %s header", TRIAL_HEADER)
+            return JSONResponse({"error": f"relay routing needs the {TRIAL_HEADER} header"}, status_code=400)
         messages = body.get("messages", [])
         index, first = track_conversation(trial, messages)
         record: dict = {
@@ -213,15 +247,29 @@ def build_proxy(
             "messages": messages[first:],
             "tools": body.get("tools") if first == 0 else None,
         }
+        author, trigger = Author.TEACHER, None
         try:
-            record["prompt_tokens_local"] = await tokens(body)
-            response, latency = await call(backend, body)
-            turn = turn_record(response, latency)
+            tokens = await counts(body)
+            record["prompt_tokens_local"] = {a.value: value for a, value in tokens.items()}
+            if relay is not None:
+                author, trigger = route(states[trial], messages, tokens[Author.STUDENT], relay.budget_tokens)
+            response, latency = await call(backends[author], body)
+            turn = turn_record(author, trigger, response, latency)
+
+            if author is Author.STUDENT and response.status_code == 200:
+                if is_completion_claim(turn["response_messages"][0] or {}):
+                    states[trial].takeover = Trigger.COMPLETION_CLAIM
+                    record["withheld_student_turn"] = turn
+                    author, trigger = Author.TEACHER, Trigger.COMPLETION_CLAIM
+                    response, latency = await call(teacher, body)
+                    turn = turn_record(author, trigger, response, latency)
         except Exception as error:  # log it: a bare 500 tells the agent nothing and leaves no trace of the cause
             logger.exception("proxy failure for trial %s", trial)
             log.write(
                 {
                     **record,
+                    "author": author.value,
+                    "trigger": trigger,
                     "status": 502,
                     "latency": None,
                     "error": repr(error)[:LOGGED_ERROR_CHARS],
