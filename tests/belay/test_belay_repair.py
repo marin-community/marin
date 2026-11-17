@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from experiments.belay.code_change import config_changes
 from experiments.belay.submit import FAILED, parse_spec, repair_key, repairs_used, run_id, spec_with_repair
 
 SPEC = """experiment: X0236
@@ -51,3 +52,12 @@ def test_attempts_count_across_the_ideas_specs_only(tmp_path: Path) -> None:
     (tmp_path / "X0236d768.yaml").write_text(once.replace("X0236", "X0236d768"))
     (tmp_path / "X02361.yaml").write_text(once.replace("X0236", "X02361"))  # another idea's id, same prefix
     assert repairs_used("X0236", tmp_path) == 3
+
+
+def test_a_repair_may_not_touch_the_config_but_needs_no_new_flag() -> None:
+    before = {"GrugModelConfig": {"kda_local_attn_fused_window": "0", "qk_mult": "1.3"}}
+    assert config_changes(before, before) == []  # a code-only fix: nothing to refuse
+    added = {"GrugModelConfig": {**before["GrugModelConfig"], "extra": "False"}}
+    changed = {"GrugModelConfig": {**before["GrugModelConfig"], "qk_mult": "1.0"}}
+    assert config_changes(before, added) == ["GrugModelConfig.extra"]
+    assert config_changes(before, changed) == ["GrugModelConfig.qk_mult"]

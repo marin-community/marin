@@ -67,6 +67,7 @@ from experiments.belay.branch import (
 from experiments.belay.code_change import (
     changed_paths,
     checkout_python,
+    config_changes,
     named_sources,
     new_flags,
     probe,
@@ -2056,9 +2057,9 @@ def gate_repair(repo: Path, paths: list[str], model_settings: list[str]) -> None
     with temporary_worktree(repo, "HEAD") as before_dir:
         before = probe(before_dir, [], python)
     after = probe(repo, [], python)
-    added = new_flags(before.defaults, after.defaults)  # also refuses a changed default
-    if added:
-        raise SystemExit(f"refusing: a repair adds no config field, got {added}; it fixes the idea's own flag only")
+    changes = config_changes(before.defaults, after.defaults)
+    if changes:
+        raise SystemExit(f"refusing: a repair changes no config field, got {changes}; it fixes the idea's own flag only")
     print("2. no config field added or changed")
     refuse_flag_off_change(before, after)
     print("3. flag off: tiny-model loss and gradients bit-identical to HEAD (the control still stands)")
