@@ -13,6 +13,11 @@ from finestore.rl.difficulty import MEASUREMENTS, DifficultyMeasurement, Difficu
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
+# The applet transport rejects single responses over 5 MiB; bulk reads page
+# under that bound with these batch sizes.
+DIFFICULTY_READ_BATCH = 50
+DECLARATION_READ_BATCH = 100
+
 from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import DifficultyCoverage, difficulty_coverage
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
@@ -56,12 +61,24 @@ def load_measurements(records: list[DifficultyMeasurement], query: AppletQuery) 
 
 
 def difficulty_records_from_query(query: AppletQuery) -> dict[str, list[DifficultyObservation]]:
-    """The stored difficulty observations, grouped by canonical source id."""
+    """The stored difficulty observations, grouped by canonical source id.
+
+    The read paginates by measurement id: the applet transport rejects single
+    responses over 5 MiB, and one measurement row can carry a full sample.
+    """
     records: dict[str, list[DifficultyObservation]] = {}
-    for row in query("SELECT measurement FROM atlas_difficulty", {})["rows"]:
-        record = DifficultyObservation.model_validate(row["measurement"])
-        records.setdefault(canonical_source_id(record.source_id), []).append(record)
-    return records
+    offset = 0
+    while True:
+        rows = query(
+            "SELECT measurement FROM atlas_difficulty ORDER BY measurement_id LIMIT :limit OFFSET :offset",
+            {"limit": DIFFICULTY_READ_BATCH, "offset": offset},
+        )["rows"]
+        for row in rows:
+            record = DifficultyObservation.model_validate(row["measurement"])
+            records.setdefault(canonical_source_id(record.source_id), []).append(record)
+        if len(rows) < DIFFICULTY_READ_BATCH:
+            return records
+        offset += DIFFICULTY_READ_BATCH
 
 
 def publish_coverage(query: AppletQuery, load_id: str) -> dict[str, Any]:
@@ -69,13 +86,21 @@ def publish_coverage(query: AppletQuery, load_id: str) -> dict[str, Any]:
 
     The pure classifier runs over the loaded declarations and the stored
     observations, so every rebuild republishes the coverage the Difficulty view
-    and the campaign-queue CLI consume — never a hand-maintained list.
+    and the campaign-queue CLI consume — never a hand-maintained list. Both
+    bulk reads paginate under the applet transport's 5 MiB response bound.
     """
-    rows = query(
-        "SELECT id, declaration FROM atlas_sources WHERE load_id = :load_id",
-        {"load_id": load_id},
-    )["rows"]
-    declarations = {canonical_source_id(row["id"]): row["declaration"] for row in rows}
+    declarations: dict[str, dict[str, Any]] = {}
+    offset = 0
+    while True:
+        rows = query(
+            "SELECT id, declaration FROM atlas_sources WHERE load_id = :load_id ORDER BY id LIMIT :limit OFFSET :offset",
+            {"load_id": load_id, "limit": DECLARATION_READ_BATCH, "offset": offset},
+        )["rows"]
+        for row in rows:
+            declarations[canonical_source_id(row["id"])] = row["declaration"]
+        if len(rows) < DECLARATION_READ_BATCH:
+            break
+        offset += DECLARATION_READ_BATCH
     observations = difficulty_records_from_query(query)
     document = difficulty_coverage(declarations, observations)
     payload = document.model_dump(mode="json", include={"sources", "counts", "generated_at"})

@@ -314,14 +314,14 @@ def test_publish_coverage_stores_the_document_for_the_load():
 
         def __call__(self, sql, parameters):
             if "FROM atlas_sources" in sql:
-                return {
-                    "rows": [
-                        {"id": source_id, "declaration": declaration}
-                        for source_id, declaration in self.declarations.items()
-                    ]
-                }
+                rows = [
+                    {"id": source_id, "declaration": declaration}
+                    for source_id, declaration in sorted(self.declarations.items())
+                ]
+                return {"rows": rows[parameters["offset"] : parameters["offset"] + parameters["limit"]]}
             if "FROM atlas_difficulty" in sql:
-                return {"rows": [{"measurement": record.model_dump(mode="json")} for record in self.records]}
+                rows = [{"measurement": record.model_dump(mode="json")} for record in self.records]
+                return {"rows": rows[parameters["offset"] : parameters["offset"] + parameters["limit"]]}
             if "INSERT INTO atlas_difficulty_coverage" in sql:
                 stored[parameters["load_id"]] = json.loads(parameters["coverage"])
                 return {"row_count": 1}
@@ -338,3 +338,51 @@ def test_publish_coverage_stores_the_document_for_the_load():
     assert document["load_id"] == "load-1"
     assert set(document["sources"]) == {"Example:example"}
     assert document["sources"]["Example:example"]["status"] == CoverageStatus.MEASURED.value
+
+
+def test_publish_coverage_paginates_bulk_reads_under_the_transport_bound(monkeypatch):
+    """Batched bulk reads produce the identical document the unbatched read produces."""
+    import infra.marina.apps.rl_data_catalog.load_difficulty as load_difficulty
+
+    stored = {}
+
+    class PagedFakeQuery:
+        """A transport honoring LIMIT/OFFSET for the two bulk reads."""
+
+        def __init__(self, declarations, records):
+            self.declarations = declarations
+            self.records = records
+
+        def __call__(self, sql, parameters):
+            if "FROM atlas_sources" in sql:
+                rows = [
+                    {"id": source_id, "declaration": declaration}
+                    for source_id, declaration in sorted(self.declarations.items())
+                ]
+            elif "FROM atlas_difficulty" in sql:
+                rows = [{"measurement": record.model_dump(mode="json")} for record in self.records]
+            elif "INSERT INTO atlas_difficulty_coverage" in sql:
+                stored[parameters["load_id"]] = json.loads(parameters["coverage"])
+                return {"row_count": 1}
+            elif "FROM atlas_current" in sql:
+                return {"rows": [{"load_id": "load-1"}]}
+            else:
+                raise AssertionError(f"Unexpected query: {sql[:60]}")
+            return {"rows": rows[parameters["offset"] : parameters["offset"] + parameters["limit"]]}
+
+    declarations = {
+        "Example:example": declaration(),
+        "Example:second": declaration(),
+        "Example:third": declaration(),
+    }
+    records = full_measurements()
+    query = PagedFakeQuery(declarations, records)
+    publish_coverage(query, "load-1")
+    unbatched = stored["load-1"]
+
+    monkeypatch.setattr(load_difficulty, "DIFFICULTY_READ_BATCH", 1)
+    monkeypatch.setattr(load_difficulty, "DECLARATION_READ_BATCH", 1)
+    publish_coverage(query, "load-2")
+    # the load id and generation timestamp differ; the document does not
+    assert stored["load-2"]["sources"] == unbatched["sources"]
+    assert stored["load-2"]["counts"] == unbatched["counts"]
