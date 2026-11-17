@@ -1,16 +1,16 @@
 experiment: X0230
 track: speedrun
 runs:
-  seed0:
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
+  seed0-r1:
     seed: 0
     variant: lag-1..3 causal window on routed-expert latent input
     flags:
     - --model-set
     - moe_lag_window=true
-  control:
-    seed: 0
-    variant: speedrun control
-    control: true
 launched:
   control: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d512 --num-steps 3030 --seed 0 --run-id
     belay-X0230-control --output-path tmp/ttl=30d/belay/runs/belay-X0230-control --submit --target-cluster cw-us-east-02a
@@ -18,3 +18,13 @@ launched:
   seed0: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d512 --num-steps 3030 --model-set moe_lag_window=true
     --seed 0 --run-id belay-X0230-seed0 --output-path tmp/ttl=30d/belay/runs/belay-X0230-seed0 --submit --target-cluster cw-us-east-02a
     --priority batch
+failed:
+  seed0:
+    seed: 0
+    variant: lag-1..3 causal window on routed-expert latent input
+    flags:
+    - --model-set
+    - moe_lag_window=true
+    replaced_by: seed0-r1
+    reason: 'eval on the dropless mesh (one batch row per data shard) failed: the lag window''s unsharded (b s) split put
+      the size-1 expert axis on seq; reshape with an explicit batch sharding'
