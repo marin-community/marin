@@ -316,7 +316,7 @@ def retry_case(tmp_path, monkeypatch, request):
                     }
                 )
             )
-            execute(["harbor", str(config_path)])
+        execute(["harbor", "trials", "start", "--config", str(config_path)])
         attempts = tuple(item for group in collect_trials(initial).values() for item in group)
         old = json.loads(mapping.read_text())
         old["task"]["source_task_checksum"] = old["task"]["task_checksum"]
