@@ -115,7 +115,7 @@ def fetch_row_runtime(root: Path, row: dict) -> dict:
     the executed machines.
     """
     uri, expected = row["row_runtime_uri"], row["row_runtime_sha256"]
-    path = root / "packets" / f"{PurePosixPath(uri).name}"
+    path = artifact_path(root, row, "source-runtime", uri)
     path.parent.mkdir(parents=True, exist_ok=True)
     copy(uri, str(path), no_clobber=True)
     digest = sha256_bytes(path.read_bytes())
@@ -175,20 +175,26 @@ def read_map(root: Path, map_uri: str, map_sha256: str) -> dict:
     return json.loads(path.read_text())
 
 
-def fetch_task_spec_bytes(root: Path, row: dict) -> bytes:
-    """Download the row's actual frozen TaskSpec and verify its exact SHA.
+def artifact_path(root: Path, row: dict, kind: str, uri: str) -> Path:
+    """Row-unique local path for a sealed artifact download.
 
-    The local path is keyed by the URI basename: task ids share prefixes
-    within a family, so a truncated id would collide across sibling rows and
-    a no-clobber copy would leave another row's bytes in place.
+    Sealed URIs share basenames across rows (package.tar.gz,
+    source-runtime.json), so download paths key on the row identity rather
+    than the basename; a basename key with no-clobber copy would leave a
+    sibling row's bytes in place.
     """
-    uri, expected = row["task_spec_uri"], row["task_spec_sha256"]
-    path = root / "packets" / PurePosixPath(uri).name
+    suffix = PurePosixPath(uri).suffix or ".bin"
+    return root / "packets" / f"{row['instance_id']}-{kind}{suffix}"
+
+
+def fetch_task_spec_bytes(root: Path, row: dict) -> bytes:
+    """Download the row's actual frozen TaskSpec and verify its exact SHA."""
+    path = artifact_path(root, row, "task-spec", row["task_spec_uri"])
     path.parent.mkdir(parents=True, exist_ok=True)
-    copy(uri, str(path), no_clobber=True)
+    copy(row["task_spec_uri"], str(path), no_clobber=True)
     digest = sha256_bytes(path.read_bytes())
-    if digest != expected:
-        raise ValueError(f"TaskSpec hash mismatch for {row['instance_id']}: {digest} != {expected}")
+    if digest != row["task_spec_sha256"]:
+        raise ValueError(f"TaskSpec hash mismatch for {row['instance_id']}: {digest} != {row['task_spec_sha256']}")
     return path.read_bytes()
 
 
@@ -209,7 +215,7 @@ def packet_from_package(root: Path, family: str, row: dict, task_spec_bytes: byt
     directory = root / "packets" / f"{family}-{name}"
     if directory.exists():
         raise FileExistsError(directory)
-    archive_path = root / "packets" / PurePosixPath(row["package_uri"]).name
+    archive_path = artifact_path(root, row, "package", row["package_uri"])
     copy(row["package_uri"], str(archive_path), no_clobber=True)
     digest = sha256_bytes(archive_path.read_bytes())
     if digest != row["package_sha256"]:
@@ -226,7 +232,7 @@ def packet_from_package(root: Path, family: str, row: dict, task_spec_bytes: byt
         raise ValueError(f"archive task-spec.json differs from the sealed TaskSpec evidence for {name}")
     if row.get("row_runtime_uri"):
         runtime_path = directory / "source-runtime.json"
-        runtime_bytes = root / "packets" / PurePosixPath(row["row_runtime_uri"]).name
+        runtime_bytes = artifact_path(root, row, "source-runtime", row["row_runtime_uri"])
         if not runtime_bytes.exists():
             fetch_row_runtime(root, row)
         if runtime_path.read_bytes() != runtime_bytes.read_bytes():
