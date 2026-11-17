@@ -243,7 +243,10 @@ def collect_worker(handle: WorkerProcess) -> RankResult:
     handle.log_file.close()
     handle.output_file.close()
     duration = time.time() - handle.started
+    # NCCL writes its INFO output to stdout and traces to stderr depending on
+    # build and NCCL_DEBUG_FILE, so the census parses both streams.
     lines = handle.log_path.read_text(errors="replace").splitlines()
+    lines += handle.output_path.read_text(errors="replace").splitlines()
     census = parse_nccl_census(lines)
     payload = None
     for line in handle.output_path.read_text(errors="replace").splitlines():
