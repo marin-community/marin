@@ -356,6 +356,8 @@ LARGE_DATA_MESSAGE = (
 
 
 def _is_data_file(path: pathlib.Path) -> bool:
+    if path.is_dir():
+        return False
     if path.suffix.lower() in DATA_FILE_SUFFIXES:
         return True
     # No OSError fallback: an unreadable file must abort the lint rather than

@@ -139,3 +139,14 @@ def test_non_data_and_config_files_are_ignored(repo: Path):
     source.write_text("value = 1\n")
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     assert precommit.check_large_data([source], fix=False) == 0
+
+
+def test_tracked_directory_symlink_keeps_large_data_checks_active(repo: Path):
+    target = repo / "configurations"
+    target.mkdir()
+    link = repo / "config-link"
+    link.symlink_to(target, target_is_directory=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    assert precommit.check_large_data([link], fix=False) == 0
+    oversized = _write_data(repo, "datasets/dump/results.json", 150)
+    assert precommit.check_large_data([link, oversized], fix=False) == 1
