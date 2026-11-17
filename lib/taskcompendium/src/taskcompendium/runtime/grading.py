@@ -538,7 +538,10 @@ async def _replay_outputs(
     machine_spec: MachineSpec,
     root: Path,
 ) -> tuple[list[tuple[Path, str]], dict[str, Any]]:
-    """Execute without private resources or inherited credentials, then close before grading."""
+    """Return local-output/destination pairs and command diagnostics after closing replay.
+
+    Replay receives no private resources or inherited credentials.
+    """
     assert replay.environment.docker_image is not None
     replay_spec = replace(
         machine_spec,

@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from dataclasses import asdict, replace
+from pathlib import PurePosixPath
 
 from harbor.environments.daytona import DaytonaEnvironment
 from harbor.models.verifier.result import VerifierResult
@@ -32,7 +33,7 @@ CAPTURE_TIMEOUT = 60.0
 
 
 class ScienceAgentBenchVerifier(BaseVerifier):
-    """Use the actor's Daytona factory for separate replay and grading machines."""
+    """Capture the submitted program and publish isolated replay/grading outcomes."""
 
     def __init__(self, *, judge_base_url: str | None = None, judge_api_key_env: str | None = None, **kwargs):
         super().__init__(**kwargs)
@@ -73,7 +74,10 @@ class ScienceAgentBenchVerifier(BaseVerifier):
             limit_bytes=MAX_OUTPUT_BYTES,
         )
         if SUBMISSION_PATH in files:
-            await asyncio.to_thread((self.trial_paths.artifacts_dir / "solution.py").write_bytes, files[SUBMISSION_PATH])
+            await asyncio.to_thread(
+                (self.trial_paths.artifacts_dir / PurePosixPath(SUBMISSION_PATH).name).write_bytes,
+                files[SUBMISSION_PATH],
+            )
         # File grading consumes only the captured program. Harbor keeps the Pi trajectory.
         attempt = GradingAttempt(
             ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))), files

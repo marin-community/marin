@@ -25,7 +25,7 @@ REPLAY_COMMAND = ("python3", "/app/solution.py")
 
 
 def completed_trace(task: TaskSpec) -> ConversationTrace:
-    """The conversation of an agent that worked in its machine and then stopped."""
+    """Append a synthetic final assistant message to the task conversation."""
     return ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
 
 

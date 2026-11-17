@@ -9,6 +9,7 @@ from verifyit.spec import JudgeSpec
 
 from taskcompendium.grader import GraderPackage
 from taskcompendium.importers.scienceagentbench import SUBMISSION_PATH, WORKING_DIRECTORY, VerifiedAnnotation
+from taskcompendium.importers.scienceagentbench_assets.visual_judge import MAX_OUTPUT_TOKENS, MODEL, SOURCE_JUDGE_MODULE
 from taskcompendium.models import (
     ArtifactKind,
     EnvironmentRequirements,
@@ -19,10 +20,12 @@ from taskcompendium.models import (
     ScriptGrader,
     VerifierArtifact,
 )
+from taskcompendium.runtime.grading import JUDGE_SPEC_PATH
 from taskcompendium.runtime.resources import inline_resource
 
 ASSETS = Path(__file__).parent / "scienceagentbench_assets"
-SOURCE_LICENSE = (ASSETS / "ScienceAgentBench.LICENSE").read_bytes()
+LICENSE_FILENAME = "ScienceAgentBench.LICENSE"
+SOURCE_LICENSE = (ASSETS / LICENSE_FILENAME).read_bytes()
 OUTPUT_DIRECTORY = f"{WORKING_DIRECTORY}/pred_results"
 PAPYRUS_ROWS = f"{WORKING_DIRECTORY}/papyrus_rows.jsonl"
 VERDICT_PATH = "/logs/verifier/verdict.json"
@@ -34,7 +37,7 @@ PAPYRUS_GOLD = "gold_rows.jsonl"
 PAPYRUS_DECODER = "decode_papyrus.py"
 VISUAL_JUDGE = "visual_judge.py"
 VISUAL_PROMPT = "visual_prompt.txt"
-VISUAL_MODEL = "openai/gpt-4o-2024-05-13"
+VISUAL_MODEL = f"openai/{MODEL}"
 
 
 def deterministic_grader(
@@ -49,7 +52,7 @@ def deterministic_grader(
     """Package a deterministic source evaluator; gold assets belong in its private image."""
     if annotation.instance_id == 22:
         raise ValueError("Task 22 requires the pickle-isolating Papyrus grader")
-    if b"gpt4_visual_judge" in evaluator_program:
+    if SOURCE_JUDGE_MODULE.encode() in evaluator_program:
         raise ValueError("Visual tasks require an explicitly configured visual judge")
     return _source_grader(
         annotation,
@@ -72,7 +75,7 @@ def visual_grader(
     verifier_timeout: float,
 ) -> GraderPackage:
     """Package a pinned figure evaluator with the three-call Azure/OpenRouter judge."""
-    if b"gpt4_visual_judge" not in evaluator_program:
+    if SOURCE_JUDGE_MODULE.encode() not in evaluator_program:
         raise ValueError("A visual grader requires an upstream figure evaluator")
     package = _source_grader(
         annotation,
@@ -90,6 +93,7 @@ def visual_grader(
                 "-I",
                 f"/tests/{VISUAL_JUDGE}",
                 f"/tests/{VISUAL_PROMPT}",
+                JUDGE_SPEC_PATH,
                 *package.grader.argv[2:],
             ),
             "judge": JudgeSpec(
@@ -97,7 +101,7 @@ def visual_grader(
                 rubric="checklist",
                 criteria=(judge_prompt,),
                 exact_gate=False,
-                max_completion_tokens=1000,
+                max_completion_tokens=MAX_OUTPUT_TOKENS,
             ),
         }
     )
@@ -151,7 +155,7 @@ def _source_grader(
         (
             inline_resource(EVALUATOR_WRAPPER, (ASSETS / EVALUATOR_WRAPPER).read_bytes()),
             inline_resource(SOURCE_EVALUATOR, evaluator_program),
-            inline_resource("ScienceAgentBench.LICENSE", SOURCE_LICENSE),
+            inline_resource(LICENSE_FILENAME, SOURCE_LICENSE),
         ),
     )
 
@@ -191,7 +195,7 @@ def papyrus_grader(
             artifacts=(VerifierArtifact(source=PAPYRUS_ROWS, target=PAPYRUS_ROWS, kind=ArtifactKind.FILE),),
             resources=(
                 inline_resource(f"replay/{PAPYRUS_DECODER}", (ASSETS / PAPYRUS_DECODER).read_bytes()),
-                inline_resource("replay/ScienceAgentBench.LICENSE", SOURCE_LICENSE),
+                inline_resource(f"replay/{LICENSE_FILENAME}", SOURCE_LICENSE),
             ),
         ),
     )
@@ -200,6 +204,6 @@ def papyrus_grader(
         (
             inline_resource(PAPYRUS_SCORER, (ASSETS / PAPYRUS_SCORER).read_bytes()),
             inline_resource(PAPYRUS_GOLD, gold_rows),
-            inline_resource("ScienceAgentBench.LICENSE", SOURCE_LICENSE),
+            inline_resource(LICENSE_FILENAME, SOURCE_LICENSE),
         ),
     )

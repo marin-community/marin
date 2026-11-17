@@ -14,6 +14,7 @@ import os
 import re
 import runpy
 import sys
+import tomllib
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
@@ -26,6 +27,8 @@ from pydantic import ValidationError
 MODEL = "gpt-4o-2024-05-13"
 COMPLETIONS = 3
 REQUEST_TIMEOUT = 120.0
+MAX_OUTPUT_TOKENS = 1000
+SOURCE_JUDGE_MODULE = "gpt4_visual_judge"
 SCORE_PATTERN = re.compile(r"\[FINAL SCORE\]: (\d{1,3})", re.DOTALL)
 
 
@@ -36,6 +39,7 @@ def score_figure(
     gold_image: str,
     *,
     model: str = MODEL,
+    max_output_tokens: int = MAX_OUTPUT_TOKENS,
     record_response: Callable[[ChatCompletion], None] | None = None,
 ) -> tuple[list[str], float]:
     """Compare base64 PNGs, scoring text without a matching score marker as zero.
@@ -44,9 +48,8 @@ def score_figure(
     The official parser uses the first matching marker without clamping its
     value; preserve that behavior, including values outside the prompted range
     and the three-digit prefix of a longer number.
-    Three separate single-completion requests replace upstream single-call n=3
-    batching because the selected endpoint does not honor n=3. All three must
-    succeed before returning a score. Retries belong to the caller.
+    All three separate single-completion requests must succeed before returning
+    an average. Retries belong to the caller.
     """
     if model not in (MODEL, f"openai/{MODEL}"):
         raise RuntimeError("ScienceAgentBench requires the pinned visual judge snapshot")
@@ -66,7 +69,7 @@ def score_figure(
                 }
             ],
             temperature=0.2,
-            max_tokens=1000,
+            max_tokens=max_output_tokens,
             n=1,
             top_p=0.95,
             frequency_penalty=0,
@@ -109,12 +112,14 @@ def record_completion(response: ChatCompletion) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("prompt", type=Path)
+    parser.add_argument("judge_spec", type=Path)
     parser.add_argument("wrapper", type=Path)
     parser.add_argument("evaluator", type=Path)
     parser.add_argument("primary_output", type=Path)
     parser.add_argument("candidate_directory", type=Path)
     parser.add_argument("verdict", type=Path)
     args = parser.parse_args()
+    settings = tomllib.loads(args.judge_spec.read_text())
     with OpenAI(
         base_url=os.environ["VERIFYIT_JUDGE_BASE_URL"],
         api_key=os.environ["VERIFYIT_JUDGE_API_KEY"],
@@ -122,7 +127,7 @@ def main() -> None:
     ) as client:
         # Preserve the pinned evaluator's figure selection and success threshold.
         # Only its judge transport is replaced; this module never runs in replay.
-        judge = ModuleType("gpt4_visual_judge")
+        judge = ModuleType(SOURCE_JUDGE_MODULE)
         judge.__dict__.update(
             encode_image=encode_image,
             score_figure=partial(
@@ -130,6 +135,7 @@ def main() -> None:
                 client,
                 args.prompt.read_text(),
                 model=os.environ["VERIFYIT_JUDGE_MODEL"],
+                max_output_tokens=settings["max_completion_tokens"],
                 record_response=record_completion,
             ),
         )

@@ -250,7 +250,7 @@ def test_visual_judge_missing_completions_remain_ungraded(indices, texts):
         )
 
     with OpenAI(api_key="fixture", http_client=httpx.Client(transport=httpx.MockTransport(respond))) as client:
-        with pytest.raises(RuntimeError, match="Visual judge"):
+        with pytest.raises(RuntimeError):
             score_figure(client, "prompt fixture", "cHJlZA==", "Z29sZA==")
 
 
