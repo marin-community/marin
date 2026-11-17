@@ -120,7 +120,8 @@ def production_checkers(*, local_disk_pool: LocalDiskPool | None = None) -> dict
     checkers = {}
     for backend, class_name in (
         ("docker", "DockerMachineFactory"),
-        ("gvisor", "GvisorMachineFactory"),
+        ("docker-gvisor", "DockerGvisorMachineFactory"),
+        ("iris", "IrisMachineFactory"),
         ("qemu", "QemuMachineFactory"),
         ("shellsim", "ShellSimMachineFactory"),
         ("daytona", "DaytonaMachineFactory"),
@@ -226,7 +227,7 @@ def _runtime_cell(backend: str, requirement: Requirement) -> RuntimeSupport:
             "Mounts require HostImage, rejected by this factory.",
         )
     if requirement == Requirement.FILE_MTIME:
-        if backend in {"local", "docker", "gvisor"}:
+        if backend in {"local", "docker", "docker-gvisor"}:
             return RuntimeSupport(
                 Support.VERIFY,
                 path + ":upload",
@@ -304,7 +305,7 @@ def survey_backend(backend: str, check: Checker) -> list[CapabilityCell]:
             )
             continue
         requirements, spec = probe
-        validator_backend = "docker" if backend == "gvisor" else backend
+        validator_backend = "docker" if backend == "docker-gvisor" else backend
         validator = "check_local_environment" if backend == "local" else "check_environment"
         evidence = f"lib/shellbox/src/shellbox/backends/{validator_backend}/machine.py:{validator}"
         try:
@@ -345,7 +346,7 @@ def survey_backend(backend: str, check: Checker) -> list[CapabilityCell]:
                         "advertising sandbox-storage-limit. SANDBOX writable-layer accounting is unqualified; "
                         "current controllers withhold that capability pending a real SANDBOX overflow."
                     )
-                if backend == "docker" or backend == "gvisor":
+                if backend == "docker" or backend == "docker-gvisor":
                     note += " Disk quotas depend on the host storage driver."
                 if backend == "local":
                     note += (

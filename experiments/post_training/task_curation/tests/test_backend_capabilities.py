@@ -17,7 +17,13 @@ import pytest
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import check_local_environment
-from shellbox.machine import Command, MachineSpec, Mount, UnsupportedMachineSpec
+from shellbox.machine import (
+    BACKEND_DEPLOYMENT,
+    Command,
+    MachineSpec,
+    Mount,
+    UnsupportedMachineSpec,
+)
 from shellbox.requirements import (
     COMMAND_FIELDS,
     MACHINE_FIELDS,
@@ -44,6 +50,7 @@ from experiments.post_training.task_curation.backend_capabilities import (
     build_survey,
     main,
     merge_surveys,
+    production_backends,
     production_matrix,
     source_map,
 )
@@ -286,6 +293,55 @@ def test_pdb_shaped_grader_fits_local_with_verified_enforcement_machinery():
     assert grader_ranges["memory_mb"] == (512, 512)
     assert grader_ranges["storage_mb"] == (1024, 1024)
 
+    # the survey carries the typed deployment classes
+    survey = _survey_with_source(mapped, checkers)
+    assert survey.deployment_classes["docker-gvisor"] == "dev_only"
+    assert survey.deployment_classes["iris"] == "production"
+
+
+def _survey_with_source(mapped, checkers):
+    """A minimal bound survey carrying one measured source and the typed deployment classes."""
+    return BackendSurvey(
+        catalog_root="test:catalog",
+        snapshot_id="snap",
+        generated_at="2026-11-17T00:00:00Z",
+        git_revision="rev",
+        schema_sha256="0" * 64,
+        runtime_defaults={"agent": RUNTIME, "grader": RUNTIME},
+        matrix=production_matrix(checkers),
+        deployment_limits={},
+        deployment_classes={
+            backend.value: deployment_class.value for backend, deployment_class in BACKEND_DEPLOYMENT.items()
+        },
+        sources=[mapped],
+    )
+
+
+def test_dev_only_supported_cell_can_never_satisfy_admission():
+    """A dev-only backend's SUPPORTED verdict never counts for admission.
+
+    The admission view (``production_backends``) drops dev-only backends, so a
+    population whose only SUPPORTED verdict comes from local Docker or
+    Docker+runsc still lacks production support and stays excluded.
+    """
+    checkers = _verified_local_checkers()
+    mapped = source_map(
+        "pdbthink",
+        [_pdb_grader_document() for _ in range(3)],
+        production_matrix(checkers),
+        checkers,
+        {},
+        {"agent": RUNTIME, "grader": RUNTIME},
+    )
+    survey = _survey_with_source(mapped, checkers)
+    production = production_backends(survey)
+    # docker and docker-gvisor measured SUPPORTED here but are dev-only; the
+    # admission view must not contain them at all
+    assert "docker" not in production and "docker-gvisor" not in production
+    assert set(production) == {"iris", "daytona", "local"}
+    # production backends keep their own measured verdicts untouched
+    assert production["local"].support == FitSupport.SUPPORTED
+
 
 def test_conversation_only_census_needs_no_backend_despite_deployment_defaults():
     checkers = {"docker": DockerMachineFactory().check_environment}
@@ -456,7 +512,7 @@ def _rejecting_checkers() -> dict[str, Checker]:
     def rejecting(requirements, spec) -> None:
         raise UnsupportedMachineSpec("The drift shard rejects every requirement")
 
-    return {name: rejecting for name in ("docker", "gvisor", "qemu", "shellsim", "daytona", "iris", "local")}
+    return {name: rejecting for name in ("docker", "docker-gvisor", "qemu", "shellsim", "daytona", "iris", "local")}
 
 
 def test_unassessed_inputs_require_their_own_declared_reason(tmp_path):
@@ -660,7 +716,7 @@ def _unit_checkers() -> dict[str, Checker]:
     return {
         "docker": DockerMachineFactory().check_environment,
         "local": check_local_environment,
-        "gvisor": rejecting,
+        "docker-gvisor": rejecting,
         "qemu": rejecting,
         "shellsim": rejecting,
         "daytona": rejecting,

@@ -131,7 +131,7 @@ def _selected_sources(sources: tuple[str, ...], mode: SourceProcessingMode) -> d
 def _image_factory(backend: Backend | None, controller_url: str | None) -> MachineFactory | None:
     if backend is None:
         return None
-    if backend == Backend.GVISOR:
+    if backend == Backend.IRIS:
         if controller_url is None:
             job = get_job_info()
             controller_url = job.controller_address if job is not None else None
@@ -449,7 +449,7 @@ def _embedding_pass(
 )
 @click.option(
     "--image-backend",
-    type=click.Choice([Backend.GVISOR.value, Backend.DAYTONA.value]),
+    type=click.Choice([Backend.IRIS.value, Backend.DAYTONA.value]),
     help="Image controls: gvisor via Iris or daytona. Omit for local and simulator controls only.",
 )
 @click.option(

@@ -21,7 +21,7 @@ function value(row, key) {
   if (key === 'result') return resultKey(row);
   if (key === 'contamination') return row.contamination_status;
   if (key === 'overlap') return row.contamination_status === 'NOT MEASURED' ? null : row.lexical_contamination?.contaminated_tasks;
-  if (key === 'backends') return backendLabels(row).map(item => item.label).join('; ');
+  if (key === 'backends') return backendLabels(row).map(item => item.dev_only ? `${item.label} (dev only)` : item.label).join('; ');
   if (key === 'grading') return Object.keys(row.grading_environment?.required_counts || {}).join('; ');
   if (key === 'area') return row.coverage?.top_area?.name;
   if (key === 'updated') return row.updated_at;

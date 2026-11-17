@@ -24,7 +24,14 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.disk import LocalDiskPool
-from shellbox.machine import HostImage, PackageSpec, RegistryImage, UnsupportedMachineSpec
+from shellbox.machine import (
+    BACKEND_DEPLOYMENT,
+    DeploymentClass,
+    HostImage,
+    PackageSpec,
+    RegistryImage,
+    UnsupportedMachineSpec,
+)
 from shellbox.requirements import Requirement, Support
 from shellbox.survey import CapabilityCell, Checker, capability_matrix, production_checkers
 from taskcompendium.backend_requirements import (
@@ -63,6 +70,23 @@ def environment_kind(source) -> Requirement:
     raise ValueError(
         f"Converted environments resolve to RegistryImage, HostImage or PackageSpec, not {type(source).__name__}"
     )
+
+
+def production_backends(survey: BackendSurvey) -> dict[str, BackendFit]:
+    """The per-source fit restricted to production deployment targets.
+
+    Admission reads this view: a DEV_ONLY backend (local Docker, Docker+runsc)
+    can never satisfy admission no matter what its cells say.
+    """
+    classes = survey.deployment_classes or {
+        backend.value: deployment_class.value for backend, deployment_class in BACKEND_DEPLOYMENT.items()
+    }
+    production = {}
+    for source in survey.sources:
+        for backend, fit in source.backends.items():
+            if classes.get(backend) == DeploymentClass.PRODUCTION.value:
+                production[backend] = fit
+    return production
 
 
 def combined_fit(values: Iterable[FitSupport]) -> FitSupport:
@@ -403,6 +427,9 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
         schema_sha256=backend_schema_sha256(),
         matrix=matrix,
         deployment_limits=limits,
+        deployment_classes={
+            backend.value: deployment_class.value for backend, deployment_class in BACKEND_DEPLOYMENT.items()
+        },
         local_disk_pool=None if disk_pool is None else str(disk_pool.root),
         runtime_defaults=runtime_defaults,
         sources=[

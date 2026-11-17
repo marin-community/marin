@@ -384,7 +384,7 @@ class IrisMachineFactory:
     with secrets must be reserved for trusted private grading, never actor jobs.
     """
 
-    backend: Backend = Backend.GVISOR
+    backend: Backend = Backend.IRIS
 
     def __init__(
         self,

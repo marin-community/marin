@@ -129,9 +129,10 @@ function overlapEvidence(source, labels) {
   return content.children.length ? content : null;
 }
 
-const backendNames = {local: 'LOCAL', daytona: 'Daytona', docker: 'Docker', gvisor: 'gVisor', qemu: 'QEMU', shellsim: 'ShellSim', iris: 'Iris'};
+const backendNames = {local: 'LOCAL', daytona: 'Daytona', docker: 'Docker', 'docker-gvisor': 'Docker + runsc (local dev)', qemu: 'QEMU', shellsim: 'ShellSim', iris: 'Iris (gVisor, production)'};
+const backendDeploymentClass = {iris: 'production', daytona: 'production', local: 'production', docker: 'dev_only', 'docker-gvisor': 'dev_only', qemu: 'dev_only', shellsim: 'dev_only'};
 const supportClasses = {supported: 'good', unsupported: 'bad', role_absent: 'unassessed'};
-const backendStatusLabels = {role_absent: 'N/A (no role)'};
+const backendStatusLabels = {role_absent: 'N/A (no role)', verify: 'Verify (live probe pending)'};
 function readableRecord(value) {
   if (value instanceof Node) return value;
   if (value === null || value === undefined) return node('span', 'Not measured', 'muted');
@@ -159,8 +160,9 @@ function binaryBackendFit(fit, taskCount) {
   }
   if (fit.support === 'partial' && !Object.keys(blockers).length) blockers.incomplete_requirement_support = fit.task_counts.partial || taskCount;
   const absent = Object.values(roles).every(counts => (counts.role_absent || 0) === taskCount);
+  const pending = fit.support === 'verify' || Object.values(roles).some(counts => (counts.verify || 0) > 0);
   const failed = ['partial', 'unsupported', 'not_applicable'].includes(fit.support) || Object.values(affected).some(count => count > 0) || Object.keys(blockers).length || Object.keys(fit.validation_errors).length;
-  return {...fit, roles, blockers, affected_roles: affected, support: absent ? 'role_absent' : failed ? 'unsupported' : 'supported'};
+  return {...fit, roles, blockers, affected_roles: affected, support: absent ? 'role_absent' : failed ? 'unsupported' : pending ? 'verify' : 'supported'};
 }
 function backendLabels(source) {
   const capabilities = source.backend_capabilities;
@@ -171,7 +173,9 @@ function backendLabels(source) {
     if (!reasons.length && Object.keys(fit.validation_errors).length) reasons.push('validation');
     const name = backendNames[key] || key;
     const status = backendStatusLabels[fit.support] || fit.support.toUpperCase();
-    return {key, fit, label: fit.support === 'supported' ? name : `${name}: ${status}${reasons.length ? ': ' + reasons.join(', ') : ''}`};
+    const devOnly = backendDeploymentClass[key] === 'dev_only';
+    const display = devOnly ? `${name} — dev only` : name;
+    return {key, fit, dev_only: devOnly, label: fit.support === 'supported' ? display : `${display}: ${status}${reasons.length ? ': ' + reasons.join(', ') : ''}`};
   });
 }
 function daytonaEvidenceRows(source, cap) {

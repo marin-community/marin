@@ -163,6 +163,8 @@ class BackendSurvey(BaseModel):
     deployment_limits: dict[str, dict]
     local_disk_pool: str | None = None
     """Worker path of the verified LOCAL disk pool backing the local checker, if any."""
+    deployment_classes: dict[str, str] = {}
+    """Per backend: ``production`` or ``dev_only``. Admission counts production backends only."""
     sources: list[BackendSourceMap]
 
     @model_validator(mode="after")

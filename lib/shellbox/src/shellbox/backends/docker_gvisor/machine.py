@@ -63,10 +63,10 @@ class GvisorMachine(DockerMachine):
             archive.extract(member, target.parent, filter="data")
 
 
-class GvisorMachineFactory(DockerMachineFactory):
+class DockerGvisorMachineFactory(DockerMachineFactory):
     """Require a Docker daemon with its ``runsc`` runtime registered."""
 
-    backend: Backend = Backend.GVISOR
+    backend: Backend = Backend.DOCKER_GVISOR
 
     def __init__(self):
         super().__init__(runtime="runsc")
