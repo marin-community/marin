@@ -356,7 +356,7 @@ def test_kueue_gate_view_reads_quota_conditions(monkeypatch) -> None:
             ]
         },
     }
-    monkeypatch.setattr(jw, "k8s_cluster_settings", lambda cluster: ("iris", "kc", "ctx"))
+    monkeypatch.setattr(jw, "k8s_cluster_settings", lambda cluster: jw.K8sClusterSettings(namespace="iris", kubeconfig="kc", context="ctx"))
     monkeypatch.setattr(jw, "run_readonly", lambda command, timeout_seconds=180: json.dumps({"items": [workload]}))
     gated, message = jw.kueue_gate_view("cw-us-east-08a", "/benfeuer/qc-v1")
     assert gated

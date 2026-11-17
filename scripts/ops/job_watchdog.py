@@ -68,8 +68,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
-import fsspec
 import yaml
+from rigging.filesystem.factory import open_url, url_to_fs
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 logger = logging.getLogger("job_watchdog")
 
@@ -1091,8 +1092,17 @@ def describe_iris_job(cluster: str, job: str, job_is_prefix: bool) -> IrisJobVie
         return views[0]
 
 
-def k8s_cluster_settings(cluster: str) -> tuple[str, str, str] | None:
-    """(namespace, kubeconfig path, kube context) for a cluster, or None when not Kubernetes."""
+@dataclasses.dataclass(frozen=True)
+class K8sClusterSettings:
+    """Kubernetes access settings resolved from one cluster's config file."""
+
+    namespace: str
+    kubeconfig: str
+    context: str
+
+
+def k8s_cluster_settings(cluster: str) -> K8sClusterSettings | None:
+    """Kubernetes settings for a cluster, or None when not Kubernetes-backed."""
     for directory in CLUSTER_CONFIG_DIRS:
         path = directory / f"{cluster}.yaml"
         if not path.exists():
@@ -1105,7 +1115,7 @@ def k8s_cluster_settings(cluster: str) -> tuple[str, str, str] | None:
         kubeconfig = platform.get("kubeconfig_path")
         if not (namespace and context and kubeconfig):
             return None
-        return namespace, str(Path(kubeconfig).expanduser()), context
+        return K8sClusterSettings(namespace=namespace, kubeconfig=str(Path(kubeconfig).expanduser()), context=context)
     return None
 
 
@@ -1114,15 +1124,14 @@ def kueue_workloads(cluster: str) -> list[dict[str, Any]]:
     settings = k8s_cluster_settings(cluster)
     if settings is None:
         return []
-    namespace, kubeconfig, context = settings
     command = [
         "kubectl",
         "--kubeconfig",
-        kubeconfig,
+        settings.kubeconfig,
         "--context",
-        context,
+        settings.context,
         "-n",
-        namespace,
+        settings.namespace,
         "get",
         "workloads.kueue.x-k8s.io",
         "-o",
@@ -1208,9 +1217,9 @@ def _detail_mtime(details: dict[str, Any]) -> datetime | None:
 
 
 def probe_storage_objects(probe: StorageObjectsProbe, lifecycle: tuple[EntryState, str, int] | None) -> Observation:
-    protocol = probe.url.split("://", 1)[0]
-    filesystem = fsspec.filesystem(protocol)
-    details = filesystem.find(probe.url, detail=True)
+    configure_coreweave_s3()
+    filesystem, path = url_to_fs(probe.url)
+    details = filesystem.find(path, detail=True)
     files = [entry for entry in details.values() if entry.get("type") != "directory"]
     count = len(files)
     mtimes = [mtime for mtime in (_detail_mtime(entry) for entry in files) if mtime is not None]
@@ -1227,7 +1236,8 @@ def probe_storage_objects(probe: StorageObjectsProbe, lifecycle: tuple[EntryStat
 
 
 def probe_json_field(probe: JsonFieldProbe, lifecycle: tuple[EntryState, str, int] | None) -> Observation:
-    with fsspec.open(probe.location, "r") as f:
+    configure_coreweave_s3()
+    with open_url(probe.location, "r") as f:
         document = json.loads(f.read())
     value: Any = document
     for part in probe.field.split("."):
