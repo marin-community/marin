@@ -3,6 +3,7 @@
 
 import hashlib
 import inspect
+import json
 from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
@@ -23,6 +24,8 @@ from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.inventory import train_quick_loop as inventory
 from experiments.post_training.long_loop import nvl72 as mochi
+from experiments.post_training.long_loop import nvl72_evaluation as mochi_eval
+from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation
 from experiments.post_training.long_loop.run_spec import resolve_spec
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 from experiments.post_training.mismatch_probe import launch as mismatch
@@ -88,6 +91,37 @@ def _inventory_step(artifact_root: Path) -> ArtifactStep[SkyRLRun]:
     return inventory.build_run(VERSION, selection=selection)
 
 
+def _mochi_evaluation_step(artifact_root: Path) -> ArtifactStep[SkyRLRun]:
+    root = artifact_root / "mochi-evaluation"
+    model = root / "model"
+    model.mkdir(parents=True)
+    manifest = json.dumps({"request": {"config": {"checkpoint": "/native/step-400407"}}}).encode()
+    model_config = json.dumps({"num_experts": 384, "max_position_embeddings": 262144}).encode()
+    data = b"pinned micro tasks"
+    (model / "export-manifest.json").write_bytes(manifest)
+    (model / "config.json").write_bytes(model_config)
+    (root / "rollouts.parquet").write_bytes(data)
+    spec = mochi_eval.NVL72EvaluationSpec(
+        format="nvl72_eval",
+        marin_revision="pinned",
+        output_prefix=str(artifact_root),
+        name="evaluations/mochi-launch-census",
+        model_uri=str(model),
+        model_step=400407,
+        model_manifest_sha256=hashlib.sha256(manifest).hexdigest(),
+        model_config_sha256=hashlib.sha256(model_config).hexdigest(),
+        tokenizer_uri="marin-community/marin-tokenizer-tools",
+        tokenizer_revision="pinned",
+        data_uri=str(root),
+        data_sha256=hashlib.sha256(data).hexdigest(),
+        input_version=VERSION,
+        job_timeout_hours=2,
+        context_tokens=65536,
+        max_new_tokens=16384,
+    )
+    return mochi_eval.evaluation_from_spec(spec, root / "launch.yaml")
+
+
 def _port_smoke_step(stage: str) -> ArtifactStep[SkyRLRun]:
     return getattr(skyrl_port_smoke.build_smoke(VERSION), stage)
 
@@ -141,6 +175,7 @@ def launch_builders(
             _mochi_step, artifact_root, resume, profile, response_tokens, smoke
         )
     builders["inventory/train"] = partial(_inventory_step, artifact_root)
+    builders["mochi/evaluation"] = partial(_mochi_evaluation_step, artifact_root)
     for stage in ("train", "resume"):
         builders[f"port-smoke/{stage}"] = partial(_port_smoke_step, stage)
     builders["iceball/workflow"] = _iceball_step
@@ -213,7 +248,11 @@ def render_launch_census(artifact_root: Path) -> tuple[dict[str, str], dict[str,
                 step = build()
                 _seed_dependency_metadata(step, artifact_root)
                 config = materialized_config(step, str(artifact_root))
-                documents[name] = config.launch_config_yaml
+                documents[name] = (
+                    config.skyrl.launch_config_yaml
+                    if isinstance(config, JudgedEvaluation)
+                    else config.launch_config_yaml
+                )
             except Exception as error:
                 failures[name] = f"{type(error).__name__}: {error}"
         # The long loop binds both launchers in one artifact graph. Fingerprint
