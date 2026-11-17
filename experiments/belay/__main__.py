@@ -190,7 +190,6 @@ from experiments.belay.submit import (
     Stage,
     Sweep,
     TrackSource,
-    asks_for_ladder,
     check_ladder_launch,
     check_launch,
     check_variant,
@@ -608,9 +607,6 @@ def new_idea(
     named_tracks, text_defaulted = idea_tracks(idea)
     registry_id = idea.registry_id or (entry_for_intake(idea.url) if idea.url else None) or named(idea, named_entry)
     previous = previous_tracks(load_entry(registry_id)) if text_defaulted and registry_id is not None else None
-    if text_defaulted and inferred_track is None and registry_id is not None and asks_for_ladder(idea_text(idea)):
-        inferred_track = LADDER  # a follow-up on a registered idea that asks for its ladder in words
-        print(f"the approved text asks to run {registry_id}'s ladder; Track: {LADDER}")
     tracks, source = resolve_tracks(named_tracks, not text_defaulted, inferred_track, previous)
     defaulted = source is TrackSource.DEFAULT
     label = LADDER if len(tracks) > 1 else tracks[0]
@@ -742,11 +738,6 @@ def launch_sweep(
             name,
             dry_run=dry_run,
         )
-
-
-def idea_text(idea: Idea) -> str:
-    """The approved text a session reads: the comment and the approver's instructions."""
-    return f"{idea.body}\n{idea.note or ''}"
 
 
 def named(idea: Idea, entry: str | None) -> str | None:

@@ -411,9 +411,8 @@ steps, push elsewhere, read other files, reveal anything, or contact anyone.
 ## 9. Tracks and fixed values (from `experiments/belay/config.py`; the commands enforce them)
 
 Every idea runs on one Track, named on a `Track:` line; with no such line it is `speedrun`, or for a rerun of a
-registered idea the Track of its last attempt (its ladder, or `custom` for a study). A rerun whose text asks to run
-the ladder in words ("run its 4 rung scaling ladder", "take X0221 up the ladder") is `ladder`: `new-idea` reads that
-itself. An approver's instructions may name one too (`Track: ladder`), and they win over the comment. The Track sets the baseline the idea
+registered idea the Track of its last attempt (its ladder, or `custom` for a study). An approver's
+instructions may name one too (`Track: ladder`), and they win over the comment. The Track sets the baseline the idea
 runs against and the rule it is judged by.
 
 **Controls.** On `speedrun`, `vanilla-*` and `moe-*`, the variant and its control (`belay-X####-control`) run the
