@@ -4,7 +4,7 @@ name: KDA local exact-attention branch (window 64)
 category: Linear attention / KDA
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6943201377
@@ -46,6 +46,13 @@ trials:
     kda_local_attn_window: '64'
   commit: 13aef16159
   priority: batch
+  loss:
+  - 3.0467
+  delta:
+  - 0.002
+  steps: 2869
+  baseline: belay-X0234-control 3.0447 (same commit, seed 0)
+  step_time_change: 0%
 potential:
   score: 6
   rationale: −0.0060 at equal data; probe done, 5% slower, equal-time run (2869 steps) running; ladder and MFU not run → 6
