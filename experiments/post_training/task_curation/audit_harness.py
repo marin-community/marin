@@ -16,7 +16,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import Confidence, Defect, ReviewRecord, ReviewStatus
 from taskcompendium.pipeline.review import review_payload
 
-from experiments.post_training.task_curation.full_qc_review import has_review_issues
+from experiments.post_training.task_curation.review_quality import has_review_issues
 
 ISSUE_POPULATION = 663
 RUBRIC_SAMPLE = 70

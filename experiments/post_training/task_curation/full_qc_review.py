@@ -15,7 +15,6 @@ from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import SourceQualityResult
 from marin.execution.artifact import ArtifactRecord, read_record, result_type_name, write_record
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -23,12 +22,9 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import (
     Confidence,
-    Quality,
-    ReferenceStatus,
     ReviewRecord,
     ReviewRubric,
     ReviewStatus,
-    ReviewVerdict,
 )
 from taskcompendium.pipeline.review import Reviewer, review_tasks
 
@@ -40,11 +36,11 @@ from experiments.post_training.task_curation.full_qc_artifacts import (
 )
 from experiments.post_training.task_curation.full_qc_inputs import task_contract
 from experiments.post_training.task_curation.published_census import population_documents
+from experiments.post_training.task_curation.review_quality import has_review_issues, quality_result
 
 logger = logging.getLogger(__name__)
 REVIEW_BATCH_SIZE = 32
 SHARD_REQUEST_CONCURRENCY = 32
-MAX_SUMMARY_ISSUES = 50
 RECORD_SCHEMA = pa.schema(
     [
         ("task_id", pa.string()),
@@ -61,51 +57,6 @@ def load_inputs(path: str) -> FullQCInputs:
     if record is None or record.result is None:
         raise ValueError(f"Missing prepared input record: {path}")
     return FullQCInputs.model_validate({**record.result, "path": path})
-
-
-def has_review_issues(verdict: ReviewVerdict) -> bool:
-    return (
-        verdict.quality in {Quality.ISSUES, Quality.BAD}
-        or bool(verdict.defects)
-        or verdict.reference_status is ReferenceStatus.CONFLICT
-    )
-
-
-def quality_result(reviews: Sequence[ReviewRecord]) -> SourceQualityResult:
-    """Compute informational Result without treating missing observations as clean."""
-    reviewed = unavailable = uncertain = 0
-    issues = []
-    issue_count = 0
-    for review in reviews:
-        verdict = review.verdict
-        if review.status is not ReviewStatus.REVIEWED or verdict is None:
-            unavailable += 1
-            continue
-        if verdict.confidence is Confidence.LOW or (
-            verdict.quality is Quality.UNKNOWN and not has_review_issues(verdict)
-        ):
-            uncertain += 1
-            continue
-        reviewed += 1
-        if has_review_issues(verdict):
-            issue_count += 1
-            if len(issues) < MAX_SUMMARY_ISSUES:
-                issues.append(f"{review.task_id}: {verdict.evidence}")
-    recommendation = (
-        "Inspect all task-level issue evidence and qualify repairs with renewed QA."
-        if issue_count
-        else "No repairs indicated by conclusive reviews."
-    )
-    if unavailable or uncertain:
-        recommendation += " Resolve unavailable and uncertain observations before source-wide conclusions."
-    return SourceQualityResult(
-        reviewed=reviewed,
-        issue_count=issue_count,
-        issues=issues,
-        repair_recommendation=recommendation,
-        unavailable_count=unavailable,
-        uncertain_count=uncertain,
-    )
 
 
 def review_batch(

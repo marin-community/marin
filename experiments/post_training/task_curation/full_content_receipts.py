@@ -35,9 +35,9 @@ from experiments.post_training.task_curation.full_qc_repair import (
     primary_records,
     repair_identity,
 )
-from experiments.post_training.task_curation.full_qc_review import quality_result
 from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
 from experiments.post_training.task_curation.published_census import population_documents
+from experiments.post_training.task_curation.review_quality import quality_result
 
 
 def full_content_result_binding(

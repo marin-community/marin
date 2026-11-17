@@ -30,12 +30,12 @@ from experiments.post_training.task_curation.full_qc_inputs import task_contract
 from experiments.post_training.task_curation.full_qc_review import (
     REVIEW_BATCH_SIZE,
     ContractBatch,
-    quality_result,
     review_batch,
     write_observations,
 )
 from experiments.post_training.task_curation.judges import PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from experiments.post_training.task_curation.review_quality import quality_result
 from experiments.post_training.task_curation.sample_qc_artifacts import (
     PINNED_REVIEWER_SHA256,
     SAMPLE_SEED,

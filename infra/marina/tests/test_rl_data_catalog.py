@@ -87,7 +87,7 @@ from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentity
 from experiments.post_training.task_curation import registry, retirement
 from experiments.post_training.task_curation.catalog_identity import backend_survey_payload, canonical_backend_survey
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
-from experiments.post_training.task_curation.full_qc_review import quality_result as recompute_review_result
+from experiments.post_training.task_curation.review_quality import quality_result as recompute_review_result
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     actor_census_input,

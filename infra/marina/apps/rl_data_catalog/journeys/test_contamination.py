@@ -18,7 +18,7 @@ from playwright.sync_api import expect
 from sqlalchemy import text
 from taskcompendium.pipeline.models import Confidence, Defect, Quality, ReferenceStatus, ReviewRecord, ReviewVerdict
 
-from experiments.post_training.task_curation.full_qc_review import quality_result as recompute_review_result
+from experiments.post_training.task_curation.review_quality import quality_result as recompute_review_result
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from infra.marina.apps.rl_data_catalog.readability import inspect_state
 from infra.marina.apps.rl_data_catalog.release_browser import (

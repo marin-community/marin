@@ -17,8 +17,8 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.models import ReviewRecord, ReviewStatus
 
 from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC
-from experiments.post_training.task_curation.full_qc_review import quality_result
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
+from experiments.post_training.task_curation.review_quality import quality_result
 from experiments.post_training.task_curation.sample_qc import panel_tasks
 from experiments.post_training.task_curation.sample_qc_artifacts import (
     SAMPLE_REVIEWER_SHA256_BY_PAYLOAD_REVISION,

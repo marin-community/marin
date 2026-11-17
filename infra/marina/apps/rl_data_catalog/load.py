@@ -45,8 +45,8 @@ from experiments.post_training.task_curation.catalog_identity import (
     identity_survey_payload,
 )
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
-from experiments.post_training.task_curation.full_qc_review import quality_result as recompute_review_result
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
+from experiments.post_training.task_curation.review_quality import quality_result as recompute_review_result
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
 from infra.marina.apps.rl_data_catalog.server.admission import (

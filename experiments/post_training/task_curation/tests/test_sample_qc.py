@@ -28,10 +28,11 @@ from experiments.post_training.task_curation.difficulty_samples import (
     relocated_panel,
 )
 from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReviewerVersion, local_reviewer
-from experiments.post_training.task_curation.full_qc_review import ContractBatch, quality_result, write_observations
+from experiments.post_training.task_curation.full_qc_review import ContractBatch, write_observations
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.published_census import population_documents, population_rows
+from experiments.post_training.task_curation.review_quality import quality_result
 from experiments.post_training.task_curation.sample_qc import SamplePanel, panel_tasks, review_panel
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory, SampleQCReview
 from experiments.post_training.task_curation.sample_qc_binding import bind_sample_result
