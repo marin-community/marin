@@ -250,6 +250,28 @@ def launch_round(plan: LaunchPlan, *, dry_run: bool = False) -> dict[str, Any]:
     dirty = subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
     if dirty:
         raise RoundsError("working tree is dirty; commit the round's code before submitting")
+    # A launch ships this working tree; warn when it is behind the rounds landing
+    # branch so a stale worktree cannot ship an old bundle unnoticed.
+    lineage = subprocess.run(
+        ["git", "fetch", "--quiet", "origin", "atlas-env-audit"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if lineage.returncode == 0:
+        behind = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", "HEAD", "origin/atlas-env-audit"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if behind.returncode != 0:
+            LOGGER.warning(
+                "HEAD %s is not an ancestor of origin/atlas-env-audit; the submitted bundle "
+                "will not contain that branch's later fixes",
+                revision[:12],
+            )
     state = {
         "job_id": f"/benfeuer/{plan.job_name}",
         "root_cluster": ROOT_CLUSTER,
