@@ -21,6 +21,7 @@ from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import SkyRLRunConfig
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import require_secret
 
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation
@@ -91,7 +92,7 @@ def main(
             require_clean_revision(Path(__file__).resolve().parents[3], nvl72.marin_revision)
         configure_coreweave_s3()
         validation_output.mkdir(parents=True, exist_ok=True)
-        fs, model_path = filesystem_for(nvl72.model_uri.rstrip("/") + "/config.json")
+        fs, model_path = filesystem_for(prefix_join(nvl72.model_uri, "config.json"))
         model_config = fs.cat_file(model_path)
         validate_model_geometry(json.loads(model_config), PROFILES[nvl72.profile])
         terminal = run_from_spec(nvl72, smoke=smoke, config_output=validation_output / "launch.yaml")

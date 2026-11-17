@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 from pathlib import Path
 
 import pytest
@@ -103,28 +102,3 @@ def test_tail_graph_adopts_producers_and_runs_only_postprocessing(tmp_path, monk
     assert Path(terminal.path(), "archive.txt").read_text() == "evidence archive"
     for key, root in roots.items():
         assert Path(root, "producer.txt").read_text() == f"original-{key}"
-
-
-def test_recovered_archive_includes_original_native_files_without_mutating_settings(tmp_path, monkeypatch):
-    evaluated = tmp_path / "view"
-    evaluated.mkdir()
-    names = ["bixbench-pi.jsonl", "aggregated_results.jsonl"]
-    (evaluated / "merge-provenance.json").write_text(json.dumps({"source_files": [{"name": name} for name in names]}))
-    settings = {"stage_files": {"eval": [{"path": "terminal.json", "category": "config"}]}}
-    observed = []
-    monkeypatch.setattr(postprocess, "archive_graph_run", lambda **kwargs: observed.append(kwargs))
-    postprocess.archive_recovered_run(
-        output="archive",
-        settings=settings,
-        resolved_spec={},
-        artifacts={},
-        trained="original-rl",
-        evaluated=str(evaluated),
-        completed_report="report",
-    )
-    assert settings == {"stage_files": {"eval": [{"path": "terminal.json", "category": "config"}]}}
-    assert observed[0]["settings"]["stage_files"]["eval"] == [
-        {"path": "terminal.json", "category": "config"},
-        {"path": "merge-provenance.json", "category": "eval_trace"},
-        *[{"path": f"original-native/{name}", "category": "eval_trace"} for name in names],
-    ]

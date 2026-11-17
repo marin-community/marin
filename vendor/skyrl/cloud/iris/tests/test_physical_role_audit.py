@@ -9,8 +9,10 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from ray.scripts.scripts import parse_node_labels_string
 from skyrlrecipe.locality import LocalityPlan
 
+from cloud.iris import task_runtime
 from cloud.iris.role_topology import (
     CLIQUE_LABEL,
     GPU_LABEL_PREFIX,
@@ -59,8 +61,6 @@ def test_policy_and_inference_replicas_cover_distinct_physical_racks():
 
 
 def test_physical_identity_labels_round_trip_through_ray_cli():
-    from ray.scripts.scripts import parse_node_labels_string
-
     _, nodes = three_rack_nodes()
     for node in nodes:
         labels = node["Labels"]
@@ -98,8 +98,6 @@ def test_shared_domain_roles_use_the_planned_group_boundaries():
 
 @pytest.mark.parametrize("split", [False, True])
 def test_head_join_gate_writes_only_a_verified_physical_report(tmp_path, monkeypatch, split):
-    from cloud.iris import task_runtime
-
     topology, nodes = three_rack_nodes()
     if split:
         nodes[0]["Labels"][CLIQUE_LABEL] = "1"
