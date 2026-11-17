@@ -105,6 +105,9 @@ fn insert_object_segments_in(
         })?;
         upsert_segment_in(transaction, row)?;
         let (sql, source_id, source_rows) = match mode {
+            // An upsert may point an existing row at another object, so it
+            // clears `column_bounds`: ranges recorded for the old object would
+            // be wrong for the new one, and the backfill records them again.
             SegmentInsert::Upsert => (
                 "INSERT INTO object_segments
                     (namespace, path, table_spec_version, source_json, artifacts_json,
@@ -116,7 +119,8 @@ fn insert_object_segments_in(
                     artifacts_json = excluded.artifacts_json,
                     migration_backfill = excluded.migration_backfill,
                     migration_source_id = NULL,
-                    migration_source_rows = NULL",
+                    migration_source_rows = NULL,
+                    column_bounds = NULL",
                 None,
                 None,
             ),

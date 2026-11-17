@@ -17,7 +17,7 @@ use crate::proto::finelog::stats::{
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_proto_owned, with_implicit_seq, Column, Schema};
 use crate::store::table_spec::canonical_json_bytes;
-use crate::store::table_state::{ArtifactReferences, SourceBinding};
+use crate::store::table_state::{ArtifactReferences, SegmentDescriptor, SourceBinding};
 use crate::store::types::{NamespaceStats, SegmentLocation, SegmentRow};
 
 fn worker_stored() -> Schema {
@@ -596,4 +596,82 @@ fn published_snapshot_replaces_a_divergent_projection_at_the_same_revision() {
         .unwrap();
 
     assert_eq!(catalog.forward_cursor("hub", "a").unwrap(), Some(7));
+}
+
+fn column_bounds_of(catalog: &Catalog, namespace: &str, path: &str) -> Option<String> {
+    catalog
+        .inner
+        .lock()
+        .unwrap()
+        .conn
+        .query_row(
+            "SELECT column_bounds FROM object_segments WHERE namespace = ?1 AND path = ?2",
+            [namespace, path],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+#[test]
+fn recommitting_a_segment_path_clears_its_column_bounds() {
+    // A release that writes `column_bounds` can be rolled back to this one,
+    // which never writes them. Bounds recorded for an earlier object must not
+    // outlive a commit that points the row at another object.
+    let catalog = Catalog::open(None).unwrap();
+    catalog.upsert("a", &worker_stored()).unwrap();
+    let spec = table_spec(1, 128);
+    catalog
+        .register_table_spec("a", &spec, &spec_hash(&spec), false)
+        .unwrap();
+    let path = "/cache/a/abc.parquet";
+    let descriptor = |object_id: &str| SegmentDescriptor {
+        row: SegmentRow {
+            namespace: "a".to_string(),
+            path: path.to_string(),
+            level: 0,
+            min_seq: 1,
+            max_seq: 3,
+            row_count: 3,
+            byte_size: 64,
+            created_at_ms: 1,
+            min_key_value: None,
+            max_key_value: None,
+            partition: None,
+            location: SegmentLocation::Both,
+        },
+        source: ObjectRef {
+            object_id: Some(object_id.to_string()),
+            byte_size: Some(64),
+            ..Default::default()
+        },
+        artifacts: ArtifactReferences::default(),
+    };
+    catalog
+        .commit_object_segments(
+            &[descriptor("_finelog/tables/a/objects/one.parquet")],
+            1,
+            false,
+        )
+        .unwrap();
+    assert_eq!(column_bounds_of(&catalog, "a", path), None);
+    catalog
+        .inner
+        .lock()
+        .unwrap()
+        .conn
+        .execute(
+            "UPDATE object_segments SET column_bounds = '[]' WHERE namespace = 'a' AND path = ?1",
+            [path],
+        )
+        .unwrap();
+
+    catalog
+        .commit_object_segments(
+            &[descriptor("_finelog/tables/a/objects/two.parquet")],
+            1,
+            false,
+        )
+        .unwrap();
+
+    assert_eq!(column_bounds_of(&catalog, "a", path), None);
 }
