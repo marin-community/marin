@@ -131,9 +131,9 @@ Initialization uses one Shamir share with threshold one. Its root token and
 unseal share remain in `initialization.json` outside Git and Pulumi. Restarted
 Bao replicas need unsealing; repeating `initialize` preserves saved entity IDs.
 Independent key custodians and a tested recovery procedure are still required
-before production use. The fixed userpass
-identities have only `marin-auth-identity`; Google SSO enrollment and production
-user provisioning remain unimplemented.
+before production use. This staging deployment uses fixed synthetic userpass
+identities with only `marin-auth-identity`. Approved deployments can use the
+[Google login enrollment procedure](../../docs/dev-guide/shared-auth-login.md).
 
 The broker token has a 24-hour renewable TTL. Leaf certificates expire after
 14 days, their CA after 30 days. Renew before expiry; `prepare` does not rotate

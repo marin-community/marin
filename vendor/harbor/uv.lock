@@ -2034,6 +2034,7 @@ provides-extras = ["iap", "prometheus", "secrets"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "google-auth-oauthlib", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "prometheus-client", specifier = ">=0.24" },
     { name = "pytest", specifier = ">=8.3.2" },
@@ -2042,6 +2043,7 @@ dev = [
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "google-auth-oauthlib", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "prometheus-client", specifier = ">=0.24" },
     { name = "pytest", specifier = ">=8.3.2" },

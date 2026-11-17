@@ -55,7 +55,7 @@ class GrantDatabase:
 
     @contextmanager
     def leadership(self, name: str) -> Iterator[bool]:
-        """Attempt one lifecycle pass; a disconnected worker loses leadership."""
+        """Yield whether the named leadership lock was acquired for this context."""
         if self.engine.dialect.name != "postgresql":
             acquired = self._local_lock.acquire(blocking=False)
             try:

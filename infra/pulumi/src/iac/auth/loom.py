@@ -12,7 +12,7 @@ from typing import Literal
 import pulumi
 import pulumi_kubernetes as k8s
 
-from iac.auth.broker import BROKER_LABELS
+from iac.auth.broker import BROKER_LABELS, BROKER_PORT
 from iac.auth.openbao import dns_egress
 
 LOOM_LABELS = {"app.kubernetes.io/name": "loom-cw"}
@@ -332,7 +332,7 @@ class Loom(pulumi.ComponentResource):
                     else []
                 ),
                 "egress": [
-                    {"to": [broker_peer], "ports": [{"port": 8090}]},
+                    {"to": [broker_peer], "ports": [{"port": BROKER_PORT}]},
                     dns_egress(args.dns_cidrs),
                     *(
                         [

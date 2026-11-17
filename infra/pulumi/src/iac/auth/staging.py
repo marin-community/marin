@@ -6,11 +6,10 @@
 import pulumi
 import pulumi_kubernetes as k8s
 
-from iac.auth.broker import BROKER_LABELS
+from iac.auth.broker import BROKER_LABELS, BROKER_PORT
 from iac.auth.openbao import APP_LABELS, dns_egress
 from iac.auth.openfga import FGA_LABELS
 
-AUTH_NAMESPACE = "marin-auth-staging"
 TASK_NAMESPACE = "marin-auth-task-staging"
 PROOF_LABELS = {"app.kubernetes.io/name": "auth-staging-proof", "marin.dev/auth-client": "true"}
 TASK_LABELS = {"iris.managed": "true", "iris.runtime": "iris-kubernetes", "iris.egress": "internet"}
@@ -19,6 +18,7 @@ TASK_LABELS = {"iris.managed": "true", "iris.runtime": "iris-kubernetes", "iris.
 def staging_permissions(
     provider: pulumi.ProviderResource,
     *,
+    auth_namespace: str,
     dns_cidrs: tuple[str, ...],
     api_cidrs: tuple[str, ...],
     namespace_dependency: pulumi.Resource,
@@ -39,7 +39,7 @@ def staging_permissions(
     )
     account = k8s.core.v1.ServiceAccount(
         "auth-staging-proof",
-        metadata={"name": "auth-staging-proof", "namespace": AUTH_NAMESPACE},
+        metadata={"name": "auth-staging-proof", "namespace": auth_namespace},
         automount_service_account_token=False,
         opts=options,
     )
@@ -68,7 +68,7 @@ def staging_permissions(
         ],
         opts=scoped,
     )
-    subject = {"kind": "ServiceAccount", "name": account.metadata["name"], "namespace": AUTH_NAMESPACE}
+    subject = {"kind": "ServiceAccount", "name": account.metadata["name"], "namespace": auth_namespace}
     k8s.apiextensions.CustomResource(
         "auth-staging-local-queue",
         api_version="kueue.x-k8s.io/v1beta1",
@@ -98,7 +98,7 @@ def staging_permissions(
         opts=options,
     )
     broker_peer = {
-        "namespace_selector": {"match_labels": {"kubernetes.io/metadata.name": AUTH_NAMESPACE}},
+        "namespace_selector": {"match_labels": {"kubernetes.io/metadata.name": auth_namespace}},
         "pod_selector": {"match_labels": BROKER_LABELS},
     }
     task_peer = {
@@ -117,24 +117,27 @@ def staging_permissions(
         spec={
             "pod_selector": {"match_labels": TASK_LABELS},
             "policy_types": ["Egress"],
-            "egress": [{"to": [broker_peer], "ports": [{"protocol": "TCP", "port": 8090}]}, dns_egress(dns_cidrs)],
+            "egress": [
+                {"to": [broker_peer], "ports": [{"protocol": "TCP", "port": BROKER_PORT}]},
+                dns_egress(dns_cidrs),
+            ],
         },
         opts=scoped,
     )
     k8s.networking.v1.NetworkPolicy(
         "auth-staging-broker-task-clients",
-        metadata={"namespace": AUTH_NAMESPACE},
+        metadata={"namespace": auth_namespace},
         spec={
             "pod_selector": {"match_labels": BROKER_LABELS},
             "policy_types": ["Ingress"],
-            "ingress": [{"from": [task_peer], "ports": [{"protocol": "TCP", "port": 8090}]}],
+            "ingress": [{"from": [task_peer], "ports": [{"protocol": "TCP", "port": BROKER_PORT}]}],
         },
         opts=options,
     )
     proof_peer = {"pod_selector": {"match_labels": PROOF_LABELS}}
     k8s.networking.v1.NetworkPolicy(
         "auth-staging-proof-fga",
-        metadata={"namespace": AUTH_NAMESPACE},
+        metadata={"namespace": auth_namespace},
         spec={
             "pod_selector": {"match_labels": FGA_LABELS},
             "policy_types": ["Ingress"],
@@ -144,7 +147,7 @@ def staging_permissions(
     )
     k8s.networking.v1.NetworkPolicy(
         "auth-staging-proof-bao",
-        metadata={"namespace": AUTH_NAMESPACE},
+        metadata={"namespace": auth_namespace},
         spec={
             "pod_selector": {"match_labels": APP_LABELS},
             "policy_types": ["Ingress"],
@@ -154,13 +157,13 @@ def staging_permissions(
     )
     k8s.networking.v1.NetworkPolicy(
         "auth-staging-proof-network",
-        metadata={"namespace": AUTH_NAMESPACE},
+        metadata={"namespace": auth_namespace},
         spec={
             "pod_selector": {"match_labels": PROOF_LABELS},
             "policy_types": ["Ingress", "Egress"],
             "ingress": [],
             "egress": [
-                {"to": [{"pod_selector": {"match_labels": BROKER_LABELS}}], "ports": [{"port": 8090}]},
+                {"to": [{"pod_selector": {"match_labels": BROKER_LABELS}}], "ports": [{"port": BROKER_PORT}]},
                 {"to": [{"pod_selector": {"match_labels": APP_LABELS}}], "ports": [{"port": 8200}]},
                 {
                     "to": [

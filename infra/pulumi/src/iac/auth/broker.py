@@ -12,6 +12,7 @@ import pulumi_kubernetes as k8s
 from iac.auth.openbao import APP_LABELS, dns_egress
 
 BROKER_LABELS = {"app.kubernetes.io/name": "marin-auth"}
+BROKER_PORT = 8090
 TOKEN_DIRECTORY = "/var/run/marin-auth"
 DATABASE_PATH = "/var/lib/marin-auth/grants.db"
 
@@ -161,13 +162,13 @@ class GrantBroker(pulumi.ComponentResource):
                                     "--host",
                                     "0.0.0.0",
                                     "--port",
-                                    "8090",
+                                    str(BROKER_PORT),
                                     "--ssl-certfile",
                                     f"{TOKEN_DIRECTORY}/tls/tls.crt",
                                     "--ssl-keyfile",
                                     f"{TOKEN_DIRECTORY}/tls/tls.key",
                                 ],
-                                "ports": [{"name": "https", "container_port": 8090}],
+                                "ports": [{"name": "https", "container_port": BROKER_PORT}],
                                 "security_context": {
                                     "allow_privilege_escalation": False,
                                     "read_only_root_filesystem": True,
@@ -251,7 +252,7 @@ class GrantBroker(pulumi.ComponentResource):
         service = k8s.core.v1.Service(
             f"{name}-api",
             metadata={"name": "marin-auth", "namespace": args.namespace},
-            spec={"selector": BROKER_LABELS, "ports": [{"name": "https", "port": 8090, "target_port": "https"}]},
+            spec={"selector": BROKER_LABELS, "ports": [{"name": "https", "port": BROKER_PORT, "target_port": "https"}]},
             opts=child,
         )
         client_peer = {
@@ -264,7 +265,7 @@ class GrantBroker(pulumi.ComponentResource):
             spec={
                 "pod_selector": {"match_labels": BROKER_LABELS},
                 "policy_types": ["Ingress", "Egress"],
-                "ingress": [{"from": [client_peer], "ports": [{"port": 8090}]}],
+                "ingress": [{"from": [client_peer], "ports": [{"port": BROKER_PORT}]}],
                 "egress": [
                     {"to": [{"pod_selector": {"match_labels": APP_LABELS}}], "ports": [{"port": 8200}]},
                     *([{"to": [client_peer], "ports": [{"port": 8443}]}] if args.policy["loom"] is not None else []),
@@ -313,5 +314,7 @@ class GrantBroker(pulumi.ComponentResource):
             },
             opts=child,
         )
-        self.address = service.metadata.apply(lambda metadata: f"https://{metadata['name']}.{args.namespace}.svc:8090")
+        self.address = service.metadata.apply(
+            lambda metadata: f"https://{metadata['name']}.{args.namespace}.svc:{BROKER_PORT}"
+        )
         self.register_outputs({"address": self.address, "policy": config.metadata["name"]})

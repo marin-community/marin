@@ -34,10 +34,10 @@ from infra.auth.bootstrap import OperatorClient, configure
 from infra.auth.fga_operator import OpenFGAOperator
 from infra.auth.openfga import scope_object
 from infra.auth.proof_fga import configure_proof
+from infra.auth.proof_pod import NAMESPACE
 from infra.auth.seed_secret import seed_canary
 
 CONTEXT = "marin_US-WEST-04A"
-NAMESPACE = "marin-auth-staging"
 DATABASE_NAMESPACE = "marin-auth-db-staging"
 DATABASE_HOST = f"auth-postgres-rw.{DATABASE_NAMESPACE}.svc"
 ISSUER = f"https://openbao.{NAMESPACE}.svc:8200/v1/identity/oidc"

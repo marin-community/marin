@@ -7,6 +7,7 @@ import pulumi
 import pulumi_kubernetes as k8s
 from iac.auth.broker import (
     BROKER_LABELS,
+    BROKER_PORT,
     TOKEN_DIRECTORY,
     GrantBroker,
     GrantBrokerArgs,
@@ -16,13 +17,12 @@ from iac.auth.openbao import OpenBao, OpenBaoArgs
 from iac.auth.openfga import OpenFGA, OpenFGAArgs
 from iac.auth.staging import staging_permissions
 
+from infra.auth.proof_pod import NAMESPACE
+
 
 def main() -> None:
     config = pulumi.Config("marin-auth")
-    if (
-        config.require("namespace") == "marin-auth-staging"
-        and config.require("kubernetes_context") != "marin_US-WEST-04A"
-    ):
+    if config.require("namespace") == NAMESPACE and config.require("kubernetes_context") != "marin_US-WEST-04A":
         raise ValueError("Synthetic auth staging is restricted to the approved CW cluster")
     provider = k8s.Provider(
         "management", kubeconfig="", context=config.require("kubernetes_context"), enable_config_map_mutable=True
@@ -55,9 +55,10 @@ def main() -> None:
     pulumi.export("issuer", service.issuer)
     pulumi.export("private_api_address", service.api_address)
     pulumi.export("namespace", config.require("namespace"))
-    if namespace == "marin-auth-staging":
+    if namespace == NAMESPACE:
         staging_permissions(
             provider,
+            auth_namespace=namespace,
             dns_cidrs=tuple(config.require_object("dns_cidrs")),
             api_cidrs=tuple(config.require_object("kubernetes_api_cidrs")),
             namespace_dependency=service,
@@ -104,7 +105,7 @@ def main() -> None:
             bao_address=service.api_address,
             ca_bundle=f"{TOKEN_DIRECTORY}/ca/ca.crt",
             bao_issuer=service.issuer,
-            issuer=f"https://marin-auth.{namespace}.svc:8090",
+            issuer=f"https://marin-auth.{namespace}.svc:{BROKER_PORT}",
         )
         broker = GrantBroker(
             "grant-broker",
