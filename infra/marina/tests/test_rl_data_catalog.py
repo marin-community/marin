@@ -1798,7 +1798,10 @@ def test_difficulty_loader_accepts_existing_measurement_without_blocked_count():
     stored = measurement.model_dump(mode="json", exclude={"blocked_tasks"})
 
     def query(sql: str, _parameters: dict[str, Any]) -> dict[str, Any]:
-        return {"rows": [{"measurement": stored}]} if sql.lstrip().startswith("SELECT") else {"row_count": 0}
+        # the batched readback selects the id with the measurement projection
+        if sql.lstrip().startswith("SELECT"):
+            return {"rows": [{"measurement_id": measurement.measurement_id, "measurement": stored}]}
+        return {"row_count": 0}
 
     assert load_measurements([measurement], query) == {"inserted": 0, "records": 1}
 
