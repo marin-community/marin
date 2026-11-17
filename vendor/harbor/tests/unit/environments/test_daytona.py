@@ -722,7 +722,9 @@ class RecordingSnapshotClient:
     def __init__(self):
         self.snapshot_params = None
         self.sandbox_params = None
-        self.sandbox = SimpleNamespace(process=SimpleNamespace(exec=_provider_exec))
+        self.sandbox = SimpleNamespace(
+            id="11111111-1111-4111-8111-111111111111", process=SimpleNamespace(exec=_provider_exec)
+        )
         self.closed = False
         self.snapshot = self
 
@@ -924,6 +926,7 @@ async def test_daytona_trial_resource_probe_wait_preserves_source_budget_and_ver
 async def test_declarative_harbor_starts_and_deletes_without_a_snapshot_service(tmp_path):
     class Provider:
         def __init__(self):
+            self.id = "22222222-2222-4222-8222-222222222222"
             self.created = None
             self.deleted = False
             self.process = SimpleNamespace(exec=self.exec)
