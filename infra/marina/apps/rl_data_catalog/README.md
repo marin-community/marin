@@ -146,8 +146,9 @@ The confidence sidecar and overlap/Grader measurement loaders are documented in
 [Release procedure](RELEASE.md#intended-measurement-refreshes).
 
 Backend fit preserves Supported, Partial and Unsupported survey states. Partial
-names the conditional capabilities and their affected-task counts; it remains
-eligible under the maintained admission policy. Missing measurements, validation
+names the conditional capabilities and their affected-task counts. Partial on a
+production backend can satisfy the backend admission gate; other admission checks
+still apply. Missing measurements, validation
 failures and incompatible environment kinds retain their typed reasons.
 N/A is reserved for an absent role. Counts from agent
 and grader roles can overlap and must not be added into a unique-task union.

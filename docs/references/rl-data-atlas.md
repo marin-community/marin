@@ -201,8 +201,9 @@ Result from incomplete content review carries a provisional variant within its
 chip unless an explicit whole-source waiver finalizes it. Review progress and lower bounds appear only on the source Evidence page.
 
 Backend fit preserves the survey's Supported, Partial and Unsupported states.
-Partial names its conditional capabilities and remains eligible under the
-maintained admission policy. Missing measurements, validation failures and
+Partial names its conditional capabilities. Partial on a production backend can
+satisfy the backend admission gate; other admission checks still apply.
+Missing measurements, validation failures and
 incompatible environment kinds keep their typed reasons. N/A is reserved for
 absent roles. Affected-task counts are exact per role; roles can overlap, so those
 counts are not a unique task union.
