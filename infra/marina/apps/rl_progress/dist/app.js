@@ -137,13 +137,17 @@ async function refresh() {
   finally { $('refresh').disabled = false; }
 }
 $('refresh').onclick = refresh;
-$('close-detail').onclick = () => $('run-detail').close();
+function closeDetails() {
+  if (location.hash.startsWith('#run=')) history.replaceState(null, '', location.pathname + location.search);
+  $('run-detail').close();
+}
+$('close-detail').onclick = closeDetails;
+$('run-detail').addEventListener('cancel', (event) => { event.preventDefault(); closeDetails(); });
 $('run-detail').addEventListener('click', (event) => {
   const dialog = $('run-detail');
   if (event.target !== dialog) return;
   const bounds = dialog.getBoundingClientRect();
-  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeDetails();
 });
-$('run-detail').addEventListener('close', () => { if (location.hash.startsWith('#run=')) history.replaceState(null, '', location.pathname + location.search); });
 window.addEventListener('hashchange', followHash);
 refresh();

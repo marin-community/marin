@@ -55,13 +55,27 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
     journey.shoot("stored-attempt-breakdowns")
     journey.page.keyboard.press("Escape")
     expect(dialog).not_to_be_visible()
+    journey.click("Learning fixture")
+    expect(dialog).to_be_visible()
     picker = journey.page.get_by_role("combobox")
-    picker.select_option("native-second")
+    dismissed_hash = journey.page.evaluate(
+        """() => {
+        document.querySelector('dialog').requestClose();
+        const dismissedHash = location.hash;
+        const picker = document.querySelector('select');
+        picker.value = 'native-second';
+        picker.dispatchEvent(new Event('change'));
+        return dismissedHash;
+    }"""
+    )
+    assert dismissed_hash == ""
     expect(dialog).to_contain_text("eval_lite_100@25/scored_fraction")
     journey.page.mouse.click(5, 5)
     expect(dialog).not_to_be_visible()
     picker.select_option("native-first")
+    expect(dialog).to_be_visible()
     journey.page.keyboard.press("Escape")
+    expect(dialog).not_to_be_visible()
     changed = deepcopy(record)
     changed["label"] = "Updated learning fixture"
     changed["evaluations"][0]["run"] = 0.625
