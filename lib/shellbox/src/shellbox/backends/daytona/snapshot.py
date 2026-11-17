@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import re
+import shlex
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -40,6 +41,9 @@ from shellbox.machine import MachineSpec, UnsupportedMachineSpec
 SNAPSHOT_PREFIX = "shellbox-"
 SNAPSHOT_STALE_AFTER = timedelta(hours=1)
 SNAPSHOT_PAGE_SIZE = 100
+DOCKERFILE_WORD = re.compile(r"""(?:[^\s'"\\]|\\.|'[^']*'|"(?:\\.|[^"\\])*")+""")
+HEREDOC_WORD = re.compile(r"^\d*<<(-?)([^<]+)$")
+PARSER_DIRECTIVE = re.compile(r"^#\s*(syntax|escape|check)\s*=\s*(\S+)\s*$", re.IGNORECASE)
 FAILED_SNAPSHOT_STATES = frozenset({SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE})
 
 
@@ -105,6 +109,57 @@ class SnapshotPurgeReport:
     referenced: tuple[str, ...]
 
 
+def _dockerfile_has_add(contents: str) -> bool:
+    """Inspect instruction headers while leaving heredoc payloads uninterpreted."""
+    lines = iter(contents.splitlines())
+    escape = "\\"
+    directives = True
+    for line in lines:
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            directive = PARSER_DIRECTIVE.fullmatch(stripped) if directives else None
+            if directive and directive[1].lower() == "escape":
+                if directive[2] not in {"\\", "`"}:
+                    raise UnsupportedMachineSpec("Invalid Dockerfile escape directive")
+                escape = directive[2]
+            directives = directives and directive is not None
+            continue
+        directives = False
+        header = stripped
+        while True:
+            trimmed = header.rstrip(" \t")
+            continued = trimmed.endswith(escape) and not trimmed.endswith(escape * 2)
+            if not continued:
+                break
+            header = trimmed[:-1]
+            for continuation in lines:
+                if continuation.strip() and not continuation.lstrip().startswith("#"):
+                    header += continuation
+                    break
+            else:
+                raise UnsupportedMachineSpec("Unterminated Dockerfile continuation")
+        command = header.split(maxsplit=1)[0].upper()
+        if command == "ADD":
+            return True
+        if command not in {"RUN", "COPY", "ONBUILD"}:
+            continue
+        if command == "ONBUILD" and header.split(maxsplit=2)[1].upper() not in {"RUN", "COPY"}:
+            continue
+        # Preserve quotes when identifying << words: an echo of "<<EOF" is not a heredoc.
+        for word in DOCKERFILE_WORD.findall(header):
+            marker = HEREDOC_WORD.fullmatch(word)
+            if marker is None:
+                continue
+            (delimiter,) = shlex.split(marker[2])
+            for body in lines:
+                candidate = body.lstrip("\t") if marker[1] else body
+                if candidate == delimiter:
+                    break
+            else:
+                raise UnsupportedMachineSpec("Unterminated Dockerfile heredoc")
+    return False
+
+
 def validate_source(
     source: RegistryImage | DockerfileSource,
 ) -> RegistryImage | DockerfileSource:
@@ -114,11 +169,7 @@ def validate_source(
     source = DockerfileSource(source.context.resolve(), source.dockerfile.resolve())
     if source.dockerfile.parent != source.context:
         raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
-    if re.search(
-        r"^\s*ADD(?:\s|$)",
-        source.dockerfile.read_text(),
-        re.IGNORECASE | re.MULTILINE,
-    ):
+    if _dockerfile_has_add(source.dockerfile.read_text()):
         raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
     return source
 

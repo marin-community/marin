@@ -34,6 +34,11 @@ eval sandbox quota, retain the actual provisioning mode in launch receipts, and
 leave other campaigns' snapshots and sandboxes alone. The ten-snapshot RL
 suitability census remains a measurement of the source's training configuration.
 
+Shellbox rejects Dockerfile `ADD` instructions before creating a sandbox. This
+check follows instruction continuations and `RUN`/`COPY` heredoc boundaries:
+an assembly `add` instruction inside a heredoc is passed through unchanged.
+Retain the original Dockerfile when diagnosing a preflight rejection.
+
 The keys live in Google Secret Manager in project `hai-gcp-models`:
 `DAYTONA_RL_API_KEY` for training and `DAYTONA_EVAL_API_KEY` for validation.
 Load them into the correspondingly named environment variables before submission.

@@ -1474,7 +1474,17 @@ def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path
 
 
 @pytest.mark.parametrize("image_build", list(DaytonaImageBuild))
-@pytest.mark.parametrize("instruction", ["ADD payload.tar /opt/", 'add ["payload.tar", "/opt/"]'])
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "ADD payload.tar /opt/",
+        'add ["payload.tar", "/opt/"]',
+        "  AdD payload.tar /opt/",
+        "RUN cat <<'EOF'\nadd x0, x1, x2\nEOF\nADD payload.tar /opt/",
+        'RUN echo "<<EOF"\nADD payload.tar /opt/',
+        "RUN cat <<ADD\nassembly\nADD\nADD payload.tar /opt/",
+    ],
+)
 def test_daytona_rejects_add_inputs_before_building(tmp_path, instruction, image_build):
     dockerfile = tmp_path / "Dockerfile"
     dockerfile.write_text(f"FROM ubuntu:24.04\n{instruction}\n")
@@ -1485,6 +1495,39 @@ def test_daytona_rejects_add_inputs_before_building(tmp_path, instruction, image
         asyncio.run(factory.create(MachineSpec(DockerfileSource(tmp_path, dockerfile))))
     assert not client.snapshot.snapshots
     assert client.params is None
+
+
+@pytest.mark.parametrize(
+    "instructions",
+    [
+        "RUN cat <<'EOF' > /code.s\nadd x0, x1, x2\nEOF\n",
+        'RUN cat <<"EOF" > /code.s\nADD r0, r1, r2\nEOF\n',
+        "RUN cat <<E'OF' > /code.s\nadd x0, x1, x2\nEOF\n",
+        "RUN cat <<-'EOF' > /code.s\n\tadd x0, x1, x2\n\tEOF\n",
+        "RUN cat <<ONE <<TWO\nadd x0, x1, x2\nONE\nADD r0, r1, r2\nTWO\n",
+        "COPY <<EOF /code.s\nadd x0, x1, x2\nEOF\n",
+        "RUN printf '%s' \\\n# continuation comment\n\nADD\n",
+    ],
+)
+def test_daytona_accepts_dockerfile_payload_add_without_changing_source(tmp_path, instructions):
+    # Assembly and continued shell arguments must reach Daytona unchanged, rather
+    # than being mistaken for unsupported Dockerfile ADD instructions.
+    dockerfile = tmp_path / "Dockerfile"
+    original = f"# syntax=docker/dockerfile:1\nFROM ubuntu:24.04\n{instructions}".encode()
+    dockerfile.write_bytes(original)
+    request = snapshot_request_for_spec(MachineSpec(DockerfileSource(tmp_path, dockerfile)))
+    assert isinstance(request.source, DockerfileSource)
+    assert request.source.dockerfile.read_bytes() == original
+
+
+def test_daytona_honors_dockerfile_escape_directive(tmp_path):
+    # Windows-style escape directives change which lines form one RUN header.
+    dockerfile = tmp_path / "Dockerfile"
+    original = b"# escape=`\nFROM ubuntu:24.04\nRUN echo `\nADD\n"
+    dockerfile.write_bytes(original)
+    request = snapshot_request_for_spec(MachineSpec(DockerfileSource(tmp_path, dockerfile)))
+    assert isinstance(request.source, DockerfileSource)
+    assert request.source.dockerfile.read_bytes() == original
 
 
 @pytest.mark.requires_host_setsid
