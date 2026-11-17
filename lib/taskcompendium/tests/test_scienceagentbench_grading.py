@@ -193,8 +193,11 @@ def test_visual_judge_preserves_wire_protocol_and_official_zero_rule(texts, expe
                 "object": "chat.completion",
                 "model": "gpt-4o-2024-05-13",
                 "choices": [
-                    {"index": index, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
-                    for index, text in enumerate(texts)
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": texts[len(requests) - 1]},
+                        "finish_reason": "stop",
+                    }
                 ],
             },
         )
@@ -202,32 +205,34 @@ def test_visual_judge_preserves_wire_protocol_and_official_zero_rule(texts, expe
     with OpenAI(api_key="fixture", http_client=httpx.Client(transport=httpx.MockTransport(respond))) as client:
         responses, score = score_figure(client, "pinned prompt fixture", "cHJlZA==", "Z29sZA==")
     assert (responses, score) == (texts, expected)
-    assert requests == [
-        {
-            "model": "gpt-4o-2024-05-13",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "pinned prompt fixture"},
-                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,cHJlZA=="}},
-                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,Z29sZA=="}},
-                    ],
-                }
-            ],
-            "temperature": 0.2,
-            "max_tokens": 1000,
-            "n": 3,
-            "top_p": 0.95,
-            "frequency_penalty": 0,
-            "presence_penalty": 0,
-        }
-    ]
+    assert (
+        requests
+        == [
+            {
+                "model": "gpt-4o-2024-05-13",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "pinned prompt fixture"},
+                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,cHJlZA=="}},
+                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,Z29sZA=="}},
+                        ],
+                    }
+                ],
+                "temperature": 0.2,
+                "max_tokens": 1000,
+                "n": 1,
+                "top_p": 0.95,
+                "frequency_penalty": 0,
+                "presence_penalty": 0,
+            }
+        ]
+        * 3
+    )
 
 
-@pytest.mark.parametrize(
-    "indices,texts", [([], []), ([0, 1], ["", ""]), ([0, 0, 2], ["", "", ""]), ([0, 1, 2], ["", None, ""])]
-)
+@pytest.mark.parametrize("indices,texts", [([], []), ([0, 1], ["", ""]), ([0, 0, 2], ["", "", ""]), ([0], [None])])
 def test_visual_judge_missing_completions_remain_ungraded(indices, texts):
     def respond(request):
         return httpx.Response(
@@ -268,14 +273,32 @@ def test_visual_judge_malformed_api_response_is_not_a_candidate_failure(choices)
             score_figure(client, "prompt fixture", "cHJlZA==", "Z29sZA==")
 
 
-def test_visual_judge_service_failure_propagates_without_hidden_retries():
+@pytest.mark.parametrize("failed_request", [1, 3])
+def test_visual_judge_service_failure_propagates_without_hidden_retries(failed_request):
     requests = []
 
     def respond(request):
         requests.append(request)
-        return httpx.Response(503, json={"error": {"message": "unavailable", "type": "server_error"}})
+        if len(requests) == failed_request:
+            return httpx.Response(503, json={"error": {"message": "unavailable", "type": "server_error"}})
+        return httpx.Response(
+            200,
+            json={
+                "id": "test-partial",
+                "created": 0,
+                "object": "chat.completion",
+                "model": "gpt-4o-2024-05-13",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "[FINAL SCORE]: 100"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
 
     with OpenAI(api_key="fixture", http_client=httpx.Client(transport=httpx.MockTransport(respond))) as client:
         with pytest.raises(InternalServerError):
             score_figure(client, "prompt fixture", "cHJlZA==", "Z29sZA==")
-    assert len(requests) == 1
+    assert len(requests) == failed_request

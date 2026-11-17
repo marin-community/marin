@@ -26,39 +26,41 @@ def score_figure(client: OpenAI, prompt: str, predicted_image: str, gold_image: 
     The official parser uses the first matching marker without clamping its
     value; preserve that behavior, including values outside the prompted range
     and the three-digit prefix of a longer number.
-    Retries belong to the caller so every attempt can be recorded.
+    Three separate single-completion requests replace upstream single-call n=3
+    batching because the selected endpoint does not honor n=3. All three must
+    succeed before returning a score. Retries belong to the caller.
     """
-    response = client.with_options(timeout=REQUEST_TIMEOUT, max_retries=0).chat.completions.create(
-        model=MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{predicted_image}"}},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{gold_image}"}},
-                ],
-            }
-        ],
-        temperature=0.2,
-        max_tokens=1000,
-        n=COMPLETIONS,
-        top_p=0.95,
-        frequency_penalty=0,
-        presence_penalty=0,
-    )
-    # The SDK constructs responses without validating the provider's JSON schema.
-    # Keep protocol errors distinct from candidate-output ValueError failures.
-    try:
-        response = ChatCompletion.model_validate(response.model_dump(), strict=True)
-    except ValidationError as error:
-        raise RuntimeError("Visual judge returned an invalid completion response") from error
-    if len(response.choices) != COMPLETIONS or {choice.index for choice in response.choices} != set(range(COMPLETIONS)):
-        raise RuntimeError("Visual judge did not return all three distinct completions")
     texts = []
     scores = []
-    for choice in response.choices:
-        text = choice.message.content
+    for _ in range(COMPLETIONS):
+        response = client.with_options(timeout=REQUEST_TIMEOUT, max_retries=0).chat.completions.create(
+            model=MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{predicted_image}"}},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{gold_image}"}},
+                    ],
+                }
+            ],
+            temperature=0.2,
+            max_tokens=1000,
+            n=1,
+            top_p=0.95,
+            frequency_penalty=0,
+            presence_penalty=0,
+        )
+        # The SDK constructs responses without validating the provider's JSON schema.
+        # Keep protocol errors distinct from candidate-output ValueError failures.
+        try:
+            response = ChatCompletion.model_validate(response.model_dump(), strict=True)
+        except ValidationError as error:
+            raise RuntimeError("Visual judge returned an invalid completion response") from error
+        if len(response.choices) != 1 or response.choices[0].index != 0:
+            raise RuntimeError("Visual judge did not return exactly one completion")
+        text = response.choices[0].message.content
         if text is None:
             raise RuntimeError("Visual judge returned a completion without text")
         texts.append(text)
