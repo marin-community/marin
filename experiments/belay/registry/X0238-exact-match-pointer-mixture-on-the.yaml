@@ -4,7 +4,7 @@ name: Exact-match pointer mixture on the output
 category: Output head and loss
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6959043400
@@ -26,3 +26,10 @@ trials:
     pointer_mixture: 'true'
   commit: 3400b535db
   priority: batch
+  loss:
+  - 3.0329
+  delta:
+  - -0.0123
+  steps: 3030
+  baseline: belay-X0238-control 3.0452 (same commit, seed 0)
+  step_time_change: +1%
