@@ -138,6 +138,33 @@ publishing a retention plan. Preserve both reports and every matched evaluation
 ID; do not hand-drop or resample tasks. A changed reference or population
 inventory requires a new artifact version.
 
+### Native verifier allocation repair
+
+PDBThink's converted tasks declare their original machine limits but omit a
+separate verifier allocation. The oracle runner would otherwise choose its
+larger fallback allocation for that verifier. `pdbthink_verifier_repair` copies
+each archived `source_archive/task.toml` allocation into the typed
+`verifier_execution_requirements` field after verifying that it matches the
+task's existing limits. Prompts, grader code, resource files and runtime bytes stay
+unchanged. The output includes a complete before/after task-hash ledger.
+
+Run this projection on the pinned lexical-retained publication in a CPU job
+in its storage region:
+
+```bash
+python -m experiments.post_training.task_curation.pdbthink_verifier_repair \
+  --input-parquet /regional/input/tasks.parquet --input-sha256 PINNED-SHA256 \
+  --expected-tasks RETAINED-COUNT --output-dir /regional/repair
+```
+
+Publish the output through `calibforge_publish` as a new private TaskCompendium
+version with its checked license notices and repair ledger. It carries no
+inherited qualification: measure the new pin and run original-oracle filtering,
+SAMPLE and admission. The answer-graded source needs no no-operation (NoP)
+negative control. Preserve the frozen shared/native held-out scan inputs and
+bind final-pin evidence through the documented
+[lexical decontamination procedure](../../../docs/references/task-curation.md#lexical-decontamination-before-publication).
+
 ## Final task selection
 
 Pass `--selection RECIPE.json` to a FULL campaign to append a

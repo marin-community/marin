@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
+import hashlib
 import json
 import os
 import runpy
@@ -9,15 +10,24 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.chat import chat_reply_status
+from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.models import Source
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
+from taskcompendium.pipeline.oracle_filter import initial_verifier_requirements
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.pdbthink.tasks import BASE, REVISION, convert, decode, sources
 from experiments.post_training.task_curation.environment_fidelity import environment_unused
+from experiments.post_training.task_curation.oracle_filter import native_verifier_profile
+from experiments.post_training.task_curation.pdbthink_verifier_repair import repair_cohort, repair_task
+from experiments.post_training.task_curation.remediation_publish import TASK_SCHEMA
 
 FIXTURE = Path(__file__).with_name("fixtures") / "pdbthink" / "g02-native.json"
 
@@ -137,3 +147,47 @@ def test_training_decoder_rejects_heldout_rows_before_reading_archives():
     assert [name for name in names if any(Path(name).match(pattern) for pattern in source.files)] == [
         "data/train-00000.parquet"
     ]
+
+
+def test_native_verifier_repair_exports_original_limits_without_changing_payload(tmp_path):
+    task, _ = native_task()
+    assert task.execution_requirements is not None
+    repaired = repair_task(task)
+    assert repaired.model_dump(exclude={"verifier_execution_requirements"}) == task.model_dump()
+    directory = tmp_path / "native"
+    write_harbor_task(repaired, directory, task.execution_requirements)
+    resolved = initial_verifier_requirements(task.execution_requirements, native_verifier_profile(directory))
+    assert resolved.memory_mb == 512 and resolved.storage_mb == 1024
+    assert resolved == task.execution_requirements
+
+
+def test_native_verifier_repair_writes_complete_hash_bound_population_and_keeps_runtime(tmp_path):
+    task, _ = native_task()
+    assert task.execution_requirements is not None
+    tasks = [task, task.model_copy(update={"id": task.id + "-second"})]
+    rows = []
+    for task in tasks:
+        encoded = task.model_dump_json()
+        rows.append(
+            {
+                "id": task.id,
+                "path": task.id,
+                "task_spec": encoded,
+                "task_sha256": hashlib.sha256(encoded.encode()).hexdigest(),
+                "runtime": "{ }",
+            }
+        )
+    source = tmp_path / "input.parquet"
+    pq.write_table(pa.Table.from_pylist(rows, schema=TASK_SCHEMA), source)
+    output = tmp_path / "repair"
+    receipt = repair_cohort(source, output, expected_sha256=file_sha256(StoragePath(str(source))), expected_tasks=2)
+    written = pq.read_table(output / "tasks.parquet").to_pylist()
+    ledger = [json.loads(line) for line in (output / "verifier-repair.jsonl").read_text().splitlines()]
+    assert receipt["tasks"] == len(ledger) == len(written) == 2
+    for before, after, evidence in zip(rows, written, ledger, strict=True):
+        original, repaired = json.loads(before["task_spec"]), json.loads(after["task_spec"])
+        assert repaired.pop("verifier_execution_requirements") == task.execution_requirements.model_dump(mode="json")
+        assert original == repaired
+        assert before["runtime"] == after["runtime"] == "{ }"
+        assert evidence["original_task_sha256"] == before["task_sha256"]
+        assert evidence["repaired_task_sha256"] == after["task_sha256"] != before["task_sha256"]
