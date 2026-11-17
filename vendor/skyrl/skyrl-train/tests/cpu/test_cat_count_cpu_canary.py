@@ -10,7 +10,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from multiprocessing.context import ForkServerContext
 
-from finestore.rl.run_records import read_attempts
+from finestore.rl.run_records import read_attempts, read_evaluations
+from finestore.rl.strata import SelectionDefinition, SelectionTaskRow, MembershipState
+from finestore.schema import arrow_schema
+import pyarrow as pa
+import pyarrow.parquet as pq
 import fsspec
 import pytest
 import rolloutengine
@@ -19,6 +23,7 @@ import skyrl_train
 import torch
 import zstandard
 from omegaconf import OmegaConf
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
 from verifyit.spec import ExactSpec
@@ -41,6 +46,7 @@ from tests.cpu.tiny_training.cat_count import (
     run_cat_count_generate,
 )
 from tests.cpu.tiny_training.cpu_backend import CPUInferenceEngine
+from tests.cpu.tiny_training.tiny_model import write_gsm8k_dataset
 from tests.cpu.tiny_training.experiment import TinyGenerateExp, read_metrics
 
 pytestmark = pytest.mark.slow
@@ -129,7 +135,7 @@ def run_process(forkserver_context, root, cfg, runner=run_cat_count):
         pytest.fail(f"the run did not finish within {RUN_TIMEOUT_SECONDS} seconds")
     assert process.exitcode == 0
     print(f"CAT_COUNT_CPU run={root.name} seconds={time.perf_counter() - start:.3f}")
-    return read_metrics(root)
+    return read_metrics(root) if "records" in cfg.trainer.logger else None
 
 
 def scores(records):
@@ -257,12 +263,32 @@ def assert_cpu_learning(positive, root: Path, telemetry):
     assert evaluations[-1]["eval/reporting/avg_score_improvement"] >= 0.1
     greedy_rows = [
         json.loads(line)
-        for line in (Path(evaluation_dump_dir(str(root / "exports"), 0)) / "train.jsonl").read_text().splitlines()
+        for line in (
+            Path(
+                evaluation_dump_dir(
+                    str(root / "exports"), 0, attempt_id=next(reversed(read_attempts(str(root / "exports"))))
+                )
+            )
+            / "train.jsonl"
+        )
+        .read_text()
+        .splitlines()
     ]
     sampled_rows = [
         json.loads(line)
         for line in (
-            (Path(evaluation_dump_dir(str(root / "exports/sampled"), 0)) / "train.jsonl").read_text().splitlines()
+            (
+                Path(
+                    evaluation_dump_dir(
+                        str(root / "exports/sampled"),
+                        0,
+                        attempt_id=next(reversed(read_attempts(str(root / "exports")))),
+                    )
+                )
+                / "train.jsonl"
+            )
+            .read_text()
+            .splitlines()
         )
     ]
     assert len(sampled_rows) == 8 * len(greedy_rows)
@@ -316,6 +342,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
     root = tmp_path / "rloo-n"
     preserved = None
     generated_attempt_id = None
+    original_dump = None
     for steps, resume in ((2, False), (4, True)):
         interval = 3 if resume else 2
         cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume, eval_interval=3)
@@ -350,9 +377,16 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             paths.append(str(path.with_suffix(".parquet")))
             write_tasks(Path(paths[-1]), tasks)
         cfg.data.train_data, cfg.data.val_data = paths[:1], paths[1:]
-        full_task = tasks[0].model_copy(update={"task": tasks[0].task.model_copy(update={"id": "full-task_set-only"})})
+        math_file = write_gsm8k_dataset(root / "data/math.jsonl", 1, max_turns=2)
+        math_row = json.loads(math_file.read_text())
+        math_row["prompt"] = [{"role": "user", "content": PROMPT.format(N=1)}]
+        full_task = source_row_task(math_row, 0, source_name="two-turn-math", environment_configs=environment_configs)
+        full_task = full_task.model_copy(
+            update={"task": full_task.task.model_copy(update={"id": "full-task_set-only"})}
+        )
         full_task_set = root / "data/full-task_set.parquet"
         write_tasks(full_task_set, [full_task])
+        cfg.generator.max_turns = 2
         cfg.trainer.callbacks = [
             {
                 "type": "evaluation",
@@ -363,7 +397,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
                         "data_files": [str(full_task_set)],
                         "schedule": "final",
                         "n_samples_per_prompt": 1,
-                        "sampling_params": {"temperature": 0.0, "seed": 42},
+                        "sampling_params": {"temperature": 0.0, "seed": 42, "max_generate_length": 8},
                     }
                 },
             },
@@ -382,6 +416,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             assert len(engine_rows) == 1
         assert any(row["name"] == "generation_tokens_total" and row["value"] > 0 for row in cat_count_session)
         attempts = read_attempts(str(root / "exports"))
+        assert all(record.evaluation_storage_version == 1 for record in attempts.values())
         if not resume:
             (generated_attempt_id,) = attempts
             saved = torch.load(root / "ckpts/global_step_2/trainer_state.pt", map_location="cpu", weights_only=False)
@@ -390,15 +425,65 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             continuation = attempts["attempt-4"]
             assert continuation.parent is not None and continuation.parent.attempt_id == generated_attempt_id
             assert continuation.parent.step == continuation.resumed_step == 2
+        current_attempt = "attempt-4" if resume else generated_attempt_id
+        task_rows = read_evaluations(
+            str(root / "exports"), attempt_id=current_attempt, step=steps, evaluation="eval/full_task_set/"
+        )
+        assert [row.task_id for row in task_rows] == ["full-task_set-only"]
+        if resume:
+            original_rows = read_evaluations(
+                str(root / "exports"), attempt_id=generated_attempt_id, step=2, evaluation="eval/full_task_set/"
+            )
+            assert [row.task_id for row in original_rows] == ["full-task_set-only"]
+            assert original_rows[0].attempt_id != task_rows[0].attempt_id
         final_metrics = [row for row in records if "eval/full_task_set/all/num_attempted" in row]
         expected_final = [2, 4] if resume else [2]
         assert [row["step"] for row in final_metrics] == expected_final
         assert all(row["eval/full_task_set/all/num_attempted"] == 1 for row in final_metrics)
-        dumped = Path(evaluation_dump_dir(str(root / "exports/full_task_set"), steps))
-        full_rows = [json.loads(line) for path in dumped.glob("*.jsonl") for line in path.read_text().splitlines()]
-        assert [row["task_id"] for row in full_rows if "task_id" in row] == ["full-task_set-only"]
-        assert not Path(evaluation_dump_dir(str(root / "exports/full_task_set"), 0)).exists()
-        assert not Path(evaluation_dump_dir(str(root / "exports/full_task_set"), 3)).exists()
+        dumped = Path(
+            evaluation_dump_dir(
+                str(root / "exports/full_task_set"), steps, attempt_id="attempt-4" if resume else generated_attempt_id
+            )
+        )
+        full_rows = [
+            json.loads(line)
+            for path in dumped.glob("*.jsonl")
+            if path.name != "aggregated_results.jsonl"
+            for line in path.read_text().splitlines()
+        ]
+        assert {row["task_id"] for row in full_rows} == {"full-task_set-only"}
+        finals = [row for row in full_rows if row["is_last_step"]]
+        assert len(finals) == 1
+        if step_wise:
+            assert len(full_rows) > len(finals)
+        assert [answer.ordinal for row in task_rows for answer in row.answers] == [row["ordinal"] for row in finals]
+        assert [answer.native_uid for row in task_rows for answer in row.answers] == [row["uid"] for row in finals]
+        boundary_dump = root / "exports" / "dumped_evals" / generated_attempt_id / "global_step_2_evals"
+        if not resume:
+            original_dump = {path.name: path.read_bytes() for path in boundary_dump.glob("*.jsonl")}
+            assert original_dump
+        else:
+            assert {path.name: path.read_bytes() for path in boundary_dump.glob("*.jsonl")} == original_dump
+            at_boundary = [
+                read_evaluations(str(root / "exports"), attempt_id=identity, step=2, evaluation="eval/")
+                for identity in (generated_attempt_id, current_attempt)
+            ]
+            assert {row.task_id for row in at_boundary[0]} == {row.task_id for row in at_boundary[1]}
+            assert all(
+                {row.attempt_id for row in rows} == {identity}
+                for identity, rows in zip((generated_attempt_id, current_attempt), at_boundary, strict=True)
+            )
+            assert all(len(row.answers) == 1 for rows in at_boundary for row in rows)
+        assert not Path(
+            evaluation_dump_dir(
+                str(root / "exports/full_task_set"), 0, attempt_id="attempt-4" if resume else generated_attempt_id
+            )
+        ).exists()
+        assert not Path(
+            evaluation_dump_dir(
+                str(root / "exports/full_task_set"), 3, attempt_id="attempt-4" if resume else generated_attempt_id
+            )
+        ).exists()
         observed = Counter(
             row["attributes"]["step"]
             for row in cat_count_session
@@ -458,11 +543,13 @@ def test_cat_count_final_profile_skips_zero_progress(
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
+@pytest.mark.parametrize("records_backend", [True, False])
 def test_cat_count_generate_preserves_task_ids_and_token_metrics(
-    tmp_path, cat_count_policy, cat_count_session, forkserver_context
+    tmp_path, cat_count_policy, cat_count_session, forkserver_context, records_backend
 ):
     root = tmp_path / "generate"
     cfg = cat_count_config(root, cat_count_policy)
+    cfg.trainer.logger = "records" if records_backend else "console"
     environment_configs = OmegaConf.to_container(cfg.environment.task_sessions, resolve=True)
 
     def task(n, identifier, extra_info):
@@ -474,8 +561,14 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         }
         lowered = source_row_task(row, 0, source_name="cat-count", environment_configs=environment_configs)
         spec = lowered.task.model_copy(update={"id": identifier})
-        if n == 7:
-            spec = spec.model_copy(update={"grader": verifyit_package(ExactSpec(expected=(TARGET_WORD,))).grader})
+        if n in (7, 1):
+            spec = spec.model_copy(
+                update={
+                    "grader": verifyit_package(
+                        ExactSpec(expected=("WRONG",) if n == 7 else (TARGET_WORD,), substring=n == 1)
+                    ).grader
+                }
+            )
             return lowered_task(spec, max_turns=1)
         return lowered.model_copy(update={"task": spec})
 
@@ -489,7 +582,39 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         update={"events": (overlong.task.context.events[0].model_copy(update={"content": "cat " * 200}),)}
     )
     spec = overlong.task.model_copy(update={"context": context})
-    write_tasks(path, [*reversed(tasks), overlong.model_copy(update={"task": spec})])
+    write_tasks(path, [*reversed(tasks), tasks[0], overlong.model_copy(update={"task": spec})])
+    pq.write_table(
+        pa.Table.from_pylist(
+            [{"task_spec": row.task.model_dump_json()} for row in (*tasks, overlong.model_copy(update={"task": spec}))]
+        ),
+        path.parent / "validation.parquet",
+    )
+    panel_rows = [
+        SelectionTaskRow(
+            task_id=task_id,
+            task_digest=canonical_sha256(
+                next(
+                    row.task for row in (*tasks, overlong.model_copy(update={"task": spec})) if row.task.id == task_id
+                ).model_dump(mode="json")
+            ),
+            family="verifier" if task_id.endswith(("7", "1")) else "counts",
+            source="cat-count",
+            state=MembershipState.ACTIVE,
+        ).model_dump(mode="json")
+        for task_id in (*expected, "overlong")
+    ]
+    pq.write_table(
+        pa.Table.from_pylist(panel_rows, schema=arrow_schema(SelectionTaskRow)), path.parent / "task_manifest.parquet"
+    )
+    (path.parent / "summary.json").write_text(
+        json.dumps(
+            {
+                "selection_strata": SelectionDefinition(
+                    name="cat-count", version="canary-1", sampling="all", task_files=("validation.parquet",)
+                ).model_dump(mode="json")
+            }
+        )
+    )
     cfg.data.val_data = [str(path)]
     cfg.generator.num_inference_engines = 2
     cfg.generator.eval_n_samples_per_prompt = 2
@@ -518,28 +643,101 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         TinyGenerateExp(invalid)
     assert str(missing) in str(unavailable.value) and str(cat_count_policy) in str(unavailable.value)
     records = run_process(forkserver_context, root, cfg, run_cat_count_generate)
-    assert len(records) == 1
-    metrics = records[0]
+    if records_backend:
+        assert len(records) == 1
+        metrics = records[0]
+    else:
+        assert records is None
+        metrics = {
+            row["attributes"]["metric"]: row["value"]
+            for row in cat_count_session
+            if row["name"] == "training_metric_value" and row["attributes"].get("payload_kind") == "generate"
+        }
     rows = [
         json.loads(line)
-        for line in (Path(evaluation_dump_dir(str(root / "exports"), None)) / "train.jsonl").read_text().splitlines()
+        for line in (
+            Path(
+                evaluation_dump_dir(
+                    str(root / "exports"), None, attempt_id=next(iter(read_attempts(str(root / "exports"))))
+                )
+            )
+            / "train.jsonl"
+        )
+        .read_text()
+        .splitlines()
     ]
+    attempts = read_attempts(str(root / "exports"))
+    (attempt_id,) = attempts
+    assert attempts[attempt_id].evaluation_storage_version == 1
+    task_rows = read_evaluations(str(root / "exports"), attempt_id=attempt_id, step=-1, evaluation="eval/")
+    assert {row.task_id for row in task_rows} == expected.keys()
+    assert {row.task_id: len(row.answers) for row in task_rows} == {
+        task_id: 4 if task_id.endswith("7") else 2 for task_id in expected
+    }
+    assert all(
+        (row.panel_name, row.panel_version, row.strata.source) == ("cat-count", "canary-1", "cat-count")
+        for row in task_rows
+    )
+    answers = sorted((answer for row in task_rows for answer in row.answers), key=lambda answer: answer.ordinal)
+    assert [answer.ordinal for answer in answers] == list(range(len(rows)))
+    assert {row["attempt_id"] for row in rows} == {attempt_id}
+    assert {row["step"] for row in rows} == {-1} and all(row["is_last_step"] for row in rows)
+    assert math.fsum(answer.optimization_reward for answer in answers) / len(answers) == metrics["eval/all/avg_score"]
+    scored = [answer.verifier_score for answer in answers if answer.verifier_score is not None]
+    assert sum(scored) / len(scored) == pytest.approx(metrics["eval/all/avg_verifier_score"])
+    assert len(scored) / len(answers) == metrics["eval/all/verifier_score_coverage"]
+    by_ordinal = {row["ordinal"]: row for row in rows}
+    for task_row in task_rows:
+        normalized = []
+        for answer in task_row.answers:
+            dumped = by_ordinal[answer.ordinal]
+            assert dumped["task_id"] == task_row.task_id
+            assert answer.native_uid == dumped["uid"]
+            reward = dumped["score"]
+            assert answer.optimization_reward == (math.fsum(reward) if isinstance(reward, list) else reward)
+            verification = dumped["verification"]
+            assert answer.error_type == dumped["exception_type"]
+            assert answer.error_treatment == dumped["error_treatment"]
+            assert answer.verification_status == (verification["status"] if verification else None)
+            assert answer.raw_verifier_score == (verification["score"] if verification else None)
+            assert answer.score_min == (verification["score_min"] if verification else None)
+            assert answer.score_max == (verification["score_max"] if verification else None)
+            if verification and verification["status"] == "verified":
+                value = (verification["score"] - verification["score_min"]) / (
+                    verification["score_max"] - verification["score_min"]
+                )
+                normalized.append(max(0, min(1, value)))
+                assert answer.verifier_score == normalized[-1]
+                assert answer.passed == (
+                    verification["passed"] if verification["passed"] is not None else answer.optimization_reward > 0
+                )
+                assert answer.outcome == "graded"
+            else:
+                assert answer.verifier_score is None and not answer.passed and answer.outcome == "unavailable"
+        assert task_row.score == (sum(normalized) / len(normalized) if normalized else None)
+    error_task = next(row for row in task_rows if row.task_id == "rollout-error")
+    assert error_task.score is None and error_task.outcome == "unavailable"
+    verifier_family = [row for row in task_rows if row.strata.family == "verifier"]
+    assert sorted(row.score for row in verifier_family) == [0.0, 1.0]
+    assert sum(row.score for row in verifier_family) / len(verifier_family) == 0.5
+    family_answers = [answer.verifier_score for row in verifier_family for answer in row.answers]
+    assert sum(family_answers) / len(family_answers) == pytest.approx(1 / 3)
     assert metrics["generate/prompts_dropped_too_long"] == 1
-    assert len(rows) == 2 * len(expected)
+    assert len(rows) == 2 * (len(expected) + 1)
     assert {row["task_id"] for row in rows} == expected.keys()
     assert all(expected[row["task_id"]] in row["input_prompt"] and row["uid"] != row["task_id"] for row in rows)
     assert all(len(row["response_token_ids"]) == 8 for row in rows if not row["task_id"].startswith("rollout-error"))
     tokens = sum(len(row["response_token_ids"]) for row in rows)
     assert metrics["generate/response_tokens"] == tokens
     assert metrics["generate/wall_seconds"] > 0
-    generated_tokens = 2 * len(expected) * 8
+    generated_tokens = 2 * (len(expected) + 1) * 8
     assert metrics["generate/vllm/generation_tokens"] == generated_tokens
     assert metrics["generate/tokens_per_second_per_gpu"] == pytest.approx(
         generated_tokens / metrics["generate/wall_seconds"] / 2
     )
     assert metrics["generate/vllm/num_engines"] == 2
     assert {outcome.value: metrics[f"eval/all/outcome/{outcome.value}"] for outcome in Outcome} == {
-        "graded": 8,
+        "graded": 10,
         "submission_failure": 0,
         "invalid_task": 0,
         "infra_error": 0,

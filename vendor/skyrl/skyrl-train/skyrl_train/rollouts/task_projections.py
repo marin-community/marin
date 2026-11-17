@@ -376,6 +376,7 @@ def _training_batch(
         rollout_logprobs=logprobs if logprobs_required else None,
         exclude_from_baseline=[not decision.disposition.baseline_eligible for decision in decisions],
         task_ids=[rollout.task_id for rollout in rollouts],
+        task_outcomes=[rollout.grade.status for rollout in rollouts],
     )
     _attach_reward_channels(batch, decisions)
     _attach_failure_channels(batch, decisions)

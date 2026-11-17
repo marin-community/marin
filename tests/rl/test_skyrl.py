@@ -736,6 +736,14 @@ def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
         ).fingerprint()
     )
 
+    conflicting_source = dataclasses.replace(
+        spec.train_data[0],
+        step=dataclasses.replace(spec.train_data[0].step, version="2026.11.17"),
+        relative_path="validation.parquet",
+    )
+    with pytest.raises(ValueError, match="distinct data artifacts share a staging directory"):
+        skyrl_step(dataclasses.replace(spec, validation_data=(conflicting_source,)), _execution()).fingerprint()
+
 
 def test_starting_checkpoint_binds_identity_and_rejects_cached_output_reuse(tmp_path: Path, monkeypatch) -> None:
     spec = _spec()
