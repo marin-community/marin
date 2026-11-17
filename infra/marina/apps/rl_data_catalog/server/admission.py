@@ -201,6 +201,29 @@ def require_private_release(
             raise ValueError("Atlas remediation requires the original private open-athena snapshot")
 
 
+def require_available_lexical_clearance(declaration: SourceDeclaration) -> None:
+    """Require lexical decontamination evidence before a NEW Available admission.
+
+    Training or unassigned use requires the decontaminated private-release
+    receipt bound to the selected pin; evaluation use requires a measured
+    benchmark receipt at the same pin — the contract the oracle-filtration
+    path already enforces, applied to every newly admitted Available source.
+    Callers grandfather sources that were already Available in the previously
+    selected catalog.
+    """
+    if declaration.intended_use is None:
+        raise ValueError(f"Admission requires an explicit intended_use: {declaration.id}")
+    if declaration.intended_use is SourceUse.TRAIN:
+        require_private_release(declaration.lexical_contamination, declaration.dataset_id, declaration.dataset_revision)
+        return
+    require_lexical_qualification(
+        declaration.lexical_contamination,
+        declaration.dataset_id,
+        declaration.dataset_revision,
+        declaration.intended_use,
+    )
+
+
 def require_lexical_qualification(
     evidence: LexicalContaminationEvidence | None,
     dataset_id: str | None,
