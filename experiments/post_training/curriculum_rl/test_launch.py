@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 from experiments.post_training.curriculum_rl import launch
 from experiments.post_training.skyrl_test_support import native_json
 from tests.rl.launch_document_census import runtime_launch as _runtime_launch
