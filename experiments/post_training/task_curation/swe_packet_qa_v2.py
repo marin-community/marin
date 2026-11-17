@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Six-row corrected SWE QA consuming the frozen v2026.11.16.2 TaskSpec packets.
+"""Six-row corrected SWE QA consuming the frozen v2026.11.16.3 TaskSpec packets.
 
-Per the ingest lane's sealed freeze map (574e2b77..., seal 1cec1f22): download
+Per the ingest lane's sealed freeze map (9bf3e1f0..., seal d1a2145e): download
 each row's actual frozen TaskSpec JSON, verify its SHA, reconstruct the native
 packet directory verbatim from the TaskSpec resources, and run the three real
 trials (nop, oracle, tamper) on those exact packet bytes through the Daytona
@@ -39,8 +39,8 @@ from rigging.secrets import get_secret
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOGGER = logging.getLogger("packet-qa-v2")
 
-MAP_URI = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.16.1/swe-v2-qa-freeze-v3/qa-map.json"
-MAP_SHA256 = "574e2b77e0602a57c931b867f10c5ba6d7cd9c32394a98cb3d171dcbffc72fa9"
+MAP_URI = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.16.1/swe-v3-qa-freeze-v1/qa-map.json"
+MAP_SHA256 = "9bf3e1f034ef6d3d940c160730491600694bf396c720aea604c6a0df7bda19b9"
 OUTPUT_ROOT = "s3://marin-us-east-02a/marin/rl-data/atlas/shared-grader-adapters/2026.11.16.1"
 ATTEMPT_TIMEOUT = 4 * 3600.0
 
@@ -250,7 +250,7 @@ def seal(run_name: str, root: Path, records: list, blocked: list) -> None:
 
 
 def main() -> None:
-    run_name = os.environ.get("QA_RUN_NAME", "swe-v2-packet-qa-v2")
+    run_name = os.environ.get("QA_RUN_NAME", "swe-v3-packet-qa-v1")
     root = Path(os.environ["IRIS_OUTPUT_DIR"]) / run_name
     root.mkdir(parents=True)
     configure_coreweave_s3()
