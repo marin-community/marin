@@ -1012,9 +1012,12 @@ class TaskSpec(BaseModel):
             if self.final_tools or self.interaction_tools or self.tool_bindings:
                 raise ValueError("Tool-free completion cannot advertise or bind tools")
             events = self.context.events
-            if len(events) != 2 or any(not isinstance(event, TextMessage) for event in events):
+            if len(events) != 2:
                 raise ValueError("Tool-free completion requires the source's system and user text")
-            if [event.role for event in events] != ["system", "user"]:
+            system, user = events
+            if not isinstance(system, TextMessage) or not isinstance(user, TextMessage):
+                raise ValueError("Tool-free completion requires the source's system and user text")
+            if (system.role, user.role) != ("system", "user"):
                 raise ValueError("Tool-free completion requires exactly one system and one user message")
             if self.environment_requirements != EnvironmentRequirements():
                 raise ValueError("Tool-free completion cannot provide an actor capability")
