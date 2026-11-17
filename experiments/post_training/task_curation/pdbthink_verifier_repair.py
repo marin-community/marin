@@ -67,10 +67,9 @@ def repair_cohort(source: Path, output: Path, *, expected_sha256: str, expected_
                 repaired = repair_task(original)
                 allocation = repaired.verifier_execution_requirements
                 assert allocation is not None
-                encoded = json.dumps(
-                    {**document, "verifier_execution_requirements": allocation.model_dump(mode="json")},
-                    ensure_ascii=False,
-                )
+                if repaired.model_dump(mode="json", exclude={"verifier_execution_requirements"}) != document:
+                    raise ValueError("PDBThink repair would change other source task fields")
+                encoded = repaired.model_dump_json()
                 after = hashlib.sha256(encoded.encode()).hexdigest()
                 runtime_sha256 = hashlib.sha256(row["runtime"].encode()).hexdigest()
                 expected[original.id] = (after, runtime_sha256)
