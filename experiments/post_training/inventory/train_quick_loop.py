@@ -76,6 +76,11 @@ def training_recipe(steps: int, max_turns: int = 1) -> dict:
         NCCL_IB_DISABLE="1",
         NCCL_SOCKET_FAMILY="AF_INET",
     )
+    # Shell tasks advertise tools, so vLLM must parse automatic tool calls.
+    config["generator"].setdefault("engine_init_kwargs", {}).update(
+        enable_auto_tools=True,
+        tool_parser="hermes",
+    )
     config["generator"]["trajectory_reward_shaping"] = {
         "enabled": True,
         # Enabling shaping would also apply the DAPO overlong penalty over the derived l_cache window.

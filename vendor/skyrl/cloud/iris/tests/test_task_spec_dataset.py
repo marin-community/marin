@@ -93,6 +93,7 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
     loaded = _loaded_specs(tmp_path, [image, prefix])
     assert [spec.task.id for spec in loaded] == ["image-task", "prefix-task"]
     assert is_shell_harness(loaded[0].harness)
+    assert loaded[0].verifier_machine.storage_mb is None
     assert loaded[1].harness == ASSISTANT_PREFIX_HARNESS
     factories = {
         "daytona": DaytonaMachineFactory(client_factory=lambda: pytest.fail("No sandbox may be created")),
@@ -146,6 +147,7 @@ def test_canonical_rows_select_a_task_machine_for_declared_environments(tmp_path
     assert loaded.task.resources.worker == task.resources.worker
     assert loaded.task.resources.verifier == task.resources.verifier
     assert loaded.task_machine is not None
+    assert loaded.task_machine.storage_mb is None
     assert loaded.task_machine.backend == ("shellsim" if simulated else "daytona")
     validate_spec(
         loaded,
