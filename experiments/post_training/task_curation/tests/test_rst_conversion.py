@@ -65,6 +65,9 @@ def test_rst_source_configuration_and_verifier_survive_calibrated_export(tmp_pat
     assert task.environment_requirements.docker_build.files[0].path == "Dockerfile"
     assert resource_bytes(task.environment_requirements.docker_build.files[0]) == files["environment/Dockerfile"]
     assert task.grader.timeout == deadline
+    # Quiescing must work before verifier delivery on original images without
+    # Python; the source verifier retains its own interpreter requirements.
+    assert task.grader.collect[0].argv[0] == "bash"
     assert task.integrity_contract.agent_user is None
     assert task.integrity_contract.undeclared_deadline == (deadline is None)
     assert {item.name: item.sha256 for item in task.integrity_contract.verifier_files} == {

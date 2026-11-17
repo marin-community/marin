@@ -7,7 +7,7 @@ import hashlib
 import tomllib
 
 from taskcompendium.harbor.adapter import ARCHIVED_SOURCE_CONFIG
-from taskcompendium.harbor.root_delivery import REWARD_PATH, DeliveredVerifier, delivery_commands, quiesce_command
+from taskcompendium.harbor.root_delivery import REWARD_PATH, DeliveredVerifier, delivery_commands, shell_quiesce_command
 from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
 from taskcompendium.models import (
     ArtifactKind,
@@ -29,7 +29,7 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 DATASET = "laion/rts-1k-rootless-apptainer"
 REVISION = "6dbb24eedc0d7ffe5431e1b052b0de8e19eaf6fe"
-VERSION = "2026.11.16.3"
+VERSION = "2026.11.17.1"
 VERIFIER_NAMES = frozenset({"test.sh", "test.sh.uvx_bak", "test_state.py"})
 VERIFIER_OUTPUT_PATH = "/logs/verifier/test-output.txt"
 VERIFIER_EXIT_PATH = "/logs/verifier/exit-code.txt"
@@ -81,7 +81,7 @@ def convert_rst(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRej
                 environment=transport_environment,
                 answer_path=None,
                 collect=(
-                    quiesce_command(),
+                    shell_quiesce_command(),
                     *delivery_commands(verifier, output_path=VERIFIER_OUTPUT_PATH, exit_code_path=VERIFIER_EXIT_PATH),
                 ),
                 artifacts=(
