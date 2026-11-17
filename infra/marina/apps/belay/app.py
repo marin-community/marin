@@ -60,6 +60,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         {"github": "atqamar", "github_id": 1707358, "identity": None},
         {"github": "muchanem", "github_id": 8000756, "identity": None},
     ],
+    # GitHub logins whose #9514 comments are approved on arrival (with no grants), and the time each was trusted from:
+    # comments posted before it still need an approver.
+    "trusted_submitters": [
+        {"github": "armorfaye", "since": "2026-11-17T02:30:00+00:00"},
+        {"github": "WhenWen", "since": "2026-11-17T02:30:00+00:00"},
+    ],
     # Marina identities of the Belay sessions (Loom's VM service account): they may call the agent endpoints.
     "session_identities": ["loom-vm@hai-gcp-models.iam.gserviceaccount.com"],
     # When set, approvers must also hold Marina's admin role.
@@ -289,6 +295,12 @@ class Approver(BaseModel):
     """The Marina identity (IAP email) this approver signs in with."""
 
 
+class TrustedSubmitter(BaseModel):
+    github: str
+    since: datetime.datetime
+    """Only comments posted from then on are approved on arrival."""
+
+
 class SettingsUpdate(BaseModel):
     """The settings an approver may change from the admin view."""
 
@@ -297,6 +309,8 @@ class SettingsUpdate(BaseModel):
     node_cap: int | None = Field(default=None, ge=1)
     """Soft cap on nodes held by Belay runs; launches read it from the app."""
     approvers: list[Approver] | None = None
+    trusted_submitters: list[str] | None = None
+    """GitHub logins; one newly listed is trusted from now, one already listed keeps its time."""
 
 
 class MaintainerNote(BaseModel):
@@ -684,6 +698,50 @@ def store_intake_snapshot(conn: Connection, snapshot: IntakeSnapshot) -> None:
         ),
         {"c": json.dumps([c.model_dump(mode="json") for c in snapshot.comments])},
     )
+
+
+# The most ideas a trusted submitter may have approved, planned or running at once; past it, an approver decides.
+TRUSTED_ACTIVE_CAP = 5
+
+
+def auto_approve_trusted(conn: Connection, comments: list[IntakeComment]) -> list[int]:
+    """Approve, oldest first, each #9514 comment a trusted submitter posted since being trusted, unless it is decided
+    or registered already, its author is at ``TRUSTED_ACTIVE_CAP``, or it has text a reviewer would not see (an
+    approver reviews that one). Returns the approved idea ids."""
+    trusted = {t["github"].casefold(): datetime.datetime.fromisoformat(t["since"]) for t in _trusted(conn)}
+    registered = registered_comments(conn)
+    approved = []
+    for c in sorted(comments, key=lambda c: c.posted_at):
+        since = trusted.get(c.author.casefold())
+        if since is None or c.posted_at < since or c.comment_id in registered or visible_text(c.body)[1]:
+            continue
+        existing = _rows(conn, "SELECT state FROM ideas WHERE comment_id = :c", c=c.comment_id)
+        if existing and existing[0]["state"] != IdeaState.PENDING:
+            continue
+        active = _rows(
+            conn,
+            "SELECT count(*) AS n FROM ideas WHERE lower(author) = :a AND state IN ('approved', 'planned', 'running')",
+            a=c.author.casefold(),
+        )[0]["n"]
+        if active >= TRUSTED_ACTIVE_CAP:
+            continue
+        record_intake_comment(conn, c)
+        idea = _rows(conn, "SELECT id FROM ideas WHERE comment_id = :c", c=c.comment_id)[0]
+        if approve_idea(conn, idea["id"], f"{c.author} (trusted)"):
+            approved.append(idea["id"])
+    return approved
+
+
+def _trusted(conn: Connection) -> list[dict[str, Any]]:
+    return _settings(conn)["trusted_submitters"]
+
+
+def trusted_entries(logins: list[str], previous: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The stored trusted list for ``logins``: a login already trusted keeps its time; a new one is trusted from now."""
+    since = {t["github"].casefold(): t["since"] for t in previous}
+    now = _now().isoformat()
+    unique = list(dict.fromkeys(login.strip() for login in logins if login.strip()))
+    return [{"github": login, "since": since.get(login.casefold(), now)} for login in unique]
 
 
 def intake_for_review(conn: Connection) -> dict[str, Any]:
@@ -1435,6 +1493,10 @@ def create_api(services: Services) -> RegisteredApi:
         with engine.begin() as conn:
             before = _settings(conn)
             for key, value in update.model_dump(exclude_none=True).items():
+                if key == "trusted_submitters":
+                    value = trusted_entries(value, before["trusted_submitters"])
+                    names = ", ".join(t["github"] for t in value) or "nobody"
+                    _activity(conn, ActivityPost(kind="control", title=f"{caller} set the trusted submitters: {names}"))
                 conn.execute(
                     text(
                         "INSERT INTO settings (key, value, updated_by, updated_at) "
@@ -1580,7 +1642,8 @@ def create_api(services: Services) -> RegisteredApi:
     def upload_intake(snapshot: IntakeSnapshot) -> dict[str, int]:
         with engine.begin() as conn:
             store_intake_snapshot(conn, snapshot)
-        return {"comments": len(snapshot.comments)}
+            approved = auto_approve_trusted(conn, snapshot.comments)
+        return {"comments": len(snapshot.comments), "auto_approved": len(approved)}
 
     @agent.post("/activity")
     def post_activity(post: ActivityPost, caller: str = Depends(session)) -> dict[str, int]:

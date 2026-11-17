@@ -439,6 +439,7 @@ function fillSettings() {
   document.getElementById('set-approvers').value = settings.approvers
     .map((a) => `${a.github} ${a.identity ?? ''}`.trim())
     .join('\n')
+  document.getElementById('set-trusted').value = settings.trusted_submitters.map((t) => t.github).join('\n')
 }
 
 function render() {
@@ -489,6 +490,11 @@ function wireControls() {
       {
         github_posting: document.getElementById('set-github').checked,
         approvers,
+        trusted_submitters: document
+          .getElementById('set-trusted')
+          .value.split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean),
       },
       'Settings saved',
     ).then(() => (settingsLoaded = false))
