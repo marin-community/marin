@@ -177,7 +177,7 @@ def test_missing_evaluator_dependency_is_ungraded(tmp_path):
     [
         (["[FINAL SCORE]: 90", "no score marker", "[FINAL SCORE]: 90"], 60.0),
         (["", "[FINAL SCORE]: 59", "[FINAL SCORE]: 100"], 53.0),
-        (["[FINAL SCORE]: 999", "[FINAL SCORE]: 30 then [FINAL SCORE]: 90", "[FINAL SCORE]: 0"], 343.0),
+        (["[FINAL SCORE]: 9999", "[FINAL SCORE]: 30 then [FINAL SCORE]: 90", "[FINAL SCORE]: 0"], 343.0),
     ],
 )
 def test_visual_judge_preserves_wire_protocol_and_official_zero_rule(texts, expected):

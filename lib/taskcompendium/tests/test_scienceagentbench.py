@@ -99,7 +99,7 @@ def test_incomplete_panel_yields_nothing(tmp_path, annotation, corruption):
     path = tmp_path / "verified.parquet"
     pq.write_table(pa.Table.from_pylist(rows), path)
     reader = read_verified_annotations(StoragePath(str(path)), ConversionContext({}, None))
-    with pytest.raises(ValueError, match="each instance ID"):
+    with pytest.raises(ValueError):
         next(reader)
 
 

@@ -556,19 +556,15 @@ async def _replay_outputs(
     outputs = []
     try:
         user = setup_user(factory.backend)
-        await _install_grading_archive(machine, archive, machine_spec.startup_timeout, user)
-        await _run_checked(
+        await _stage_environment(
             machine,
-            Command(("mkdir", "-p", replay.cwd), timeout=machine_spec.startup_timeout),
-            "Cannot initialize replay workspace",
+            archive,
+            submitted_archive,
+            replay.cwd,
+            replay.environment,
+            machine_spec.startup_timeout,
+            user,
         )
-        for setup in replay.environment.setup_commands:
-            await _run_checked(
-                machine,
-                Command(("sh", "-c", setup), timeout=machine_spec.startup_timeout, user=user),
-                "Replay environment setup failed",
-            )
-        await _install_grading_archive(machine, submitted_archive, machine_spec.startup_timeout, user)
         result = await machine.run(
             Command(replay.argv, cwd=replay.cwd, timeout=replay.timeout, output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES)
         )
@@ -602,7 +598,7 @@ async def _grade_staged(
     host_environment: Mapping[str, str],
     judge_connection: JudgeConnection | None,
 ) -> GradeResult:
-    """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
+    """Grade in a fresh machine, transferring only declared outputs when replay is enabled."""
     limit = grading.limit if isinstance(grading.grader, ScriptGrader) and grading.grader.replay is not None else None
     deadline = asyncio.timeout(limit)
     try:
@@ -737,6 +733,25 @@ async def _grade_on(
     preparation_timeout: float | None,
     user: str | None,
 ) -> GradeResult:
+    await _stage_environment(
+        machine, archive_path, submission_archive, workspace, environment, preparation_timeout, user
+    )
+    if spec is not None:
+        return await _verifyit_reward(machine, spec, workspace, timeout)
+    assert isinstance(grader, ScriptGrader)
+    return await _script_reward(machine, grader, timeout, preparation_timeout)
+
+
+async def _stage_environment(
+    machine: Machine,
+    archive_path: Path,
+    submission_archive: Path,
+    workspace: str,
+    environment: EnvironmentRequirements,
+    preparation_timeout: float | None,
+    user: str | None,
+) -> None:
+    """Install resources and run setup before overlaying captured submissions."""
     await _install_grading_archive(machine, archive_path, preparation_timeout, user)
     await _run_checked(
         machine,
@@ -751,10 +766,6 @@ async def _grade_on(
         )
     # Setup provisions the declared environment; candidate files must replace its initial fixtures afterward.
     await _install_grading_archive(machine, submission_archive, preparation_timeout, user)
-    if spec is not None:
-        return await _verifyit_reward(machine, spec, workspace, timeout)
-    assert isinstance(grader, ScriptGrader)
-    return await _script_reward(machine, grader, timeout, preparation_timeout)
 
 
 async def _install_grading_archive(

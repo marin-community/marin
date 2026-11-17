@@ -6,7 +6,7 @@
 from pathlib import Path, PurePosixPath
 
 from taskcompendium.grader import GraderPackage
-from taskcompendium.importers.scienceagentbench import SUBMISSION_PATH, VerifiedAnnotation
+from taskcompendium.importers.scienceagentbench import SUBMISSION_PATH, WORKING_DIRECTORY, VerifiedAnnotation
 from taskcompendium.models import (
     ArtifactKind,
     EnvironmentRequirements,
@@ -21,8 +21,10 @@ from taskcompendium.runtime.resources import inline_resource
 
 ASSETS = Path(__file__).parent / "scienceagentbench_assets"
 SOURCE_LICENSE = (ASSETS / "ScienceAgentBench.LICENSE").read_bytes()
-PAPYRUS_ROWS = "/testbed/papyrus_rows.jsonl"
+OUTPUT_DIRECTORY = f"{WORKING_DIRECTORY}/pred_results"
+PAPYRUS_ROWS = f"{WORKING_DIRECTORY}/papyrus_rows.jsonl"
 VERDICT_PATH = "/logs/verifier/verdict.json"
+BINARY_VERDICT = FileReward(files=(RewardFile(path=VERDICT_PATH, format=RewardFileFormat.VERDICT_JSON),), pass_above=0.5)
 
 
 def deterministic_grader(
@@ -49,24 +51,20 @@ def deterministic_grader(
             "-I",
             "/tests/evaluate.py",
             "/tests/source_evaluator.py",
-            f"/testbed/{output}",
-            "/testbed/pred_results",
+            f"{WORKING_DIRECTORY}/{output}",
+            OUTPUT_DIRECTORY,
             VERDICT_PATH,
         ),
-        cwd="/testbed",
+        cwd=WORKING_DIRECTORY,
         answer_path=None,
         timeout=verifier_timeout,
-        reward=FileReward(files=(RewardFile(path=VERDICT_PATH, format=RewardFileFormat.VERDICT_JSON),), pass_above=0.5),
+        reward=BINARY_VERDICT,
         replay=ReplayStage(
             environment=replay_environment,
             argv=("python3", SUBMISSION_PATH),
-            cwd="/testbed",
+            cwd=WORKING_DIRECTORY,
             timeout=replay_timeout,
-            artifacts=(
-                VerifierArtifact(
-                    source="/testbed/pred_results", target="/testbed/pred_results", kind=ArtifactKind.DIRECTORY
-                ),
-            ),
+            artifacts=(VerifierArtifact(source=OUTPUT_DIRECTORY, target=OUTPUT_DIRECTORY, kind=ArtifactKind.DIRECTORY),),
         ),
     )
     return GraderPackage(
@@ -87,7 +85,7 @@ def papyrus_grader(
     replay_timeout: float,
     verifier_timeout: float,
 ) -> GraderPackage:
-    """Grade task 22 using gold rows normalized during trusted image preparation.
+    """Package task 22 with gold rows normalized during trusted image preparation.
 
     Candidate pickle decoding occurs only in replay. The grading machine gets
     a JSON-lines file, the trusted normalized gold rows, and a JSON-only scorer.
@@ -95,10 +93,10 @@ def papyrus_grader(
     grader = ScriptGrader(
         environment=environment,
         argv=("python3", "-I", "/tests/papyrus_rows.py", PAPYRUS_ROWS, "/tests/gold_rows.jsonl", VERDICT_PATH),
-        cwd="/testbed",
+        cwd=WORKING_DIRECTORY,
         answer_path=None,
         timeout=verifier_timeout,
-        reward=FileReward(files=(RewardFile(path=VERDICT_PATH, format=RewardFileFormat.VERDICT_JSON),), pass_above=0.5),
+        reward=BINARY_VERDICT,
         replay=ReplayStage(
             environment=replay_environment,
             argv=(
@@ -106,10 +104,10 @@ def papyrus_grader(
                 "-I",
                 "/replay/decode_papyrus.py",
                 SUBMISSION_PATH,
-                "/testbed/pred_results/papyrus_filtered.pkl",
+                f"{OUTPUT_DIRECTORY}/papyrus_filtered.pkl",
                 PAPYRUS_ROWS,
             ),
-            cwd="/testbed",
+            cwd=WORKING_DIRECTORY,
             timeout=replay_timeout,
             artifacts=(VerifierArtifact(source=PAPYRUS_ROWS, target=PAPYRUS_ROWS, kind=ArtifactKind.FILE),),
             resources=(

@@ -66,8 +66,7 @@ class VerifiedAnnotation(BaseModel):
 def read_verified_annotations(path: StoragePath, _context: ConversionContext) -> Iterator[dict[str, Any]]:
     """Read the complete pinned panel without sampling, rewriting, or dropping rows.
 
-    Validate the population before yielding any row so a failed import cannot
-    publish a partial panel. The released annotations are approximately 280 KiB.
+    Invalid input yields no rows, so a failed import cannot publish a partial panel.
     """
     rows = list(parquet_documents(path))
     annotations = tuple(VerifiedAnnotation.model_validate(row) for row in rows)

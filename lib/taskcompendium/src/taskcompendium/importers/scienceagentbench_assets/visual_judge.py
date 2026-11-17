@@ -18,11 +18,12 @@ SCORE_PATTERN = re.compile(r"\[FINAL SCORE\]: (\d{1,3})", re.DOTALL)
 
 
 def score_figure(client: OpenAI, prompt: str, predicted_image: str, gold_image: str) -> tuple[list[str], float]:
-    """Compare base64 PNGs, preserving malformed returned responses as zeros.
+    """Compare base64 PNGs, scoring text without a matching score marker as zero.
 
     Transport errors and absent completions propagate as infrastructure errors.
     The official parser uses the first matching marker without clamping its
-    value; preserve that behavior, including values outside the prompted range.
+    value; preserve that behavior, including values outside the prompted range
+    and the three-digit prefix of a longer number.
     Retries belong to the caller so every attempt can be recorded.
     """
     response = client.with_options(timeout=REQUEST_TIMEOUT, max_retries=0).chat.completions.create(

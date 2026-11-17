@@ -83,7 +83,7 @@ class LocalGradingMachine:
                     spec_path.write_text(render_spec(replace(spec, workspace=str(self.local("/app")))))
                 argv.extend(("--logs-dir", str(self.local("/logs/verifier"))))
         else:
-            assert program in {"bash", "sh"}, command.argv
+            assert program in {"bash", "sh", "tar", "rm"}, command.argv
         process = await asyncio.create_subprocess_exec(
             *argv,
             cwd=self.local(command.cwd or self.workdir),
@@ -118,16 +118,7 @@ class ReplayMachine(LocalGradingMachine):
     async def run(self, command: Command):
         if self.hang and command.argv == ("python3", "/app/solution.py"):
             await asyncio.Event().wait()
-        if command.argv[:2] not in {("tar", "-cf"), ("rm", "-rf")}:
-            return await super().run(command)
-        process = await asyncio.create_subprocess_exec(
-            *self.local_arguments(command.argv),
-            cwd=self.root,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-        return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
+        return await super().run(command)
 
 
 @dataclass
