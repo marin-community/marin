@@ -321,8 +321,9 @@ class SourceTaskDataset(TaskDataset):
 
     def _map_task_rows(self, dataset: Dataset, mapper: Callable[[dict, int], dict]) -> Dataset:
         def prepare(row: dict, index: int) -> dict:
-            result = mapper(row, index)
-            result[TASK_EVALUATION_IDENTITY] = row.get(TASK_EVALUATION_IDENTITY)
+            carrier = row.get(TASK_EVALUATION_IDENTITY)
+            result = mapper({key: value for key, value in row.items() if key != TASK_EVALUATION_IDENTITY}, index)
+            result[TASK_EVALUATION_IDENTITY] = carrier
             return result
 
         return dataset.map(

@@ -36,6 +36,7 @@ from finestore.rl.run_records import (
     METRIC_ATTEMPT_IDS,
     METRIC_METADATA_KEYS,
     AttemptRecord,
+    write_attempt,
     CheckpointReference,
     MetricRow,
     read_attempt,
@@ -117,13 +118,23 @@ class Tracking:
             coordinator_iris_job_id=runtime.get("coordinator_iris_job_id"),
         )
 
-        if "records" in backends:
+        if config is not None:
             with open_dict(config):
                 config.runtime = {
                     **runtime,
                     "run_id": tracking_config["run_id"],
                     "attempt_id": tracking_config["attempt_id"],
                 }
+            write_attempt(
+                str(config.trainer.export_path),
+                AttemptRecord(
+                    run_id=tracking_config["run_id"],
+                    attempt_id=tracking_config["attempt_id"],
+                    evaluation_storage_version=1,
+                ),
+            )
+
+        if "records" in backends:
             self.logger["records"] = _RecordsAdapter(
                 str(config.trainer.export_path), tracking_config["run_id"], tracking_config["attempt_id"]
             )
