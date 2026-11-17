@@ -146,12 +146,10 @@ def counted_population(
             }
         return {
             **pending,
-            "example_count": retained,
-            "admitted_count": None,
             "count_evidence": evidence,
             "reason": (
-                f"Source status {status}: the current-pin static projection retains {retained} tasks, "
-                "pending admission; the retained count stays visible but is not admitted."
+                f"Source status {status}: the current-pin static projection retains {retained} tasks "
+                "(visible in the count evidence), pending admission; nothing counts as admitted."
             ),
         }
     return {
