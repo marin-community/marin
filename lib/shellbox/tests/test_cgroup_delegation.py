@@ -21,6 +21,9 @@ def cgroup_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     scope.mkdir(parents=True)
     (scope / "cgroup.procs").write_text("1234\n")
     (scope / "cgroup.kill").write_text("")
+    slice_level = scope.parent
+    (slice_level / "cgroup.procs").write_text("")
+    (slice_level / "cgroup.kill").write_text("")
     monkeypatch.setattr(cgroup_module, "CGROUP_ROOT", root)
     monkeypatch.setattr(cgroup_module, "_current_cgroup", lambda: scope)
     return root
@@ -49,7 +52,7 @@ def test_scope_failure_falls_back_to_the_wrapping_pod_slice(cgroup_tree: Path, m
     slice_level = scope.parent
     checked = _patch_checks(
         monkeypatch,
-        writable={scope, slice_level},
+        writable={slice_level},
         applying={slice_level},
     )
     assert delegated_cgroup_parent() == slice_level
@@ -88,15 +91,37 @@ def test_delegate_subgroup_still_prefers_the_unit(cgroup_tree: Path, monkeypatch
     assert checked[0] == scope
 
 
-def test_probe_rejecting_a_candidate_keeps_searching(cgroup_tree: Path, monkeypatch: pytest.MonkeyPatch):
-    """check passes but the limits probe fails for the scope: the slice is still found."""
-    scope = cgroup_module._current_cgroup()
-    slice_level = scope.parent
+def test_shared_host_slices_are_never_candidates(cgroup_tree: Path, monkeypatch: pytest.MonkeyPatch):
+    """A worker directly under a shared slice must not enable controllers there."""
+    root = cgroup_tree
+    shared = root / "system.slice"
+    shared.mkdir()
+    (shared / "cgroup.procs").write_text("")
+    (shared / "cgroup.kill").write_text("")
+    worker = shared / "marin-worker.service"
+    worker.mkdir()
+    (worker / "cgroup.procs").write_text("1234\n")
+    monkeypatch.setattr(cgroup_module, "_current_cgroup", lambda: worker)
     checked = _patch_checks(
         monkeypatch,
-        writable={scope, slice_level},
-        applying={slice_level},
+        writable={worker, shared},
+        applying={shared, worker},
     )
-    # the scope passes check_cgroup_parent but drops the limits on readback
-    assert delegated_cgroup_parent() == slice_level
-    assert checked == [scope, slice_level]
+    # the shared slice passes check and would apply limits, but it is not a
+    # dedicated unit: enabling controllers there affects unrelated workloads
+    assert delegated_cgroup_parent() == worker
+    assert shared not in checked
+
+
+def test_pod_slice_candidates_require_empty_internal_processes(cgroup_tree: Path, monkeypatch: pytest.MonkeyPatch):
+    """A pod slice that still holds direct processes is not a fallback candidate."""
+    scope = cgroup_module._current_cgroup()
+    slice_level = scope.parent
+    (slice_level / "cgroup.procs").write_text("9999\n")
+    checked = _patch_checks(
+        monkeypatch,
+        writable={scope},
+        applying={scope},
+    )
+    assert delegated_cgroup_parent() == scope
+    assert slice_level not in checked

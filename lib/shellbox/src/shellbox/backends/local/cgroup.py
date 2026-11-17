@@ -47,7 +47,8 @@ def cgroup_limits_applied(path: Path, *, cpus: int, memory_mb: int) -> bool:
         cpu_applied = int(quota) == cpus * CPU_PERIOD and int(period) == CPU_PERIOD
         memory_applied = int((path / "memory.max").read_text()) == memory_mb * 1024 * 1024
         return cpu_applied and memory_applied
-    except (OSError, ValueError):
+    except (OSError, ValueError) as error:
+        logger.warning("Cannot read back limits in %s: %s", path, error)
         return False
 
 
@@ -62,7 +63,8 @@ def probe_cgroup_limits(parent: Path, *, cpus: int = 1, memory_mb: int = 1024) -
     """
     try:
         cgroup = MachineCgroup.create(parent, cpus=cpus, memory_mb=memory_mb)
-    except (OSError, UnsupportedMachineSpec):
+    except (OSError, UnsupportedMachineSpec) as error:
+        logger.warning("Cannot probe cgroup limits under %s: %s", parent, error)
         return False
     try:
         return cgroup_limits_applied(cgroup.path, cpus=cpus, memory_mb=memory_mb)
@@ -71,16 +73,38 @@ def probe_cgroup_limits(parent: Path, *, cpus: int = 1, memory_mb: int = 1024) -
         cgroup.remove_if_empty()
 
 
+def _fallback_parents(current: Path) -> list[Path]:
+    """Parents that may enforce limits when the worker's own cgroup cannot.
+
+    A candidate must have no internal processes (the no-internal-process rule
+    otherwise blocks enabling controllers) and must be dedicated to this
+    worker: a systemd DelegateSubgroup unit, or the container runtime's
+    pod-private slice. Shared host slices are never candidates — enabling
+    controllers there would change accounting for unrelated workloads.
+    """
+    unit_suffixes = (".service", ".scope")
+    parent = current.parent
+    if parent == current or not parent.is_relative_to(CGROUP_ROOT):
+        return []
+    if (parent / "cgroup.procs").read_text().strip():
+        return []
+    if parent.name.endswith(unit_suffixes):
+        return [parent]
+    if parent.name.startswith("kubepods") and "-pod" in parent.name:
+        return [parent]
+    return []
+
+
 def delegated_cgroup_parent() -> Path | None:
     """Find a writable delegation that can actually enforce resource limits.
 
-    Candidates are the worker's own cgroup and its parent unit: systemd
-    DelegateSubgroup setups keep the worker below its unit (whose subtree can
-    then take controllers), while container runtimes scope the worker into a
+    Candidates are the worker's own cgroup and any dedicated parent unit
+    (:func:`_fallback_parents`). Container runtimes scope the worker into a
     ``cri-containerd`` scope whose subtree cannot enable domain controllers
-    until the worker moves out — the wrapping pod slice can. Each candidate is
-    verified by applying and reading back limits in a throwaway machine cgroup,
-    so a delegation that silently drops limits never becomes the parent.
+    until the worker moves out; the wrapping pod slice can. Each candidate is
+    verified by applying and reading back limits in a throwaway machine
+    cgroup, so a delegation that silently drops limits never becomes the
+    parent.
     """
     if not (CGROUP_ROOT / "cgroup.controllers").is_file():
         return None
@@ -88,15 +112,10 @@ def delegated_cgroup_parent() -> Path | None:
     if not current.is_relative_to(CGROUP_ROOT):
         return None
     candidates = [current]
-    # DelegateSubgroup moves the worker below its unit. Do not cross a unit
-    # boundary into a shared systemd slice, even when that slice is writable.
-    unit_suffixes = (".service", ".scope")
-    if not current.name.endswith(unit_suffixes) and current.parent.name.endswith(unit_suffixes):
-        if not (current.parent / "cgroup.procs").read_text().strip():
-            candidates.insert(0, current.parent)
-    if current.parent != current and current.parent.is_relative_to(CGROUP_ROOT):
-        if current.parent not in candidates:
-            candidates.append(current.parent)
+    # DelegateSubgroup moves the worker below its unit, which then verifies.
+    for parent in _fallback_parents(current):
+        if parent not in candidates:
+            candidates.insert(0, parent)
     for parent in candidates:
         try:
             check_cgroup_parent(parent)
