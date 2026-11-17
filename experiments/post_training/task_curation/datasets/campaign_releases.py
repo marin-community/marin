@@ -153,13 +153,22 @@ def sources() -> list[RlDataSource]:
                 title="Forge main split, 2026-11-17 (TaskCompendium)",
                 origin="Forge",
                 family="synthetic-cross-domain",
-                tags=("rlvr", "agentic", "multi-turn", "synthetic", "campaign-release"),
+                tags=("rlvr", "agentic", "multi-turn", "synthetic", "campaign-release", EXCLUDED_TAG),
                 task_format=TaskFormat.TASKCOMPENDIUM,
-                oracle_validation=OracleValidation.EXECUTED,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the 4,000 lowered task specs at the pinned revision: the "
+                    "670 Linux task machines and 3,293 graders share one identity (the digest-pinned "
+                    "python:3.12-slim). The 2,978 answer-only tasks need no task machine. Daytona refuses the "
+                    "352 shell-simulator task machines, which name no image or build context"
+                ),
+                daytona_execution_failures=352,
+                oracle_validation=OracleValidation.SKIPPED,
                 oversight=OversightEvidence(
                     campaign="Forge re-validation campaign 2026-11-13",
                     recipe_revision="forge_release.py; forge @ be691e29b0",
                     verification=(
+                        "Unverified historical evidence; does not certify execution in the declared environments. "
                         "Measured on all 4,000 tasks from their exported records, in forge's own sandboxes: "
                         "95,706 authored controls (21,996 correct answers, at least one per task) all graded as "
                         "expected at confirmation; both adversaries finished on the accepted version without a "
@@ -169,16 +178,17 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=4378,
                     admitted=4000,
-                    level=OversightLevel.FULL,
+                    level=OversightLevel.NONE,
                 ),
                 notes=(
-                    "4,000 synthetic tasks written by forge from a 1,999-skill, 45-subject catalog (1,598 skills "
-                    "covered), selected coverage first from 4,378 accepts after dropping 244 that carried a "
-                    "reviewer note or missing evidence. 955 in band, 3,021 too easy and 24 too hard for GLM-5.3 "
+                    "Excluded until each grader-base task's controls are replayed through the production grading "
+                    "path in its declared image. 4,000 synthetic tasks written by forge from a 1,999-skill, "
+                    "45-subject catalog (1,598 skills covered), selected coverage first from 4,378 accepts after "
+                    "dropping 244 that carried a reviewer note or missing evidence. 955 in band, 3,021 too easy and 24 too hard for GLM-5.3 "
                     "over eight trials; 2,978 answer-only, 670 Linux and 352 simulated-shell tasks. Machines that "
                     "forge's local sandbox recorded without an image are restored to the image their authors "
-                    "declared. Not re-executed through the Atlas rollout path; the Daytona snapshot identity is "
-                    "unmeasured. The repository is private pending release."
+                    "declared. Not re-executed through the Atlas rollout path. The repository is private pending "
+                    "release."
                 ),
             ),
         ),

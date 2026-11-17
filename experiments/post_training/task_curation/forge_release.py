@@ -42,7 +42,6 @@ import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import CommandSemantics, TaskSpec
-from taskforge.sandbox.images import GRADER_BASE_IMAGE
 
 from experiments.post_training.task_curation.lowered_envelope import LOWERED_TASK_SPEC_COLUMN, LoweredSpec, MachineShape
 
@@ -61,6 +60,10 @@ SELECTION_RULE = (
     "break on the SHA-256 of the task id."
 )
 CONTROLS_CREDIT_CAP = 20
+# Copies of ``taskforge.sandbox.images.GRADER_BASE_IMAGE`` and the serialized ``taskforge.spec.draft.LOCAL_CPYTHON``:
+# taskforge is not a dependency of this package. A drift fails closed, since ``restored_task`` refuses any restored
+# machine that differs from its authored spec.
+GRADER_BASE_IMAGE = "docker.io/library/python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
 EMPTY_PACKAGES = {"pypi_packages": [], "tools": []}
 ENVIRONMENTS = {CommandSemantics.SHELL_SIMULATOR: "shellsim", CommandSemantics.LINUX_PROCESS: "linux", None: "reasoning"}
 """A task's environment, by the command semantics of its (restored) task machine."""
@@ -191,7 +194,7 @@ def machine_shape(machine: Mapping | None) -> MachineShape:
 def restored_machine(requirements: Mapping | None) -> Mapping | None:
     """Undo forge's local-sandbox hosting of one machine.
 
-    The campaign ran with ``FORGE_LOCAL_SANDBOX=1``, under which forge's ``host_requirements`` rewrites a machine
+    The campaign ran with ``FORGE_LOCAL_SANDBOX=1``, under which taskforge's ``host_requirements`` rewrites a machine
     naming ``GRADER_BASE_IMAGE`` into a Linux process with no image and an empty package spec, run in the driver's
     own sandbox. Forge never authors that shape, so it maps back to the image the author named.
     """
