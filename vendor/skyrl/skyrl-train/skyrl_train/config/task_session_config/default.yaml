@@ -60,11 +60,12 @@ task_spec:
     user: null
     startup_timeout: 600
     cleanup_timeout: 60
+  image_verifier_overrides: {}
   image_verifier:
     backend: daytona
     cpus: 2
     memory_mb: 4096
-    storage_mb: null
+    storage_mb: 10240
     gpus: 0
     network: allow
     user: null

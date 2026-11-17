@@ -44,6 +44,7 @@ REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
 EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
+TASKFORGE_IMAGE = "docker.io/library/python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
 
 
 def training_recipe(steps: int, max_turns: int = 1) -> dict:
@@ -67,7 +68,10 @@ def training_recipe(steps: int, max_turns: int = 1) -> dict:
             "local": {},
             "daytona": {"api_key_env": EVALUATION_API_KEY_ENV, "ttl_minutes": 60},
             "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": JUDGE_API_KEY_ENV},
-            "task_spec": {"session": {"max_turns": max_turns}},
+            "task_spec": {
+                "session": {"max_turns": max_turns},
+                "image_verifier_overrides": {TASKFORGE_IMAGE: {"storage_mb": None}},
+            },
         }
     }
     config["extra_env"].update(

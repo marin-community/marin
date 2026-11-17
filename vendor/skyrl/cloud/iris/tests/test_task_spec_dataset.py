@@ -45,7 +45,7 @@ class LocalAdmissionFactory:
         raise AssertionError(f"Admission must not acquire a machine: {spec}")
 
 
-def _loaded_specs(tmp_path: Path, tasks: list[TaskSpec]) -> list:
+def _loaded_specs(tmp_path: Path, tasks: list[TaskSpec], *, image_verifier_overrides: dict | None = None) -> list:
     path = tmp_path / "tasks.parquet"
     pq.write_table(pa.Table.from_pylist([{"task_spec": task.model_dump_json()} for task in tasks]), path)
     tokenizer = PreTrainedTokenizerFast(
@@ -54,12 +54,15 @@ def _loaded_specs(tmp_path: Path, tasks: list[TaskSpec]) -> list:
         chat_template="{% for message in messages %}{{ message.content }} {% endfor %}",
     )
     config = get_default_config()
+    sessions = OmegaConf.to_container(config.environment.task_sessions, resolve=True)
+    if image_verifier_overrides is not None:
+        sessions["task_spec"]["image_verifier_overrides"] = image_verifier_overrides
     dataset = SourceTaskDataset(
         [str(path)],
         tokenizer,
         128,
         num_workers=1,
-        environment_configs=OmegaConf.to_container(config.environment.task_sessions, resolve=True),
+        environment_configs=sessions,
     )
     return [row["input"].spec for row in dataset.collate_fn(list(dataset))]
 
@@ -93,7 +96,7 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
     loaded = _loaded_specs(tmp_path, [image, prefix])
     assert [spec.task.id for spec in loaded] == ["image-task", "prefix-task"]
     assert is_shell_harness(loaded[0].harness)
-    assert loaded[0].verifier_machine.storage_mb is None
+    assert loaded[0].verifier_machine.storage_mb == 10240
     assert loaded[1].harness == ASSISTANT_PREFIX_HARNESS
     factories = {
         "daytona": DaytonaMachineFactory(client_factory=lambda: pytest.fail("No sandbox may be created")),
@@ -156,3 +159,27 @@ def test_canonical_rows_select_a_task_machine_for_declared_environments(tmp_path
             "daytona": DaytonaMachineFactory(client_factory=lambda: pytest.fail("No sandbox may be created")),
         },
     )
+
+
+def test_image_verifier_resource_override_is_scoped_to_exact_image(tmp_path: Path):
+    candidate_image = "docker.io/library/python@sha256:" + "1" * 64
+    baseline_image = "fixture@sha256:" + "0" * 64
+    tasks = [
+        text_task(name).model_copy(
+            update={
+                "grader": ScriptGrader(
+                    argv=("sh", "/tests/grade.sh"),
+                    environment=EnvironmentRequirements(
+                        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=image
+                    ),
+                )
+            }
+        )
+        for name, image in (("candidate", candidate_image), ("baseline", baseline_image))
+    ]
+    loaded = _loaded_specs(tmp_path, tasks, image_verifier_overrides={candidate_image: {"storage_mb": None}})
+    assert loaded[0].verifier_machine.storage_mb is None
+    assert loaded[1].verifier_machine.storage_mb == 10240
+    assert loaded[0].verifier_machine.cpus == loaded[1].verifier_machine.cpus == 2
+    assert loaded[0].verifier_machine.memory_mb == loaded[1].verifier_machine.memory_mb == 4096
+    assert [spec.task for spec in loaded] == tasks
