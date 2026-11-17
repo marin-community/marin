@@ -69,29 +69,32 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     producer = json.loads((StoragePath(spec.model_uri) / "export-manifest.json").read_bytes())
     if not producer["request"]["config"]["checkpoint"].endswith(f"/step-{spec.model_step}"):
         raise ValueError("Evaluation checkpoint step differs from the pinned export producer")
+    plan = SkyRLRolePlan(
+        colocate_all=True,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=4,
+        num_inference_engines=1,
+        inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=16,
+        inference_engine_expert_parallel_size=16,
+        train_batch_size=1,
+        policy_mini_batch_size=1,
+        micro_train_batch_size_per_gpu=1,
+        n_samples_per_prompt=1,
+    )
     model_config = json.loads((StoragePath(spec.model_uri) / "config.json").read_bytes())
-    if model_config["num_experts"] % 12 or spec.context_tokens > model_config["max_position_embeddings"]:
-        raise ValueError("The model does not support EP12 or the selected context")
+    if (
+        model_config["num_experts"] % plan.inference_engine_expert_parallel_size
+        or spec.context_tokens > model_config["max_position_embeddings"]
+    ):
+        raise ValueError("The model does not support the inference expert parallelism or selected context")
     data = StoragePath(spec.data_uri) / "rollouts.parquet"
     with data.open("rb") as stream:
         if hashlib.file_digest(stream, "sha256").hexdigest() != spec.data_sha256:
             raise ValueError("Pinned micro evaluation data differs from its SHA-256")
     recipe = yaml.safe_load(RECIPE.read_text())
     config = recipe["config"]
-    plan = SkyRLRolePlan(
-        colocate_all=True,
-        policy_num_nodes=3,
-        policy_num_gpus_per_node=4,
-        num_inference_engines=1,
-        inference_engine_tensor_parallel_size=1,
-        inference_engine_pipeline_parallel_size=1,
-        inference_engine_data_parallel_size=12,
-        inference_engine_expert_parallel_size=12,
-        train_batch_size=1,
-        policy_mini_batch_size=1,
-        micro_train_batch_size_per_gpu=1,
-        n_samples_per_prompt=1,
-    )
     _materialize_role_plan_config(config, plan)
     config["context_budget"].update(
         request_window_tokens=spec.context_tokens, max_new_tokens_per_turn=spec.max_new_tokens
