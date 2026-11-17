@@ -41,6 +41,38 @@ def read_registry_json(path: Path) -> dict[str, Any]:
     return document
 
 
+def _require_complete_shard_family(documents: dict[str, bytes], references_root: Path, directory: Path) -> None:
+    """Refuse a publish that would blank rows held by sibling shards it does not stage.
+
+    The archive flow writes ``{}`` over every sibling ``part-*.json`` it is not
+    staging, treating them as inactive tail shards whose rows the staged shards
+    consolidate. A staged subset of an active family instead silently drops the
+    siblings' rows from the refreshed collection (the 2026-11-16 census incident).
+    A sibling whose rows are all present in the staged shards may still be
+    blanked; a sibling holding rows the staged set lacks aborts the publish.
+    """
+    staged_keys: set[str] = set()
+    for name, data in documents.items():
+        if Path(name).parent == directory:
+            staged_keys.update(json.loads(data))
+    for previous in sorted((references_root / directory).glob("part-*.json")):
+        name = previous.relative_to(references_root).as_posix()
+        if name in documents:
+            continue
+        try:
+            previous_content = read_registry_json(previous)
+        except Exception as error:
+            raise ValueError(f"Cannot verify the sibling shard {name} before publishing {directory}: {error}") from error
+        dropped = sorted(set(previous_content) - staged_keys)
+        if dropped:
+            raise ValueError(
+                f"Publishing {directory.as_posix()}/ would drop {len(dropped)} rows held by the unstaged shard"
+                f" {name} ({', '.join(dropped[:4])}{'…' if len(dropped) > 4 else ''});"
+                " stage the complete shard family or consolidate its rows into the staged shards"
+            )
+        documents.setdefault(name, b"{}\n")
+
+
 def archive_registry_documents(
     staged_root: Path, references_root: Path, *, repo: str, parent_revision: str, commit_message: str
 ) -> str:
@@ -56,11 +88,7 @@ def archive_registry_documents(
         raise ValueError(f"No registry documents staged in {staged_root}")
     shard_directories = {Path(name).parent for name in documents if Path(name).match("part-*.json")}
     for directory in shard_directories:
-        for previous in (references_root / directory).glob("part-*.json"):
-            name = previous.relative_to(references_root).as_posix()
-            # Preserve the old artifact in its prior immutable revision while
-            # excluding inactive tail shards from the refreshed collection.
-            documents.setdefault(name, b"{}\n")
+        _require_complete_shard_family(documents, references_root, directory)
     for name, data in documents.items():
         if not isinstance(json.loads(data), dict):
             raise ValueError(f"Registry document must contain an object: {name}")
