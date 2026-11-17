@@ -233,7 +233,7 @@ def test_visual_judge_preserves_wire_protocol_and_official_zero_rule(texts, expe
 
 
 @pytest.mark.parametrize("indices,texts", [([], []), ([0, 1], ["", ""]), ([0, 0, 2], ["", "", ""]), ([0], [None])])
-def test_visual_judge_missing_completions_remain_ungraded(indices, texts):
+def test_visual_judge_invalid_completions_remain_ungraded(indices, texts):
     def respond(request):
         return httpx.Response(
             200,

@@ -255,7 +255,7 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
     return True
 
 
-def _diagnostics(result: Result) -> dict[str, Any]:
+def _diagnostics(result: Result) -> dict[str, str | int | None]:
     return {
         "stdout": result.stdout.decode(errors="replace"),
         "stderr": result.stderr.decode(errors="replace"),
@@ -538,7 +538,7 @@ async def _replay_outputs(
     factory: MachineFactory,
     machine_spec: MachineSpec,
     root: Path,
-) -> tuple[list[tuple[Path, str]], dict[str, Any]]:
+) -> tuple[list[tuple[Path, str]], dict[str, str | int | None]]:
     """Return local-output/destination pairs and command diagnostics after closing replay.
 
     Replay receives no private resources or inherited credentials.
@@ -641,7 +641,7 @@ async def _grade_staged_impl(
     host_environment: Mapping[str, str],
     judge_connection: JudgeConnection | None,
 ) -> GradeResult:
-    """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
+    """Grade in a fresh machine using the declared replay outputs or captured submissions."""
     files = _grading_files(task, attempt, grading)
     try:
         for command in grading.collect:

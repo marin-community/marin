@@ -45,7 +45,7 @@ class KnowledgeCondition(StrEnum):
 
 
 class VerifiedAnnotation(BaseModel):
-    """Released annotation fields; reference metadata must remain actor-private."""
+    """Released annotation fields; reference metadata stays outside the actor prompt."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
