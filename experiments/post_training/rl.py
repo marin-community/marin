@@ -12,12 +12,12 @@
   data-medium      learning-medium on --tasks; 40 H100, runtime unmeasured.
   train-long       async training, checkpoints and HF export; 40 H100 east; no verdict.
 
-Guide: docs/recipes/snowball-rl.md. Without --run, print the plan and saved status.
+Guide: docs/recipes/rl-experiments.md. Without --run, print the plan and saved status.
 A gated preset without a pin at its current revision refuses every command, including the plan print,
 with exit 4. Controls are collected after merge; --control and train-long need no pin.
 
 \b
-Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
+Examples, each after `uv run python -m experiments.post_training.rl`:
   --preset speed-medium --version dev --run --wait
   --preset learning-medium --set trainer.algorithm.advantage_estimator=grpo \
     --set trainer.algorithm.group_advantage_min_size=null --version dev --run
@@ -75,11 +75,11 @@ from marin.rl.skyrl_records import (
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output
 
-from experiments.post_training import snowball_rl_gate
-from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training import snowball_rl_recipe as recipe
-from experiments.post_training.snowball_rl_command import EXIT_CODES, SnowballCommand
-from experiments.post_training.snowball_rl_scoring import GATE_INPUTS_FILENAME, GateInputs, InvalidComparison
+from experiments.post_training import rl_gate
+from experiments.post_training import rl_presets as presets
+from experiments.post_training import rl_recipe as recipe
+from experiments.post_training.rl_command import EXIT_CODES, SnowballCommand
+from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInputs, InvalidComparison
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
 )
@@ -91,7 +91,7 @@ _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, 
 @dataclass(frozen=True)
 class SnowballRun:
     runs: tuple[ArtifactStep[SkyRLRun], ...]
-    gate: ArtifactStep[snowball_rl_gate.GateReport] | None = None
+    gate: ArtifactStep[rl_gate.GateReport] | None = None
     inputs: GateInputs | None = None
 
 
@@ -119,7 +119,7 @@ def _run_snowball(config: SkyRLRunConfig, *, inputs: GateInputs) -> SkyRLRun:
 
 def _run_name(preset: presets.Preset, provenance: Provenance, inputs_hash: str, replicate: int, *, control: bool) -> str:
     if control:
-        return snowball_rl_gate.control_name(preset.name, provenance.base_commit, replicate)
+        return rl_gate.control_name(preset.name, provenance.base_commit, replicate)
     name = f"{presets.RUN_PREFIX}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     return user_owned_name(name + (f"-r{replicate}" if preset.gated else ""))
 
@@ -182,10 +182,10 @@ def build_run(
         "settings": sorted(presets.override_document(settings).items()),
         "evaluations": sorted(evaluation_inputs),
     }
-    snowball_rl_gate.validate_requirements(preset, requirements, control=control)
+    rl_gate.validate_requirements(preset, requirements, control=control)
     provenance = _provenance(control=control)
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
-    inputs = snowball_rl_gate.gate_inputs(
+    inputs = rl_gate.gate_inputs(
         preset.name,
         settings,
         f"{tasks.name}@{tasks.version}" if tasks is not None else None,
@@ -198,7 +198,7 @@ def build_run(
         run = recipe.run_step(preset, replace(spec, name=name), wandb_entity=wandb_entity)
         runs.append(replace(run, run=partial(_run_snowball, inputs=inputs)))
     gate = (
-        snowball_rl_gate.gate_step(
+        rl_gate.gate_step(
             preset,
             tuple(runs),
             inputs=inputs,
@@ -244,7 +244,7 @@ def _completed_update(path: str, workload: presets.Training | presets.Generation
 
 
 def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = False) -> dict:
-    run = replace(run, gate=snowball_rl_gate.completed_gate(run.gate))
+    run = replace(run, gate=rl_gate.completed_gate(run.gate))
     rows = []
     planned = []
     for step in run.runs:
@@ -301,10 +301,10 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
     report = None
     if run.gate is not None:
         path = run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster))
-        report = snowball_rl_gate.read_gate_report(path)
+        report = rl_gate.read_gate_report(path)
         if report is not None:
             verdict = {
-                "report": str(StoragePath(path) / snowball_rl_gate.GATE_REPORT_FILENAME),
+                "report": str(StoragePath(path) / rl_gate.GATE_REPORT_FILENAME),
                 **report.model_dump(mode="json", include={"verdict", "label", "reason"}),
             }
     if "verdict" not in verdict and preset.gated:
@@ -340,13 +340,13 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
 def _print_status(snapshot: dict) -> None:
     click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
     if "report" in snapshot:
-        click.echo((StoragePath(snapshot["report"]).parent / snowball_rl_gate.GATE_MARKDOWN_FILENAME).read_text())
+        click.echo((StoragePath(snapshot["report"]).parent / rl_gate.GATE_MARKDOWN_FILENAME).read_text())
 
 
 def _from_handles(handles: list[ArtifactStep]) -> SnowballRun:
     return SnowballRun(
         tuple(step for step in handles if step.artifact_type is SkyRLRun),
-        next((step for step in handles if step.artifact_type is snowball_rl_gate.GateReport), None),
+        next((step for step in handles if step.artifact_type is rl_gate.GateReport), None),
     )
 
 
@@ -385,11 +385,11 @@ def _run_command(function: Callable) -> click.Command:
         options = click.get_current_context().params
         preset = presets.PRESETS[options["preset_name"]]
         if get_job_info() is None:
-            job = submit_or_run("experiments.post_training.snowball_rl", handles, max_concurrent, os.environ)
+            job = submit_or_run("experiments.post_training.rl", handles, max_concurrent, os.environ)
         else:
             planned = _from_handles(handles)
             build_artifacts(*planned.runs, max_concurrent=max_concurrent)
-            gate = snowball_rl_gate.completed_gate(planned.gate)
+            gate = rl_gate.completed_gate(planned.gate)
             if gate is not None:
                 build_artifacts(gate, max_concurrent=max_concurrent)
             job = None
@@ -486,7 +486,7 @@ def main(
     do_run = click.get_current_context().params.get("do_run", False)
     if do_run and get_job_info() is None:
         assert run.inputs is not None
-        snowball_rl_gate.validate_candidate(
+        rl_gate.validate_candidate(
             preset,
             run.inputs,
             control=control,

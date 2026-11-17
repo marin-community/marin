@@ -13,10 +13,10 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 
-from experiments.post_training import snowball_rl as snowball
-from experiments.post_training import snowball_rl_gate as gate
-from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training import snowball_rl_recipe as recipe
+from experiments.post_training import rl as snowball
+from experiments.post_training import rl_gate as gate
+from experiments.post_training import rl_presets as presets
+from experiments.post_training import rl_recipe as recipe
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 

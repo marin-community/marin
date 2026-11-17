@@ -16,8 +16,8 @@ from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training import iceball_micro, skyrl_port_smoke, snowball_online_eagle, snowball_rl
-from experiments.post_training import snowball_rl_presets as snowball
+from experiments.post_training import iceball_micro, rl, skyrl_port_smoke, snowball_online_eagle
+from experiments.post_training import rl_presets as snowball
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.mismatch_probe import launch as mismatch
@@ -45,7 +45,7 @@ def _snowball_step(preset: snowball.Preset, settings: tuple[str, ...] = ()) -> A
         path = StoragePath(source.path()) / snowball.SUMMARY_FILENAME
         path.parent.mkdirs()
         path.write_text(json.dumps(summary))
-    return snowball_rl.build_run(
+    return rl.build_run(
         preset,
         tasks=selection if preset.tasks_input == "required" else None,
         settings=settings,

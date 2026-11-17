@@ -30,15 +30,15 @@ from rigging.provenance import Provenance
 from scipy.stats import t
 from taskcompendium.grading_result import Outcome
 
-from experiments.post_training import snowball_rl as snowball
-from experiments.post_training import snowball_rl_gate as gate
-from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training import snowball_rl_scoring as scoring
-from experiments.post_training.snowball_rl_command import EXIT_CODES
-from experiments.post_training.snowball_rl_scoring import GATE_INPUTS_FILENAME, GateInputs, read_gate_inputs
-from experiments.post_training.snowball_tests.fixtures import answer as _answer
-from experiments.post_training.snowball_tests.fixtures import write_json as _json
-from experiments.post_training.snowball_tests.fixtures import write_metrics, write_receipt
+from experiments.post_training import rl as snowball
+from experiments.post_training import rl_gate as gate
+from experiments.post_training import rl_presets as presets
+from experiments.post_training import rl_scoring as scoring
+from experiments.post_training.rl_command import EXIT_CODES
+from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInputs, read_gate_inputs
+from experiments.post_training.rl_tests.fixtures import answer as _answer
+from experiments.post_training.rl_tests.fixtures import write_json as _json
+from experiments.post_training.rl_tests.fixtures import write_metrics, write_receipt
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 KL = "policy/mismatch/staleness0/kl_k3"

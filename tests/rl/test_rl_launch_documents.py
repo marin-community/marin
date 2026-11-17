@@ -9,7 +9,7 @@ import pytest
 from marin.rl.skyrl import SkyRLSpec, skyrl_cpu_command
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 
-from experiments.post_training import snowball_rl_presets as snowball
+from experiments.post_training import rl_presets as snowball
 from experiments.post_training.skyrl_test_support import current_control_pins
 from tests.rl.launch_document_census import render_launch_census
 

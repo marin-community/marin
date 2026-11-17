@@ -150,8 +150,8 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
             path,
             [
                 "experiments/post_training/curriculum_rl/test_launch.py",
-                "experiments/post_training/snowball_tests/test_snowball_rl.py",
-                "experiments/post_training/snowball_tests/test_snowball_rl_gate.py",
+                "experiments/post_training/rl_tests/test_rl.py",
+                "experiments/post_training/rl_tests/test_rl_gate.py",
                 "tests/rl/test_skyrl.py",
             ],
         )
@@ -172,12 +172,10 @@ def test_experiment_tests_run_for_test_and_dependency_changes(
     write(tmp_path, "experiments/moe/test_unrelated.py", "def test_other():\n    assert True\n")
     write(tmp_path, "tests/test_unrelated.py", "def test_other():\n    assert True\n")
 
-    write(
-        tmp_path, "experiments/post_training/snowball_tests/test_snowball_rl.py", "def test_native_config():\n    pass\n"
-    )
+    write(tmp_path, "experiments/post_training/rl_tests/test_rl.py", "def test_native_config():\n    pass\n")
     write(
         tmp_path,
-        "experiments/post_training/snowball_tests/test_snowball_rl_gate.py",
+        "experiments/post_training/rl_tests/test_rl_gate.py",
         "def test_native_protocol():\n    pass\n",
     )
     write(

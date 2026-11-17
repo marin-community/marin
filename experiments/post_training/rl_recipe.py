@@ -32,7 +32,7 @@ from skyrlrecipe.declared import (
 )
 from skyrlrecipe.documents import MISSING, get_path
 
-from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training import rl_presets as presets
 from experiments.post_training.task_curation.selection import GraderKind
 
 RUN_TIMEOUT_HOURS = 72

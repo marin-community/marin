@@ -34,7 +34,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grading_result import Outcome
 
-from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training import rl_presets as presets
 from experiments.post_training.task_curation.selection import TASK_MANIFEST_FILENAME, TASK_SPEC_COLUMN
 
 SLICE_COLUMNS = ("family", "aaii_category", "agentic")

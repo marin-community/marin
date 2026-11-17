@@ -3,7 +3,7 @@
 
 import pytest
 
-from experiments.post_training.snowball_tests import fixtures
+from experiments.post_training.rl_tests import fixtures
 
 selection = pytest.fixture(fixtures.selection)
 source_provenance = pytest.fixture(fixtures.source_provenance)

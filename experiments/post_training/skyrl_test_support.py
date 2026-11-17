@@ -9,8 +9,8 @@ from pathlib import Path
 from marin.rl.skyrl import skyrl_cpu_command
 from rigging.config_discovery import find_project_root
 
-from experiments.post_training import snowball_rl_gate as gate
-from experiments.post_training import snowball_rl_presets as snowball
+from experiments.post_training import rl_gate as gate
+from experiments.post_training import rl_presets as snowball
 
 
 def current_control_pins(monkeypatch) -> None:

@@ -30,7 +30,7 @@ Datakit SFT weights and tokenizer, GPU layout, evaluation schedule and measureme
 ## Run a preset
 
 ```bash
-uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev
+uv run python -m experiments.post_training.rl --preset speed-short --version dev
 ```
 
 A gated preset without a control pin at its current revision refuses every command, including the plan print,
@@ -58,12 +58,12 @@ checkpoints or export; learner and engine token rates are descriptive telemetry.
 ## Change one input
 
 ```bash
-uv run python -m experiments.post_training.snowball_rl --preset learning-medium \
+uv run python -m experiments.post_training.rl --preset learning-medium \
   --set trainer.algorithm.advantage_estimator=grpo \
   --set trainer.algorithm.group_advantage_min_size=null --version dev
-uv run python -m experiments.post_training.snowball_rl --preset data-short \
+uv run python -m experiments.post_training.rl --preset data-short \
   --tasks my-selection@2026.11.10.1 --version dev
-uv run python -m experiments.post_training.snowball_rl --preset train-long \
+uv run python -m experiments.post_training.rl --preset train-long \
   --set trainer.max_steps=100 --version dev
 ```
 
@@ -97,7 +97,7 @@ JSON comparison rows have `objective`, `constraint`, `requirement`, `reported` o
 `gate_inputs.json` records the requested settings and inputs for re-scoring; `run.config_changes` lists
 explicit settings and derived differences. Native elapsed time and allocated GPUs determine gain per H100-hour.
 
-Each gated preset uses one control pin in `snowball_rl_gate.CONTROLS`, with a source commit, revision and
+Each gated preset uses one control pin in `rl_gate.CONTROLS`, with a source commit, revision and
 replicate count. Data-medium shares learning-medium's pin. Before submission, the command composes the
 candidate on CPU and checks every control against current defaults. During scoring, candidate configuration
 must match its recorded inputs. The report states why a comparison is INVALID or an invariant fails.
@@ -115,9 +115,9 @@ refuse requirements. Requirements change report identity while training names an
 Run stored comparisons on CPU:
 
 ```bash
-uv run python -m experiments.post_training.snowball_rl_gate \
+uv run python -m experiments.post_training.rl_gate \
   --preset learning-medium --candidate RUN_NAME[@VERSION] --require 'eval_lite/aaii_category/coding/mean>=control'
-uv run python -m experiments.post_training.snowball_rl_gate \
+uv run python -m experiments.post_training.rl_gate \
   --preset speed-medium --leave-out r0
 ```
 
@@ -126,7 +126,7 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 
 ## Change a preset's default
 
-1. Edit that preset's `tasks`, `model`, `eval_lite` or `recipe` in `snowball_rl_presets.py`.
+1. Edit that preset's `tasks`, `model`, `eval_lite` or `recipe` in `rl_presets.py`.
    A preset's `Recipe.config` is its typed override point; merge a `RecipePatch` there for a
    preset-specific default. `_DEFAULT_PATCH` supplies shared settings, including context budget.
    Trainer precision, engine precision and batch invariance use the native recipe keys through `--set`.
@@ -134,7 +134,7 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 3. From the repository root, print the complete compared-configuration hash:
 
    ```bash
-   uv run pytest -s -q -n 0 experiments/post_training/snowball_tests/test_snowball_rl.py::test_presets_match_revisioned_native_configs
+   uv run pytest -s -q -n 0 experiments/post_training/rl_tests/test_rl.py::test_presets_match_revisioned_native_configs
    ```
 
    A new revision intentionally fails until its printed hash is added under that preset in
@@ -143,8 +143,8 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 4. Controls are collected by CI after the default change merges, once per changed default.
    That CI workflow is planned separately; control collection is not a merge gate.
    The manual `--control` command remains available for an explicitly authorized calibration.
-   Source, revision and replicate count live in `snowball_rl_gate.CONTROLS`.
-5. Validate a newly collected cohort with `snowball_rl_gate --leave-out rN` for every replicate.
+   Source, revision and replicate count live in `rl_gate.CONTROLS`.
+5. Validate a newly collected cohort with `rl_gate --leave-out rN` for every replicate.
    Every leave-one-out verdict must PASS.
 
 ## Tasks and evaluation

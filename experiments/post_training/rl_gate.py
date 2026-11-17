@@ -4,12 +4,12 @@
 """Compare a saved Snowball run, or one control replicate, with the preset's pinned controls.
 
 Checks saved measurements against current preset defaults and pinned controls on CPU. Writes gate_report.json and
-gate_report.md under the caller's namespace and prints the report as JSON. snowball_rl runs this
+gate_report.md under the caller's namespace and prints the report as JSON. rl runs this
 comparison itself after a gated run; use this command to re-score a finished run, for example
 with a new --require, or to check calibration by scoring a control against the other controls.
 
 \b
-Examples, each after `uv run python -m experiments.post_training.snowball_rl_gate`:
+Examples, each after `uv run python -m experiments.post_training.rl_gate`:
   --preset learning-medium --candidate RUN_NAME --require 'eval_lite/aaii_category/coding/mean>=control'
   --preset speed-medium --leave-out r0
 """
@@ -48,11 +48,11 @@ from scipy.stats import t
 from skyrlrecipe.documents import MISSING, get_path, set_path
 from tabulate import tabulate
 
-from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training import snowball_rl_recipe as recipe
-from experiments.post_training.snowball_rl_command import EXIT_CODES, SnowballCommand
-from experiments.post_training.snowball_rl_presets import RUN_PREFIX
-from experiments.post_training.snowball_rl_scoring import (
+from experiments.post_training import rl_presets as presets
+from experiments.post_training import rl_recipe as recipe
+from experiments.post_training.rl_command import EXIT_CODES, SnowballCommand
+from experiments.post_training.rl_presets import RUN_PREFIX
+from experiments.post_training.rl_scoring import (
     GateInputs,
     InvalidComparison,
     RunData,
@@ -677,7 +677,7 @@ def control_pin(preset: presets.Preset) -> ControlPin:
         raise InvalidComparison(
             f"no control pin for {preset.name} at {preset.revision}; "
             f"recorded control revision={pin.revision if pin else None}; "
-            f"collect with python -m experiments.post_training.snowball_rl --preset {name} "
+            f"collect with python -m experiments.post_training.rl --preset {name} "
             f"--version {preset.revision} --control --replicates {replicas} --run"
         )
     return pin
@@ -795,7 +795,7 @@ def gate_step(
     "requirements",
     multiple=True,
     metavar="KEY<=|>=BOUND",
-    help="Add a condition, as in snowball_rl --require, to those the run recorded at launch. Repeatable.",
+    help="Add a condition, as in rl --require, to those the run recorded at launch. Repeatable.",
 )
 def main(
     preset_name: str,
@@ -848,4 +848,4 @@ def completed_gate(gate: ArtifactStep[GateReport] | None) -> ArtifactStep[GateRe
 
 if __name__ == "__main__":
     # The importable module owns the persisted GateReport type.
-    importlib.import_module("experiments.post_training.snowball_rl_gate").main()
+    importlib.import_module("experiments.post_training.rl_gate").main()
