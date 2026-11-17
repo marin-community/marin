@@ -135,11 +135,12 @@ def test_verified_closure_trainer_preserves_rollouts_and_trains_verified_repairs
 @pytest.mark.parametrize("token_rewards", [False, True], ids=["scalar", "token"])
 def test_reward_mean_uses_compensated_totals(token_rewards):
     values = [2.0**110, 2.0**54, 1.0, -(2.0**54), -(2.0**110)]
+    response_lengths = [5, 1, 1, 1, 1] if token_rewards else [1] * 5
     batch = {
         "prompt_token_ids": [[0]] * 5,
-        "response_ids": [[1]] * 5,
-        "rewards": [[value] for value in values] if token_rewards else values,
-        "loss_masks": [[1]] * 5,
+        "response_ids": [[1] * length for length in response_lengths],
+        "rewards": [values, [0.0], [0.0], [0.0], [0.0]] if token_rewards else values,
+        "loss_masks": [[1] * length for length in response_lengths],
     }
     metrics = reward_metrics([RowFacts.from_batch(batch)], ["g0"] * 5, n_samples_per_prompt=1)
     assert metrics["reward/avg_raw_reward"] == 0.2

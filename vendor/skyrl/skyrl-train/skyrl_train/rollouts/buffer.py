@@ -139,7 +139,7 @@ class GroupRewards:
 
 @dataclass(frozen=True)
 class RowFacts:
-    """Per-row lengths, baseline exclusions, stop reasons, and policy stamps.
+    """Per-row summaries for batch assembly and metrics.
 
     Separate reward totals and mask counts retain their consumers' original
     reduction arithmetic so driver metrics preserve their exact values.
