@@ -6,7 +6,7 @@
 A reserved pool (scale groups that share one ``quota_pool`` and draw on one cloud
 reservation) can be fully held by small, lower-priority slices. Preemption cannot
 help a higher-priority job that needs a larger slice: it only replaces one existing
-slice of the same variant and size, and idle scale-down never touches busy slices.
+slice of its own variant and at least its size, and idle scale-down never touches busy slices.
 The larger slice then waits on the cloud indefinitely.
 
 :func:`plan_reservation_reclaim` picks lower-priority slices in the same pool whose
@@ -26,13 +26,7 @@ from rigging.timing import Timestamp
 
 from iris.cluster.config import ReservationReclaimConfig
 from iris.cluster.types import WorkerStatusMap
-from iris.rpc import job_pb2
-from iris.rpc.proto_display import priority_band_order
-
-_VICTIM_BAND_LIMITS = {
-    "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
-    "batch": job_pb2.PRIORITY_BAND_BATCH,
-}
+from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_rank, priority_band_value
 
 
 @dataclass(frozen=True)
@@ -88,17 +82,18 @@ class ReclaimPlan:
     blocked: list[ReclaimBlocked]
 
 
-def _slice_band(slice_: PoolSlice, worker_status: WorkerStatusMap) -> tuple[bool, int | None]:
-    """Return (known, top band): ``known`` is False when any worker is missing from the snapshot."""
-    top: int | None = None
+def _slice_rank(slice_: PoolSlice, worker_status: WorkerStatusMap) -> tuple[bool, int | None]:
+    """Return (eligible, rank of the slice's highest running band; None when idle).
+
+    Not eligible when a worker is missing from the snapshot or runs a task of an unknown band.
+    """
+    ranks: list[int] = []
     for worker_id in slice_.worker_ids:
         status = worker_status.get(worker_id)
-        if status is None:
+        if status is None or any(band not in PRIORITY_BAND_VALUES for band in status.running_bands):
             return False, None
-        band = status.top_running_band
-        if band is not None and (top is None or priority_band_order(band) < priority_band_order(top)):
-            top = band
-    return True, top
+        ranks.extend(priority_band_rank(band) for band in status.running_bands)
+    return True, min(ranks, default=None)
 
 
 def plan_reservation_reclaim(
@@ -114,7 +109,7 @@ def plan_reservation_reclaim(
     Args:
         slices: Every tracked slice of the reserved scale groups.
         waiting_bands: Scale group -> highest band of the coscheduled demand routed to it this tick.
-        worker_status: The controller's worker snapshot, with each worker's top running band.
+        worker_status: The controller's worker snapshot, with each worker's running bands.
         config: Reclaim settings; pools not listed in ``quota_pools`` are never touched.
         last_reclaim: Pool -> time of its last reclaim, for the cooldown.
         now: Current time.
@@ -132,12 +127,12 @@ def plan_reservation_reclaim(
         - At most one reclaim per pool per ``cooldown``.
     """
     pools = set(config.quota_pools)
-    victim_limit = priority_band_order(_VICTIM_BAND_LIMITS[config.highest_victim_band])
+    victim_limit = priority_band_rank(priority_band_value(config.highest_victim_band))
 
     waiting_by_pool: dict[str, list[tuple[PoolSlice, int]]] = {}
     for slice_ in slices:
         band = waiting_bands.get(slice_.group)
-        if slice_.quota_pool not in pools or not slice_.waiting or band is None:
+        if slice_.quota_pool not in pools or not slice_.waiting or band not in PRIORITY_BAND_VALUES:
             continue
         if now.epoch_ms() - slice_.created_at.epoch_ms() < config.min_wait.to_ms():
             continue
@@ -149,23 +144,22 @@ def plan_reservation_reclaim(
         last = last_reclaim.get(pool)
         if last is not None and now.epoch_ms() - last.epoch_ms() < config.cooldown.to_ms():
             continue
-        target, band = min(waiting, key=lambda item: (priority_band_order(item[1]), item[0].created_at.epoch_ms()))
-        preemptor_order = priority_band_order(band)
+        target, band = min(waiting, key=lambda item: (priority_band_rank(item[1]), item[0].created_at.epoch_ms()))
+        preemptor_rank = priority_band_rank(band)
 
         candidates: list[tuple[tuple[int, int, int, int], PoolSlice]] = []
         for slice_ in slices:
             if slice_.quota_pool != pool or not slice_.ready or slice_.group == target.group:
                 continue
-            known, top = _slice_band(slice_, worker_status)
-            if not known:
+            eligible, rank = _slice_rank(slice_, worker_status)
+            if not eligible:
                 continue
-            if top is None:
+            if rank is None:
                 key = (0, 0, slice_.chips, -slice_.created_at.epoch_ms())
             else:
-                order = priority_band_order(top)
-                if order <= preemptor_order or order < victim_limit:
+                if rank <= preemptor_rank or rank < victim_limit:
                     continue
-                key = (1, -order, slice_.chips, -slice_.created_at.epoch_ms())
+                key = (1, -rank, slice_.chips, -slice_.created_at.epoch_ms())
             candidates.append((key, slice_))
         candidates.sort(key=lambda item: item[0])
 

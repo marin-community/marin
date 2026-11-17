@@ -82,7 +82,6 @@ from iris.cluster.types import (
     WorkerUsability,
 )
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.proto_display import priority_band_order
 
 # ---------------------------------------------------------------------------
 # Query-result dataclasses (previously rows.py)
@@ -832,21 +831,18 @@ _RUNNING_TASK_BANDS_BY_WORKER_STMT = select(
 )
 
 
-def top_running_band_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId, int]:
-    """Return the highest-priority band among each busy worker's running tasks (idle workers are absent)."""
+def running_bands_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId, frozenset[int]]:
+    """Return the priority bands of each busy worker's running tasks (idle workers are absent)."""
     if not worker_ids:
         return {}
     rows = tx.execute(
         _RUNNING_TASK_BANDS_BY_WORKER_STMT,
         {"worker_ids": list(worker_ids), "states": sorted(ACTIVE_TASK_STATES)},
     ).all()
-    top: dict[WorkerId, int] = {}
+    bands: dict[WorkerId, set[int]] = {}
     for row in rows:
-        band = int(row.priority_band)
-        current = top.get(row.worker_id)
-        if current is None or priority_band_order(band) < priority_band_order(current):
-            top[row.worker_id] = band
-    return top
+        bands.setdefault(row.worker_id, set()).add(int(row.priority_band))
+    return {worker_id: frozenset(worker_bands) for worker_id, worker_bands in bands.items()}
 
 
 def running_tasks_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:

@@ -74,7 +74,7 @@ from iris.cluster.platforms.types import (
 from iris.cluster.stats.tables import IrisProvisioning, ProvisioningOutcome
 from iris.cluster.types import WorkerStatusMap
 from iris.rpc import job_pb2, vm_pb2
-from iris.rpc.proto_display import priority_band_order
+from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_rank
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -451,9 +451,13 @@ class Autoscaler:
             return
         waiting_bands: dict[str, int] = {}
         for group_name, entries in routed_entries.items():
-            bands = [e.priority_band for e in entries if e.coschedule_group_id is not None and e.priority_band]
+            bands = [
+                e.priority_band
+                for e in entries
+                if e.coschedule_group_id is not None and e.priority_band in PRIORITY_BAND_VALUES
+            ]
             if bands:
-                waiting_bands[group_name] = min(bands, key=priority_band_order)
+                waiting_bands[group_name] = min(bands, key=priority_band_rank)
         plan = plan_reservation_reclaim(
             slices=[slice_ for group in self._groups.values() for slice_ in group.pool_slices()],
             waiting_bands=waiting_bands,

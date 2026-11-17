@@ -1238,13 +1238,13 @@ class Controller:
         liveness = self._worker_health.all()
         worker_ids = {worker_id for worker_id, state in liveness.items() if state.usability is not WorkerUsability.DEAD}
         running = reads.running_tasks_by_worker(snap, worker_ids)
-        bands = reads.top_running_band_by_worker(snap, worker_ids)
+        bands = reads.running_bands_by_worker(snap, worker_ids)
         return {
             worker_id: WorkerStatus(
                 worker_id=worker_id,
                 running_task_ids=frozenset(task_id.to_wire() for task_id in running.get(worker_id, set())),
                 usability=liveness[worker_id].usability,
-                top_running_band=bands.get(worker_id),
+                running_bands=bands.get(worker_id, frozenset()),
             )
             for worker_id in worker_ids
         }

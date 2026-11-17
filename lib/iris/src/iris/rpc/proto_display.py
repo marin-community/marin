@@ -104,11 +104,6 @@ def priority_band_rank(band: int) -> int:
         raise ValueError(f"Unknown priority band {band}") from err
 
 
-def priority_band_order(band: int) -> int:
-    """Like :func:`priority_band_rank`, but an unknown band ranks above every real one instead of raising."""
-    return PRIORITY_BAND_VALUES.index(band) if band in PRIORITY_BAND_VALUES else -1
-
-
 # ---------------------------------------------------------------------------
 # ContainerProfile helpers
 # ---------------------------------------------------------------------------

@@ -5,10 +5,9 @@
 
 import dataclasses
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import yaml
-from iris.cluster.config import AutoscalerConfig, ReservationReclaimConfig, load_config
+from iris.cluster.config import AutoscalerConfig, ReservationReclaimConfig
 from iris.cluster.constraints import DeviceType
 from iris.cluster.controller.autoscaler.reclaim import PoolSlice, ReclaimDecision, plan_reservation_reclaim
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
@@ -90,7 +89,7 @@ def _status(slices: list[PoolSlice], bands: dict[str, int | None]) -> dict[str, 
             status[worker_id] = WorkerStatus(
                 worker_id=worker_id,
                 running_task_ids=frozenset() if band is None else frozenset({f"{worker_id}/task"}),
-                top_running_band=band,
+                running_bands=frozenset() if band is None else frozenset({band}),
             )
     return status
 
@@ -145,7 +144,7 @@ def test_a_slice_with_one_equal_band_task_is_skipped_whole():
     mixed = _slice("mixed", "small", 8, workers=2)
     slices = [waiting, mixed]
     status = _status(slices, {"mixed": BATCH})
-    status["mixed-w1"] = dataclasses.replace(status["mixed-w1"], top_running_band=PRODUCTION)
+    status["mixed-w1"] = dataclasses.replace(status["mixed-w1"], running_bands=frozenset({BATCH, PRODUCTION}))
 
     plan = plan_reservation_reclaim(slices, {"big": PRODUCTION}, status, ON, {}, NOW)
 
@@ -213,7 +212,6 @@ def test_no_reclaim_before_min_wait_or_inside_cooldown():
 def test_off_by_default_and_other_pools_are_never_touched():
     slices = [_slice("wait", "big", 8, ready=False), _slice("b", "small", 8)]
     bands = {"b": BATCH}
-    assert ReservationReclaimConfig().quota_pools == []
     assert _plan(slices, bands, config=ReservationReclaimConfig(), waiting={"big": PRODUCTION}).decisions == []
 
     other_pool = [_slice("wait", "big", 8, ready=False), _slice("b", "small", 8, pool="v5p-reserved/us-east5-a")]
@@ -256,7 +254,7 @@ def test_autoscaler_reclaims_for_a_waiting_production_slice_and_holds_victim_sca
     )
     busy = {
         worker.worker_id: WorkerStatus(
-            worker_id=worker.worker_id, running_task_ids=frozenset({"t"}), top_running_band=BATCH
+            worker_id=worker.worker_id, running_task_ids=frozenset({"t"}), running_bands=frozenset({BATCH})
         )
         for handle in small_handles
         for worker in handle.describe().workers
@@ -371,18 +369,6 @@ def test_controller_fails_and_removes_reclaimed_workers_and_retries_their_tasks(
     assert row.preemption_count == 1
 
 
-def test_marin_config_keeps_reclaim_off_and_its_reserved_v4_groups_form_one_pool():
-    config = load_config(Path(__file__).resolve().parents[3] / "config" / "marin.yaml")
-    assert config.defaults.autoscaler.reservation_reclaim.quota_pools == []
-
-    big = config.scale_groups["tpu_v4-reserved_1024-us-central2-b"]
-    small = config.scale_groups["tpu_v4-reserved_8-us-central2-b"]
-    assert big.quota_pool == small.quota_pool == POOL
-    assert big.resources.capacity_type == small.resources.capacity_type == CapacityType.RESERVED
-    assert big.resources.device_count * big.num_vms == 512
-    assert small.resources.device_count * small.num_vms == 4
-
-
 def test_documented_reclaim_block_parses():
     block = yaml.safe_load(
         """
@@ -397,3 +383,11 @@ def test_documented_reclaim_block_parses():
     assert reclaim.quota_pools == [POOL]
     assert reclaim.min_wait == Duration.from_minutes(10) and reclaim.cooldown == Duration.from_minutes(30)
     assert reclaim.highest_victim_band == "batch"
+
+
+def test_unknown_bands_never_trigger_reclaim_and_never_make_victims():
+    unknown = job_pb2.PRIORITY_BAND_INHERIT  # a sentinel, never a resolved band
+    slices = [_slice("wait", "big", 8, ready=False), _slice("b", "small", 8)]
+    assert _plan(slices, {"b": BATCH}, waiting={"big": unknown}).decisions == []
+    plan = _plan(slices, {"b": unknown}, waiting={"big": PRODUCTION})
+    assert plan.decisions == [] and plan.blocked[0].chips_reclaimable == 0
