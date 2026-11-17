@@ -52,7 +52,7 @@ archived production population.
 
 `ifbench_heldout` checks IFBench training tasks against every user prompt in
 `allenai/IFBench_test@2e8a48de45ff3bf41242f927254ca81b59ca3ae2` (300 tasks).
-It reads the exact-pin receipt from `datasets/license_receipts.json` and requires
+It reads the exact-pin receipt through `datasets/license_receipts/index.json` and requires
 a passing binding license check before acquisition. The reference
 preserves the benchmark keys and exact `prompt` strings used by the native
 evaluator. Grader data and generated answers are excluded.
@@ -88,6 +88,55 @@ the causal evaluation references. New IFBench references use
 `ifbench-test:<original key>`; existing reference IDs keep their original form. The retained private
 pin still needs its final census, qualification, SAMPLE review and admission
 receipt before training use.
+
+## PDBThink native held-out check
+
+`pdbthink_heldout` checks the population converted from the original `train` split
+(TRAIN) against all 4,411 validation and 4,435 test tasks
+at `open-athena/pdbthink-coordinate-tasks@3734406cb97b1702844319f9a5d860cbbf8fe660`.
+It requires the exact-pin EVAL license receipt. A frozen raw-snapshot inventory
+binds the selected Parquet files by SHA-256. Extraction verifies each released
+prompt hash and renders the complete system/user prompts with the TaskCompendium
+`format_conversation` renderer used for TRAIN. Grader references and oracle files are excluded
+from the search text. Task identities include their original split and path.
+
+Run both stages in an Iris CPU job in the input bucket's region. The reference
+stage seals the native held-out Bloom before the full shared population inventory
+is ready. The scan stage uses that same reference and the complete frozen
+`SourceTextPopulation` inventory supplied through `--populations` and its SHA-256.
+Use the exact inventory from the shared scan whose exclusions must be preserved.
+The original shared Bloom is
+`s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_3a94b52b`; the entrypoint
+verifies its pinned filter and index hashes before merging:
+
+```bash
+python -m experiments.post_training.task_curation.pdbthink_heldout \
+  --stage reference --raw-inventory s3://REGIONAL-BUCKET/raw-snapshots.json \
+  --raw-inventory-sha256 RAW-SHA256 \
+  --artifact-root s3://REGIONAL-BUCKET/marin \
+  --artifact-version NEW-VERSION --max-workers 4 \
+  --output s3://REGIONAL-BUCKET/native-reference.json --run
+
+python -m experiments.post_training.task_curation.pdbthink_heldout \
+  --stage scan --raw-inventory s3://REGIONAL-BUCKET/raw-snapshots.json \
+  --raw-inventory-sha256 RAW-SHA256 \
+  --populations s3://REGIONAL-BUCKET/frozen-populations.json \
+  --populations-sha256 POPULATIONS-SHA256 \
+  --artifact-root s3://REGIONAL-BUCKET/marin \
+  --artifact-version NEW-VERSION --max-workers 4 \
+  --output s3://REGIONAL-BUCKET/heldout-reports.json --run
+```
+
+The scan preserves the original shared Bloom and its report. In separate
+artifacts, it merges the SHA-pinned original Bloom with the native reference and
+recomputes the existing source/global frequency filters across the full cohort.
+It then emits native-only and combined-reference reports for PDBThink TRAIN.
+Use the combined report for retention: features from different references can
+jointly meet the existing contamination threshold. Verify that the shared scan's
+excluded IDs and causal evaluation IDs remain in the combined report before
+publishing a retention plan. Preserve both reports and every matched evaluation
+ID; do not hand-drop or resample tasks. A changed reference or population
+inventory requires a new artifact version.
 
 ## Final task selection
 
