@@ -9,6 +9,7 @@ from omegaconf import OmegaConf
 from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE, selected_export_step
 from skyrl_train.callbacks.base import TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import CheckpointCallback, create_callbacks_from_config
+from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.rollouts.context import TrainingContextState
 from skyrl_train.rollouts.loader import PromptLoaderState
 from skyrl_train.trainer import RayPPOTrainer
@@ -192,6 +193,10 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
 def test_timed_checkpoint_interval_and_forced_final(monkeypatch, elapsed, periodic):
     clock = [0.0]
     monkeypatch.setattr("rigging.timing.time.monotonic", lambda: clock[0])
+    validate_hf_export_config(OmegaConf.create({"trainer": {"callbacks": [
+        {"type": "checkpoint", "save_steps": -1, "save_interval_seconds": 7200, "save_on_train_end": True},
+        {"type": "hf_model_save", "save_steps": -1, "save_on_train_end": True},
+    ]}}))
     callback = CheckpointCallback(save_steps=-1, save_interval_seconds=7200)
     state = TrainerState(3, 0, 100, 100)
     callback.on_train_begin(state, TrainerControl())
