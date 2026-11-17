@@ -1,0 +1,12 @@
+id: X0231
+slug: bilinear-lm-head-rank-lift
+name: Bilinear lm_head rank lift
+category: Output head and loss
+summary: 'Track: speedrun'
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6940686544
+  author: armorfaye
+  approved_by: ClassicLarry
