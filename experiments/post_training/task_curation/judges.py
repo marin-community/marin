@@ -42,6 +42,10 @@ class JudgeTierDefinition:
     model_identity: str
     model_revision: str | None
     reasoning_policy: str
+    # How the served engine turns chat requests into prompt tokens: the repo
+    # chat template ("chat_template") or the openai_harmony encoder
+    # ("harmony", gpt-oss model families).
+    served_encoding: str = "chat_template"
     qa_reviewer: ReviewerSpec | None = None
 
 
@@ -343,6 +347,7 @@ JUDGE_TIERS: Mapping[JudgeTier, JudgeTierDefinition] = MappingProxyType(
             model_identity="openai/gpt-oss-120b",
             model_revision="b5c939de8f754692c1647ca79fbf85e8c1e70f8a",
             reasoning_policy="low",
+            served_encoding="harmony",
         ),
         JudgeTier.MEDIUM: JudgeTierDefinition(
             spec=replace(

@@ -18,6 +18,7 @@ from transformers import AutoTokenizer
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.task_curation.difficulty_protocol import PINS
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
+from experiments.post_training.task_curation.harmony_probe import harmony_prompt_tokens
 from experiments.post_training.task_curation.judges import JudgeTierDefinition
 
 PROBE_MESSAGES = [
@@ -68,9 +69,33 @@ def probe_endpoint(solver: Solver, endpoint: str, api_model: str, api_key: str, 
         endpoint,
         api_key,
         request,
-        model_identity=SOLVER_MODELS[solver],
-        model_revision=pin.revision,
-        chat_template_kwargs=request.get("chat_template_kwargs", {}),
+        expected_prompt_tokens=hf_prompt_tokens(
+            request,
+            model_identity=SOLVER_MODELS[solver],
+            model_revision=pin.revision,
+            chat_template_kwargs=request.get("chat_template_kwargs", {}),
+        ),
+    )
+
+
+def hf_prompt_tokens(
+    request: dict,
+    *,
+    model_identity: str,
+    model_revision: str,
+    chat_template_kwargs: dict,
+) -> int:
+    """Prompt token count the pinned repo chat template renders for this request."""
+    tokenizer = AutoTokenizer.from_pretrained(model_identity, revision=model_revision)
+    return len(
+        tokenizer.apply_chat_template(
+            chat_template_messages(request["messages"]),
+            tools=request.get("tools"),
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=False,
+            **chat_template_kwargs,
+        )
     )
 
 
@@ -79,9 +104,7 @@ def probe_serving_endpoint(
     api_key: str,
     request: dict,
     *,
-    model_identity: str,
-    model_revision: str,
-    chat_template_kwargs: dict,
+    expected_prompt_tokens: int,
 ) -> dict:
     """Verify pinned tools/thinking tokenization against authoritative serving usage."""
     # A cold vLLM engine can still be compiling when the endpoint accepts connections;
@@ -89,25 +112,23 @@ def probe_serving_endpoint(
     with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=1800) as client:
         models = client.get(endpoint.rstrip("/") + "/models")
         models.raise_for_status()
-        tokenizer = AutoTokenizer.from_pretrained(model_identity, revision=model_revision)
-        prompt_tokens = len(
-            tokenizer.apply_chat_template(
-                chat_template_messages(request["messages"]),
-                tools=request.get("tools"),
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=False,
-                **chat_template_kwargs,
-            )
-        )
         probe_response = client.post(endpoint.rstrip("/") + "/chat/completions", json=request)
         probe_response.raise_for_status()
         completion = probe_response.json()
-        if completion["usage"]["prompt_tokens"] != prompt_tokens:
-            raise ValueError("Pinned tools/thinking rendering differs from authoritative server usage")
+        served_prompt_tokens = completion["usage"]["prompt_tokens"]
+        if served_prompt_tokens != expected_prompt_tokens:
+            raise ValueError(
+                "Pinned tools/thinking rendering differs from authoritative server usage: "
+                f"pinned rendering is {expected_prompt_tokens} prompt tokens, "
+                f"the server rendered {served_prompt_tokens}"
+            )
     return {
         "advertised_models": models.json(),
-        "tools_thinking_probe": {"request": request, "completion": completion, "hf_prompt_tokens": prompt_tokens},
+        "tools_thinking_probe": {
+            "request": request,
+            "completion": completion,
+            "pinned_prompt_tokens": expected_prompt_tokens,
+        },
     }
 
 
@@ -127,6 +148,24 @@ def judge_probe_request(definition: JudgeTierDefinition, temperature: float) -> 
     }
 
 
+def judge_expected_prompt_tokens(definition: JudgeTierDefinition, request: dict) -> int:
+    """The pinned prompt token count for a judge tier's probe request.
+
+    Chat-template tiers render through the pinned repo tokenizer; harmony-served
+    tiers (gpt-oss families) render through the openai_harmony encoder the
+    engine itself uses.
+    """
+    if definition.served_encoding == "harmony":
+        return harmony_prompt_tokens(request)
+    assert definition.model_revision is not None
+    return hf_prompt_tokens(
+        request,
+        model_identity=definition.model_identity,
+        model_revision=definition.model_revision,
+        chat_template_kwargs=definition.spec.chat_template_kwargs or {},
+    )
+
+
 def probe_judge_endpoint(endpoint: str, definition: JudgeTierDefinition, temperature: float, api_key: str) -> dict:
     """Verify the judge tier's pinned rendering and identity against its served endpoint."""
     if definition.model_revision is None:
@@ -135,9 +174,7 @@ def probe_judge_endpoint(endpoint: str, definition: JudgeTierDefinition, tempera
         endpoint,
         api_key,
         judge_probe_request(definition, temperature),
-        model_identity=definition.model_identity,
-        model_revision=definition.model_revision,
-        chat_template_kwargs=definition.spec.chat_template_kwargs or {},
+        expected_prompt_tokens=judge_expected_prompt_tokens(definition, judge_probe_request(definition, temperature)),
     )
 
 
