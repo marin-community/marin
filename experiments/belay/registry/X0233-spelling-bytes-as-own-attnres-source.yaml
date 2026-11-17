@@ -4,7 +4,7 @@ name: Spelling bytes as own AttnRes source
 category: Embeddings and inputs
 summary: 'Track: speedrun'
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6940571647
@@ -46,6 +46,13 @@ trials:
     spelling_byte_source: 'true'
   commit: bf014fb0d4
   priority: batch
+  loss:
+  - 3.0417
+  delta:
+  - -0.0033
+  steps: 2959
+  baseline: belay-X0233-control 3.0450 (same commit, seed 0)
+  step_time_change: 0%
 potential:
   score: 6
   rationale: −0.0058 at equal data (+3% step time); equal-time run (2959 steps) running; ladder and MFU not run → 6
