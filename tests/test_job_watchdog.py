@@ -356,7 +356,11 @@ def test_kueue_gate_view_reads_quota_conditions(monkeypatch) -> None:
             ]
         },
     }
-    monkeypatch.setattr(jw, "k8s_cluster_settings", lambda cluster: jw.K8sClusterSettings(namespace="iris", kubeconfig="kc", context="ctx"))
+    monkeypatch.setattr(
+        jw,
+        "k8s_cluster_settings",
+        lambda cluster: jw.K8sClusterSettings(namespace="iris", kubeconfig="kc", context="ctx"),
+    )
     monkeypatch.setattr(jw, "run_readonly", lambda command, timeout_seconds=180: json.dumps({"items": [workload]}))
     gated, message = jw.kueue_gate_view("cw-us-east-08a", "/benfeuer/qc-v1")
     assert gated
@@ -380,6 +384,66 @@ def test_iris_lifecycle_maps_states_and_gate_reasons() -> None:
     state, detail = jw.iris_lifecycle_observation(unschedulable, "cw-us-east-08a")
     assert state == jw.EntryState.GATED
     assert "unschedulable" in detail
+
+
+def test_expected_replacement_downgrades_owner_initiated_deaths(tmp_path: Path) -> None:
+    entry = dataclasses.replace(
+        stall_entry(tmp_path),
+        expected_replacement=jw.IrisJobRef(cluster="cw-us-east-02a", job="/benfeuer/job-v2"),
+    )
+    record = jw.EntryRecord()
+    now = datetime(2026, 11, 17, 12, 0, tzinfo=UTC)
+
+    # Replacement alive: the death is a planned handover, recorded as info.
+    alert = jw.evaluate_alert(
+        entry, "JOB_KILLED", jw.EntryState.RUNNING, jw.EntryState.KILLED, record, jw.AlertRecord(), now, "running"
+    )
+    assert alert is not None and alert.severity == "info"
+    assert "expected replacement /benfeuer/job-v2: running" in alert.message
+
+    # Replacement missing: the death stays critical and says so.
+    alert = jw.evaluate_alert(
+        entry, "JOB_KILLED", jw.EntryState.RUNNING, jw.EntryState.KILLED, record, jw.AlertRecord(), now, None
+    )
+    assert alert is not None and alert.severity == "critical"
+    assert "not in fleet list" in alert.message
+
+    # The downgrade only applies to death alerts.
+    alert = jw.evaluate_alert(
+        entry, "NO_PROGRESS", jw.EntryState.RUNNING, jw.EntryState.NO_PROGRESS, record, jw.AlertRecord(), now, "running"
+    )
+    assert alert is not None and alert.severity == "warning"
+
+
+def test_registry_parses_expected_replacement() -> None:
+    registry = jw.parse_registry(
+        {
+            "coordinator": "c",
+            "entries": [
+                {
+                    "id": "a",
+                    "owner": "o",
+                    "probe": {"type": "log_regex", "cluster": "cl", "job": "/u/v1"},
+                    "expected_replacement": {"cluster": "cl", "job": "/u/v2"},
+                }
+            ],
+        }
+    )
+    assert registry.entries[0].expected_replacement == jw.IrisJobRef(cluster="cl", job="/u/v2")
+    with pytest.raises(jw.RegistryError, match="expected_replacement"):
+        jw.parse_registry(
+            {
+                "coordinator": "c",
+                "entries": [
+                    {
+                        "id": "a",
+                        "owner": "o",
+                        "probe": {"type": "log_regex", "cluster": "cl", "job": "/u/v1"},
+                        "expected_replacement": "/u/v2",
+                    }
+                ],
+            }
+        )
 
 
 def test_humanize_duration() -> None:

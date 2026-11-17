@@ -181,6 +181,7 @@ class RegistryEntry:
     cooldown: timedelta
     preempt_alert_count: int
     expected_terminal: EntryState | None
+    expected_replacement: IrisJobRef | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -486,6 +487,16 @@ def parse_registry(raw: dict[str, Any]) -> Registry:
                 expected_state = EntryState(str(expected))
             except ValueError as e:
                 raise RegistryError(f"{context}: unknown expected_terminal {expected!r}") from e
+        replacement_raw = item.get("expected_replacement")
+        replacement = None
+        if replacement_raw is not None:
+            if not isinstance(replacement_raw, dict):
+                raise RegistryError(f"{context}: expected_replacement must be a mapping with cluster and job")
+            replacement = IrisJobRef(
+                cluster=_require_str(replacement_raw, "cluster", f"{context}.expected_replacement"),
+                job=_require_str(replacement_raw, "job", f"{context}.expected_replacement"),
+                job_is_prefix=bool(replacement_raw.get("job_is_prefix", False)),
+            )
         entries.append(
             RegistryEntry(
                 id=entry_id,
@@ -507,6 +518,7 @@ def parse_registry(raw: dict[str, Any]) -> Registry:
                 ),
                 preempt_alert_count=int(item.get("preempt_alert_count", PREEMPT_ALERT_COUNT_DEFAULT)),
                 expected_terminal=expected_state,
+                expected_replacement=replacement,
             )
         )
     return Registry(coordinator=coordinator, entries=tuple(entries), defaults=defaults)
@@ -608,19 +620,42 @@ def effective_state(entry: RegistryEntry, record: EntryRecord, observation: Obse
     return EntryState.RUNNING
 
 
-def compose_message(entry: RegistryEntry, alert_kind: str, state: EntryState, record: EntryRecord, now: datetime) -> str:
+def compose_message(
+    entry: RegistryEntry,
+    alert_kind: str,
+    state: EntryState,
+    record: EntryRecord,
+    now: datetime,
+    replacement_state: str | None = None,
+) -> str:
     since = "unknown"
     if record.progress_changed_at is not None:
         since = humanize_duration(now - record.progress_changed_at)
     lines = [
-        f"[job-watchdog] {alert_kind} {entry.id} ({SEVERITY_BY_KIND[alert_kind]})",
+        f"[job-watchdog] {alert_kind} {entry.id} ({severity_for_kind(alert_kind, entry, replacement_state)})",
         f"state: {state.value} | progress: {record.progress or 'n/a'} | last progress: {since} ago",
     ]
     if record.detail:
         lines.append(record.detail)
+    if entry.expected_replacement is not None:
+        replacement = entry.expected_replacement.job
+        state_text = replacement_state or "not in fleet list"
+        lines.append(f"expected replacement {replacement}: {state_text}")
     suffix = f" | expected terminal: {entry.expected_terminal.value}" if entry.expected_terminal else ""
     lines.append(f"owner: {entry.owner}{suffix}")
     return "\n".join(lines)
+
+
+def severity_for_kind(alert_kind: str, entry: RegistryEntry, replacement_state: str | None) -> str:
+    """An owner-initiated replacement that is already alive downgrades a death to info."""
+    default = SEVERITY_BY_KIND[alert_kind]
+    if (
+        alert_kind in ("JOB_FAILED", "JOB_KILLED")
+        and entry.expected_replacement is not None
+        and replacement_state in IRIS_ACTIVE_STATES
+    ):
+        return "info"
+    return default
 
 
 def alert_kind_for(
@@ -674,6 +709,7 @@ def evaluate_alert(
     record: EntryRecord,
     book: AlertRecord,
     now: datetime,
+    replacement_state: str | None = None,
 ) -> Alert | None:
     """Return the alert to fire for this tick, or None.
 
@@ -687,18 +723,19 @@ def evaluate_alert(
     cooled = book.last_sent_at is not None and now - book.last_sent_at >= entry.cooldown
     if not (never_fired or changed or cooled):
         return None
-    message = compose_message(entry, alert_kind, state, record, now)
+    message = compose_message(entry, alert_kind, state, record, now, replacement_state)
     evidence = {
         "progress": record.progress,
         "since_progress": humanize_duration(now - record.progress_changed_at) if record.progress_changed_at else None,
         "detail": record.detail,
         "owner": entry.owner,
         "expected_terminal": entry.expected_terminal.value if entry.expected_terminal else None,
+        "replacement_state": replacement_state,
     }
     return Alert(
         key=key,
         kind=alert_kind,
-        severity=SEVERITY_BY_KIND[alert_kind],
+        severity=severity_for_kind(alert_kind, entry, replacement_state),
         entry_id=entry.id,
         state=state.value,
         message=message,
@@ -785,8 +822,13 @@ def run_tick(
     probe_runner,
     sink: AlertSink,
     now: datetime,
+    resolve_replacement=None,
 ) -> TickResult:
-    """One watchdog tick: probe every entry, update rolling state, fire deduplicated alerts."""
+    """One watchdog tick: probe every entry, update rolling state, fire deduplicated alerts.
+
+    resolve_replacement(entry) returns the expected replacement job's current Iris
+    state (or None when unknown); used to soften owner-initiated replacement deaths.
+    """
     statuses: list[EntryStatus] = []
     fired: list[Alert] = []
     for entry in registry.entries:
@@ -828,7 +870,16 @@ def run_tick(
         if alert_kind is not None:
             key = f"{entry.id}:{alert_kind}"
             book = state.alerts.setdefault(key, AlertRecord())
-            alert = evaluate_alert(entry, alert_kind, previous_state, current_state, record, book, now)
+            alert = evaluate_alert(
+                entry,
+                alert_kind,
+                previous_state,
+                current_state,
+                record,
+                book,
+                now,
+                replacement_state=resolve_replacement(entry) if entry.expected_replacement is not None else None,
+            )
             if alert is not None:
                 fired.append(alert)
                 book.last_state = current_state.value
@@ -879,6 +930,8 @@ def collect_fleet_snapshot(registry: Registry, now: datetime) -> FleetSnapshot:
         for ref in refs:
             prefixes_by_cluster.setdefault(ref.cluster, set()).add(ref.job)
             log_patterns.append(_log_pattern_for(ref))
+        if entry.expected_replacement is not None:
+            prefixes_by_cluster.setdefault(entry.expected_replacement.cluster, set()).add(entry.expected_replacement.job)
     for cluster, prefixes in sorted(prefixes_by_cluster.items()):
         for prefix in sorted(prefixes):
             # A tight per-prefix limit: the fleet list is most-recent-first, so one
@@ -1029,6 +1082,26 @@ def _resolve_log_line(snapshot: FleetSnapshot, probe: LogRegexProbe) -> LogLine 
     if not matches:
         return None
     return max(matches, key=lambda line: (line.epoch_ms, line.seq))
+
+
+def replacement_state_resolver(snapshot: FleetSnapshot):
+    """Resolve an entry's expected replacement job to its current Iris state."""
+
+    def resolve(entry: RegistryEntry) -> str | None:
+        ref = entry.expected_replacement
+        if ref is None:
+            return None
+        if not ref.job_is_prefix:
+            view = snapshot.iris.get((ref.cluster, ref.job))
+            return view.state if view else None
+        matches = [
+            view
+            for (cluster, _), view in snapshot.iris.items()
+            if cluster == ref.cluster and view.job_id.startswith(ref.job)
+        ]
+        return matches[0].state if matches else None
+
+    return resolve
 
 
 def parse_iris_job_describe(output: str) -> IrisJobView:
@@ -1317,7 +1390,8 @@ def tick_once(registry: Registry, state_dir: Path, dashboard_path: Path, alerts_
         now = datetime.now(UTC)
         snapshot = collect_fleet_snapshot(registry, now)
         sink = FanOutSink((JsonlAlertSink(alerts_path), DesktopNotificationSink()))
-        result = run_tick(registry, state, snapshot_probe_runner(snapshot), sink, now)
+        runner = snapshot_probe_runner(snapshot)
+        result = run_tick(registry, state, runner, sink, now, resolve_replacement=replacement_state_resolver(snapshot))
         save_state(state_dir / "state.json", state)
         append_history(state_dir / "history.jsonl", result.statuses)
         write_dashboard(dashboard_path, result.statuses, result.ticked_at)
