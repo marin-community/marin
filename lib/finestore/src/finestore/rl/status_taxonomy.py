@@ -3,9 +3,9 @@
 
 """The Atlas source-status taxonomy: statuses, exclusion reasons and their evidence.
 
-Every source status and exclusion reason is defined exactly here, each reason
-with one canonical explanation record; other modules consume these members and
-render from them rather than defining their own labels.
+Every source status and exclusion reason is defined exactly here. Each
+``ExclusionReason`` member has exactly one ``REASON_EXPLANATIONS`` entry, and
+``ExclusionClaim.explanation`` returns that entry for the claim's reason.
 """
 
 from enum import StrEnum
@@ -287,19 +287,3 @@ class ExclusionClaim(BaseModel):
     @property
     def explanation(self) -> ReasonExplanation:
         return REASON_EXPLANATIONS[self.reason]
-
-
-DIFFICULTY_GAP_EXCLUSION_REASONS: dict[str, ExclusionReason] = {
-    "ENVIRONMENT_ARTIFACT_MISSING": ExclusionReason.ENVIRONMENT_ARTIFACT_MISSING,
-    "TOOL_PROVIDER_REQUIRED": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "UNSUPPORTED_COMPOSE_DOCUMENT": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "STATE_CAPTURE_REQUIRED": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "UNRESOLVED_DOCKER_BUILD": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "NO_EXECUTABLE_GRADER": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "PROVIDER_CONTRACT_INVALID": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "NETWORK_POLICY_VIOLATION": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "JUDGE_ROUTE_UNQUALIFIED": ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
-    "JUDGE_API_UNQUALIFIED": ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
-    "INVALID_REFERENCE": ExclusionReason.INVALID_REFERENCE,
-}
-"""Map SOURCE-owned DifficultyGap member names to exclusion reasons."""

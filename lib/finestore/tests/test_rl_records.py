@@ -107,6 +107,24 @@ def test_check_license_reports_a_recorded_ban():
     assert (check.verdict, check.rule_id.name) == (LicenseCheckVerdict.FAIL, "BANNED")
 
 
+def test_require_license_applies_a_registry_ban():
+    source_id = "nemotron_sft_v3/math_v2/medium"
+    ban = LicenseBan(
+        source_id=source_id,
+        upstream_id="upstream",
+        upstream_revision="rev-1",
+        classification="restricted",
+        license_ids=["cc-by-nc-4.0"],
+        reason="recorded registry ban",
+        evidence_urls=["https://example.com/license"],
+        decided_at="2026-11-16T12:00:00+00:00",
+        decision_by="coordinator",
+        issue_url=ISSUE_URL,
+    )
+    with pytest.raises(ValueError, match="blocks ingest and admission"):
+        require_license(receipt([evidence(("mit",))]), source_id, "math", "rev-1", "ingest", ban)
+
+
 def test_require_license_fails_closed_on_each_missing_prerequisite():
     source_id = "nemotron_sft_v3/math_v2/medium"
     with pytest.raises(ValueError):

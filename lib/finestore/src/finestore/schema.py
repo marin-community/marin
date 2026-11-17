@@ -32,6 +32,10 @@ _SCALARS: dict[type, pa.DataType] = {
 }
 
 
+SHA256_PATTERN = r"^[0-9a-f]{64}$"
+"""Field pattern for a lowercase hex SHA-256 digest."""
+
+
 def arrow_schema(model: type | pa.Schema) -> pa.Schema:
     """Return a pyarrow schema for ``model``: a ``pa.Schema`` unchanged, or one derived from a
     pydantic model class or a dataclass."""

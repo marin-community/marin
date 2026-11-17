@@ -15,7 +15,8 @@ from pydantic import Field, field_validator, model_validator
 
 from finestore.layout import OnConflict
 from finestore.rl.curation import CatalogRecord, ContentEvidenceReference, DatasetRelease
-from finestore.schema import arrow_schema
+from finestore.rl.status_taxonomy import ExclusionReason
+from finestore.schema import SHA256_PATTERN, arrow_schema
 from finestore.store import DataStore
 
 PROTOCOL_ID = "atlas-difficulty-v3"
@@ -45,6 +46,9 @@ class DifficultyProtocol:
 
 
 # Add a new entry for a new protocol; keep existing contracts readable indefinitely.
+SAMPLE_SIZE = 100
+"""The per-measurement sample size every validator and the protocol agree on."""
+
 PROTOCOLS = MappingProxyType(
     {
         "atlas-difficulty-v3": DifficultyProtocol(
@@ -92,6 +96,12 @@ class DifficultyGapSpec:
     owner: DifficultyGapOwner
     meaning: str
     cleared_by: str
+    exclusion: ExclusionReason | None = None
+    """The Atlas exclusion reason the gap raises; only SOURCE-owned gaps may exclude."""
+
+    def __post_init__(self) -> None:
+        if self.exclusion is not None and self.owner is not DifficultyGapOwner.SOURCE:
+            raise ValueError("Only SOURCE-owned gaps can exclude a source")
 
 
 class DifficultyGap(StrEnum):
@@ -229,31 +239,37 @@ DIFFICULTY_GAPS: Mapping[DifficultyGap, DifficultyGapSpec] = MappingProxyType(
             DifficultyGapOwner.SOURCE,
             "A declared environment artifact (packages lock or prepared image) exists in no storage region.",
             "The artifact is rebuilt or repointed to a regional path (exclusion candidate otherwise).",
+            exclusion=ExclusionReason.ENVIRONMENT_ARTIFACT_MISSING,
         ),
         DifficultyGap.UNSUPPORTED_COMPOSE_DOCUMENT: DifficultyGapSpec(
             DifficultyGapOwner.SOURCE,
             "The source declares a compose document no backend can execute.",
             "A supported backend executes the compose document (exclusion candidate otherwise).",
+            exclusion=ExclusionReason.NO_SUPPORTED_BACKEND,
         ),
         DifficultyGap.NETWORK_POLICY_VIOLATION: DifficultyGapSpec(
             DifficultyGapOwner.SOURCE,
             "The source's declared runtime fails its production network-policy qualification.",
             "The declared runtime qualifies under the production network policy (exclusion candidate otherwise).",
+            exclusion=ExclusionReason.NO_SUPPORTED_BACKEND,
         ),
         DifficultyGap.NO_EXECUTABLE_GRADER: DifficultyGapSpec(
             DifficultyGapOwner.SOURCE,
             "The task spec declares no executable grader.",
             "The source supplies an executable grader contract.",
+            exclusion=ExclusionReason.NO_SUPPORTED_BACKEND,
         ),
         DifficultyGap.STATE_CAPTURE_REQUIRED: DifficultyGapSpec(
             DifficultyGapOwner.SOURCE,
             "The contract captures state that no supported executor returns.",
             "A supported executor captures the declared state.",
+            exclusion=ExclusionReason.NO_SUPPORTED_BACKEND,
         ),
         DifficultyGap.TOOL_PROVIDER_REQUIRED: DifficultyGapSpec(
             DifficultyGapOwner.SOURCE,
             "The contract requires a tool provider no backend supports.",
             "A supported backend provides the tool interface (exclusion candidate otherwise).",
+            exclusion=ExclusionReason.NO_SUPPORTED_BACKEND,
         ),
         DifficultyGap.SHARED_EXECUTOR_REQUIRED: DifficultyGapSpec(
             DifficultyGapOwner.SOURCE,
@@ -264,26 +280,31 @@ DIFFICULTY_GAPS: Mapping[DifficultyGap, DifficultyGapSpec] = MappingProxyType(
             DifficultyGapOwner.SOURCE,
             "The declared tool-provider contract is invalid for its interface.",
             "The source declares a valid provider contract.",
+            exclusion=ExclusionReason.NO_SUPPORTED_BACKEND,
         ),
         DifficultyGap.UNRESOLVED_DOCKER_BUILD: DifficultyGapSpec(
             DifficultyGapOwner.SOURCE,
             "The contract requires resolving a Docker build no supported executor performs.",
             "The Docker build is resolved declaratively or the contract changes.",
+            exclusion=ExclusionReason.NO_SUPPORTED_BACKEND,
         ),
         DifficultyGap.JUDGE_ROUTE_UNQUALIFIED: DifficultyGapSpec(
             DifficultyGapOwner.SOURCE,
             "The source's own judge model has no qualified serving route.",
             "The judge is re-pinned to a served tier, substituted, or the source is excluded.",
+            exclusion=ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
         ),
         DifficultyGap.JUDGE_API_UNQUALIFIED: DifficultyGapSpec(
             DifficultyGapOwner.SOURCE,
             "The source's judge API is not the qualified chat-completions contract.",
             "The judge is re-pinned to a served API (exclusion candidate otherwise).",
+            exclusion=ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
         ),
         DifficultyGap.INVALID_REFERENCE: DifficultyGapSpec(
             DifficultyGapOwner.SOURCE,
             "A frozen sample task carries an invalid expected reference target.",
             "The source is repaired in a private remediation version, or excluded.",
+            exclusion=ExclusionReason.INVALID_REFERENCE,
         ),
     }
 )
@@ -435,7 +456,7 @@ def require_difficulty_gaps(reason: str) -> None:
 
 class SampleTask(CatalogRecord):
     task_id: str
-    task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    task_sha256: str = Field(pattern=SHA256_PATTERN)
 
 
 class DifficultyPopulation(CatalogRecord):
@@ -446,7 +467,7 @@ class DifficultyPopulation(CatalogRecord):
     converter_version: str
     converter_revision: str
     population_count: int = Field(ge=0)
-    task_specs_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    task_specs_sha256: str = Field(pattern=SHA256_PATTERN)
     drop_manifest: ContentEvidenceReference
     seed: int
     pre_oracle_filter: bool
@@ -469,8 +490,8 @@ class DifficultySample(DifficultyPopulation):
 
     @model_validator(mode="after")
     def _selection(self) -> "DifficultySample":
-        if len(self.tasks) != min(100, self.population_count):
-            raise ValueError("Difficulty requires min(100, retained population) selected tasks")
+        if len(self.tasks) != min(SAMPLE_SIZE, self.population_count):
+            raise ValueError("Difficulty requires min(SAMPLE_SIZE, retained population) selected tasks")
         if len({task.task_id for task in self.tasks}) != len(self.tasks):
             raise ValueError("Difficulty sample contains duplicate task IDs")
         return self
@@ -481,7 +502,7 @@ class SolverIdentity(CatalogRecord):
     revision: str = Field(min_length=1)
     tokenizer: str
     tokenizer_revision: str
-    chat_template_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    chat_template_sha256: str = Field(pattern=SHA256_PATTERN)
     serving_receipt: ContentEvidenceReference
 
 
@@ -563,30 +584,30 @@ class DifficultyObservation(CatalogRecord):
     def _coverage(self) -> "DifficultyObservation":
         if self.solved > self.n:
             raise ValueError("Solved count exceeds scored tasks")
+        if self.reason is not None:
+            require_difficulty_gaps(self.reason)
         if self.status == MeasurementStatus.NOT_MEASURED:
             if not self.reason or self.n or self.solved or self.wilson_95 is not None:
                 raise ValueError("Not-measured results need a reason and no solve statistics")
             return self
         if self.sample is None or self.sample_receipt is None or self.model is None or self.settings is None:
             raise ValueError("Pending and measured results require pinned sample, model and settings")
-        protocol = PROTOCOLS.get(self.protocol_id)
-        if protocol is not None:
-            if (
-                self.model.model != protocol.models[self.solver]
-                or self.settings.thinking != protocol.thinking[self.solver]
-            ):
-                raise ValueError("Solver model or thinking policy differs from its protocol")
-            if self.settings.temperature != protocol.temperature:
-                raise ValueError("Solver temperature differs from its protocol")
-            if self.settings.sampling_values() != protocol.sampling and not self.settings.deviations:
-                raise ValueError("Record every deviation from the protocol token and sampling settings")
+        if self.protocol_id not in PROTOCOLS:
+            raise ValueError(f"Unknown difficulty protocol: {self.protocol_id!r}")
+        protocol = PROTOCOLS[self.protocol_id]
+        if self.model.model != protocol.models[self.solver] or self.settings.thinking != protocol.thinking[self.solver]:
+            raise ValueError("Solver model or thinking policy differs from its protocol")
+        if self.settings.temperature != protocol.temperature:
+            raise ValueError("Solver temperature differs from its protocol")
+        if self.settings.sampling_values() != protocol.sampling and not self.settings.deviations:
+            raise ValueError("Record every deviation from the protocol token and sampling settings")
         if (self.source_id, self.release, self.converter_version) != (
             self.sample.source_id,
             self.sample.release,
             self.sample.converter_version,
         ):
             raise ValueError("Measurement and sample identify different source contracts")
-        if self.n + self.pending_tasks + self.blocked_tasks != min(100, self.sample.population_count):
+        if self.n + self.pending_tasks + self.blocked_tasks != min(SAMPLE_SIZE, self.sample.population_count):
             raise ValueError("Every selected task must be scored, pending or blocked")
         if self.status == MeasurementStatus.MEASURED and (
             self.pending_tasks
@@ -630,6 +651,8 @@ class DifficultyAttempt(CatalogRecord):
 
     @model_validator(mode="after")
     def _reward(self) -> "DifficultyAttempt":
+        if self.reason is not None:
+            require_difficulty_gaps(self.reason)
         if self.status == AttemptStatus.SCORED:
             if self.reward is None or not math.isfinite(self.reward):
                 raise ValueError("Scored attempts require a finite grader reward")
@@ -646,8 +669,9 @@ class AttemptTally:
 
     scored: dict[str, float]
     """Reward per scored task id; each task scores at most once."""
-    infrastructure: int
-    """Attempt count excluded from scoring: infrastructure failures and blocked attempts."""
+    excluded: int
+    """Attempt count excluded from scoring: infrastructure failures and blocked attempts.
+    The recorded receipt key keeps the historical name ``infrastructure_attempts``."""
     blocked: frozenset[str]
     """Task ids whose attempts ended blocked."""
     blocked_reasons: frozenset[str]
@@ -681,7 +705,7 @@ def _tally_attempts(measurement: DifficultyMeasurement, attempts: Sequence[Diffi
             scored[attempt.task_id] = attempt.reward
     return AttemptTally(
         scored=scored,
-        infrastructure=excluded,
+        excluded=excluded,
         blocked=frozenset(blocked),
         blocked_reasons=frozenset(blocked_reasons),
     )
@@ -731,7 +755,7 @@ def measurement_from_attempts(
             "solved": solved,
             "pending_tasks": pending,
             "blocked_tasks": len(tally.blocked),
-            "infrastructure_attempts": tally.infrastructure,
+            "infrastructure_attempts": tally.excluded,
             "wilson_95": interval,
         }
     )
