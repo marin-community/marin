@@ -45,11 +45,24 @@ def test_pod_slice_is_the_fallback_for_a_container_scope(pod_tree):
     assert _fallback_parents(scope) == [slice_level]
 
 
-def test_worker_directly_in_a_unit_has_no_fallback(pod_tree):
+def test_shared_host_slices_are_never_candidates(pod_tree, tmp_path: Path):
+    """A unit under a shared slice gets no fallback candidates.
+
+    A worker directly in a ``.service`` under a non-pod slice has no dedicated
+    parent unit to fall back to, and a pod-slice-shaped wrapper is never a
+    candidate either.
+    """
     scope, _ = pod_tree
     unit = _make_cgroup(scope.parent.parent, "marin-worker.service", procs="1234\n")
     (unit.parent / "cgroup.procs").write_text("")
     assert _fallback_parents(unit) == []
+    root = tmp_path / "shared-host"
+    root.mkdir()
+    (root / "cgroup.controllers").write_text("cpuset cpu io memory pids\n")
+    _make_cgroup(root, "system.slice", procs="")
+    worker = _make_cgroup(root, "system.slice/marin-worker.service", procs="1234\n")
+    monkeypatch.setattr(cgroup_module, "CGROUP_ROOT", root)
+    assert _fallback_parents(worker) == []
 
 
 def test_delegate_subgroup_prefers_its_empty_unit(pod_tree):
@@ -59,21 +72,28 @@ def test_delegate_subgroup_prefers_its_empty_unit(pod_tree):
     assert _fallback_parents(delegate) == [unit]
 
 
-def test_shared_host_slices_are_never_candidates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """A worker directly under a shared slice must not enable controllers there."""
-    root = tmp_path / "cgroup"
-    root.mkdir()
-    (root / "cgroup.controllers").write_text("cpuset cpu io memory pids\n")
-    _make_cgroup(root, "system.slice", procs="")
-    worker = _make_cgroup(root, "system.slice/marin-worker.service", procs="1234\n")
-    monkeypatch.setattr(cgroup_module, "CGROUP_ROOT", root)
-    assert _fallback_parents(worker) == []
-
-
 def test_pod_slice_candidates_require_no_internal_processes(pod_tree):
     scope, slice_level = pod_tree
     (slice_level / "cgroup.procs").write_text("9999\n")
     assert _fallback_parents(scope) == []
+
+
+@pytest.mark.parametrize("scope_enforces", [False, True], ids=["scope-drops-limits", "both-enforce"])
+def test_discovery_selects_the_pod_slice_over_the_container_scope(pod_tree, monkeypatch, scope_enforces: bool):
+    """The real 02a scenario: the scope is a writable candidate but the slice enforces.
+
+    With a stub limits probe the scope either drops its limits (the container
+    runtime refuses domain controllers) or enforces; discovery must return the
+    dedicated pod slice in both cases because the fallback parent is verified
+    ahead of the worker's own cgroup.
+    """
+    scope, slice_level = pod_tree
+
+    def probe(parent: Path, **_kwargs) -> bool:
+        return scope_enforces or parent == slice_level
+
+    monkeypatch.setattr(cgroup_module, "probe_cgroup_limits", probe)
+    assert delegated_cgroup_parent() == slice_level
 
 
 def test_containment_survives_when_no_candidate_enforces_limits(pod_tree):
