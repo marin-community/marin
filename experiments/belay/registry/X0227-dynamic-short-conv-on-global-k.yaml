@@ -20,7 +20,8 @@ trials:
   batch: X0227
   date: '2026-11-17'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0227
-  wandb: []
+  wandb:
+  - belay-X0227-seed0
   settings:
     mla_dynamic_kv_conv: 'true'
   commit: a23dfd1458
