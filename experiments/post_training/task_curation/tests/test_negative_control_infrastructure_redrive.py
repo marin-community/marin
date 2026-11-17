@@ -33,7 +33,7 @@ FIXTURES = Path(__file__).parent / "fixtures/negative_controls"
 COLLECT_ERROR = "Cannot collect grading inputs: exit=1"
 
 
-def physical_control(tmp_path, name, *, infrastructure, **redrive):
+def physical_control(tmp_path, name, *, infrastructure, archive_failure=False, **redrive):
     """Derive a synthetic failure from the retained production preparation fixture."""
     index = json.loads((FIXTURES / "packet-runtime-fallback-index.json").read_text())["source"]
     archive = tmp_path / f"{name}.tar.gz"
@@ -53,6 +53,17 @@ def physical_control(tmp_path, name, *, infrastructure, **redrive):
             verdict = {"status": "infra_error", "reward": None, "detail": {"error": COLLECT_ERROR}}
             control["physical_verdict"] = verdict
             control["verifier_exit_code"] = 1
+        if archive_failure:
+            result["exception_info"] = {
+                "exception_type": "DownloadVerifierDirError",
+                "exception_message": "Failed to download verifier directory from environment",
+                "exception_traceback": "RuntimeError: Failed to archive /logs/verifier: No space left on device",
+            }
+            result["verifier_result"] = None
+            result["completion"] = None
+            verdict = None
+            control["physical_verdict"] = None
+            control["verifier_exit_code"] = None
         result_bytes = json.dumps(result).encode()
         control["trial_result_file_sha256"] = hashlib.sha256(result_bytes).hexdigest()
         updates = {
@@ -62,6 +73,8 @@ def physical_control(tmp_path, name, *, infrastructure, **redrive):
         }
         with tarfile.open(archive, "w:gz") as output:
             for member in original.getmembers():
+                if archive_failure and member.name.startswith("nop-control/trials/nop/verifier/"):
+                    continue
                 payload = updates.get(member.name)
                 if payload is None and member.isfile():
                     payload = original.extractfile(member).read()
@@ -79,8 +92,7 @@ def physical_control(tmp_path, name, *, infrastructure, **redrive):
 
 
 def approval(tmp_path, parent):
-    verdict = parent.trial.verdict
-    assert verdict is not None
+    error = (parent.trial.verdict or {}).get("detail", {}).get("error")
     diagnosis = tmp_path / "diagnosis.json"
     diagnosis.write_text(json.dumps({"classification": "our_infrastructure", "parent": parent.trial.result_sha256}))
     decision = tmp_path / "decision.json"
@@ -90,9 +102,7 @@ def approval(tmp_path, parent):
         approval={
             "classification": "our_infrastructure",
             "parent_result_sha256": parent.trial.result_sha256,
-            "failure_signature": (
-                f"{parent.trial.result['exception_info']['exception_type']}: " f"{verdict['detail']['error']}"
-            ),
+            "failure_signature": f"{parent.trial.result['exception_info']['exception_type']}: " f"{error}",
             "decision_ref": str(decision),
         },
         diagnosis=ContentEvidenceReference(
@@ -108,6 +118,7 @@ def source_receipt(control, reward):
     result["agent_info"]["name"] = "oracle"
     result["config"]["agent"] = {"name": "oracle"}
     result["exception_info"] = None
+    result["completion"] = {"trajectory_present": False}
     result["verifier_result"] = {"rewards": {"reward": reward}, "exit_code": 0}
     source = OracleTrialReceipt(
         path="oracle/result.json",
@@ -236,3 +247,29 @@ def test_repeated_native_signal_classified_as_infrastructure_still_remains_pendi
     require_negative_control(repeat)
     assert repeat.signal_exit_code == parent.signal_exit_code
     assert repeat.annotation is None and not repeat.conclusive and not repeat.passed(None)
+
+
+@pytest.mark.parametrize("repeat_archive_failure", [False, True])
+def test_approved_verifier_archive_failure_retries_same_control_and_preserves_another_failure(
+    tmp_path, repeat_archive_failure
+):
+    parent = physical_control(tmp_path, "archive-parent", infrastructure=False, archive_failure=True)
+    assert not parent.conclusive and parent.trial.result["completion"] is None
+    decision, diagnosed = approval(tmp_path, parent)
+    repeat = physical_control(
+        tmp_path,
+        "archive-repeat",
+        infrastructure=False,
+        archive_failure=repeat_archive_failure,
+        redrive_parent=parent,
+        redrive_decision=decision,
+        redrive_infrastructure=diagnosed,
+    )
+    require_negative_control(repeat)
+    assert repeat.redrive_parent == parent and repeat.trial.execution_requirements == parent.trial.execution_requirements
+    assert repeat.conclusive is not repeat_archive_failure
+    assert repeat.annotation is None and not repeat.passed(None)
+    assert source_receipt(repeat, 1).passed is not repeat_archive_failure
+    assert parent.trial.result["completion"] is None and parent.trial.result["verifier_result"] is None
+    if repeat_archive_failure:
+        assert repeat.trial.result["completion"] is None and repeat.score is None

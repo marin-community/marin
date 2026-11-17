@@ -4098,6 +4098,14 @@ score and records `negative_control_verifier_timeout`; recognized source-local
 verifier failures record `negative_control_verifier_error`. These annotations
 are non-passing controls and preserve the original oracle pass.
 
+An explicitly diagnosed harness archive failure can also receive one
+same-budget NoP re-drive when public preparation and the original verifier
+phase completed, but staging `/logs/verifier` in guest `/tmp` failed with ENOSPC
+before any verdict was downloaded. The original archive, absent reward and
+completion remain unchanged. Bind the same per-parent infrastructure approval
+and immutable diagnosis; successful controls become conclusive, while another
+archive failure stays pending. Task disk budgets do not change.
+
 A native producer signal (-9, -6 or -11), or the exact source error
 `pytest producer was interrupted`, permits one approved identical-budget nop
 re-drive. Bind its physical `redrive_parent` and immutable `redrive_decision`;

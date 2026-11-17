@@ -1126,12 +1126,17 @@ class OracleNegativeControlReceipt(BaseModel):
                 exception = parent.trial.result.get("exception_info") or {}
                 error = (parent.trial.verdict or {}).get("detail", {}).get("error")
                 signature = f"{exception.get('exception_type')}: {error}"
+                archive_failure = parent.unscored_verifier_archive_failure
+                signal = parent.trial.failure_signal
                 if (
-                    not parent.completed_public_setup
+                    not (parent.completed_public_setup or archive_failure)
                     or parent.conclusive
                     or parent.trial.graded
-                    or parent.trial.failure_signal is not FailureSignal.INFRASTRUCTURE
-                    or (parent.trial.verdict or {}).get("status") != "infra_error"
+                    or (
+                        signal is not FailureSignal.INFRASTRUCTURE
+                        and not (archive_failure and signal is FailureSignal.NON_RESOURCE)
+                    )
+                    or ((parent.trial.verdict or {}).get("status") != "infra_error" and not archive_failure)
                     or parent.accepted_source_error
                     or parent.accepted_source_deadline
                     or parent.trial.prior_phase_failure is not None
@@ -1172,14 +1177,37 @@ class OracleNegativeControlReceipt(BaseModel):
 
     @property
     def completed_public_setup(self) -> bool:
-        if (
-            self.trial.result.get("finished_at") is None
-            or (self.trial.result.get("completion") is None and self.trial.post_grade_teardown is None)
-            or self.trial.result.get("secondary_exception_info")
-            or self.trial.resource_usage.oom_kills
-            or self.trial.verifier_resource_usage.oom_kills
-        ):
-            return False
+        return (
+            self.trial.result.get("finished_at") is not None
+            and (self.trial.result.get("completion") is not None or self.trial.post_grade_teardown is not None)
+            and not self.trial.result.get("secondary_exception_info")
+            and not self.trial.resource_usage.oom_kills
+            and not self.trial.verifier_resource_usage.oom_kills
+            and self.public_preparation_completed
+        )
+
+    @property
+    def unscored_verifier_archive_failure(self) -> bool:
+        """Identify missing grades after the harness's verifier archive exhausted guest disk."""
+        result = self.trial.result
+        exception = result.get("exception_info") or {}
+        traceback = exception.get("exception_traceback") or ""
+        verifier = result.get("verifier") or {}
+        return (
+            exception.get("exception_type") == "DownloadVerifierDirError"
+            and self.trial.verdict is None
+            and self.score is None
+            and result.get("finished_at") is not None
+            and verifier.get("started_at") is not None
+            and verifier.get("finished_at") is not None
+            and "Failed to archive /logs/verifier:" in traceback
+            and "No space left on device" in traceback
+            and self.public_preparation_completed
+        )
+
+    @property
+    def public_preparation_completed(self) -> bool:
+        """Match the original public setup independently of final result collection."""
         if self.setup_kind is NegativeControlSetupKind.DECLARED_SETUP:
             preparation = self.trial.result.get("environment_setup") or {}
             return (
