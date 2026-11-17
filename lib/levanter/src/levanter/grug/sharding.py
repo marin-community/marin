@@ -115,23 +115,19 @@ def _reshard_for_shard_map(
 
 
 def keep_reduced(spec: PartitionSpec, x: jax.Array) -> PartitionSpec:
-    """``spec`` plus the mesh axes ``x`` is ``reduced`` over, except those ``spec`` already shards over.
+    """Preserve ``x``'s reduced mesh axes unless ``spec`` shards over them.
 
-    A weight that enters a ``shard_map`` with these in_specs gets a cotangent ``unreduced`` over them, so the caller
-    chooses when to reduce its gradient. With a plain spec the ``shard_map`` transpose psums it over them instead. An
-    axis ``spec`` shards over cannot also be reduced; each shard's cotangent covers only its own slice there. For a
-    weight that is not ``reduced``, ``spec`` is returned unchanged.
+    Without them, the gradient is all-reduced over those axes (by the shard_map transpose) instead of left unreduced.
     """
+    x_spec = partition_spec_of(x)
+    if x_spec is None:
+        return spec
     sharded = {name for entry in spec for name in _axis_names(entry)}
-    return spec.update(reduced=jax.typeof(x).sharding.spec.reduced - sharded)
+    return spec.update(reduced=x_spec.reduced - sharded)
 
 
 def replicate_keeping_reduced(x: jax.Array) -> jax.Array:
-    """Replicate ``x`` over every mesh axis, keeping the axes it is ``reduced`` over.
-
-    A weight marked ``reduced`` gets an ``unreduced`` cotangent, so its gradient reduction can wait until the caller
-    reshards it (e.g. once after a layer scan). Resharding it to a plain replicated spec would reduce it here.
-    """
+    """Replicate ``x`` while preserving its reduced mesh axes."""
     return reshard(x, keep_reduced(P(*(None,) * x.ndim), x))
 
 

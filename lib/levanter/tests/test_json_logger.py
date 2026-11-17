@@ -21,7 +21,6 @@ def test_json_logger_tracker_logs_and_finishes():
     logger.setLevel(logging.INFO)
 
     tracker = JsonLoggerTracker(logger)
-    # Host arrays, as jax.device_get returns them, log as numbers and lists like device arrays.
     tracker.log({"a": 1, "b": jnp.array(2), "d": np.asarray(0.5, np.float32), "e": np.arange(2)}, step=1)
     tracker.log_summary({"c": 3})
     tracker.finish()

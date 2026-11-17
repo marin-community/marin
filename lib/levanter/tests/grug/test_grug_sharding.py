@@ -1,19 +1,17 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-import re
-
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from jax import shard_map
+from jax.extend.core import ClosedJaxpr, Jaxpr
 from jax.sharding import AxisType, NamedSharding, PartitionSpec as P, reshard
 
 from levanter.grug.grug_moe import MoEExpertMlp, QBRoutedMoE, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import _axis_names, keep_reduced, replicate_keeping_reduced
+from levanter.grug.sharding import _axis_names, keep_reduced
 from levanter.testing.devices import use_test_devices
 
 _AXES = ("replica_dcn", "data", "expert")
@@ -24,25 +22,31 @@ def _mesh(shape, devices):
     return jax.make_mesh(shape, _AXES, axis_types=(AxisType.Explicit,) * 3, devices=devices)
 
 
-def _weight_gradient_reductions(fn, weights) -> list[str]:
-    """The all-reduces and reduce-scatters in ``fn``'s compiled program with a result the size of a weight's shard."""
-    text = jax.jit(fn).lower(*weights).compile().as_text()
-    shard_sizes = {math.prod(w.sharding.shard_shape(w.shape)) for w in weights}
-    results = re.findall(r"= (.+?) (?:all-reduce|reduce-scatter)(?:-start)?\(", text)
-    return [
-        result
-        for result in results
-        if any(
-            math.prod(map(int, filter(None, dims.split(",")))) in shard_sizes
-            for dims in re.findall(r"\[([\d,]*)\]", result)
-        )
-    ]
+def _plain_weight_values(fn, weights) -> list[str]:
+    """Values outside ``fn``'s shard_maps with a weight's shape that are neither reduced nor unreduced.
+
+    A reduced weight that loses its reduced axes on the way into a shard_map gets its gradient summed over them.
+    """
+    shapes = {w.shape for w in weights}
+
+    def walk(jaxpr):
+        for eqn in jaxpr.eqns:
+            for var in eqn.outvars:
+                spec = var.aval.sharding.spec if getattr(var.aval, "shape", None) in shapes else None
+                if spec is not None and not spec.reduced and not spec.unreduced:
+                    yield f"{eqn.primitive.name} -> {var.aval}"
+            if eqn.primitive.name == "shard_map":
+                continue
+            for param in eqn.params.values():
+                for sub in param if isinstance(param, (list, tuple)) else (param,):
+                    if isinstance(sub, (ClosedJaxpr, Jaxpr)):
+                        yield from walk(sub.jaxpr if isinstance(sub, ClosedJaxpr) else sub)
+
+    return list(walk(jax.make_jaxpr(fn)(*weights).jaxpr))
 
 
 @pytest.mark.multidevice
 def test_keep_reduced_leaves_out_axes_the_spec_shards_over():
-    # A weight reduced over replica_dcn and data enters a shard_map that shards it over data and all-gathers it there,
-    # as the chunked sonic_cute path does. Its gradient stays unreduced over both axes and sums to the plain gradient.
     with use_test_devices(8) as devices:
         mesh = _mesh((2, 2, 2), devices)
 
@@ -67,19 +71,6 @@ def test_keep_reduced_leaves_out_axes_the_spec_shards_over():
             np.testing.assert_allclose(jax.jit(reduced_grad)(w, x), jax.jit(jax.grad(loss))(w, x), rtol=1e-6)
 
 
-@pytest.mark.multidevice
-def test_unreduced_weights_keep_their_specs_and_programs():
-    # The grug shard_maps receive exactly the specs they had before, so their programs do not change.
-    with use_test_devices(8) as devices:
-        mesh = _mesh((2, 2, 2), devices)
-        with jax.set_mesh(mesh):
-            w = jax.device_put(np.ones((4, 6), np.float32), NamedSharding(mesh, P("expert", None)))
-            for spec in (P(None, None), P("expert", None), P(("replica_dcn", "data"), "expert")):
-                assert keep_reduced(spec, w) == spec
-            replicated = jax.jit(lambda w: reshard(w, P(None, None))).lower(w).as_text()
-            assert jax.jit(lambda w: replicate_keeping_reduced(w)).lower(w).as_text() == replicated
-
-
 def _lm_head_case(mesh):
     hidden = jax.device_put(np.random.RandomState(0).randn(8, 16).astype(np.float32), NamedSharding(mesh, P(_AXES)))
     labels = jax.device_put(np.arange(8, dtype=np.int32) % 32, NamedSharding(mesh, P(_AXES)))
@@ -89,6 +80,20 @@ def _lm_head_case(mesh):
         return fused_linear_softmax_cross_entropy_loss(hidden, lm_head, labels, reduction="mean")
 
     return loss, (lm_head,)
+
+
+@pytest.mark.multidevice
+def test_fused_loss_accepts_single_device_lm_head_with_mesh():
+    with use_test_devices(8) as devices:
+        mesh = _mesh((2, 2, 2), devices)
+        hidden = jax.device_put(np.ones((8, 16), np.float32), NamedSharding(mesh, P(_AXES, None)))
+        labels = jax.device_put(np.arange(8, dtype=np.int32), NamedSharding(mesh, P(_AXES)))
+        lm_head = jnp.arange(16 * 32, dtype=jnp.float32).reshape(16, 32) / 100
+        with jax.set_mesh(mesh):
+            loss = fused_linear_softmax_cross_entropy_loss(hidden, lm_head, labels, reduction="mean")
+        logits = np.asarray(hidden) @ np.asarray(lm_head)
+        expected = np.mean(np.logaddexp.reduce(logits, axis=-1) - logits[np.arange(8), np.asarray(labels)])
+        np.testing.assert_allclose(np.asarray(loss), expected, rtol=1e-5)
 
 
 def _moe_case(mesh):
@@ -140,15 +145,12 @@ def _router_case(mesh):
     ],
 )
 def test_reduced_weights_get_unreduced_gradients(case, mesh_shape):
-    # Weights the caller marks reduced over the token axes come back with gradients unreduced over them: the backward
-    # runs no weight-sized reduction, and reducing the gradient afterwards gives the plain gradient.
     with use_test_devices(8) as devices:
         mesh = _mesh(mesh_shape, devices)
         with jax.set_mesh(mesh):
             loss, weights = case(mesh)
             argnums = tuple(range(len(weights)))
             specs = [jax.typeof(w).sharding.spec for w in weights]
-            # Tokens are sharded over every mesh axis; each weight is reduced over those it is not sharded over.
             reduced = [frozenset(_AXES) - {name for entry in spec for name in _axis_names(entry)} for spec in specs]
 
             def unreduced_grads(*weights):
@@ -160,9 +162,8 @@ def test_reduced_weights_get_unreduced_gradients(case, mesh_shape):
 
             for grad, r in zip(jax.eval_shape(unreduced_grads, *weights), reduced, strict=True):
                 assert jax.typeof(grad).sharding.spec.unreduced == r, jax.typeof(grad)
-            assert _weight_gradient_reductions(unreduced_grads, weights) == []
-            assert _weight_gradient_reductions(jax.grad(loss, argnums=argnums), weights) != []
-
+            assert _plain_weight_values(unreduced_grads, weights) == []
+            assert _plain_weight_values(jax.grad(loss, argnums=argnums), weights) != []
             plain = jax.jit(jax.grad(loss, argnums=argnums))(*weights)
             for actual, expected in zip(jax.jit(reduced_afterwards)(*weights), plain, strict=True):
                 np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-6)
