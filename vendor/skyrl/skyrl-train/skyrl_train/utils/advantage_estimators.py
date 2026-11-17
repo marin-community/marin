@@ -60,6 +60,8 @@ def batch_advantages(
         adv_estimator=algorithm.advantage_estimator,
         config=algorithm,
         gamma=algorithm.gamma,
+        lambd=algorithm.lambd,
+        values=data.get("values"),
         grpo_norm_by_std=algorithm.grpo_norm_by_std,
         exclude_from_baseline=data.metadata.get("exclude_from_baseline"),
         token_level_shaping=data.get("token_level_shaping"),
