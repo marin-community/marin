@@ -116,7 +116,7 @@ Run stored comparisons on CPU:
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl rescore \
-  --preset learning-medium --candidate RUN_NAME[@VERSION] --require 'eval_lite/aaii_category/coding/mean>=control'
+  --preset learning-medium --candidate RUN_NAME[@VERSION] --require 'eval_lite/aai_category/coding/mean>=control'
 uv run python -m experiments.post_training.snowball_rl rescore \
   --preset speed-medium --leave-out r0
 ```

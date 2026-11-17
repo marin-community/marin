@@ -220,7 +220,6 @@ class EvalLiteRate:
 @dataclass(frozen=True)
 class EvalLiteSelection:
     tasks: tuple[tuple[TaskSpec, EvalLiteSource], ...]
-    fast: tuple[TaskSpec, ...]
     counts: dict[str, Counter[str]]
 
 
@@ -372,9 +371,9 @@ def _chat_panel_task(case: EvaluationCase) -> TaskSpec:
     return task
 
 
-def task_records(tasks: Iterator[TaskSpec], strata: Mapping[str, TaskStrata] | None = None) -> Iterator[dict[str, str]]:
+def task_records(tasks: Iterator[TaskSpec], strata: Mapping[str, TaskStrata]) -> Iterator[dict[str, str]]:
     for task in tasks:
-        tags = strata[task.id] if strata is not None else TaskStrata(source=task.source.dataset)
+        tags = strata[task.id]
         yield {TASK_SPEC_COLUMN: task.model_dump_json(), **tags.model_dump()}
 
 
@@ -691,28 +690,17 @@ def _check_pass_rates(tasks: tuple[TaskSpec, ...], rates: Mapping[str, EvalLiteR
             raise ValueError(f"Pass-rate evidence measures different task content: {task.id}")
 
 
-def _fast_subset(recipe: EvalLiteRecipe, selected: list[tuple[TaskSpec, EvalLiteSource]]) -> tuple[TaskSpec, ...]:
-    """The seeded per-family fast quotas, in full-panel order."""
-    if recipe.fast_counts.keys() != {part.family for _, part in selected}:
-        raise ValueError("Fast-panel quotas must cover every selected family")
-    return _stratified_sample(
-        tuple(task for task, _ in selected),
-        {task.id: part.family for task, part in selected},
-        recipe.fast_counts,
-        recipe.seed,
-    )
-
-
 def select_eval_lite(
     recipe: EvalLiteRecipe,
     sources: Mapping[str, Iterator[TaskSpec]],
     excluded: Iterator[TaskSpec],
     rates: Mapping[str, EvalLiteRate],
+    retained: Iterator[TaskSpec],
 ) -> EvalLiteSelection:
     """Select canonical tasks from source iterators, assigning duplicates to the first source."""
     excluded_keys = {key for task in excluded for key in _panel_keys(task).exclusion}
     selected: list[tuple[TaskSpec, EvalLiteSource]] = []
-    taken: set[tuple[str, str]] = set()
+    taken = {key for task in retained for key in _panel_keys(task).exact}
     audit: dict[str, Counter[str]] = {}
 
     def candidates(part: EvalLiteSource, counts: Counter[str]) -> Iterator[TaskSpec]:
@@ -746,10 +734,12 @@ def select_eval_lite(
     selected.sort(key=lambda entry: entry[0].id)
     if recipe.pass_rates is not None and recipe.parent is None:
         _check_pass_rates(tuple(task for task, _ in selected), rates)
-    return EvalLiteSelection(tuple(selected), _fast_subset(recipe, selected) if recipe.parent is None else (), audit)
+    return EvalLiteSelection(tuple(selected), audit)
 
 
 def _joint_subset(rows: Mapping[str, SelectionTaskRow], quotas: Mapping[str, int], seed: int) -> set[str]:
+    if quotas.keys() != {row.family for row in rows.values()}:
+        raise ValueError("Fast-panel quotas must cover every selected family")
     selected = set()
     for family, quota in quotas.items():
         cells = {}
@@ -775,16 +765,6 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
     """Publish a retained task pool and a stratified active membership with reference evidence."""
     recipe = config.recipe
     rates = _eval_lite_measurements(recipe.pass_rates)
-    selection = (
-        select_eval_lite(
-            recipe,
-            {part.source_id: _panel_source_tasks(config.sources[part.source_id], {}) for part in recipe.sources},
-            (task for source in (*recipe.training, recipe.development) for task in _panel_source_tasks(source, {})),
-            rates,
-        )
-        if recipe.sources
-        else EvalLiteSelection((), (), {})
-    )
     raw_tasks, rows = {}, {}
     reference_revisions = set()
     if recipe.parent is not None:
@@ -800,6 +780,17 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
             task = TaskSpec.model_validate_json(raw)
             raw_tasks[task.id] = raw
             rows[task.id] = parent.tasks[task.id].model_copy(update={"task_digest": canonical_sha256(json.loads(raw))})
+    selection = (
+        select_eval_lite(
+            recipe,
+            {part.source_id: _panel_source_tasks(config.sources[part.source_id], {}) for part in recipe.sources},
+            (task for source in (*recipe.training, recipe.development) for task in _panel_source_tasks(source, {})),
+            rates,
+            (TaskSpec.model_validate_json(raw) for raw in raw_tasks.values()),
+        )
+        if recipe.sources
+        else EvalLiteSelection((), {})
+    )
     for task, part in selection.tasks:
         row = _selection_row(
             task,

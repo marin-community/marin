@@ -744,36 +744,71 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
         ] == [(canonical_sha256(task.model_dump(mode="json")), "fixture-model", 8, 8, index + 1, (index + 1) / 8)]
     assert final_panel.tasks[saturated.id].state == MembershipState.RETIRED
     assert saturated.id not in {task.id for task in read_tasks(final / VALIDATION_FILENAME)}
-    addition = next(task for task in full if task.id in originals)
-    addition = addition.model_copy(
-        update={
-            "id": "addition",
-            "context": chat(("user", "An additional untouched question.")),
-            "source": addition.source.model_copy(update={"row": "addition"}),
-        }
+    parent_table = pq.read_table(final / FULL_VALIDATION_FILENAME)
+    parent_rows = parent_table.to_pylist()
+    parent_rows[0]["task_spec"] = json.dumps(json.loads(parent_rows[0]["task_spec"]), indent=2, sort_keys=True)
+    pq.write_table(pa.Table.from_pylist(parent_rows, schema=parent_table.schema), final / FULL_VALIDATION_FILENAME)
+    template = next(task for task in full if task.id in originals)
+    additions, source_parts, inputs = [], [], {}
+    for group, mean in (("a", 0.0), ("b", 1.0), ("c", 0.5)):
+        tasks = [
+            template.model_copy(
+                update={
+                    "id": f"addition-{group}-{i}",
+                    "context": chat(("user", f"An additional untouched {group} question {i}.")),
+                    "source": template.source.model_copy(update={"dataset": f"fixture:{group}", "row": str(i)}),
+                }
+            )
+            for i in range(2)
+        ]
+        additions.extend((task, mean) for task in tasks)
+        if group == "a":
+            tasks.append(template.model_copy(update={"id": "parent-alias"}))
+        source_id = f"fixture:{group}"
+        source = task_file(tmp_path / f"addition-{group}.parquet", tasks)
+        inputs[source_id] = ArtifactStep.adopt(f"fixture/addition-{group}", source.version, source.uri)
+        source_parts.append(
+            questions.model_copy(
+                update={
+                    "source_id": source_id,
+                    "format": PanelFormat.TASK_SPEC,
+                    "rows": len(tasks),
+                    "count": 2,
+                    "topic": f"topic-{group}",
+                }
+            )
+        )
+    reference_path = tmp_path / "second-reference.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "task_id": task.id,
+                    "task_digest": canonical_sha256(task.model_dump(mode="json")),
+                    "model_revision": "second-model",
+                    "attempted": 8,
+                    "samples": 8,
+                    "passed": int(mean * 8),
+                    "mean_score": mean,
+                }
+                for task, mean in additions
+            ]
+        ),
+        reference_path,
     )
-    addition_input = task_file(tmp_path / "addition.parquet", [addition])
     successor = measured.model_copy(
         update={
             "version": "2026.11.04.2",
+            "seed": 3,
             "parent": SelectionParent(root=str(final), name=measured.name, version=measured.version),
-            "pass_rates": None,
-            "difficulty_bands": DifficultyBands(hard_below=0.1, easy_above=0.7),
-            "sources": (
-                questions.model_copy(
-                    update={"source_id": "fixture:addition", "format": PanelFormat.TASK_SPEC, "rows": 1, "count": 1}
-                ),
+            "pass_rates": measured.pass_rates.model_copy(
+                update={"uri": str(reference_path), "rows": 6, "model_revision": "second-model"}
             ),
+            "difficulty_bands": DifficultyBands(hard_below=0.1, easy_above=1.0),
+            "sources": tuple(source_parts),
         }
     )
-    successor_output = Path(
-        run(
-            eval_lite_step(
-                {"fixture:addition": ArtifactStep.adopt("fixture/addition", addition_input.version, addition_input.uri)},
-                successor,
-            )
-        )[0].path
-    )
+    successor_output = Path(run(eval_lite_step(inputs, successor))[0].path)
     successor_panel = read_selection_strata(str(successor_output))
     assert successor_panel is not None and successor_panel.definition.parent == successor.parent
 
@@ -784,18 +819,22 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
         }
 
     parent_tasks, successor_tasks = retained_tasks(final), retained_tasks(successor_output)
-    assert successor_tasks.keys() == parent_tasks.keys() | {"addition"}
+    assert successor_tasks.keys() == parent_tasks.keys() | {task.id for task, _ in additions}
     assert all(successor_tasks[task_id] == value for task_id, value in parent_tasks.items())
     assert successor_panel.tasks[saturated.id].state == MembershipState.RETIRED
-    assert successor_panel.tasks[saturated.id].references == final_panel.tasks[saturated.id].references
-    assert (
-        successor_panel.tasks["addition"].references == []
-        and successor_panel.tasks["addition"].state != MembershipState.RETIRED
-    )
-    assert (
-        Counter(row.family for row in successor_panel.tasks.values() if row.state == MembershipState.ACTIVE)
-        == settings.fast_counts
-    )
+    assert all(successor_panel.tasks[task_id].references == row.references for task_id, row in final_panel.tasks.items())
+    assert all(successor_panel.tasks[task.id].state != MembershipState.RETIRED for task, _ in additions)
+    active = [row for row in successor_panel.tasks.values() if row.state == MembershipState.ACTIVE]
+    assert Counter(row.family for row in active) == settings.fast_counts
+    cells = Counter((row.source, row.topic, row.difficulty) for row in active if row.family == questions.family)
+    parent_source = template.source.dataset
+    assert cells == {
+        (parent_source, "untagged", "learnable"): 1,
+        ("fixture:a", "topic-a", "hard"): 1,
+        ("fixture:c", "topic-c", "learnable"): 1,
+    }
+    successor_summary = json.loads((successor_output / "summary.json").read_text())
+    assert successor_summary["source_counts"]["fixture:a"]["duplicate"] == 1
 
     def other_user(task: TaskSpec) -> TaskSpec:
         calls = json.loads(json.dumps(task.grader.parameters["expected_calls"]))
