@@ -37,7 +37,7 @@ from starlette.routing import Route
 
 from infra.auth.iris import IrisAttemptBroker, IrisBrokerConfig, mount_iris_attempts
 from infra.auth.loom import LoomLauncher
-from infra.auth.openfga import ACTIONS, AuthorizationUnavailable, OpenFGAPolicy, ProviderIdentity
+from infra.auth.openfga import ACTIONS, AuthorizationUnavailable, OpenFGAPolicy, OpenFGARuntime, ProviderIdentity
 from infra.auth.secret_bindings import OpenBaoSecretReader, SecretConfig
 
 REFRESH_AUDIENCES = frozenset({"cw_s3"})
@@ -69,6 +69,14 @@ class OpenFGAConfig(BaseModel):
     model_id: str
     token_file: Path
     principals: tuple[PrincipalConfig, ...]
+
+
+class RuntimeGrantsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_url: str
+    store_id: str
+    model_id: str
+    token_file: Path
 
 
 class StorageConfig(BaseModel):
@@ -145,6 +153,7 @@ class ServiceConfig(BaseModel):
     database: Annotated[SqliteDatabaseConfig | PostgresDatabaseConfig, Field(discriminator="backend")]
     subjects: dict[str, str]
     openfga: OpenFGAConfig
+    runtime_grants: RuntimeGrantsConfig
     storage: tuple[StorageConfig, ...]
     secrets: tuple[SecretConfig, ...] = ()
     max_token_ttl: int
@@ -156,6 +165,7 @@ class ServiceConfig(BaseModel):
         paths = [
             self.broker_token_file,
             self.openfga.token_file,
+            self.runtime_grants.token_file,
             *(binding.token_file for binding in self.storage),
             *(binding.token_file for binding in self.secrets),
         ]
@@ -168,6 +178,8 @@ class ServiceConfig(BaseModel):
             )
         if len({binding.name for binding in self.secrets}) != len(self.secrets):
             raise ValueError("Secret binding names must be unique")
+        if self.openfga.store_id == self.runtime_grants.store_id:
+            raise ValueError("Standing permissions and runtime grants require separate OpenFGA stores")
         return self
 
 
@@ -186,7 +198,9 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
         ca_bundle=config.ca_bundle,
         secrets=[binding.binding(config.bao_address) for binding in config.secrets],
     )
-    store = GrantStore(config.database.connect(), policy.authorities, policy)
+    database = config.database.connect()
+    runtime = OpenFGARuntime(**config.runtime_grants.model_dump(), ca_bundle=config.ca_bundle)
+    store = GrantStore(runtime, policy.authorities, policy)
     broker = OpenBaoClient(config.bao_address, config.broker_token_file, ca_bundle=config.ca_bundle)
     signer = OpenBaoTransitSigner(broker, issuer=config.issuer, key_version=config.signing_key_version)
     audiences = frozenset(service for service, _action in ACTIONS)
@@ -228,7 +242,7 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
 
     app = create_app(authority)
     if config.iris is not None:
-        mount_iris_attempts(app, IrisAttemptBroker(authority, config.iris, auth_url=config.issuer))
+        mount_iris_attempts(app, IrisAttemptBroker(authority, config.iris, database=database, auth_url=config.issuer))
     app.add_exception_handler(AuthorizationUnavailable, authorization_unavailable)
     app.add_exception_handler(SQLAlchemyError, authorization_unavailable)
     serving = False
@@ -238,7 +252,7 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
     launcher = None
     if config.loom is not None:
         launcher = LoomLauncher(
-            store.database,
+            database,
             base_url=config.loom.base_url,
             observer_tokens=LoomObserverTokenProvider(config.loom.observer_token_file),
             grants=authority,
@@ -380,6 +394,7 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
             serving = False
             session.close()
             store.close()
+            database.close()
 
     app.router.routes.extend(
         [

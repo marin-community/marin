@@ -14,6 +14,7 @@ import requests
 from rigging.auth import StaticTokenProvider
 from rigging.grant_database import SqliteGrantDatabase
 from rigging.grants import GrantDenied, GrantStore, Permission, PrincipalAuthority
+from rigging.testing import MemoryRuntimeGrants
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -66,11 +67,11 @@ class LaunchPolicy:
 
 
 @pytest.fixture
-def grant_service(tmp_path):
+def grant_service():
     permission = Permission("loom", frozenset({"session.create"}), "/review/")
     with closing(
         GrantStore(
-            SqliteGrantDatabase(tmp_path / "grants.sqlite"),
+            MemoryRuntimeGrants(),
             [PrincipalAuthority("owner", "owner", 300, 1, "1")],
             LaunchPolicy(permission),
             now=lambda: 1000,
@@ -345,6 +346,37 @@ def test_bad_first_run_does_not_block_later_completed_grant(launcher, grant_serv
     assert not grant_service.active(first.grant_id, first.actor)
     assert not grant_service.active(second.grant_id, second.actor)
     assert first.session_id in loom_api.archived
+    assert launcher.reconcile() == []
+
+
+def test_temporary_authority_failure_does_not_block_other_retirement_and_retries(
+    launcher, grant_service, loom_api, monkeypatch
+):
+    first = launcher.launch(grant_service.token, template="review", title="First", goal="Read first change")
+    second_grant = grant_service.store.create(
+        "owner", actor="runtime-two", permissions=grant_service.grant.permissions, expires_at=1200
+    )
+    grant_service.grant = second_grant
+    second = launcher.launch(grant_service.token, template="review", title="Second", goal="Read second change")
+    loom_api.runs[first.run_id]["status"] = "completed"
+    loom_api.runs[second.run_id]["status"] = "completed"
+    active = grant_service.active
+    unavailable = True
+
+    def check_authority(grant_id, actor):
+        nonlocal unavailable
+        if grant_id == first.grant_id and unavailable:
+            unavailable = False
+            raise requests.ConnectionError("Temporary OpenFGA outage")
+        return active(grant_id, actor)
+
+    monkeypatch.setattr(grant_service, "active", check_authority)
+    observed = launcher.reconcile()
+    assert {run.grant_id for run in observed} == {second.grant_id}
+    assert active(first.grant_id, first.actor)
+    assert not active(second.grant_id, second.actor)
+    assert {run.grant_id for run in launcher.reconcile()} == {first.grant_id}
+    assert not active(first.grant_id, first.actor)
     assert launcher.reconcile() == []
 
 

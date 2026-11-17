@@ -132,10 +132,12 @@ shared-mode latch also prevents removing shared trust from reopening implicit
 local administration on that database.
 
 `marin-auth` deploys OpenBao, OpenFGA, and the Marin credential service in a dedicated management
-namespace. OpenFGA stores standing relationships in external PostgreSQL; the
-credential service retains the runtime grant ledger. It owns no training resources. The three OpenBao replicas use separate retained
-PVCs, verified TLS, pod anti-affinity, a disruption budget, and restricted
-service accounts. The public ingress exposes exactly the identity discovery and
+namespace. OpenFGA stores standing relationships and runtime grants in separate
+stores backed by external PostgreSQL. The broker keeps operational launch and
+cleanup records in its separate database. OpenBao also uses PostgreSQL with
+verified TLS and HA enabled. Its three replicas use pod anti-affinity, a
+disruption budget and restricted service accounts. The public ingress exposes
+exactly the identity discovery and
 JWKS endpoints. The API remains a ClusterIP service.
 
 The separate [CloudNativePG prototype](../postgres/README.md) exercises CW
@@ -160,8 +162,10 @@ schedulable hosts, Traefik's `traefik` ingress class and
 `traefik.io/v1alpha1/ServersTransport` CRD, and a CNI that enforces NetworkPolicy.
 Set the actual ingress controller namespace and pod labels. Only those pods and
 the explicitly selected auth broker pods can contact OpenBao on port 8200.
-Raft traffic stays inside the OpenBao pod set. Egress allows DNS only to
-explicit resolver host CIDRs and HTTPS to configured destination CIDRs.
+OpenBao peer traffic stays inside its pod set. Database egress selects the
+configured CNPG cluster on TCP 5432. Egress allows DNS only to
+explicit resolver host CIDRs and HTTPS to configured destination CIDRs or,
+with Cilium, addresses learned for configured domain names.
 Read the selected cluster's pod resolver configuration and DNS services before
 setting `dns_cidrs`; each entry must be a `/32` or `/128` resolver address.
 Read-only inspection of the current CoreWeave cluster found resolver service
@@ -170,20 +174,20 @@ with `node-local-dns` and `coredns` selectors. These observations are inputs to
 deployment review, not portable defaults. Include the resolver addresses
 actually reached by the selected cluster's pods.
 
-Use a dedicated management cluster before enrolling live identities. Existing
+Use a dedicated management cluster before production enrollment. Existing
 Iris cluster roles can manage pods across namespaces; a namespace and
 NetworkPolicy alone do not isolate signing authority from those roles. Reuse
 of a training cluster requires a separately audited RBAC, admission and node
 isolation design. This stack does not change Iris roles or create that design.
 
-Select storage whose provider documents the synchronous writes, locking and
-durability required by [OpenBao Integrated Storage](https://openbao.org/docs/configuration/storage/raft/).
-Prefer durable block storage. The observed CoreWeave cluster currently exposes
-only `shared-vast`; that observation does **not** establish that this class is
-safe for Raft. The stack deliberately has no storage-class default. Certify a
-suitable class before applying. Each pod receives its own `ReadWriteOnce` PVC;
-PVCs remain after scale-down and deletion. Disable host swap because the
-unprivileged server uses `disable_mlock=true`.
+Provision a separate OpenBao PostgreSQL database and owner. Supply external
+credential and CA Secrets in the auth namespace. The server reads `username`
+and `password` through Secret references, verifies the database hostname with
+`sslmode=verify-full`, and mounts `ca.crt`. Existing Raft claim templates and
+PVCs remain retained for the controlled migration and rollback described in
+[synthetic staging](STAGING.md). New PostgreSQL-backed deployments request no
+OpenBao data PVC. Disable host swap because the unprivileged server uses
+`disable_mlock=true`.
 
 Supply a digest-pinned OpenBao image that supports the configured APIs and runs
 as UID/GID 1000. Test image and storage compatibility on staging before adoption.
@@ -194,7 +198,7 @@ Provision two TLS Secrets outside Pulumi in the management namespace:
   certificate must contain `openbao.NAMESPACE.svc`, the configured
   `listener_tls_server_name`, and `localhost` for verified operator
   port-forwarding. `ca.crt` must contain its issuing trust chain. The same
-  server name and CA authenticate Raft joins and Traefik's upstream connection.
+  server name and CA authenticate operator access and Traefik's upstream connection.
 - `ingress_tls_secret`: a publicly trusted certificate and private key for
   `public_hostname`. Point that DNS name at the ingress. Only the two exact
   discovery paths are routed to OpenBao; `/v1/sys/*`, authentication, token
@@ -216,7 +220,10 @@ keys with `pulumi config set --stack staging KEY VALUE` or
 | `kubernetes_context` | Explicit management-cluster kubeconfig context |
 | `image` | OpenBao image with `@sha256:` digest |
 | `public_hostname` | Public discovery DNS name |
-| `raft_storage_class` | Reviewed storage class suitable for Raft |
+| `openbao_database_secret` | External Secret with `username` and `password` keys |
+| `openbao_database_ca_secret` | External Secret containing the database `ca.crt` |
+| `openbao_database_host` | PostgreSQL hostname covered by its certificate |
+| `database_namespace` / `database_cluster` | CNPG namespace and cluster label selected for database egress |
 | `listener_tls_secret` | Existing server TLS/CA Secret name |
 | `listener_tls_server_name` | SAN used to verify internal TLS |
 | `ingress_tls_secret` | Existing public edge certificate Secret name |
@@ -225,6 +232,7 @@ keys with `pulumi config set --stack staging KEY VALUE` or
 | `operator_groups` | Array of Kubernetes groups allowed to port-forward |
 | `dns_cidrs` | Explicit resolver host CIDRs used by OpenBao and the broker |
 | `https_egress_cidrs` | Explicit array; use `[]` if no external auth fetches are needed |
+| `https_egress_domains` | Optional exact lowercase HTTPS names, requiring Cilium's CRD and L7 DNS proxy |
 
 The operator Role permits pod discovery and port-forwarding. It grants no
 Secret access, pod execution or cluster-wide rights. The OpenBao ServiceAccount
@@ -260,11 +268,11 @@ In a separate terminal, set `BAO_ADDR=https://localhost:18200` and
 with reviewed share/threshold and PGP recipient options, and store encrypted
 unseal shares and the initial root token in the approved recovery system. Do
 not send them to Pulumi, logs or the repository. Run interactive
-`bao operator unseal` separately for enough key holders. The other pods
-retry-join using verified TLS; port-forward and unseal each in turn. Never
-initialize a second pod into an independent cluster.
+`bao operator unseal` separately for enough key holders. All replicas share
+the initialized PostgreSQL backend. Port-forward and unseal each in turn.
+Initialize the shared backend only once.
 
-Once a quorum is unsealed, supply an ephemeral operator token through
+Once the active server is unsealed, supply an ephemeral operator token through
 `BAO_TOKEN` and run from the repository root:
 
 ```bash
@@ -305,13 +313,13 @@ digest-pinned image built from `infra/auth/Dockerfile` with the `marin-auth`
 runtime dependencies. It runs `python -P -m infra.auth.service` from `/app`,
 with the canonical image setting `PYTHONPATH=/app` explicitly. The safe-path
 flag prevents the working directory from selecting a stale service module.
-With this key set, all broker configuration is required;
-there is no generated identity or in-memory ledger fallback.
+With this key set, all broker configuration is required, including identity,
+runtime authority and operational database references.
 
 | Key | Required value |
 | --- | --- |
-| `broker_storage_class` | Storage class suitable for a persistent SQLite ledger |
-| `broker_storage_size` | Explicit ledger volume capacity |
+| `broker_storage_class` | Storage class suitable for persistent SQLite lifecycle records |
+| `broker_storage_size` | Explicit lifecycle volume capacity |
 | `broker_database_secret` | PostgreSQL mode: external Secret containing a `url` key with a `postgresql+pg8000` URL |
 | `broker_database_cidrs` / `database_namespace` | PostgreSQL destinations on TCP 5432, by explicit CIDRs or isolated CNPG namespace |
 | `broker_replicas` | Replica count; more than one requires PostgreSQL |
@@ -323,7 +331,7 @@ there is no generated identity or in-memory ledger fallback.
 | `broker_https_egress_cidrs` | HTTPS egress destinations for public OpenBao discovery/JWKS |
 | `broker_policy` | Standing policy and database configuration described below |
 
-`broker_policy` supplies `broker_token_file`, `subjects`, `openfga`, `storage`
+`broker_policy` supplies `broker_token_file`, `subjects`, `openfga`, `runtime_grants`, `storage`
 and `max_token_ttl`, plus explicit `loom` (`null` or a configured Loom binding)
 and `signing_key_version` (the reviewed Transit key version), plus explicit
 `database` configuration. Optional `iris` and `secrets` configure task attempts
@@ -341,8 +349,10 @@ server. The observer rejects OpenBao credentials before making a request to Loom
 `principals` (`principal`, `owner`, `max_ttl`, `delegation_depth`). The stack
 sets `api_url` to its TLS Check gateway. The store and immutable model IDs must
 come from operator publication, not a caller token. Mount a separate OpenFGA
-API token alongside the other external token files. Standing group membership
-and action/resource relationships live in OpenFGA, not in the broker ConfigMap.
+API token alongside the other external token files. `runtime_grants` contains
+its own `api_url`, `store_id`, `model_id` and `token_file`. It selects a distinct
+runtime store and credential on the same TLS gateway. Standing group membership
+and action/resource relationships are operator-owned OpenFGA tuples.
 Each storage binding still declares its complete native permissions and separate
 OpenBao identity token; permission to issue that identity is checked in OpenFGA.
 
@@ -356,8 +366,8 @@ OpenBao service address and public issuer, `ca_bundle` pointing to a CA-only
 projection from `broker_ca_secret`, and issuer
 `https://marin-auth.NAMESPACE.svc:8090`. It publishes this policy in a ConfigMap
 and mounts external Secret files without reading their values. Runtime grant
-creation, attenuation and revocation update only the selected runtime database. They cannot alter the
-ConfigMap, OpenBao ACLs or provider policies.
+creation, attenuation and revocation update the runtime OpenFGA store. The
+gateway confines its writer credential to that store's tuple operations.
 
 The combined CA bundle must verify the private OpenBao listener, public OpenBao
 issuer/JWKS endpoint and private Loom TLS proxy. A listener-only private CA
@@ -365,8 +375,8 @@ cannot verify the public issuer certificate. The broker uses this same explicit
 bundle for observer requests to Loom; no TLS verification is disabled.
 
 The broker is a restricted StatefulSet. PostgreSQL mode mounts the external URL
-Secret and verified CA, without a ledger PVC; multiple replicas share the grant
-and lifecycle tables. SQLite mode uses the retained `/var/lib/marin-auth/grants.db`
+Secret and verified CA. Multiple replicas share lifecycle tables and the runtime
+OpenFGA store. SQLite mode uses the retained `/var/lib/marin-auth/grants.db`
 PVC and requires exactly one replica. Configuration changes update a pod-template
 hash and trigger a `RollingUpdate`. Changing the pinned OpenFGA model ID,
 provider mappings, or principal limits changes the revision. Standing relationship
@@ -390,7 +400,7 @@ From outside the cluster, fetch
 `https://HOST/v1/identity/oidc/.well-known/openid-configuration`, check that its
 issuer matches the stack output exactly, and fetch its `jwks_uri`. Confirm a
 public request to `/v1/sys/health` receives no OpenBao route. Inspect readiness,
-`bao operator raft list-peers` and each PVC before treating the service as ready.
+`bao operator members` and PostgreSQL connectivity before treating the service as ready.
 
 ## CoreWeave standing policies
 
@@ -462,7 +472,7 @@ defines nested groups and action-scoped resource ancestry. The reviewed
 [relationships](policy/relationships.json) include a team nested in
 `marin-research`; [principals](policy/principals.json) record ownership, lifetime,
 and delegation limits. OpenBao supplies verified identity and signing. The
-Marin service checks the active grant and asks OpenFGA for the standing decision;
+Marin service requires live OpenFGA decisions from the runtime and standing stores.
 Loom enforces its launch profile and repository locally.
 
 For example, these relationships give a researcher transitive Iris access:
@@ -494,12 +504,14 @@ permission-result cache. Transport failures, redirects and malformed decisions
 return HTTP 503 and cannot grant access. A temporary OpenFGA outage does not
 permanently revoke a live grant; lifecycle reconciliation retries instead. No positive decision cache is added in the broker.
 
-The production OpenFGA component uses external PostgreSQL and a TLS gateway
-exposing only POST `/stores/STORE-ID/check`. The full HTTP and gRPC APIs bind to
-pod loopback. Operators publish models and reconcile standing tuples through
-Kubernetes port-forwarding; the broker has neither Kubernetes credentials nor
-an exposed write route. OpenFGA's experimental built-in API access controls are
-not required by this deployment.
+The production OpenFGA component uses external PostgreSQL and a TLS gateway.
+The standing credential can POST only `/stores/STANDING-ID/check`. A separate
+runtime credential can POST `/stores/RUNTIME-ID/check`,
+`/stores/RUNTIME-ID/read` and `/stores/RUNTIME-ID/write`.
+The gateway validates the credential separately for each store. Model writes
+and standing-tuple writes use the full API bound to pod loopback through
+operator port-forwarding. OpenFGA's
+experimental built-in API access controls are not required by this deployment.
 
 A runtime grant is a bounded record approved by that standing policy. For
 example, an approved bundle can contain:
@@ -528,16 +540,38 @@ node is not a proof about every descendant of that node.
 Pulumi deploys OpenFGA and publishes the pinned store/model references, trusted
 OpenBao principal mappings and provider mappings. The operator reconciles
 reviewed standing relationships using the native OpenFGA API. `POST /v1/grants` authenticates its bearer as an OpenBao
-identity and writes the approved runtime grant to the configured database. Owner comes from
-trusted principal data. A child grant can reduce actions, prefixes, lifetime and
-delegation depth and must still pass current policy. Live checks require the
-entire ancestor chain to remain active. They query OpenFGA using the original
-granting principal and enforce the current actor's grant ceiling separately;
-an attribution owner does not confer that owner's permissions.
+identity and writes the approved grant to the runtime OpenFGA store. Owner comes
+from trusted principal data. The broker validates delegation actor, depth,
+lifetime and non-widening bounds before issuance. Live checks require the
+entire ancestor chain to remain active. Each operation requires
+a runtime-model decision for its actor and action/resource, plus a standing-model
+decision for the original granting principal. Current principal limits and
+policy revision also apply.
 
-The service selects its runtime database explicitly:
+The [runtime model](policy/runtime_model.json) binds each grant to its actor and
+conditional service/action/resource bounds. Expiry uses the broker's current
+server time. Recursive relations intersect every ancestor's bounds and expiry.
+A permanent revocation tuple excludes the revoked grant and every descendant,
+including a child written concurrently with revocation. Immutable metadata,
+actor, bounds and parent/root tuples are inserted in one atomic write.
+Idempotency keys derive one grant ID per authenticated principal. A fixed
+metadata tuple makes conflicting retries contend on that identity. The broker
+reads persisted state after an uncertain write response and rejects a different
+actor, parent or scope under the same key. Metadata remains readable for cleanup
+after expiry or revocation.
+
+Principal names are percent-encoded inside OpenFGA object IDs. For example,
+`service:grafana` becomes `principal:service%3Agrafana`. Grant metadata and JWTs
+retain the original principal string.
+
+The service selects its runtime store and operational database explicitly.
 
 ```yaml
+runtime_grants:
+  api_url: https://openfga.NAMESPACE.svc:8443
+  store_id: RUNTIME-STORE-ID
+  model_id: RUNTIME-MODEL-ID
+  token_file: /var/run/marin-auth/openfga-runtime-token/token
 database:
   backend: postgres
   url_file: /var/run/marin-auth/database/url
@@ -546,10 +580,12 @@ database:
 
 The private file contains a `postgresql+pg8000://` URL; the service verifies the
 server certificate and hostname against `ca_file` (or system roots if omitted).
-Grant records, idempotency keys and Loom launch intent share this database.
-PostgreSQL transaction locks serialize issuance, ancestor checks and revocation
-across replicas. Local operation selects `database: {backend: sqlite, path: /private/grants.db}`
-and runs one broker. Existing SQLite ledgers are not imported automatically.
+SQL stores launch intent, run/session IDs, attempt retirement records and worker
+coordination. PostgreSQL locks serialize that bookkeeping across replicas.
+OpenFGA stores grant records, issuance idempotency and revocation authority.
+A single local broker can select
+`database: {backend: sqlite, path: /private/grants.db}` for lifecycle bookkeeping.
+Drain and reissue existing SQL-backed grants before switching to the runtime store.
 
 `POST /oauth/token` follows [OAuth Token Exchange](https://www.rfc-editor.org/rfc/rfc8693.html):
 form fields name the subject token, token type, exact audience and grant ID.
@@ -592,7 +628,7 @@ child and its task descendants. The initial Iris token expires after
 `max_token_ttl` (60 seconds in the proof); it cannot refresh. The proof submits
 within that window. Long-running Loom identity renewal remains unimplemented.
 
-Run/session IDs and launch intent share the grant database. Named session locks
+Run/session IDs and launch intent share the operational database. Named session locks
 coordinate lifecycle passes and per-grant operations across PostgreSQL replicas.
 A lost connection releases leadership; idempotent remote calls and monotonic
 terminal records prevent a stale worker from reviving a cleaned run.
@@ -601,16 +637,15 @@ reconciler checks actual Loom state and revokes completed grants. Native calls
 register their intent before credential issuance, so bypassing the launch
 front door does not bypass lifecycle tracking. An intent that never produces
 a run becomes eligible for revocation after sixty seconds. Each reconciliation
-checks local expiry, revocation and policy revision for all rows before any
-network requests, so an earlier failed request cannot postpone authority already
-due for retirement. An in-progress network cycle can delay the next local check.
-Each ledger row is reconciled independently: a missing or malformed run cannot block
+checks current grant authority and policy revision for all rows before Loom
+requests. An in-progress network cycle can delay the next check.
+Each lifecycle row is reconciled independently. A missing or malformed run cannot block
 completion cleanup for later grants. Malformed or mismatched metadata revokes
 the affected grant; cleanup uses only its previously verified session ID.
 Revoking a grant immediately prevents further broker issuance; archiving its
 Loom session and discovering a late run depend on successful reconciliation.
 Unavailable requests are logged and retried, so a Loom outage can delay session
-cleanup. A fatal background-task or ledger failure makes `/healthz` return 503,
+cleanup. A fatal background-task or operational database failure makes `/healthz` return 503,
 allowing Kubernetes probes to restart the broker.
 
 Secret reads use a fixed KV-v2 binding and a separate native OpenBao credential:
@@ -690,6 +725,7 @@ checks with a role allowed to create and drop test databases:
 
 ```bash
 MARIN_AUTH_TEST_POSTGRES_URL='postgresql+pg8000://postgres@127.0.0.1:15432/postgres' \
+MARIN_AUTH_TEST_OPENFGA_EXECUTABLE=/path/to/openfga \
   uv run --no-sync pytest infra/auth/tests/test_postgres.py infra/auth/tests/test_loom.py -m integration
 ```
 
@@ -733,48 +769,58 @@ deployed stack, live CoreWeave enforcement remains unverified.
 
 ## Recovery and upgrades
 
-Keep encrypted unseal shares, CA recovery and Raft snapshots outside this stack.
-Take and restore a staging snapshot before relying on this service. PVC
-retention is not a backup. Protect the namespace and StatefulSet from accidental
+Keep encrypted unseal shares, CA recovery and PostgreSQL backups outside this stack.
+Restore a staging database backup before relying on this service. Preserve
+retained migration-source Raft PVCs according to [staging recovery](STAGING.md).
+Protect the namespace and StatefulSet from accidental
 Pulumi deletion; removing them requires a reviewed recovery or retirement plan.
 
 OpenBao StatefulSet updates use `OnDelete`: config and image changes do not silently
 restart sealed replicas. During an approved upgrade, replace and unseal one
-replica at a time, verify quorum and readiness, then continue. Renew externally
+replica at a time, verify active/standby status and readiness, then continue. Renew externally
 managed certificates before expiry and restart or reload replicas through that
 same reviewed procedure. Never disable TLS verification to bypass a failed
-renewal or Raft join.
+renewal or database connection.
 
 ## OpenFGA publication
 
 Provide these additional stack inputs: `openfga_image`, `openfga_proxy_image`
-(both pinned by digest), `openfga_store_id`, `openfga_database_secret`
+(both pinned by digest), distinct `openfga_store_id` and `openfga_runtime_store_id`, `openfga_database_secret`
 (key `uri`, a PostgreSQL URI with verified TLS), `openfga_database_ca_secret`
 (key `ca.crt`, mounted at `/var/run/postgres/ca/ca.crt`), `openfga_token_secret`
-(key `token`), `openfga_tls_secret` (`tls.crt`, `tls.key`), and
+(key `token`), `openfga_runtime_token_secret` (a distinct `token`), `openfga_tls_secret` (`tls.crt`, `tls.key`), and
 `openfga_database_cidrs` (only the database destinations on port 5432), or an
 isolated CNPG `database_namespace` with an explicit empty CIDR list.
 Secret values are provisioned outside Pulumi and never enter its arguments or
 state. PostgreSQL needs independent backups and restoration checks.
 
 For initial bootstrap, deploy without a broker using the reserved placeholder
-`00000000000000000000000000` as `openfga_store_id` on the Check gateway. Port-forward the OpenFGA pod's loopback HTTP port 8080,
-publish the model and relationships below, then configure the returned actual
-store/model IDs in `openfga_store_id` and `broker_policy.openfga.store_id` /
-`broker_policy.openfga.model_id`, then enable the broker. The Service exposes
-only the TLS Check gateway; the operator full API remains bound to pod loopback.
+`00000000000000000000000000` as `openfga_store_id` and
+`00000000000000000000000001` as `openfga_runtime_store_id` on the gateway.
+Port-forward the OpenFGA pod's loopback HTTP port 8080. Publish the standing
+model with its relationships and create a separate empty runtime store.
 
 ```bash
 uv run python -m infra.auth.fga_operator \
   --url http://127.0.0.1:18080 --token-file /private/openfga.token \
   --name marin-staging --relationships infra/auth/policy/relationships.json
+
+uv run python -m infra.auth.fga_operator \
+  --url http://127.0.0.1:18080 --token-file /private/openfga.token \
+  --name marin-runtime --model infra/auth/policy/runtime_model.json
 ```
+
+Set the returned standing IDs in `openfga_store_id` and
+`broker_policy.openfga.store_id` / `model_id`. Set the runtime IDs in
+`openfga_runtime_store_id` and `broker_policy.runtime_grants.store_id` /
+`model_id`, then enable the broker. Mount distinct standing and runtime gateway
+credentials. The operator full API remains bound to pod loopback.
 
 The operator returns only store/model IDs and the model hash. For later standing
 relationship updates, replace `--name` with `--store-id ID --model-id ID`.
 This command authoritatively reconciles all tuples in its dedicated store;
 review the complete relationship file before applying it. It does not modify
-runtime grant records. Publish a new model to a new store and drain old grants
+the separate runtime store. Publish a new model to a new store and drain old grants
 before switching model references.
 
 ## Bounded CoreWeave proof

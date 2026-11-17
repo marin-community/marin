@@ -34,8 +34,11 @@ def main() -> None:
             namespace=namespace,
             image=config.require("image"),
             public_hostname=config.require("public_hostname"),
-            storage_class=config.require("raft_storage_class"),
-            storage_size=config.require("storage_size"),
+            database_secret=config.require("openbao_database_secret"),
+            database_ca_secret=config.require("openbao_database_ca_secret"),
+            database_host=config.require("openbao_database_host"),
+            database_namespace=config.require("database_namespace"),
+            database_cluster=config.require("database_cluster"),
             listener_tls_secret=config.require("listener_tls_secret"),
             listener_tls_server_name=config.require("listener_tls_server_name"),
             ingress_tls_secret=config.require("ingress_tls_secret"),
@@ -46,6 +49,7 @@ def main() -> None:
             operator_groups=tuple(config.require_object("operator_groups")),
             dns_cidrs=tuple(config.require_object("dns_cidrs")),
             https_egress_cidrs=tuple(config.require_object("https_egress_cidrs")),
+            https_egress_domains=tuple(config.get_object("https_egress_domains") or []),
             replicas=config.require_int("replicas"),
             anti_affinity=config.get("anti_affinity") or "required",
             discovery_mode=config.get("discovery_mode") or "ingress",
@@ -72,8 +76,10 @@ def main() -> None:
             database_secret=config.require("openfga_database_secret"),
             database_ca_secret=config.require("openfga_database_ca_secret"),
             token_secret=config.require("openfga_token_secret"),
+            runtime_token_secret=config.require("openfga_runtime_token_secret"),
             tls_secret=config.require("openfga_tls_secret"),
             store_id=config.require("openfga_store_id"),
+            runtime_store_id=config.require("openfga_runtime_store_id"),
             dns_cidrs=tuple(config.require_object("dns_cidrs")),
             database_cidrs=tuple(config.require_object("openfga_database_cidrs")),
             database_namespace=config.get("database_namespace"),
@@ -89,6 +95,7 @@ def main() -> None:
             "broker_token_file",
             "subjects",
             "openfga",
+            "runtime_grants",
             "storage",
             "max_token_ttl",
             "loom",
@@ -101,6 +108,9 @@ def main() -> None:
         if policy["openfga"]["store_id"] != config.require("openfga_store_id"):
             raise ValueError("The broker and OpenFGA gateway must use the same store")
         policy["openfga"]["api_url"] = fga.address
+        if policy["runtime_grants"]["store_id"] != config.require("openfga_runtime_store_id"):
+            raise ValueError("The broker and OpenFGA gateway must use the same runtime store")
+        policy["runtime_grants"]["api_url"] = fga.address
         policy.update(
             bao_address=service.api_address,
             ca_bundle=f"{TOKEN_DIRECTORY}/ca/ca.crt",

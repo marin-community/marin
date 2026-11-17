@@ -16,6 +16,8 @@ import jwt
 import pytest
 import requests
 from rigging.grant_auth import ACCESS_TOKEN_TYPE, JWT_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT, GrantAuthService
+from rigging.grant_database import GrantDatabase
+from rigging.testing import MemoryRuntimeGrants
 from rigging.token_authority import generate_ed25519_keypair, public_jwk_from_pem
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -107,6 +109,7 @@ class Environment:
     authority: GrantAuthService
     config: service.ServiceConfig
     loom: LoomHTTP
+    database: GrantDatabase
 
 
 @dataclass
@@ -177,6 +180,12 @@ def environment(tmp_path, monkeypatch, openfga_http, secret_http):
                     {"principal": "service:grafana", "owner": "service:grafana", "max_ttl": 3600, "delegation_depth": 1}
                 ],
             },
+            "runtime_grants": {
+                "api_url": openfga_http["api_url"],
+                "store_id": "01ARZ3NDEKTSV4RRFFQ69G5FAX",
+                "model_id": "01ARZ3NDEKTSV4RRFFQ69G5FAY",
+                "token_file": tmp_path / "runtime-grants.token",
+            },
             "storage": [
                 {
                     "name": name,
@@ -209,10 +218,14 @@ def environment(tmp_path, monkeypatch, openfga_http, secret_http):
     monkeypatch.setattr(service, "OpenBaoTransitSigner", TransitSigner)
     monkeypatch.setattr(service, "OpenBaoIdentityVerifier", IdentityVerifier)
     monkeypatch.setattr(service, "OpenBaoStorageIssuer", StorageIssuer)
+    runtime = MemoryRuntimeGrants()
+    monkeypatch.setattr(service, "OpenFGARuntime", lambda **_kwargs: runtime)
     monkeypatch.setattr(service.requests, "Session", lambda: loom)
     app, authority = service.create_service(config)
-    yield Environment(app, authority, config, loom)
+    database = config.database.connect()
+    yield Environment(app, authority, config, loom, database)
     authority.store.close()
+    database.close()
 
 
 def create_grant(client, *, parent_id=None, ttl=1800):
@@ -344,7 +357,7 @@ def test_openfga_outage_denies_requests_without_permanently_revoking_live_grants
         assert client.post("/v1/authorize", headers=headers, json=check).status_code == 200
         grant = environment.authority.store.active(grant_id)
         launcher = LoomLauncher(
-            environment.authority.store.database,
+            environment.database,
             base_url="https://loom.example",
             observer_tokens=service.LoomObserverTokenProvider(environment.config.loom.observer_token_file),
             grants=environment.authority,
@@ -363,7 +376,7 @@ def test_openfga_outage_denies_requests_without_permanently_revoking_live_grants
 @pytest.mark.asyncio
 async def test_fatal_reconciler_failure_makes_health_unavailable(environment):
     # Losing the observer ledger exercises an actual fatal storage error, beyond per-row recovery.
-    with environment.authority.store.database.transaction() as db:
+    with environment.database.transaction() as db:
         db.execute(text("DROP TABLE loom_grant_runs"))
     with pytest.raises(ExceptionGroup) as error:
         async with environment.app.router.lifespan_context(environment.app):
@@ -381,7 +394,7 @@ def test_observer_does_not_send_an_openbao_token_from_a_distinct_file(environmen
         assert runtime_credentials(client, environment, headers).status_code == 200
         environment.config.loom.observer_token_file.write_text("hvs.synthetic-bao-secret")
         observer = LoomLauncher(
-            environment.authority.store.database,
+            environment.database,
             base_url=environment.config.loom.base_url,
             observer_tokens=service.LoomObserverTokenProvider(environment.config.loom.observer_token_file),
             grants=environment.authority,
@@ -453,31 +466,25 @@ def test_runtime_tokens_share_one_narrowed_session_child_and_revoke_with_launch_
         assert client.post("/v1/authorize", headers=runtime_headers, json=check).status_code == 403
 
 
-def test_database_outage_returns_sanitized_503_and_recovers(environment):
+def test_lifecycle_database_outage_returns_sanitized_503_and_recovers(environment):
     assert isinstance(environment.config.database, service.SqliteDatabaseConfig)
     path = environment.config.database.path
     backup = path.with_suffix(".saved")
     client = TestClient(environment.app)
     try:
-        create_grant(client)
+        grant_id = create_grant(client)
+        headers = exchange(client, grant_id, "loom")
         path.rename(backup)
         path.mkdir()
         try:
-            response = client.post(
-                "/v1/grants",
-                headers={"Authorization": "Bearer grafana-identity"},
-                json={
-                    "actor": "service:grafana",
-                    "permissions": [{"service": "loom", "actions": ["session.create"], "resource": "/diagnostics/"}],
-                    "expires_at": time.time() + 300,
-                },
-            )
+            response = runtime_credentials(client, environment, headers)
             assert response.status_code == 503
             assert response.json() == {"error": "Authorization is unavailable"}
         finally:
             path.rmdir()
             backup.rename(path)
-        create_grant(client)
+        assert runtime_credentials(client, environment, headers).status_code == 200
+        assert environment.authority.store.active(grant_id).id == grant_id
     finally:
         client.close()
 

@@ -80,8 +80,9 @@ resource before inspecting recovery.
 This is an operator and database failover experiment. OpenFGA and OpenBao share
 one disposable database owner for the proof; production needs separate
 databases and least-privilege identities. This disposable failover proof uses
-one local SQLite grant ledger; the persistent staging stack instead gives
-replicated brokers a separate PostgreSQL grant/lifecycle database.
+one local SQLite lifecycle database. Runtime grants live in OpenFGA. The
+persistent staging stack gives OpenBao, OpenFGA and broker lifecycle records
+separate PostgreSQL databases and owners.
 
 Production adoption also needs independent failure domains, qualified storage,
 off-cluster backups and WAL archiving, restore drills, monitoring and alerting,

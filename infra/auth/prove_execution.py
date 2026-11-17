@@ -15,7 +15,7 @@ import shlex
 import time
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -39,12 +39,12 @@ from iris.version import client_revision_date
 from rigging.grant_auth import JWT_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT
 from rigging.shared_grants import SHARED_GRANT_TOKEN_SECRET, SharedGrantConfig
 from rigging.timing import Duration, ExponentialBackoff
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from infra.auth.proof_fga import free_port
 from infra.auth.proof_http import serve
 from infra.auth.prove_loom import IsolatedLoom, isolated_loom, prepare_loom_profile
-from infra.auth.service import LoomConfig, ServiceConfig, create_service
+from infra.auth.service import LoomConfig, ServiceConfig, SqliteDatabaseConfig, create_service
 
 TASK_NAMESPACE = "marin-auth-task-staging"
 PROOF_MARKER = "AUTH_ATTEMPT_BOUNDED"
@@ -400,6 +400,9 @@ def main() -> None:
             ) as loom:
                 local_config = service_config.model_copy(
                     update={
+                        "database": SqliteDatabaseConfig(
+                            backend="sqlite", path=case_directory / "loom-lifecycle.sqlite"
+                        ),
                         "loom": LoomConfig(
                             base_url=loom.base_url,
                             observer_token_file=loom.observer_token_file,
@@ -476,6 +479,22 @@ def main() -> None:
                         client.post(
                             f"/v1/grants/{grant_id}/revoke", headers={"Authorization": f"Bearer {identity}"}
                         ).raise_for_status()
+                        with closing(local_config.database.connect()) as database:
+
+                            def lifecycle_cleaned(grant_id: str = grant_id) -> bool:
+                                with database.engine.connect() as connection:
+                                    status = connection.execute(
+                                        text("SELECT status FROM loom_grant_runs WHERE grant_id = :grant_id"),
+                                        {"grant_id": grant_id},
+                                    ).scalar_one()
+                                return status == "cleaned"
+
+                            ExponentialBackoff().wait_until_or_raise(
+                                lifecycle_cleaned,
+                                timeout=Duration.from_seconds(15),
+                                error_message="The local Loom lifecycle did not retire before teardown",
+                            )
+                        evidence[-1]["loom_lifecycle_cleaned"] = True
     report = args.output_dir / "execution-proof.json"
     report.write_text(json.dumps({"cases": evidence}, indent=2) + "\n")
     print(json.dumps({"executed_cpu_cases": len(evidence), "evidence_file": str(report)}))

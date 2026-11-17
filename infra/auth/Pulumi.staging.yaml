@@ -5,11 +5,9 @@ config:
   marin-auth:openfga_image: openfga/openfga@sha256:b852071314f1fda1194d341a6ebac0a4f619b3cd87a6626d2ccc7048af4ec671
   marin-auth:openfga_proxy_image: nginxinc/nginx-unprivileged@sha256:7377697a821c131a924a7105fafbe7414db4e9fcc77a6f08f776f33f141ec3f8
   marin-auth:namespace: marin-auth-staging
-  marin-auth:storage_size: 2Gi
   marin-auth:replicas: '3'
   marin-auth:anti_affinity: preferred
   marin-auth:discovery_mode: private
-  marin-auth:raft_storage_class: shared-vast
   marin-auth:public_hostname: openbao.marin-auth-staging.svc
   marin-auth:listener_tls_server_name: openbao.marin-auth-staging.svc
   marin-auth:listener_tls_secret: openbao-tls
@@ -18,22 +16,31 @@ config:
   marin-auth:ingress_pod_labels:
     marin.dev/auth-client: 'true'
   marin-auth:operator_groups:
-    - marin-auth-staging-operators
+  - marin-auth-staging-operators
   marin-auth:dns_cidrs:
-    - 10.16.0.10/32
-    - 10.16.1.203/32
-    - 10.16.0.30/32
+  - 10.16.0.10/32
+  - 10.16.1.203/32
+  - 10.16.0.30/32
   marin-auth:kubernetes_api_cidrs:
-    - 100.124.1.94/32
-    - 10.16.0.1/32
+  - 100.124.1.94/32
+  - 10.16.0.1/32
   marin-auth:https_egress_cidrs: []
+  marin-auth:https_egress_domains:
+    - accounts.google.com
+    - www.googleapis.com
   marin-auth:database_namespace: marin-auth-db-staging
+  marin-auth:database_cluster: auth-postgres
+  marin-auth:openbao_database_secret: openbao-database
+  marin-auth:openbao_database_ca_secret: postgres-ca
+  marin-auth:openbao_database_host: auth-postgres-rw.marin-auth-db-staging.svc
   marin-auth:openfga_database_secret: openfga-database
   marin-auth:openfga_database_ca_secret: postgres-ca
   marin-auth:openfga_database_cidrs: []
   marin-auth:openfga_token_secret: openfga-token
+  marin-auth:openfga_runtime_token_secret: openfga-runtime-token
   marin-auth:openfga_tls_secret: openfga-tls
   marin-auth:openfga_store_id: 01M6TF6S445107A0VN3S7YG4RY
+  marin-auth:openfga_runtime_store_id: 01M7M20MXSMVCXSGP2V9Q80C1B
   marin-auth:broker_database_secret: grants-database
   marin-auth:broker_database_cidrs: []
   marin-auth:broker_replicas: '2'
@@ -46,9 +53,10 @@ config:
     marin.dev/auth-client: 'true'
   marin-auth:broker_https_egress_cidrs: []
   marin-auth:broker_token_secrets:
-    - broker-token
-    - openfga-token
-    - task-canary-token
+  - broker-token
+  - openfga-token
+  - openfga-runtime-token
+  - task-canary-token
   marin-auth:broker_policy:
     broker_token_file: /var/run/marin-auth/broker-token/token
     subjects:
@@ -60,20 +68,25 @@ config:
       model_id: 01M6TF6SCCPDJVRQPPW8Q2K81H
       token_file: /var/run/marin-auth/openfga-token/token
       principals:
-        - principal: launcher
-          owner: proof-owner
-          max_ttl: 3600
-          delegation_depth: 2
-        - principal: other-session
-          owner: other-owner
-          max_ttl: 3600
-          delegation_depth: 0
+      - principal: launcher
+        owner: proof-owner
+        max_ttl: 3600
+        delegation_depth: 2
+      - principal: other-session
+        owner: other-owner
+        max_ttl: 3600
+        delegation_depth: 0
+    runtime_grants:
+      api_url: https://openfga.marin-auth-staging.svc:8443
+      store_id: 01M7M20MXSMVCXSGP2V9Q80C1B
+      model_id: 01M7M20N6AS8TGMYH8FW8A0SP9
+      token_file: /var/run/marin-auth/openfga-runtime-token/token
     storage: []
     secrets:
-      - name: task-canary
-        mount: auth-proof
-        path: task-canary
-        token_file: /var/run/marin-auth/task-canary-token/token
+    - name: task-canary
+      mount: auth-proof
+      path: task-canary
+      token_file: /var/run/marin-auth/task-canary-token/token
     max_token_ttl: 60
     loom: null
     signing_key_version: 1
@@ -85,19 +98,19 @@ config:
       controller_clusters:
         service:iris-staging: isolated-proof
       permissions:
-        - service: openbao
-          actions:
-            - secret.read
-          resource: /secrets/task-canary/
+      - service: openbao
+        actions:
+        - secret.read
+        resource: /secrets/task-canary/
       audience: openbao
       max_attempt_ttl: 60
   marin-auth:grant_public_keys:
-    - '-----BEGIN PUBLIC KEY-----
+  - '-----BEGIN PUBLIC KEY-----
 
-      MCowBQYDK2VwAyEA+6VqHUPVEvlPWb6EBUk0NcXhMr4Bu/qt+lxf4/1TCwY=
+    MCowBQYDK2VwAyEA+6VqHUPVEvlPWb6EBUk0NcXhMr4Bu/qt+lxf4/1TCwY=
 
-      -----END PUBLIC KEY-----
+    -----END PUBLIC KEY-----
 
-'
-  marin-auth:broker_image: ghcr.io/marin-community/iris-worker@sha256:da939c3cd88413c77a96aef881f3f79968b4acbdcbd6de20459486ffac7e7e81
+    '
+  marin-auth:broker_image: ghcr.io/marin-community/iris-worker@sha256:558a8be35470fcc9d282d73b6c119d1cce8c83e12ec354767aa047288bfede30
 encryptedkey: CiQAKk3j6e+rOX4XT9+gTXNtlIGecuXIpFiNF7M09p5/Lf6HTCwSSQCdtF6i+JMObDm1gq81PamkbidHXSbKdyoCKCf/XzQ7wsD7553BWvGvDv34gUMlgmd5cux8apzm+ORjQGcDlfPB6qjFbC593Zs=

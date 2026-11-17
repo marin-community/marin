@@ -116,3 +116,18 @@ def configure_proof(operator: OpenFGAOperator) -> dict:
             {"principal": "other-session", "owner": "other-owner", "max_ttl": 3600, "delegation_depth": 0},
         ],
     }
+
+
+def configure_runtime(operator: OpenFGAOperator) -> dict:
+    """Publish an isolated runtime store with a separately mounted credential."""
+    model = Path(__file__).parent / "policy/runtime_model.json"
+    store_id, model_id = operator.publish("marin-runtime-proof", json.loads(model.read_text()))
+    token_file = operator.token_file.with_name("openfga-runtime.token")
+    token_file.touch(mode=0o600)
+    token_file.write_text(operator.token_file.read_text())
+    return {
+        "api_url": operator.api_url,
+        "store_id": store_id,
+        "model_id": model_id,
+        "token_file": token_file,
+    }

@@ -43,7 +43,9 @@ class OpenFGAOperator:
         if writes:
             payload["writes"] = {"tuple_keys": writes}
         if deletes:
-            payload["deletes"] = {"tuple_keys": deletes}
+            payload["deletes"] = {
+                "tuple_keys": [{field: row[field] for field in ("user", "relation", "object")} for row in deletes]
+            }
         if writes or deletes:
             self.request(f"stores/{quote(store_id, safe='')}/write", payload)
 
@@ -61,11 +63,13 @@ class OpenFGAOperator:
                 break
 
         def key(row: dict) -> str:
-            return json.dumps(row, sort_keys=True, separators=(",", ":"))
+            return json.dumps(
+                {name: value for name, value in row.items() if value is not None}, sort_keys=True, separators=(",", ":")
+            )
 
         current = {key(row): row for row in existing}
         desired = {key(row): row for row in relationships}
-        writes = [row for item, row in desired.items() if item not in current]
+        writes = [json.loads(item) for item in desired if item not in current]
         deletes = [row for item, row in current.items() if item not in desired]
         # OpenFGA limits one Write transaction to 100 tuple mutations.
         for offset in range(0, len(deletes), MAX_TUPLE_MUTATIONS):
@@ -83,7 +87,7 @@ def main() -> None:
     parser.add_argument("--store-id")
     parser.add_argument("--model-id")
     parser.add_argument("--model", type=Path, default=Path(__file__).parent / "policy/model.json")
-    parser.add_argument("--relationships", type=Path, required=True)
+    parser.add_argument("--relationships", type=Path)
     args = parser.parse_args()
     operator = OpenFGAOperator(args.url, args.token_file, ca_bundle=args.ca_file or True)
     if args.name:
@@ -93,8 +97,11 @@ def main() -> None:
     else:
         if not args.store_id or not args.model_id:
             parser.error("supply --name or both --store-id and --model-id")
+        if args.relationships is None:
+            parser.error("existing-store reconciliation requires --relationships")
         store_id, model_id = args.store_id, args.model_id
-    operator.reconcile(store_id, model_id, json.loads(args.relationships.read_text()))
+    if args.relationships is not None:
+        operator.reconcile(store_id, model_id, json.loads(args.relationships.read_text()))
     print(
         json.dumps(
             {

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deployment-owned grant policy and brokers sharing a durable runtime ledger."""
+"""Deployment-owned broker configuration and shared lifecycle bookkeeping."""
 
 import hashlib
 from dataclasses import dataclass
@@ -85,6 +85,7 @@ class GrantBroker(pulumi.ComponentResource):
         configured_paths = [
             args.policy["broker_token_file"],
             args.policy["openfga"]["token_file"],
+            args.policy["runtime_grants"]["token_file"],
             *(binding["token_file"] for binding in args.policy["storage"]),
             *(binding["token_file"] for binding in args.policy.get("secrets", [])),
         ]

@@ -13,40 +13,53 @@ from iac.auth.openbao import OpenBao, OpenBaoArgs
 from iac.auth.openfga import OpenFGA, OpenFGAArgs
 
 
+@pytest.fixture
+def openbao_args():
+    return OpenBaoArgs(
+        namespace="management",
+        image="openbao/openbao@sha256:" + "a" * 64,
+        public_hostname="auth.example.org",
+        database_secret="openbao-database",
+        database_ca_secret="postgres-ca",
+        database_host="auth-postgres-rw.auth-database.svc",
+        database_namespace="auth-database",
+        database_cluster="auth-postgres",
+        replicas=2,
+        listener_tls_secret="listener-tls",
+        listener_tls_server_name="openbao.management.svc",
+        ingress_tls_secret="edge-tls",
+        ingress_namespace="traefik",
+        ingress_pod_labels={"app.kubernetes.io/name": "traefik"},
+        client_namespace="management",
+        client_pod_labels={"app.kubernetes.io/name": "marin-auth"},
+        operator_groups=("auth-operators",),
+        dns_cidrs=("10.16.0.10/32", "10.16.0.30/32"),
+        https_egress_cidrs=(),
+    )
+
+
 @pulumi.runtime.test
-def test_openbao_exposes_only_verification_endpoints_and_retains_sealed_raft_servers(recording_mocks):
+def test_openbao_uses_external_postgres_credentials_and_exposes_only_verification_endpoints(
+    recording_mocks, openbao_args
+):
     mocks = recording_mocks
     pulumi.runtime.set_mocks(mocks, project="marin-auth", stack="test", preview=False)
     cluster = OpenBao(
         "openbao",
-        OpenBaoArgs(
-            namespace="management",
-            image="openbao/openbao@sha256:" + "a" * 64,
-            public_hostname="auth.example.org",
-            storage_class="block",
-            storage_size="10Gi",
-            listener_tls_secret="listener-tls",
-            listener_tls_server_name="openbao.management.svc",
-            ingress_tls_secret="edge-tls",
-            ingress_namespace="traefik",
-            ingress_pod_labels={"app.kubernetes.io/name": "traefik"},
-            client_namespace="management",
-            client_pod_labels={"app.kubernetes.io/name": "marin-auth"},
-            operator_groups=("auth-operators",),
-            dns_cidrs=("10.16.0.10/32", "10.16.0.30/32"),
-            https_egress_cidrs=(),
-        ),
+        openbao_args,
         k8s_provider=k8s.Provider("test", kubeconfig="", context="test"),
     )
 
     def check(_: list) -> None:
         resources = {resource.typ: resource.inputs for resource in mocks.resources}
         assert "kubernetes:core/v1:Secret" not in resources
+        assert not any(resource.inputs.get("kind") == "CiliumNetworkPolicy" for resource in mocks.resources)
         stateful = resources["kubernetes:apps/v1:StatefulSet"]["spec"]
+        assert stateful["replicas"] == 2
         assert stateful["podManagementPolicy"] == "Parallel"
         assert stateful["updateStrategy"] == {"type": "OnDelete"}
         assert stateful["persistentVolumeClaimRetentionPolicy"] == {"whenDeleted": "Retain", "whenScaled": "Retain"}
-        assert stateful["volumeClaimTemplates"][0]["spec"]["accessModes"] == ["ReadWriteOnce"]
+        assert not stateful.get("volumeClaimTemplates")
         pod = stateful["template"]["spec"]
         assert pod["automountServiceAccountToken"] is False
         container = pod["containers"][0]
@@ -54,13 +67,25 @@ def test_openbao_exposes_only_verification_endpoints_and_retains_sealed_raft_ser
         assert container["livenessProbe"]["tcpSocket"] == {"port": "api"}
         assert container["readinessProbe"]["exec"]["command"] == ["bao", "status"]
         config = json.loads(resources["kubernetes:core/v1:ConfigMap"]["data"]["config.json"])
-        assert config["storage"]["raft"]["path"] == "/openbao/data"
+        assert config["storage"] == {"postgresql": {"ha_enabled": True}}
         assert "seal" not in config
         assert "tls_disable" not in config["listener"]["tcp"]
-        assert all(
-            "leader_ca_cert_file" in peer and "leader_tls_servername" in peer
-            for peer in config["storage"]["raft"]["retry_join"]
-        )
+        environment = {item["name"]: item for item in container["env"]}
+        assert environment["PGUSER"]["valueFrom"]["secretKeyRef"] == {"name": "openbao-database", "key": "username"}
+        assert environment["PGPASSWORD"]["valueFrom"]["secretKeyRef"] == {"name": "openbao-database", "key": "password"}
+        assert environment["PGHOST"]["value"] == "auth-postgres-rw.auth-database.svc"
+        assert environment["PGPORT"]["value"] == "5432"
+        assert environment["PGDATABASE"]["value"] == "openbao"
+        assert environment["PGSSLMODE"]["value"] == "verify-full"
+        mounts = {mount["name"]: mount for mount in container["volumeMounts"]}
+        volumes = {volume["name"]: volume for volume in pod["volumes"]}
+        assert environment["PGSSLROOTCERT"]["value"] == mounts["database-ca"]["mountPath"] + "/ca.crt"
+        assert mounts["database-ca"]["readOnly"] is True
+        assert volumes["database-ca"]["secret"] == {
+            "secretName": "postgres-ca",
+            "items": [{"key": "ca.crt", "path": "ca.crt"}],
+        }
+        assert "data" not in mounts
         ingress = resources["kubernetes:networking.k8s.io/v1:Ingress"]["spec"]
         paths = ingress["rules"][0]["http"]["paths"]
         assert {(path["path"], path["pathType"]) for path in paths} == {
@@ -76,6 +101,15 @@ def test_openbao_exposes_only_verification_endpoints_and_retains_sealed_raft_ser
             "podSelector": {"matchLabels": {"k8s-app": "node-local-dns"}},
         } in dns["to"]
         assert all(port["port"] == 53 for port in dns["ports"])
+        assert next(rule for rule in network["egress"] if rule["ports"] == [{"port": 5432}]) == {
+            "to": [
+                {
+                    "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "auth-database"}},
+                    "podSelector": {"matchLabels": {"cnpg.io/cluster": "auth-postgres"}},
+                }
+            ],
+            "ports": [{"port": 5432}],
+        }
         role = resources["kubernetes:rbac.authorization.k8s.io/v1:Role"]
         assert {(tuple(rule["resources"]), tuple(rule["verbs"])) for rule in role["rules"]} == {
             (("pods",), ("get", "list", "watch")),
@@ -85,6 +119,66 @@ def test_openbao_exposes_only_verification_endpoints_and_retains_sealed_raft_ser
     return pulumi.Output.all(
         cluster.stateful_set.spec, cluster.network_policy.spec, cluster.discovery_ingress.spec
     ).apply(check)
+
+
+@pulumi.runtime.test
+def test_openbao_fqdn_egress_proxies_only_approved_resolvers_and_allows_exact_https_destinations(
+    recording_mocks, openbao_args
+):
+    pulumi.runtime.set_mocks(recording_mocks, project="marin-auth", stack="test", preview=False)
+    domains = ("accounts.google.com", "www.googleapis.com")
+    cluster = OpenBao(
+        "openbao",
+        replace(openbao_args, https_egress_domains=domains),
+        k8s_provider=k8s.Provider("fqdn-test", kubeconfig="", context="test"),
+    )
+
+    def check(_values):
+        resources = recording_mocks.resources
+        cilium = next(resource.inputs for resource in resources if resource.inputs.get("kind") == "CiliumNetworkPolicy")
+        assert cilium["apiVersion"] == "cilium.io/v2"
+        assert cilium["metadata"]["namespace"] == openbao_args.namespace
+        assert cilium["spec"]["endpointSelector"] == {"matchLabels": {"app.kubernetes.io/name": "openbao"}}
+        dns_addresses, dns_pods, https = cilium["spec"]["egress"]
+        assert dns_addresses["toCIDR"] == list(openbao_args.dns_cidrs)
+        assert dns_pods["toEndpoints"] == [
+            {
+                "matchLabels": {
+                    "k8s:io.kubernetes.pod.namespace": "kube-system",
+                    "k8s:k8s-app": "node-local-dns",
+                }
+            }
+        ]
+        for rule in (dns_addresses, dns_pods):
+            assert rule["toPorts"] == [
+                {
+                    "ports": [{"port": "53", "protocol": "UDP"}, {"port": "53", "protocol": "TCP"}],
+                    "rules": {"dns": [{"matchPattern": "*"}]},
+                }
+            ]
+        assert https == {
+            "toFQDNs": [{"matchName": "accounts.google.com"}, {"matchName": "www.googleapis.com"}],
+            "toPorts": [{"ports": [{"port": "443", "protocol": "TCP"}]}],
+        }
+        network = next(resource.inputs["spec"] for resource in resources if resource.typ.endswith(":NetworkPolicy"))
+        assert not any(53 == port["port"] for rule in network["egress"] for port in rule["ports"])
+        assert not any(443 == port["port"] for rule in network["egress"] for port in rule["ports"])
+
+    return pulumi.Output.all(cluster.https_egress_policy.spec, cluster.network_policy.spec).apply(check)
+
+
+@pytest.mark.parametrize(
+    "domain", ["*", "*.google.com", "accounts.google.com/*", "https://accounts.google.com", "0.0.0.0/0"]
+)
+@pulumi.runtime.test
+def test_openbao_fqdn_egress_rejects_wildcard_or_non_domain_destinations(recording_mocks, openbao_args, domain):
+    pulumi.runtime.set_mocks(recording_mocks, project="marin-auth", stack="test", preview=False)
+    with pytest.raises(ValueError, match="exact lowercase DNS names"):
+        OpenBao(
+            "openbao",
+            replace(openbao_args, https_egress_domains=(domain,)),
+            k8s_provider=k8s.Provider("invalid-fqdn-test", kubeconfig="", context="test"),
+        )
 
 
 @pytest.fixture
@@ -99,6 +193,7 @@ def broker_args():
         "signing_key_version": 1,
         "subjects": {"entity-id": "human:alice"},
         "openfga": {"token_file": "/var/run/marin-auth/fga-token/token"},
+        "runtime_grants": {"token_file": "/var/run/marin-auth/runtime-token/token"},
         "storage": [
             {
                 "name": "checkpoint-reader",
@@ -136,6 +231,7 @@ def broker_args():
             "loom-token",
             "storage-token",
             "fga-token",
+            "runtime-token",
             "canary-token",
             "callback-token",
         ),
@@ -268,7 +364,7 @@ def test_postgres_brokers_mount_private_database_reference_without_a_shared_ledg
 
 
 @pulumi.runtime.test
-def test_openfga_exposes_check_gateway_and_keeps_model_and_tuple_apis_on_loopback(recording_mocks):
+def test_openfga_gateway_separates_standing_and_runtime_store_operations(recording_mocks):
     mocks = recording_mocks
     pulumi.runtime.set_mocks(mocks, project="marin-auth", stack="test", preview=False)
     cluster = OpenFGA(
@@ -280,8 +376,10 @@ def test_openfga_exposes_check_gateway_and_keeps_model_and_tuple_apis_on_loopbac
             database_secret="postgres-connection",
             database_ca_secret="postgres-ca",
             token_secret="fga-token",
+            runtime_token_secret="runtime-token",
             tls_secret="fga-tls",
             store_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            runtime_store_id="01ARZ3NDEKTSV4RRFFQ69G5FAW",
             dns_cidrs=("10.16.0.10/32",),
             database_cidrs=("10.0.0.8/32",),
         ),
@@ -297,7 +395,9 @@ def test_openfga_exposes_check_gateway_and_keeps_model_and_tuple_apis_on_loopbac
         assert {"--http-addr=127.0.0.1:8080", "--grpc-addr=127.0.0.1:8081", "--authn-method=preshared"} <= set(
             server["args"]
         )
-        assert server["env"][-1]["valueFrom"]["secretKeyRef"] == {"key": "token", "name": "fga-token"}
+        environment = {item["name"]: item for item in server["env"]}
+        assert environment["STANDING_TOKEN"]["valueFrom"]["secretKeyRef"] == {"key": "token", "name": "fga-token"}
+        assert environment["RUNTIME_TOKEN"]["valueFrom"]["secretKeyRef"] == {"key": "token", "name": "runtime-token"}
         assert gateway["ports"] == [{"containerPort": 8443, "name": "https"}]
         exposed = resources["kubernetes:core/v1:Service"]["spec"]["ports"]
         assert exposed == [{"name": "https", "port": 8443, "targetPort": "https"}]

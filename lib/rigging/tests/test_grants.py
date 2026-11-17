@@ -5,8 +5,8 @@ import time
 from dataclasses import replace
 
 import pytest
-from rigging.grant_database import SqliteGrantDatabase
 from rigging.grants import GrantDenied, GrantStore, Permission, PrincipalAuthority
+from rigging.testing import MemoryRuntimeGrants
 
 
 @pytest.fixture
@@ -28,8 +28,8 @@ def authorities():
 
 
 @pytest.fixture
-def store(tmp_path, authorities, grant_policy, clock):
-    database = GrantStore(SqliteGrantDatabase(tmp_path / "grants.db"), authorities, grant_policy, now=lambda: clock[0])
+def store(authorities, grant_policy, clock):
+    database = GrantStore(MemoryRuntimeGrants(), authorities, grant_policy, now=lambda: clock[0])
     yield database
     database.close()
 
@@ -138,11 +138,9 @@ def test_grant_and_ancestor_expiry_apply_at_decision_time(store, clock, grant_pe
         store.authorize(child.id, actor="iris:job", service="iris", action="job.submit", resource="/alice/train")
 
 
-def test_revocation_survives_restart_and_invalidates_descendants(
-    tmp_path, authorities, grant_permissions, grant_policy, clock
-):
-    path = tmp_path / "grants.db"
-    database = GrantStore(SqliteGrantDatabase(path), authorities, grant_policy, now=lambda: clock[0])
+def test_revocation_survives_restart_and_invalidates_descendants(authorities, grant_permissions, grant_policy, clock):
+    runtime = MemoryRuntimeGrants()
+    database = GrantStore(runtime, authorities, grant_policy, now=lambda: clock[0])
     try:
         parent = database.create(
             "user:alice", actor="loom:one", permissions=grant_permissions, expires_at=clock[0] + 300
@@ -157,7 +155,7 @@ def test_revocation_survives_restart_and_invalidates_descendants(
         database.revoke(parent.id, principal="user:alice")
     finally:
         database.close()
-    reopened = GrantStore(SqliteGrantDatabase(path), authorities, grant_policy, now=lambda: clock[0])
+    reopened = GrantStore(runtime, authorities, grant_policy, now=lambda: clock[0])
     try:
         with pytest.raises(GrantDenied):
             reopened.authorize(child.id, actor="iris:job", service="iris", action="job.submit", resource="/alice/train")
@@ -232,17 +230,15 @@ def test_child_policy_denial_blocks_issuance_and_existing_descendants(store, gra
 
 @pytest.mark.parametrize("change", [{"revision": "policy-v2"}, {"delegation_depth": 0}])
 def test_reduced_standing_authority_invalidates_existing_grants(
-    tmp_path, authorities, grant_permissions, grant_policy, clock, change
+    authorities, grant_permissions, grant_policy, clock, change
 ):
-    path = tmp_path / "grants.db"
-    database = GrantStore(SqliteGrantDatabase(path), authorities, grant_policy, now=lambda: clock[0])
+    runtime = MemoryRuntimeGrants()
+    database = GrantStore(runtime, authorities, grant_policy, now=lambda: clock[0])
     try:
         grant = database.create("user:alice", actor="loom:one", permissions=grant_permissions, expires_at=clock[0] + 300)
     finally:
         database.close()
-    reopened = GrantStore(
-        SqliteGrantDatabase(path), [replace(authorities[0], **change)], grant_policy, now=lambda: clock[0]
-    )
+    reopened = GrantStore(runtime, [replace(authorities[0], **change)], grant_policy, now=lambda: clock[0])
     try:
         with pytest.raises(GrantDenied):
             reopened.active(grant.id)

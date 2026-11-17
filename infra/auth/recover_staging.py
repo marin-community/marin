@@ -65,7 +65,7 @@ def database_digest(url: URL, ca_file: Path) -> dict:
 def database_restore(directory: Path, source_file: Path, ca_file: Path, postgres_bin: Path) -> dict:
     """Compare a quiescent synthetic source to a restored logical backup."""
     source = make_url(source_file.read_text().strip())
-    if source.host != DATABASE_HOST or source.database not in {"openfga", "grants"}:
+    if source.host != DATABASE_HOST or source.database not in {"openfga", "grants", "openbao"}:
         raise ValueError("Restore drills are restricted to the synthetic staging databases")
     target = source.set(database=f"{source.database}-recovery")
     before = database_digest(source, ca_file)
@@ -150,7 +150,6 @@ def bao_restore(directory: Path, executable: Path) -> dict:
     if {path.name for path in Path("/sys/class/net").iterdir()} != {"lo"}:
         raise ValueError("Run the restore command inside Docker --network=none")
     initialized = json.loads(credential(directory, "initialization.json"))
-    expected = json.loads(credential(directory, "openbao-recovery.json"))
     snapshot = (directory / "openbao.snap").read_bytes()
     with tempfile.TemporaryDirectory(prefix="restore-", dir=directory) as scratch:
         with isolated_openbao(executable, Path(scratch)) as (local, certificate):
@@ -177,24 +176,42 @@ def bao_restore(directory: Path, executable: Path) -> dict:
                 Duration.from_seconds(30),
                 "Restored OpenBao did not elect a local leader",
             )
-            assert restored.request("GET", "transit/keys/marin-grants")["data"]["keys"] == expected["keys"]
-            assert (
-                restored.request("GET", f"identity/entity/id/{expected['subject']}")["data"]["id"] == expected["subject"]
-            )
-            login = restored.request(
-                "POST",
-                "auth/synthetic/login/launcher",
-                {
-                    "password": credential(directory, "launcher.password"),
-                },
-            )["auth"]
-            assert login["entity_id"] == expected["subject"]
+            verify_bao_state(restored, directory)
     return {
         "snapshot_sha256": hashlib.sha256(snapshot).hexdigest(),
         "signing_keys_retained": True,
         "synthetic_identity_retained": True,
         "fixed_password_login": True,
         "limit": "isolated single-process restore; no production seal custody or off-cluster DR guarantee",
+    }
+
+
+def verify_bao_state(client: OperatorClient, directory: Path) -> None:
+    """Match the restored signing key and fixed synthetic identity to the snapshot."""
+    expected = json.loads(credential(directory, "openbao-recovery.json"))
+    assert client.request("GET", "transit/keys/marin-grants")["data"]["keys"] == expected["keys"]
+    assert client.request("GET", f"identity/entity/id/{expected['subject']}")["data"]["id"] == expected["subject"]
+    login = client.request(
+        "POST", "auth/synthetic/login/launcher", {"password": credential(directory, "launcher.password")}
+    )["auth"]
+    assert login["entity_id"] == expected["subject"]
+
+
+def bao_verify(directory: Path, address: str) -> dict:
+    """Validate the unsealed PostgreSQL-backed staging server against its Raft snapshot."""
+    initialized = json.loads(credential(directory, "initialization.json"))
+    client = OperatorClient(address, initialized["root_token"], str(directory / "ca.crt"))
+    health = client.request("GET", "sys/health")
+    if not health["initialized"] or health["sealed"]:
+        raise ValueError("Unseal the migrated staging server before validating recovery")
+    if client.request("GET", "sys/seal-status")["storage_type"] != "postgresql":
+        raise ValueError("The migrated staging server must use PostgreSQL storage")
+    verify_bao_state(client, directory)
+    return {
+        "storage": "postgresql",
+        "signing_keys_retained": True,
+        "synthetic_identity_retained": True,
+        "fixed_password_login": True,
     }
 
 
@@ -210,12 +227,16 @@ def main() -> None:
     snapshot.add_argument("--address", default="https://localhost:18200")
     bao = subparsers.add_parser("openbao")
     bao.add_argument("--bao", type=Path, required=True)
+    verify = subparsers.add_parser("openbao-verify")
+    verify.add_argument("--address", required=True)
     args = parser.parse_args()
     directory = private_directory(args.directory)
     if args.command == "database":
         evidence = database_restore(directory, args.url_file, args.ca_file, args.postgres_bin)
     elif args.command == "openbao-snapshot":
         evidence = bao_snapshot(directory, args.address)
+    elif args.command == "openbao-verify":
+        evidence = bao_verify(directory, args.address)
     else:
         evidence = bao_restore(directory, args.bao)
     print(json.dumps(evidence, indent=2))

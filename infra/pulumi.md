@@ -61,8 +61,8 @@ constructs `iac.gcp.cloud_run.CloudRunService` with Grafana's image, runtime
 configuration, and dependencies.
 
 `infra/auth` owns the OpenBao and grant-broker deployment, including its
-non-secret standing-policy ConfigMap. Runtime session grants belong to the
-broker database. CoreWeave storage identity policies remain in `infra/buckets`;
+non-secret standing-policy ConfigMap. Runtime session grants belong to a dedicated OpenFGA store; the
+broker database holds lifecycle bookkeeping. CoreWeave storage identity policies remain in `infra/buckets`;
 job and session launches do not update Pulumi.
 
 `infra/postgres` owns isolated CloudNativePG authorization prototypes on CW,

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Runtime authority storage and replica coordination for grant services."""
+"""Operational lifecycle bookkeeping and replica coordination for grant services."""
 
 import hashlib
 import ssl
@@ -19,11 +19,11 @@ def _lock_key(name: str) -> int:
 
 
 class GrantDatabase:
-    """Serialize decisions and mutations, and coordinate lifecycle workers.
+    """Serialize lifecycle records and coordinate their workers.
 
-    PostgreSQL transaction locks provide a single order for grant creation,
-    ancestor checks, revocation and idempotency. Session locks coordinate work
-    that includes remote calls without holding a database transaction open.
+    PostgreSQL transaction locks order launch intent and cleanup bookkeeping.
+    Session locks coordinate work that includes remote calls without holding a
+    database transaction open. OpenFGA persists and evaluates grant authority.
     """
 
     def __init__(self, engine: Engine):
@@ -102,7 +102,7 @@ def _begin_sqlite(connection: Connection) -> None:
 
 
 class PostgresGrantDatabase(GrantDatabase):
-    """Shared storage with transaction and session locks across broker replicas."""
+    """Shared lifecycle storage with transaction and session locks across replicas."""
 
     def __init__(self, url: str, *, ssl_context: ssl.SSLContext | None):
         engine = create_engine(

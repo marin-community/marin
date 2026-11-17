@@ -9,7 +9,7 @@ import re
 
 NAMESPACE = "marin-auth-staging"
 POD_NAME = "auth-flow-proof-10950"
-TOKEN_SECRETS = ("broker-token", "openfga-token", "task-canary-token")
+TOKEN_SECRETS = ("broker-token", "openfga-token", "openfga-runtime-token", "task-canary-token")
 
 
 def proof_pod(image: str, identity_secret: str) -> dict:

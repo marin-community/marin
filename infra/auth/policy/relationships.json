@@ -20,12 +20,12 @@
     "object": "scope:loom/session.create//diagnostics/"
   },
   {
-    "user": "principal:service:grafana",
+    "user": "principal:service%3Agrafana",
     "relation": "accessor",
     "object": "scope:loom/session.create//diagnostics/"
   },
   {
-    "user": "principal:service:grafana",
+    "user": "principal:service%3Agrafana",
     "relation": "accessor",
     "object": "scope:cw_s3/credentials.issue/diagnostics"
   }

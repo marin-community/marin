@@ -25,7 +25,7 @@ from rigging.shared_grants import SharedGrantClient, SharedGrantConfig
 from infra.auth.bootstrap import OperatorClient, configure, configure_google
 from infra.auth.login import close_session, enroll, read_private, verify_google_identity, write_private
 from infra.auth.login import login as login_session
-from infra.auth.proof_fga import configure_proof, isolated_openfga
+from infra.auth.proof_fga import configure_proof, configure_runtime, isolated_openfga
 from infra.auth.proof_http import serve
 from infra.auth.proof_iris import iris
 from infra.auth.prove import _certificate, _free_port, isolated_openbao
@@ -249,6 +249,7 @@ def prove(
                     "database": {"backend": "sqlite", "path": directory / "grants.db"},
                     "subjects": {enrollment["entity_id"]: "launcher"},
                     "openfga": fga_config,
+                    "runtime_grants": configure_runtime(fga),
                     "storage": [],
                     "max_token_ttl": 60,
                     "loom": None,
@@ -359,7 +360,7 @@ def prove(
                             google_directory, address=operator.address, ca_file=str(ca_file), auth_url=None, grants=[]
                         )
             finally:
-                service.store.database.close()
+                service.store.close()
             return {
                 "identity": (
                     "real Google identity through discover, operator enroll and login"

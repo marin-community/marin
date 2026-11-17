@@ -73,8 +73,10 @@ def prepare(directory: Path) -> None:
         "launcher.password",
         "iris-controller.password",
         "openfga.token",
+        "openfga-runtime.token",
         "openfga.password",
         "grants.password",
+        "openbao.password",
     ):
         if not (directory / name).exists():
             private_file(directory / name, secrets.token_urlsafe(40).encode())
@@ -193,6 +195,11 @@ def install_secrets(directory: Path) -> None:
             },
         )
     install_database_secrets(directory)
+    install_secret(
+        NAMESPACE,
+        "openbao-database",
+        {"username": "openbao", "password": credential(directory, "openbao.password")},
+    )
     for name in ("openfga", "grants"):
         password = credential(directory, f"{name}.password")
         userinfo = f"{name}:{quote(password, safe='')}"
@@ -212,6 +219,7 @@ def install_secrets(directory: Path) -> None:
                 NAMESPACE, "grants-database", {"url": f"postgresql+pg8000://{userinfo}@{DATABASE_HOST}/grants"}
             )
     install_secret(NAMESPACE, "openfga-token", {"token": credential(directory, "openfga.token")})
+    install_secret(NAMESPACE, "openfga-runtime-token", {"token": credential(directory, "openfga-runtime.token")})
     for username in ("launcher", "iris-controller"):
         install_secret(
             NAMESPACE,
@@ -226,7 +234,7 @@ def install_secrets(directory: Path) -> None:
 
 
 def install_database_secrets(directory: Path) -> None:
-    for name in ("openfga", "grants"):
+    for name in ("openfga", "grants", "openbao"):
         install_secret(
             DATABASE_NAMESPACE,
             f"{name}-database",
@@ -271,7 +279,7 @@ def initialize(directory: Path, addresses: list[str]) -> dict:
         ExponentialBackoff(initial=0.2, maximum=2).wait_until_or_raise(
             lambda client=client: unsealed_peer(client, material["keys_base64"][0]),
             Duration.from_seconds(90),
-            "OpenBao did not complete its Raft join and unseal",
+            "OpenBao did not unseal",
         )
         ExponentialBackoff(initial=0.2, maximum=2).wait_until_or_raise(
             lambda address=address, index=index: requests.get(
@@ -403,8 +411,8 @@ def rotate_broker(directory: Path, address: str) -> dict:
     return {"broker_expires_at": metadata["expire_time"], "replicas_refreshed": True}
 
 
-def issue_proof(directory: Path, address: str, ttl: int) -> dict:
-    """Refresh synthetic proof credentials only while the execution proof is idle."""
+def issue_proof(directory: Path, address: str, ttl: int, *, login_directory: Path | None = None) -> dict:
+    """Refresh idle proof credentials, optionally using an enrolled Google session."""
     proof = private_directory(Path(tempfile.mkdtemp(prefix="proof-", dir=directory)))
     material = json.loads(credential(directory, "initialization.json"))
     ca_file = str(directory / "ca.crt")
@@ -418,19 +426,22 @@ def issue_proof(directory: Path, address: str, ttl: int) -> dict:
         ("launcher", "launcher.jwt", "identity.json"),
         ("iris-controller", "controller.jwt", "iris-controller.json"),
     ):
-        login = operator.request(
-            "POST",
-            f"auth/synthetic/login/{username}",
-            {
-                "password": credential(directory, f"{username}.password"),
-            },
-        )["auth"]
-        client = OperatorClient(address, login["client_token"], ca_file)
+        if username == "launcher" and login_directory is not None:
+            expected = json.loads(credential(login_directory, "enrollment.json"))
+            expected_subject = expected["entity_id"]
+            client = OperatorClient(address, credential(login_directory, "bao.token"), ca_file)
+        else:
+            login = operator.request(
+                "POST",
+                f"auth/synthetic/login/{username}",
+                {"password": credential(directory, f"{username}.password")},
+            )["auth"]
+            expected_subject = json.loads(credential(directory, metadata_file))["subject"]
+            client = OperatorClient(address, login["client_token"], ca_file)
         token = client.request("GET", "identity/oidc/token/marin-auth")["data"]["token"]
         claims = jwt.decode(token, options={"verify_signature": False})
-        expected = json.loads(credential(directory, metadata_file))
-        if claims["iss"] != ISSUER or claims["sub"] != expected["subject"]:
-            raise ValueError("The proof identity does not match this synthetic deployment")
+        if claims["iss"] != ISSUER or claims["sub"] != expected_subject:
+            raise ValueError("The proof identity does not match this staging enrollment")
         private_file(proof / filename, token.encode())
         expiries[username] = claims["exp"]
     signer = OpenBaoTransitSigner(
@@ -476,6 +487,7 @@ def main() -> None:
     parser.add_argument("--bao-address", action="append")
     parser.add_argument("--openfga-address", default="http://localhost:18080")
     parser.add_argument("--ttl", type=int)
+    parser.add_argument("--login-directory", type=Path)
     args = parser.parse_args()
     directory = private_directory(args.directory)
     if args.command == "prepare":
@@ -493,7 +505,16 @@ def main() -> None:
     elif args.command == "issue-proof":
         if args.ttl is None:
             parser.error("issue-proof requires --ttl (at most 900 seconds)")
-        print(json.dumps(issue_proof(directory, (args.bao_address or ["https://localhost:18200"])[0], args.ttl)))
+        print(
+            json.dumps(
+                issue_proof(
+                    directory,
+                    (args.bao_address or ["https://localhost:18200"])[0],
+                    args.ttl,
+                    login_directory=args.login_directory,
+                )
+            )
+        )
     else:
         path = directory / "openfga.json"
         operator = OpenFGAOperator(args.openfga_address, directory / "openfga.token")
@@ -529,7 +550,15 @@ def main() -> None:
             )
         )
         operator.reconcile(policy["store_id"], policy["model_id"], relationships)
-        print(json.dumps(policy))
+        runtime_path = directory / "openfga-runtime.json"
+        if not runtime_path.exists():
+            model = Path(__file__).parent / "policy/runtime_model.json"
+            store_id, model_id = operator.publish("marin-runtime-staging", json.loads(model.read_text()))
+            private_file(
+                runtime_path,
+                json.dumps({"store_id": store_id, "model_id": model_id}).encode(),
+            )
+        print(json.dumps({"openfga": policy, "runtime_grants": json.loads(credential(directory, runtime_path.name))}))
 
 
 if __name__ == "__main__":

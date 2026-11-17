@@ -4,7 +4,7 @@
 """Shared grant token exchange and live authorization for application services.
 
 Only this exchange mints grant access tokens. Applications use the verifier and
-live grant database to enforce action/resource bounds and immediate revocation.
+live grant authority to enforce action/resource bounds and immediate revocation.
 Identity authentication and signing are injected so OpenBao remains the identity
 and key authority, rather than making each application a token issuer.
 """
@@ -164,7 +164,7 @@ class GrantAuthService:
 
 
 class GrantAuthorizer:
-    """Verify grant JWTs and current database bounds before a service operation."""
+    """Verify grant JWTs and current runtime authority before a service operation."""
 
     def __init__(self, verifier: GrantTokenVerifier, store: GrantStore, *, audience: str):
         self._verifier = verifier
@@ -333,7 +333,8 @@ def create_app(service: GrantAuthService) -> Starlette:
     async def create(request: Request) -> JSONResponse:
         caller = await run_in_threadpool(principal, request)
         payload = _GrantRequest.model_validate(await request.json())
-        grant = service.store.create(
+        grant = await run_in_threadpool(
+            service.store.create,
             caller,
             actor=payload.actor,
             permissions=tuple(Permission(item.service, item.actions, item.resource) for item in payload.permissions),

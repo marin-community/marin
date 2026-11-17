@@ -6,10 +6,11 @@ The `staging` stack in `infra/auth` and `us-west4-staging` stack in
 `marin-auth-db-staging`, and `marin-auth-task-staging`. They do not alter the
 production Iris controller or its RBAC.
 
-Three OpenBao Raft replicas and three PostgreSQL instances share the cluster's
-two observed hosts and zones. PostgreSQL requires one synchronous standby.
-OpenFGA and grant brokers use separate database owners; recovery databases are
-owned by the corresponding source owner. `shared-vast` is a shared storage
+Three OpenBao servers use the same three-instance PostgreSQL cluster as
+OpenFGA and the broker. Each service has a separate database and owner; matching
+recovery databases belong to those owners. PostgreSQL requires one synchronous
+standby. OpenFGA stores standing permissions and runtime grants in separate
+stores. The broker database contains only lifecycle bookkeeping. `shared-vast` is a shared storage
 backend with `Retain` reclamation. These choices do not establish independent
 host or storage failure tolerance, or management isolation from cluster-wide
 Iris permissions.
@@ -114,6 +115,9 @@ identities = [json.loads((root / name).read_text()) for name in ("identity.json"
 policy["subjects"] = {item["subject"]: item["principal"] for item in identities}
 policy["openfga"].update({key: standing[key] for key in ("store_id", "model_id", "principals")})
 values["marin-auth:openfga_store_id"] = standing["store_id"]
+runtime = json.loads((root / "openfga-runtime.json").read_text())
+policy["runtime_grants"].update(runtime)
+values["marin-auth:openfga_runtime_store_id"] = runtime["store_id"]
 values["marin-auth:grant_public_keys"] = [(Path(proof["directory"]) / "grants.pem").read_text()]
 template = yaml.safe_load(Path("infra/auth/Pulumi.staging.yaml").read_text())["config"]
 values["marin-auth:broker_image"] = template["marin-auth:broker_image"]
@@ -171,7 +175,7 @@ the proof does not modify that ClusterQueue or request GPUs.
 The proof Pod must explicitly mount its ServiceAccount token and carry labels
 `app.kubernetes.io/name=auth-staging-proof` and
 `marin.dev/auth-client=true`. Its network permits the broker, OpenBao, the
-OpenFGA Check gateway, staging PostgreSQL, approved DNS, and the observed
+OpenFGA gateway, staging PostgreSQL, approved DNS, and the observed
 Kubernetes API addresses.
 Tasks run without a ServiceAccount token. The task namespace denies ingress and
 egress by default. The sole task exception selects `iris.managed=true`,
@@ -207,7 +211,8 @@ them. It runs as 1000:1000 and retains PG17, Bao, OpenFGA, Node and Git tools.
 
 Authenticated callback changes are in [Loom PR420](https://github.com/marin-community/loom/pull/420).
 The Loom binaries were built from [e0f63c7](https://github.com/marin-community/loom/commit/e0f63c77d8225afd48183793190b348a49affa2a).
-The published image uses Marin source [968957f](https://github.com/marin-community/marin/commit/968957fafbaa8bab8fb98b8bdbbfc0de173e2d2c).
+The published image contains the runtime OpenFGA implementation from
+[Marin PR10950](https://github.com/marin-community/marin/pull/10950).
 Reuse the matching checkout and shared build cache:
 
 ```bash
@@ -252,7 +257,8 @@ Released Iris binaries do not contain this branch's shared-grant ingress.
 
 ## Run the execution proof
 
-The pinned image passed real CPU task completion and cancellation on 2026-11-17.
+The pinned image passed Google-authenticated CPU task completion and cancellation
+on 2026-11-17.
 Both tasks read the approved canary, rejected wider access, and lost authority
 with more than 50 seconds remaining before token expiry. The completion signal
 uses `/tmp`, which remains writable when the image's `/app` is preserved.
@@ -264,7 +270,7 @@ shares and userpass passwords never enter the driver.
 ```bash
 export KUBECONFIG=/home/power/.kube/coreweave-iris
 export STAGING_PRIVATE=/home/power/.local/state/marin-auth-staging
-export PROOF_IMAGE_DIGEST=ghcr.io/marin-community/iris-worker@sha256:512fcf98254cd8498cffa8ddd34278f31eed0b9ace582c28e58d852bf3c895ab
+export PROOF_IMAGE_DIGEST=ghcr.io/marin-community/iris-worker@sha256:558a8be35470fcc9d282d73b6c119d1cce8c83e12ec354767aa047288bfede30
 umask 077
 kubectl --context marin_US-WEST-04A -n marin-auth-staging delete pod auth-flow-proof-10950 --ignore-not-found --wait=true
 uv run --no-sync -m infra.auth.staging --directory "$STAGING_PRIVATE" issue-proof --ttl 900 \
@@ -297,7 +303,10 @@ and expiry metadata. The native token lasts at most 900 seconds; OIDC JWTs last
 
 The driver's home/output are under `/proof`; `/proof/execution` must not exist
 before a run. Each isolated Loom gets a distinct private callback credential,
-shared only with its local lifecycle broker. Deployed brokers keep `loom: null`
+shared only with its local lifecycle broker and a separate SQLite lifecycle
+database. The proof waits for local cleanup before stopping that Loom. Runtime
+grants and the deployed Iris attempt broker continue to use PostgreSQL-backed
+services. Deployed brokers keep `loom: null`
 so they do not query these runs through a different Loom instance.
 
 ## Recovery drills
@@ -316,7 +325,8 @@ python -P -m infra.auth.recover_staging --directory /proof/recovery database \
 ```
 
 The chmod removes the inherited fsGroup/setgid bit; keep the permission guard
-unchanged. The helper restores only to `grants-recovery` or `openfga-recovery`,
+unchanged. The helper restores only to `grants-recovery`, `openfga-recovery`, or
+`openbao-recovery`,
 compares table row counts/digests and never restores over the source. Use a
 fresh private output directory for a second drill; dump files are created once.
 
@@ -350,30 +360,94 @@ to persistent private operator storage with mode 0600 and compare SHA256 values
 with those reports. Remove copied driver scratch files before replacing it;
 backups contain private authorization state.
 
-In the operator terminal, take an OpenBao snapshot through the verified
-localhost port-forward. A fresh private directory preserves earlier snapshots:
+OpenBao recovery now uses the `openbao` PostgreSQL database. Stop all Bao
+servers during a logical digest comparison: its HA lease table changes even
+when no clients are active. Supply an owner-only connection URL file and run
+the same `database` command against `openbao`; it restores to
+`openbao-recovery`. Start an isolated Bao server against that recovery database,
+unseal with the saved original material, and verify its identities and signing
+keys before accepting the restore. Never run a recovery server against the live
+database accidentally.
+
+These same-cluster logical restores do not establish off-cluster recovery,
+WAL/PITR, concurrent-write, host-loss or storage-loss guarantees. Check restored
+revocations before serving authorization; row equality alone cannot establish
+that an old backup is safe to reopen.
+
+## Migrate an existing Raft deployment
+
+This is an offline operation for the isolated staging stack. Keep the saved
+unseal material, CA, synthetic identity metadata and password in a fresh private
+migration directory. Stop the staging broker, then capture the active Bao peer
+through its verified port-forward:
 
 ```bash
-SNAPSHOT_PRIVATE="$STAGING_PRIVATE/snapshot-$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -m 700 "$SNAPSHOT_PRIVATE"
-install -m 600 "$STAGING_PRIVATE/initialization.json" "$STAGING_PRIVATE/identity.json" \
-  "$STAGING_PRIVATE/launcher.password" "$STAGING_PRIVATE/ca.crt" "$SNAPSHOT_PRIVATE/"
-uv run --no-sync -m infra.auth.recover_staging --directory "$SNAPSHOT_PRIVATE" openbao-snapshot
+kubectl --context marin_US-WEST-04A -n marin-auth-staging scale statefulset/marin-auth --replicas=0
+kubectl --context marin_US-WEST-04A -n marin-auth-staging wait --for=delete pod \
+  -l app.kubernetes.io/name=marin-auth --timeout=90s
+uv run --no-sync -m infra.auth.migrate_openbao --directory "$MIGRATION_PRIVATE" prepare \
+  --leader-pod openbao-0 --address https://localhost:18200
+kubectl --context marin_US-WEST-04A -n marin-auth-staging scale statefulset/openbao --replicas=0
+kubectl --context marin_US-WEST-04A -n marin-auth-staging wait --for=delete pod \
+  -l app.kubernetes.io/name=openbao --timeout=90s
+uv run --no-sync -m infra.auth.migrate_openbao --directory "$MIGRATION_PRIVATE" run
 ```
 
-Restore in a separate container with no route to the source Raft peers:
+Select the actual leader; `prepare` refuses a mismatched peer. Before `run`, the
+new PostgreSQL owner, empty database, external credential/CA Secrets and reviewed
+Bao database egress must exist. The helper verifies the retained source PVC and
+refuses a populated destination. Its Job copies encrypted storage using the
+source's pinned OpenBao image and verifies the PostgreSQL TLS certificate.
+
+After successful migration, remove only the completed migration Job. Apply the
+reviewed PostgreSQL server configuration, restore the configured replica counts,
+and unseal every Bao replica using the original material. Then verify:
 
 ```bash
-docker run --rm --network=none --user "$(id -u):$(id -g)" \
-  --mount "type=bind,src=$SNAPSHOT_PRIVATE,dst=/private" \
-  --entrypoint python "$PROOF_IMAGE_DIGEST" \
-  -P -m infra.auth.recover_staging --directory /private openbao --bao /usr/local/bin/bao
+uv run --no-sync -m infra.auth.recover_staging --directory "$MIGRATION_PRIVATE" \
+  openbao-verify --address https://localhost:18200
 ```
 
-These quiescent same-cluster logical restores and isolated Raft recovery do not
-establish off-cluster DR, WAL/PITR, concurrent-write, host-loss or storage-loss
-guarantees. Check restored revocations before serving authorization; row equality
-alone cannot establish that an old backup is safe to reopen.
+Existing Raft PVCs are retained and no longer mounted by Bao. Once PostgreSQL
+accepts writes, restarting the old Raft state would lose those writes and could
+restore revoked access. Recovery must use the current authoritative state.
+
+Runtime grants start in a new OpenFGA store. Drain old jobs before changing
+stores; old SQL-backed grant IDs fail closed and must be reissued. Keep the old
+ledger only as a private migration record. No runtime code consults it. Complete
+Loom lifecycle cleanup before switching stores; a leftover row cannot retire
+its old grant through the new store. For an interrupted pilot, verify its old
+grant is revoked and expired and its session is archived before marking that
+specific lifecycle row cleaned.
+
+## Google SSO execution smoke
+
+Follow the [login enrollment procedure](../../docs/dev-guide/shared-auth-login.md)
+to enroll the operator-selected Google account into staging and add its entity
+to the broker's subject map. Give its pilot principal membership in
+`marin-team`, which inherits `marin-research` permissions. Keep that account's
+metadata and credentials in an owner-only directory outside the checkout.
+
+Bao needs HTTPS egress to Google's discovery and signing-key endpoints. Configure
+`https_egress_domains` with `accounts.google.com` and `www.googleapis.com`, and
+remove their static address entries from `https_egress_cidrs`. The optional
+OpenBao-only CiliumNetworkPolicy observes DNS through the approved resolver
+addresses and node-local DNS pods, then permits TCP 443 to the learned IPs for
+those exact names. Cilium's CRD and L7 DNS proxy are required. Follow the
+[Google egress recipe](../../docs/dev-guide/shared-auth-login.md#enroll-an-approved-deployment).
+
+After logging in, replace the execution proof's synthetic launcher with that
+Bao session while retaining the synthetic controller:
+
+```bash
+uv run --no-sync -m infra.auth.staging --directory "$STAGING_PRIVATE" issue-proof \
+  --ttl 900 --login-directory "$LOGIN_PRIVATE" > "$STAGING_PRIVATE/proof-current.json"
+```
+
+Run the execution proof above with the resulting identity Secret. Its driver
+receives only the short-lived Bao identity JWT, never the Google refresh token,
+Bao login token, root token, or unseal material. Revoke the proof's root grants
+and close the Bao session after saving the results.
 
 ## Retirement
 

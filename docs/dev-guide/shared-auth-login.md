@@ -1,8 +1,10 @@
 # Google login for shared grants
 
 Google sign-in establishes a Bao entity, which the grant broker maps to a
-deployment-owned principal. OpenFGA supplies current permissions through that
-principal. Google account names and browser input cannot select a principal.
+deployment-owned principal. Separate OpenFGA stores hold standing memberships
+and runtime grants. Each protected operation requires current standing access
+and a live grant for its actor, action and resource. Google account names and
+browser input cannot select a principal.
 
 The client uses Marin's installed-app Google login with PKCE and state
 validation, then presents the Google ID token to Bao's JWT auth method.
@@ -92,6 +94,27 @@ Select an approved Bao deployment and supply its verified TLS CA through
 auth bootstrap before enrolling users. Bao requires outbound HTTPS access to
 Google discovery and signing-key endpoints. Deployment network policy owns
 that access.
+
+On Cilium clusters, configure the auth stack with the exact Google endpoints.
+
+```yaml
+marin-auth:https_egress_domains:
+  - accounts.google.com
+  - www.googleapis.com
+marin-auth:https_egress_cidrs: []
+```
+
+Keep `dns_cidrs` set to the pod's approved cluster resolvers. This optional
+OpenBao-only Cilium policy requires the CiliumNetworkPolicy CRD and an enabled
+L7 proxy. It observes DNS on UDP/TCP 53 at those resolver addresses and the
+existing `kube-system` / `node-local-dns` pod selector. DNS queries retain their
+existing name coverage so internal PostgreSQL names and search paths resolve.
+TCP 443 access follows IPs learned for the configured exact names as DNS rotates.
+OpenBao verifies the Google HTTPS certificates. The component moves OpenBao's
+DNS allowance into the Cilium policy when domains are configured, because an
+overlapping unrestricted L4 DNS rule bypasses L7 inspection.
+[Cilium DNS policy](https://docs.cilium.io/en/stable/security/policy/layer7/)
+
 The [auth deployment guide](https://github.com/marin-community/marin/blob/main/infra/auth/README.md#initialize-unseal-and-configure)
 describes bootstrap. Its [OpenFGA policy procedure](https://github.com/marin-community/marin/blob/main/infra/auth/README.md#openfga-publication)
 owns model publication and relationships.
@@ -157,8 +180,15 @@ uv run --no-sync python -m infra.auth.login --directory "$LOGIN_PRIVATE" \
 including `/v1/identity/oidc`. Login checks the returned entity UUID, verifies
 the minted identity JWT against that issuer and writes private `bao.token`
 and `identity.jwt`. The latter authenticates grant creation, revocation and
-token exchange. Grant ownership, permissions and delegation limits come from
-broker policy. A partially completed login retains `bao.token` so its session
+token exchange. Grant ownership and delegation limits come from deployment
+policy. The broker validates issuance and writes actor, permission, expiry and
+parent/root tuples atomically to the runtime store. OpenFGA conditions enforce
+the grant and every ancestor's bounds and expiry. Revocation adds a permanent
+tombstone that also denies descendants. Deterministic request IDs let retries
+reuse the same grant without extending its lifetime. The runtime gateway
+credential permits only that store's tuple operations. Standing relationships
+and model publication remain operator-owned. SQL records launch and cleanup
+bookkeeping. A partially completed login retains `bao.token` so its session
 can still be closed.
 
 Record root grant IDs when creating grants. Revoke those roots before closing

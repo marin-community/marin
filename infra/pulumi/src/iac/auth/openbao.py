@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from ipaddress import ip_network
 
@@ -41,8 +42,11 @@ class OpenBaoArgs:
     namespace: str
     image: str
     public_hostname: str
-    storage_class: str
-    storage_size: str
+    database_secret: str
+    database_ca_secret: str
+    database_host: str
+    database_namespace: str
+    database_cluster: str
     listener_tls_secret: str
     listener_tls_server_name: str
     ingress_tls_secret: str
@@ -53,14 +57,14 @@ class OpenBaoArgs:
     operator_groups: tuple[str, ...]
     dns_cidrs: tuple[str, ...]
     https_egress_cidrs: tuple[str, ...]
+    https_egress_domains: tuple[str, ...] = ()
     replicas: int = 3
     anti_affinity: str = "required"
     discovery_mode: str = "ingress"
 
 
 def openbao_config(args: OpenBaoArgs) -> dict:
-    """Return listener and Raft configuration containing only public metadata."""
-    peers = [f"openbao-{index}.openbao-internal.{args.namespace}.svc" for index in range(args.replicas)]
+    """Return listener and PostgreSQL configuration containing only public metadata."""
     return {
         "ui": False,
         "disable_mlock": True,
@@ -74,24 +78,12 @@ def openbao_config(args: OpenBaoArgs) -> dict:
                 "tls_key_file": "/openbao/tls/tls.key",
             }
         },
-        "storage": {
-            "raft": {
-                "path": "/openbao/data",
-                "retry_join": [
-                    {
-                        "leader_api_addr": f"https://{peer}:8200",
-                        "leader_ca_cert_file": "/openbao/tls/ca.crt",
-                        "leader_tls_servername": args.listener_tls_server_name,
-                    }
-                    for peer in peers
-                ],
-            }
-        },
+        "storage": {"postgresql": {"ha_enabled": True}},
     }
 
 
 class OpenBao(pulumi.ComponentResource):
-    """Deploy a Shamir-sealed Raft cluster without putting key material in Pulumi."""
+    """Deploy Shamir-sealed servers backed by external PostgreSQL credentials."""
 
     def __init__(
         self,
@@ -102,18 +94,38 @@ class OpenBao(pulumi.ComponentResource):
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__("marin:auth:OpenBao", name, None, opts)
-        if args.replicas < 3 or args.replicas % 2 == 0:
-            raise ValueError("OpenBao Raft requires an odd number of at least three replicas")
+        if args.replicas < 1:
+            raise ValueError("OpenBao requires at least one replica")
+        if not all(
+            (
+                args.database_secret,
+                args.database_ca_secret,
+                args.database_host,
+                args.database_namespace,
+                args.database_cluster,
+            )
+        ):
+            raise ValueError(
+                "OpenBao requires external PostgreSQL credential, CA, host, namespace and cluster references"
+            )
         if args.anti_affinity not in {"required", "preferred"}:
             raise ValueError("OpenBao anti_affinity must be required or preferred")
         if args.anti_affinity == "preferred" and args.namespace != "marin-auth-staging":
-            raise ValueError("Shared-host Raft placement is restricted to synthetic staging")
+            raise ValueError("Shared-host OpenBao placement is restricted to synthetic staging")
         if args.discovery_mode not in {"ingress", "private"}:
             raise ValueError("OpenBao discovery mode must be ingress or private")
         if not args.operator_groups or not args.client_pod_labels or not args.ingress_pod_labels:
             raise ValueError("OpenBao requires explicit operator groups and client/ingress pod selectors")
         if "@sha256:" not in args.image:
             raise ValueError("OpenBao image must be pinned by digest")
+        if any(
+            len(domain) > 253
+            or "." not in domain
+            or domain.rsplit(".", 1)[-1].isdigit()
+            or any(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) is None for label in domain.split("."))
+            for domain in args.https_egress_domains
+        ):
+            raise ValueError("OpenBao HTTPS egress requires exact lowercase DNS names")
 
         namespace = k8s.core.v1.Namespace(
             f"{name}-namespace",
@@ -251,10 +263,18 @@ class OpenBao(pulumi.ComponentResource):
                                     {"name": "cluster", "container_port": 8201},
                                 ],
                                 "env": [
-                                    {
-                                        "name": "BAO_RAFT_NODE_ID",
-                                        "value_from": {"field_ref": {"field_path": "metadata.name"}},
-                                    },
+                                    {"name": "PGHOST", "value": args.database_host},
+                                    {"name": "PGPORT", "value": "5432"},
+                                    {"name": "PGDATABASE", "value": "openbao"},
+                                    {"name": "PGSSLMODE", "value": "verify-full"},
+                                    {"name": "PGSSLROOTCERT", "value": "/openbao/database-ca/ca.crt"},
+                                    *(
+                                        {
+                                            "name": variable,
+                                            "value_from": {"secret_key_ref": {"name": args.database_secret, "key": key}},
+                                        }
+                                        for variable, key in (("PGUSER", "username"), ("PGPASSWORD", "password"))
+                                    ),
                                     {"name": "POD_IP", "value_from": {"field_ref": {"field_path": "status.podIP"}}},
                                     {"name": "BAO_CLUSTER_ADDR", "value": "https://$(POD_IP):8201"},
                                     {"name": "BAO_ADDR", "value": "https://127.0.0.1:8200"},
@@ -279,7 +299,7 @@ class OpenBao(pulumi.ComponentResource):
                                 # A sealed server is alive; restarting it cannot unseal it.
                                 "liveness_probe": {"tcp_socket": {"port": "api"}, "initial_delay_seconds": 30},
                                 "volume_mounts": [
-                                    {"name": "data", "mount_path": "/openbao/data"},
+                                    {"name": "database-ca", "mount_path": "/openbao/database-ca", "read_only": True},
                                     {"name": "config", "mount_path": "/openbao/config", "read_only": True},
                                     {"name": "tls", "mount_path": "/openbao/tls", "read_only": True},
                                     {"name": "tmp", "mount_path": "/tmp"},
@@ -287,25 +307,28 @@ class OpenBao(pulumi.ComponentResource):
                             }
                         ],
                         "volumes": [
+                            {
+                                "name": "database-ca",
+                                "secret": {
+                                    "secret_name": args.database_ca_secret,
+                                    "items": [{"key": "ca.crt", "path": "ca.crt"}],
+                                },
+                            },
                             {"name": "config", "config_map": {"name": config.metadata["name"]}},
                             {"name": "tls", "secret": {"secret_name": args.listener_tls_secret, "default_mode": 0o440}},
                             {"name": "tmp", "empty_dir": {}},
                         ],
                     },
                 },
-                "volume_claim_templates": [
-                    {
-                        "metadata": {"name": "data"},
-                        "spec": {
-                            "access_modes": ["ReadWriteOnce"],
-                            "storage_class_name": args.storage_class,
-                            "resources": {"requests": {"storage": args.storage_size}},
-                        },
-                    }
-                ],
             },
             opts=pulumi.ResourceOptions(
-                parent=self, provider=k8s_provider, depends_on=[namespace], protect=True, retain_on_delete=True
+                parent=self,
+                provider=k8s_provider,
+                depends_on=[namespace],
+                protect=True,
+                retain_on_delete=True,
+                # Existing immutable Raft claim templates and retained PVCs remain available for rollback.
+                ignore_changes=["spec.volumeClaimTemplates"],
             ),
         )
         k8s.policy.v1.PodDisruptionBudget(
@@ -322,6 +345,7 @@ class OpenBao(pulumi.ComponentResource):
             "namespace_selector": {"match_labels": {"kubernetes.io/metadata.name": args.client_namespace}},
             "pod_selector": {"match_labels": args.client_pod_labels},
         }
+        resolver_egress = dns_egress(args.dns_cidrs)
         self.network_policy = k8s.networking.v1.NetworkPolicy(
             f"{name}-network",
             metadata={"name": "openbao", "namespace": args.namespace},
@@ -337,7 +361,18 @@ class OpenBao(pulumi.ComponentResource):
                 ],
                 "egress": [
                     {"to": [{"pod_selector": {"match_labels": APP_LABELS}}], "ports": [{"port": 8200}, {"port": 8201}]},
-                    dns_egress(args.dns_cidrs),
+                    {
+                        "to": [
+                            {
+                                "namespace_selector": {
+                                    "match_labels": {"kubernetes.io/metadata.name": args.database_namespace}
+                                },
+                                "pod_selector": {"match_labels": {"cnpg.io/cluster": args.database_cluster}},
+                            }
+                        ],
+                        "ports": [{"port": 5432}],
+                    },
+                    *([] if args.https_egress_domains else [resolver_egress]),
                     *(
                         [
                             {
@@ -352,6 +387,42 @@ class OpenBao(pulumi.ComponentResource):
             },
             opts=child,
         )
+        if args.https_egress_domains:
+            # An overlapping L4 DNS allow would bypass Cilium's DNS proxy.
+            dns_ports = [
+                {
+                    "ports": [{"port": "53", "protocol": "UDP"}, {"port": "53", "protocol": "TCP"}],
+                    "rules": {"dns": [{"matchPattern": "*"}]},
+                }
+            ]
+            self.https_egress_policy = k8s.apiextensions.CustomResource(
+                f"{name}-https-egress",
+                api_version="cilium.io/v2",
+                kind="CiliumNetworkPolicy",
+                metadata={"name": "openbao-https-egress", "namespace": args.namespace},
+                spec={
+                    "endpointSelector": {"matchLabels": APP_LABELS},
+                    "egress": [
+                        {"toCIDR": list(args.dns_cidrs), "toPorts": dns_ports},
+                        {
+                            "toEndpoints": [
+                                {
+                                    "matchLabels": {
+                                        "k8s:io.kubernetes.pod.namespace": "kube-system",
+                                        "k8s:k8s-app": "node-local-dns",
+                                    }
+                                }
+                            ],
+                            "toPorts": dns_ports,
+                        },
+                        {
+                            "toFQDNs": [{"matchName": domain} for domain in args.https_egress_domains],
+                            "toPorts": [{"ports": [{"port": "443", "protocol": "TCP"}]}],
+                        },
+                    ],
+                },
+                opts=child,
+            )
         if args.discovery_mode == "private":
             self.issuer = pulumi.Output.from_input(f"https://openbao.{args.namespace}.svc:8200{OIDC_PATH}")
             self.api_address = pulumi.Output.from_input(f"https://openbao.{args.namespace}.svc:8200")

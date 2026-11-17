@@ -32,7 +32,7 @@ from rigging.openbao import OpenBaoClient, OpenBaoTransitSigner
 from rigging.timing import Duration, ExponentialBackoff
 
 from infra.auth.bootstrap import OperatorClient, configure
-from infra.auth.proof_fga import configure_proof, isolated_openfga
+from infra.auth.proof_fga import configure_proof, configure_runtime, isolated_openfga
 from infra.auth.proof_http import serve
 from infra.auth.prove_loom import isolated_loom, run_loom_proof
 from infra.auth.service import ServiceConfig, create_service
@@ -225,6 +225,7 @@ def prove(
                     "database": {"backend": "sqlite", "path": directory / "grants.db"},
                     "subjects": {subject: "launcher", other_subject: "other-session"},
                     "openfga": fga_config,
+                    "runtime_grants": configure_runtime(fga),
                     "storage": [
                         {
                             "name": "diagnostics",

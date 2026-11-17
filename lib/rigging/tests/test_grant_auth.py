@@ -19,9 +19,9 @@ from rigging.grant_auth import (
     create_app,
     verified_grant_token,
 )
-from rigging.grant_database import SqliteGrantDatabase
 from rigging.grants import GrantDenied, GrantStore, Permission, PrincipalAuthority
 from rigging.shared_grants import SHARED_GRANT_ROLE, SharedGrantClient, SharedGrantConfig, SharedGrantUnavailable
+from rigging.testing import MemoryRuntimeGrants
 from rigging.token_authority import JwksVerifier, generate_ed25519_keypair
 from starlette.testclient import TestClient
 
@@ -72,10 +72,10 @@ def refresh_audiences():
 
 
 @pytest.fixture
-def auth(tmp_path, grant_permissions, grant_policy, refresh_audiences):
+def auth(grant_permissions, grant_policy, refresh_audiences):
     clock = [time.time()]
     store = GrantStore(
-        SqliteGrantDatabase(tmp_path / "grants.db"),
+        MemoryRuntimeGrants(),
         [PrincipalAuthority("user:alice", "user:alice", 600, 2, "policy-v1")],
         grant_policy,
         now=lambda: clock[0],

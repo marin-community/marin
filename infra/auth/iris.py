@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.grant_auth import GrantAuthService
+from rigging.grant_database import GrantDatabase
 from rigging.grants import GrantDenied, Permission
 from rigging.server_auth import extract_bearer_token
 from sqlalchemy import text
@@ -82,6 +83,7 @@ class IrisAttemptBroker:
         authority: GrantAuthService,
         config: IrisBrokerConfig,
         *,
+        database: GrantDatabase,
         auth_url: str,
         now: Callable[[], float] = time.time,
     ):
@@ -89,7 +91,7 @@ class IrisAttemptBroker:
         self.config = config
         self.auth_url = auth_url
         self.now = now
-        self.database = authority.store.database
+        self.database = database
         with self.database.transaction() as db:
             db.execute(
                 text(

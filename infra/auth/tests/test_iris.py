@@ -9,6 +9,7 @@ import pytest
 from rigging.grant_auth import GrantAuthService, create_app
 from rigging.grant_database import SqliteGrantDatabase
 from rigging.grants import GrantDenied, GrantStore, Permission, PrincipalAuthority, permissions_cover
+from rigging.testing import MemoryRuntimeGrants
 from rigging.token_authority import JwksVerifier, generate_ed25519_keypair
 from starlette.testclient import TestClient
 
@@ -63,8 +64,9 @@ class BrokerEnvironment:
 @pytest.fixture
 def iris_broker(tmp_path):
     clock = [time.time()]
+    database = SqliteGrantDatabase(tmp_path / "attempts.sqlite")
     store = GrantStore(
-        SqliteGrantDatabase(tmp_path / "grants.sqlite"),
+        MemoryRuntimeGrants(),
         [PrincipalAuthority("owner", "research", 600, 3, "policy-1")],
         Policy(),
         now=lambda: clock[0],
@@ -92,6 +94,7 @@ def iris_broker(tmp_path):
             audience="cw_s3",
             max_attempt_ttl=60,
         ),
+        database=database,
         auth_url="https://auth.example",
         now=lambda: clock[0],
     )
@@ -103,6 +106,7 @@ def iris_broker(tmp_path):
     )
     yield BrokerEnvironment(authority, broker, request, clock)
     store.close()
+    database.close()
 
 
 def test_attempt_http_credentials_are_bounded_and_retirement_survives_broker_restart(iris_broker):
@@ -138,6 +142,7 @@ def test_attempt_http_credentials_are_bounded_and_retirement_survives_broker_res
         replacement = IrisAttemptBroker(
             environment.authority,
             environment.broker.config,
+            database=environment.broker.database,
             auth_url="https://auth.example",
             now=lambda: environment.clock[0],
         )

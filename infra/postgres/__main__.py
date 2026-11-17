@@ -138,7 +138,7 @@ database = k8s.apiextensions.CustomResource(
                             "login": True,
                             "passwordSecret": {"name": f"{name}-database"},
                         }
-                        for name in ("openfga", "grants")
+                        for name in ("openfga", "grants", "openbao")
                     ]
                 }
             }
@@ -173,7 +173,7 @@ database = k8s.apiextensions.CustomResource(
     ),
 )
 if retained:
-    for name in ("openfga", "grants", "openfga-recovery", "grants-recovery"):
+    for name in ("openbao", "openfga", "grants", "openbao-recovery", "openfga-recovery", "grants-recovery"):
         k8s.apiextensions.CustomResource(
             f"{name}-database",
             api_version="postgresql.cnpg.io/v1",

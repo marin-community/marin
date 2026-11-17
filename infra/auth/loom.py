@@ -276,7 +276,7 @@ class LoomLauncher:
                     try:
                         self._retire_local_authority(run)
                         pending.append(run)
-                    except (ValueError, KeyError, TypeError, OSError, SQLAlchemyError):
+                    except (requests.RequestException, ValueError, KeyError, TypeError, OSError, SQLAlchemyError):
                         logger.exception("Loom local retirement failed for grant %s; retrying later", run.grant_id)
             observed = []
             for run in pending:

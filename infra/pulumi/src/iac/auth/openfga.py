@@ -24,19 +24,22 @@ class OpenFGAArgs:
     database_secret: str
     database_ca_secret: str
     token_secret: str
+    runtime_token_secret: str
     tls_secret: str
     store_id: str
+    runtime_store_id: str
     dns_cidrs: tuple[str, ...]
     database_cidrs: tuple[str, ...]
     database_namespace: str | None = None
 
 
 class OpenFGA(pulumi.ComponentResource):
-    """Persist relationships in external PostgreSQL; expose only Check to workloads.
+    """Persist standing policy and runtime grants in separate OpenFGA stores.
 
     The full HTTP and gRPC APIs bind to loopback. Operators use Kubernetes pod
     port-forwarding to publish models and reconcile tuples. The broker has no
-    Kubernetes credentials and can reach only the TLS Check gateway.
+    Kubernetes credentials. Its TLS gateway permits standing checks and runtime
+    tuple operations, while standing-policy and model writes remain private.
     """
 
     def __init__(
@@ -52,6 +55,8 @@ class OpenFGA(pulumi.ComponentResource):
             raise ValueError("OpenFGA and its gateway require digest-pinned images")
         if not re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{26}", args.store_id):
             raise ValueError("OpenFGA store_id must be an explicit ULID")
+        if not re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{26}", args.runtime_store_id) or args.runtime_store_id == args.store_id:
+            raise ValueError("OpenFGA runtime_store_id must be a distinct explicit ULID")
         if not args.database_cidrs and not args.database_namespace:
             raise ValueError("OpenFGA requires explicit PostgreSQL destination CIDRs")
         child = pulumi.ResourceOptions(parent=self, provider=k8s_provider)
@@ -73,6 +78,13 @@ http {{
     location = /healthz {{ proxy_pass http://127.0.0.1:8080; }}
     location = /stores/{args.store_id}/check {{
       limit_except POST {{ deny all; }}
+      if ($http_authorization != "Bearer ${{STANDING_TOKEN}}") {{ return 403; }}
+      proxy_pass http://127.0.0.1:8080;
+      proxy_read_timeout 10s;
+    }}
+    location ~ ^/stores/{args.runtime_store_id}/(check|read|write)$ {{
+      limit_except POST {{ deny all; }}
+      if ($http_authorization != "Bearer ${{RUNTIME_TOKEN}}") {{ return 403; }}
       proxy_pass http://127.0.0.1:8080;
       proxy_read_timeout 10s;
     }}
@@ -144,8 +156,18 @@ http {{
                                 "env": [
                                     *datastore,
                                     {
-                                        "name": "OPENFGA_AUTHN_PRESHARED_KEYS",
+                                        "name": "STANDING_TOKEN",
                                         "value_from": {"secret_key_ref": {"name": args.token_secret, "key": "token"}},
+                                    },
+                                    {
+                                        "name": "RUNTIME_TOKEN",
+                                        "value_from": {
+                                            "secret_key_ref": {"name": args.runtime_token_secret, "key": "token"}
+                                        },
+                                    },
+                                    {
+                                        "name": "OPENFGA_AUTHN_PRESHARED_KEYS",
+                                        "value": "$(STANDING_TOKEN),$(RUNTIME_TOKEN)",
                                     },
                                 ],
                                 "security_context": security,
@@ -158,7 +180,27 @@ http {{
                             {
                                 "name": "gateway",
                                 "image": args.proxy_image,
-                                "command": ["nginx", "-g", "daemon off;"],
+                                "command": ["/bin/sh", "-ec"],
+                                "args": [
+                                    'test -n "$STANDING_TOKEN"; test -n "$RUNTIME_TOKEN"; '
+                                    'test "$STANDING_TOKEN" != "$RUNTIME_TOKEN"; '
+                                    'case "$STANDING_TOKEN$RUNTIME_TOKEN" in *[!a-zA-Z0-9_-]*) exit 1;; esac; '
+                                    "umask 077; envsubst '$STANDING_TOKEN $RUNTIME_TOKEN' "
+                                    "< /etc/nginx/nginx.conf > /tmp/nginx.conf; "
+                                    "unset STANDING_TOKEN RUNTIME_TOKEN; exec nginx -c /tmp/nginx.conf -g 'daemon off;'"
+                                ],
+                                "env": [
+                                    {
+                                        "name": "STANDING_TOKEN",
+                                        "value_from": {"secret_key_ref": {"name": args.token_secret, "key": "token"}},
+                                    },
+                                    {
+                                        "name": "RUNTIME_TOKEN",
+                                        "value_from": {
+                                            "secret_key_ref": {"name": args.runtime_token_secret, "key": "token"}
+                                        },
+                                    },
+                                ],
                                 "ports": [{"name": "https", "container_port": 8443}],
                                 "readiness_probe": {
                                     "http_get": {"path": "/healthz", "port": "https", "scheme": "HTTPS"}
