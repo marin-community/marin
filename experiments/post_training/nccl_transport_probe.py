@@ -60,6 +60,7 @@ from connectrpc.errors import ConnectError
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import EndpointAccess
 
 logger = logging.getLogger("nccl_transport_probe")
 
@@ -228,6 +229,8 @@ def spawn_worker(
             **variant.env,
         }
     )
+    if os.environ.get("PROBE_INIT_TIMEOUT"):
+        env["PROBE_INIT_TIMEOUT"] = os.environ["PROBE_INIT_TIMEOUT"]
     cmd = [sys.executable, str(Path(__file__).resolve()), "--mode", "worker", "--variant", variant.name]
     log_file: IO[bytes] = open(log_path, "wb")  # noqa: SIM115 - closed in collect_worker after the child exits
     output_file: IO[bytes] = open(output_path, "wb")  # noqa: SIM115 - closed in collect_worker after the child exits
@@ -279,7 +282,7 @@ def collect_worker(handle: WorkerProcess) -> RankResult:
 
 def run_variant(
     variant: Variant,
-    task_index: int,
+    rank_offset: int,
     local_gpus: int,
     world_size: int,
     master: str,
@@ -288,7 +291,7 @@ def run_variant(
 ) -> dict:
     """Run one variant on this task's local GPUs and summarize the ranks."""
     handles = [
-        spawn_worker(variant, task_index * local_gpus + local, local, master, port, world_size, log_dir)
+        spawn_worker(variant, rank_offset + local, local, master, port, world_size, log_dir)
         for local in range(local_gpus)
     ]
     ranks = [collect_worker(handle) for handle in handles]
@@ -327,16 +330,25 @@ def run_launcher(args: argparse.Namespace) -> None:
     num_tasks = job_info.num_tasks
     task_index = job_info.task_index
     local_gpus = min(torch.cuda.device_count(), args.max_local_gpus) or 1
-    world_size = num_tasks * local_gpus
-    if num_tasks < 2:
+    world_size = args.world_size if args.world_size else num_tasks * local_gpus
+    rank_offset = args.rank_offset if args.rank_offset is not None else task_index * local_gpus
+    if num_tasks < 2 and args.endpoint_name is None:
         logger.warning("num_tasks=%d: single-task run exercises intra-node transport only", num_tasks)
 
     ctx = iris_ctx()
-    endpoint_name = f"{ENDPOINT_BASE_NAME}-attempt-{job_info.attempt_id}"
-    if task_index == 0:
+    if args.endpoint_name:
+        # An absolute name bypasses the job namespace, so two separate jobs can
+        # share one rendezvous; the low ranks register it as public.
+        endpoint_name = args.endpoint_name
+        coordinator = rank_offset == 0
+    else:
+        endpoint_name = f"{ENDPOINT_BASE_NAME}-attempt-{job_info.attempt_id}"
+        coordinator = task_index == 0
+    if coordinator:
         base_port = allocate_port_block(len(build_variants()) + 1)
         master_host = job_info.advertise_host
-        endpoint_id = ctx.registry.register(endpoint_name, f"{master_host}:{base_port}")
+        access = EndpointAccess.ENDPOINT_ACCESS_PUBLIC if args.endpoint_name else EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+        endpoint_id = ctx.registry.register(endpoint_name, f"{master_host}:{base_port}", access=access)
         logger.info("Registered rendezvous %s at %s:%d", endpoint_name, master_host, base_port)
     else:
         master_host, base_port = wait_for_rendezvous(ctx.resolver, endpoint_name)
@@ -351,11 +363,11 @@ def run_launcher(args: argparse.Namespace) -> None:
             continue
         logger.info("[task %s] variant %s starting", task_index, variant.name)
         results.append(
-            run_variant(variant, task_index, local_gpus, world_size, master_host, base_port + 1 + offset, log_dir)
+            run_variant(variant, rank_offset, local_gpus, world_size, master_host, base_port + 1 + offset, log_dir)
         )
         logger.info("[task %s] variant %s finished pass=%s", task_index, variant.name, results[-1]["pass"])
 
-    if task_index == 0:
+    if coordinator:
         ctx.registry.unregister(endpoint_id)
     report = {
         "job": {
@@ -377,7 +389,8 @@ def run_worker_mode(args: argparse.Namespace) -> None:
 
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
-    dist.init_process_group("nccl", timeout=datetime.timedelta(seconds=PROCESS_GROUP_TIMEOUT_SECONDS))
+    init_timeout = int(os.environ.get("PROBE_INIT_TIMEOUT", PROCESS_GROUP_TIMEOUT_SECONDS))
+    dist.init_process_group("nccl", timeout=datetime.timedelta(seconds=init_timeout))
     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
     device = torch.device("cuda", torch.cuda.current_device())
 
@@ -428,8 +441,27 @@ def main() -> None:
     parser.add_argument("--variant", help="Worker mode: variant name carried into the result JSON")
     parser.add_argument("--variants", help="Launcher: comma-separated variant names to run")
     parser.add_argument("--max-local-gpus", type=int, default=MAX_LOCAL_GPUS)
+    parser.add_argument(
+        "--endpoint-name",
+        help="Launcher: absolute registry name shared by two separate jobs; the low ranks register it public",
+    )
+    parser.add_argument(
+        "--rank-offset",
+        type=int,
+        help="Launcher: global rank of this job's first worker (default: task_index * local_gpus)",
+    )
+    parser.add_argument(
+        "--world-size", type=int, help="Launcher: total number of ranks (default: num_tasks * local_gpus)"
+    )
+    parser.add_argument(
+        "--init-timeout-seconds",
+        type=int,
+        help="Launcher: process-group init timeout for the workers (default 300)",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    if args.init_timeout_seconds:
+        os.environ["PROBE_INIT_TIMEOUT"] = str(args.init_timeout_seconds)
     if args.mode == "launcher":
         run_launcher(args)
     else:
