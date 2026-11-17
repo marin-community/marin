@@ -19,5 +19,16 @@ def get_default_config():
     return cfg
 
 
+def model_expert_count(config: object) -> int | None:
+    """Return a model's declared expert count, including its text configuration."""
+    for candidate in (config, getattr(config, "text_config", None)):
+        if candidate is not None:
+            for name in ("num_experts", "num_local_experts", "n_routed_experts"):
+                value = getattr(candidate, name, None)
+                if isinstance(value, int) and value > 0:
+                    return value
+    return None
+
+
 if __name__ == "__main__":
     cfg = get_default_config()

@@ -8,7 +8,7 @@ root environment.
 | file | role |
 | --- | --- |
 | `run_opd_h100.sh` | run synchronous OPD with separate policy, rollout, and teacher roles |
-| `run_grug_megatron.sh` | run the softmax kernel test and Grug parity, training, and serving gates on four H100s |
+| `run_grug_megatron.sh` | run the softmax kernel, Grug parity/training/serving, and worker-batch gates on four H100s |
 | `run_cat_count_h100.sh` | submit the CatCount coordinator and gate sampled learning on four H100s |
 | `gate.py` | score a training run against its spec |
 | `specs/cat-count-canary-qwen2.5-0.5b-async.json` | CatCount sampled learning and per-step mechanism requirements |
