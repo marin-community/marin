@@ -17,6 +17,8 @@ from experiments.post_training.task_curation.publication_gate import (
     configured_restriction,
     require_no_restriction_downgrade,
 )
+from experiments.post_training.task_curation.raw_source_publish import publish_raw_source
+from experiments.post_training.task_curation.remediation_publish import ReleasePlan
 from experiments.post_training.task_curation.source import SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from infra.marina.apps.rl_data_catalog.server import restriction_registry
@@ -247,11 +249,10 @@ def test_reviewer_packet_freeze_refuses_a_private_source(tmp_path):
 
 def test_staged_raw_snapshot_without_a_tier_is_refused(tmp_path):
     """A staged raw snapshot must declare its source's tier before it can be archived."""
-    from experiments.post_training.task_curation import raw_source_publish  # noqa: PLC0415
 
     stage = {"source_id": "Test:fixture", "dataset_id": "upstream/fixture", "revision": "a" * 40}
     with pytest.raises(ValueError, match="declares no restriction tier"):
-        raw_source_publish.publish_raw_source(
+        publish_raw_source(
             stage,
             fixture_license("Test:fixture", "upstream/fixture", "a" * 40),
             version="v",
@@ -262,9 +263,6 @@ def test_staged_raw_snapshot_without_a_tier_is_refused(tmp_path):
 
 def test_staged_private_plan_and_snapshot_are_refused(tmp_path):
     """The publish guards refuse staged records that declare PRIVATE_ALWAYS."""
-    from experiments.post_training.task_curation import raw_source_publish
-    from experiments.post_training.task_curation.remediation_publish import ReleasePlan
-
     private_snapshot = {
         "source_id": "Test:private",
         "dataset_id": "upstream/fixture",
@@ -274,7 +272,7 @@ def test_staged_private_plan_and_snapshot_are_refused(tmp_path):
         "files": [{"path": "README.md", "uri": "finestore://fixture/README.md", "sha256": "b" * 64}],
     }
     with pytest.raises(ValueError, match="PRIVATE_ALWAYS"):
-        raw_source_publish.publish_raw_source(
+        publish_raw_source(
             private_snapshot,
             fixture_license("Test:private", "upstream/fixture", "a" * 40),
             version="v",
