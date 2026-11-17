@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import hashlib
 from itertools import permutations
 from types import SimpleNamespace
 from dataclasses import replace
@@ -42,7 +43,22 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
     for path in (primary, named):
         path.parent.mkdir()
         task = text_task("shared")
-        write_tasks(path, [lowered_task(task)])
+        if experiment_type is BasePPOExp and path == primary:
+            pq.write_table(
+                pa.table(
+                    {
+                        "task_spec": [task.model_dump_json()],
+                        "family": ["primary"],
+                        "aai_category": ["general"],
+                        "source": ["declared-source"],
+                        "topic": ["algebra"],
+                        "difficulty": ["hard"],
+                    }
+                ),
+                path,
+            )
+        else:
+            write_tasks(path, [lowered_task(task)])
         pq.write_table(
             pa.Table.from_pylist([{"task_spec": task.model_dump_json()}]), path.parent / "validation.parquet"
         )
@@ -51,6 +67,9 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
             task_digest=canonical_sha256(task.model_dump(mode="json")),
             family=path.parent.name,
             source="declared-source",
+            aai_category="general",
+            topic="algebra",
+            difficulty="hard",
             state=MembershipState.ACTIVE,
         )
         pq.write_table(
@@ -103,13 +122,55 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
             item.evaluation_identity.panel_name,
             item.evaluation_identity.strata.family,
             item.evaluation_identity.strata.source,
+            item.evaluation_identity.strata.aai_category,
+            item.evaluation_identity.strata.topic,
+            item.evaluation_identity.strata.difficulty,
         )
         for item in identities
-    ] == [("primary", "primary", "declared-source"), ("named", "named", "declared-source")]
+    ] == [
+        ("primary", "primary", "declared-source", "general", "algebra", "hard"),
+        ("named", "named", "declared-source", "general", "algebra", "hard"),
+    ]
     assert all(item.data_source != "declared-source" for item in identities)
     config.data.val_data = [str(primary), str(named)]
     with pytest.raises(ValueError, match="conflicting selection identities"):
         experiment.get_eval_dataset()
+    if experiment_type is TerminalBenchExp:
+        package = tmp_path / "packages" / "shared"
+        (package / "environment").mkdir(parents=True)
+        (package / "tests").mkdir()
+        (package / "tests/test.sh").write_text("#!/bin/sh\nexit 0\n")
+        (package / "instruction.md").write_text("Write an answer.")
+        (package / "task.toml").write_text(
+            f'[verifier]\nenvironment_mode = "separate"\n[environment]\ndocker_image = "{NATIVE_ENVIRONMENT.docker_image}"\n'
+        )
+        config.trainer.max_prompt_length = 4096
+        package_dataset = experiment.get_eval_dataset([str(package.parent)])
+        package_input = package_dataset.collate_fn(list(package_dataset))[0]["input"]
+        assert package_input.spec.task.id == "shared" and package_input.metadata.evaluation_identity is None
+        with pytest.raises(ValueError, match="conflicting selection identities"):
+            experiment.get_eval_dataset([str(primary), str(package.parent)])
+    else:
+        raw = {
+            "prompt": [{"role": "user", "content": "Count cats."}],
+            "env_class": "cat_count",
+            "data_source": "original",
+            "extra_info": {"n": 1},
+        }
+        source_file = tmp_path / "raw.jsonl"
+        source_file.write_text(json.dumps(raw) + "\n")
+        source_dataset = experiment.get_eval_dataset([str(source_file)])
+        source_task = source_dataset.collate_fn(list(source_dataset))[0]["input"].spec.task
+        payload = json.dumps(raw, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        assert source_task.source.revision == "sha256:" + hashlib.sha256(payload).hexdigest()
+        original = pq.read_table(primary)
+        mismatched = original.set_column(
+            original.schema.get_field_index("family"), "family", pa.array(["wrong-family"])
+        )
+        pq.write_table(mismatched, primary)
+        with pytest.raises(ValueError, match="row strata differ from selection manifest"):
+            experiment.get_eval_dataset([str(primary)])
+        pq.write_table(original, primary)
     config.data.val_data = [str(primary)]
     (primary.parent / "summary.json").write_text('{"selection_strata": null}')
     with pytest.raises(ValueError, match="SelectionDefinition"):

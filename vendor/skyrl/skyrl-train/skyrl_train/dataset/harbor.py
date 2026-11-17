@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
-from finestore.rl.strata import read_selection_strata
+from finestore.rl.strata import TaskEvaluationIdentity, read_selection_strata
 from loguru import logger
 from transformers import PreTrainedTokenizerBase
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
@@ -171,6 +171,25 @@ def lower_harbor_task(directory: Path, task: TaskSpec, *, session: Mapping[str, 
     )
 
 
+def _parquet_evaluation_identities(
+    data_files: Sequence[str | Mapping[str, Any]],
+) -> dict[str, TaskEvaluationIdentity | None]:
+    identities = {}
+    for source in data_files:
+        if not isinstance(source, str) or not source.endswith(".parquet"):
+            continue
+        panel = read_selection_strata(str(Path(source).parent))
+        with pq.ParquetFile(source) as parquet:
+            for batch in parquet.iter_batches(columns=[TASK_ROLLOUT_COLUMN], batch_size=MATERIALIZATION_BATCH_SIZE):
+                for raw in batch.column(0).to_pylist():
+                    task_id = json.loads(raw)["task"]["id"]
+                    identity = panel.identity(task_id) if panel is not None else None
+                    if task_id in identities and identities[task_id] != identity:
+                        raise ValueError(f"task has conflicting selection identities in one input set: {task_id}")
+                    identities[task_id] = identity
+    return identities
+
+
 def materialize_harbor_tasks(
     data_files: Sequence[str | Mapping[str, Any]],
     *,
@@ -181,6 +200,7 @@ def materialize_harbor_tasks(
     """Combine Harbor packages and pre-lowered task Parquet for one worker pool."""
     task_files = [source for source in data_files if isinstance(source, str) and source.endswith(".parquet")]
     sources = TerminalBenchTaskDataset([source for source in data_files if source not in task_files])
+    identities = _parquet_evaluation_identities(data_files)
     if not len(sources) and not task_files:
         raise ValueError("No Harbor tasks matched the configured sources")
 
@@ -198,6 +218,8 @@ def materialize_harbor_tasks(
                         directory = directories[item]
                         data_source = item.stable_uri()
                         uid = item.uid()
+                    if identities.get(uid) is not None:
+                        raise ValueError(f"task has conflicting selection identities in one input set: {uid}")
                     importer = harbor_trial_task if session["task_session"] == HARBOR_TRIAL_SESSION else harbor_task
                     task = importer(
                         directory,
@@ -259,19 +281,7 @@ class HarborTaskDataset(TaskDataset):
         grader_override: NoGrader | None = None,
         num_workers: int = 8,
     ):
-        identities = {}
-        for source in data_files:
-            if not isinstance(source, str) or not source.endswith(".parquet"):
-                continue
-            panel = read_selection_strata(str(Path(source).parent))
-            with pq.ParquetFile(source) as parquet:
-                for batch in parquet.iter_batches(columns=[TASK_ROLLOUT_COLUMN], batch_size=MATERIALIZATION_BATCH_SIZE):
-                    for raw in batch.column(0).to_pylist():
-                        task_id = json.loads(raw)["task"]["id"]
-                        identity = panel.identity(task_id) if panel is not None else None
-                        if task_id in identities and identities[task_id] != identity:
-                            raise ValueError(f"task has conflicting selection identities in one input set: {task_id}")
-                        identities[task_id] = identity
+        identities = _parquet_evaluation_identities(data_files)
 
         def prepare_source(_source, dataset):
             encoded = []
