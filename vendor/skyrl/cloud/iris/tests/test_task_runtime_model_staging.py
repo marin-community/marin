@@ -245,6 +245,11 @@ def test_staged_policy_model_supplies_its_embedded_tokenizer(tmp_path, monkeypat
     monkeypatch.setattr(hf_model_cache, "fs_and_path", lambda _uri: (fsspec.filesystem("file"), str(source)))
     args = task_runtime._runtime_namespace(launch_config)
     monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+
+    def reject_hub_download(*args, **kwargs):
+        raise AssertionError("embedded-tokenizer staging requested a Hub download")
+
+    monkeypatch.setattr(hf_model_cache, "snapshot_download", reject_hub_download)
     policy = prepare_policy_model(args)
     assert policy is not None
     tokenizer = prepare_policy_tokenizer(args)
