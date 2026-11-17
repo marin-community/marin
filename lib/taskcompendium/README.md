@@ -264,9 +264,11 @@ archives exclude those credentials. The machine must permit network access.
 
 For file and workspace answers, `ReplayStage` declares a prepared, digest-pinned
 `environment`, an `argv` command, `cwd`, command `timeout`, and output `artifacts`.
-Replay receives shared and worker resources and captured submission files. It
+Replay receives shared and worker resources, its declared helper `resources`,
+and captured submission files. Replay helpers must contain no references or secrets;
+they are not installed in the actor or grader. Replay
 receives neither oracle/verifier resources nor inherited machine environment
-variables or judge credentials. Its image and explicit environment must be
+variables or judge credentials. Its image, explicit environment, and helper resources must be
 audited for the same separation. Replay closes before the grading machine starts;
 only declared replay outputs are transferred, with the usual archive size and
 symlink checks. The original submitted program is not transferred to grading.
@@ -447,8 +449,25 @@ only `/testbed/solution.py` and requires the same environment for actor and repl
 An oracle control can copy `/controls/reference.py` to `/testbed/solution.py` and
 then use ordinary grading. The reference is staged only for oracle controls.
 
-This module is not registered as a runnable evaluation. Preparing the real image
-and grader packages, validating references, and official Pi/EvalDash integration
+`scienceagentbench_grading.deterministic_grader` packages a source evaluator
+with the common output wrapper. The grader image supplies the source's private
+gold files and required data. Source data/shape errors remain failed submissions;
+missing gold files, dependencies, and other runtime failures remain ungraded.
+Reference validation must reject any package whose own gold data or evaluator
+produces these errors before the package can be used for model scoring.
+
+Task 22 uses `papyrus_grader`. Replay executes the submitted program and decodes
+its pickle without gold data or credentials, then transfers normalized JSON rows.
+Trusted preparation separately normalizes the pinned gold pickle with the same
+decoder. The scorer reads only JSON arrays of strings, with a 1,048,576-character
+row limit. It preserves the upstream sort/round/string conversion and gold-prefix
+comparison, including the upstream acceptance of matching rows followed by extras.
+The package transfers neither the candidate pickle nor the decoder to grading. Validation
+must use the pinned scientific environment; synthetic local tests establish the
+transfer and scoring behavior, not full benchmark or container validation.
+
+This module is not registered as a runnable evaluation. Preparing the real images
+and visual grader packages, validating references, and official Pi/EvalDash integration
 remain tracked in
 [issue #11592](https://github.com/marin-community/marin/issues/11592).
 

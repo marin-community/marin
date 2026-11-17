@@ -547,7 +547,7 @@ async def _replay_outputs(
         workdir=replay.cwd,
     )
     archive = root / "replay-inputs.tar"
-    write_archive(archive, resource_files(task.resources.all + task.resources.worker, ""), [])
+    write_archive(archive, resource_files(task.resources.all + task.resources.worker + replay.resources, ""), [])
     submitted_archive = root / "replay-submission.tar"
     write_archive(submitted_archive, submissions, [])
     async with asyncio.timeout(machine_spec.startup_timeout):

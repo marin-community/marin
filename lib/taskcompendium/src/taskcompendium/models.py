@@ -604,7 +604,7 @@ def verifyit_spec(grader: VerifyitGrader) -> Spec:
 class ReplayStage(BaseModel):
     """Run submitted files in a fresh image before exposing outputs to a grader.
 
-    Only shared/worker resources and captured submissions enter this machine.
+    Only shared/worker resources, replay helpers, and captured submissions enter this machine.
     ``artifacts`` selects its outputs for the subsequent grading machine.
     """
 
@@ -615,6 +615,7 @@ class ReplayStage(BaseModel):
     cwd: str
     timeout: float = Field(gt=0)
     artifacts: tuple[VerifierArtifact, ...] = Field(min_length=1)
+    resources: tuple[TaskResource, ...] = ()
 
     @model_validator(mode="after")
     def validate_replay(self) -> "ReplayStage":
@@ -623,6 +624,7 @@ class ReplayStage(BaseModel):
         normalized_absolute_path(self.cwd)
         validate_output_paths(tuple(artifact.source for artifact in self.artifacts))
         validate_output_paths(tuple(artifact.target for artifact in self.artifacts))
+        validate_relative_file_paths(resource.path for resource in self.resources)
         return self
 
 
@@ -984,6 +986,11 @@ class TaskSpec(BaseModel):
         if isinstance(self.grader, ScriptGrader):
             if self.grader.replay is not None and self.answer_type not in (AnswerType.FILE, AnswerType.WORKSPACE_STATE):
                 raise ValueError("Replay requires captured file or workspace submissions")
+            if self.grader.replay is not None:
+                validate_relative_file_paths(
+                    resource.path
+                    for resource in self.resources.all + self.resources.worker + self.grader.replay.resources
+                )
             if self.grader.answer_path is not None and self.answer_type not in CONVERSATION_ANSWERS:
                 raise ValueError(f"A {self.answer_type} answer has no extracted answer to write")
             installed = {f"/tests/{resource.path}" for resource in self.resources.verifier}

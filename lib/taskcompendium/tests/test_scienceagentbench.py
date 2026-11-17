@@ -16,15 +16,12 @@ from taskcompendium.importers.scienceagentbench import (
     read_verified_annotations,
     scienceagentbench_task,
 )
+from taskcompendium.importers.scienceagentbench_grading import deterministic_grader
 from taskcompendium.models import (
-    ArtifactKind,
     CommandSemantics,
     EnvironmentRequirements,
     GradingAttempt,
-    ReplayStage,
-    ScriptGrader,
     TaskSpec,
-    VerifierArtifact,
 )
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.runtime.resources import inline_resource
@@ -115,40 +112,31 @@ def test_converted_task_grades_replayed_program_and_keeps_reference_private(tmp_
         working_directory="/testbed",
         capabilities=("shell", "filesystem"),
     )
-    grader = ScriptGrader(
+    script = b"""
+from pathlib import Path
+def eval():
+    assert not Path('../controls/reference.py').exists()
+    assert not Path('solution.py').exists()
+    return int(Path('pred_results/output.csv').read_text() == Path('../tests/gold.csv').read_text()), 'match'
+"""
+    package = deterministic_grader(
+        annotation,
         environment=EnvironmentRequirements(
             docker_image=GRADER_IMAGE,
             command_semantics=CommandSemantics.LINUX_PROCESS,
             working_directory="/testbed",
         ),
-        argv=("python3", "/tests/grade.py"),
-        cwd="/testbed",
-        answer_path=None,
-        timeout=30,
-        replay=ReplayStage(
-            environment=environment,
-            argv=("python3", "/testbed/solution.py"),
-            cwd="/testbed",
-            timeout=10,
-            artifacts=(
-                VerifierArtifact(
-                    source="/testbed/pred_results", target="/testbed/pred_results", kind=ArtifactKind.DIRECTORY
-                ),
-            ),
-        ),
+        replay_environment=environment,
+        evaluator_program=script,
+        replay_timeout=10,
+        verifier_timeout=30,
     )
-    script = b"""
-from pathlib import Path
-assert not Path('../controls/reference.py').exists()
-assert not Path('solution.py').exists()
-print(float(Path('pred_results/output.csv').read_text() == Path('../tests/gold.csv').read_text()))
-"""
     reference = b"PRIVATE_REFERENCE_PROGRAM"
     task = scienceagentbench_task(
         annotation,
         condition,
         environment=environment,
-        package=GraderPackage(grader, (inline_resource("grade.py", script), inline_resource("gold.csv", b"42"))),
+        package=GraderPackage(package.grader, (*package.resources, inline_resource("gold.csv", b"42"))),
         reference_program=reference,
         importer_revision="test-converter",
     )
