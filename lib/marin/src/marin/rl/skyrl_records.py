@@ -65,6 +65,7 @@ class RecordedLaunch(BaseModel):
     run_mode: str = Field(validation_alias=AliasPath("run", "mode"))
     coordinator_iris_job_id: str | None = Field(validation_alias=AliasPath("run", "coordinator_iris_job_id"))
     export_root: str = Field(validation_alias=AliasPath("artifacts", "export_root"))
+    cluster: str = Field(validation_alias=AliasPath("iris", "cluster"))
     wandb_entity: str | None = Field(validation_alias=AliasPath("iris", "wandb_entity"))
     num_nodes: int = Field(validation_alias=AliasPath("iris", "allocation", "num_nodes"))
     gpus_per_node: int = Field(validation_alias=AliasPath("iris", "allocation", "gpus_per_node"))
