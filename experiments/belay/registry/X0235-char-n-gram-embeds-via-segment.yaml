@@ -4,7 +4,7 @@ name: Char n-gram embeds via segment-sum table
 category: Embeddings and inputs
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6944782650
@@ -26,3 +26,10 @@ trials:
     spelling_ngram_embeds: 'true'
   commit: 2daab551bb
   priority: batch
+  loss:
+  - 3.0318
+  delta:
+  - -0.0131
+  steps: 3030
+  baseline: belay-X0235-control 3.0449 (same commit, seed 0)
+  step_time_change: +1%
