@@ -9,8 +9,8 @@ Candidates wrap model catalog entries and evaluations hold launcher evaluation d
 from collections import Counter
 from dataclasses import dataclass
 
+from evalrecords.records import EvaluationSelection
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvaluationSelection
 
 from experiments.evaluation.evals import EvaluationDefinition
 

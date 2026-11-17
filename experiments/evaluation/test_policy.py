@@ -5,8 +5,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from evalrecords.records import EvaluationSelection
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvaluationSelection
 
 from experiments.evaluation.evals import HarborDefinition
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
