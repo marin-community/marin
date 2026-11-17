@@ -20,7 +20,8 @@ trials:
   batch: X0239
   date: '2026-11-17'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0239
-  wandb: []
+  wandb:
+  - belay-X0239-seed0
   settings:
     embed_lr_mult: '4.0'
   commit: e71120947b
