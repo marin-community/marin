@@ -767,9 +767,10 @@ def create_api(services: AppletServices) -> FastAPI:
         finalization = declaration.get("quality_result_finalization")
         report = {**row, "source_id": canonical_source_id(row["source_id"])}
         if private:
-            # Rollout traces are task attempts for this source: a PRIVATE_ALWAYS
-            # source serves none of them.
+            # Rollout traces are task attempts for this source and the rubric is
+            # reviewer prompt text: a PRIVATE_ALWAYS source serves neither.
             report.pop("traces", None)
+            report["rubric"] = PRIVATE_TEXT_MARKER
         return {
             "source": declaration["display_name"],
             "scope": display.quality.value,
@@ -881,6 +882,7 @@ def create_api(services: AppletServices) -> FastAPI:
                 summaries = redact_cohort_summaries(cohort_summaries(connection, **parameters), private)
                 if private:
                     assessment.pop("traces", None)
+                    assessment["rubric"] = PRIVATE_TEXT_MARKER
             reviews = [
                 dict(row)
                 for row in connection.execute(

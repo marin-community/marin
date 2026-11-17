@@ -352,7 +352,7 @@ def stage_private_catalog(root: str, snapshot_id: str = "private-tier-1") -> dic
                     "max_attempts": 3,
                     "retry_max_tokens": 8192,
                 },
-                rubric="Check answerability",
+                rubric=f"Reviewer rubric quoting {PRIVATE_CANARY}" if private else "Check answerability",
                 curation=curation,
                 curation_uri=store.write_object(f"{key}/curation.json", curation.model_dump_json().encode()),
                 traces=traces,
@@ -462,6 +462,7 @@ def test_private_source_content_never_serves(
         # private source and served for the open one; cohort example explanations too.
         private_assessment = client.get("/assessment", params={"source_id": PRIVATE_SOURCE_ID}).json()
         assert "traces" not in private_assessment["report"]
+        assert private_assessment["report"]["rubric"] == "Private data: content is not displayed."
         items = private_assessment["report"]["evidence"]["items"]
         redacted = {item["task_id"]: item for item in items}
         assert redacted["one"]["explanation"] == "Private data: content is not displayed."
@@ -481,6 +482,7 @@ def test_private_source_content_never_serves(
         assert declaration["task_count"] == 3
         assert declaration["license_receipt"]["dataset_id"] == "open-athena/private-tier-fixture"
         assert "traces" not in private_source["assessment"]
+        assert private_source["assessment"]["rubric"] == "Private data: content is not displayed."
         assert not canary_in_payload(private_source)
         open_source = client.get("/source", params={"source_id": OPEN_SOURCE_ID}).json()
         assert open_source["declaration"]["data_restriction"] == "open"
