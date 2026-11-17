@@ -223,6 +223,7 @@ def test_shared_root_setup_keeps_source_compiler_home(tmp_path, declared_home):
     workspace = Path("/testbed")
     bootstrap = Path("/opt/taskcompendium-shared-bootstrap")
     protected = Path("/opt/taskcompendium-shared")
+    bootstrap_input = Path("/") / BOOTSTRAP_ARCHIVE
     assert not any(path.exists() for path in (workspace, bootstrap, protected))
     source_home = tmp_path / "source-home"
     source_home.mkdir()
@@ -248,17 +249,19 @@ def test_shared_root_setup_keeps_source_compiler_home(tmp_path, declared_home):
         files, spec=PytestSpec(paths=("test_case.py",)), dependency_state=SharedDependencyState.AGENT_MUTABLE
     )
     config = tomlkit.parse(files["task.toml"].decode()).unwrap()
+    bootstrap_input.parent.mkdir()
     try:
         workspace.mkdir()
         (workspace / "test_case.py").write_text("def test_source(): pass\n")
         bootstrap.mkdir()
         (bootstrap / "control.py").write_bytes(files["environment/taskcompendium-shared/control.py"])
         (bootstrap / "python").symlink_to(sys.executable)
+        bootstrap_input.write_bytes(files[BOOTSTRAP_ARCHIVE])
         environment = {**os.environ, "HOME": str(source_home), **config["environment"]["env"]}
         subprocess.run(["bash", "-c", config["environment"]["setup"]["command"]], env=environment, check=True)
         assert marker.read_text() == "source-toolchain\n"
         assert (protected / "contract.json").is_file()
     finally:
-        for path in (workspace, bootstrap, protected):
+        for path in (workspace, bootstrap, protected, bootstrap_input.parent):
             if path.exists():
                 shutil.rmtree(path)
