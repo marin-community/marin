@@ -81,6 +81,8 @@ def _fallback_parents(current: Path) -> list[Path]:
     worker: a systemd DelegateSubgroup unit, or the container runtime's
     pod-private slice. Shared host slices are never candidates — enabling
     controllers there would change accounting for unrelated workloads.
+    A verifying dedicated parent is preferred over the worker's own cgroup;
+    the worker's cgroup is tried next.
     """
     unit_suffixes = (".service", ".scope")
     parent = current.parent

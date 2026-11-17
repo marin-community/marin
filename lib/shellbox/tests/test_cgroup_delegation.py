@@ -1,127 +1,125 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Delegation discovery verifies limits instead of trusting writable subtree writes."""
+"""Delegation candidate selection reads real files; the full probe runs on cgroups.
+
+The unit tests below exercise ``_fallback_parents`` and ``cgroup_limits_applied``
+against plain files — both are pure filesystem readers, so no part of the code
+under test is mocked. The full ``delegated_cgroup_parent`` verification loop
+(create a throwaway machine cgroup, apply limits, read back, clean up) needs a
+kernel cgroup v2 filesystem and runs under the manual marker like the rest of
+the local cgroup suite.
+"""
 
 from pathlib import Path
 
 import pytest
 from shellbox.backends.local import cgroup as cgroup_module
-from shellbox.backends.local.cgroup import delegated_cgroup_parent
-from shellbox.machine import UnsupportedMachineSpec
+from shellbox.backends.local.cgroup import (
+    CPU_PERIOD,
+    _fallback_parents,
+    cgroup_limits_applied,
+    delegated_cgroup_parent,
+)
+
+
+def _make_cgroup(root: Path, relative: str, *, procs: str) -> Path:
+    path = root / relative
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "cgroup.procs").write_text(procs)
+    return path
 
 
 @pytest.fixture
-def cgroup_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A fake cgroup v2 root with a pod slice, container scope and worker files."""
+def pod_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """A fake pod hierarchy: pod slice wrapping the worker's container scope."""
     root = tmp_path / "cgroup"
     root.mkdir()
     (root / "cgroup.controllers").write_text("cpuset cpu io memory pids\n")
-    scope = root / "kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod.slice/cri-containerd.scope"
-    scope.mkdir(parents=True)
-    (scope / "cgroup.procs").write_text("1234\n")
-    (scope / "cgroup.kill").write_text("")
-    slice_level = scope.parent
-    (slice_level / "cgroup.procs").write_text("")
-    (slice_level / "cgroup.kill").write_text("")
+    scope = _make_cgroup(
+        root,
+        "kubepods.slice/kubepods-burstable.slice/kubepods-burstable-podA.slice/cri-containerd.scope",
+        procs="1234\n",
+    )
+    slice_level = _make_cgroup(root, "kubepods.slice/kubepods-burstable.slice/kubepods-burstable-podA.slice", procs="")
     monkeypatch.setattr(cgroup_module, "CGROUP_ROOT", root)
     monkeypatch.setattr(cgroup_module, "_current_cgroup", lambda: scope)
-    return root
+    return scope, slice_level
 
 
-def _patch_checks(monkeypatch: pytest.MonkeyPatch, writable: set[str], applying: set[str]) -> list[Path]:
-    """check_cgroup_parent passes only for ``writable``; the limits probe only for ``applying``."""
-    checked = []
-
-    def fake_check(parent: Path) -> None:
-        checked.append(parent)
-        if parent not in writable:
-            raise UnsupportedMachineSpec("Local process containment requires a delegated cgroup v2 directory")
-
-    def fake_probe(parent: Path) -> bool:
-        return parent in applying
-
-    monkeypatch.setattr(cgroup_module, "check_cgroup_parent", fake_check)
-    monkeypatch.setattr(cgroup_module, "probe_cgroup_limits", fake_probe)
-    return checked
+def test_pod_slice_is_the_fallback_for_a_container_scope(pod_tree):
+    scope, slice_level = pod_tree
+    assert _fallback_parents(scope) == [slice_level]
 
 
-def test_scope_failure_falls_back_to_the_wrapping_pod_slice(cgroup_tree: Path, monkeypatch: pytest.MonkeyPatch):
-    """Container scopes cannot enable domain controllers with the worker inside; the pod slice can."""
-    scope = cgroup_module._current_cgroup()
-    slice_level = scope.parent
-    checked = _patch_checks(
-        monkeypatch,
-        writable={slice_level},
-        applying={slice_level},
-    )
-    assert delegated_cgroup_parent() == slice_level
-    assert checked == [slice_level]
+def test_worker_directly_in_a_unit_has_no_fallback(pod_tree):
+    scope, _ = pod_tree
+    unit = _make_cgroup(scope.parent.parent, "marin-worker.service", procs="1234\n")
+    (unit.parent / "cgroup.procs").write_text("")
+    assert _fallback_parents(unit) == []
 
 
-def test_worker_scope_wins_when_it_can_enforce_limits(cgroup_tree: Path, monkeypatch: pytest.MonkeyPatch):
-    """On a plain delegated worker nothing changes: the worker's own cgroup stays the parent."""
-    scope = cgroup_module._current_cgroup()
-    _patch_checks(monkeypatch, writable={scope, scope.parent}, applying={scope})
-    assert delegated_cgroup_parent() == scope
+def test_delegate_subgroup_prefers_its_empty_unit(pod_tree):
+    scope, _ = pod_tree
+    unit = _make_cgroup(scope.parent.parent, "marin-worker.service", procs="")
+    delegate = _make_cgroup(unit, "shellbox-delegate", procs="1234\n")
+    assert _fallback_parents(delegate) == [unit]
 
 
-def test_no_candidate_enforcing_limits_returns_none(cgroup_tree: Path, monkeypatch: pytest.MonkeyPatch):
-    """A delegation that silently drops limits must never become the parent."""
-    scope = cgroup_module._current_cgroup()
-    _patch_checks(monkeypatch, writable={scope, scope.parent}, applying=set())
-    assert delegated_cgroup_parent() is None
-
-
-def test_delegate_subgroup_still_prefers_the_unit(cgroup_tree: Path, monkeypatch: pytest.MonkeyPatch):
-    """Systemd DelegateSubgroup setups keep the existing preference for the unit parent."""
-    scope = cgroup_module._current_cgroup()
-    delegate = scope / "shellbox-delegate"
-    delegate.mkdir()
-    # the worker moved below the unit, so the unit itself has no direct processes
-    (scope / "cgroup.procs").write_text("")
-    (delegate / "cgroup.procs").write_text("1234\n")
-    monkeypatch.setattr(cgroup_module, "_current_cgroup", lambda: delegate)
-    checked = _patch_checks(
-        monkeypatch,
-        writable={delegate, scope, scope.parent},
-        applying={scope, scope.parent},
-    )
-    assert delegated_cgroup_parent() == scope
-    assert checked[0] == scope
-
-
-def test_shared_host_slices_are_never_candidates(cgroup_tree: Path, monkeypatch: pytest.MonkeyPatch):
+def test_shared_host_slices_are_never_candidates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A worker directly under a shared slice must not enable controllers there."""
-    root = cgroup_tree
-    shared = root / "system.slice"
-    shared.mkdir()
-    (shared / "cgroup.procs").write_text("")
-    (shared / "cgroup.kill").write_text("")
-    worker = shared / "marin-worker.service"
-    worker.mkdir()
-    (worker / "cgroup.procs").write_text("1234\n")
-    monkeypatch.setattr(cgroup_module, "_current_cgroup", lambda: worker)
-    checked = _patch_checks(
-        monkeypatch,
-        writable={worker, shared},
-        applying={shared, worker},
-    )
-    # the shared slice passes check and would apply limits, but it is not a
-    # dedicated unit: enabling controllers there affects unrelated workloads
-    assert delegated_cgroup_parent() == worker
-    assert shared not in checked
+    root = tmp_path / "cgroup"
+    root.mkdir()
+    (root / "cgroup.controllers").write_text("cpuset cpu io memory pids\n")
+    _make_cgroup(root, "system.slice", procs="")
+    worker = _make_cgroup(root, "system.slice/marin-worker.service", procs="1234\n")
+    monkeypatch.setattr(cgroup_module, "CGROUP_ROOT", root)
+    assert _fallback_parents(worker) == []
 
 
-def test_pod_slice_candidates_require_empty_internal_processes(cgroup_tree: Path, monkeypatch: pytest.MonkeyPatch):
-    """A pod slice that still holds direct processes is not a fallback candidate."""
-    scope = cgroup_module._current_cgroup()
-    slice_level = scope.parent
+def test_pod_slice_candidates_require_no_internal_processes(pod_tree):
+    scope, slice_level = pod_tree
     (slice_level / "cgroup.procs").write_text("9999\n")
-    checked = _patch_checks(
-        monkeypatch,
-        writable={scope},
-        applying={scope},
-    )
-    assert delegated_cgroup_parent() == scope
-    assert slice_level not in checked
+    assert _fallback_parents(scope) == []
+
+
+def test_cgroup_limits_applied_reads_back_written_files(tmp_path: Path):
+    applied = tmp_path / "applied"
+    applied.mkdir()
+    (applied / "cpu.max").write_text(f"{CPU_PERIOD} {CPU_PERIOD}\n")
+    (applied / "memory.max").write_text(str(1024 * 1024 * 1024) + "\n")
+    assert cgroup_limits_applied(applied, cpus=1, memory_mb=1024)
+
+    unbounded = tmp_path / "unbounded"
+    unbounded.mkdir()
+    (unbounded / "cpu.max").write_text("max 100000\n")
+    (unbounded / "memory.max").write_text("max\n")
+    assert not cgroup_limits_applied(unbounded, cpus=1, memory_mb=1024)
+
+    wrong = tmp_path / "wrong"
+    wrong.mkdir()
+    (wrong / "cpu.max").write_text(f"{2 * CPU_PERIOD} {CPU_PERIOD}\n")
+    (wrong / "memory.max").write_text(str(512 * 1024 * 1024) + "\n")
+    assert not cgroup_limits_applied(wrong, cpus=1, memory_mb=1024)
+
+    missing = tmp_path / "missing"
+    missing.mkdir()
+    assert not cgroup_limits_applied(missing, cpus=1, memory_mb=1024)
+
+
+@pytest.mark.manual
+def test_delegated_parent_enforces_and_cleans_up_delegation_probes():
+    """On a real delegated worker the discovery probes apply, read back and clean up.
+
+    This is the regression for the container-scope case: the pod slice (not the
+    worker's own scope) must be selected, and the probe's throwaway machine
+    cgroups must leave nothing behind.
+    """
+    parent = delegated_cgroup_parent()
+    if parent is None:
+        pytest.skip("Run inside a worker with a delegated cgroup v2 hierarchy")
+    before = {path for path in parent.parent.rglob("shellbox-*")} | {path for path in parent.rglob("shellbox-*")}
+    # discovery itself probed and cleaned up; a second call must agree
+    assert delegated_cgroup_parent() == parent
+    after = {path for path in parent.parent.rglob("shellbox-*")} | {path for path in parent.rglob("shellbox-*")}
+    assert before == after == set()
