@@ -1,0 +1,13 @@
+experiment: X0239
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: token_embed in its own Adam group at 4x adam_lr
+    flags:
+    - --opt-set
+    - embed_lr_mult=4.0
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
