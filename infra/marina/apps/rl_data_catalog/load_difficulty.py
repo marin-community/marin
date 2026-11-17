@@ -13,13 +13,13 @@ from finestore.rl.difficulty import MEASUREMENTS, DifficultyMeasurement, Difficu
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
+from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import DifficultyCoverage, difficulty_coverage
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
+
 # The applet transport rejects single responses over 5 MiB; bulk reads page
 # under that bound with these batch sizes.
 DIFFICULTY_READ_BATCH = 50
 DECLARATION_READ_BATCH = 100
-
-from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import DifficultyCoverage, difficulty_coverage
-from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 
 def read_measurements(view: ReadView) -> list[DifficultyMeasurement]:

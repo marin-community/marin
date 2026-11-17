@@ -20,6 +20,7 @@ from finestore.rl.difficulty import (
     difficulty_gap_reason,
 )
 
+import infra.marina.apps.rl_data_catalog.load_difficulty as load_difficulty
 from infra.marina.apps.rl_data_catalog.load_difficulty import publish_coverage
 from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import (
     CoverageStatus,
@@ -342,8 +343,6 @@ def test_publish_coverage_stores_the_document_for_the_load():
 
 def test_publish_coverage_paginates_bulk_reads_under_the_transport_bound(monkeypatch):
     """Batched bulk reads produce the identical document the unbatched read produces."""
-    import infra.marina.apps.rl_data_catalog.load_difficulty as load_difficulty
-
     stored = {}
 
     class PagedFakeQuery:
