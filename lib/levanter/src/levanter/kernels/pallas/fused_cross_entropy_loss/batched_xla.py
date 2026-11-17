@@ -639,9 +639,9 @@ def _streaming_block_grads(
 ) -> tuple[Float[Array, "B H"], Float[Array, "H Vb"]]:
     """One vocabulary block's input- and weight-gradient terms; a partial block is masked from ``v_valid`` on.
 
-    The input-gradient term is float32. The weight-gradient GEMM accumulates in float32 and returns the wider of the
-    activation and weight dtypes, so a bf16 weight's block is rounded once, in the GEMM, and a float32 weight's is not
-    rounded at all."""
+    The input-gradient term is float32. The weight-gradient GEMM returns the wider of the activation and weight dtypes:
+    a float32 weight's block stays float32, and a bf16 weight's block is rounded to bf16 once, by the GEMM, which
+    accumulates bf16 inputs in float32 on GPU and TPU."""
     v_block_size = w_block.shape[1]
     logits_raw = jax.lax.dot_general(
         x,
@@ -699,8 +699,8 @@ def _backward_streaming_from_lse(
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
     """Streaming backward pass over vocab blocks using saved LSE.
 
-    Each block's weight gradient comes from a GEMM that accumulates in float32 and writes ``w``'s dtype (rounding
-    once), and goes into the ``[H, V]`` result in place. Only a partial last block is padded."""
+    Each block's weight gradient is written in ``w``'s dtype (see ``_streaming_block_grads``) into the ``[H, V]``
+    result in place. Only a partial last block is padded."""
     b_dim, h_dim = x.shape
     v_dim = w.shape[1]
     num_full_blocks, tail = divmod(v_dim, v_block_size)
