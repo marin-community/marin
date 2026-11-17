@@ -52,6 +52,7 @@ from marin.evaluation.runner import (
     run_with_inference_recovery,
 )
 from marin.evaluation.serving_config import inference_config_for_model
+from marin.execution.step_status import StatusFile
 from marin.inference.config import (
     EffectiveServing,
     ResolvedModelLocator,
@@ -62,7 +63,7 @@ from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupE
 from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.cluster_config import marin_temp_bucket
-from rigging.filesystem.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
+from rigging.filesystem.step_status import STATUS_FAILED, STATUS_SUCCESS
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
 

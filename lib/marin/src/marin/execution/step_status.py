@@ -13,6 +13,7 @@ On GCS, we use generation-based conditional writes for atomicity.
 
 import contextlib
 import logging
+import os
 from collections.abc import Generator
 from threading import Event, Thread
 from time import sleep
@@ -21,20 +22,84 @@ from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem.distributed_lock import (
     HEARTBEAT_INTERVAL,
     LeaseLostError,
+    create_lock,
     default_worker_id,
 )
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_RUNNING,
     STATUS_SUCCESS,
-    StatusFile,
+    get_status_path,
+    read_status_file,
 )
 from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
 
 _LOCK_WAIT_LOG_INTERVAL = 5 * 60
+
+
+class StatusFile:
+    """Manages executor step status with distributed locking.
+
+    Two types of files:
+    - LOCK file (JSON): Single file for distributed lock acquisition.
+      Contains {worker_id, timestamp}. Must be refreshed periodically.
+    - Status file (simple text): Step state - SUCCESS, FAILED, DEP_FAILED, or RUNNING.
+
+    Lock acquisition and release delegate to ``rigging.filesystem.distributed_lock``.
+    """
+
+    def __init__(self, output_path: str, worker_id: str):
+        self.output_path = output_path
+        self.path = get_status_path(output_path)
+        self.worker_id = worker_id
+        self._lock_path = self.path + ".lock"
+        self.fs = url_to_fs(self.path, use_listings_cache=False)[0]
+        self._lock = create_lock(self._lock_path, worker_id=worker_id)
+
+    @property
+    def status(self) -> str | None:
+        """Read current status from status file."""
+        return read_status_file(self.fs, self.path)
+
+    def write_status(self, status: str) -> None:
+        """Write the status file without changing lock ownership.
+
+        ``step_lock`` owns the lock lifetime: it stops the heartbeat before
+        releasing the lock. Keeping status writes separate from lock release
+        prevents the heartbeat from observing our own terminal cleanup as lease
+        loss.
+        """
+        parent = os.path.dirname(self.path)
+        if not self.fs.exists(parent):
+            self.fs.makedirs(parent, exist_ok=True)
+        with self.fs.open(self.path, "w") as f:
+            f.write(status)
+
+        logger.debug("[%s] Wrote status %s to %s", self.worker_id, status, self.path)
+
+    def refresh_lock(self) -> None:
+        """Refresh a lock held by the current worker.
+
+        Raises ``LeaseLostError`` if another worker holds the lock, or if the
+        lock disappeared before the heartbeat stopped.
+        """
+        self._lock.refresh()
+
+    def try_acquire_lock(self) -> bool:
+        """Try to acquire the lock using atomic LOCK file."""
+        return self._lock.try_acquire()
+
+    def release_lock(self) -> None:
+        """Release the lock if we hold it."""
+        self._lock.release()
+
+    def active_lock_holder(self) -> str | None:
+        """Return the active lock-owner ID, or None if no active lock exists."""
+        return self._lock.active_holder_id()
 
 
 # ---------------------------------------------------------------------------
