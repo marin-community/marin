@@ -26,3 +26,9 @@ trials:
     moe_lag_window: 'true'
   commit: 7d0973a1e7
   priority: batch
+potential:
+  score: 5
+  rationale: 'No result yet: variant reached 3.02k/3.03k steps then crashed in eval (sharding error); control done -> 5'
+  model: claude-opus-5-5
+  date: '2026-11-17'
+  inputs_digest: b4612f7f0764
