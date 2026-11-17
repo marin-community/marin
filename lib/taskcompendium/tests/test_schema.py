@@ -12,6 +12,7 @@ from verifyit.spec import ExactSpec, JudgeSpec
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading import grade_answer
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -362,8 +363,6 @@ def test_task_json_rejects_prior_schema_version(specification):
 
 def test_explicit_null_execution_requirements_round_trip(specification):
     """A frozen packet carrying an explicit null keeps the key and its identity."""
-    from taskcompendium.identity import canonical_sha256
-
     wire = specification.model_dump_json()
     injected = wire.replace(
         '"environment_requirements":', '"execution_requirements":null,"environment_requirements":', 1
