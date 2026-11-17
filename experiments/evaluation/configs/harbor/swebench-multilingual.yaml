@@ -9,6 +9,9 @@ retry:
     - SandboxBuildFailedError
     - ArtifactUploadTimeoutError
     - ArtifactWriterBacklogError
+    # Daytona connection resets and unresponsive sandboxes during tmux control calls.
+    - DaytonaConnectionError
+    - TmuxBatchTimeoutError
   exclude_exceptions: []
   wait_multiplier: 2.0
   min_wait_sec: 1.0
