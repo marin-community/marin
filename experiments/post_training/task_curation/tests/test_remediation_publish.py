@@ -47,9 +47,11 @@ from experiments.post_training.task_curation.lexical_binding import LexicalMeasu
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.remediation_binding import (
+    ArchivedRetainedBinding,
     PublicationReceipt,
     RetainedReleaseReceipt,
     StaticRetentionBinding,
+    bind_archived_retained_release,
     bind_retained_release,
     measured_intake_source,
     release_lexical_evidence,
@@ -1023,3 +1025,20 @@ def test_lineage_proof_requires_a_zero_drop_readback(retained_receipt):
     assert lineage.original_input == receipt.original_info.actor_census_input
     assert lineage.original_unique_count == receipt.original_info.within_source_dedup.unique_count
     assert lineage.retained_content_sha256 == receipt.publication.retained_content_sha256
+
+
+def test_archived_retention_keeps_frozen_pin_after_live_recipe_advances(retained_receipt):
+    source, record = retained_receipt
+    advanced = replace(source, config=replace(source.config, version="next-conversion"))
+    with pytest.raises(ValueError, match="different conversion input"):
+        bind_retained_release(advanced, record)
+    binding = ArchivedRetainedBinding(
+        retained=record, authority=ContentEvidenceReference(uri="memory://archive-ruling", sha256="a" * 64)
+    )
+    frozen = bind_archived_retained_release(ArchivedRetainedBinding.model_validate_json(binding.model_dump_json()))
+    assert frozen.current_release == record.publication.release
+    assert frozen.config.tasks_parquet_sha256 == record.publication.tasks_parquet_sha256
+    assert frozen.config.expected_rows == record.publication.verified_retained_tasks
+    assert frozen.info.actor_census_input == record.actor.input
+    assert frozen.pipeline is retained_release.import_retained
+    assert advanced.version == "next-conversion" and record.original_pipeline.version == source.version

@@ -2728,6 +2728,14 @@ the typed `resource_calibration:infrastructure` reason; `exclusion_counts` recor
 the matching count. Keep those outcomes in the complete canonical receipt and
 out of the published task Parquet. Publication verifies both lists against the
 canonical outcomes without changing any grade or error classification.
+
+An explicitly approved archived converter can supply the baseline through
+`OracleAdmittedReleaseReceipt.archived_original`. Its `ArchivedRetainedBinding`
+contains the frozen retained record and a hashed approval-decision reference in
+`authority`, which must also appear in `repair_evidence`. The binding validates the
+recorded input pin, recipe version and complete census, then selects the private
+retained pin without invoking the live converter. Later converter releases with
+changed TaskSpecs require fresh oracle controls and workspace NoPs.
 Native Harbor `reward.txt` and `reward.json` outputs qualify through the production
 reward parser when their exact reward dictionary matches the validated Trial's
 `VerifierResult`. The collector records `native_grade` with the raw artifact SHA-256,

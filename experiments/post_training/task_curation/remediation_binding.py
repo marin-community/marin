@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from finestore.rl.curation import (
+    ContentEvidenceReference,
     DatasetRelease,
     DeconReceiptStatus,
     DecontaminatedRelease,
@@ -175,6 +176,44 @@ class RetainedReleaseReceipt(BaseModel):
         return self
 
 
+class ArchivedRetainedBinding(BaseModel):
+    """An explicitly authorized retained baseline independent of a live converter."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    retained: RetainedReleaseReceipt
+    authority: ContentEvidenceReference
+
+    @model_validator(mode="after")
+    def _recorded_original(self) -> "ArchivedRetainedBinding":
+        record = self.retained
+        plan, pipeline = record.publication.plan, record.original_pipeline
+        actor = record.original_info.actor_census_input
+        if record.original_info.id != record.source_id or actor is None:
+            raise ValueError("Archived retention lacks its original source census")
+        if (pipeline.source, pipeline.revision, pipeline.version) != (
+            plan.source_dataset_id,
+            plan.source_revision,
+            plan.converter_version,
+        ) or (
+            actor.dataset_id,
+            actor.dataset_revision,
+            actor.converter_version,
+            actor.converter_revision,
+            actor.task_specs_sha256,
+            actor.measured_tasks,
+        ) != (
+            plan.source_dataset_id,
+            plan.source_revision,
+            plan.converter_version,
+            plan.converter_revision,
+            plan.task_specs_sha256,
+            plan.raw_count,
+        ):
+            raise ValueError("Archived retention differs from its recorded conversion")
+        return self
+
+
 def release_lexical_evidence(publication: PublicationReceipt) -> LexicalContaminationEvidence:
     """Keep raw measurements and attach disjoint duplicate-first retention accounting."""
     plan = publication.plan
@@ -253,8 +292,27 @@ def bind_retained_release(source: RlDataSource, receipt: RetainedReleaseReceipt)
         original_input.measured_tasks,
     ) != (plan.task_specs_sha256, plan.converter_revision, plan.raw_count):
         raise ValueError(f"Retention belongs to a different converted population: {source.info.id}")
+    return _retained_population(
+        source.info,
+        receipt,
+        name=source.name,
+        dataset=dataset,
+        inherited_admission=source.current_release if source.declaration.status == "Available" else None,
+    )
+
+
+def _retained_population(
+    info: SourceInfo,
+    receipt: RetainedReleaseReceipt,
+    *,
+    name: str,
+    dataset: SourceReference,
+    inherited_admission: DatasetRelease | None,
+) -> RlDataSource[RetainedCohort]:
+    publication = receipt.publication
+    plan = publication.plan
     config = RetainedCohort(
-        name=source.name + "-retained",
+        name=name + "-retained",
         version=RETAINED_IMPORT_VERSION,
         release=publication.release,
         original_dataset=SourceReference(plan.source_dataset_id, plan.source_revision, dataset.url),
@@ -264,10 +322,10 @@ def bind_retained_release(source: RlDataSource, receipt: RetainedReleaseReceipt)
         evidence_url=publication.evidence_url,
     )
     info = replace(
-        source.info,
+        info,
         current_release=publication.release,
-        upstream_url=source.info.upstream_url or dataset.url,
-        inherited_admission=source.current_release if source.declaration.status == "Available" else None,
+        upstream_url=info.upstream_url or dataset.url,
+        inherited_admission=inherited_admission,
         dataset=config.dataset,
         count=plan.retained_count,
         task_format=TaskFormat.TASKCOMPENDIUM,
@@ -279,7 +337,7 @@ def bind_retained_release(source: RlDataSource, receipt: RetainedReleaseReceipt)
         notes=(
             f"remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; "
             f"original oversight and quality evidence apply through this subset lineage: {publication.evidence_url}. "
-            + source.info.notes
+            + info.notes
         ),
     )
     retained = RlDataSource(info=info, config=config, pipeline=import_retained)
@@ -293,6 +351,25 @@ def bind_retained_release(source: RlDataSource, receipt: RetainedReleaseReceipt)
             no_oracle_executability_policy=receipt.static_retention.policy,
             no_oracle_static_retention=receipt.static_retention.evidence,
         ),
+    )
+
+
+def bind_archived_retained_release(binding: ArchivedRetainedBinding) -> RlDataSource[RetainedCohort]:
+    """Select only the frozen private pin recorded in an authorized archived baseline."""
+    record = binding.retained
+    pipeline = record.original_pipeline
+    assert pipeline.source is not None and pipeline.revision is not None
+    dataset = SourceReference(
+        pipeline.source,
+        pipeline.revision,
+        f"https://huggingface.co/datasets/{pipeline.source}/tree/{pipeline.revision}",
+    )
+    return _retained_population(
+        record.original_info,
+        record,
+        name=pipeline.name,
+        dataset=dataset,
+        inherited_admission=None,
     )
 
 

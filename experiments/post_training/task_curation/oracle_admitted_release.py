@@ -49,6 +49,10 @@ from experiments.post_training.task_curation.prebuilt import (
     require_runnable_grader,
 )
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
+from experiments.post_training.task_curation.remediation_binding import (
+    ArchivedRetainedBinding,
+    bind_archived_retained_release,
+)
 from experiments.post_training.task_curation.retained_grading import RetainedGradingReceipt
 from experiments.post_training.task_curation.sample_qc_binding import (
     SampleQCReceipt,
@@ -77,9 +81,19 @@ class OracleAdmittedReleaseReceipt(BaseModel):
     repair_evidence: tuple[ContentEvidenceReference, ...] = Field(min_length=1)
     consumer: ContentEvidenceReference
     full_content: FullContentResultBinding | None = None
+    archived_original: ArchivedRetainedBinding | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def _qualified_population(self) -> "OracleAdmittedReleaseReceipt":
+        if self.archived_original is not None:
+            archived = bind_archived_retained_release(self.archived_original)
+            if (
+                archived.info.id != self.source_id
+                or archived.pipeline_reference != self.original_pipeline
+                or archived.info != self.original_info
+                or self.archived_original.authority not in self.repair_evidence
+            ):
+                raise ValueError("Archived oracle admission differs from its authorized retained baseline")
         evidence, actor = self.filtration, self.actor.input
         release = evidence.filtered_release
         original = self.original_info.within_source_dedup
@@ -286,6 +300,7 @@ class OracleAdmittedReleaseInput(BaseModel):
     filtration: OracleFiltrationEvidence
     execution_release: DatasetRelease | None
     qualification: ContentEvidenceReference
+    archived_original: ArchivedRetainedBinding | None = None
     repair_evidence: tuple[ContentEvidenceReference, ...] = Field(min_length=1)
     original_cohort: Path
     oracle_filter: Path
@@ -305,7 +320,11 @@ def main() -> None:
     from experiments.post_training.task_curation.sources import sources_before_oracle_filtration  # noqa: PLC0415
 
     item = OracleAdmittedReleaseInput.model_validate_json(args.manifest.read_bytes())
-    source = sources_before_oracle_filtration()[item.source_id]
+    source = (
+        bind_archived_retained_release(item.archived_original)
+        if item.archived_original is not None
+        else sources_before_oracle_filtration()[item.source_id]
+    )
     release = item.filtration.filtered_release
     if not HfApi().repo_info(release.repo, repo_type="dataset", revision=release.revision).private:
         raise ValueError("Filtered publication must remain private")
@@ -343,6 +362,7 @@ def main() -> None:
         sample=observed_sample,
         repair_evidence=item.repair_evidence,
         consumer=item.qualification,
+        archived_original=item.archived_original,
         full_content=(
             FullContentResultBinding.model_validate(metadata["full_content"])
             if metadata.get("full_content") is not None
