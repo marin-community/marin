@@ -220,15 +220,16 @@ function clearHistory() {
             <span class="hidden sm:inline">Report issue</span>
           </button>
           <label class="flex items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary">
-            Max tokens
+            Max output tokens
             <input
               v-model.number="params.maxTokens"
               type="number"
               min="1"
               step="1"
+              placeholder="no limit"
               aria-label="Maximum output tokens"
-              title="Maximum output tokens generated for each response"
-              class="w-20 rounded-lg border border-surface-border bg-surface px-2 py-1 text-sm text-text outline-none transition-colors focus:border-accent"
+              title="Maximum tokens generated for each response. Empty: no limit, the response can use the rest of the context window. The prompt and this limit together must fit in the context window."
+              class="w-24 rounded-lg border border-surface-border bg-surface px-2 py-1 text-sm text-text outline-none transition-colors focus:border-accent"
             />
           </label>
           <button

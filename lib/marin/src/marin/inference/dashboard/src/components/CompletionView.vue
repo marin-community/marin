@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from 'vue'
-import { isAbortError, requestCompletion } from '../lib/api'
+import { isAbortError, maxTokensField, requestCompletion } from '../lib/api'
 import { COMPLETION_EXAMPLES } from '../lib/examples'
 import type { SamplingParams } from '../lib/types'
 import LoadingSpinner from './LoadingSpinner.vue'
@@ -60,7 +60,7 @@ async function run() {
         prompt: prompt.value,
         stream: props.streaming,
         temperature: props.params.temperature,
-        max_tokens: props.params.maxTokens,
+        ...maxTokensField(props.params),
         top_p: props.params.topP,
       },
       props.streaming,

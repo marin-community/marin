@@ -7,6 +7,7 @@ import {
   invokeWebExtract,
   invokeWebSearch,
   isAbortError,
+  maxTokensField,
   requestCompletion,
 } from '../lib/api'
 import { chatTemplateRequestFields } from '../lib/chat_template'
@@ -320,7 +321,7 @@ async function complete(
     messages,
     stream: props.streaming,
     temperature: props.params.temperature,
-    max_tokens: props.params.maxTokens,
+    ...maxTokensField(props.params),
     top_p: props.params.topP,
     ...templateFields,
     ...vllmDebugStreamOptions(debugEnabled, props.streaming),

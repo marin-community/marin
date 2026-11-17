@@ -2,12 +2,13 @@ import { ThinkingMode } from './chat_template'
 import type { Conversation, SamplingParams } from './types'
 
 const CONVERSATIONS_KEY = 'marin-serve:conversations:v1'
-const PARAMS_KEY = 'marin-serve:params:v1'
+// v2: Max output tokens defaults to no limit; v1 saved the old 1024 default for every browser.
+const PARAMS_KEY = 'marin-serve:params:v2'
 const MAX_CONVERSATIONS = 100
 
 export const DEFAULT_PARAMS: SamplingParams = {
   temperature: 0.7,
-  maxTokens: 1024,
+  maxTokens: null,
   topP: 1.0,
   maxToolRounds: 0,
 }

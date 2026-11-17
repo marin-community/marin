@@ -80,7 +80,7 @@ async function copy() {
         role="status"
         class="mb-2 rounded-lg border border-status-danger/40 bg-status-danger/10 px-3 py-2 text-sm text-status-danger"
       >
-        The response hit the Max tokens limit and may be incomplete. Increase Max tokens and try again.
+        The response hit the Max output tokens limit or filled the context window, and may be incomplete. If Max output tokens is set, increase or clear it and try again.
       </p>
       <details v-if="showVllmDebug && message.requestDebug" class="mb-2 rounded-lg border border-surface-border bg-surface-sunken px-3 py-2 text-xs text-text-secondary">
         <summary class="cursor-pointer font-medium text-text-muted">Request stats</summary>

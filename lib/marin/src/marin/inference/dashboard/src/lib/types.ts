@@ -102,7 +102,8 @@ export interface Conversation {
 
 export interface SamplingParams {
   temperature: number
-  maxTokens: number
+  /** Output token limit per response; null leaves the rest of the context window to the response. */
+  maxTokens: number | null
   topP: number
   maxToolRounds: number
 }

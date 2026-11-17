@@ -1,6 +1,13 @@
-import type { Conversation, ImportedGitCommit, ServingInfo } from './types'
+import type { Conversation, ImportedGitCommit, SamplingParams, ServingInfo } from './types'
 import type { ToolDefinition } from './python_tools'
 import type { SharedChatSnapshot } from './shared_chat'
+
+/** The request's output limit; with no limit set the server generates until the context window is full. */
+export function maxTokensField(params: SamplingParams): { max_tokens?: number } {
+  // An emptied number input holds '' at runtime, so accept only a positive number as a limit.
+  const limit = params.maxTokens
+  return typeof limit === 'number' && limit > 0 ? { max_tokens: Math.floor(limit) } : {}
+}
 
 /** Resolve a path relative to a dashboard URL. The dashboard is served under the
  * Iris controller proxy at /proxy/<name>/, and the proxy does not rewrite
