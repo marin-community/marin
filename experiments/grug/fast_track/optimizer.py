@@ -292,7 +292,7 @@ KDA_BETA_LR_MULT = 2.0
 """MuonH LR multiple of the ``kda_beta`` group (the KDA write-strength projection)."""
 _ADAM_LEAVES = re.compile(
     r"(?:^|\.)(value_embed|ve_lambda|ve_gate|head_ve_lambda|head_ve_gate|head_ve_gain|qk_mult|dyn_conv_k|dyn_conv_v"
-    r"|lag_gain)$"
+    r"|lag_gain|pointer_w|pointer_b|pointer_open)$"
 )
 
 
@@ -446,7 +446,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if "attn_res_query" in path_lower:
                 return "attn_res_query"
             # Inkling rel-pos weights; value embeddings and their mixing weights; small per-layer gates; the dynamic
-            # K/V conv tap generators and the MoE lag-window gain (zero-initialised).
+            # K/V conv tap generators, the MoE lag-window gain and the pointer mixture's weights (zero-initialised).
             if ".rel_pos." in path_lower or _ADAM_LEAVES.search(path_lower):
                 return "adam"
             if _KDA_LOCAL_ATTN_ADAM_LEAF.search(path_lower):
