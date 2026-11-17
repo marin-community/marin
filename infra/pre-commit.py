@@ -358,11 +358,10 @@ LARGE_DATA_MESSAGE = (
 def _is_data_file(path: pathlib.Path) -> bool:
     if path.suffix.lower() in DATA_FILE_SUFFIXES:
         return True
-    try:
-        with path.open("rb") as stream:
-            return b"\0" in stream.read(8192)
-    except OSError:
-        return False
+    # No OSError fallback: an unreadable file must abort the lint rather than
+    # silently evade the large-data guard.
+    with path.open("rb") as stream:
+        return b"\0" in stream.read(8192)
 
 
 def _large_data_allowlist() -> dict[str, int]:
