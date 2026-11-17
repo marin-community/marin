@@ -374,6 +374,24 @@ class DaytonaMachine:
     async def open_process_scope(self) -> ProcessScope:
         raise UnsupportedMachineSpec("Daytona does not provide confirmed scoped descendant teardown")
 
+    async def _exit_status(
+        self, script_path: str, pidfile: str, completed_path: str, cwd: str | None, environment: dict[str, str]
+    ) -> int:
+        """Start the command script and poll in bounded requests until it exits."""
+        response = await self.sandbox.process.exec(
+            _control_command(shlex.join(("/bin/sh", script_path))),
+            cwd=cwd,
+            env=environment,
+            timeout=WAIT_REQUEST_TIMEOUT,
+        )
+        while (status := _command_status(response)) is None:
+            response = await self.sandbox.process.exec(
+                _control_command(_wait_command(pidfile, completed_path, 0)),
+                cwd=CONTROL_CWD,
+                timeout=WAIT_REQUEST_TIMEOUT,
+            )
+        return status
+
     async def run(self, command: Command) -> Result:
         if self._closed:
             raise RuntimeError("Machine is closed")
@@ -427,19 +445,9 @@ class DaytonaMachine:
                 # even when every original command argument fits.
                 await self.sandbox.fs.upload_file_stream(script.encode(), script_path)
                 started = True
-                response = await self.sandbox.process.exec(
-                    _control_command(shlex.join(("/bin/sh", script_path))),
-                    cwd=command.cwd or self.spec.workdir or None,
-                    env=environment,
-                    timeout=WAIT_REQUEST_TIMEOUT,
+                exit_code = await self._exit_status(
+                    script_path, pidfile, completed_path, command.cwd or self.spec.workdir or None, environment
                 )
-                while (status := _command_status(response)) is None:
-                    response = await self.sandbox.process.exec(
-                        _control_command(_wait_command(pidfile, completed_path, 0)),
-                        cwd=CONTROL_CWD,
-                        timeout=WAIT_REQUEST_TIMEOUT,
-                    )
-                exit_code = status
             async with asyncio.timeout(self.output_collection_timeout):
                 limit = command.output_limit_bytes
                 stdout, stdout_truncated = await self._read_output(stdout_path, limit)
