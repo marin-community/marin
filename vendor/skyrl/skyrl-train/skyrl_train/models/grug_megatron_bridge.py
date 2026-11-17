@@ -78,21 +78,20 @@ class GrugModelProvider(GPTModelProvider):
         for count in (self.num_query_groups, self.grug_local_kv_heads, self.grug_global_kv_heads):
             if self.grug_hero and count % self.tensor_model_parallel_size:
                 raise ValueError("Grug stored, local, and global KV head counts must divide evenly over TP")
-        if self.grug_hero:
-            communications = self.cp_comm_type
-            if isinstance(communications, str):
-                communications = [communications] * self.num_layers
-            for is_long, communication in zip(
-                grug_long_layer_flags(self.num_layers, self.grug_global_every), communications, strict=True
-            ):
-                validate_cp_attention(
-                    query_heads=self.num_attention_heads,
-                    kv_heads=self.grug_global_kv_heads if is_long else self.grug_local_kv_heads,
-                    tensor_parallel=self.tensor_model_parallel_size,
-                    context_parallel=self.context_parallel_size,
-                    communication=communication,
-                    sliding_window=not is_long,
-                )
+        communications = self.cp_comm_type
+        if isinstance(communications, str):
+            communications = [communications] * self.num_layers
+        for is_long, communication in zip(
+            grug_long_layer_flags(self.num_layers, self.grug_global_every), communications, strict=True
+        ):
+            validate_cp_attention(
+                query_heads=self.num_attention_heads,
+                kv_heads=self.grug_global_kv_heads if is_long else self.grug_local_kv_heads,
+                tensor_parallel=self.tensor_model_parallel_size,
+                context_parallel=self.context_parallel_size,
+                communication=communication,
+                sliding_window=not is_long,
+            )
         if self.grug_hero and self.moe_shared_expert_overlap:
             raise ValueError("Hero shared experts require moe_shared_expert_overlap=False")
         if self.grug_sconv_sites and self.mlp_chunks_for_training != 1:
@@ -242,8 +241,7 @@ class GrugMoeBridge(MegatronModelBridge):
         provider.grug_sconv_kernel = config.sconv_kernel
         provider.grug_hero = config.uses_hero_architecture
         provider.moe_latent_size = config.latent_dim
-        if provider.grug_hero:
-            provider.cp_comm_type = grug_cp_communication(long_flags)
+        provider.cp_comm_type = grug_cp_communication(long_flags)
         provider.grug_qk_mult = config.qk_mult
         provider.grug_qk_mult_long_scale = config.qk_mult_long_scale
         provider.grug_log_scaling_n_floor = config.log_scaling_n_floor
