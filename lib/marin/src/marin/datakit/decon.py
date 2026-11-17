@@ -925,6 +925,16 @@ def decon_to_parquet(
     )
 
 
+@dataclass(frozen=True)
+class RequiredEvalManifest:
+    """An independently versioned mandatory reference suite."""
+
+    path: str
+    version: str
+    names: tuple[str, ...]
+    source_catalog_sha256: str | None = None
+
+
 def build_eval_bloom(
     *,
     eval_data_sources: str | list[str],
@@ -937,6 +947,7 @@ def build_eval_bloom(
     required_eval_manifest_path: str | None = None,
     required_eval_corpus_version: str | None = None,
     required_eval_names: tuple[str, ...] = (),
+    additional_required_eval_manifests: tuple[RequiredEvalManifest, ...] = (),
     best_effort_eval_manifest_path: str | None = None,
     best_effort_eval_corpus_version: str | None = None,
     worker_resources: ResourceConfig | None = None,
@@ -976,6 +987,8 @@ def build_eval_bloom(
             report. Set this with ``required_eval_manifest_path``.
         required_eval_names: Exact benchmark names that the required manifest
             must contain.
+        additional_required_eval_manifests: Additional independently versioned
+            suites. Every listed family must have nonzero, self-matching records.
         best_effort_eval_manifest_path: Optional manifest with the exact
             best-effort artifacts to include. Artifacts must be below the
             manifest directory.
@@ -1001,6 +1014,17 @@ def build_eval_bloom(
             required_eval_names,
             text_field=text_field,
             ngram=ngram,
+        )
+    for manifest in additional_required_eval_manifests:
+        eval_paths.extend(
+            _validate_required_eval_manifest(
+                manifest.path,
+                manifest.version,
+                manifest.names,
+                text_field=text_field,
+                ngram=ngram,
+                expected_source_catalog_sha256=manifest.source_catalog_sha256,
+            )
         )
     best_effort_parameters = (
         best_effort_eval_manifest_path,
@@ -1084,6 +1108,7 @@ def _validate_required_eval_manifest(
     *,
     text_field: str,
     ngram: NGramConfig | None,
+    expected_source_catalog_sha256: str | None = None,
 ) -> list[str]:
     """Validate required artifacts and confirm that each record has a feature."""
     manifest_storage = StoragePath(manifest_path)
@@ -1101,6 +1126,10 @@ def _validate_required_eval_manifest(
         raise ValueError("required eval manifest does not mark the suite as required")
     if manifest.get("status") != "complete":
         raise ValueError(f"required eval manifest status is {manifest.get('status')!r}, expected 'complete'")
+
+    if expected_source_catalog_sha256 is not None:
+        if manifest.get("source_catalog_sha256") != expected_source_catalog_sha256:
+            raise ValueError("required eval manifest source catalog differs from the configured source pins")
 
     benchmarks = manifest.get("benchmarks")
     if not isinstance(benchmarks, list) or not all(isinstance(entry, Mapping) for entry in benchmarks):
@@ -1122,11 +1151,19 @@ def _validate_required_eval_manifest(
         expected_records = entry.get("expected_records")
         if not isinstance(name, str) or not isinstance(artifact, str) or not isinstance(expected_records, int):
             raise ValueError("required eval manifest benchmark entries need name, artifact, and expected_records")
+        if expected_records <= 0:
+            raise ValueError(f"{name}: configured reference family yielded zero records")
         artifact_path = prefix_join(manifest_parent, artifact)
         artifact_storage = StoragePath(artifact_path)
         if not artifact_storage.exists():
             raise ValueError(f"{name}: required eval artifact does not exist: {artifact_path}")
         with artifact_storage.open("rb") as source:
+            expected_sha256 = entry.get("sha256")
+            if expected_sha256 is not None:
+                actual_sha256 = hashlib.file_digest(source, "sha256").hexdigest()
+                if actual_sha256 != expected_sha256:
+                    raise ValueError(f"{name}: artifact SHA-256 differs from its sealed manifest")
+                source.seek(0)
             parquet = pq.ParquetFile(source)
             actual_records = parquet.metadata.num_rows
             if text_field not in parquet.schema_arrow.names:
@@ -1307,6 +1344,7 @@ def build_eval_bloom_step(
     required_eval_manifest_path: str | None = None,
     required_eval_corpus_version: str | None = None,
     required_eval_names: tuple[str, ...] = (),
+    additional_required_eval_manifests: tuple[RequiredEvalManifest, ...] = (),
     best_effort_eval_manifest_path: str | None = None,
     best_effort_eval_corpus_version: str | None = None,
     worker_resources: ResourceConfig | None = None,
@@ -1334,6 +1372,7 @@ def build_eval_bloom_step(
             required_eval_names: Required-suite gate passed to
             :func:`build_eval_bloom`. The path is an external input. The
             expected version and names enter the step hash.
+        additional_required_eval_manifests: Additional mandatory reference suites.
         best_effort_eval_manifest_path, best_effort_eval_corpus_version:
             Optional best-effort suite. Only the exact artifacts below its
             immutable, versioned manifest directory enter the Bloom.
@@ -1381,6 +1420,12 @@ def build_eval_bloom_step(
         "best_effort_eval_corpus_version": best_effort_eval_corpus_version,
     }
 
+    if additional_required_eval_manifests:
+        hash_attrs["additional_required_eval_manifests"] = tuple(
+            (manifest.path, manifest.version, manifest.names, manifest.source_catalog_sha256)
+            for manifest in additional_required_eval_manifests
+        )
+
     return StepSpec(
         name=name,
         fn=lambda output_path: build_eval_bloom(
@@ -1394,6 +1439,7 @@ def build_eval_bloom_step(
             required_eval_manifest_path=required_eval_manifest_path,
             required_eval_corpus_version=required_eval_corpus_version,
             required_eval_names=required_eval_names,
+            additional_required_eval_manifests=additional_required_eval_manifests,
             best_effort_eval_manifest_path=best_effort_eval_manifest_path,
             best_effort_eval_corpus_version=best_effort_eval_corpus_version,
             worker_resources=worker_resources,

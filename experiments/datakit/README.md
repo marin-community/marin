@@ -166,6 +166,35 @@ flowchart TD
     STORE -.-> RS
 ```
 
+## Evaluation references
+
+The shared decontamination Bloom requires the nine AA benchmarks and the
+`atlas-benchmark-references-v1` supplement: all 210 selected Micro210 tasks,
+SWE-bench full/Verified/Lite test splits (2,294/500/300), and 120 long-loop
+holdouts. Micro210 protects its selected instances at revision `4564ed08`;
+it does not provide full coverage of each upstream benchmark. TaskSpec
+references use supplied system/user text; SWE references use problem statements.
+Grader code, solutions and image bytes are excluded.
+
+Prepare the supplement with
+`python -m experiments.datakit.decontam.pinned_references` on a CPU worker in
+the output bucket's region, with the usual `cpu` and `datakit` extras and
+regional `MARIN_PREFIX`. Source commits, input/output SHA-256 values and exact
+counts are sealed in its manifest. Then run the reference pipeline with
+`--target decon-bloom` to build a new Bloom identity. Existing marks require
+an explicit rebuild to use it. The AA/LMH corpus and LMH best-effort policy
+are unchanged.
+
+The supplement currently exists only under `s3://marin-us-east-02a/marin`.
+Because its manifest is required, `--target decon-bloom` fails against
+`gs://marin-us-central2` or `gs://marin-eu-west4` until the supplement is
+prepared there with the command above and that region's `MARIN_PREFIX`.
+
+The earlier broader release remains evidence for these benchmark additions:
+[`release-validation.json`](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fdatakit%2Fbloom%2F_combined_fixed_3a94b52b%2Frelease-validation.json)
+at `s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_3a94b52b/release-validation.json`.
+It also contains separate LMH replacements and is not the benchmark-only release.
+
 ## Testbed samples
 
 Each testbed sample is a tree of already-normalized sources named
