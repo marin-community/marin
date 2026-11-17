@@ -179,16 +179,16 @@ Grader code, solutions and image bytes are excluded.
 Prepare the supplement with
 `python -m experiments.datakit.decontam.pinned_references` on a CPU worker in
 the output bucket's region, with the usual `cpu` and `datakit` extras and
-regional `MARIN_PREFIX`. Source commits, input/output SHA-256 values and exact
-counts are sealed in its manifest. Then run the reference pipeline with
-`--target decon-bloom` to build a new Bloom identity. Existing marks require
-an explicit rebuild to use it. The AA/LMH corpus and LMH best-effort policy
-are unchanged.
+regional `MARIN_PREFIX`. GCP workers also need the CoreWeave key pair as Iris
+secrets to read the pinned long-loop holdouts in S3. Source commits,
+input/output SHA-256 values and exact counts are sealed in its manifest. Then
+run the reference pipeline with `--target decon-bloom` to build a new Bloom
+identity. Existing marks require an explicit rebuild to use it. The AA/LMH
+corpus and LMH best-effort policy are unchanged.
 
-The supplement currently exists only under `s3://marin-us-east-02a/marin`.
-Because its manifest is required, `--target decon-bloom` fails against
-`gs://marin-us-central2` or `gs://marin-eu-west4` until the supplement is
-prepared there with the command above and that region's `MARIN_PREFIX`.
+The supplement exists under `s3://marin-us-east-02a/marin` and
+`gs://marin-us-west4`. Because its manifest is required, `--target decon-bloom`
+fails against other regional buckets until the supplement is prepared there.
 
 The earlier broader release remains evidence for these benchmark additions:
 [`release-validation.json`](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fdatakit%2Fbloom%2F_combined_fixed_3a94b52b%2Frelease-validation.json)
