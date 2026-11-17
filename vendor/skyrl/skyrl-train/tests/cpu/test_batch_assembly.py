@@ -11,6 +11,8 @@ from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
 from skyrl_train.utils.utils import validate_cfg
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
+from skyrl_train.batch_metrics import reward_metrics
+from skyrl_train.rollouts.buffer import RowFacts
 
 
 class RecordedRows:
@@ -129,3 +131,16 @@ def test_verified_closure_trainer_preserves_rollouts_and_trains_verified_repairs
     assert batch["rollout_logprobs"] is None
     assert batch["student_topk_indices"][batch["ftpo_chosen_mask"]].tolist() == [candidates[1]]
     assert trainer.all_metrics["ftpo/selected_boundaries"] == 1
+
+
+@pytest.mark.parametrize("token_rewards", [False, True], ids=["scalar", "token"])
+def test_reward_mean_uses_compensated_totals(token_rewards):
+    values = [2.0**110, 2.0**54, 1.0, -(2.0**54), -(2.0**110)]
+    batch = {
+        "prompt_token_ids": [[0]] * 5,
+        "response_ids": [[1]] * 5,
+        "rewards": [[value] for value in values] if token_rewards else values,
+        "loss_masks": [[1]] * 5,
+    }
+    metrics = reward_metrics([RowFacts.from_batch(batch)], ["g0"] * 5, n_samples_per_prompt=1)
+    assert metrics["reward/avg_raw_reward"] == 0.2
