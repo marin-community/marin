@@ -257,6 +257,7 @@ class Layout:
     host_memory: str
     gpu_variant: str
     host_cpu: int
+    host_disk: str
     priority: str
     coordinator_timeout_hours: int
     job_timeout_seconds: int

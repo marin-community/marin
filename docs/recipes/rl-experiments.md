@@ -181,7 +181,7 @@ compares stored results; `rl_scoring.py` reads measurements. These modules conta
 
 `snowball_rl.py` is Snowball's model entry. Its `SNOWBALL` value contains the presets, the
 `p40` and `e8` layouts, immutable model and task references, evaluation selections and control pins.
-The layouts declare GPU type, CPU, memory, priority and both job deadlines; their role plans
+The layouts declare GPU type, CPU, memory, disk, priority and both job deadlines; their role plans
 supply the GPU width. Presets declare seed, W&B entity, checkpoint retention and HF export
 independently of dashboard publication. Its `__main__` calls `rl.main(SNOWBALL)`.
 

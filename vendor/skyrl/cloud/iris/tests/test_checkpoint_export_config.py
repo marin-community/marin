@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import numpy as np
+from safetensors.numpy import save
 from omegaconf import OmegaConf
 
 from cloud.iris import export_hf_checkpoint, launch
@@ -15,6 +17,8 @@ from cloud.iris.export_hf_checkpoint import (
     _run_export,
     checkpoint_export_launch_config,
 )
+from cloud.iris.iris_backend import IrisBackend
+from marinskyrl.model_manifest import write_local_model_manifest
 from cloud.iris.launch_config import derive_launch_topology, load_launch_config, validate_launch_config
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
@@ -235,11 +239,14 @@ def test_nested_export_reads_cluster_config_relative_to_parent_launch(tmp_path: 
         assert "test-export-credential" not in " ".join(command)
         export = Path(policy_export_path(config.artifacts.export_root, request.step))
         export.mkdir(parents=True)
-        (export / "model.safetensors").write_bytes(b"exported-weights")
+        (export / "model.safetensors").write_bytes(save({"weight": np.ones(1, dtype=np.float32)}))
+        for name in ("config.json", "tokenizer.json", "tokenizer_config.json"):
+            (export / name).write_text("{}")
+        write_local_model_manifest(export)
         return 0
 
     monkeypatch.setattr(export_hf_checkpoint.subprocess, "call", child_export)
-    export_hf_checkpoint.export_terminal_policy(path, forward_env=("HF_TEST_KEY",))
+    IrisBackend(forward_env=("HF_TEST_KEY",)).export_terminal_policy(path)
     assert read_hf_export_request(str(checkpoint)).status is HFExportStatus.COMPLETE
     assert json.loads(output.read_text())["platform"]["coreweave"]["kube_context"] == "export-cluster"
 

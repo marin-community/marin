@@ -437,7 +437,7 @@ def run_step(
             cluster_config=cluster_config_path(layout.cluster),
             cpu=layout.host_cpu,
             memory=layout.host_memory,
-            disk="2TB",
+            disk=layout.host_disk,
             priority=layout.priority,
             max_retries=0,
             target_cluster=layout.cluster,

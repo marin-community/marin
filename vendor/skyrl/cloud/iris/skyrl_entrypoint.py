@@ -60,7 +60,13 @@ def run_config(config_path: Path) -> None:
         if config.inputs.model is not None:
             model = config.inputs.model
             config.skyrl.runtime.checkpoint_identity = str(model.identity)
-            config.skyrl.runtime.tokenizer_identity = f"{model.tokenizer_uri}@{model.tokenizer_revision}"
+            config.skyrl.runtime.tokenizer_identity = (
+                str(model.identity)
+                if model.tokenizer_uri is None
+                else f"{model.tokenizer_uri}@{model.tokenizer_revision}"
+                if model.tokenizer_revision
+                else model.tokenizer_uri
+            )
         if config.skyrl.get("trainer", {}).get("mismatch_probe", {}).get("enabled"):
             config.skyrl.runtime.checkpoint_path = str(config.skyrl.trainer.resume_path or config.inputs.model.uri)
     if job_info is not None and config.run.mode != RunMode.CHECKPOINT_EXPORT:

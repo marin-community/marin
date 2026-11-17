@@ -18,12 +18,14 @@ import pyarrow.parquet as pq
 import pytest
 import yaml
 from click.testing import CliRunner
+from cloud.iris import launch as native_launch
 from iris.client.client import IrisClient
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
-from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
+from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, materialized_config, run
+from marin.rl import skyrl as skyrl_api
 from marin.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
 from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_launch_config, read_skyrl_metrics
@@ -378,6 +380,16 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     preset = snowball_model.SNOWBALL.by_name["train-long" if case.startswith("train-") else "speed-medium"]
     roots = controls(recorded_runs, preset.name) if preset.gated else []
+    if case == "train-pass":
+        preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_disk="3TB")))
+        monkeypatch.setattr(
+            snowball_model,
+            "SNOWBALL",
+            replace(
+                snowball_model.SNOWBALL,
+                presets=tuple(preset if row.name == preset.name else row for row in snowball_model.SNOWBALL.presets),
+            ),
+        )
     initializer = (
         ArtifactHfModel(
             ArtifactStep.adopt(
@@ -393,6 +405,11 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         if case == "train-pass"
         else None
     )
+    if initializer is not None:
+        model_root = Path(initializer.step.path())
+        model_root.mkdir(parents=True)
+        for filename in ("config.json", "tokenizer_config.json"):
+            (model_root / filename).write_text("{}")
     built = snowball.build_run(preset, table=snowball_model.SNOWBALL, init=initializer)
     source = (
         None
@@ -488,17 +505,44 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         module_name = "second_model_rl"
         module = tmp_path / (module_name + ".py")
         module.write_text(
+            "from dataclasses import replace\n"
             "from marin.execution.lazy import ArtifactStep\n"
             "from marin.rl.skyrl import ArtifactHfModel\n"
             "from experiments.post_training import rl, snowball_rl\n"
             "preset = snowball_rl.SNOWBALL.by_name['train-long']\n"
+            "preset = replace(preset, recipe=replace(preset.recipe,\n"
+            "    layout=replace(preset.recipe.layout, host_disk='3TB')))\n"
+            "table = replace(snowball_rl.SNOWBALL, presets=tuple(preset if row.name == preset.name else row "
+            "for row in snowball_rl.SNOWBALL.presets))\n"
             f"step = ArtifactStep.adopt('tests/python-init', '2026.11.17', {initializer.step.path()!r}, "
             "kind=preset.model.step.artifact_type)\n"
             "init = ArtifactHfModel(step, 'tests/python-tokenizer', 'python-tokenizer-revision', relative_path='')\n"
-            "raise SystemExit(rl.main(snowball_rl.SNOWBALL, init=init, forward_env=('HF_TEST_KEY',)))\n"
+            "raise SystemExit(rl.main(table, init=init, forward_env=('HF_TEST_KEY',)))\n"
         )
         monkeypatch.syspath_prepend(str(tmp_path))
         arguments += ["--max-concurrent", "3"]
+        staged = source.with_name("native-fixture-before-execution")
+        source.rename(staged)
+
+        def launch_native(command):
+            args = native_launch.create_parser().parse_args(command[command.index("marinskyrl") + 1 :])
+            assert args.forward_env == ["HF_TEST_KEY"]
+            native = native_launch.load_launch_config(args.config)
+            assert native.iris.allocation.disk == "3TB"
+            assert native.inputs.model.tokenizer_uri == "tests/python-tokenizer"
+            shutil.copytree(staged, source, dirs_exist_ok=True)
+            response = json.loads((source / "terminal.json").read_text())["result"]
+            response["model"] = dict(
+                policy_export_uri=str(source / "policy"),
+                global_step=preset.updates,
+                tokenizer_uri="tests/python-tokenizer",
+                tokenizer_revision="python-tokenizer-revision",
+                checkpoint_root=str(source / "checkpoints"),
+                terminal_manifest_uri=str(source / "terminal.json"),
+            )
+            return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
+
+        monkeypatch.setattr(skyrl_api, "_run_launcher", launch_native)
 
         def submit(**kwargs):
             assert kwargs["entrypoint"].command == ["python", "-m", module_name, *arguments]
@@ -602,7 +646,7 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
         ("--set", "trainer.policy.optimizer_config.lr=wrong"),
     ],
 )
-def test_refusals_use_exit_four(selection, arguments, capsys):
+def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path):
     if arguments == ("python-init-rescore",):
         assert (
             snowball.main(snowball_model.SNOWBALL, argv=["rescore"], init=snowball_model.SNOWBALL.presets[0].model) == 4
@@ -610,8 +654,18 @@ def test_refusals_use_exit_four(selection, arguments, capsys):
         assert "Python init" in capsys.readouterr().err
         return
     initializer = snowball_model.SNOWBALL.presets[0].model if arguments == ("python-init-conflict",) else None
+    preset_name = "speed-medium"
     if initializer is not None:
-        arguments = ("--init", "missing-artifact@2026.11.17")
+        preset_name = "train-long"
+        name, version = "tests/valid-published-init", "2026.11.17"
+        root = tmp_path / name / version
+        _json(
+            root / RECORD_FILENAME,
+            ArtifactRecord(
+                name=name, version=version, result_type=result_type_name(Artifact), source=str(root)
+            ).model_dump(mode="json"),
+        )
+        arguments = ("--init", f"{name}@{version}")
     result = CliRunner().invoke(
         snowball.command(
             snowball_model.SNOWBALL,
@@ -619,9 +673,11 @@ def test_refusals_use_exit_four(selection, arguments, capsys):
             init=initializer,
             entry_module="experiments.post_training.snowball_rl",
         ),
-        ["--preset", "speed-medium", "--version", snowball_model.SNOWBALL.by_name["speed-medium"].revision, *arguments],
+        ["--preset", preset_name, "--version", snowball_model.SNOWBALL.by_name[preset_name].revision, *arguments],
     )
     assert result.exit_code == 4, (result.output, result.exception)
+    if initializer is not None:
+        assert "Python init and --init" in result.output
     if "trainer.dump_eval_results=false" in arguments:
         assert "owned" in result.output
 
@@ -795,6 +851,9 @@ def test_gate_compares_recorded_configuration_and_defaults(recorded_runs, tmp_pa
         for old in omitted:
             receipt = json.loads((old / "terminal.json").read_text())
             assert receipt["config"]["skyrl"]["generator"].pop("chat_template_kwargs") == {}
+            if case == "omitted-default":
+                assert receipt["config"]["inputs"].pop("starting_checkpoint") is None
+                assert receipt["config"]["iris"].pop("role_topology") is None
             write_receipt(old, receipt)
     root = control_roots[0] if case == "control-commit" else candidate
     if case in ("control-commit", "unbound-data", "allocation", "staged-profile"):

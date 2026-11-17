@@ -558,10 +558,14 @@ def _setting_keys(inputs: GateInputs, keys: set[str]) -> set[str]:
 def _schema_defaults(native_project: str, source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
     program = (
         "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
-        "from cloud.iris import rl_config_translation\n"
-        f"assert Path(rl_config_translation.__file__).resolve().is_relative_to({native_project!r})\n"
+        "from cloud.iris import launch_config, rl_config_translation\n"
+        f"assert all(Path(module.__file__).resolve().is_relative_to({native_project!r}) "
+        "for module in (launch_config,rl_config_translation))\n"
         "config = rl_config_translation.compose_config_groups(json.loads(sys.argv[1]), config_name='ppo_base_config')\n"
-        "print(json.dumps(OmegaConf.to_container(config, resolve=True, enum_to_str=True)))\n"
+        "defaults = OmegaConf.to_container(\n"
+        "    OmegaConf.structured(launch_config.SkyRLLaunchConfig), resolve=False, enum_to_str=True)\n"
+        "defaults['skyrl'] = OmegaConf.to_container(config, resolve=True, enum_to_str=True)\n"
+        "print(json.dumps(defaults))\n"
     )
     result = subprocess.run(
         skyrl_cpu_command("python", "-c", program, json.dumps(dict(groups))),
@@ -579,14 +583,14 @@ def _check_control_config(
 ) -> None:
     observed, current = comparison_config(config, recorded), comparison_config(current_config)
     differences = _changed_config_keys(observed, current)
-    missing = {key for key in differences if key not in observed and key.startswith("skyrl.")}
+    missing = {key for key in differences if key not in observed}
     if missing:
         groups = tuple(sorted(preset.recipe.config.to_skyrl().get("config_groups", {}).items()))
         defaults = _schema_defaults(
             str(recipe.REPO_ROOT / "vendor/skyrl"), Provenance.capture(recipe.REPO_ROOT).tree_hash, groups
         )
         for key in missing:
-            value = get_path(defaults, key.removeprefix("skyrl."))
+            value = get_path(defaults, key)
             if value is MISSING:
                 continue
             projected = deepcopy(current_config)

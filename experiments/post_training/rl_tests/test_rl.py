@@ -78,6 +78,32 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
         ).model_dump_json()
     )
     cli_initializer = recipe.published_model(f"{initializer.name}@{initializer.version}", preset=learning)
+    published = []
+    for suffix, config in (
+        ("own", {}),
+        (
+            "explicit",
+            {
+                "tokenizer_uri": "tests/top-tokenizer",
+                "tokenizer_revision": "top-revision",
+                "train_config": {"data": {"tokenizer": "tests/nested-ignored"}},
+            },
+        ),
+    ):
+        name = "tests/checkpoint-" + suffix
+        record = tmp_path / name / initializer.version / RECORD_FILENAME
+        record.parent.mkdir(parents=True)
+        record.write_text(
+            ArtifactRecord(
+                name=name,
+                version=initializer.version,
+                result_type=result_type_name(Artifact),
+                config=config,
+                source=str(checkpoint),
+            ).model_dump_json()
+        )
+        published.append(recipe.published_model(f"{name}@{initializer.version}", preset=learning))
+
     revisioned = replace(snowball_model.SNOWBALL.by_name["speed-short"], revision="2026.11.12.2")
     steps = (
         changed,
@@ -94,6 +120,7 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
         ).runs[0],
         snowball.build_run(revisioned, control=True, table=snowball_model.SNOWBALL).runs[0],
         snowball.build_run(learning, init=cli_initializer, table=snowball_model.SNOWBALL).runs[0],
+        *(snowball.build_run(learning, init=model, table=snowball_model.SNOWBALL).runs[0] for model in published),
     )
     paths = []
     for index, step in enumerate(steps):
@@ -125,12 +152,20 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     ) == (False, "float16", True, {})
     assert configs[2]["inputs"]["model"]["uri"] == str(export)
     assert configs[2]["iris"]["wandb_entity"] == "test-team"
-    for config, revision in ((configs[2], "tokenizer-revision"), (configs[-1], "a" * 40)):
+    for config, revision in ((configs[2], "tokenizer-revision"), (configs[5], "a" * 40)):
         assert (config["inputs"]["model"]["tokenizer_uri"], config["inputs"]["model"]["tokenizer_revision"]) == (
             "tests/own-tokenizer",
             revision,
         )
         assert config["inputs"]["model"]["uri"] == str(export)
+    assert (configs[6]["inputs"]["model"]["tokenizer_uri"], configs[6]["inputs"]["model"]["tokenizer_revision"]) == (
+        None,
+        None,
+    )
+    assert (configs[7]["inputs"]["model"]["tokenizer_uri"], configs[7]["inputs"]["model"]["tokenizer_revision"]) == (
+        "tests/top-tokenizer",
+        "top-revision",
+    )
     callbacks = configs[3]["skyrl"]["trainer"]["callbacks"]
     assert next(row for row in callbacks if row["type"] == "evaluation")["eval_on_train_end"] is True
     assert configs[3]["skyrl"]["trainer"]["max_steps"] == 2
