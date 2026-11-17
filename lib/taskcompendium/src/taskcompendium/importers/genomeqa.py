@@ -38,9 +38,9 @@ CELL_COUNTS = {
     f"{task}/{answer_format}": 100 if task == "6_motif" else 500 for task in SUBTASKS for answer_format in FORMATS
 }
 POPULATION = sum(CELL_COUNTS.values())
-FILE_HASHES = {
-    "binary": "0ef4c3d33541980e3fded9a5b23a952296ce3c51cb0415b42c0299a61c21938a",
-    "mcq": "c1cbb51449eb8a5241890337c88dc1bc0a58974b8eb4cb8bc49f310b12faeb75",
+FORMAT_BY_SHA256 = {
+    "0ef4c3d33541980e3fded9a5b23a952296ce3c51cb0415b42c0299a61c21938a": "binary",
+    "c1cbb51449eb8a5241890337c88dc1bc0a58974b8eb4cb8bc49f310b12faeb75": "mcq",
 }
 
 
@@ -62,9 +62,9 @@ def load_system_prompt(path: str) -> str:
 
 def read_genomeqa(path: StoragePath, _context: ConversionContext) -> Iterator[dict]:
     """Validate each complete pinned format before publishing its questions."""
-    answer_format = path.parent.name
-    if file_sha256(path) != FILE_HASHES[answer_format]:
-        raise ValueError(f"GenomeQA {answer_format} checksum mismatch")
+    answer_format = FORMAT_BY_SHA256.get(file_sha256(path))
+    if answer_format is None:
+        raise ValueError("GenomeQA checksum mismatch")
     counts = Counter()
     seen = set()
     for row in parquet_rows(path):

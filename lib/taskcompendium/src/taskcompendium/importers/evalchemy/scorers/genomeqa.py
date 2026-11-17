@@ -11,11 +11,12 @@ from verifyit.grade import Reward, scored
 MACRO_METRIC = "genomeqa_macro"
 
 _ANSWER_HEADING = "### Answer"
+_CHOICE = r"[A-Za-z](?!\w)"
 _ANSWER = re.compile(
-    r"\bAnswer\s*:\s*\**\s*\[?" r"([A-Za-z](?![A-Za-z])(?:\]?\**\s*(?:or|and|/|,)\s*\**\[?[A-Za-z](?![A-Za-z]))*)\]?",
+    rf"\bAnswer\s*:\s*\**\s*[\[(]?({_CHOICE}(?:[\])]?\**\s*(?:or|and|/|,)\s*\**[\[(]?{_CHOICE})*)",
     re.IGNORECASE,
 )
-_LETTER = re.compile(r"(?<![A-Za-z])([A-Z])(?![A-Za-z])")
+_LETTER = re.compile(r"(?<!\w)([A-Z])(?!\w)")
 
 
 def grade_genomeqa(expected: str, options: str, cell_weight: float, response: str, stop_reason: str) -> Reward:
