@@ -139,6 +139,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
                     global_step=None,
                     tokenizer=self.tokenizer,
                     val_set_name=name,
+                    records_export_root=str(self.cfg.trainer.export_path),
                     trajectory_sink=trajectory_sink,
                 )
                 results.update(named_evaluation_metrics(profile_results, name))

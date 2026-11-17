@@ -44,6 +44,7 @@ from experiments.post_training import rl_recipe as recipe
 from experiments.post_training.rl_command import EXIT_CODES, RLCommand
 from experiments.post_training.rl_presets import ControlPin, ModelPresets
 from experiments.post_training.rl_scoring import (
+    AAII_WEIGHTS,
     GateInputs,
     InvalidComparison,
     RunData,
@@ -82,11 +83,11 @@ def validate_requirements(
 
 def validate_candidate(
     preset: presets.Preset, inputs: GateInputs, *, table: ModelPresets, control: bool = False
-) -> None:
-    """Compose the submitted inputs and check every gated control against current defaults."""
-    defaults, _ = _current_configs(preset, inputs)
+) -> dict:
+    """Return the composed candidate after checking gated controls against current defaults."""
+    defaults, candidate = _current_configs(preset, inputs)
     if control or not preset.gated:
-        return
+        return candidate
     pin = control_pin(preset, table=table)
     for index in range(pin.runs):
         path = control_path(preset, pin, index, table=table)
@@ -98,6 +99,7 @@ def validate_candidate(
         except ValueError as error:
             raise InvalidComparison(str(error)) from error
         _check_control_config(receipt.native.config, defaults, launch, preset=preset)
+    return candidate
 
 
 def gate_inputs(
@@ -321,7 +323,14 @@ def _compare(
 
 
 def _render_markdown(report: GateReport) -> str:
-    lines = [f"# {report.preset}"]
+    lines = [
+        f"# {report.preset}",
+        "",
+        "AAII v4.3.2 category weights: "
+        + ", ".join(f"{category} {weight:.0%}" for category, weight in AAII_WEIGHTS.items())
+        + ". Weights are normalized over represented categories; format has weight zero. "
+        "A represented category without scored tasks has no weighted mean.",
+    ]
     tables = (
         (
             "Objectives",
@@ -619,6 +628,10 @@ def _write_gate(
     invariants, comparisons = [], []
     verdict, label, reason = Verdict.INVALID, None, None
     try:
+        receipts = [read_stored_skyrl_attempt(path) for path in run_paths]
+        metadata = metadata.model_copy(
+            update={"attempt_ids": tuple(receipt.attempt_id for receipt in receipts if receipt)}
+        )
         runs = [
             with_requirements(with_objectives(load_run(path, preset, inputs), preset), inputs.requirements)
             for path in run_paths

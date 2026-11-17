@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 import click
 import pytest
@@ -14,12 +16,14 @@ from marin.execution.lazy import OUT, ArtifactStep, apply, materialized_config, 
 from marin.rl import skyrl as skyrl_api
 from marin.rl.skyrl import ArtifactHfModel
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 
 from experiments.post_training import rl as snowball
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_recipe as recipe
 from experiments.post_training import snowball_rl as snowball_model
+from experiments.post_training.rl_command import grafana_url
 from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs, native_json
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SELECTION_PREFIX
 
@@ -56,11 +60,15 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
             ),
         ),
     )
-    checkpoint = tmp_path / "checkpoint"
+    checkpoint = StoragePath("s3://marin-test/models/checkpoint")
     export = checkpoint / "hf"
-    export.mkdir(parents=True)
-    for name in ("config.json", "tokenizer_config.json"):
-        (export / name).write_text("{}")
+    files = {str(export / name).removeprefix("s3://") for name in ("config.json", "tokenizer_config.json")}
+    monkeypatch.setattr("s3fs.S3FileSystem.glob", lambda self, path, **kwargs: [str(export / "config.json")])
+    monkeypatch.setattr("s3fs.S3FileSystem.modified", lambda self, path: datetime(2026, 1, 1, tzinfo=UTC))
+    monkeypatch.setattr(
+        "s3fs.S3FileSystem.exists",
+        lambda self, path, **kwargs: str(path).removeprefix("s3://") in files | {str(checkpoint).removeprefix("s3://")},
+    )
     metadata = {"train_config": {"data": {"tokenizer": "tests/own-tokenizer"}}}
     monkeypatch.setattr(model_cache, "model_info", lambda *args, **kwargs: SimpleNamespace(sha="a" * 40))
     initializer = ArtifactStep.adopt(
@@ -360,14 +368,14 @@ print(json.dumps(selected))
 
 def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch):
     revisions = {
-        "speed-short": {"2026.11.13.1": "96e0d088"},
-        "data-short": {"2026.11.13.1": "7d9a590f"},
-        "speed-medium": {"2026.11.12.1": "e75349ff"},
-        "learning-medium": {"2026.11.12.1": "ba638a12"},
-        "data-medium": {"2026.11.12.1": "ba638a12"},
-        "speed-long": {"2026.11.11.1": "cd0a5f4e"},
-        "train-long": {"2026.11.11.1": "4945b701"},
-        "train-long-harbor": {"2026.11.17.2": "f0fddfb4"},
+        "speed-short": {"2026.11.13.1": "96e0d088", "2026.11.17.1": "363225a9"},
+        "data-short": {"2026.11.13.1": "7d9a590f", "2026.11.17.1": "772467a8"},
+        "speed-medium": {"2026.11.12.1": "e75349ff", "2026.11.17.1": "5cd852f4"},
+        "learning-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2"},
+        "data-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2"},
+        "speed-long": {"2026.11.11.1": "cd0a5f4e", "2026.11.17.1": "f29155cc"},
+        "train-long": {"2026.11.11.1": "4945b701", "2026.11.17.1": "b411c765"},
+        "train-long-harbor": {"2026.11.17.2": "5a71e7e8"},
     }
     configs = assert_revisioned_native_configs(
         snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch
@@ -528,3 +536,21 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     for tasks in (recipe.selection_artifact(snowball_model.SNOWBALL.by_name["learning-medium"].tasks), selection):
         with pytest.raises(click.BadParameter, match="full EvalLite"):
             snowball.build_run(data, tasks=tasks, table=snowball_model.SNOWBALL)
+
+
+def test_grafana_url_selects_native_run_and_utc_window():
+    result = urlparse(grafana_url("users/test/run", "marin-east", "rl", "2026-11-06T18:40:00Z", "2026-11-06T19:40:00Z"))
+    assert result.path == "/d/marin-rl-runs/rl-post-training"
+    assert parse_qs(result.query) == {
+        "orgId": ["1"],
+        "timezone": ["utc"],
+        "from": ["1793990400000"],
+        "to": ["1793994000000"],
+        "var-training_type": ["rl"],
+        "var-cluster": ["marin-east"],
+        "var-run": ["users/test/run"],
+        "var-job": ["$__all"],
+        "var-execution": ["$__all"],
+    }
+    open_window = parse_qs(urlparse(grafana_url("generation", "marin-east", None, "2026-11-06T18:40:00Z")).query)
+    assert open_window["to"] == ["now"] and open_window["var-training_type"] == ["sync"]

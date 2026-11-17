@@ -1,11 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import hashlib
 from itertools import permutations
 from types import SimpleNamespace
 from dataclasses import replace
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
+from finestore.rl.strata import MembershipState, SelectionDefinition, SelectionTaskRow
+from finestore.schema import arrow_schema
+from taskcompendium.identity import canonical_sha256
 from omegaconf import OmegaConf
 from transformers import AutoTokenizer
 from rolloutengine.models import ModelTurn
@@ -32,9 +39,52 @@ from tests.cpu.tiny_training.tiny_model import build_tiny_policy
 @pytest.mark.parametrize("experiment_type", [BasePPOExp, TerminalBenchExp])
 def test_final_profiles_build_primary_and_named_datasets_without_periodic_evaluation(tmp_path, experiment_type):
     config = get_default_config()
-    primary, named = tmp_path / "primary.parquet", tmp_path / "named.parquet"
+    primary, named = tmp_path / "primary" / "tasks.parquet", tmp_path / "named" / "tasks.parquet"
     for path in (primary, named):
-        write_tasks(path, [lowered_task(text_task(path.stem))])
+        path.parent.mkdir()
+        task = text_task("shared")
+        if experiment_type is BasePPOExp and path == primary:
+            pq.write_table(
+                pa.table(
+                    {
+                        "task_spec": [task.model_dump_json()],
+                        "family": ["primary"],
+                        "aai_category": ["general"],
+                        "source": ["declared-source"],
+                        "topic": ["algebra"],
+                        "difficulty": ["hard"],
+                    }
+                ),
+                path,
+            )
+        else:
+            write_tasks(path, [lowered_task(task)])
+        pq.write_table(
+            pa.Table.from_pylist([{"task_spec": task.model_dump_json()}]), path.parent / "validation.parquet"
+        )
+        row = SelectionTaskRow(
+            task_id=task.id,
+            task_digest=canonical_sha256(task.model_dump(mode="json")),
+            family=path.parent.name,
+            source="declared-source",
+            aai_category="general",
+            topic="algebra",
+            difficulty="hard",
+            state=MembershipState.ACTIVE,
+        )
+        pq.write_table(
+            pa.Table.from_pylist([row.model_dump(mode="json")], schema=arrow_schema(SelectionTaskRow)),
+            path.parent / "task_manifest.parquet",
+        )
+        (path.parent / "summary.json").write_text(
+            json.dumps(
+                {
+                    "selection_strata": SelectionDefinition(
+                        name=path.parent.name, version="1", sampling="all", task_files=("validation.parquet",)
+                    ).model_dump(mode="json")
+                }
+            )
+        )
     config.data.val_data = [str(primary)]
     config.data.task_cache_dir = str(tmp_path / "task-cache")
     if experiment_type is TerminalBenchExp:
@@ -58,11 +108,73 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
     named_datasets = experiment.get_named_eval_datasets()
 
     assert primary_dataset is not None
-    assert [row["input"].spec.task.id for row in primary_dataset.collate_fn(list(primary_dataset))] == ["primary"]
+    assert [row["input"].spec.task.id for row in primary_dataset.collate_fn(list(primary_dataset))] == ["shared"]
     named_dataset = named_datasets["named_final"]
-    assert [row["input"].spec.task.id for row in named_dataset.collate_fn(list(named_dataset))] == ["named"]
+    assert [row["input"].spec.task.id for row in named_dataset.collate_fn(list(named_dataset))] == ["shared"]
     if experiment_type is TerminalBenchExp:
-        assert (primary_dataset.uid(0), named_dataset.uid(0)) == ("primary", "named")
+        assert (primary_dataset.uid(0), named_dataset.uid(0)) == ("shared", "shared")
+
+    identities = [
+        dataset.collate_fn(list(dataset))[0]["input"].metadata for dataset in (primary_dataset, named_dataset)
+    ]
+    assert [
+        (
+            item.evaluation_identity.panel_name,
+            item.evaluation_identity.strata.family,
+            item.evaluation_identity.strata.source,
+            item.evaluation_identity.strata.aai_category,
+            item.evaluation_identity.strata.topic,
+            item.evaluation_identity.strata.difficulty,
+        )
+        for item in identities
+    ] == [
+        ("primary", "primary", "declared-source", "general", "algebra", "hard"),
+        ("named", "named", "declared-source", "general", "algebra", "hard"),
+    ]
+    assert all(item.data_source != "declared-source" for item in identities)
+    config.data.val_data = [str(primary), str(named)]
+    with pytest.raises(ValueError, match="conflicting selection identities"):
+        experiment.get_eval_dataset()
+    if experiment_type is TerminalBenchExp:
+        package = tmp_path / "packages" / "shared"
+        (package / "environment").mkdir(parents=True)
+        (package / "tests").mkdir()
+        (package / "tests/test.sh").write_text("#!/bin/sh\nexit 0\n")
+        (package / "instruction.md").write_text("Write an answer.")
+        (package / "task.toml").write_text(
+            f'[verifier]\nenvironment_mode = "separate"\n[environment]\ndocker_image = "{NATIVE_ENVIRONMENT.docker_image}"\n'
+        )
+        config.trainer.max_prompt_length = 4096
+        package_dataset = experiment.get_eval_dataset([str(package.parent)])
+        package_input = package_dataset.collate_fn(list(package_dataset))[0]["input"]
+        assert package_input.spec.task.id == "shared" and package_input.metadata.evaluation_identity is None
+        with pytest.raises(ValueError, match="conflicting selection identities"):
+            experiment.get_eval_dataset([str(primary), str(package.parent)])
+    else:
+        raw = {
+            "prompt": [{"role": "user", "content": "Count cats."}],
+            "env_class": "cat_count",
+            "data_source": "original",
+            "extra_info": {"n": 1},
+        }
+        source_file = tmp_path / "raw.jsonl"
+        source_file.write_text(json.dumps(raw) + "\n")
+        source_dataset = experiment.get_eval_dataset([str(source_file)])
+        source_task = source_dataset.collate_fn(list(source_dataset))[0]["input"].spec.task
+        payload = json.dumps(raw, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        assert source_task.source.revision == "sha256:" + hashlib.sha256(payload).hexdigest()
+        original = pq.read_table(primary)
+        mismatched = original.set_column(
+            original.schema.get_field_index("family"), "family", pa.array(["wrong-family"])
+        )
+        pq.write_table(mismatched, primary)
+        with pytest.raises(ValueError, match="row strata differ from selection manifest"):
+            experiment.get_eval_dataset([str(primary)])
+        pq.write_table(original, primary)
+    config.data.val_data = [str(primary)]
+    (primary.parent / "summary.json").write_text('{"selection_strata": null}')
+    with pytest.raises(ValueError, match="SelectionDefinition"):
+        experiment.get_eval_dataset()
 
 
 @pytest.mark.parametrize("per_token", [False, True])

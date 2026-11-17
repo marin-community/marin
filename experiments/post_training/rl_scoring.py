@@ -9,7 +9,7 @@ import math
 import re
 import statistics
 from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
@@ -19,26 +19,30 @@ import click
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from marin.rl.rl_progress import Invariant
+from finestore.rl.run_records import AttemptRecord, read_evaluations
+from finestore.rl.strata import MembershipState, read_selection_strata
+from marin.rl.rl_progress import Comparison, ComparisonRole, Invariant
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
     RecordedLaunch,
     RecordedSource,
     attempt_tracking,
-    read_skyrl_launch_config,
     read_skyrl_metrics,
+    read_stored_skyrl_attempt,
     recorded_launch,
 )
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grading_result import Outcome
+from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_recipe as recipe
-from experiments.post_training.task_curation.selection import TASK_MANIFEST_FILENAME, TASK_SPEC_COLUMN
+from experiments.post_training.task_curation.selection import TASK_SPEC_COLUMN
 
-SLICE_COLUMNS = ("family", "aaii_category", "agentic")
+SLICE_COLUMNS = ("family", "aai_category", "source", "topic", "difficulty", "agentic")
+AAII_WEIGHTS = {"scientific_reasoning": 0.2, "coding": 0.2, "general": 0.3, "agents": 0.3}
 
 EVAL_SCORE_SCHEMA = pa.schema(
     [
@@ -58,11 +62,8 @@ class InvalidComparison(ValueError):
 
 
 def task_manifest(root: StoragePath) -> dict[str, dict]:
-    fs, key = filesystem_for(str(root / TASK_MANIFEST_FILENAME))
-    if not fs.exists(key):
-        return {}
-    with fs.open(key, "rb") as stream:
-        return {row["task_id"]: row for row in pq.read_table(stream).to_pylist()}
+    panel = read_selection_strata(str(root))
+    return {task_id: row.model_dump(mode="json") for task_id, row in panel.tasks.items()} if panel is not None else {}
 
 
 def paths(pattern: StoragePath) -> list[StoragePath]:
@@ -90,14 +91,49 @@ def _evaluation_answers(dump_root: StoragePath) -> list[EvaluationAnswer]:
     return answers
 
 
-def _recorded_config(run_output: str) -> RecordedLaunch:
-    document = read_skyrl_launch_config(run_output)
-    return RecordedLaunch.from_document(document, attempt=document["run"]["attempt_id"])
+def _evaluation_record(run_output: str) -> AttemptRecord:
+    record = read_stored_skyrl_attempt(run_output)
+    if record is None:
+        raise InvalidComparison(f"evaluation attempt receipt is unavailable: {run_output}")
+    return record
 
 
-def evaluation_answers(run_output: str, launch: RecordedLaunch | None = None) -> list[EvaluationAnswer]:
-    launch = launch or _recorded_config(run_output)
-    return _evaluation_answers(StoragePath(launch.export_root) / "dumped_evals")
+def _selected_evaluation_record(
+    run_output: str, launch: RecordedLaunch | None, receipt: AttemptRecord | None
+) -> tuple[AttemptRecord, RecordedLaunch]:
+    record = receipt or _evaluation_record(run_output)
+    selected = recorded_launch(record)
+    if (record.run_id, record.attempt_id) != (selected.run_id, selected.attempt_id):
+        raise InvalidComparison("evaluation receipt identity differs from its configuration")
+    if launch is not None and (launch.run_id, launch.attempt_id, launch.export_root) != (
+        selected.run_id,
+        selected.attempt_id,
+        selected.export_root,
+    ):
+        raise InvalidComparison("evaluation launch differs from the selected receipt")
+    return record, launch or selected
+
+
+def _attempt_answers(record: AttemptRecord, root: StoragePath) -> list[EvaluationAnswer]:
+    if record.evaluation_storage_version == 1:
+        root = root / record.attempt_id
+        if not root.exists():
+            raise InvalidComparison(f"evaluation dump is missing for attempt {record.attempt_id}: {root}")
+    answers = _evaluation_answers(root)
+    if record.evaluation_storage_version == 1:
+        if any(
+            row.answer.get("attempt_id") != record.attempt_id or row.answer.get("step") != row.step for row in answers
+        ):
+            raise InvalidComparison(f"evaluation dump attribution differs from attempt {record.attempt_id}")
+        answers = [row for row in answers if row.answer["is_last_step"]]
+    return answers
+
+
+def evaluation_answers(
+    run_output: str, launch: RecordedLaunch | None = None, *, receipt: AttemptRecord | None = None
+) -> list[EvaluationAnswer]:
+    record, launch = _selected_evaluation_record(run_output, launch, receipt)
+    return _attempt_answers(record, StoragePath(launch.export_root) / "dumped_evals")
 
 
 def recorded_sources(launch: RecordedLaunch, name: str) -> list[RecordedSource]:
@@ -113,15 +149,20 @@ class RecordedTaskSet(NamedTuple):
     task_set_sha256: str
 
 
+def _task_specs(path: StoragePath) -> Iterator[tuple[str, str]]:
+    fs, key = filesystem_for(str(path))
+    with fs.open(key, "rb") as stream:
+        for raw in pq.read_table(stream, columns=[TASK_SPEC_COLUMN])[TASK_SPEC_COLUMN].to_pylist():
+            yield json.loads(raw)["id"], raw
+
+
 def read_recorded_task_set(launch: RecordedLaunch, name: str) -> RecordedTaskSet:
     """Read evaluation task IDs and a hash of the sorted raw TaskSpec strings."""
-    pairs = []
-    for source in recorded_sources(launch, name):
-        path = StoragePath(source.uri) / source.relative_path
-        fs, key = filesystem_for(str(path))
-        with fs.open(key, "rb") as stream:
-            for raw in pq.read_table(stream, columns=[TASK_SPEC_COLUMN])[TASK_SPEC_COLUMN].to_pylist():
-                pairs.append((json.loads(raw)["id"], raw))
+    pairs = [
+        pair
+        for source in recorded_sources(launch, name)
+        for pair in _task_specs(StoragePath(source.uri) / source.relative_path)
+    ]
     payload = json.dumps(sorted(pairs), separators=(",", ":"), ensure_ascii=False).encode()
     return RecordedTaskSet(tuple(task_id for task_id, _ in pairs), hashlib.sha256(payload).hexdigest())
 
@@ -166,13 +207,84 @@ def evaluation_scores(
     primary_answers: list[EvaluationAnswer] | None = None,
     *,
     launch: RecordedLaunch | None = None,
+    panel_root: str | None = None,
+    step: int | None = None,
+    receipt: AttemptRecord | None = None,
 ) -> pa.Table:
-    launch = launch or _recorded_config(run_output)
+    """Read one recorded attempt, optionally joining an earlier panel's active membership."""
+    record, launch = _selected_evaluation_record(run_output, launch, receipt)
+    if record.evaluation_storage_version != 1:
+        if panel_root is not None:
+            raise InvalidComparison("version recomputation requires per-task evaluation records")
+        scores = _legacy_evaluation_scores(evaluation, run_output, primary_answers, launch=launch, receipt=record)
+        return scores.filter(pc.equal(scores["step"], step)) if step is not None else scores
+    tasks = read_evaluations(
+        launch.export_root, attempt_id=record.attempt_id, evaluation=native_prefix(launch, evaluation.name), step=step
+    )
+    if not tasks:
+        raise InvalidComparison(f"per-task evaluation records are missing for attempt {record.attempt_id}")
+    panel = read_selection_strata(panel_root) if panel_root is not None else None
+    if panel_root is not None and panel is None:
+        raise InvalidComparison(f"selection strata are unavailable: {panel_root}")
+    if panel is not None:
+        expected = {task_id for task_id, row in panel.tasks.items() if row.state == MembershipState.ACTIVE}
+        original_content = {
+            task_id: canonical_sha256(json.loads(raw))
+            for filename in panel.definition.task_files
+            for task_id, raw in _task_specs(StoragePath(panel_root) / filename)
+        }
+        measured_content = {
+            task_id: canonical_sha256(json.loads(raw))
+            for source in recorded_sources(launch, evaluation.name)
+            for task_id, raw in _task_specs(StoragePath(source.uri) / source.relative_path)
+        }
+        if any(original_content[task_id] != measured_content.get(task_id) for task_id in expected):
+            raise InvalidComparison("panel recomputation task content differs from the measured source")
+        expected_answers = evaluation_protocol(launch, evaluation.name)["n_samples_per_prompt"]
+        if any(len(row.answers) != expected_answers for row in tasks if row.task_id in expected):
+            raise InvalidComparison("panel recomputation has incomplete answer coverage")
+        for measured_step in {row.step for row in tasks}:
+            missing = expected - {row.task_id for row in tasks if row.step == measured_step}
+            if missing:
+                raise InvalidComparison(f"panel recomputation is incomplete at step {measured_step}: {sorted(missing)}")
+        tasks = [row for row in tasks if row.task_id in expected]
+    rows = []
+    attempts = Counter()
+    for task, answer in sorted(
+        ((row, value) for row in tasks for value in row.answers), key=lambda pair: (pair[0].step, pair[1].ordinal)
+    ):
+        identity = panel.tasks[task.task_id] if panel is not None else task
+        strata = identity.strata
+        verified = answer.verification_status == "verified" and answer.verifier_score is not None
+        rows.append(
+            {
+                "evaluation": evaluation.name,
+                "step": task.step,
+                "item": task.task_id,
+                "attempt": attempts[task.step, task.task_id],
+                **strata.model_dump(),
+                "agentic": identity.agentic,
+                "score": answer.verifier_score if verified else 0.0,
+                "scored": verified and not answer.error_type and not answer.error_treatment,
+            }
+        )
+        attempts[task.step, task.task_id] += 1
+    return pa.Table.from_pylist(rows, schema=EVAL_SCORE_SCHEMA)
+
+
+def _legacy_evaluation_scores(
+    evaluation: presets.Evaluation,
+    run_output: str,
+    primary_answers: list[EvaluationAnswer] | None = None,
+    *,
+    launch: RecordedLaunch,
+    receipt: AttemptRecord,
+) -> pa.Table:
     sources = recorded_sources(launch, evaluation.name)
     answers = (
-        _evaluation_answers(StoragePath(launch.export_root) / evaluation.name / "dumped_evals")
+        _attempt_answers(receipt, StoragePath(launch.export_root) / evaluation.name / "dumped_evals")
         if native_prefix(launch, evaluation.name) != "eval/"
-        else evaluation_answers(run_output, launch) if primary_answers is None else primary_answers
+        else evaluation_answers(run_output, launch, receipt=receipt) if primary_answers is None else primary_answers
     )
     manifest = {}
     for source in sources:
@@ -180,6 +292,8 @@ def evaluation_scores(
     attempts = Counter()
     rows = []
     for step, path, row in answers:
+        if not row.get("is_last_step", True):
+            continue
         item = row.get("task_id")
         if not item:
             raise InvalidComparison(f"evaluation answer lacks a TaskSpec id: {path}")
@@ -250,7 +364,23 @@ def evaluation_statistics(scores: pa.Table) -> dict[str, float]:
         if len({row["step"] for row in rows}) != 1:
             raise ValueError(f"select one weight step before aggregating {evaluation}")
         scored = [row for row in rows if row["scored"]]
+        result[f"{evaluation}/attempted"] = len(rows)
+        result[f"{evaluation}/scored"] = len(scored)
         result[f"{evaluation}/scored_fraction"] = len(scored) / len(rows)
+        represented = {
+            category: weight
+            for category, weight in AAII_WEIGHTS.items()
+            if any(row["aai_category"] == category for row in rows)
+        }
+        weight_sum = math.fsum(represented.values())
+        result[f"{evaluation}/aai_category_weight_coverage"] = weight_sum
+        if weight_sum:
+            result.update(
+                {
+                    f"{evaluation}/aai_category/{category}/weight": weight / weight_sum
+                    for category, weight in represented.items()
+                }
+            )
         if not scored:
             continue
         tasks = defaultdict(list)
@@ -271,6 +401,14 @@ def evaluation_statistics(scores: pa.Table) -> dict[str, float]:
         ]
         if families:
             result[f"{evaluation}/family_mean"] = math.fsum(families) / len(families)
+        if weight_sum and all(f"{evaluation}/aai_category/{category}/mean" in result for category in represented):
+            result[f"{evaluation}/aai_weighted_mean"] = (
+                math.fsum(
+                    weight * result[f"{evaluation}/aai_category/{category}/mean"]
+                    for category, weight in represented.items()
+                )
+                / weight_sum
+            )
     return result
 
 
@@ -397,7 +535,7 @@ def _session_invariants(
     counts = Counter(row["item"] for row in rows)
     holds = len(rows) == expected and set(counts.values()) == {evaluation.answers} and set(counts) == set(task_ids)
     result = [Invariant(name=f"{name}/batch_finished", value=len(rows), limit=expected, comparator="==", holds=holds)]
-    if evaluation == preset.guarded:
+    if evaluation == preset.guarded or (preset.checkpoint_every and evaluation.held_out):
         coverage = len({row["item"] for row in rows if row["scored"]}) / (expected // evaluation.answers)
         result.append(
             Invariant(
@@ -420,6 +558,7 @@ class RunData:
     provenance: dict
     values: dict[str, float]
     invariants: tuple[Invariant, ...]
+    evaluations: tuple[Comparison, ...]
     slices: dict[str, int]
     evaluation_identity: dict[str, tuple[str | None, dict]]
     h100_hours: float | None
@@ -436,16 +575,18 @@ def load_run(
     path: str,
     preset: presets.Preset,
     inputs: GateInputs | None = None,
+    *,
+    receipt: AttemptRecord | None = None,
 ) -> RunData:
     inputs = inputs or GateInputs(preset_name=preset.name)
-    terminal = read_skyrl_attempt(path)
+    terminal = receipt or read_skyrl_attempt(path)
     if terminal is None:
         raise FileNotFoundError(f"no launch receipt at {path}")
     if terminal.native.result.state != "succeeded":
         raise InvalidComparison(f"native job {terminal.native.result.iris_job_id} is {terminal.native.result.state}")
     if terminal.native.result.provenance is None:
         raise InvalidComparison(f"run has no recorded source provenance: {path}")
-    metrics = read_skyrl_metrics(path)
+    metrics = read_skyrl_metrics(path, attempt_id=terminal.attempt_id)
     workload = preset.recipe.layout.workload
     planned = workload.planned_steps(preset.updates)
     training = [row for step, row in sorted(metrics.items()) if step in planned]
@@ -454,7 +595,7 @@ def load_run(
         launch = recorded_launch(terminal)
     except ValueError as error:
         raise InvalidComparison(str(error)) from None
-    answers = evaluation_answers(path, launch) if preset.evaluations else []
+    answers = evaluation_answers(path, launch, receipt=terminal) if preset.evaluations else []
     tracking = attempt_tracking(terminal, launch)
     try:
         recorded_task_sets = {
@@ -474,12 +615,14 @@ def load_run(
     )
     task_set = preset.eval_lite if preset.held_out is not None else None
     scores, initial_scores = [EVAL_SCORE_SCHEMA.empty_table()], []
+    evaluations = []
     for evaluation in preset.evaluations:
-        quality = evaluation.held_out and evaluation == preset.guarded
+        quality = evaluation.held_out and (evaluation == preset.guarded or bool(preset.checkpoint_every))
         expected = recipe.evaluation_answer_count(
             evaluation, recipe.evaluation_source(evaluation, selection, default, preset.eval_lite)
         )
-        table = evaluation_scores(evaluation, path, answers, launch=launch)
+        all_scores = evaluation_scores(evaluation, path, answers, launch=launch, receipt=terminal)
+        table = all_scores
         initial = table.filter(pc.equal(table["step"], 0))
         table = table.filter(pc.equal(table["step"], workload.scored_step(preset.updates)))
         scores.append(table)
@@ -490,8 +633,29 @@ def load_run(
             if initial.num_rows and frozenset(initial["item"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final evaluation task IDs differ: {path}")
             sessions.append((evaluation.name + "/initial", initial, 0))
+        if preset.checkpoint_every:
+            scheduled = set(range(evaluation.every, preset.updates, evaluation.every)) if evaluation.every else set()
+            sessions.extend(
+                (f"{evaluation.name}/step-{step}", all_scores.filter(pc.equal(all_scores["step"], step)), step)
+                for step in sorted(
+                    (set(all_scores["step"].to_pylist()) | scheduled) - {0, workload.scored_step(preset.updates)}
+                )
+            )
         prefix = native_prefix(launch, evaluation.name) + "all/outcome/"
         for session_name, session, metric_step in sessions:
+            statistics = evaluation_statistics(session)
+            slices = score_slices(session)
+            for key, value in statistics.items():
+                evaluations.append(
+                    Comparison(
+                        metric=f"{evaluation.name}@{metric_step}/{key.removeprefix(evaluation.name + '/')}",
+                        role=ComparisonRole.SLICE,
+                        run=value,
+                        n_run=1,
+                        n_control=0,
+                        tasks=len({row["item"] for row in slices[key]}) if key in slices else None,
+                    )
+                )
             invariants.extend(
                 _session_invariants(
                     session_name, session, evaluation, preset, expected, recorded_task_sets[evaluation.name].task_ids
@@ -536,6 +700,7 @@ def load_run(
         provenance=terminal.native.result.provenance,
         values=values,
         invariants=tuple(invariants),
+        evaluations=tuple(evaluations),
         slices=slices,
         evaluation_identity=identities,
         h100_hours=h100_hours,

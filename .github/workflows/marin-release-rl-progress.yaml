@@ -1,0 +1,72 @@
+name: "Marin - Release RL Progress"
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Inspect and validate without publishing"
+        type: boolean
+        default: true
+      bootstrap_unrecorded:
+        description: "Replace a reviewed legacy release lacking Git provenance"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: rl-progress-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'marin-community/marin' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install Marina
+        run: uv sync --locked --package marin-marina --no-default-groups
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+      - name: Inspect and release changed source
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          BOOTSTRAP_UNRECORDED: ${{ inputs.bootstrap_unrecorded }}
+        run: |
+          app=infra/marina/apps/rl_progress
+          record="$RUNNER_TEMP/rl-progress-release.json"
+          uv run --no-sync marina release-status "$app" --json > "$record"
+          state=$(jq -r .state "$record")
+          if [[ "$state" == current ]]; then exit 0; fi
+          if [[ "$state" == unrecorded && "$BOOTSTRAP_UNRECORDED" != true ]]; then
+            echo 'Inspect the legacy release before setting bootstrap_unrecorded.' >&2
+            exit 1
+          fi
+          if [[ "$state" != different && "$state" != unrecorded ]]; then exit 1; fi
+          args=(--base-version "$(jq -r .version "$record")")
+          if [[ "$DRY_RUN" == true ]]; then args+=(--dry-run); fi
+          node --check "$app/dist/app.js"
+          uv run --no-sync marina release "$app" "${args[@]}" --json > "$RUNNER_TEMP/rl-progress-published.json"
+      - name: Retain release records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rl-progress-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rl-progress-*.json
+          if-no-files-found: ignore

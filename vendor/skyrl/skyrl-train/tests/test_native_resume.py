@@ -43,7 +43,7 @@ class LocalPolicyGroup:
         checkpoint = root / f"global_step_{step}"
         self.strategy.save_checkpoint(self.model, str(checkpoint / "policy"), 0, self.optimizer, self.scheduler)
         torch.save(
-            {"global_step": step, "config": self.config, "distillation_scored_tokens_total": step * 17},
+            {"config": self.config, "global_step": step, "distillation_scored_tokens_total": step * 17},
             checkpoint / TRAINER_STATE_FILENAME,
         )
         torch.save(

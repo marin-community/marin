@@ -15,9 +15,9 @@ import sys
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from functools import partial, wraps
 from pathlib import Path
-from urllib.parse import urlencode
 
 import click
 import yaml
@@ -35,7 +35,7 @@ from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import submit_or_run
-from marin.rl.rl_progress import Verdict
+from marin.rl.rl_progress import Invariant, Verdict
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     IrisSkyRLExecution,
@@ -56,11 +56,17 @@ from marin.rl.skyrl_records import (
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output
 
-from experiments.post_training import rl_gate
+from experiments.post_training import rl_gate, rl_publication
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_recipe as recipe
-from experiments.post_training.rl_command import EXIT_CODES, GRAFANA_URL, REFUSAL_EXIT_CODE, RLCommand
-from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInputs, InvalidComparison
+from experiments.post_training.rl_command import EXIT_CODES, REFUSAL_EXIT_CODE, RLCommand, grafana_url
+from experiments.post_training.rl_scoring import (
+    GATE_INPUTS_FILENAME,
+    GateInputs,
+    InvalidComparison,
+    load_run,
+    read_gate_inputs,
+)
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
 )
@@ -203,25 +209,46 @@ def build_run(
 
 
 def _grafana_links(receipt: AttemptRecord | None, cluster: str, launch: RecordedLaunch | None) -> dict[str, str]:
-    if receipt is None or not receipt.native.result.iris_job_id or not receipt.native.result.started_at:
+    if receipt is None or launch is None or not receipt.native.result.started_at:
         return {}
-    if launch is None or launch.training_type not in ("sync", "async"):
+    result = receipt.native.result
+    return {"run": grafana_url(receipt.run_id, cluster, launch.training_type, result.started_at, result.finished_at)}
+
+
+def _evaluation_status(path: str, preset: presets.Preset, receipt: AttemptRecord, launch: RecordedLaunch) -> dict:
+    if not preset.evaluations or receipt.native.result.state != "succeeded":
         return {}
-    query = urlencode(
-        {
-            "orgId": 1,
-            "timezone": "utc",
-            "from": recipe.utc_millis(receipt.native.result.started_at),
-            "to": recipe.utc_millis(receipt.native.result.finished_at) if receipt.native.result.finished_at else "now",
-            "var-training_type": launch.training_type,
-            "var-cluster": cluster,
-            "var-run": receipt.run_id,
-            "var-job": "$__all",
-            "var-execution": "$__all",
-        },
-        safe="$",
+    try:
+        effective = preset.with_updates(launch.max_steps if launch.max_steps is not None else preset.updates)
+        try:
+            inputs = read_gate_inputs(path)
+        except FileNotFoundError:
+            inputs = None
+        data = load_run(path, effective, inputs, receipt=receipt)
+        facts = [
+            fact
+            for fact in data.invariants
+            if any(fact.name.startswith(evaluation.name + "/") for evaluation in preset.evaluations)
+        ]
+        return {
+            "evaluations": [row.model_dump(mode="json", exclude_none=True) for row in data.evaluations],
+            "evaluation_invariants": [fact.model_dump(mode="json") for fact in facts],
+        }
+    except (InvalidComparison, FileNotFoundError) as error:
+        return {
+            "evaluation_error": str(error),
+            "evaluation_invariants": [
+                Invariant(
+                    name="evaluation_records_available", value=False, limit=True, comparator="==", holds=False
+                ).model_dump(mode="json")
+            ],
+        }
+
+
+def _evaluation_failed(snapshot: dict, preset: presets.Preset) -> bool:
+    return bool(preset.checkpoint_every) and any(
+        not fact["holds"] for row in snapshot["runs"] for fact in row.get("evaluation_invariants", ())
     )
-    return {"run": f"{GRAFANA_URL}?{query}"}
 
 
 def _completed_update(path: str, workload: presets.Training | presets.Generation) -> int | None:
@@ -236,8 +263,14 @@ def _completed_update(path: str, workload: presets.Training | presets.Generation
     return None
 
 
-def _status(run: RLRun, preset: presets.Preset, *, stored_only: bool = False) -> dict:
-    run = replace(run, gate=rl_gate.completed_gate(run.gate))
+def _status(
+    run: RLRun,
+    preset: presets.Preset,
+    *,
+    stored_only: bool = False,
+    issue: int | None = None,
+    publication_urls: dict[str, str] | None = None,
+) -> dict:
     rows = []
     planned = []
     for step in run.runs:
@@ -279,6 +312,22 @@ def _status(run: RLRun, preset: presets.Preset, *, stored_only: bool = False) ->
                     if tracking.get(key) is not None
                 },
                 **({"grafana_links": grafana} if grafana else {}),
+                **(
+                    _evaluation_status(path, preset, receipt, launch)
+                    if receipt is not None and launch is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "best_checkpoint_step": (
+                            json.loads((StoragePath(launch.export_root) / "best_checkpoint.json").read_text())["step"]
+                            if (StoragePath(launch.export_root) / "best_checkpoint.json").exists()
+                            else "none eligible"
+                        )
+                    }
+                    if preset.checkpoint_every and launch is not None
+                    else {}
+                ),
                 "latest_completed_update": _completed_update(path, preset.recipe.layout.workload),
                 "cluster": execution.cluster,
                 "allocation": {
@@ -288,6 +337,8 @@ def _status(run: RLRun, preset: presets.Preset, *, stored_only: bool = False) ->
                     "disk": execution.disk,
                 },
                 "output": path,
+                "issue": issue,
+                "rl_progress_url": (publication_urls or {}).get(path),
             }
         )
     verdict = {}
@@ -308,6 +359,7 @@ def _status(run: RLRun, preset: presets.Preset, *, stored_only: bool = False) ->
                 "reason": f"native job {crashed['iris_job_id']} is {crashed['state']}",
                 "iris_job_id": crashed["iris_job_id"],
             }
+    preset = preset.with_updates(planned[0]["skyrl"]["trainer"]["max_steps"])
     return {
         "preset": preset.name,
         "code": asdict(Provenance.capture(recipe.REPO_ROOT)),
@@ -319,7 +371,7 @@ def _status(run: RLRun, preset: presets.Preset, *, stored_only: bool = False) ->
             },
         },
         "context_budget": planned[0]["skyrl"]["context_budget"],
-        "updates": preset.recipe.layout.workload.update_count(planned[0]["skyrl"]["trainer"]["max_steps"]),
+        "updates": preset.recipe.layout.workload.update_count(preset.updates),
         "measured_updates": list(preset.measured),
         "config_changes": list(report.run.config_changes) if report else [],
         "budget_estimate": preset.budget,
@@ -353,19 +405,62 @@ def _iris_client() -> Iterator[IrisClient]:
             yield client
 
 
-def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Preset) -> None:
+def _publish_records(
+    run: RLRun, preset: presets.Preset, *, table: presets.ModelPresets, issue: int | None, service_url: str | None
+) -> rl_publication.PublicationOutcome | None:
+    if not preset.publishes:
+        return None
+    prefix = recipe.artifact_prefix(preset.recipe.layout.cluster)
+    gate_path = run.gate.path(prefix) if run.gate is not None else None
+    outputs = [training.path(prefix) for training in run.runs]
+    return rl_publication.publish_runs(
+        outputs, preset, table=table, gate_path=gate_path, issue=issue, service_url=service_url
+    )
+
+
+def _wait_for_run(
+    job: JobName,
+    handles: list[ArtifactStep],
+    preset: presets.Preset,
+    *,
+    table: presets.ModelPresets,
+    issue: int | None,
+    service_url: str | None,
+) -> None:
     with _iris_client() as client:
         parent = client.job(job).wait(
             preset.recipe.layout.coordinator_timeout_hours * 3600, poll_interval=60, raise_on_failure=False
         )
+    coordinator_error = (
+        f"coordinator {job} is {parent.state}; required verdict unavailable"
+        if parent.state != JobState.SUCCEEDED
+        else None
+    )
     run = _from_handles(handles)
-    snapshot = _status(run, preset)
-    if "verdict" not in snapshot and (parent.state != JobState.SUCCEEDED or run.gate is not None):
-        snapshot["reason"] = f"coordinator {job} is {parent.state}; verdict unavailable"
+    run = replace(run, gate=rl_gate.completed_gate(run.gate))
+    try:
+        publication = _publish_records(run, preset, table=table, issue=issue, service_url=service_url)
+    except Exception as error:
+        publication = rl_publication.PublicationOutcome(
+            errors=[str(error)], retry="Repeat the original command with --wait."
+        )
+    snapshot = _status(
+        run,
+        preset,
+        issue=issue,
+        stored_only=True,
+        publication_urls=publication.urls if publication is not None else None,
+    )
+    if publication is not None:
+        snapshot["publication"] = publication.to_dict()
+    if "verdict" not in snapshot and (coordinator_error is not None or run.gate is not None):
+        snapshot["reason"] = coordinator_error or "required verdict unavailable"
     _print_status(snapshot)
+    if _evaluation_failed(snapshot, preset):
+        raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
     verdict = snapshot.get("verdict")
-    if verdict is None and run.gate is None and parent.state == JobState.SUCCEEDED:
-        verdict = Verdict.PASS.value
+    if verdict is None and run.gate is None and coordinator_error is None:
+        verdict = Verdict.PASS
     raise click.exceptions.Exit(EXIT_CODES[verdict])
 
 
@@ -373,7 +468,7 @@ def _run_command(
     table: presets.ModelPresets, argv: tuple[str, ...], entry_module: str | None, function: Callable
 ) -> click.Command:
     @wraps(function)
-    def checked(*args, wait: bool = False, **kwargs):
+    def checked(*args, wait: bool = False, url: str | None = None, **kwargs):
         if wait and not click.get_current_context().params["do_run"]:
             raise click.BadParameter("--wait requires --run")
         return function(*args, **kwargs)
@@ -388,12 +483,31 @@ def _run_command(
                 module = specification.name if specification is not None else None
             if not module:
                 raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
+            submitted_at = datetime.now(UTC).isoformat()
             job = submit_or_run(module, handles, max_concurrent, os.environ, argv=argv)
+            submitted = []
+            for step in _from_handles(handles).runs:
+                config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+                execution = next(value for value in step.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
+                submitted.append(
+                    {
+                        "name": step.name,
+                        "grafana_links": {
+                            "run": grafana_url(
+                                config.run_id,
+                                execution.cluster,
+                                click.get_current_context().meta["rl_training_type"],
+                                submitted_at,
+                            )
+                        },
+                    }
+                )
+            _print_status({"coordinator_job_id": str(job), "submitted_at": submitted_at, "runs": submitted})
         else:
             _run_graph(handles, max_concurrent)
             job = None
         if options["wait"] and job is not None:
-            _wait_for_run(job, handles, preset)
+            _wait_for_run(job, handles, preset, table=table, issue=options["issue"], service_url=options["url"])
 
     return click.command(
         cls=RLCommand, help=__doc__ + "\n\n" + "\n".join(f"{preset.name}: {preset.budget}" for preset in table.presets)
@@ -409,10 +523,13 @@ def command(
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
     @partial(_run_command, table, argv, entry_module)
+    @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for launcher publication.")
+    @click.option("--url", help="Marina origin for run publication (defaults to the Marina service).")
     @click.option(
         "--wait",
         is_flag=True,
-        help="Wait after --run; exit 0 for PASS, 1 for FAIL, 2 for INVALID, 3 without a required verdict.",
+        help="Wait after --run and publish dashboard records for supported presets. "
+        "Exit 0 for PASS, 1 for FAIL, 2 for INVALID, 3 without a required verdict.",
     )
     @click.option(
         "--preset",
@@ -481,6 +598,7 @@ def command(
         replicates: int,
         control: bool,
         requirements: tuple[str, ...],
+        issue: int | None,
     ) -> tuple[ArtifactStep, ...]:
         preset = table.by_name[preset_name]
         if init is not None and init_name is not None:
@@ -502,14 +620,17 @@ def command(
         do_run = click.get_current_context().params.get("do_run", False)
         if do_run and get_job_info() is None:
             assert run.inputs is not None
-            rl_gate.validate_candidate(
+            validated = rl_gate.validate_candidate(
                 preset,
                 run.inputs,
                 control=control,
                 table=table,
             )
-        snapshot = _status(run, preset, stored_only=do_run)
+            click.get_current_context().meta["rl_training_type"] = validated["runtime"]["training_type"]
+        snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
         _print_status(snapshot)
+        if not do_run and _evaluation_failed(snapshot, preset):
+            raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
         if not do_run and "verdict" in snapshot:
             raise click.exceptions.Exit(EXIT_CODES[snapshot["verdict"]])
         return (*run.runs, *((run.gate,) if run.gate else ()))

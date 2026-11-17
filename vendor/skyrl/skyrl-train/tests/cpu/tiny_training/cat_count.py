@@ -2,10 +2,17 @@
 
 import json
 import os
+from dataclasses import replace
+from functools import partial
 from pathlib import Path
 
 from examples.cat_count.cpu_canary import HELD_OUT_N, PROMPT, TRAIN_N
 from omegaconf import DictConfig, OmegaConf
+from rolloutengine.models import ModelTurn
+from taskcompendium.grading_result import GradeResult, Outcome
+from skyrl_gym.answer_tasks import grade_cat_count
+from skyrl_gym.task_records import TaskTransition
+from skyrl_gym.task_sessions import AnswerTaskSession
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.utils.algorithm_registry import AdvantageEstimatorRegistry
 
@@ -120,6 +127,15 @@ def run_cat_count(cfg: DictConfig, worker_env: dict[str, str]) -> None:
     run_tiny_training(cfg)
 
 
+def bounded_cat_count_grade(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
+    transition = grade_cat_count(turn, config, extras)
+    return replace(transition, grade=GradeResult(Outcome.GRADED, 3.0, passed=False, score_min=1.0, score_max=5.0))
+
+
 def run_cat_count_generate(cfg: DictConfig, worker_env: dict[str, str]) -> None:
     os.environ.update(worker_env)
-    run_with_exp(cfg, TinyGenerateExp, operation=EntrypointOperation.GENERATE)
+    run_with_exp(
+        cfg,
+        partial(TinyGenerateExp, sessions={"cat_count": partial(AnswerTaskSession, grader=bounded_cat_count_grade)}),
+        operation=EntrypointOperation.GENERATE,
+    )

@@ -26,7 +26,8 @@ Datakit SFT weights and tokenizer, GPU layout, evaluation schedule and measureme
    at an immutable version with the required evaluation exclusions.
 3. [Run a preset](#which-experiment-to-run): use `data-short` then `data-medium` with
    `--tasks NAME@VERSION`, or choose the preset for the change.
-4. Read the [verdict](#compare-with-controls) for a gated run.
+4. Read the [verdict](#compare-with-controls) for a gated run. For `learning-medium`,
+   `data-medium` and `train-long`, open the dashboard row in `rl_progress_url`.
 
 ## Run a preset
 
@@ -55,6 +56,44 @@ East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs and eight engine
 128 prompts × four answers and a 24,576-token window. Natural replies allow 8,192 tokens.
 All training presets use staleness 2 and TIS. Speed-long has no evaluation,
 checkpoints or export; learner and engine token rates are descriptive telemetry.
+
+## Dashboard publication
+
+Publish a stored attempt after an app release, without starting native work:
+
+```bash
+uv run python -m experiments.post_training.snowball_rl_publication --preset train-long \
+  --output RUN_OUTPUT --attempt ATTEMPT_ID --url MARINA_ORIGIN
+```
+
+Without `--output` and `--attempt`, that command publishes the selected preset's pinned controls.
+Both selectors are required together. Historical attempts retain their own native identity and
+window. Unattributed historical JSONL dumps do not supply per-attempt evaluation summaries.
+The dashboard's detail view shows each evaluation step's counts and strata means, including
+family, AAII category and difficulty, and links to the run's Grafana window.
+
+
+After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
+data-medium and train-long attempts using the caller's Marina login. Pass `--issue ISSUE_NUMBER`
+and record the finishing status's `rl_progress_url` with the verdict.
+Use `--url ORIGIN` to publish to a local Marina stack; the default is the Marina service.
+
+Repeat the original command with `--wait` from the same source and inputs. The executor reuses
+successful steps and runs failed work, then the launcher retries publication from stored outputs.
+Errors identify the affected native attempt; missing credentials suggest `iris login`.
+Publication errors preserve the experiment verdict and exit code. A current successful gated attempt
+requires a report for exactly the current native attempts.
+
+Publish learning-medium or data-medium controls from their stored paths:
+
+```bash
+python -m experiments.post_training.snowball_rl_publication --preset learning-medium
+```
+
+The pins in `snowball_rl.SNOWBALL.controls` must match the preset's current revision; unavailable pins
+produce a usage error. Speed presets and data-short publish nothing. See the
+[dashboard and record contract](https://github.com/marin-community/marin/blob/2a13c0c0627c2a6b2dd6b44d898edd530b4e1b6d/infra/marina/apps/rl_progress/README.md) for native identity,
+recorded measurements and stored gate facts.
 
 ## Change one input
 
@@ -117,7 +156,7 @@ Run stored comparisons on CPU:
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl rescore \
-  --preset learning-medium --candidate RUN_NAME[@VERSION] --require 'eval_lite/aaii_category/coding/mean>=control'
+  --preset learning-medium --candidate RUN_NAME[@VERSION] --require 'eval_lite/aai_category/coding/mean>=control'
 uv run python -m experiments.post_training.snowball_rl rescore \
   --preset speed-medium --leave-out r0
 ```
@@ -171,9 +210,39 @@ Set `DAYTONA_EVAL_API_KEY` and `DAYTONA_TARGET` before submission. Checkpoint ch
 requires at least 99% native coverage and 90% in each Harbor cohort; `eval/all` pools native and
 Harbor scored rewards. Per-cohort metrics are `eval/harbor/<cohort>/*`; trial artifacts live under
 `exports/inline_harbor/`. A Harbor error stops training; rerunning the same command resumes from
-the latest checkpoint. `best_checkpoint.json` records the selected checkpoint; HF export uses
-the latest checkpoint. This runtime evaluates the current training weights; the separate
+the latest checkpoint. `best_checkpoint.json` records the selected checkpoint evidence. The native result records
+the HF export and its model files. This runtime evaluates the current training weights; the separate
 [offline evaluation launcher](../explanations/evaluation.md) evaluates an exported model.
+
+## What a run writes
+
+The status block names the run's artifact output and native job. Submission prints an open-ended
+Grafana link immediately; terminal status prints the recorded native time window. For evaluation
+presets, `evaluations` lists scored and attempted answer counts and the means for each weight step.
+Train-long checks every scheduled evaluation, requires at least 99% of its tasks to score, and
+returns a failed status when this evidence is missing or below the bound. Its status also names the
+best checkpoint step, or `none eligible`.
+
+| Location | Contents and reader |
+|---|---|
+| `resolved-launch.yaml`, `terminal.json` | Native configuration and result; `read_stored_skyrl_attempt(output)` in `marin.rl.skyrl_records` reads the retained attempt without Iris. |
+| `gate_inputs.json` | The runner's declared task, initializer, settings and requirements. |
+| `exports/run-records/` | FineStore attempt receipts, numeric metrics and per-task evaluations. `read_skyrl_metrics(output, attempt_id=...)` reads a selected attempt. |
+| FineStore `evaluations` table | One task per attempt, evaluation and step, with ordered answers, native rewards, verifier bounds, normalized verifier scores, outcomes and canonical strata. `finestore.rl.run_records.read_evaluations(export_root, attempt_id=...)` reads it; `rl_scoring.evaluation_scores` joins a selected panel's membership and content to these rows. |
+| `exports/dumped_evals/<attempt_id>/...` | JSONL answers carrying attempt, step and final-turn identity; named evaluations also have their own export subtree. |
+| Native checkpoint root | Recovery checkpoints in the 14-day TTL bucket. The receipt records their location and lineage; they are separate from durable exports. |
+| `exports/best_checkpoint.json` | The selected native checkpoint step and its evaluation evidence, written when a checkpoint is eligible. |
+| HF export under `exports/` | Model configuration, weight index and shards, and tokenizer files. The completed receipt identifies the HF model for `--init`. |
+| Gate artifact `gate_report.json`, `gate_report.md` | Calibrated comparison, invariants and breakdowns for a gated preset. Train-long has evaluation invariants without a calibrated verdict. |
+
+Evaluation summaries include the native answer-weighted overall mean, task-weighted family,
+AAII-category, source, topic and difficulty means, and an AAII-weighted mean. The category weights
+are 0.2 scientific reasoning, 0.2 coding, 0.3 General and 0.3 Agents, renormalized over represented
+categories; format has zero AAII weight. Missing annotations are `untagged`. These summaries do
+not add a gate threshold. A versioned selection's `summary.json` declares its strata schema,
+reference models, difficulty bounds and parent; `task_manifest.parquet` retains all parent tasks,
+with active, candidate or retired membership. A previous version's score uses that version's active
+IDs and TaskSpec digests against the saved per-task results.
 
 ## Gaps
 

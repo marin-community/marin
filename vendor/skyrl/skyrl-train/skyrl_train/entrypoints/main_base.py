@@ -45,8 +45,6 @@ from marinskyrl.runtime_options import (
     static_preference_pairs_requested,
 )
 from marinskyrl.resource_locator import RolloutModelLoading
-from skyrl_train.dataset.preference_pairs import PreferencePairFormat
-from skyrl_train.tokenizer import validate_checkpoint_vocabulary
 
 if TYPE_CHECKING:
     from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
@@ -294,6 +292,8 @@ class BasePPOExp:
 
         The `cfg` passed here will be the final config from Hydra, including CLI overrides.
         """
+        from skyrl_train.tokenizer import validate_checkpoint_vocabulary  # noqa: PLC0415
+
         self.cfg = cfg
         self.sessions = {} if sessions is None else dict(sessions)
         self._configure_log_level()
@@ -378,7 +378,7 @@ class BasePPOExp:
             PromptDataset: The training dataset.
         """
         if static_preference_pairs_requested(self.cfg):
-            from skyrl_train.dataset import PreferencePairDataset  # noqa: PLC0415
+            from skyrl_train.dataset.preference_pairs import PreferencePairDataset, PreferencePairFormat  # noqa: PLC0415
 
             return PreferencePairDataset(
                 tokenizer=self.tokenizer,
@@ -539,6 +539,7 @@ class BasePPOExp:
             TrajectoryRunner: The runner.
         """
         if static_preference_pairs_requested(cfg):
+            from skyrl_train.dataset.preference_pairs import PreferencePairFormat  # noqa: PLC0415
             from skyrl_train.trajectory_runners.preference_pairs import PreferencePairTrajectoryRunner  # noqa: PLC0415
 
             if list(cfg.data.get("terminal_bench_data", [])):
