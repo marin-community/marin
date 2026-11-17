@@ -38,6 +38,7 @@ def test_emitted_rl_validation_and_eval_settings_come_from_the_pinned_spec(tmp_p
         config["generator"]["eval_sampling_params"]["temperature"] = 0.7
         config["terminal_bench"]["installed_agent"]["cleanup_timeout"] = 137
     terminal = build_spec_graph(resolved, "2026.11.12.1", through="archive")
+    assert terminal.lower().name == terminal.name
     stages = graph_handles([terminal])
     for stage in ("rl", "evaluation"):
         step = next(

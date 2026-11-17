@@ -182,4 +182,5 @@ def configured_evaluation_step(
             validate_replayable_model_reference(model["local_path"], model["uri"], model["identity"])
         return JudgedEvaluation(run, judge, capability_origin, judge_gpu_count)
 
-    return replace(step, run=run_judged, build_config=build_config)
+    configured = replace(step, run=run_judged, build_config=build_config)
+    return replace(configured, expected_fingerprint=configured.fingerprint())

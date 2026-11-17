@@ -90,4 +90,5 @@ def configured_rl_step(
             installed["output_path"] = prefix_join(traces, "installed-agent")
         return replace(launch, launch_config_yaml=yaml.safe_dump(document, sort_keys=False))
 
-    return replace(step, build_config=bind_runtime)
+    configured = replace(step, build_config=bind_runtime)
+    return replace(configured, expected_fingerprint=configured.fingerprint())
