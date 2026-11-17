@@ -175,7 +175,7 @@ def read_map(root: Path, map_uri: str, map_sha256: str) -> dict:
     return json.loads(path.read_text())
 
 
-def fetch_task_spec(root: Path, row: dict) -> dict:
+def fetch_task_spec_bytes(root: Path, row: dict) -> bytes:
     """Download the row's actual frozen TaskSpec and verify its exact SHA.
 
     The local path is keyed by the URI basename: task ids share prefixes
@@ -189,7 +189,55 @@ def fetch_task_spec(root: Path, row: dict) -> dict:
     digest = sha256_bytes(path.read_bytes())
     if digest != expected:
         raise ValueError(f"TaskSpec hash mismatch for {row['instance_id']}: {digest} != {expected}")
-    return json.loads(path.read_text())
+    return path.read_bytes()
+
+
+def packet_from_package(root: Path, family: str, row: dict, task_spec_bytes: bytes) -> Path:
+    """Unpack the frozen passing prepared-package archive verbatim and verify it.
+
+    The archive carries the production calibrated task.toml (with the final
+    native actor allocations), task-spec.json and source-runtime.json; the
+    trial reads everything from disk, which applies the exact calibrated
+    budgets without changing TaskSpec bytes or using forbidden overrides.
+    The unpacked bytes are checked against the sealed TaskSpec and runtime
+    evidence and against the original consumed task_checksum via the
+    maintained Harbor inspection (Task.checksum).
+    """
+    from harbor.models.task.task import Task  # noqa: PLC0415 - optional heavy import, QA host only
+
+    name = row["instance_id"]
+    directory = root / "packets" / f"{family}-{name}"
+    if directory.exists():
+        raise FileExistsError(directory)
+    archive_path = root / "packets" / PurePosixPath(row["package_uri"]).name
+    copy(row["package_uri"], str(archive_path), no_clobber=True)
+    digest = sha256_bytes(archive_path.read_bytes())
+    if digest != row["package_sha256"]:
+        raise ValueError(f"package hash mismatch for {name}: {digest} != {row['package_sha256']}")
+    directory.mkdir(parents=True)
+    with tarfile.open(archive_path) as bundle:
+        for member in bundle.getmembers():
+            target = (directory / member.name).resolve()
+            if not target.is_relative_to(directory.resolve()):
+                raise ValueError(f"package member escapes the extraction root: {member.name}")
+        bundle.extractall(directory, filter="tar")
+    spec_path = directory / "task-spec.json"
+    if spec_path.read_bytes() != task_spec_bytes:
+        raise ValueError(f"archive task-spec.json differs from the sealed TaskSpec evidence for {name}")
+    if row.get("row_runtime_uri"):
+        runtime_path = directory / "source-runtime.json"
+        runtime_bytes = root / "packets" / PurePosixPath(row["row_runtime_uri"]).name
+        if not runtime_bytes.exists():
+            fetch_row_runtime(root, row)
+        if runtime_path.read_bytes() != runtime_bytes.read_bytes():
+            raise ValueError(f"archive source-runtime.json differs from the sealed runtime evidence for {name}")
+    checksum = Task(task_dir=directory).checksum
+    expected_checksum = row.get("task_checksum")
+    if not expected_checksum:
+        raise ValueError(f"row {name} lacks the original consumed task_checksum")
+    if checksum != expected_checksum:
+        raise ValueError(f"task_checksum mismatch for {name}: {checksum} != {expected_checksum}")
+    return directory
 
 
 def packet_from_task_spec(directory: Path, task_spec: dict) -> Path:
@@ -277,9 +325,23 @@ async def _run_logged(config_path: Path, log_path: Path) -> dict:
 def qa_row(root: Path, family: str, row: dict) -> dict:
     name = row["instance_id"]
     LOGGER.info("[%s] consuming frozen packet", name)
-    task_spec = fetch_task_spec(root, row)
-    packet = packet_from_task_spec(root / "packets" / f"{family}-{name}", task_spec)
-    binding = fetch_row_runtime(root, row) if row.get("row_runtime_uri") else None
+    task_spec_bytes = fetch_task_spec_bytes(root, row)
+    task_spec = json.loads(task_spec_bytes)
+    if row.get("package_uri"):
+        # Archive-verbatim mode: the passing prepared package carries the
+        # production calibrated task.toml (final actor allocations),
+        # task-spec.json and source-runtime.json; the trial reads everything
+        # from disk. No reconstruction from baseline resources.
+        packet = packet_from_package(root, family, row, task_spec_bytes)
+        binding = None
+    else:
+        if family in ("rst", "multi"):
+            raise ValueError(
+                f"{family} row {name} lacks the frozen prepared-package archive;"
+                " reconstruction from baseline resources is not allowed"
+            )
+        packet = packet_from_task_spec(root / "packets" / f"{family}-{name}", task_spec)
+        binding = fetch_row_runtime(root, row) if row.get("row_runtime_uri") else None
     if binding is not None and binding["task_sha256"] != row["task_spec_sha256"]:
         raise ValueError(f"row runtime binding does not bind the executed TaskSpec for {name}")
     guard = attempt_guard(row)
@@ -294,6 +356,9 @@ def qa_row(root: Path, family: str, row: dict) -> dict:
         "row_runtime_uri": row.get("row_runtime_uri"),
         "row_runtime_sha256": row.get("row_runtime_sha256") or row.get("runtimeSHA"),
         "bound_runtime_task_sha256": binding["task_sha256"] if binding else None,
+        "package_uri": row.get("package_uri"),
+        "package_sha256": row.get("package_sha256"),
+        "task_checksum": row.get("task_checksum"),
         "actor_execution_requirements": row.get("actor_execution_requirements"),
         "verifier_execution_requirements": row.get("verifier_execution_requirements"),
         "nop_execution_requirements": row.get("nop_execution_requirements"),
