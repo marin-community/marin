@@ -172,6 +172,18 @@ def test_token_validity_uses_empty_rows_from_dense_boolean_masks():
     np.testing.assert_array_equal(valid, jnp.array([[True, True, False], [True, True, False]]))
 
 
+def test_tpu_splash_attention_rejects_fa4_bounds():
+    # Splash builds its mask from static fields; it must not silently drop a per-layer window in the bounds.
+    q, k, v = _make_qkv(batch=2, q_len=12, k_len=12, q_heads=2, kv_heads=1)
+    segment_ids = jnp.array([[0] * 7 + [1] * 5, [0] * 12], dtype=jnp.int32)
+    windowed = AttentionMask.causal(sliding_window=4).with_segment_ids(segment_ids)
+    lower_bounds, valid = fa4_cute_segment_bounds(windowed, batch_size=2, seq_len=12, sliding_window=4)
+    bounds_mask = AttentionMask.causal().with_segment_ids(segment_ids).with_fa4_bounds(lower_bounds, valid)
+
+    with pytest.raises(NotImplementedError, match="cannot apply fa4_bounds"):
+        attention(q, k, v, bounds_mask, implementation="tpu_splash")
+
+
 def test_attention_rejects_unknown_implementation():
     q, k, v = _make_qkv()
 

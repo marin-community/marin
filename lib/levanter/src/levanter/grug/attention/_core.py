@@ -322,6 +322,13 @@ def _tpu_splash_attention(
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | jax.Array | None,
 ) -> Float[Array, "B Q Hq D"]:
+    if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
+        # Splash compiles its mask from static fields only. Per-query bounds (a per-layer window
+        # chosen inside a scan) would otherwise be dropped and every layer would run full causal.
+        raise NotImplementedError(
+            "TPU Splash attention cannot apply fa4_bounds; pass each layer a mask with a static "
+            "sliding_window instead (for example, select between two static masks with lax.cond)."
+        )
     # Splash attention expects BHSD.
     q_ = jnp.transpose(q, (0, 2, 1, 3))
     k_ = jnp.transpose(k, (0, 2, 1, 3))
