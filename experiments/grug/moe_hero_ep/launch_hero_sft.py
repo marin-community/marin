@@ -16,7 +16,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
-from levanter.checkpoint import CheckpointerConfig
+from levanter.checkpoint import CheckpointerConfig, load_checkpoint_metadata
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.mixture import StopStrategy
 from levanter.data.text.datasets import (
@@ -332,8 +332,7 @@ def placement_applies(placement: ExpertPlacement, checkpoint: str) -> bool:
     """
     if placement.permutes(checkpoint):
         return True
-    metadata = json.loads((StoragePath(checkpoint) / "metadata.json").read_text())
-    recorded = ExpertPlacement.recorded_in(metadata)
+    recorded = ExpertPlacement.recorded_in(load_checkpoint_metadata(checkpoint))
     return recorded is not None and recorded.fingerprint == placement.fingerprint
 
 

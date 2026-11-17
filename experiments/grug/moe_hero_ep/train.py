@@ -1213,7 +1213,7 @@ def prepare_start_state(
     """
     step = int(state.step)
     if fresh_optimizer_state_at_step is not None and step == fresh_optimizer_state_at_step:
-        state = fresh_optimizer_state(state, optimizer, offload_opt_state=offload_opt_state)
+        state = fresh_optimizer_state(state, optimizer)
         logger.info("Replaced the optimizer state restored at step %d with a fresh one", step)
     # Reseeding at the start step is idempotent, so a restart that restores a save from that step stays exact.
     if special_tokens is not None and special_tokens.reseed and step == special_tokens.start_step:
@@ -1226,16 +1226,12 @@ def prepare_start_state(
     return state
 
 
-def fresh_optimizer_state(
-    state: "GrugTrainState", optimizer: optax.GradientTransformation, *, offload_opt_state: bool
-) -> "GrugTrainState":
+def fresh_optimizer_state(state: "GrugTrainState", optimizer: optax.GradientTransformation) -> "GrugTrainState":
     """Keep the weights and replace the optimizer state with ``optimizer.init`` of them (zero moments and counts).
 
     The restored state's buffers are freed first, and the fresh state is built directly in their shardings and
     memory kinds, so at no point do two optimizer states coexist and the layout matches a carried state.
-    ``offload_opt_state`` is implied by those memory kinds.
     """
-    del offload_opt_state
     if state.master_params is not None:
         raise ValueError("a fresh optimizer state supports only MasterParamMode.DEVICE")
     restored = state.opt_state
