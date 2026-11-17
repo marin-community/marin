@@ -20,7 +20,8 @@ trials:
   batch: X0231
   date: '2026-11-17'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0231
-  wandb: []
+  wandb:
+  - belay-X0231-seed0
   settings:
     lm_head_bilinear: 'true'
   commit: 759042a2c7
