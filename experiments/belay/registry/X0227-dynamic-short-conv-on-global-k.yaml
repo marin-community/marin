@@ -1,0 +1,12 @@
+id: X0227
+slug: dynamic-short-conv-on-global-k
+name: Dynamic short conv on global K and V
+category: Attention variants
+summary: 🤖 Posted on behalf of @ClassicLarry.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6933607780
+  author: ClassicLarry
+  approved_by: ClassicLarry
