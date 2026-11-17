@@ -105,7 +105,7 @@ def create_workspace_zip(
     extra_includes: Sequence[str] = (),
     max_size_bytes: int | None = MAX_BUNDLE_SIZE_BYTES,
 ) -> bytes:
-    """Create a zip of the workspace and return the raw bytes.
+    """Create a zip of the workspace and return the raw bytes, or b"" if empty.
 
     Suitable for Iris bundle uploads where the caller sends bytes directly.
     ``extra_includes`` re-includes caller-specified gitignored files (see
