@@ -11,6 +11,7 @@ from experiments.evaluation.benchmarks import (
     biomedical,
     code,
     commonsense,
+    econevals,
     financebench,
     gsm8k,
     instruction_following,
@@ -57,6 +58,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             reasoning,
             financebench,
             simpleqa,
+            econevals,
             long_context,
             nupa,
         )
