@@ -40,7 +40,8 @@ trials:
   batch: X0232
   date: '2026-11-17'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0232
-  wandb: []
+  wandb:
+  - belay-X0232-seed0-t
   settings:
     spelling_ngram_source: 'true'
   commit: 2037ad456e
