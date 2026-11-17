@@ -6,6 +6,7 @@ import json
 
 import pytest
 from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseBan, LicenseDecision, LicenseReceipt, LicenseSourcePin
+from finestore.rl.status_taxonomy import DataRestriction
 from huggingface_hub import DatasetCard
 from huggingface_hub.hf_api import RepoFile
 from taskcompendium.pipeline.models import IntendedUse
@@ -229,7 +230,12 @@ def test_native_publication_binds_the_input_receipt_before_reading_tasks(tmp_pat
     entry = {"id": receipt.source_id, "dataset_id": DATASET, "dataset_revision": "c" * 40}
     with pytest.raises(ValueError, match="License"):
         native_quick.publish_quick(
-            entry, tmp_path / "no-task-files", "open-athena/new-private-pin", receipt, intended_use=IntendedUse.TRAIN
+            entry,
+            tmp_path / "no-task-files",
+            "open-athena/new-private-pin",
+            receipt,
+            intended_use=IntendedUse.TRAIN,
+            data_restriction=DataRestriction.OPEN,
         )
 
 

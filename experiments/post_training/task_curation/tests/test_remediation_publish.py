@@ -111,6 +111,7 @@ def frozen_population(tmp_path):
         evidence_url="https://example.test/frozen-plan",
         lexical_use="train",
         census_evidence_url="https://example.test/census",
+        data_restriction=DataRestriction.OPEN,
     )
     return plan, specs, rows
 
@@ -170,7 +171,7 @@ def test_existing_hf_destination_is_never_uploaded(tmp_path, monkeypatch):
 
     monkeypatch.setattr(calibforge_publish, "HfApi", ExistingRepo)
     with pytest.raises(FileExistsError, match="already exists"):
-        calibforge_publish.publish(tasks, card, "open-athena/existing")
+        calibforge_publish.publish(tasks, card, "open-athena/existing", data_restriction=DataRestriction.OPEN)
     assert uploaded == []
 
 

@@ -7,6 +7,7 @@ import json
 
 import pytest
 from finestore.rl.status_taxonomy import DataRestriction
+from pydantic import ValidationError
 
 from experiments.post_training.task_curation import calibforge_publish, publication_gate
 from experiments.post_training.task_curation.audit_harness import freeze_sample
@@ -17,6 +18,7 @@ from experiments.post_training.task_curation.publication_gate import (
     require_no_restriction_downgrade,
 )
 from experiments.post_training.task_curation.source import SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from infra.marina.apps.rl_data_catalog.server import restriction_registry
 from infra.marina.apps.rl_data_catalog.server.restrictions import (
     PRIVATE_TEXT_MARKER,
@@ -241,6 +243,69 @@ def test_reviewer_packet_freeze_refuses_a_private_source(tmp_path):
             data_restriction=DataRestriction.PRIVATE_ALWAYS,
         )
     assert not output.exists()
+
+
+def test_staged_raw_snapshot_without_a_tier_is_refused(tmp_path):
+    """A staged raw snapshot must declare its source's tier before it can be archived."""
+    from experiments.post_training.task_curation import raw_source_publish  # noqa: PLC0415
+
+    stage = {"source_id": "Test:fixture", "dataset_id": "upstream/fixture", "revision": "a" * 40}
+    with pytest.raises(ValueError, match="declares no restriction tier"):
+        raw_source_publish.publish_raw_source(
+            stage,
+            fixture_license("Test:fixture", "upstream/fixture", "a" * 40),
+            version="v",
+            evidence_root=str(tmp_path),
+            use="train",
+        )
+
+
+def test_staged_private_plan_and_snapshot_are_refused(tmp_path):
+    """The publish guards refuse staged records that declare PRIVATE_ALWAYS."""
+    from experiments.post_training.task_curation import raw_source_publish
+    from experiments.post_training.task_curation.remediation_publish import ReleasePlan
+
+    private_snapshot = {
+        "source_id": "Test:private",
+        "dataset_id": "upstream/fixture",
+        "revision": "a" * 40,
+        "data_restriction": DataRestriction.PRIVATE_ALWAYS.value,
+        "source_files": ["README.md"],
+        "files": [{"path": "README.md", "uri": "finestore://fixture/README.md", "sha256": "b" * 64}],
+    }
+    with pytest.raises(ValueError, match="PRIVATE_ALWAYS"):
+        raw_source_publish.publish_raw_source(
+            private_snapshot,
+            fixture_license("Test:private", "upstream/fixture", "a" * 40),
+            version="v",
+            evidence_root=str(tmp_path),
+            use="train",
+        )
+    with pytest.raises(ValidationError):
+        ReleasePlan.model_validate(
+            {
+                "source_id": "Test:private",
+                "source_dataset_id": "upstream/fixture",
+                "source_revision": "a" * 40,
+                "converter_revision": "b" * 40,
+                "converter_version": "1",
+                "input_artifact": "fixture",
+                "task_specs_sha256": "c" * 64,
+                "raw_count": 1,
+                "combined_drop_count": 0,
+                "retained_count": 1,
+                "combined_drop_manifest_uri": "finestore://fixture/drops",
+                "lexical_use": "train",
+                "unique_count": 1,
+                "within_source_duplicates": 0,
+                "raw_lexical_count": 0,
+                "unique_lexical_count": 0,
+                "multiplicities": {},
+                "drop_manifest_uri": "finestore://fixture/drops",
+                "evidence_url": "https://example.test/plan",
+                "census_evidence_url": "https://example.test/census",
+            }
+        )
 
 
 def test_publish_helper_refuses_a_private_payload_before_any_upload(tmp_path, monkeypatch):

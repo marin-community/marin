@@ -35,7 +35,7 @@ from experiments.post_training.task_curation.license_publication import (
     prepare_license_publication,
 )
 from experiments.post_training.task_curation.native_quick import source_slug
-from experiments.post_training.task_curation.publication_gate import configured_restriction, require_public_data
+from experiments.post_training.task_curation.publication_gate import require_public_data
 from experiments.post_training.task_curation.receipt_shards import read_receipt_shards
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
@@ -56,6 +56,10 @@ TASK_SCHEMA = pa.schema(
 class ReleasePlan(RetentionPlan):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    data_restriction: DataRestriction
+    """The source population's typed tier, authored with the staged plan from its
+    configured declaration: ``publish_plan`` refuses a PRIVATE_ALWAYS release here,
+    at the shared publish helper."""
     unique_count: int
     within_source_duplicates: int
     raw_lexical_count: int
@@ -246,14 +250,14 @@ def publish_plan(
     raw_archive: RawSourceArchive | None,
     *,
     measurement_receipt: LexicalMeasurementReceipt | None = None,
-    data_restriction: DataRestriction,
 ) -> dict:
     """Publish one approved selection and its immutable regional readback receipt.
 
-    The caller passes the configured source's tier: a decontaminated release is
-    derived content, so a PRIVATE_ALWAYS source is refused here.
+    The staged plan carries the source's typed tier: a decontaminated release is
+    derived content, so a PRIVATE_ALWAYS source is refused here, at the shared
+    publish helper.
     """
-    require_public_data(data_restriction, plan.source_id, plan.lexical_use.value + " release")
+    require_public_data(plan.data_restriction, plan.source_id, plan.lexical_use.value + " release")
     require_license(
         license_receipt, plan.source_id, plan.source_dataset_id, plan.source_revision, plan.lexical_use.value
     )
@@ -365,7 +369,7 @@ def publish_plan(
                 original,
                 card,
                 original_repo,
-                data_restriction=data_restriction,
+                data_restriction=plan.data_restriction,
                 evidence_files=(manifest, *publication.notice_files),
             )
             original_license = check_publication(plan.source_id, original_repo, original_revision)
@@ -390,7 +394,7 @@ def publish_plan(
             tasks,
             card,
             repo,
-            data_restriction=data_restriction,
+            data_restriction=plan.data_restriction,
             evidence_files=(manifest, duplicate_manifest, combined_manifest, *publication.notice_files),
         )
         final_license = check_publication(plan.source_id, repo, revision)
@@ -474,7 +478,6 @@ def main() -> None:
                 receipts[plan.source_id],
                 raw_archives.get(plan.source_id),
                 measurement_receipt=None if staged_measurements is None else staged_measurements[plan.source_id],
-                data_restriction=configured_restriction(plan.source_id),
             )
             for plan in plans
         ]

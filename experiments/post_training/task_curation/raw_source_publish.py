@@ -24,26 +24,24 @@ from experiments.post_training.task_curation.license_publication import (
     prepare_license_publication,
 )
 from experiments.post_training.task_curation.native_quick import source_slug
-from experiments.post_training.task_curation.publication_gate import configured_restriction, require_public_data
+from experiments.post_training.task_curation.publication_gate import require_public_data
 from experiments.post_training.task_curation.remediation_publish import RawSourceArchive
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 
 
 def publish_raw_source(
-    stage: dict,
-    receipt: LicenseReceipt,
-    *,
-    version: str,
-    evidence_root: str,
-    use: str,
-    data_restriction: DataRestriction,
+    stage: dict, receipt: LicenseReceipt, *, version: str, evidence_root: str, use: str
 ) -> RawSourceArchive:
     """Archive one raw snapshot; refused outright for a PRIVATE_ALWAYS source.
 
-    The caller passes the configured source's tier: an exact re-publish of its
-    content is an export, and the private store never exports.
+    The staged snapshot carries its source's typed tier (``data_restriction``):
+    an exact re-publish of its content is an export, and the private store never
+    exports. A staged snapshot without the tier is refused.
     """
-    require_public_data(data_restriction, stage["source_id"], "raw source archive")
+    raw_tier = stage.get("data_restriction")
+    if not isinstance(raw_tier, str):
+        raise ValueError(f"Staged raw snapshot declares no restriction tier: {stage['source_id']}")
+    require_public_data(DataRestriction(raw_tier), stage["source_id"], "raw source archive")
     require_license(receipt, stage["source_id"], stage["dataset_id"], stage["revision"], use)
     require_unbanned(stage["source_id"], stage["dataset_id"], receipt)
     identity = hashlib.sha256(stage["source_id"].encode()).hexdigest()[:8]
@@ -143,7 +141,6 @@ def main() -> None:
             version=args.version,
             evidence_root=args.evidence_root,
             use=args.use,
-            data_restriction=configured_restriction(stage["source_id"]),
         )
         for stage in stages
     ]

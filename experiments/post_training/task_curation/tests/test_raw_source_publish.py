@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseReceipt
+from finestore.rl.status_taxonomy import DataRestriction
 from huggingface_hub.hf_api import RepoFile
 from huggingface_hub.utils import validate_repo_id
 
@@ -35,6 +36,7 @@ def test_raw_archive_preserves_complete_source_and_rejects_mutated_staging_befor
         "source_id": source_id,
         "dataset_id": dataset,
         "revision": revision,
+        "data_restriction": DataRestriction.OPEN.value,
         "artifact": str(staged),
         "source_files": list(original),
         "files": [
