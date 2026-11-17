@@ -363,6 +363,10 @@ class GrugModelConfig:
     mix."""
     attn_res_kv_source_layers: int | None = None
     """How many leading layers' outputs ``attn_res_kv_layers`` may read (None: ``num_layers // 2``)."""
+    attn_res_global_kv_query: bool = False
+    """Each global (MLA) layer's shared KV-latent down-projection reads its own Block AttnRes mix: a second
+    zero-init pseudo-query over the same sources as the attention gate, normed like the attention input (Inkling 2
+    Small). Q and everything else keep the attention gate's mix; KDA layers and the MLP gates are unchanged."""
     entropy_skip_layers: tuple[int, ...] = ()
     """Layers the entropy head's chosen tokens (``extra_mlp_select``, ``extra_mlp_frac``) skip, as in ``LayerSkip``,
     from when ``extra_mlp_active`` turns on. The entropy head is a linear read of the stop-gradient stream entering
@@ -496,6 +500,12 @@ class GrugModelConfig:
             raise ValueError("skip_adapter_dim needs attn_res")
         if self.skip_router_layers and (not self.attn_res or not 0.0 < self.skip_router_frac < 1.0):
             raise ValueError("skip_router_layers needs attn_res and 0 < skip_router_frac < 1")
+        if self.attn_res_global_kv_query and (
+            not self.attn_res or not self.mla or self.local_mixer != LocalMixer.KDA or self.attn_res_kv_layers
+        ):
+            raise ValueError(
+                "attn_res_global_kv_query needs attn_res and mla with local_mixer=kda, not attn_res_kv_layers"
+            )
         if self.attn_res_kv_layers:
             if not self.attn_res:
                 raise ValueError("attn_res_kv_layers needs attn_res")
@@ -1355,7 +1365,8 @@ class Block(eqx.Module):
     # Block AttnRes pseudo-queries of the attention and MLP sublayers (None without cfg.attn_res).
     attn_res_query_attn: Float[Array, " D"] | None
     attn_res_query_mlp: Float[Array, " D"] | None
-    attn_res_query_kv: Float[Array, " D"] | None  # cfg.attn_res_kv_layers (every layer carries one; those read it)
+    # cfg.attn_res_kv_layers (every layer carries one; those read it) or cfg.attn_res_global_kv_query (global layers)
+    attn_res_query_kv: Float[Array, " D"] | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, use_kda: bool = False) -> "Block":
@@ -1403,7 +1414,9 @@ class Block(eqx.Module):
             ),
             attn_res_query_attn=attn_res_query,
             attn_res_query_mlp=attn_res_query,
-            attn_res_query_kv=attn_res_query if cfg.attn_res_kv_layers else None,
+            attn_res_query_kv=(
+                attn_res_query if cfg.attn_res_kv_layers or (cfg.attn_res_global_kv_query and not use_kda) else None
+            ),
         )
 
     def attn_input(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
@@ -1750,6 +1763,10 @@ def _attn_res_layer(
         # KV-gate queries follow the per-layer gates: the KV gate of layer i is row 2 L + i.
         h_kv, _, _ = mix(None, 2 * cfg.num_layers + layer_index, leading_sources_only=True)
         kv_input = layer.attn_input(h_kv)
+    elif cfg.attn_res_global_kv_query and layer_index in (kv_layers := _kv_query_layers(cfg)):
+        # The global layer's own KV gate, over the attention gate's sources.
+        h_kv, _, _ = mix(partial, 2 * cfg.num_layers + kv_layers.index(layer_index))
+        kv_input = layer.attn_input(h_kv)
     attn_out, attn_stats = attn_branch(layer, h, mask, use_long, use_long, token_ids, kv_input)
     skip_keep = None if extras is None else extras.get(_SKIP_KEEP)
     if skip_keep is not None:
@@ -1848,6 +1865,15 @@ def _stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[i
     """``(softmax_layers, kda_layers)``: the layer indices of ``Transformer.stacked_blocks`` and ``kda_blocks``."""
     kda_layers = _kda_layer_indices(cfg)
     return tuple(i for i in range(cfg.num_layers) if i not in kda_layers), kda_layers
+
+
+def _kv_query_layers(cfg: GrugModelConfig) -> tuple[int, ...]:
+    """Layers carrying an AttnRes KV pseudo-query, in query order: the ``n``-th is row ``2 * num_layers + n``."""
+    if cfg.attn_res_kv_layers:
+        return tuple(range(cfg.num_layers))
+    if cfg.attn_res_global_kv_query:
+        return _stack_layer_indices(cfg)[0]
+    return ()
 
 
 def _unstack_layers(stacked: ArrayStacked[Block]) -> list[Block]:
@@ -2138,12 +2164,12 @@ class Transformer(eqx.Module):
         num_layers = cfg.num_layers
         starts = attn_res_block_starts(cfg)
         layers = self.layers()
-        # Every query in gate order: attn_0, mlp_0, ..., mlp_{L-1}; the KV gates (attn_res_kv_layers); final.
+        # Every query in gate order: attn_0, mlp_0, ..., mlp_{L-1}; the KV gates (``_kv_query_layers``); final.
         gate_queries = []
         for layer in layers:
             assert layer.attn_res_query_attn is not None and layer.attn_res_query_mlp is not None
             gate_queries.append(jnp.stack([layer.attn_res_query_attn, layer.attn_res_query_mlp]))
-        kv_queries = [layer.attn_res_query_kv[None] for layer in layers] if cfg.attn_res_kv_layers else []
+        kv_queries = [layers[i].attn_res_query_kv[None] for i in _kv_query_layers(cfg)]
         queries = jnp.concatenate([*gate_queries, *kv_queries, self.attn_res_query_final[None]])
         layer_fn = (
             _attn_res_layer_remat
