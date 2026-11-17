@@ -125,16 +125,15 @@ their active tasks hold, run the report that the `old-iris-jobs` Loom watch
 posts to Slack:
 
 ```bash
-mkdir -p /tmp/old-iris-jobs
+WORK=$(mktemp -d)
 uv run python scripts/ops/old_iris_jobs.py --min-age-days 7 --cluster marin \
-  --state /tmp/old-iris-jobs/state.json --message /tmp/old-iris-jobs/message.md
+  --state $WORK/state.json --messages-dir $WORK/messages
+cat $WORK/messages/*
 ```
 
 The `marin` hub covers the jobs it federates. For jobs submitted directly to a
-CoreWeave controller, run it again with `--cluster <cw-cluster>` and a separate
-`--state` file; this needs CoreWeave kubeconfig access. The script lists only
-jobs that are not in the `--state` file, then replaces the file; remove it to
-list every old job again.
+CoreWeave controller, use `--cluster <cw-cluster>`; this needs CoreWeave
+kubeconfig access. The script omits the jobs that the `--state` file names.
 
 ### Submitting a GPU gang from a workstation
 

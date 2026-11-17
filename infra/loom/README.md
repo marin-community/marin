@@ -363,11 +363,9 @@ The `old-iris-jobs` watch runs the `ops` profile at 09:00 Pacific on weekdays
 ([prompt](watches/old-iris-jobs.md)). It runs
 [`scripts/ops/old_iris_jobs.py`](../../scripts/ops/old_iris_jobs.py) against the
 `marin` hub and posts the Iris root jobs older than the prompt's
-`--min-age-days` to `#marin-alerts`, with owner, age, and the resources their
-active tasks hold. The watch state records the jobs it has posted, so each job is posted once
-while it keeps running, including while its tasks wait after a preemption. The
-hub covers the jobs it federates to CoreWeave. Loom has no CoreWeave kubeconfig,
-so jobs submitted directly to a CoreWeave controller are not in the report. The
+`--min-age-days` to `#marin-alerts`, once per job while the job keeps running.
+Loom has no CoreWeave kubeconfig, so the report has the jobs the hub federates
+to CoreWeave but not the jobs submitted directly to a CoreWeave controller. The
 watch does not cancel jobs.
 
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)

@@ -32,10 +32,8 @@ def _running_job(
     return job_status_from_proto(proto)
 
 
-def _old_job(name: str, started_days_ago: float, *, cluster: str = "marin") -> OldJob:
-    return OldJob(
-        cluster, JobName.from_wire(f"/alice/{name}"), NOW_MS - int(started_days_ago * MS_PER_DAY), {"tpu=v5p-8": 1}
-    )
+def _old_job(name: str, started_days_ago: float, *, cluster: str = "marin", task: ResourceRequest = TPU_TASK) -> OldJob:
+    return OldJob(cluster, JobName.from_wire(f"/alice/{name}"), NOW_MS - int(started_days_ago * MS_PER_DAY), {task: 1})
 
 
 def test_find_old_jobs_counts_active_tasks_of_each_tree_on_the_cluster_that_runs_it():
@@ -57,35 +55,38 @@ def test_find_old_jobs_counts_active_tasks_of_each_tree_on_the_cluster_that_runs
     old_jobs = find_old_jobs("marin", jobs, CUTOFF_MS, requests.__getitem__)
 
     assert sorted(old_jobs, key=lambda job: job.key) == [
-        OldJob("cw-rno2a", JobName.from_wire("/dave/gang"), NOW_MS - 9 * MS_PER_DAY, {"gpu=8xH100": 8}),
-        OldJob(
-            "marin",
-            JobName.from_wire("/alice/train"),
-            NOW_MS - 10 * MS_PER_DAY,
-            {"tpu=v6e-8": 3, "cpu=0.5 mem=4GiB": 1},
-        ),
+        OldJob("cw-rno2a", JobName.from_wire("/dave/gang"), NOW_MS - 9 * MS_PER_DAY, {GPU_TASK: 8}),
+        OldJob("marin", JobName.from_wire("/alice/train"), NOW_MS - 10 * MS_PER_DAY, {TPU_TASK: 3, CPU_TASK: 1}),
         OldJob("marin", JobName.from_wire("/carol/preempted"), NOW_MS - 10 * MS_PER_DAY, {}),
     ]
 
 
-def test_report_lists_each_old_job_once_and_defers_jobs_beyond_the_message_size():
+def test_report_lists_every_old_job_once_across_messages_within_the_post_size():
     old_jobs = [_old_job(f"job-{index:03d}", started_days_ago=8 + index) for index in range(80)]
 
-    first_message, first_reported = report(old_jobs, set(), "marin", NOW_MS, 7)
-    second_message, second_reported = report(old_jobs, first_reported, "marin", NOW_MS, 7)
-    third_message, third_reported = report(old_jobs, second_reported, "marin", NOW_MS, 7)
+    messages, reported = report(old_jobs, set(), "marin", NOW_MS, 7)
+    later_messages, later_reported = report(old_jobs, reported, "marin", NOW_MS, 7)
 
-    oldest_first = sorted(old_jobs, key=lambda job: job.started_at_ms)
-    posted_first = [job for job in oldest_first if job.key in first_reported]
-    assert 0 < len(posted_first) < len(old_jobs)
+    assert len(messages) > 1
     # Loom rejects a Slack post above 4,000 bytes.
-    assert len(first_message.encode()) <= 4_000
-    assert posted_first == oldest_first[: len(posted_first)]
-    assert all(str(job.root) in first_message for job in posted_first)
-    assert all(str(job.root) in second_message for job in old_jobs if job.key not in first_reported)
-    assert second_reported == {job.key for job in old_jobs}
-    assert third_message == ""
-    assert third_reported == second_reported
+    assert all(len(message.encode()) <= 4_000 for message in messages)
+    assert all("\n".join(messages).count(f"`{job.root}`") == 1 for job in old_jobs)
+    assert reported == {job.key for job in old_jobs}
+    assert later_messages == []
+    assert later_reported == reported
+
+
+def test_report_lists_accelerator_jobs_before_older_cpu_jobs():
+    cpu_oldest = _old_job("cpu-oldest", 40, task=CPU_TASK)
+    gpu_newer = _old_job("gpu-newer", 8, task=GPU_TASK)
+    tpu_older = _old_job("tpu-older", 20)
+
+    (message,), _ = report([cpu_oldest, gpu_newer, tpu_older], set(), "marin", NOW_MS, 7)
+
+    positions = [message.index(str(job.root)) for job in (tpu_older, gpu_newer, cpu_oldest)]
+    assert positions == sorted(positions)
+    assert "1x gpu=8xH100" in message
+    assert "1x cpu=0.5 mem=4GiB" in message
 
 
 def test_report_lists_a_job_again_after_it_stops_running():
@@ -93,7 +94,7 @@ def test_report_lists_a_job_again_after_it_stops_running():
     _, first_reported = report([kept, finished, resubmitted], set(), "marin", NOW_MS, 7)
     _, second_reported = report([kept], first_reported, "marin", NOW_MS, 7)
 
-    message, third_reported = report([kept, resubmitted], second_reported, "marin", NOW_MS, 7)
+    (message,), third_reported = report([kept, resubmitted], second_reported, "marin", NOW_MS, 7)
 
     assert second_reported == {kept.key}
     assert third_reported == {kept.key, resubmitted.key}
@@ -106,21 +107,21 @@ def test_report_lists_a_job_once_across_a_preemption_that_leaves_every_task_pend
     waiting = replace(job, occupied={})
     never_posted = replace(_old_job("never-posted", 9), occupied={})
 
-    first_message, first_reported = report([job, never_posted], set(), "marin", NOW_MS, 7)
-    waiting_message, waiting_reported = report([waiting, never_posted], first_reported, "marin", NOW_MS, 7)
-    resumed_message, _ = report([job, never_posted], waiting_reported, "marin", NOW_MS, 7)
+    (first_message,), first_reported = report([job, never_posted], set(), "marin", NOW_MS, 7)
+    waiting_messages, waiting_reported = report([waiting, never_posted], first_reported, "marin", NOW_MS, 7)
+    resumed_messages, _ = report([job, never_posted], waiting_reported, "marin", NOW_MS, 7)
 
     assert str(job.root) in first_message
     assert str(never_posted.root) not in first_message
-    assert waiting_message == ""
+    assert waiting_messages == []
     assert waiting_reported == {job.key}
-    assert resumed_message == ""
+    assert resumed_messages == []
 
 
 def test_report_tells_owners_to_cancel_a_federated_job_through_the_scanned_cluster():
     federated = _old_job("federated", 9, cluster="cw-rno2a")
 
-    message, _ = report([federated], set(), "marin", NOW_MS, 7)
+    (message,), _ = report([federated], set(), "marin", NOW_MS, 7)
 
     assert "iris --cluster=marin job cancel" in message
     assert "--cluster=cw-rno2a" not in message
