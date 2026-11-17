@@ -85,6 +85,7 @@ class SharedSourceFamily(StrEnum):
 
     SCALE_SWE = "scale-swe"
     SWE_LEGO = "swe-lego"
+    SWE_REBENCH = "swe-rebench"
 
 
 class SourceSharedRunner(BaseModel):
@@ -93,8 +94,11 @@ class SourceSharedRunner(BaseModel):
     ``capture_dirs`` and ``capture_patterns`` select the workspace paths the
     bootstrap freezes as the trusted grading reference; ``patch_config_keys``
     name the private config entries holding unified diffs whose affected paths
-    must be captured. ``dependency_paths`` are the source interpreter
-    environments whose live inventory grading audits.
+    must be captured; ``path_config_keys`` name the private config entries
+    holding explicit workspace-relative path lists (e.g. a source's trusted
+    test-file list) that join the capture scope when they exist.
+    ``dependency_paths`` are the source interpreter environments whose live
+    inventory grading audits.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -103,6 +107,7 @@ class SourceSharedRunner(BaseModel):
     capture_dirs: tuple[str, ...] = ()
     capture_patterns: tuple[str, ...] = ()
     patch_config_keys: tuple[str, ...] = ()
+    path_config_keys: tuple[str, ...] = ()
     dependency_paths: tuple[str, ...] = ()
     shared_controller_sha256: str = ""
 

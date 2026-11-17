@@ -5,6 +5,7 @@
 
 import ast
 import json
+import tempfile
 import zlib
 from pathlib import Path
 
@@ -13,6 +14,7 @@ import pytest
 from taskcompendium.harbor.shared_source import (
     SCALE_SWE_PROFILE,
     SWE_LEGO_PROFILE,
+    SWE_REBENCH_PROFILE,
     harden_shared_source,
     patch_paths,
     published_contract,
@@ -199,3 +201,96 @@ def test_guest_controller_stays_runtime_compatible_with_python_39():
     # Syntax-level guard: 3.10+ grammar (e.g. match statements) must not enter
     # the controller either.
     ast.parse(source, feature_version=(3, 9))
+
+
+def swe_rebench_files(workdir: str = "/spectree") -> dict[str, bytes]:
+    """A SWE-rebench-shaped converted package: explicit test_files, rendered test.sh."""
+    config = {
+        "workdir": workdir,
+        "base_commit": "b" * 40,
+        "test_patch": "--- /dev/null\n+++ b/tests/test_new.py\n@@ -0,0 +1,1 @@\n+value = 1\n",
+        "test_cmd": "python -m pytest tests/test_new.py",
+        "test_files": ["tests/test_app.py", "tests/conftest.py"],
+        "log_parser": "parse_log_pytest",
+        "language": "python",
+        "test_ids": ["tests/test_new.py::test_resolved"],
+        "FAIL_TO_PASS": ["tests/test_new.py::test_resolved"],
+        "PASS_TO_PASS": [],
+    }
+    return {
+        "instruction.md": b"Fix the module so the tests pass.\n",
+        "task.toml": (
+            b"[environment]\ncpus = 6\nmemory_mb = 24576\nstorage_mb = 32768\n"
+            b"[agent]\ntimeout_sec = 3000.0\n"
+            b"[verifier]\ntimeout_sec = 2400.0\n"
+        ),
+        "environment/Dockerfile": b"FROM fixture.test/swe-rebench-base@sha256:" + b"b" * 64 + b"\n",
+        "tests/test.sh": b"#!/bin/sh\nset -uo pipefail\nexit 0\n",
+        "tests/test.patch": config["test_patch"].encode(),
+        "tests/config.json": json.dumps(config).encode(),
+        "tests/grade.py": b"print('grade')\n",
+        "solution/solve.sh": b"#!/bin/sh\nexit 0\n",
+        "solution/gold.patch": b"--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-old\n+new\n",
+    }
+
+
+def test_swe_rebench_profile_binds_the_agreed_contract():
+    contract = harden_shared_source(
+        swe_rebench_files(), profile=SWE_REBENCH_PROFILE, dependency_state=SharedDependencyState.AGENT_MUTABLE
+    )
+    assert contract.workspace == "/spectree"
+    assert contract.id == "shared-source"
+    native = contract.native
+    assert native.family == SharedSourceFamily.SWE_REBENCH
+    assert native.patch_config_keys == ("test_patch",)
+    assert native.path_config_keys == ("test_files",)
+    assert native.capture_dirs == ()
+    assert native.capture_patterns == ("tests/test_new.py",)
+    # Protected test patterns mirror the grading-material scope: the test patch
+    # paths (Lego precedent) plus the row's explicit test_files list.
+    assert "tests/test_new.py" in contract.protected_test_patterns
+    assert "tests/test_app.py" in contract.protected_test_patterns
+    # The upstream-declared verifier deadline passes through verbatim; the
+    # quiesce binding is the POSIX shell variant for this family.
+    assert SWE_REBENCH_PROFILE.quiesce_variant == "shell"
+    assert SWE_REBENCH_PROFILE.path_config_keys == ("test_files",)
+
+
+def test_swe_rebench_rejects_undeclared_config_keys_and_missing_private_files():
+    files = swe_rebench_files()
+    config = json.loads(files["tests/config.json"])
+    config["unexpected"] = 1
+    files["tests/config.json"] = json.dumps(config).encode()
+    with pytest.raises(ValueError, match="config"):
+        harden_shared_source(files, profile=SWE_REBENCH_PROFILE, dependency_state=SharedDependencyState.AGENT_MUTABLE)
+    files = swe_rebench_files()
+    del files["tests/test.patch"]
+    with pytest.raises(ValueError, match=r"test\.patch"):
+        harden_shared_source(files, profile=SWE_REBENCH_PROFILE, dependency_state=SharedDependencyState.AGENT_MUTABLE)
+
+
+def test_capture_scope_joins_explicit_config_path_lists():
+    workspace = tmp_scope()
+    runner = {
+        "capture_dirs": (),
+        "capture_patterns": (),
+        "patch_config_keys": ("test_patch",),
+        "path_config_keys": ("test_files",),
+    }
+    config = {
+        "test_patch": "--- /dev/null\n+++ b/tests/test_new.py\n@@ -0,0 +1,1 @@\n+value = 1\n",
+        "test_files": ["tests/test_app.py", "tests/absent.py", "/etc/passwd"],
+    }
+    (workspace / "tests").mkdir(parents=True)
+    (workspace / "tests" / "test_app.py").write_text("value = 0\n")
+    scope = shared_source.capture_scope(workspace, runner, config)
+    # Existing test_files entries join; absent entries and absolute paths do
+    # not. The test_patch path does NOT join here (it does not exist before
+    # the grading-time patch application; the patch-path ancestor handling
+    # covers it then).
+    assert scope == ["tests/test_app.py"]
+
+
+def tmp_scope() -> Path:
+    directory = Path(tempfile.mkdtemp(prefix="capture-scope-"))
+    return directory

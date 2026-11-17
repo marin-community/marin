@@ -106,6 +106,14 @@ def capture_scope(workspace: Path, runner: dict, config: dict) -> list[str]:
         for name in patch_paths(config[key]):
             if (workspace / name).exists() and not PurePosixPath(name).is_absolute():
                 selected.add(name)
+    for key in runner.get("path_config_keys", ()):
+        # Explicit per-row path lists (e.g. a source's trusted test files):
+        # entries that exist at capture time join the scope; patch-created
+        # files that only materialize at grading are covered by the patch-path
+        # handling instead.
+        for name in config.get(key) or []:
+            if (workspace / name).exists() and not PurePosixPath(name).is_absolute():
+                selected.add(name)
     return sorted(selected)
 
 
@@ -325,7 +333,7 @@ def bootstrap(input_path: Path) -> None:
     common.write_json(root / "spec.json", spec)
 
     config = json.loads((tests / "config.json").read_text())
-    if runner["family"] == "scale-swe":
+    if runner["family"] in ("scale-swe", "swe-rebench"):
         if config.get("workdir") != contract["workspace"]:
             raise ValueError("Source workdir differs from the published contract workspace")
     elif contract["workspace"] != "/testbed":

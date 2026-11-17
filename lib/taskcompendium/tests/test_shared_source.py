@@ -30,6 +30,7 @@ import tomlkit
 from taskcompendium.harbor.shared_source import (
     SCALE_SWE_PROFILE,
     SWE_LEGO_PROFILE,
+    SWE_REBENCH_PROFILE,
     harden_shared_source,
 )
 from taskcompendium.integrity import SharedDependencyState
@@ -305,6 +306,39 @@ LEGO_TEST_CMD = "python -m pytest -rA tests/nested/test_fixed.py"
 SCALE_IDS = ["tests/test_app.py::test_add", "tests/test_app.py::test_add_negative"]
 LEGO_IDS = ["tests/nested/test_fixed.py::test_add_fixed"]
 
+SWE_REBENCH_TEST_PATCH = (
+    "--- /dev/null\n"
+    "+++ b/tests/test_new.py\n"
+    "@@ -0,0 +1,6 @@\n"
+    "+import sys, pathlib\n"
+    "+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))\n"
+    "+from app import add\n"
+    "+\n"
+    "+def test_resolved():\n"
+    "+    assert add(1, 2) == 3\n"
+)
+SWE_REBENCH_TEST_CMD = "python3 -m pytest -q tests/test_new.py"
+SWE_REBENCH_IDS = ["tests/test_new.py::test_resolved"]
+SWE_REBENCH_GRADE = (
+    "import pathlib, sys\n"
+    "log = pathlib.Path(sys.argv[1]).read_text()\n"
+    "ok = '1 passed' in log and ' failed' not in log and 'error' not in log.lower()\n"
+    "raise SystemExit(0 if ok else 1)\n"
+)
+SWE_REBENCH_TEST_SH = (
+    "#!/bin/sh\n"
+    "set -uo pipefail\n"
+    "V=/logs/verifier\n"
+    'mkdir -p "$V"\n'
+    'echo 0 > "$V/reward.txt"\n'
+    "git restore -- tests/test_app.py 2>/dev/null || rm -f -- tests/test_app.py\n"
+    "git apply /tests/test.patch\n"
+    f'timeout 300 {SWE_REBENCH_TEST_CMD} > "$V/test_output.log" 2>&1 || true\n'
+    'if python3 /tests/grade.py "$V/test_output.log"; then\n'
+    '  echo 1 > "$V/reward.txt"\n'
+    "fi\n"
+)
+
 TEST_SH = b"#!/bin/sh\nset -eu\nmkdir -p /logs/verifier\npython /tests/grade.py\n"
 
 
@@ -360,6 +394,34 @@ def build_repo() -> str:
 
 
 def package_files(family: str, base: str) -> tuple[dict[str, bytes], object]:
+    if family == "swe-rebench":
+        config = {
+            "workdir": str(WORKSPACE),
+            "base_commit": base,
+            "test_patch": SWE_REBENCH_TEST_PATCH,
+            "test_cmd": SWE_REBENCH_TEST_CMD,
+            "test_files": ["tests/test_app.py"],
+            "log_parser": "parse_log_pytest",
+            "language": "python",
+            "test_ids": SWE_REBENCH_IDS,
+            "FAIL_TO_PASS": SWE_REBENCH_IDS,
+            "PASS_TO_PASS": [],
+        }
+        files = {
+            "instruction.md": b"Fix add so the tests pass.\n",
+            "task.toml": (
+                b"[environment]\ncpus = 4\nmemory_mb = 4096\nstorage_mb = 10240\n"
+                b'[verifier]\nenvironment_mode = "shared"\n'
+            ),
+            "environment/Dockerfile": b"FROM fixture.test/source@sha256:" + b"a" * 64 + b"\n",
+            "tests/test.sh": SWE_REBENCH_TEST_SH.encode(),
+            "tests/test.patch": SWE_REBENCH_TEST_PATCH.encode(),
+            "tests/config.json": json.dumps(config).encode(),
+            "tests/grade.py": SWE_REBENCH_GRADE.encode(),
+            "solution/solve.sh": b"cd /testbed\n" + GOLD_PATCH.encode(),
+            "solution/gold.patch": GOLD_PATCH.encode(),
+        }
+        return files, SWE_REBENCH_PROFILE
     if family == "scale":
         config = {
             "workdir": str(WORKSPACE),
@@ -370,6 +432,7 @@ def package_files(family: str, base: str) -> tuple[dict[str, bytes], object]:
         }
         profile = SCALE_SWE_PROFILE
         private = {"grade.py": SCALE_GRADE.encode(), "scale_score.py": SCALE_SCORE.encode()}
+        test_sh = TEST_SH
     else:
         config = {
             "base_commit": base,
@@ -379,6 +442,7 @@ def package_files(family: str, base: str) -> tuple[dict[str, bytes], object]:
         }
         profile = SWE_LEGO_PROFILE
         private = {"grade.py": LEGO_GRADE.encode()}
+        test_sh = TEST_SH
     files = {
         "instruction.md": b"Fix add so the tests pass.\n",
         "task.toml": (
@@ -386,7 +450,7 @@ def package_files(family: str, base: str) -> tuple[dict[str, bytes], object]:
             b'[verifier]\nenvironment_mode = "shared"\n'
         ),
         "environment/Dockerfile": b"FROM fixture.test/source@sha256:" + b"a" * 64 + b"\n",
-        "tests/test.sh": TEST_SH,
+        "tests/test.sh": test_sh,
         "tests/native_scripts.py": NATIVE_SCRIPTS.replace("@SHIM@", SHIM).encode(),
         "tests/config.json": json.dumps(config).encode(),
         **{f"tests/{name}": content for name, content in private.items()},
@@ -733,3 +797,38 @@ def test_agent_symlinked_tests_directory_cannot_reach_protected_state(source_ima
     restored = WORKSPACE / "tests"
     assert not restored.is_symlink()
     assert (restored / "test_app.py").is_file()
+
+
+@pytest.mark.parametrize("source_image", ["swe-rebench"], indirect=True)
+def test_swe_rebench_reward_channel_and_test_files_scope(source_image):
+    """The SWE-rebench flow: verbatim-style test.sh writes the reward file; the
+    declared test_files list joins the protected grading scope."""
+    workspace = Path(contract_workspace_of(source_image.files))
+    # NoP: the restored base + the test patch fails on the buggy source.
+    assert run_grade(source_image.files)["reward"] == 0.0
+    # The agent tampers with a declared test_files path and shadows the
+    # patch-created test; grading must neutralize both.
+    tamper = run_as_agent(
+        "import pathlib\n"
+        f"base = pathlib.Path({str(workspace)!r})\n"
+        "(base / 'tests' / 'test_app.py').write_text('def test_resolved():\\n    assert True\\n')\n"
+        "(base / 'tests' / 'test_new.py').write_text('def test_resolved():\\n    assert True\\n')\n"
+    )
+    assert tamper.returncode == 0, tamper.stderr
+    assert run_grade(source_image.files)["reward"] == 0.0
+    # The declared test_files path was restored to the frozen reference bytes
+    # and the shadowing patch-path file was removed before the patch reapplied.
+    assert (workspace / "tests" / "test_app.py").read_text() == SCALE_TEST
+    assert "assert add(1, 2) == 3" in (workspace / "tests" / "test_new.py").read_text()
+    # Oracle: the fixed source passes the F2P test -> reward 1.0.
+    fix = run_as_agent(
+        "import pathlib\n" f"base = pathlib.Path({str(workspace)!r})\n" f"(base / 'app.py').write_text({APP_FIXED!r})\n"
+    )
+    assert fix.returncode == 0, fix.stderr
+    assert run_grade(source_image.files)["reward"] == 1.0
+
+
+def contract_workspace_of(files: dict[str, bytes]) -> str:
+    """Read the workspace the hardened contract published for this package."""
+    payload = json.loads(zlib.decompress(files["setup_files/taskcompendium-source-input.zlib"]))
+    return payload["contract"]["workspace"]

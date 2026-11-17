@@ -69,6 +69,14 @@ class SourceGraderProfile:
     pinned base commit, so its disclosure records source semantics; Lego's
     original ``REVERT_TEST_FILES`` touches only ``test_patch`` paths, so its
     disclosure records an adapter security policy.
+
+    ``path_config_keys`` names private config entries holding explicit
+    workspace-relative path lists that join the capture scope when they exist
+    (a source that enumerates its trusted test files instead of following
+    capture patterns). ``quiesce_variant`` records which quiesce helper the
+    conversion must emit for the family's collect commands: ``python`` for
+    images that ship a guest python3, ``shell`` (the POSIX variant) for
+    families whose bases may ship no guest interpreter at all.
     """
 
     family: SharedSourceFamily
@@ -79,6 +87,8 @@ class SourceGraderProfile:
     patch_config_keys: tuple[str, ...]
     dependency_paths: tuple[str, ...]
     removal_policy: str
+    path_config_keys: tuple[str, ...] = ()
+    quiesce_variant: str = "python"
 
 
 SCALE_SWE_PROFILE = SourceGraderProfile(
@@ -110,9 +120,42 @@ SWE_LEGO_PROFILE = SourceGraderProfile(
     ),
 )
 
+SWE_REBENCH_PROFILE = SourceGraderProfile(
+    family=SharedSourceFamily.SWE_REBENCH,
+    config_keys=frozenset(
+        {
+            "workdir",
+            "base_commit",
+            "test_patch",
+            "test_cmd",
+            "test_files",
+            "log_parser",
+            "language",
+            "test_ids",
+            "FAIL_TO_PASS",
+            "PASS_TO_PASS",
+        }
+    ),
+    private_files=("grade.py", "config.json", "test.sh", "test.patch"),
+    capture_dirs=(),
+    capture_patterns=(),
+    patch_config_keys=("test_patch",),
+    dependency_paths=(),
+    removal_policy=(
+        "The source's own test.sh restores test_files (git restore for base-tracked entries, rm -f otherwise) "
+        "before applying test.patch - Scale-style source-semantics disclosure. The frozen reference additionally "
+        "restores the captured grading-material scope (test_patch paths plus the row test_files list) before "
+        "grading; agent-created files at captured paths are removed by the frozen reference restore (adapter "
+        "security policy)."
+    ),
+    path_config_keys=("test_files",),
+    quiesce_variant="shell",
+)
+
 PROFILES = {
     SharedSourceFamily.SCALE_SWE: SCALE_SWE_PROFILE,
     SharedSourceFamily.SWE_LEGO: SWE_LEGO_PROFILE,
+    SharedSourceFamily.SWE_REBENCH: SWE_REBENCH_PROFILE,
 }
 
 
@@ -145,23 +188,36 @@ def source_contract(
     ``tests`` holds the package's private ``tests/`` material keyed by
     tests-relative name; its canonical hash becomes the contract's reference.
     """
-    workspace = config.get("workdir", "/testbed") if profile.family is SharedSourceFamily.SCALE_SWE else "/testbed"
+    workspace = (
+        config.get("workdir", "/testbed")
+        if profile.family in (SharedSourceFamily.SCALE_SWE, SharedSourceFamily.SWE_REBENCH)
+        else "/testbed"
+    )
     patterns: tuple[str, ...] = profile.capture_patterns
-    if profile.family is SharedSourceFamily.SWE_LEGO:
+    if profile.family in (SharedSourceFamily.SWE_LEGO, SharedSourceFamily.SWE_REBENCH):
         patterns = tuple(dict.fromkeys((*patterns, *patch_paths(config["test_patch"]))))
     runner = SourceSharedRunner(
         family=profile.family,
         capture_dirs=profile.capture_dirs,
         capture_patterns=patterns,
         patch_config_keys=profile.patch_config_keys,
+        path_config_keys=profile.path_config_keys,
         dependency_paths=profile.dependency_paths,
         shared_controller_sha256=hashlib.sha256(Path(shared_pytest.__file__).read_bytes()).hexdigest(),
     )
+    protected_test_patterns = (
+        *profile.capture_patterns,
+        *(f"{directory}/**" for directory in profile.capture_dirs),
+    )
+    if profile.family is SharedSourceFamily.SWE_REBENCH:
+        # Publish the row's grading-material scope: the test patch paths plus
+        # the explicit test_files list (both are per-row config data).
+        protected_test_patterns = tuple(dict.fromkeys((*patterns, *(config.get("test_files") or []))))
     return SharedIntegrityContract(
         id="shared-source",
         dependency_state=dependency_state,
         workspace=workspace,
-        protected_test_patterns=(*profile.capture_patterns, *(f"{directory}/**" for directory in profile.capture_dirs)),
+        protected_test_patterns=protected_test_patterns,
         audit_probes=("dependencies-diff.json", "startup-hooks-diff.json"),
         known_open_gaps=(
             "Agent-installed pytest plugins and imports in the shared interpreter environments",
@@ -187,8 +243,16 @@ def parse_source_config(files: dict[str, bytes], profile: SourceGraderProfile) -
     for key in profile.patch_config_keys:
         if not isinstance(config[key], str):
             raise ValueError(f"Source patch key {key} must be a string")
+    for key in profile.path_config_keys:
+        value = config[key]
+        if not isinstance(value, list) or any(not isinstance(entry, str) for entry in value):
+            raise ValueError(f"Source path key {key} must be a list of workspace-relative paths")
+        if any(PurePosixPath(entry).is_absolute() or ".." in PurePosixPath(entry).parts for entry in value):
+            raise ValueError(f"Source path key {key} entries must be relative workspace paths")
     if profile.family is SharedSourceFamily.SCALE_SWE and not config["workdir"].startswith("/"):
         raise ValueError("Scale-SWE workdir must be an absolute workspace path")
+    if profile.family is SharedSourceFamily.SWE_REBENCH and not config["workdir"].startswith("/"):
+        raise ValueError("SWE-rebench workdir must be an absolute workspace path")
     return config
 
 
