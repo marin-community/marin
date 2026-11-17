@@ -15,7 +15,7 @@ from rigging.config_discovery import find_project_root
 def serving_release() -> VllmGpuRelease:
     manifest = json.loads(Path(__file__).with_name("vllm-release.json").read_text())
     return VllmGpuRelease(
-        release_tag="marin-vllm-gpu-20260929-39e62869693c",
+        release_tag="marin-vllm-gpu-20261113-0ac9dcb157ee",
         source_commit=manifest["source"]["fork_commit"],
         version=manifest["distribution"]["version"],
         torch_backend=manifest["abi"]["cuda_variant"],

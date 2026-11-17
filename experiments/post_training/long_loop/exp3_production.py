@@ -314,8 +314,8 @@ def production_plan(release: DataRelease, source_revision: str, files: dict[str,
         current_harbor = operational["config"]["terminal_bench"]["harbor"]
         for field in (
             "environment_type",
-            "daytona_provisioning",
-            "eval_daytona_provisioning",
+            "daytona_image_build",
+            "eval_daytona_image_build",
             "daytona_api_key_env",
             "eval_daytona_api_key_env",
             "verifier_override_timeout_sec",

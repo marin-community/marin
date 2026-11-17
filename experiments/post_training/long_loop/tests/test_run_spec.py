@@ -44,7 +44,7 @@ def test_emitted_rl_validation_and_eval_settings_come_from_the_pinned_spec(tmp_p
             s for s in stages if s.name == resolved[stage]["name"] or s.name.endswith("/" + resolved[stage]["name"])
         )
         context = StepContext.for_run(
-            str(tmp_path / stage), str(tmp_path), deps=step.deps, runtime_args=step.runtime_args
+            "s3://test/long-loop/" + stage, "s3://test/long-loop", deps=step.deps, runtime_args=step.runtime_args
         )
         built = step.build_config(replace(context, is_fingerprint=True))
         launch = built if stage == "rl" else built.skyrl
@@ -62,7 +62,7 @@ def test_emitted_rl_validation_and_eval_settings_come_from_the_pinned_spec(tmp_p
             assert compiled["ray"][key] == value
         emitted = compiled["skyrl"]
         assert emitted["trainer"]["seed"] == resolved[stage]["seed"]
-        assert emitted["terminal_bench_config"]["harbor"]["eval_daytona_provisioning"] == "declarative"
+        assert emitted["terminal_bench_config"]["harbor"]["eval_daytona_image_build"] == "declarative"
         if stage == "rl":
             assert emitted["trainer"]["max_ckpts_to_keep"] == resolved[stage]["retained"]
         source = yaml.safe_load(yaml.safe_dump(resolved[stage]["config"]))
@@ -221,20 +221,25 @@ def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch,
         )
     )
     resolved["adopted_handoff"] = {
-        "uri": str(handoff_root),
+        "uri": "s3://test/verified-handoff",
         "source_checkpoint": "s3://test/committed-sft/checkpoints/step-746",
         "files": [],
     }
     resolved["adopted_endpoint"] = {
         "uri": "s3://test/verified-endpoint",
-        "model_uri": str(handoff_root / "hf"),
+        "model_uri": "s3://test/verified-handoff/hf",
         "tokenizer_revision": resolved["tokenizer"]["revision"],
         "settings": resolved["endpoint"],
         "files": [],
     }
     terminal = build_spec_graph(resolved, "2026.11.10.1", through="archive")
     names = [step.name for step in graph_handles([terminal])]
-    validate_graph(terminal, tmp_path / "full-graph", "s3://marin-us-east-02a/marin/")
+    validate_graph(
+        terminal,
+        tmp_path / "full-graph",
+        "s3://marin-us-east-02a/marin/",
+        model_config=(handoff_root / "hf/config.json").read_bytes(),
+    )
     executions = [
         value
         for step in graph_handles([terminal])
@@ -246,7 +251,7 @@ def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch,
     assert any(name.endswith("/adopt-sft") for name in names)
     assert not any(name.endswith("/sft") or name.endswith("/base") for name in names)
     handoff = next(step for step in graph_handles([terminal]) if step.name.endswith("/sft-handoff"))
-    assert handoff.adopt_source == str(handoff_root)
+    assert handoff.adopt_source == "s3://test/verified-handoff"
     endpoint = next(step for step in graph_handles([terminal]) if step.name.endswith("/endpoint"))
     assert endpoint.adopt_source == "s3://test/verified-endpoint"
     assert any(step.name.endswith("/verify-endpoint") for step in endpoint.deps)
@@ -285,7 +290,7 @@ def test_rl_keeps_child_execution_profile_without_gpu_probe_jobs():
 
 
 def test_controlled_stage_allocations_and_deadlines_reach_dispatched_jobs(tmp_path, monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    monkeypatch.setenv("MARIN_PREFIX", "s3://test/long-loop")
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     resolved = resolve_spec(SPEC, smoke=False)
     remote = spec_pipeline.remote
@@ -315,7 +320,8 @@ def test_controlled_stage_allocations_and_deadlines_reach_dispatched_jobs(tmp_pa
         assert execution.coordinator_timeout_hours * 3600 == COORDINATOR_TIMEOUT_SECONDS
 
 
-def test_changed_stage_controls_require_acknowledgement_and_archive_the_decision(tmp_path):
+def test_changed_stage_controls_require_acknowledgement_and_archive_the_decision(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://test/long-loop")
     root = tmp_path / "specs"
     shutil.copytree(SPEC.parent, root)
     resource_path = root / "execution.yaml"

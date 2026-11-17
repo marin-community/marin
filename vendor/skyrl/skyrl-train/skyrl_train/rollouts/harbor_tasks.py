@@ -7,12 +7,11 @@ import os
 from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
 from shellbox.backends.daytona.machine import (
-    DaytonaDeclarativeMachineFactory,
+    DaytonaImageBuild,
     DaytonaMachineFactory,
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
 )
-from shellbox.backends.daytona.provisioning import DaytonaProvisioning
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import NoGrader
 from rolloutengine.models import MachineRuntimeSpec, RolloutFailure, TaskRolloutSpec
@@ -108,10 +107,10 @@ class HarborTaskSettings:
         environment = self.environment
         if phase != "eval" or environment.type is not EnvironmentType.DAYTONA:
             return environment
-        if environment.eval_provisioning is None:
-            raise ValueError("Daytona evaluation requires explicit eval_daytona_provisioning")
+        if environment.eval_image_build is None:
+            raise ValueError("Daytona evaluation requires explicit eval_daytona_image_build")
         return environment.model_copy(
-            update={"kwargs": {**environment.kwargs, "provisioning": environment.eval_provisioning.value}}
+            update={"kwargs": {**environment.kwargs, "image_build": environment.eval_image_build.value}}
         )
 
     def machine_factory(self, *, phase: str = "train") -> MachineFactory:
@@ -126,11 +125,8 @@ class HarborTaskSettings:
                     if not api_key:
                         raise ValueError(f"Missing Daytona credential environment variable: {key_env}")
                     client_factory = partial(AsyncDaytona, DaytonaConfig(api_key=api_key))
-                factory_type = {
-                    DaytonaProvisioning.SNAPSHOT: DaytonaMachineFactory,
-                    DaytonaProvisioning.DECLARATIVE: DaytonaDeclarativeMachineFactory,
-                }[DaytonaProvisioning(environment.kwargs.get("provisioning", DaytonaProvisioning.SNAPSHOT))]
-                return factory_type(
+                return DaytonaMachineFactory(
+                    image_build=DaytonaImageBuild(environment.kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT)),
                     client_factory=client_factory,
                     ttl_minutes=self.environment.kwargs.get("ttl_minutes", 360),
                     network_policy=None

@@ -7,6 +7,7 @@ import asyncio
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from pathlib import Path
+from typing import cast
 
 from daytona import AsyncDaytona
 
@@ -32,6 +33,7 @@ from harbor.environments.model_relay import (
 )
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
+from shellbox.backends.daytona.leases import SnapshotLeaser
 from shellbox.backends.daytona.machine import (
     DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
     DEFAULT_SANDBOX_TTL_MINUTES,
@@ -136,6 +138,7 @@ class DaytonaEnvironment(BaseEnvironment):
             output_collection_timeout=output_collection_timeout,
             network_policy=policy,
             image_build=DaytonaImageBuild(image_build),
+            snapshot_leaser=cast(SnapshotLeaser | None, kwargs.get("host_capabilities", HostCapabilities()).snapshot_leaser),
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
         self.judge_access = JudgeAccess(judge_access)

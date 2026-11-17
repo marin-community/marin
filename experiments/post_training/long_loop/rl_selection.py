@@ -9,7 +9,11 @@ import math
 from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, trailing_validation_ema
+from vendor.skyrl.marinskyrl.checkpoint_paths import (
+    BEST_CHECKPOINT_FILENAME,
+    ValidationObservation,
+    trailing_validation_ema,
+)
 
 VALIDATION_EMA_WINDOW = 5
 VALIDATION_EMA_ALPHA = 2 / (VALIDATION_EMA_WINDOW + 1)
@@ -28,11 +32,12 @@ def validate_selection_receipts(best: dict, history: list[dict], selected_step: 
     if len(rows) != len(history):
         raise ValueError("Duplicate validation steps")
     scores = {}
+    observations = [ValidationObservation(**row) for row in history]
     interval = best.get("evaluation_interval", 1)
     for step in sorted(rows):
         if step < VALIDATION_EMA_WINDOW * interval or step % interval:
             continue
-        score = trailing_validation_ema(history, step, VALIDATION_EMA_WINDOW, interval=interval)
+        score = trailing_validation_ema(observations, step, VALIDATION_EMA_WINDOW, interval=interval)
         if score is None:
             continue
         window = [rows[index] for index in range(step - (VALIDATION_EMA_WINDOW - 1) * interval, step + 1, interval)]

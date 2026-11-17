@@ -386,8 +386,8 @@ artifact graph, emits its launch YAML, runs the production SkyRL composition, an
 compares every supplied setting with the compiled configuration, excluding artifact
 bindings such as model and data paths.
 
-The RL document explicitly selects `daytona_provisioning: snapshot` for training
-and `eval_daytona_provisioning: declarative` for inline validation. Declarative
+The RL document explicitly selects `daytona_image_build: snapshot` for training
+and `eval_daytona_image_build: declarative` for inline validation. Declarative
 validation creates sandboxes directly from each task's image or build context
 with the eval credential, without creating or leasing named snapshots. Final
 evaluation also selects declarative provisioning in its evaluation document.

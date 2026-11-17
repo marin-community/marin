@@ -91,7 +91,7 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         eval_daytona_connection=connections["eval"],
     )
     harbor = HarborTaskSettings.from_config(
-        OmegaConf.create({"harbor": {"daytona_provisioning": "snapshot", "eval_daytona_provisioning": "declarative"}})
+        OmegaConf.create({"harbor": {"daytona_image_build": "snapshot", "eval_daytona_image_build": "declarative"}})
     )
     harness = runtime.original_harness(lowered, "session", harbor, phase)
     monkeypatch.setenv("DAYTONA_API_KEY", "ambient-key")
@@ -263,6 +263,6 @@ async def test_verifier_guest_relay_binding_keeps_real_credentials_on_host(tmp_p
         return resolved
 
     monkeypatch.setattr(runtime, "run_original_trial", check_binding)
-    harbor = HarborTaskSettings.from_config(OmegaConf.create({"harbor": {"eval_daytona_provisioning": "declarative"}}))
+    harbor = HarborTaskSettings.from_config(OmegaConf.create({"harbor": {"eval_daytona_image_build": "declarative"}}))
     harness = runtime.original_harness(lowered, "fixture", harbor, "eval")
     await harness.run_trial(unexpected_model_request)

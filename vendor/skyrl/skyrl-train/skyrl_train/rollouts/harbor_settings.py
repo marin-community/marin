@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
-from shellbox.backends.daytona.provisioning import DaytonaProvisioning
+from shellbox.backends.daytona.machine import DaytonaImageBuild
 
 HARBOR_EXCEPTION = "harbor_exception_type"
 HARBOR_MODEL_LIMIT = "harbor_model_limit"
@@ -26,7 +26,7 @@ class EnvironmentType(StrEnum):
 
 class EnvironmentConfig(BaseModel):
     type: EnvironmentType = EnvironmentType.DOCKER
-    eval_provisioning: DaytonaProvisioning | None = None
+    eval_image_build: DaytonaImageBuild | None = None
     override_cpus: int | None = None
     override_memory_mb: int | None = None
     override_storage_mb: int | None = None

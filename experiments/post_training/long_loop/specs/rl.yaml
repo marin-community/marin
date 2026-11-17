@@ -238,8 +238,8 @@ config:
   terminal_bench:
     harbor:
       environment_type: daytona
-      daytona_provisioning: snapshot
-      eval_daytona_provisioning: declarative
+      daytona_image_build: snapshot
+      eval_daytona_image_build: declarative
       daytona_api_key_env: DAYTONA_RL_API_KEY
       eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
       override_timeout_sec: 1800

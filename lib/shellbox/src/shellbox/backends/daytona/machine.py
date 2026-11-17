@@ -31,6 +31,7 @@ from daytona import (
 )
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.daytona.leases import SnapshotLease, SnapshotLeaser
 from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.daytona.snapshot import (
     daytona_image,
@@ -545,6 +546,7 @@ class DaytonaMachineFactory:
         output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
         network_policy: DaytonaNetworkPolicy | None = None,
         image_build: DaytonaImageBuild = DaytonaImageBuild.SNAPSHOT,
+        snapshot_leaser: SnapshotLeaser | None = None,
     ):
         self.client_factory = client_factory
         self.ttl_minutes = ttl_minutes
@@ -552,6 +554,9 @@ class DaytonaMachineFactory:
         self.output_collection_timeout = output_collection_timeout
         self.network_policy = network_policy
         self.image_build = image_build
+        if snapshot_leaser is not None and image_build != DaytonaImageBuild.SNAPSHOT:
+            raise ValueError("Declarative Daytona builds cannot use a snapshot leaser")
+        self.snapshot_leaser = snapshot_leaser
 
     def _clients(self) -> Callable[[], AsyncDaytona]:
         """Resolve the configured client factory for one provider session."""
@@ -601,6 +606,21 @@ class DaytonaMachineFactory:
         async with client_factory() as client, asyncio.timeout(timeout):
             return await ensure_snapshot(client, request)
 
+    async def _delete_and_release(self, client: AsyncDaytona, name: str, lease: SnapshotLease | None) -> None:
+        await _delete_named_sandbox(client, name)
+        if lease is None:
+            return
+        # A provider DELETE may return while the sandbox still uses its snapshot.
+        async with asyncio.timeout(120):
+            while True:
+                try:
+                    await client.get(name)
+                except DaytonaNotFoundError:
+                    break
+                await asyncio.sleep(2)
+        assert self.snapshot_leaser is not None
+        await self.snapshot_leaser.release(lease)
+
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
         network = (
             {"network_block_all": spec.network is NetworkPolicy.DENY}
@@ -615,17 +635,29 @@ class DaytonaMachineFactory:
                 request = snapshot_request_for_spec(spec)
                 name = f"shellbox-{uuid.uuid4().hex}"
                 sandbox_fields = dict(
-                    name=name, os_user="root", env_vars=spec.env, **network, ttl_minutes=self.ttl_minutes
+                    name=name,
+                    os_user="root",
+                    env_vars=spec.env,
+                    **network,
+                    ttl_minutes=self.ttl_minutes,
+                    auto_stop_interval=0,
+                    auto_pause_interval=0,
                 )
+                lease = None
                 if self.image_build == DaytonaImageBuild.SNAPSHOT:
+                    if self.snapshot_leaser is not None and isinstance(spec.source, RegistryImage):
+                        lease = await self.snapshot_leaser.acquire(spec)
+                        lifetime.push_async_callback(self._delete_and_release, client, name, lease)
                     params = CreateSandboxFromSnapshotParams(
-                        snapshot=await ensure_snapshot(client, request), **sandbox_fields
+                        snapshot=lease.name if lease is not None else await ensure_snapshot(client, request),
+                        **sandbox_fields,
                     )
                 else:
                     params = CreateSandboxFromImageParams(
                         image=daytona_image(request.source), resources=request.resources, **sandbox_fields
                     )
-                lifetime.push_async_callback(_delete_named_sandbox, client, name)
+                if lease is None:
+                    lifetime.push_async_callback(self._delete_and_release, client, name, None)
                 sandbox = await _create_sandbox(client, params, timeout=timeout)
             prepared = await sandbox.process.exec(
                 _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT

@@ -132,6 +132,8 @@ class HostCapabilities:
     """Host authority passed outside serialized job and task configuration."""
 
     daytona: DaytonaConnection | None = field(default=None, repr=False)
+    # Backend-specific authority stays opaque so the base package needs no backend extra.
+    snapshot_leaser: object | None = field(default=None, repr=False)
     model_authentication: Mapping[str, str] = field(default_factory=dict, repr=False)
     protected_values: frozenset[str] = field(default_factory=frozenset, repr=False)
 
