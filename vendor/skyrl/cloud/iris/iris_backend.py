@@ -735,7 +735,7 @@ def _build_task_shell(
     controller_cmd: list[str],
     pythonpath: str,
 ) -> list[str]:
-    """Wrap the node controller with per-pod storage and cache setup."""
+    """Wrap the node controller with per-pod storage setup."""
     ctrl = shlex.join(controller_cmd)
     # Run outside task_runtime so every pod establishes Ray's filesystem contract
     # before importing or starting any MarinSkyRL controller code. The controller

@@ -214,7 +214,7 @@ def log_phase(phase: CollectivePhase) -> None:
 
 
 def start_phase(phase: CollectivePhase) -> None:
-    """Start a collective phase and log its entry."""
+    """Log entry to a collective phase inside the active region."""
     context = _active_region()
     if context is None:
         return
