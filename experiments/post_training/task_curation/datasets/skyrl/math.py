@@ -45,8 +45,7 @@ Check whether the premises specify a unique answer. Difficulty alone is not a qu
 """
 
 AIME_1983_2024_RUBRIC = f"""
-Historical AIME answers are integers; contest year and problem number are kept as reference evidence. Reserve this
-benchmark for evaluation.
+Historical AIME answers are integers; contest year and problem number are kept as reference evidence.
 
 {REFERENCE_CHECK}
 """
@@ -318,7 +317,7 @@ SOURCES = (
             SourceFormat.CSV,
         ),
         convert_aime_1983_2024,
-        IntendedUse.EVAL,
+        IntendedUse.TRAIN,
         AIME_1983_2024_RUBRIC,
         info=SourceInfo(
             id="di-zhang-fdu:aime_1983_2024",
@@ -328,7 +327,7 @@ SOURCES = (
             build_path="MarinSkyRL",
             origin=SourceOrigin.DI_ZHANG_FDU,
             family="math-answer",
-            tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/aime"),
+            tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
         ),
     ),
     MathSource(

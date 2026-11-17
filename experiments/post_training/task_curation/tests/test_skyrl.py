@@ -3,6 +3,7 @@
 
 """SkyRL declarations turn source-shaped rows into tasks with the right graders."""
 
+import hashlib
 import json
 from copy import deepcopy
 from typing import cast
@@ -28,12 +29,15 @@ from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
 
 from experiments.post_training.task_curation.datasets.skyrl import code, ifeval, math, mcq, preference
+from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.pipeline import CurationRecipe, source_files
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
     fixture_context,
 )
+from experiments.post_training.task_curation.within_source_census import census_source
 
 RECIPES = {
     source.name: cast(CurationRecipe, source.config)
@@ -238,6 +242,42 @@ def grade_reply(task: TaskSpec, reply: str):
 
 def verifier_file(task: TaskSpec, path: str) -> bytes:
     return resource_bytes(next(resource for resource in task.resources.verifier if resource.path == path))
+
+
+def test_historical_aime_excludes_matched_evaluation_rows(tmp_path):
+    source = next(source for source in math.sources() if source.name == "aime_1983_2024")
+    task = converted_task(source.config, ROWS["aime_1983_2024"])
+    encoded = task.model_dump_json()
+    specs = tmp_path / "specs"
+    specs.mkdir()
+    pq.write_table(pa.table({"id": [task.id], "task_spec": [encoded]}), specs / "part-000000.parquet")
+    pq.write_table(pa.table({"id": [task.id]}), tmp_path / "drop_manifest.parquet")
+    population = SourceTextPopulation(
+        path=str(tmp_path),
+        source_id=source.info.id,
+        dataset_id=source.dataset.name,
+        dataset_revision=source.dataset.revision,
+        source_version=source.version,
+        converter_revision="a" * 40,
+        text_renderer_version="fixture",
+        task_count=1,
+        text_sha256="0" * 64,
+        task_specs_sha256=hashlib.sha256(encoded.encode()).hexdigest(),
+        main_output_dir=str(tmp_path),
+        specs_output_dir=str(specs),
+        converter_rejections={},
+        admission_rejections={},
+    )
+    plan = census_source(
+        population,
+        {"measured_tasks": 1, "contaminated_tasks": 1, "evidence_url": str(tmp_path / "measurement.json")},
+        str(tmp_path / "retention"),
+        lexical_use=source_lexical_use(source),
+    )
+    assert plan["retained_count"] == 0 and plan["combined_drop_count"] == 1
+    assert pq.read_table(plan["combined_drop_manifest_uri"]).to_pylist() == [
+        {"task_id": task.id, "kept_id": task.id, "reasons": ["LEXICAL_CONTAMINATION"]}
+    ]
 
 
 @pytest.mark.parametrize("name", sorted(ANSWERS))
