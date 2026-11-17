@@ -62,7 +62,6 @@ class StatusFile:
 
     @property
     def status(self) -> str | None:
-        """Read current status from status file."""
         return read_status_file(self.fs, self.path)
 
     def write_status(self, status: str) -> None:

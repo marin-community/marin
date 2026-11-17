@@ -18,7 +18,7 @@ from rigging.filesystem.storage_path import prefix_join
 STATUS_RUNNING = "RUNNING"
 STATUS_FAILED = "FAILED"
 STATUS_SUCCESS = "SUCCESS"
-STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed
+STATUS_DEP_FAILED = "DEP_FAILED"
 
 
 def get_status_path(output_path: str) -> str:
