@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from infra.marina.tests.rl_progress_fixtures import APPLET_ID
+from infra.marina.tests.rl_progress_fixtures import APPLET_ID, progress_record
 
 pytestmark = pytest.mark.integration
 
@@ -22,37 +22,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         assert response.status_code == 200, response.text
         return response.json()
 
-    record = {
-        "run_id": "test/control",
-        "attempt_id": "native-first",
-        "label": "learning-medium lr=2e-06",
-        "series": "learning-medium",
-        "issue": 123,
-        "gate": "test/gate",
-        "run_date": "2026-11-02T00:00:00Z",
-        "started_at": "2026-11-02T00:00:00Z",
-        "completed_at": "2026-11-02T01:00:00Z",
-        "elapsed_seconds": 3600,
-        "timing_scope": "native_job_start_to_finish",
-        "status": "succeeded",
-        "optimizer_steps": 25,
-        "source_revision": "source-1",
-        "data_identity": "data-1",
-        "initializer_identity": "model-1",
-        "gate_result": {
-            "comparisons": [
-                {"metric": "score", "role": "objective", "run": 0.4, "control": 0.2, "n_run": 1, "n_control": 4}
-            ],
-            "invariants": [{"name": "planned_updates", "value": 25, "limit": 25, "holds": True, "replicate": 0}],
-            "verdict": "pass",
-            "label": "improves",
-            "reason": None,
-            "attempt_ids": ["native-first"],
-            "replicates": 1,
-        },
-        "artifact_uri": "s3://example/test",
-        "evidence": [],
-    }
+    record = progress_record()
     assert publish(record) == record
     failed = record | {
         "attempt_id": "native-second",

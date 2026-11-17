@@ -466,7 +466,12 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     if case in ("train-pass", "train-entry-override"):
         preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_disk="3TB")))
         initializer = ArtifactHfModel(
-            ArtifactStep.adopt("tests/python-init", "2026.11.17", "s3://marin-test/models/python-init", kind=preset.model.step.artifact_type),
+            ArtifactStep.adopt(
+                "tests/python-init",
+                "2026.11.17",
+                "s3://marin-test/models/python-init",
+                kind=preset.model.step.artifact_type,
+            ),
             "tests/python-tokenizer",
             "python-tokenizer-revision",
             relative_path="",
@@ -480,7 +485,10 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         ),
     )
     if initializer is not None:
-        monkeypatch.setattr("s3fs.S3FileSystem.exists", lambda self, path, **kwargs: str(path).removeprefix("s3://") == "marin-test/models/python-init")
+        monkeypatch.setattr(
+            "s3fs.S3FileSystem.exists",
+            lambda self, path, **kwargs: str(path).removeprefix("s3://") == "marin-test/models/python-init",
+        )
     roots = controls(recorded_runs, preset.name) if preset.gated else []
     replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
     control = case == "control-missing-receipt"

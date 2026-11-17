@@ -93,6 +93,8 @@ class RunSummary(BaseModel):
     issue: StrictInt | None = None
     iris_job_id: str | None = None
     wandb_url: str | None = None
+    grafana_url: str | None = None
+    evaluations: list[Comparison] = Field(default_factory=list)
     engine: dict[str, Any] | None = None
     gate_result: GateResult | None = None
     gate: str | None = None
