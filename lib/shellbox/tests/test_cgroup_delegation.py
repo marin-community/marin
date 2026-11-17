@@ -45,7 +45,7 @@ def test_pod_slice_is_the_fallback_for_a_container_scope(pod_tree):
     assert _fallback_parents(scope) == [slice_level]
 
 
-def test_shared_host_slices_are_never_candidates(pod_tree, tmp_path: Path):
+def test_shared_host_slices_are_never_candidates(pod_tree, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A unit under a shared slice gets no fallback candidates.
 
     A worker directly in a ``.service`` under a non-pod slice has no dedicated
