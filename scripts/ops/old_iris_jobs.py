@@ -19,7 +19,8 @@ from pathlib import Path
 
 import click
 from iris.cli.connect import open_iris_client
-from iris.client.workload import DeviceKind, JobStatus, ResourceRequest
+from iris.cli.task import format_resources
+from iris.client.workload import JobStatus, ResourceRequest
 from iris.cluster.types import LOCAL_CLUSTER, JobName
 from iris.resources.state import JobState, TaskState
 from rigging.timing import Timestamp
@@ -55,16 +56,6 @@ def active_task_count(job: JobStatus) -> int:
     return sum(job.task_state_counts.get(state, 0) for state in ACTIVE_TASK_STATES)
 
 
-def format_resources(resources: ResourceRequest) -> str:
-    """Describe one task's resources by its accelerator, or by CPU and memory without one."""
-    device = resources.device
-    if device is not None and device.kind is DeviceKind.TPU:
-        return f"tpu={device.variant}"
-    if device is not None and device.kind is DeviceKind.GPU:
-        return f"gpu={device.count}x{device.variant}"
-    return f"cpu={resources.cpu_millicores / 1000:g} mem={resources.memory_bytes / 2**30:.3g}GiB"
-
-
 def find_old_jobs(
     scanned_cluster: str,
     running_jobs: Iterable[JobStatus],
@@ -98,11 +89,7 @@ def find_old_jobs(
 
 def _job_line(job: OldJob, now_ms: int) -> str:
     age_days = (now_ms - job.started_at_ms) / MS_PER_DAY
-    # Requests that differ only in fields the description omits share one entry.
-    described: Counter[str] = Counter()
-    for resources, count in job.occupied.items():
-        described[format_resources(resources)] += count
-    resources = ", ".join(f"{count}x {spec}" for spec, count in sorted(described.items()))
+    resources = "; ".join(sorted(f"{count}x ({format_resources(request)})" for request, count in job.occupied.items()))
     return f"• {job.cluster} `{job.root}`: owner {job.root.user}, {age_days:.1f} days, {resources}"
 
 
