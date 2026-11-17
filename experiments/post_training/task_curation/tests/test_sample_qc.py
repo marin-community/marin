@@ -192,7 +192,7 @@ def test_sample_filter_proof_must_cover_unselected_retained_tasks(sample_panel, 
             assert result.sample.oracle_filter_receipt == reference
 
 
-@pytest.mark.parametrize("payload_revision", ["4", "5"])
+@pytest.mark.parametrize("payload_revision", ["4", "5", "6"])
 def test_sample_review_keeps_full_population_identity_and_reuses_exact_panel_evidence(
     sample_panel, review_server, tmp_path, payload_revision
 ):
