@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RL iteration progress</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <main>
+    <header><div><span class="eyebrow">POST-TRAINING / EXPERIMENTS</span><h1>RL iteration progress</h1><p>Native attempts and their recorded experiment results.</p></div><button id="refresh">Refresh</button></header>
+    <div id="error" role="alert" hidden></div>
+    <div id="warnings" class="warning" role="status" hidden></div>
+    <div class="toolbar"><span id="count"></span></div>
+    <section class="panel"><div class="panel-heading"><h2>Recorded runs</h2><span class="note">Select an attempt; latest first. Native timestamps use UTC.</span></div><div class="table-scroll"><table><thead><tr><th>Run / attempt</th><th>Climbed metrics · control → run</th><th>Constraints</th><th>Verdict</th></tr></thead><tbody id="attempts"></tbody></table></div></section>
+  </main>
+  <dialog id="run-detail" aria-labelledby="detail-title"><div class="dialog-heading"><span class="eyebrow">RUN DETAILS</span><button id="close-detail" aria-label="Close run details">Close ×</button></div><div class="dialog-scroll"><h2 id="detail-title"></h2><div id="detail-body"></div></div></dialog>
+</body>
+</html>
