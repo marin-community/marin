@@ -23,15 +23,9 @@ Use a privileged CPU dev box to debug Linux-only behavior interactively, such as
 ```bash
 uv run python -m scripts.iris.dev_cpu --config lib/iris/config/cw-rno2a.yaml --name <unique-name> \
   allocate --cpu 16 --memory 64GB --disk 200GB --priority interactive --max-lifetime 259200
-uv run python -m scripts.iris.dev_cpu --name <unique-name> exec -- bash -lc 'bwrap --version; docker info'
-uv run python -m scripts.iris.dev_cpu --name <unique-name> shell
-uv run python -m scripts.iris.dev_cpu --name <unique-name> cp-to ./grader.py /tmp/grader.py
-uv run python -m scripts.iris.dev_cpu --name <unique-name> cp-from /tmp/out ./out
-uv run python -m scripts.iris.dev_cpu --name <unique-name> status
-uv run python -m scripts.iris.dev_cpu --name <unique-name> release
 ```
 
-Run from the repository root. `allocate` returns once the pod runs and records the session under `~/.cache/marin/dev_cpu_iris/`. Iris ends the holder job after `--max-lifetime` seconds; `release` ends it sooner, so release the box when done. Commands re-resolve the holder task's running pod, so a retried box stays reachable; after the lifetime ends, `status` reports `Pod: none` and `Active: False`.
+Then use `exec`, `shell`, `cp-to`, `cp-from`, `status` and `release` with `--name <unique-name>` (see `--help`). The box never retries: `--max-lifetime` is a hard limit and a lost pod ends it. Release it when done.
 
 ## TPU
 

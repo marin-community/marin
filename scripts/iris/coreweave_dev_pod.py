@@ -32,6 +32,8 @@ from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
+# The holder only sleeps. Exiting 0 on SIGTERM/SIGINT makes a release or pod shutdown end it at once
+# with a clean exit status; Python's default SIGTERM handling would kill it by signal and record a failure.
 HOLDER_COMMAND = (
     "import signal, sys, time; "
     "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); "

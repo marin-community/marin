@@ -6,8 +6,8 @@
 
 The box is one non-preemptible task under ``CONTAINER_PROFILE_PRIVILEGED``, so bubblewrap sandboxes,
 in-pod Docker and grader liveness checks behave as they do on curation workers. ``allocate`` returns
-once the pod runs; the holder job ends at ``--max-lifetime`` or on ``release``. Commands re-resolve
-the task's Running pod, because Iris can retry the holder onto a new pod at any time.
+once the pod runs; the holder job ends at ``--max-lifetime`` or on ``release``. The holder never
+retries, so ``--max-lifetime`` is a hard limit and a lost pod ends the box; allocate a new one.
 """
 
 import json
@@ -47,8 +47,6 @@ from scripts.iris.coreweave_dev_pod import (
 )
 
 STATE_DIR = Path.home() / ".cache" / "marin" / "dev_cpu_iris"
-# A retry can land a replacement pod that is still starting, so give re-resolution
-# the same window the initial allocation uses.
 POD_RESOLVE_TIMEOUT = 120
 
 
@@ -77,6 +75,8 @@ class HolderJob:
             timeout=Duration.from_seconds(self.max_lifetime),
             priority_band=PRIORITY_BANDS[self.priority],
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+            # A retry would land on an empty pod and restart the lifetime clock.
+            max_retries_preemption=0,
             submit_argv=redact_submit_argv(list(sys.argv)),
         )
 
@@ -91,8 +91,6 @@ class DevCpuState:
     task_id: str
     priority: Priority
     target: CoreweaveTarget
-    last_pod_name: str | None = None
-    """The pod resolved most recently, so a holder retry is visible to the user."""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -107,7 +105,6 @@ class DevCpuState:
             task_id=data["task_id"],
             priority=Priority(data["priority"]),
             target=CoreweaveTarget(**data["target"]),
-            last_pod_name=data.get("last_pod_name"),
         )
 
 
@@ -117,22 +114,9 @@ def save_state(state_dir: Path, state: DevCpuState) -> None:
     path.write_text(state.to_json())
 
 
-def resolve_pod(state: DevCpuState, state_dir: Path, *, timeout: int = POD_RESOLVE_TIMEOUT) -> PodRef:
-    """Resolve the task's Running pod afresh; a retried holder moves to a new pod.
-
-    A moved pod loses the old pod's files and shell state, so the change is
-    logged and recorded for the next command.
-    """
-    pod = wait_for_running_pod(state.target, state.task_id, timeout=timeout)
-    if pod.pod_name != state.last_pod_name:
-        if state.last_pod_name is not None:
-            logger.warning(
-                "The holder task moved from pod %s to %s; files written to the old pod are gone.",
-                state.last_pod_name,
-                pod.pod_name,
-            )
-        save_state(state_dir, replace(state, last_pod_name=pod.pod_name))
-    return pod
+def resolve_pod(state: DevCpuState, *, timeout: int = POD_RESOLVE_TIMEOUT) -> PodRef:
+    """Resolve the holder task's Running pod."""
+    return wait_for_running_pod(state.target, state.task_id, timeout=timeout)
 
 
 def job_is_active(state: DevCpuState) -> bool:
@@ -176,7 +160,7 @@ def load_active_pod(obj: Context) -> tuple[DevCpuState, PodRef]:
         raise click.ClickException(f"Dev CPU box '{state.session_name}' has ended; release it")
     if not state.task_id:
         raise click.ClickException(f"Dev CPU box '{state.session_name}' has not started its task yet")
-    return state, resolve_pod(state, obj.state_dir)
+    return state, resolve_pod(state)
 
 
 @click.group()
@@ -325,7 +309,7 @@ def status(obj: Context) -> None:
     """Show the session and whether its holder job is still active."""
     state = obj.state()
     active = job_is_active(state)
-    pod = resolve_pod(state, obj.state_dir) if active and state.task_id else None
+    pod = resolve_pod(state) if active and state.task_id else None
     print(session_summary(state, pod))
     print(f"Active: {active}")
 

@@ -37,6 +37,7 @@ def test_holder_job_submits_privileged_non_preemptible_cpu_task_with_lifetime():
     submitted = client.submitted
     assert submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_PRIVILEGED
     assert submitted["timeout"].to_seconds() == 259200
+    assert submitted["max_retries_preemption"] == 0
     resources = submitted["resources"].to_proto()
     assert not resources.HasField("device")
     (constraint,) = [c.to_proto() for c in submitted["constraints"]]
