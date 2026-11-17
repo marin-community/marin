@@ -5,12 +5,12 @@
 
 Harbor's mini-swe-agent trajectory drops the model's reasoning, so training rows come from the proxy
 log instead: the messages each request added, in order, with every assistant turn taken from the
-logged reply, including usage and ``reasoning`` as ``reasoning_content``. The final reply, which no
-later request echoes, closes the conversation.
+logged reply (``reasoning`` kept as ``reasoning_content``) and tagged with its author and relay
+trigger. The final reply, which no later request echoes, closes the conversation.
 
 Each output row is one conversation of one trial: trial_id, conversation, n_conversations, the Harbor
-trial fields (task_name, trial_name, retry, reward, exception), tokens (turns, prompt, completion,
-reasoning), messages, tools, dropped_replies (replies the harness discarded, with
+trial fields (task_name, trial_name, retry, reward, exception), triggers, tokens (per author: turns,
+prompt, completion, reasoning), messages, tools, dropped_replies (replies the harness discarded, with
 the message index they preceded) and problems. A trial is joined to its Harbor result through the
 ``trial_correlation_id.txt`` that the agents in ``harbor_agents/trial_agents.py`` write next to their
 logs. ``problems`` reports gaps in the logged message ranges, echoed assistant messages that differ
@@ -42,6 +42,8 @@ def assistant_turn(record: dict) -> dict:
         turn["tool_calls"] = message["tool_calls"]
     if reasoning:
         turn["reasoning_content"] = reasoning
+    turn["author"] = record["author"]
+    turn["trigger"] = record.get("trigger")
     turn["usage"] = record.get("usage")
     return turn
 
@@ -91,18 +93,19 @@ def rebuild(records: list[dict]) -> Conversation:
     return Conversation(conversation, records[0].get("tools"), problems, dropped)
 
 
-def token_counts(conversation: list[dict]) -> dict[str, int]:
-    """Prompt, completion and reasoning tokens reported by the backend for retained turns."""
-    totals = {"turns": 0, "prompt": 0, "completion": 0, "reasoning": 0}
+def token_counts(conversation: list[dict]) -> dict[str, dict[str, int]]:
+    """Prompt, completion and reasoning tokens summed per author, as reported by the serving backends."""
+    totals: dict[str, dict[str, int]] = defaultdict(lambda: {"turns": 0, "prompt": 0, "completion": 0, "reasoning": 0})
     for message in conversation:
         usage = message.get("usage") if message.get("role") == "assistant" else None
         if not usage:
             continue
-        totals["turns"] += 1
-        totals["prompt"] += usage.get("prompt_tokens") or 0
-        totals["completion"] += usage.get("completion_tokens") or 0
-        totals["reasoning"] += (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
-    return totals
+        total = totals[message["author"]]
+        total["turns"] += 1
+        total["prompt"] += usage.get("prompt_tokens") or 0
+        total["completion"] += usage.get("completion_tokens") or 0
+        total["reasoning"] += (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
+    return dict(totals)
 
 
 def harbor_results(root: StoragePath) -> dict[str, dict]:
@@ -150,6 +153,7 @@ def rebuilt_rows(records: list[dict], results: dict[str, dict]) -> list[dict]:
                 "conversation": index,
                 "n_conversations": n_conversations[trial_id],
                 **results.get(trial_id, {}),
+                "triggers": [m["trigger"] for m in conversation.messages if m.get("trigger")],
                 "tokens": token_counts(conversation.messages),
                 "messages": conversation.messages,
                 "tools": conversation.tools,
