@@ -390,7 +390,7 @@ assert os.environ['OPENAI_API_KEY'] == 'EMPTY'
 assert not any(
     secret in value
     for value in os.environ.values()
-    for secret in ('candidate-private', 'judge-private', 'unforwarded-host-secret')
+    for secret in ('candidate-private', 'judge-private', 'private-capability', 'unforwarded-host-secret')
 )
 for port, model in [({candidate_port}, 'candidate'), ({judge_port}, 'judge')]:
     request = urllib.request.Request(
