@@ -27,7 +27,7 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.task_grading import grade_task
 
-from .grading_machines import GRADER_IMAGE, REPLAY_IMAGE, ReplayMachines, finished
+from .grading_machines import GRADER_IMAGE, REPLAY_COMMAND, REPLAY_IMAGE, ReplayMachines, completed_trace
 
 FORBIDDEN_VARIABLE = "REPLAY_FORBIDDEN_SECRET"
 
@@ -48,7 +48,7 @@ def replay_task():
                 docker_image=REPLAY_IMAGE,
                 command_semantics=CommandSemantics.LINUX_PROCESS,
             ),
-            argv=("python3", "/app/solution.py"),
+            argv=REPLAY_COMMAND,
             cwd="/app",
             timeout=10,
             artifacts=(VerifierArtifact(source="/app/outputs", target="/app/outputs", kind=ArtifactKind.DIRECTORY),),
@@ -89,7 +89,7 @@ def run_program(tmp_path, task, program, *, hang=False):
     result = grade_task(
         task,
         GradingAttempt(
-            finished(task),
+            completed_trace(task),
             {
                 "/app/solution.py": program,
                 "/app/outputs/actor-only.txt": b"must not reach the grader",

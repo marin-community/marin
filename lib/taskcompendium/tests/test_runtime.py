@@ -82,7 +82,7 @@ from taskcompendium.runtime.shell import (
 )
 from taskcompendium.runtime.task_grading import grade_task
 
-from .grading_machines import LocalGradingMachines, finished
+from .grading_machines import LocalGradingMachines, completed_trace
 
 GRADER_IMAGE = "fixture@sha256:" + "a" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE)
@@ -226,11 +226,11 @@ def test_unresolved_grader_build_never_creates_a_machine(shell_task, entrypoint)
     machines = FileMachines()
     with pytest.raises(UnsupportedMachineSpec):
         if entrypoint == "grade":
-            asyncio.run(grade_in_sandbox(task, GradingAttempt(finished(task)), machines, GRADER_MACHINE))
+            asyncio.run(grade_in_sandbox(task, GradingAttempt(completed_trace(task)), machines, GRADER_MACHINE))
         elif entrypoint == "empty":
             asyncio.run(grade_empty_in_sandbox(task, machines, GRADER_MACHINE))
         else:
-            grade_task(task, GradingAttempt(finished(task)))
+            grade_task(task, GradingAttempt(completed_trace(task)))
     assert machines.machines == []
 
 
@@ -351,7 +351,9 @@ async def test_script_verdict_retains_unscored_failures(tmp_path, script_grading
             "resources": ResourceGroups(verifier=(inline_resource("grade.py", script),)),
         }
     )
-    result = await grade_in_sandbox(task, GradingAttempt(finished(task)), LocalGradingMachines(tmp_path), GRADER_MACHINE)
+    result = await grade_in_sandbox(
+        task, GradingAttempt(completed_trace(task)), LocalGradingMachines(tmp_path), GRADER_MACHINE
+    )
     assert (result.status, result.reward) == (expected, None)
     if not exit_code:
         assert result.error == "unavailable dependency"
@@ -417,7 +419,7 @@ async def test_trusted_grader_bootstrap_excludes_submitted_stdlib_names(
     tmp_path, trusted_bootstrap_task, candidate, expected
 ):
     task = trusted_bootstrap_task
-    attempt = GradingAttempt(finished(task), {"/app/numbers.py": candidate})
+    attempt = GradingAttempt(completed_trace(task), {"/app/numbers.py": candidate})
     result = await grade_in_sandbox(task, attempt, LocalGradingMachines(tmp_path), GRADER_MACHINE)
     assert (result.status, result.reward) == (Outcome.GRADED, expected), result.error
 
@@ -428,7 +430,7 @@ async def test_private_fixture_archive_removed_before_grading_or_grader_never_ru
     tmp_path, trusted_bootstrap_task, remove_exit_code
 ):
     machines = LocalGradingMachines(tmp_path, remove_exit_code=remove_exit_code)
-    attempt = GradingAttempt(finished(trusted_bootstrap_task), {"/app/numbers.py": b"print(42)\n"})
+    attempt = GradingAttempt(completed_trace(trusted_bootstrap_task), {"/app/numbers.py": b"print(42)\n"})
     result = await grade_in_sandbox(trusted_bootstrap_task, attempt, machines, GRADER_MACHINE)
     archive = tmp_path / STAGING_ARCHIVE.lstrip("/")
     assert (tmp_path / "tests/config.json").is_file()
@@ -479,7 +481,9 @@ def test_script_grader_scores_captured_files_in_sandbox_and_task_grading(
     tmp_path, script_grading_task, candidate, reward
 ):
     factory = LocalGradingMachines(tmp_path)
-    attempt = grading_attempt(finished(script_grading_task), RuntimeEvidence({"/app/numbers.py": candidate}, "{}"))
+    attempt = grading_attempt(
+        completed_trace(script_grading_task), RuntimeEvidence({"/app/numbers.py": candidate}, "{}")
+    )
     sandbox = asyncio.run(grade_in_sandbox(script_grading_task, attempt, factory, GRADER_MACHINE))
     runtime = grade_task(script_grading_task, attempt, machine_factory=factory, machine_spec=GRADER_MACHINE)
     assert (sandbox.status, sandbox.reward) == (Outcome.GRADED, reward)
@@ -531,7 +535,7 @@ def test_script_grader_reads_captured_state(tmp_path, script_grading_task, state
     task = script_grading_task.model_copy(update={"answer_type": AnswerType.STATE, "output_paths": ()})
     result = grade_task(
         task,
-        grading_attempt(finished(task), RuntimeEvidence({}, state)),
+        grading_attempt(completed_trace(task), RuntimeEvidence({}, state)),
         machine_factory=LocalGradingMachines(tmp_path),
         machine_spec=GRADER_MACHINE,
     )
@@ -546,7 +550,7 @@ class UnavailableMachines(DockerMachineFactory):
 
 
 def test_grading_machine_failure_is_infrastructure_error(script_grading_task):
-    attempt = GradingAttempt(finished(script_grading_task), {"/app/numbers.py": b"print(42)\n"})
+    attempt = GradingAttempt(completed_trace(script_grading_task), {"/app/numbers.py": b"print(42)\n"})
     result = grade_task(script_grading_task, attempt, machine_factory=UnavailableMachines(), machine_spec=GRADER_MACHINE)
     assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
 
@@ -555,7 +559,7 @@ def test_no_grader_task_is_unavailable_without_a_grading_machine(shell_task):
     grader = shell_task.grader
     assert isinstance(grader, NoGrader)
     machines = FileMachines()
-    attempt = GradingAttempt(finished(shell_task), {OUTPUT_PATH: b"person-0-0\n"})
+    attempt = GradingAttempt(completed_trace(shell_task), {OUTPUT_PATH: b"person-0-0\n"})
     result = grade_task(shell_task, attempt, machine_factory=machines, machine_spec=GRADER_MACHINE)
     assert (result.status, result.reward, result.error) == (Outcome.UNAVAILABLE, None, grader.reason)
     assert not machines.machines
@@ -654,7 +658,9 @@ async def test_grader_setup_uses_prepared_cwd_before_explicit_grader_command(she
         ),
     )
     task = shell_task.model_copy(update={"grader": grader, "output_paths": ()})
-    result = await grade_in_sandbox(task, GradingAttempt(finished(task)), LocalGradingMachines(tmp_path), GRADER_MACHINE)
+    result = await grade_in_sandbox(
+        task, GradingAttempt(completed_trace(task)), LocalGradingMachines(tmp_path), GRADER_MACHINE
+    )
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
 
 
@@ -676,7 +682,7 @@ async def test_local_script_grader_stages_inputs_and_runs_setup_as_host_user(she
     )
     task = shell_task.model_copy(update={"grader": grader, "output_paths": ()})
 
-    result = await grade_in_sandbox(task, GradingAttempt(finished(task)), factory, MachineSpec(HostImage()))
+    result = await grade_in_sandbox(task, GradingAttempt(completed_trace(task)), factory, MachineSpec(HostImage()))
 
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
 
@@ -830,7 +836,7 @@ async def test_grader_setup_cannot_overwrite_captured_candidate_files(shell_task
     task = shell_task.model_copy(update={"grader": grader, "output_paths": ("/app/solution.txt",)})
     result = await grade_in_sandbox(
         task,
-        GradingAttempt(finished(task), files={"/app/solution.txt": b"solved\n"}),
+        GradingAttempt(completed_trace(task), files={"/app/solution.txt": b"solved\n"}),
         LocalGradingMachines(tmp_path),
         GRADER_MACHINE,
     )

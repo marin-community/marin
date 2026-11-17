@@ -25,6 +25,11 @@ OUTPUT_DIRECTORY = f"{WORKING_DIRECTORY}/pred_results"
 PAPYRUS_ROWS = f"{WORKING_DIRECTORY}/papyrus_rows.jsonl"
 VERDICT_PATH = "/logs/verifier/verdict.json"
 BINARY_VERDICT = FileReward(files=(RewardFile(path=VERDICT_PATH, format=RewardFileFormat.VERDICT_JSON),), pass_above=0.5)
+EVALUATOR_WRAPPER = "evaluate.py"
+SOURCE_EVALUATOR = "source_evaluator.py"
+PAPYRUS_SCORER = "papyrus_rows.py"
+PAPYRUS_GOLD = "gold_rows.jsonl"
+PAPYRUS_DECODER = "decode_papyrus.py"
 
 
 def deterministic_grader(
@@ -42,15 +47,15 @@ def deterministic_grader(
     if b"gpt4_visual_judge" in evaluator_program:
         raise ValueError("Visual tasks require an explicitly configured visual judge")
     output = PurePosixPath(annotation.output_fname)
-    if ".." in output.parts or not output.is_relative_to("pred_results"):
+    if ".." in output.parts or not output.is_relative_to(PurePosixPath(OUTPUT_DIRECTORY).name):
         raise ValueError("ScienceAgentBench outputs must be under pred_results")
     grader = ScriptGrader(
         environment=environment,
         argv=(
             "python3",
             "-I",
-            "/tests/evaluate.py",
-            "/tests/source_evaluator.py",
+            f"/tests/{EVALUATOR_WRAPPER}",
+            f"/tests/{SOURCE_EVALUATOR}",
             f"{WORKING_DIRECTORY}/{output}",
             OUTPUT_DIRECTORY,
             VERDICT_PATH,
@@ -70,8 +75,8 @@ def deterministic_grader(
     return GraderPackage(
         grader,
         (
-            inline_resource("evaluate.py", (ASSETS / "evaluate.py").read_bytes()),
-            inline_resource("source_evaluator.py", evaluator_program),
+            inline_resource(EVALUATOR_WRAPPER, (ASSETS / EVALUATOR_WRAPPER).read_bytes()),
+            inline_resource(SOURCE_EVALUATOR, evaluator_program),
             inline_resource("ScienceAgentBench.LICENSE", SOURCE_LICENSE),
         ),
     )
@@ -92,7 +97,7 @@ def papyrus_grader(
     """
     grader = ScriptGrader(
         environment=environment,
-        argv=("python3", "-I", "/tests/papyrus_rows.py", PAPYRUS_ROWS, "/tests/gold_rows.jsonl", VERDICT_PATH),
+        argv=("python3", "-I", f"/tests/{PAPYRUS_SCORER}", PAPYRUS_ROWS, f"/tests/{PAPYRUS_GOLD}", VERDICT_PATH),
         cwd=WORKING_DIRECTORY,
         answer_path=None,
         timeout=verifier_timeout,
@@ -102,7 +107,7 @@ def papyrus_grader(
             argv=(
                 "python3",
                 "-I",
-                "/replay/decode_papyrus.py",
+                f"/replay/{PAPYRUS_DECODER}",
                 SUBMISSION_PATH,
                 f"{OUTPUT_DIRECTORY}/papyrus_filtered.pkl",
                 PAPYRUS_ROWS,
@@ -111,7 +116,7 @@ def papyrus_grader(
             timeout=replay_timeout,
             artifacts=(VerifierArtifact(source=PAPYRUS_ROWS, target=PAPYRUS_ROWS, kind=ArtifactKind.FILE),),
             resources=(
-                inline_resource("replay/decode_papyrus.py", (ASSETS / "decode_papyrus.py").read_bytes()),
+                inline_resource(f"replay/{PAPYRUS_DECODER}", (ASSETS / PAPYRUS_DECODER).read_bytes()),
                 inline_resource("replay/ScienceAgentBench.LICENSE", SOURCE_LICENSE),
             ),
         ),
@@ -119,8 +124,8 @@ def papyrus_grader(
     return GraderPackage(
         grader,
         (
-            inline_resource("papyrus_rows.py", (ASSETS / "papyrus_rows.py").read_bytes()),
-            inline_resource("gold_rows.jsonl", gold_rows),
+            inline_resource(PAPYRUS_SCORER, (ASSETS / PAPYRUS_SCORER).read_bytes()),
+            inline_resource(PAPYRUS_GOLD, gold_rows),
             inline_resource("ScienceAgentBench.LICENSE", SOURCE_LICENSE),
         ),
     )

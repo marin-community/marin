@@ -21,9 +21,10 @@ from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE
 EXITED = Result(0, b"", b"", False, False, ExitReason.EXITED)
 GRADER_IMAGE = "grader@sha256:" + "a" * 64
 REPLAY_IMAGE = "replay@sha256:" + "b" * 64
+REPLAY_COMMAND = ("python3", "/app/solution.py")
 
 
-def finished(task: TaskSpec) -> ConversationTrace:
+def completed_trace(task: TaskSpec) -> ConversationTrace:
     """The conversation of an agent that worked in its machine and then stopped."""
     return ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
 
@@ -116,7 +117,7 @@ class ReplayMachine(LocalGradingMachine):
     hang: bool = False
 
     async def run(self, command: Command):
-        if self.hang and command.argv == ("python3", "/app/solution.py"):
+        if self.hang and command.argv == REPLAY_COMMAND:
             await asyncio.Event().wait()
         return await super().run(command)
 

@@ -27,7 +27,7 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.task_grading import grade_task
 
-from .grading_machines import GRADER_IMAGE, REPLAY_IMAGE, ReplayMachines, finished
+from .grading_machines import GRADER_IMAGE, REPLAY_IMAGE, ReplayMachines, completed_trace
 
 
 @pytest.fixture
@@ -152,7 +152,7 @@ Path('pred_results/output.csv').write_text({prediction!r})
 """.encode()
         result = grade_task(
             task,
-            GradingAttempt(finished(task), {"/testbed/solution.py": program}),
+            GradingAttempt(completed_trace(task), {"/testbed/solution.py": program}),
             machine_factory=machines,
             machine_spec=MachineSpec(DockerImage(GRADER_IMAGE)),
         )

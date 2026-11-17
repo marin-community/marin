@@ -12,6 +12,7 @@ MAX_ROW_CHARACTERS = 1024 * 1024
 
 
 def read_row(stream: TextIO) -> list[str] | None:
+    """Read a normalized row; return None at EOF and raise ValueError for malformed rows."""
     line = stream.readline(MAX_ROW_CHARACTERS + 1)
     if not line:
         return None
@@ -50,7 +51,7 @@ def score_rows(candidate: Path, gold: Path) -> dict:
     return {
         "status": "scored",
         "reward": float(not rejected and matched == total),
-        "detail": {"matched_rows": matched, "gold_rows": total, "invalid_candidate_rows": rejected},
+        "detail": {"matched_rows": matched, "gold_rows": total, "malformed_or_missing_candidate_rows": rejected},
     }
 
 

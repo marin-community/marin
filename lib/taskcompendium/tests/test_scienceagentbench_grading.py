@@ -26,7 +26,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.task_grading import grade_task
 
-from .grading_machines import GRADER_IMAGE, REPLAY_IMAGE, ReplayMachines, finished
+from .grading_machines import GRADER_IMAGE, REPLAY_IMAGE, ReplayMachines, completed_trace
 
 GOLD_ROWS = b'["1", "1.235", "a"]\n["2", "2.346", "b"]\n'
 
@@ -62,7 +62,7 @@ def grade_papyrus_program(tmp_path, program, gold_rows=GOLD_ROWS):
     machines = ReplayMachines(tmp_path / "machines")
     result = grade_task(
         TaskSpec.model_validate_json(task.model_dump_json()),
-        GradingAttempt(finished(task), {"/testbed/solution.py": program}),
+        GradingAttempt(completed_trace(task), {"/testbed/solution.py": program}),
         machine_factory=machines,
         machine_spec=MachineSpec(DockerImage(GRADER_IMAGE)),
     )
