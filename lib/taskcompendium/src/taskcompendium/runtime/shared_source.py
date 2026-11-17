@@ -25,7 +25,7 @@ import signal
 import stat
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 REPORT_FILES = ("verdict.json", "reward.txt", "reward.json", "test_output.log")
@@ -197,7 +197,7 @@ def quarantine_remove(common, path: Path, quarantine_root: str | None) -> None:
     except OSError:
         if quarantine_root is None:
             raise
-        destination = Path(quarantine_root) / datetime.now(UTC).strftime("quarantine-%Y%m%d%H%M%S%f")
+        destination = Path(quarantine_root) / datetime.now(timezone.utc).strftime("quarantine-%Y%m%d%H%M%S%f")
         destination.parent.mkdir(parents=True, exist_ok=True)
         os.rename(path, destination)
 

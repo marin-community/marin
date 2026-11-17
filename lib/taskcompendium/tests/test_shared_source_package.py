@@ -3,6 +3,7 @@
 
 """Portable regressions for the protected SHARED source-scorer packaging."""
 
+import ast
 import json
 import zlib
 from pathlib import Path
@@ -195,3 +196,6 @@ def test_guest_controller_stays_runtime_compatible_with_python_39():
         if stripped.startswith("from datetime import"):
             names = {name.strip() for name in stripped[len("from datetime import") :].split(",")}
             assert "UTC" not in names, f"datetime.UTC is 3.11+ only; controller line: {stripped}"
+    # Syntax-level guard: 3.10+ grammar (e.g. match statements) must not enter
+    # the controller either.
+    ast.parse(source, feature_version=(3, 9))
