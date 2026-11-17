@@ -30,7 +30,9 @@ from finestore.rl.curation import (
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.backend_requirements import BackendSurvey, backend_schema_sha256
+from shellbox.machine import NetworkPolicy
+from shellbox.requirements import Requirement
+from taskcompendium.backend_requirements import BackendSourceMap, BackendSurvey, backend_schema_sha256
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.models import ReviewRecord, ReviewStatus
@@ -277,6 +279,19 @@ def stage_full_review(source_id: str, binding: FullContentResultBinding) -> Stag
     )
 
 
+def _grader_network_profile_pending(backend_row: BackendSourceMap, backend_map: BackendSurvey) -> bool:
+    """Whether the source's grader needs network while the survey's grader profile denies it.
+
+    Under the deny defaults every production backend reports unsupported for
+    such a source, so the fit failure is the profile binding, not a missing
+    backend; the r22 projection ships it as typed Pending.
+    """
+    grader_demands = (backend_row.demands or {}).get("grader") or {}
+    needs_network = bool({Requirement.NETWORK, Requirement.NETWORK_ALLOW} & set(grader_demands))
+    grader_profile = backend_map.runtime_defaults.get("grader")
+    return needs_network and grader_profile is not None and grader_profile.network is NetworkPolicy.DENY
+
+
 def load_catalog(
     catalog: CurationCatalog,
     query: AppletQuery,
@@ -373,7 +388,7 @@ def load_catalog(
         else set()
     )
     verification_pending: dict[str, list[str]] = {}
-    downgraded: list[str] = []
+    downgraded: dict[str, str] = {}
     for source in sources:
         # Available rows must pass full population admission; every other status
         # publishes as metadata without admission or selectability.
@@ -382,13 +397,17 @@ def load_catalog(
             and filtration(source.declaration.model_dump(mode="json"))["state"] != "excluded"
         ):
             require_declaration_admission(source.declaration)
-        verdicts = {
-            name: fit.support.value
-            for name, fit in next(row for row in backend_map.sources if row.source_id == source.id).backends.items()
-        }
+        backend_row = next(row for row in backend_map.sources if row.source_id == source.id)
+        verdicts = {name: fit.support.value for name, fit in backend_row.backends.items()}
         blocker, pending = backend_admission_review(verdicts, source.declaration.status, backend_map.deployment_classes)
         if blocker:
-            raise ValueError(f"Backend admission blocked: {source.id}: {blocker}")
+            if source.declaration.status == "Available" and _grader_network_profile_pending(backend_row, backend_map):
+                # r22 ruling: the profile conflict ships as typed Pending —
+                # unadmitted, with the unsupported evidence and the conflict
+                # visible — until a maintained per-source profile binding lands.
+                downgraded[source.id] = "Backend profile pending: grader needs network allow."
+            else:
+                raise ValueError(f"Backend admission blocked: {source.id}: {blocker}")
         if pending:
             # An already-admitted source keeps its status with a visible marker.
             # A new source downgrades to Pending only when NO production backend
@@ -399,7 +418,11 @@ def load_catalog(
             if source.id not in previously_available and not has_runnable_production_support(
                 verdicts, backend_map.deployment_classes
             ):
-                downgraded.append(source.id)
+                downgraded[source.id] = (
+                    "Backend verification pending: "
+                    + ", ".join(pending)
+                    + " (new admission waits on the live qualification)."
+                )
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
     if {source.id for source in sources} != {source.source_id for source in backend_map.sources}:
@@ -410,16 +433,11 @@ def load_catalog(
     for index, source in enumerate(sources):
         if source.id not in downgraded:
             continue
-        # A new fully-qualified source whose only positive production outcome
-        # is VERIFY materializes as Pending metadata: admission waits on the
-        # live qualification, typed and visible, without touching the
-        # registry declaration.
-        notes = (
-            (source.declaration.notes + " " if source.declaration.notes else "")
-            + "Backend verification pending: "
-            + ", ".join(verification_pending[source.id])
-            + " (new admission waits on the live qualification)."
-        )
+        # A typed Pending projection: the registry declaration is untouched and
+        # the load-time copy carries the stage note — VERIFY-pending sources
+        # wait on the live qualification, profile-conflict sources (grader
+        # needs network allow) wait on the maintained profile binding.
+        notes = (source.declaration.notes + " " if source.declaration.notes else "") + downgraded[source.id]
         downgraded_declaration = source.declaration.model_copy(update={"status": "Pending", "notes": notes})
         sources[index] = source.model_copy(update={"declaration": downgraded_declaration})
         source_declarations[source.id] = downgraded_declaration

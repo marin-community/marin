@@ -421,8 +421,9 @@ def test_unclassified_capability_counts_a_misfit_on_every_backend():
         "unclassified", [document], capability_matrix(checkers), checkers, {}, {"agent": RUNTIME, "grader": RUNTIME}
     )
     fit = mapped.backends["docker"]
-    assert fit.task_counts == {Support.UNSUPPORTED: 1}
-    assert fit.roles["agent"] == {Support.UNSUPPORTED: 1}
+    # the vocabulary gap is pending evidence, not a fit failure (VERIFY ruling)
+    assert fit.task_counts == {Support.VERIFY: 1}
+    assert fit.roles["agent"] == {Support.VERIFY: 1}
     assert fit.blockers == {"agent:nemotron-agent:ns_tools_simple_agent": 1}
 
 
@@ -445,8 +446,8 @@ def test_unclassified_capability_preserves_the_other_role_and_known_requirements
         {"agent": RUNTIME, "grader": RUNTIME},
     )
     fit = mapped.backends["docker"]
-    assert fit.task_counts == {Support.UNSUPPORTED: 1}
-    assert fit.roles["agent"] == {Support.UNSUPPORTED: 1}
+    assert fit.task_counts == {Support.VERIFY: 1}
+    assert fit.roles["agent"] == {Support.VERIFY: 1}
     assert fit.roles["grader"] == {FitSupport.NOT_APPLICABLE: 1}
     assert fit.not_applicable == {"grader:host_image": 1}
     assert fit.blockers == {"agent:nemotron-agent:ns_tools_simple_agent": 1}
@@ -768,3 +769,29 @@ def test_runtime_column_applies_published_runtime_allocations(tmp_path):
     assert measured.resource_ranges["agent"]["storage_mb"] == (10240, 10240)
     assert measured.demands["agent"][Requirement.STORAGE] == 1
     assert measured.backends["docker"].task_counts == {Support.VERIFY: 1}
+
+
+def test_unclassified_capability_is_verify_not_unsupported():
+    """A capability outside the survey vocabulary is a vocabulary gap, not a backend gap."""
+    document = _pdb_grader_document()
+    document["task"]["environment_requirements"] = {
+        "command_semantics": "linux_process",
+        "docker_image": PDB_SHAPE,
+        "capabilities": ("nemotron-agent:ns_tools_simple_agent",),
+    }
+    checkers = _verified_local_checkers()
+    mapped = source_map(
+        "nemotron-math-tir",
+        [document],
+        production_matrix(checkers),
+        checkers,
+        {},
+        {"agent": RUNTIME, "grader": RUNTIME},
+    )
+    for backend, fit in mapped.backends.items():
+        # the agent role is VERIFY on every backend; the overall fit may still
+        # be worse where the grader environment kind is not hostable
+        assert fit.roles["agent"] == {FitSupport.VERIFY: 1}, backend
+        assert fit.blockers.get("agent:nemotron-agent:ns_tools_simple_agent") == 1
+    for backend in ("daytona", "iris", "local"):
+        assert mapped.backends[backend].support == FitSupport.VERIFY, backend

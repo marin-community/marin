@@ -266,11 +266,15 @@ def source_map(
                     continue
                 if role in failures:
                     error = failures[role]
-                    role_counts[backend][role][FitSupport.UNSUPPORTED] += 1
+                    # An unclassified capability is a survey-vocabulary gap,
+                    # not a demonstrated backend gap: the cells stay VERIFY
+                    # until the vocabulary classifies the capability or a live
+                    # probe resolves the role (VERIFY ruling).
+                    role_counts[backend][role][FitSupport.VERIFY] += 1
                     for capability in error.capabilities:
                         blockers[backend][f"{role}:{capability}"] += 1
                     errors[backend][str(error)] += 1
-                    outcomes.append(FitSupport.UNSUPPORTED)
+                    outcomes.append(FitSupport.VERIFY)
                     continue
                 declared = task.get("environment_requirements") if role == "agent" else task["grader"]["environment"]
                 shape = runtime.get("task_machine" if role == "agent" else "verifier_machine")

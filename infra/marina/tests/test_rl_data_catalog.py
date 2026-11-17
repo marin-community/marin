@@ -68,7 +68,7 @@ from marina.applets import (
 )
 from marina.client import AppletQuery
 from rigging.server_auth import VerifiedIdentity, identity_scope
-from shellbox.machine import Backend
+from shellbox.machine import Backend, NetworkPolicy
 from shellbox.requirements import Requirement, Support
 from shellbox.survey import CapabilityCell
 from sqlalchemy import create_engine, event, text
@@ -78,6 +78,7 @@ from taskcompendium.backend_requirements import (
     BackendSourceMap,
     BackendSurvey,
     FitSupport,
+    RuntimeProfile,
     backend_schema_sha256,
 )
 from taskcompendium.evaluation.corpus import file_sha256
@@ -3194,3 +3195,70 @@ def test_new_source_with_a_runnable_production_backend_stays_available(catalog_d
     row = _source_load_row(catalog_query, result["load_id"], "Marin:mixed")
     assert row["status"] == "Available"
     assert row["backend_verification_pending"] == ["daytona"]
+
+
+def _unsupported_profile_survey(
+    catalog: CurationCatalog, source_id: str, *, grader_demands_network: bool
+) -> BackendSurvey:
+    """Every backend UNSUPPORTED for one source, with the survey's grader profile denying network."""
+    survey = catalog_backend_map(catalog)
+    profile = RuntimeProfile(
+        network=NetworkPolicy.DENY,
+        cpus=1,
+        memory_mb=512,
+        storage_mb=1024,
+        gpus=0,
+        user=None,
+        startup_timeout=900.0,
+        cleanup_timeout=120.0,
+    )
+    row = next(s for s in survey.sources if s.source_id == source_id)
+    count = row.task_count or 1
+    backends = {
+        backend: fit.model_copy(
+            update={
+                "support": FitSupport.UNSUPPORTED,
+                "task_counts": {FitSupport.UNSUPPORTED: count},
+                "roles": {
+                    "agent": {FitSupport.UNSUPPORTED: count},
+                    "grader": {FitSupport.UNSUPPORTED: count},
+                },
+                "blockers": {"agent: Machine execution requires explicit semantics and native dependencies": count},
+            }
+        )
+        for backend, fit in row.backends.items()
+    }
+    demands = (
+        {"grader": {Requirement.NETWORK: count}} if grader_demands_network else {"grader": {Requirement.CPUS: count}}
+    )
+    new_row = row.model_copy(update={"backends": backends, "demands": demands})
+    return survey.model_copy(
+        update={
+            "sources": [new_row if s.source_id == source_id else s for s in survey.sources],
+            "runtime_defaults": {"agent": profile, "grader": profile},
+        }
+    )
+
+
+def test_grader_profile_conflict_ships_as_typed_pending(catalog_database, catalog_query, tmp_path):
+    """A source whose grader needs network under deny defaults loads as Pending with the stage note."""
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "profile-conflict", source_id="Marin:orshape")
+    catalog = CurationCatalog(root)
+    flipped = _unsupported_profile_survey(catalog, "Marin:orshape", grader_demands_network=True)
+    result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    row = _source_load_row(catalog_query, result["load_id"], "Marin:orshape")
+    assert row["status"] == "Pending"
+    assert "Backend profile pending: grader needs network allow." in row["notes"]
+    # no VERIFY cells here: the marker stays unset; the typed stage note is the visibility
+    assert row["backend_verification_pending"] is None
+
+
+def test_all_unsupported_without_a_profile_conflict_still_blocks(catalog_database, catalog_query, tmp_path):
+    """An all-unsupported Available source with no network demand keeps the hard blocker."""
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "plain-unsupported", source_id="Marin:plain")
+    catalog = CurationCatalog(root)
+    flipped = _unsupported_profile_survey(catalog, "Marin:plain", grader_demands_network=False)
+    with pytest.raises(ValueError, match="Backend admission blocked"):
+        load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
