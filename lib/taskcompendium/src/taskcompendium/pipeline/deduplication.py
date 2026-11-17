@@ -136,13 +136,18 @@ class PreparedShard:
     input_rows: int
 
 
+def read_deduplication_keys(path: str) -> Iterator[DeduplicationKey]:
+    for row in load_parquet(path):
+        yield DeduplicationKey(**row)
+
+
 def prepared_payload(item: tuple[int, ConvertedRow]) -> dict[str, Any]:
     record = retained_row({"row": item[1], "duplicate_of": None})
     assert record is not None
     return record
 
 
-def prepared_key(item: tuple[int, ConvertedRow], *, payload: str) -> DeduplicationKey:
+def prepared_key(item: tuple[int, ConvertedRow], *, payload: str) -> dict[str, Any]:
     index, row = item
     return {
         "key": converted_key(row),
@@ -271,7 +276,7 @@ def deduplicate_population(
     result = execute_phase(
         context,
         Dataset.from_list([part.keys for part in prepared])
-        .flat_map(load_parquet)
+        .flat_map(read_deduplication_keys)
         .group_by(
             key_identity,
             reducer=duplicate_group,
