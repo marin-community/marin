@@ -46,6 +46,7 @@ GET /finelog/marin/alerts/training_telemetry     watched hero runs + silent-tele
 GET /finelog/marin/alerts/training_optimizer     watched hero runs + optimizer-fault value(0|1)
 GET /finelog/marin/alerts/training_health        watched hero runs + degraded-signal value(0|1)
 GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
+GET /finelog/marin/alerts/b200_utilization       GB200 clusters + state + idle value(0|1)
 GET /iris/{cluster}/job_counts | jobs | workers | health
                                                     live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
@@ -610,6 +611,10 @@ recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 The CoreWeave storage-telemetry freshness warning and `TrainingRunHealthDegraded`
 carry the explicit `notification=slack` exception, so they announce in Slack
 and open a session on the default `operator` channel.
+`B200ClusterUnderutilized` uses the same route when a cluster's Ready GB200
+GPUs stay idle for 30 minutes; the thresholds are the constants in
+`src/b200_utilization_alert.py`. A cluster with incomplete telemetry or an
+unreadable node inventory does not fire, and its `state` label says why.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard panels rather than alert rules because they have expected benign
 causes. `severity=critical` routes to `ops-critical` (email

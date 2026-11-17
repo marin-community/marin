@@ -6,17 +6,13 @@ import asyncio
 from pathlib import Path
 from typing import Any, Protocol
 
-import hydra
 import ray
 from loguru import logger
 from omegaconf import DictConfig
 from marinskyrl.runtime_options import EvaluationRunner
 
 from skyrl_train.config.rollout_validation import EntrypointOperation
-from skyrl_train.entrypoints.main_base import (
-    BasePPOExp,
-    config_dir,
-)
+from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_disk_load_request
 from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray
 from skyrl_train.evaluate import evaluate
@@ -102,12 +98,3 @@ def run(cfg: DictConfig) -> None:
     initialize_ray(cfg)
     metrics = ray.get(eval_entrypoint.remote(cfg))
     logger.info(f"Metrics from eval only run: {metrics}")
-
-
-@hydra.main(config_path=config_dir, config_name="ppo_base_config", version_base=None)
-def main(cfg: DictConfig) -> None:
-    run(cfg)
-
-
-if __name__ == "__main__":
-    main()

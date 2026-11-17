@@ -25,7 +25,7 @@ name: qwen3-32b                 # slash-free launch identity; catalog entries mu
 location: Qwen/Qwen3-32B        # HF repo id, or gs://|s3:// HF-format export dir
 revision: null                  # pin an immutable checkpoint (base models); optional
 tokenizer: null                 # required only when location is an object-store path
-apply_chat_template: true       # whether Evalchemy formats requests with the tokenizer chat template
+apply_chat_template: true       # select curated chat or completion corpus variants
 
 resource_hint:                  # ResourceHint -> experiment fleet placement
   hbm_gb: 84                    # serving HBM budget the hardware selector sizes a slice from
@@ -56,10 +56,10 @@ serve:                          # ServeConfig -> model-server behavior
   auto_overrides: true          # derive remaining flags + clamp max_model_len from config.json
 
 generation:                     # per-model generation behavior
-  max_gen_toks: null            # Evalchemy generation limit and Harbor agent output budget
-  extra_gen_kwargs:             # forwarded to Evalchemy, e.g. for a thinking model
+  max_gen_toks: null            # Curated generation limit and Harbor agent output budget
+  extra_gen_kwargs:             # forwarded to curated requests, e.g. for a thinking model
     skip_special_tokens: "false"
-  chat_template_kwargs:         # boolean or string template arguments on Evalchemy chat requests
+  chat_template_kwargs:         # boolean or string template arguments on curated chat requests
     enable_thinking: false
 
 agent:                          # AgentConfig -> the Harbor/agentic agent

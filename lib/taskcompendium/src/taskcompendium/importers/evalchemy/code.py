@@ -10,7 +10,10 @@ Shellbox bounds startup separately and supplies isolation and resource limits.
 
 import hashlib
 import json
+from collections.abc import Iterator
 from pathlib import Path
+from random import Random
+from typing import cast
 
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
@@ -24,6 +27,7 @@ from taskcompendium.evaluation.spec import ChatGeneration, EvaluationItem, TextG
 from taskcompendium.grader import GraderPackage
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.importers.evalchemy.assets.code_protocol import function_prompt, mbpp_prompt
+from taskcompendium.importers.fewshot import FEWSHOT_SEED, parquet_documents
 from taskcompendium.models import FileReward, RewardFile, RewardFileFormat, ScriptGrader, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
@@ -56,6 +60,27 @@ CODE_REVISION = (
 )
 
 
+CRUX_DIRECTIONS = ("input", "output")
+
+
+def read_humaneval_fewshot(path: StoragePath, _context: ConversionContext) -> Iterator[dict]:
+    """Preserve the ten-shot completion menu, including its test-text demonstrations."""
+    documents = list(parquet_documents(path))
+    sampler = Random(FEWSHOT_SEED)
+    for document in documents:
+        indices = sampler.sample(range(len(documents)), 10)
+        prefix = "".join(
+            documents[index]["prompt"]
+            + " "
+            + documents[index]["test"]
+            + "\ncheck("
+            + documents[index]["entry_point"]
+            + ")\n\n"
+            for index in indices
+        )
+        yield {**document, "evaluation_prompt": prefix + document["prompt"]}
+
+
 def read_mbpp(path: StoragePath, _context: ConversionContext):
     """Keep the source's first 500 rows and its fixed examples at positions 1, 2 and 3."""
     with path.open("rb") as file:
@@ -68,7 +93,7 @@ def read_mbpp(path: StoragePath, _context: ConversionContext):
 def read_crux(path: StoragePath, _context: ConversionContext):
     with path.open("rt") as file:
         rows = [json.loads(line) for line in file if line.strip()]
-    for direction in ("input", "output"):
+    for direction in CRUX_DIRECTIONS:
         template = (ASSETS / f"crux_{direction}.txt").read_text()
         for row in rows:
             prompt = template.replace("{input}", row["input"]).replace("{output}", row["output"])
@@ -78,7 +103,7 @@ def read_crux(path: StoragePath, _context: ConversionContext):
 def convert_python(row: RawRow, context: ConversionContext, *, suite: str) -> TaskSpec:
     problem = dict(row.data)
     prompt = (
-        (problem["prompt"] if suite == "humaneval" else function_prompt(problem))
+        (problem.get("evaluation_prompt", problem["prompt"]) if suite == "humaneval" else function_prompt(problem))
         if suite in {"humaneval", "humanevalplus"}
         else problem["evaluation_prompt"]
     )
@@ -103,7 +128,9 @@ def convert_python(row: RawRow, context: ConversionContext, *, suite: str) -> Ta
         ),
         (*CODE_ASSETS, inline_resource("config.json", json.dumps(config, allow_nan=False, sort_keys=True).encode())),
     )
-    task = conversation_task(row, events=(TextMessage(role="user", content=prompt),), package=package, evidence=problem)
+    task = conversation_task(
+        row, events=(TextMessage(role="user", content=cast(str, prompt)),), package=package, evidence=problem
+    )
     return task.model_copy(update={"tags": ("eval", "source:evalchemy", f"benchmark:{suite}", "code")})
 
 

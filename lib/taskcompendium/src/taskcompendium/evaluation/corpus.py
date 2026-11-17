@@ -58,6 +58,8 @@ class EvaluationManifest(EvaluationModel):
     intended_use: Literal["eval"] = "eval"
     protocol_hash: str
     conversion_manifest_sha256: str
+    curation_identity: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    protocol_name: str | None = None
     rows: int = Field(gt=0)
     shards: tuple[EvaluationShard, ...]
 
@@ -141,6 +143,11 @@ def chat_item(task: TaskSpec, *, response_selection: ResponseSelection = "combin
         source_row=task.source.row,
         operation=ChatGeneration(response_selection=response_selection),
     )
+
+
+def chat_variant_item(task: TaskSpec, *, item_builder: ItemBuilder) -> EvaluationItem:
+    """Retain source grouping and provenance in an explicit chat transport variant."""
+    return item_builder(task).model_copy(update={"operation": ChatGeneration()})
 
 
 def file_sha256(path: StoragePath) -> str:

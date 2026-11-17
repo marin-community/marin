@@ -12,6 +12,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
@@ -21,10 +22,11 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from fray.client import JobHandle
 from fray.current_client import current_client
-from fray.types import ActorConfig, Entrypoint, EnvironmentConfig, JobRequest, JobStatus, TpuConfig
+from fray.types import ActorConfig, Entrypoint, EnvironmentConfig, JobRequest, JobStatus, TpuConfig, create_environment
 from iris.client.client import iris_ctx
 from iris.client.workload import TaskStatus
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
 from iris.resources.state import TaskState, is_job_finished
 from rigging import telemetry
@@ -62,6 +64,7 @@ from marin.inference.iris_vllm import (
     notify_iris_vllm_stopped,
     wait_for_iris_vllm_shutdown,
 )
+from marin.inference.model_cache import ModelPreparationError, prepare_hf_models
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import LocalInferenceSession, local_inference
 from marin.inference.types import (
@@ -100,12 +103,20 @@ _CAPABILITY_TTL = Duration.from_hours(24 * 7)
 _BROKER_ACTOR_MAX_CONCURRENCY = 32
 
 
+class InferenceStartupPhase(StrEnum):
+    PREPARATION = "preparation"
+    SERVING = "serving"
+
+
 class RemoteInferenceStartupError(RuntimeError):
     """Remote inference failed before yielding a usable endpoint."""
 
-    def __init__(self, message: str, jobs: tuple[JobHandle, ...]):
+    def __init__(
+        self, message: str, jobs: tuple[JobHandle, ...], *, phase: InferenceStartupPhase = InferenceStartupPhase.SERVING
+    ):
         super().__init__(message)
         self.jobs = jobs
+        self.phase = phase
 
 
 @dataclass(frozen=True)
@@ -730,6 +741,7 @@ def remote_inference(
 
     if get_job_info() is None:
         raise RuntimeError("remote_inference must run inside an Iris job")
+    config = _prepared_inference_config(config)
     resolved_broker = _broker_config(config.instances, config.broker)
     if resolved_broker is None:
         with _start_direct_inference(config) as session:
@@ -737,6 +749,23 @@ def remote_inference(
         return
     with _start_brokered_inference(config, resolved_broker) as session:
         yield session
+
+
+def _prepared_inference_config(config: RemoteInferenceConfig) -> RemoteInferenceConfig:
+    """Mirror uncached Hugging Face weights from CPU jobs before any accelerator job starts."""
+    environment = create_environment(
+        setup_scripts=[default_setup_script(packages=["marin-core"])],
+        env_vars=dict(config.iris.worker_environment.env_vars),
+        secrets=dict(config.iris.worker_environment.secrets),
+        secret_behavior=config.iris.worker_environment.secret_behavior,
+    )
+    try:
+        model, engine = prepare_hf_models(
+            config.model, config.engine, config.iris, client=current_client(), environment=environment
+        )
+    except ModelPreparationError as exc:
+        raise RemoteInferenceStartupError(str(exc), jobs=exc.jobs, phase=InferenceStartupPhase.PREPARATION) from exc
+    return replace(config, model=model, engine=engine)
 
 
 @contextlib.contextmanager

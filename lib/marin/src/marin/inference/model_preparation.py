@@ -7,14 +7,13 @@ import json
 from urllib.parse import unquote, urlsplit
 
 from levanter.compat.hf_checkpoints import load_tokenizer
-from levanter.model_cache import resolve_cached_model_path
+from levanter.model_cache import CacheMode, resolve_cached_model_path
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoConfig, PreTrainedTokenizerBase
 
-from marin.inference.config import RemoteInferenceConfig, VllmEngineConfig
 from marin.inference.vllm_server import _is_object_store_path
 
-_MODEL_CACHE_PREFIX = "quick-serve-models"
+MODEL_CACHE_PREFIX = "quick-serve-models"
 
 
 def _tool_template_probe() -> list[dict[str, object]]:
@@ -96,24 +95,22 @@ def _read_model_config_dict(model: str, revision: str | None = None) -> dict:
     return AutoConfig.from_pretrained(model, revision=revision, trust_remote_code=True).to_dict()
 
 
-def resolve_model_path(model: str, cache_ttl_days: int, revision: str | None = None) -> str:
+def resolve_model_path(
+    model: str, cache_ttl_days: int, revision: str | None = None, *, cache_mode: CacheMode = CacheMode.POPULATE
+) -> str:
     """Resolve and optionally mirror an HF model to the region-local cache."""
 
     if revision is None or _is_object_store_path(model):
-        resolved = resolve_cached_model_path(model, cache_ttl_days=cache_ttl_days, cache_prefix=_MODEL_CACHE_PREFIX)
+        resolved = resolve_cached_model_path(
+            model, cache_ttl_days=cache_ttl_days, cache_prefix=MODEL_CACHE_PREFIX, cache_mode=cache_mode
+        )
         return _vllm_model_path(resolved)
     pinned_model = f"{model}@{revision}"
     resolved = resolve_cached_model_path(
         pinned_model,
         cache_ttl_days=cache_ttl_days,
-        cache_prefix=_MODEL_CACHE_PREFIX,
+        cache_prefix=MODEL_CACHE_PREFIX,
+        cache_mode=cache_mode,
     )
     # With caching disabled, vLLM receives the bare model plus its separate revision argument.
     return model if resolved == pinned_model else _vllm_model_path(resolved)
-
-
-def precache_inference_model(config: RemoteInferenceConfig) -> None:
-    """Mirror serving weights on a CPU coordinator before its readiness clock starts."""
-    resolve_model_path(config.model.weights, config.iris.cache_ttl_days, config.model.revision)
-    if isinstance(config.engine, VllmEngineConfig) and config.engine.speculative is not None:
-        resolve_model_path(config.engine.speculative.model.uri, config.iris.cache_ttl_days)

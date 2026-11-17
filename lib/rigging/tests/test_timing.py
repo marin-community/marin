@@ -64,15 +64,6 @@ def test_deadline_raise_if_expired():
         deadline.raise_if_expired("Test timeout", now=t0.add_ms(100))
 
 
-def test_deadline_from_now_with_duration():
-    """Deadline.after works with Duration."""
-    t0 = Timestamp.from_ms(1_000_000)
-    deadline = Deadline.after(t0, Duration.from_ms(100))
-    assert not deadline.expired(now=t0)
-    assert not deadline.expired(now=t0.add_ms(50))
-    assert deadline.expired(now=t0.add_ms(150))
-
-
 def test_rate_limiter_throttles():
     """RateLimiter prevents running too frequently."""
     limiter = RateLimiter(interval_seconds=0.2)
@@ -165,16 +156,6 @@ def test_timestamp_uses_wall_clock():
 
     age_ms = ts1.age_ms()
     assert age_ms >= 20
-
-
-def test_deadline_expiry_progression():
-    """Deadline transitions from not-expired to expired as time advances."""
-    t0 = Timestamp.from_ms(1_000_000)
-    deadline = Deadline.after(t0, Duration.from_ms(100))
-
-    assert not deadline.expired(now=t0)
-    assert not deadline.expired(now=t0.add_ms(50))
-    assert deadline.expired(now=t0.add_ms(110))
 
 
 def test_deadline_remaining_time():
@@ -315,20 +296,6 @@ def test_token_bucket_refills_over_time():
     assert not bucket.try_acquire(now=t2)
 
 
-def test_token_bucket_respects_timestamp():
-    """Deterministic behavior using explicit now= parameter."""
-    bucket = TokenBucket(capacity=2, refill_period=Duration.from_seconds(10))
-    t0 = Timestamp.from_ms(5_000_000)
-
-    assert bucket.try_acquire(now=t0)
-    assert bucket.try_acquire(now=t0)
-    assert not bucket.try_acquire(now=t0)
-
-    t1 = t0.add_ms(5_000)
-    assert bucket.try_acquire(now=t1)
-    assert not bucket.try_acquire(now=t1)
-
-
 def test_token_bucket_thread_safe():
     """Concurrent acquire from multiple threads doesn't over-allocate."""
     bucket = TokenBucket(capacity=100, refill_period=Duration.from_hours(1))
@@ -458,7 +425,9 @@ def test_retry_with_backoff_respects_max_elapsed():
 
 
 def test_retry_with_backoff_does_not_mutate_caller_backoff():
-    backoff = ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0)
+    # factor=10 makes the first interval (0.001) differ from the second (0.01),
+    # so an advanced backoff would be visible through next_interval().
+    backoff = ExponentialBackoff(initial=0.001, maximum=0.01, factor=10.0, jitter=0.0)
     attempts = []
 
     def fn():
@@ -467,6 +436,5 @@ def test_retry_with_backoff_does_not_mutate_caller_backoff():
             raise OSError("x")
         return "ok"
 
-    retry_with_backoff(fn, backoff=backoff)
-    # Caller's backoff was not advanced by the internal retry loop
-    assert backoff._attempt == 0
+    assert retry_with_backoff(fn, backoff=backoff) == "ok"
+    assert backoff.next_interval() == 0.001

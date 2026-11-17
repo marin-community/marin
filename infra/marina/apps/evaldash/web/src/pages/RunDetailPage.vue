@@ -12,7 +12,7 @@ import {
   objectStoreUrl,
   shortSha,
 } from '@/utils/formatting'
-import { UNVERSIONED_COHORT, isPartialCoverage } from '@/utils/panel'
+import { UNVERSIONED_COHORT, isPartialCoverage, scoredItemsLabel } from '@/utils/panel'
 import { metricView, type MetricRow } from '@/utils/runMetrics'
 import { FLAG_NOTES, INTERVAL_KIND, type EvalRecord } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
@@ -43,11 +43,17 @@ const jobRoles = computed(() => Object.keys(data.value?.jobs ?? {}))
 const gradedNote = computed<{ label: string; warn: boolean }>(() => {
   const headline = data.value?.headline
   if (!headline) return { label: '', warn: false }
+  if (headline.repeat_aggregation?.coverage_basis === 'source') {
+    return { label: 'source coverage retained; item count uncertain', warn: true }
+  }
   if (headline.interval_kind !== INTERVAL_KIND.IDENTIFIED) {
     return { label: 'attempted count unreported', warn: false }
   }
   const attempted = `${headline.n_attempted ?? 'unknown'}${headline.n_benchmark === null ? '' : ` of ${headline.n_benchmark}`}`
-  const graded = `${headline.n_scored}${headline.n_attempted === null ? '' : ` of ${headline.n_attempted}`}`
+  const gradedCount = headline.repeat_aggregation?.coverage_basis === 'item_lower_bound'
+    ? `at least ${headline.n_scored}`
+    : `${headline.n_scored}`
+  const graded = `${gradedCount}${headline.n_attempted === null ? '' : ` of ${headline.n_attempted}`}`
   return {
     label: `attempted ${attempted} · graded ${graded}`,
     warn: isPartialCoverage(headline) || (headline.benchmark_rate !== null && headline.benchmark_rate < 1),
@@ -171,7 +177,16 @@ async function copyPath() {
               95% {{ formatInterval(data.headline.low, data.headline.high) }}
             </div>
             <div class="text-xs font-mono text-text-muted truncate max-w-[16rem]" :title="data.headline.metric">
-              {{ data.headline.metric }} · {{ data.headline.n_scored }} items
+              {{ data.headline.metric }} · {{ scoredItemsLabel(data.headline) }}
+            </div>
+            <div v-if="data.headline.repeat_aggregation" class="text-xs text-text-muted mt-0.5">
+              <template v-if="data.headline.repeat_aggregation.n_scored_trials === null">
+                {{ data.headline.repeat_aggregation.n_trials }} planned trials
+              </template>
+              <template v-else>
+                {{ data.headline.repeat_aggregation.n_scored_trials }} of {{ data.headline.repeat_aggregation.n_trials }} trials scored
+              </template>
+              · item-based standard error
             </div>
             <div class="text-xs font-mono mt-0.5" :class="gradedNote.warn ? 'text-status-warning' : 'text-text-muted'">
               {{ gradedNote.label }}

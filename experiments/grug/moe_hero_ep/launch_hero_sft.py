@@ -483,7 +483,7 @@ def build_sft_run(
                 base_path=permanent_path,
                 temporary_base_path=temporary_path,
                 save_interval=RESUME_SAVE_INTERVAL,
-                keep=None,
+                keep=[{"every": 500}],
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
                 keep_last_temporary_checkpoints=1,

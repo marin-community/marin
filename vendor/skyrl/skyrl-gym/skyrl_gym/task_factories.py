@@ -8,7 +8,7 @@ from typing import Protocol
 
 from rolloutengine.harness.core import Harness, HarnessContext, ModelSession
 from rolloutengine.harness.step import StepHarness
-from rolloutengine.models import ModelTurn, Prompt, RolloutLimits, TaskRolloutSpec, Transition
+from rolloutengine.models import ContextRecovery, ModelTurn, Prompt, RolloutLimits, TaskRolloutSpec, Transition
 from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 from taskcompendium.grading_result import GradeResult
@@ -73,6 +73,8 @@ class _StepEpisode:
 
 @dataclass(frozen=True)
 class _NemotronHarness:
+    context_recovery = ContextRecovery.NEVER
+
     open_episode: Callable[[HarnessContext], TaskEpisode]
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
