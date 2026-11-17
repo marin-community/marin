@@ -79,9 +79,6 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
         extra_env={
             **base.extra_env,
             "VERIFYIT_JUDGE_MODEL": "openai/gpt-oss-120b",
-            "NCCL_NET": "Socket",
-            "NCCL_IB_DISABLE": "1",
-            "NCCL_SOCKET_FAMILY": "AF_INET",
         },
     )
     config = config.merge(
