@@ -23,6 +23,7 @@ import os
 import shlex
 import tarfile
 import threading
+import tomllib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
 
@@ -160,6 +161,46 @@ def attempt_guard(row: dict) -> float:
             if value is not None:
                 deadlines.append(float(value))
     return max(ATTEMPT_TIMEOUT, max(deadlines, default=0.0) + 1800.0)
+
+
+def crosscheck_allocations(root: Path, family: str, row: dict, phase: str) -> dict:
+    """Original-vs-resolved role allocation cross-check for one phase.
+
+    Actor allocations and deadlines are read from the on-disk frozen packet
+    (task.toml environment and TaskSpec execution_requirements — exactly what
+    the executor consumes); verifier allocations from the trial result's
+    resolved config. Both must equal the map's calibrated budgets; any
+    mismatch flags the row as a fidelity finding instead of passing silently.
+    """
+    actor_key, verifier_key = PHASE_BUDGET_KEYS[phase]
+    actor_budget = row.get(actor_key) or {}
+    verifier_budget = row.get(verifier_key) or {}
+    if not actor_budget and not verifier_budget:
+        return {"ok": True, "skipped": "no map budgets for this family"}
+    packet = root / "packets" / f"{family}-{row['instance_id']}"
+    environment = tomllib.loads((packet / "task.toml").read_text()).get("environment", {})
+    execution = json.loads((packet / "task-spec.json").read_text()).get("execution_requirements") or {}
+    result_path = (
+        root
+        / "trials"
+        / f"{family}-{row['instance_id']}-{phase}"
+        / "jobs"
+        / f"{family}-{row['instance_id']}-{phase}"
+        / "result.json"
+    )
+    result = json.loads(result_path.read_text()) if result_path.exists() else {}
+    resolved_verifier = ((result.get("config") or {}).get("task") or {}).get("verifier_execution_requirements")
+    checks = {}
+    for name in ("cpus", "memory_mb", "storage_mb"):
+        expected, resolved = actor_budget.get(name), environment.get(name)
+        checks[f"actor_{name}"] = {"expected": expected, "resolved": resolved, "ok": expected == resolved}
+    for name in ("agent_timeout_sec", "verifier_timeout_sec"):
+        expected, resolved = actor_budget.get(name), execution.get(name)
+        checks[f"deadline_{name}"] = {"expected": expected, "resolved": resolved, "ok": expected == resolved}
+    for name in ("cpus", "memory_mb", "storage_mb", "agent_timeout_sec", "verifier_timeout_sec"):
+        expected, resolved = verifier_budget.get(name), (resolved_verifier or {}).get(name)
+        checks[f"verifier_{name}"] = {"expected": expected, "resolved": resolved, "ok": expected == resolved}
+    return {"ok": all(check["ok"] for check in checks.values()), "checks": checks}
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -387,6 +428,9 @@ def qa_row(root: Path, family: str, row: dict) -> dict:
             summary["testbed_python"] = getattr(_probe, "testbed_python", None)
         record[phase] = summary
         LOGGER.info("[%s/%s] reward=%s", name, phase, summary["rewards"].get("reward"))
+    record["allocation_crosscheck"] = {
+        phase: crosscheck_allocations(root, family, row, phase) for phase, _ in row_phases(family)
+    }
     return record
 
 
@@ -402,6 +446,9 @@ def seal(run_name: str, root: Path, records: list, blocked: list, map_uri: str, 
         }
         if "tamper" in record:
             verdict["tamper_reward_0"] = record["tamper"]["rewards"].get("reward") == 0.0
+        crosscheck = record.get("allocation_crosscheck") or {}
+        verdict["allocations_ok"] = all(entry.get("ok") for entry in crosscheck.values())
+        verdict["qualified"] = row_qualified(record)
         verdicts[record["instance_id"]] = verdict
     for entry in blocked:
         verdicts[entry["instance_id"]] = {"failure_class": entry["failure_class"], "blocked": entry["error"]}
@@ -419,7 +466,8 @@ def row_qualified(record: dict) -> bool:
     qualified = record["nop"]["rewards"].get("reward") == 0.0 and record["oracle"]["rewards"].get("reward") == 1.0
     if "tamper" in record:
         qualified = qualified and record["tamper"]["rewards"].get("reward") == 0.0
-    return qualified
+    crosscheck = record.get("allocation_crosscheck") or {}
+    return qualified and all(entry.get("ok") for entry in crosscheck.values())
 
 
 def main() -> None:
