@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""MMLU-Redux publication renders ZeroEval's prompt, grades by gold letter and groups by subject."""
+"""MMLU-Redux publication renders ZeroEval's prompt and binds gold letters and subject groups."""
 
 import json
 
