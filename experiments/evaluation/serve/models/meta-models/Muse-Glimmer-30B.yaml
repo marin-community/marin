@@ -22,4 +22,3 @@ serve:
 agent:
   agent_kwargs:
     thinking_format: chat-template
-# Model-default and thinking-on benchmarks use the template's default reasoning strength (high).

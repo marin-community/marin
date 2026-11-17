@@ -15,8 +15,7 @@ serve:
   reasoning_parser: nemotron_v3
   vllm_extra_args:
   - --enable-prefix-caching
-  # Baked tool-aware template, verbatim from the pinned revision: the serve skips its tokenizer
-  # probe, which the pinned launcher crashes on model-cache hits for remote-code models.
+  # Tool-aware template from the pinned model revision.
   chat_template: |
     {% macro render_extra_keys(json_dict, handled_keys) %}
         {%- if json_dict is mapping %}
@@ -268,5 +267,3 @@ agent:
   agent_kwargs:
     thinking_format: chat-template
     extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
-# Benchmark configs select thinking mode explicitly. Model-default benchmarks retain the native
-# template behavior.
