@@ -2927,6 +2927,12 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
   --calibration-solutions /path/to/calibration-solutions
 ~~~
 
+Calibration verifies every task and runtime identity before starting any trials.
+It then rereads the frozen cohort and keeps at most `--concurrency` task packets
+in flight. Task IDs and completed receipts remain in memory, while task
+packets are streamed from Parquet. The final map keeps the original cohort
+order and includes every calibration receipt.
+
 For candidate trials, select `task-spec-chat` with explicit `api_base`,
 `max_turns`, `max_tokens` and `request_parameters` agent kwargs. Atlas routes
 its candidate endpoint through the protocol relay, which owns tokenization,

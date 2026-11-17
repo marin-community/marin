@@ -3,9 +3,11 @@
 
 """Full Harbor trial receipts preserve oracle exits and filter exact converted bytes."""
 
+import gc
 import hashlib
 import json
 import subprocess
+import tracemalloc
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -17,7 +19,7 @@ from finestore.rl.curation import ContentEvidenceReference
 from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.harbor.protected_runtime import ExpectedRuntime, RuntimeRole
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ExecutionRequirements, TaskSpec
+from taskcompendium.models import ConversationInput, ExecutionRequirements, TaskSpec, TextMessage
 from taskcompendium.pipeline.models import Controls, IntendedUse
 from taskcompendium.pipeline.oracle_filter import (
     ExecutabilityRunReceipt,
@@ -28,6 +30,7 @@ from taskcompendium.pipeline.oracle_filter import (
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.resources import inline_resource
 
+from experiments.post_training.task_curation import oracle_filter
 from experiments.post_training.task_curation.datasets.tasktrove.calendar import calendar_golden
 from experiments.post_training.task_curation.datasets.tasktrove.math import MATH_CONTROLS
 from experiments.post_training.task_curation.oracle_filter import (
@@ -48,6 +51,78 @@ from experiments.post_training.task_curation.task_spec_harbor import prepare
 
 from .negative_control_fixtures import filter_with_negative_controls as filter_cohort
 from .prebuilt_fixtures import prebuilt_task
+
+
+def calibration_cohort(tmp_path, count, prompt_bytes):
+    template = TaskSpec.model_validate(json.loads(prebuilt_task("template")["lowered_task_spec"])["task"])
+    template = template.model_copy(
+        update={"context": ConversationInput(events=(TextMessage(role="user", content="x" * prompt_bytes),))}
+    )
+    rows, mappings = [], {}
+    for index in range(count):
+        task = template.model_copy(update={"id": f"frozen-{index:04d}"})
+        runtime = {"task_machine": {}, "original_row": index}
+        rows.append({"task_spec": task.model_dump_json(), "runtime": json.dumps(runtime)})
+        mappings[task.id] = {
+            "task_sha256": canonical_sha256(task.model_dump(mode="json")),
+            "runtime_sha256": canonical_sha256(runtime),
+        }
+    cohort, mapping = tmp_path / "cohort.parquet", tmp_path / "task-map.json"
+    pq.write_table(pa.Table.from_pylist(rows), cohort)
+    # Map order is deliberately different from cohort order.
+    mapping.write_text(json.dumps(dict(reversed(list(mappings.items())))))
+    return cohort, mapping
+
+
+def completed_external_trial(task, mapping, *_args, source_runtime=None, **_kwargs):
+    return {**mapping, "task_id": task.id, "runtime": source_runtime, "calibration": {"oracle_kind": "original"}}
+
+
+def test_calibration_large_frozen_cohort_keeps_packet_memory_bounded(tmp_path, monkeypatch):
+    cohort, mapping = calibration_cohort(tmp_path, count=512, prompt_bytes=64 * 1024)
+    # The provider/subprocess boundary returns small persisted receipts, not retained task packets.
+    monkeypatch.setattr(oracle_filter, "calibrated_task", completed_external_trial)
+    gc.collect()
+    tracemalloc.start()
+    try:
+        calibrate_cohort(cohort, mapping, tmp_path / "run", "local", {}, 2)
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    # The frozen payload exceeds32MiB; only the Arrow batch and active trial window may remain live.
+    assert peak < 16 * 1024 * 1024
+    assert len(json.loads((tmp_path / "run/task-map.json").read_text())) == 512
+
+
+def test_calibration_map_is_byte_identical_to_eager_execution(tmp_path, monkeypatch):
+    cohort, mapping = calibration_cohort(tmp_path, count=7, prompt_bytes=4096)
+    mappings = json.loads(mapping.read_text())
+    eager = {}
+    for row in pq.read_table(cohort).to_pylist():
+        task = oracle_filter.row_task(row)
+        assert task is not None
+        eager[task.id] = completed_external_trial(task, mappings[task.id], source_runtime=oracle_filter.row_runtime(row))
+    monkeypatch.setattr(oracle_filter, "calibrated_task", completed_external_trial)
+    calibrate_cohort(cohort, mapping, tmp_path / "run", "local", {}, 3)
+    assert (tmp_path / "run/task-map.json").read_bytes() == (json.dumps(eager, indent=2) + "\n").encode()
+
+
+def test_calibration_validates_last_frozen_identity_before_any_trial(tmp_path, monkeypatch):
+    cohort, mapping = calibration_cohort(tmp_path, count=65, prompt_bytes=1024)
+    mappings = json.loads(mapping.read_text())
+    mappings["frozen-0064"]["task_sha256"] = "0" * 64
+    mapping.write_text(json.dumps(mappings))
+    executed = []
+
+    def execute(task, *args, **kwargs):
+        executed.append(task.id)
+        return completed_external_trial(task, *args, **kwargs)
+
+    monkeypatch.setattr(oracle_filter, "calibrated_task", execute)
+    with pytest.raises(ValueError, match="Task changed after Harbor export: frozen-0064"):
+        calibrate_cohort(cohort, mapping, tmp_path / "run", "local", {}, 2)
+    assert executed == []
+    assert not (tmp_path / "run/task-map.json").exists()
 
 
 @pytest.mark.parametrize("kind", ["native_text", "native_json", "task_spec_missing", "task_spec_infra"])

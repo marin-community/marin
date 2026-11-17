@@ -11,9 +11,10 @@ import subprocess
 import time
 import tomllib
 from collections import Counter
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Iterator
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import nullcontext
+from itertools import islice
 from pathlib import Path
 
 import pyarrow as pa
@@ -1054,6 +1055,31 @@ def calibrated_task(
     return result
 
 
+def calibration_contracts(cohort: Path, mappings: dict) -> Iterator[tuple[TaskSpec, dict | None]]:
+    """Stream and verify one complete frozen assignment without retaining its packets."""
+    seen = set()
+    paths = sorted(cohort.glob("*.parquet")) if cohort.is_dir() else [cohort]
+    for path in paths:
+        for batch in pq.ParquetFile(path).iter_batches(batch_size=32):
+            for row in batch.to_pylist():
+                task = row_task(row)
+                if task is None:
+                    continue
+                if task.id in seen:
+                    raise ValueError("Calibration task map must cover exactly the full converted population")
+                seen.add(task.id)
+                mapping = mappings[task.id]
+                if mapping["task_sha256"] != canonical_sha256(task.model_dump(mode="json")):
+                    raise ValueError(f"Task changed after Harbor export: {task.id}")
+                runtime = row_runtime(row)
+                runtime_sha256 = canonical_sha256(runtime) if runtime is not None else None
+                if mapping.get("runtime_sha256") != runtime_sha256:
+                    raise ValueError(f"Runtime changed after Harbor export: {task.id}")
+                yield task, runtime
+    if seen != mappings.keys():
+        raise ValueError("Calibration task map must cover exactly the full converted population")
+
+
 def calibrate_cohort(
     cohort: Path,
     task_map: Path,
@@ -1070,52 +1096,46 @@ def calibrate_cohort(
 ) -> None:
     """Fold calibration into full-population oracle filtering; collect the same trials afterward."""
     mappings = json.loads(task_map.read_text())
-    tasks = []
-    runtimes = {}
-    paths = sorted(cohort.glob("*.parquet")) if cohort.is_dir() else [cohort]
-    for path in paths:
-        for batch in pq.ParquetFile(path).iter_batches(batch_size=32):
-            for row in batch.to_pylist():
-                task = row_task(row)
-                if task is None:
-                    continue
-                mapping = mappings[task.id]
-                if mapping["task_sha256"] != canonical_sha256(task.model_dump(mode="json")):
-                    raise ValueError(f"Task changed after Harbor export: {task.id}")
-                if mapping.get("runtime_sha256") != row_runtime_hash(row):
-                    raise ValueError(f"Runtime changed after Harbor export: {task.id}")
-                tasks.append(task)
-                runtimes[task.id] = row_runtime(row)
-    if len({task.id for task in tasks}) != len(tasks) or set(mappings) != {task.id for task in tasks}:
-        raise ValueError("Calibration task map must cover exactly the full converted population")
+    # Finish the complete identity preflight before any trial can create a machine.
+    task_ids = [task.id for task, _runtime in calibration_contracts(cohort, mappings)]
     if retry_contexts is not None and retry_contexts.keys() != mappings.keys():
         raise ValueError("Infrastructure phase context must cover exactly the approved partition")
     if initial_requirements is not None and (retry_contexts is None or initial_requirements.keys() != mappings.keys()):
         raise ValueError("Resumed allocations must cover the approved retry partition")
     destination.mkdir(parents=True, exist_ok=False)
+    contracts = calibration_contracts(cohort, mappings)
+    calibrated = {}
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        futures = {
-            task.id: pool.submit(
-                calibrated_task,
-                task,
-                mappings[task.id],
-                destination,
-                environment,
-                environment_kwargs,
-                calibration_solutions,
-                None if retry_contexts is None else retry_contexts[task.id],
-                prepare_attempt,
-                initial_requirements=None if initial_requirements is None else initial_requirements[task.id],
-                source_runtime=runtimes[task.id],
-                host_admission=host_admission,
-                initial_verifier_execution_requirements=(
-                    initial_verifier_execution_requirements[task.id] if initial_verifier_execution_requirements else None
-                ),
-            )
-            for task in tasks
-        }
-        calibrated = {task_id: future.result() for task_id, future in futures.items()}
-    (destination / "task-map.json").write_text(json.dumps(calibrated, indent=2) + "\n")
+        pending: dict[Future[dict], str] = {}
+        while True:
+            for task, runtime in islice(contracts, concurrency - len(pending)):
+                future = pool.submit(
+                    calibrated_task,
+                    task,
+                    mappings[task.id],
+                    destination,
+                    environment,
+                    environment_kwargs,
+                    calibration_solutions,
+                    None if retry_contexts is None else retry_contexts[task.id],
+                    prepare_attempt,
+                    initial_requirements=None if initial_requirements is None else initial_requirements[task.id],
+                    source_runtime=runtime,
+                    host_admission=host_admission,
+                    initial_verifier_execution_requirements=(
+                        initial_verifier_execution_requirements[task.id]
+                        if initial_verifier_execution_requirements
+                        else None
+                    ),
+                )
+                pending[future] = task.id
+            if not pending:
+                break
+            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                calibrated[pending.pop(future)] = future.result()
+    ordered = {task_id: calibrated[task_id] for task_id in task_ids}
+    (destination / "task-map.json").write_text(json.dumps(ordered, indent=2) + "\n")
 
 
 def backend_code_files(root: Path) -> dict[str, str]:
