@@ -5,6 +5,7 @@
 
 import json
 import zlib
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +17,7 @@ from taskcompendium.harbor.shared_source import (
     published_contract,
 )
 from taskcompendium.integrity import SharedDependencyState, SharedSourceFamily
+from taskcompendium.runtime import shared_source
 from taskcompendium.runtime.shared_source import parse_source_reward
 
 SCALE_TEST_SH = b"#!/bin/sh\nset -eu\nmkdir -p /logs/verifier\npython /tests/grade.py\n"
@@ -176,3 +178,20 @@ def test_scale_requires_absolute_workdir_and_pinned_commit():
     files["tests/config.json"] = json.dumps(config).encode()
     with pytest.raises(ValueError, match="pinned base commit"):
         harden_shared_source(files, profile=SCALE_SWE_PROFILE, dependency_state=SharedDependencyState.AGENT_MUTABLE)
+
+
+def test_guest_controller_stays_runtime_compatible_with_python_39():
+    """The controller must load on task images whose best interpreter is 3.9.
+
+    Annotations stay lazy via ``from __future__ import annotations`` (PEP 604
+    unions never evaluate), so the only 3.9 hazards are runtime constructs:
+    ``datetime.UTC`` exists only on 3.11+ and broke the matplotlib-20009
+    image's bootstrap in the freeze-v3 QA (ImportError at control.py import).
+    """
+    source = Path(shared_source.__file__).read_text()
+    assert "from __future__ import annotations" in source
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("from datetime import"):
+            names = {name.strip() for name in stripped[len("from datetime import") :].split(",")}
+            assert "UTC" not in names, f"datetime.UTC is 3.11+ only; controller line: {stripped}"
