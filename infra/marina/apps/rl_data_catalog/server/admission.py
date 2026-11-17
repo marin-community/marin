@@ -66,23 +66,22 @@ def backend_admission_review(
     verdicts: Mapping[str, str],
     status: str | None,
     deployment_classes: Mapping[str, str] | None = None,
-    *,
-    previously_admitted: bool = False,
 ) -> tuple[str | None, list[str]]:
     """Review one source's backend fit for admission.
 
     Returns ``(blocker, verification_pending)``. A production ``verify`` cell is
-    pending live qualification, not a fit failure: an already-admitted source
-    keeps its status and the caller surfaces ``verification_pending`` as a
-    visible marker, while a new admission is refused until the live
-    qualification resolves the cell. Dev-only backends (local Docker,
-    Docker+runsc) are dropped before every check: a DEV_ONLY SUPPORTED cell can
-    never satisfy admission. ``None`` for every non-Available status: exclusion
-    and hold statuses never need a runnable backend. ``role_absent`` marks a
-    population that declares no environment for a role at all, so a source
-    whose every production cell is ``role_absent`` needs no backend.
-    ``not_applicable`` and ``unsupported`` are real verdicts on declared roles:
-    when every production backend is ``unsupported`` the blocker names them all.
+    pending live qualification, not a fit failure: it never blocks, and the
+    caller decides the status — an already-admitted source keeps its status with
+    the visible marker, a new admission materializes as Pending. Dev-only
+    backends (local Docker, Docker+runsc) are dropped before every check: a
+    DEV_ONLY SUPPORTED cell can never satisfy admission. ``None`` for every
+    non-Available status: exclusion and hold statuses never need a runnable
+    backend. ``role_absent`` marks a population that declares no environment
+    for a role at all, so a source whose every production cell is
+    ``role_absent`` needs no backend. ``not_applicable`` cells are applicability
+    outcomes on declared roles and cannot negate a pending qualification, but
+    when every production backend is ``not_applicable``/``unsupported`` the
+    blocker names them all.
     """
     if status != "Available":
         return None, []
@@ -103,13 +102,7 @@ def backend_admission_review(
         # One production VERIFY cell is enough: not_applicable cells on other
         # production backends are applicability outcomes, not fit failures, and
         # cannot negate a pending live qualification.
-        if previously_admitted:
-            return None, pending
-        return (
-            "backend verification pending: "
-            + ", ".join(f"{name}=verify" for name in pending)
-            + " — new admissions wait on the live qualification"
-        ), pending
+        return None, pending
     if production_verdicts and all(support == "role_absent" for support in production_verdicts.values()):
         return None, []
     return (

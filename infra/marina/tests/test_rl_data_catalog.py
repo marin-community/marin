@@ -3069,3 +3069,67 @@ def test_backend_verification_pending_persists_and_projects(catalog_database, ca
         }
     )
     assert projected["backend_verification_pending"] == ["daytona"]
+
+
+def _verify_pending_survey(survey: BackendSurvey, source_id: str) -> BackendSurvey:
+    """Flip every production backend of one source to VERIFY (pending live qualification)."""
+    return survey.model_copy(
+        update={
+            "sources": [
+                (
+                    source.model_copy(
+                        update={
+                            "backends": {
+                                **source.backends,
+                                **{
+                                    backend: source.backends[backend].model_copy(update={"support": Support.VERIFY})
+                                    for backend in ("daytona", "iris", "local")
+                                },
+                            }
+                        }
+                    )
+                    if source.source_id == source_id
+                    else source
+                )
+                for source in survey.sources
+            ]
+        }
+    )
+
+
+def _source_load_row(catalog_query: AppletQuery, load_id: str, source_id: str) -> dict:
+    row = catalog_query(
+        "SELECT id, declaration->>'status' AS status, declaration->>'notes' AS notes, backend_verification_pending"
+        " FROM atlas_sources WHERE load_id=:load_id AND id=:source_id",
+        {"load_id": load_id, "source_id": source_id},
+    )["rows"]
+    assert len(row) == 1
+    return row[0]
+
+
+def test_new_verify_source_materializes_as_pending_with_marker(catalog_database, catalog_query, tmp_path):
+    """A new admission whose only positive production outcome is VERIFY loads as Pending."""
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "new-verify", source_id="Marin:newverify")
+    catalog = CurationCatalog(root)
+    flipped = _verify_pending_survey(catalog_backend_map(catalog), "Marin:newverify")
+    result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    row = _source_load_row(catalog_query, result["load_id"], "Marin:newverify")
+    assert row["status"] == "Pending"
+    assert "Backend verification pending" in row["notes"]
+    assert row["backend_verification_pending"] == ["daytona", "iris", "local"]
+
+
+def test_admitted_source_stays_available_when_every_production_backend_is_verify(
+    catalog_database, catalog_query, tmp_path
+):
+    """An already-admitted source keeps Available under VERIFY, with the marker."""
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "admitted-verify", source_id="Marin:admitted")
+    catalog = CurationCatalog(root)
+    load_catalog(catalog, catalog_query)
+    flipped = _verify_pending_survey(catalog_backend_map(catalog), "Marin:admitted")
+    result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    row = _source_load_row(catalog_query, result["load_id"], "Marin:admitted")
+    assert row["status"] == "Available"
+    assert row["backend_verification_pending"] == ["daytona", "iris", "local"]

@@ -57,31 +57,27 @@ def test_non_available_status_needs_no_backend():
     assert backend_admission_review({"docker": "supported", "iris": "unsupported"}, "Excluded") == (None, [])
 
 
-def test_verify_pending_keeps_an_admitted_source_available():
-    """VERIFY on production backends is pending evidence, not a fit failure."""
+def test_verify_pending_never_blocks_and_reports_the_backends():
+    """VERIFY on production backends is pending evidence, never a fit failure.
+
+    The status decision is the loader's: an already-admitted source keeps its
+    status with the marker, a new admission materializes as Pending.
+    """
     verdicts = {"daytona": "verify", "iris": "verify", "local": "verify"}
-    blocker, pending = backend_admission_review(verdicts, "Available", previously_admitted=True)
+    blocker, pending = backend_admission_review(verdicts, "Available")
     assert blocker is None
-    assert pending == ["daytona", "iris", "local"]
-
-
-def test_verify_pending_refuses_a_new_admission():
-    """A new source waits on the live qualification before becoming Available."""
-    verdicts = {"daytona": "verify", "iris": "verify", "local": "verify"}
-    blocker, pending = backend_admission_review(verdicts, "Available", previously_admitted=False)
-    assert blocker is not None and "backend verification pending" in blocker
     assert pending == ["daytona", "iris", "local"]
 
 
 def test_verify_with_a_runnable_production_backend_passes_with_a_marker():
     verdicts = {"daytona": "verify", "local": "supported"}
-    blocker, pending = backend_admission_review(verdicts, "Available", previously_admitted=False)
+    blocker, pending = backend_admission_review(verdicts, "Available")
     assert blocker is None and pending == ["daytona"]
 
 
 def test_all_production_unsupported_still_blocks_with_exact_verdicts():
     verdicts = {"daytona": "unsupported", "iris": "unsupported", "local": "unsupported"}
-    blocker, pending = backend_admission_review(verdicts, "Available", previously_admitted=True)
+    blocker, pending = backend_admission_review(verdicts, "Available")
     assert blocker == (
         "no surveyed production backend can run the source: " "daytona=unsupported, iris=unsupported, local=unsupported"
     )
@@ -91,7 +87,5 @@ def test_all_production_unsupported_still_blocks_with_exact_verdicts():
 def test_not_applicable_does_not_negate_a_production_verify():
     """N/A on other production backends cannot negate one pending VERIFY cell."""
     verdicts = {"daytona": "not_applicable", "iris": "not_applicable", "local": "verify"}
-    blocker, pending = backend_admission_review(verdicts, "Available", previously_admitted=True)
+    blocker, pending = backend_admission_review(verdicts, "Available")
     assert blocker is None and pending == ["local"]
-    blocker, pending = backend_admission_review(verdicts, "Available", previously_admitted=False)
-    assert blocker is not None and pending == ["local"]

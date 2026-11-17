@@ -372,6 +372,7 @@ def load_catalog(
         else set()
     )
     verification_pending: dict[str, list[str]] = {}
+    downgraded: list[str] = []
     for source in sources:
         # Available rows must pass full population admission; every other status
         # publishes as metadata without admission or selectability.
@@ -387,19 +388,18 @@ def load_catalog(
             },
             source.declaration.status,
             backend_map.deployment_classes,
-            previously_admitted=source.id in previously_available,
         )
         if blocker:
             raise ValueError(f"Backend admission blocked: {source.id}: {blocker}")
         if pending:
-            # An already-admitted source keeps its status with a visible marker;
-            # a new admission was refused above until the live qualification lands.
+            # An already-admitted source keeps its status with a visible marker.
+            # A new fully-qualified source whose only positive production outcome
+            # is VERIFY materializes as Pending (admission pending live
+            # qualification) instead of Available, so it never enters selection
+            # while unverified.
             verification_pending[source.id] = pending
             if source.id not in previously_available:
-                raise ValueError(
-                    f"Backend admission blocked: {source.id}: backend verification pending: "
-                    + ", ".join(f"{name}=verify" for name in pending)
-                )
+                downgraded.append(source.id)
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
     if {source.id for source in sources} != {source.source_id for source in backend_map.sources}:
@@ -407,6 +407,22 @@ def load_catalog(
     if {source.id for source in sources} != set(identities.fingerprints):
         raise ValueError("Source identity map does not cover the selected catalog inventory")
     source_declarations = {source.id: source.declaration for source in sources}
+    for index, source in enumerate(sources):
+        if source.id not in downgraded:
+            continue
+        # A new fully-qualified source whose only positive production outcome
+        # is VERIFY materializes as Pending metadata: admission waits on the
+        # live qualification, typed and visible, without touching the
+        # registry declaration.
+        notes = (
+            (source.declaration.notes + " " if source.declaration.notes else "")
+            + "Backend verification pending: "
+            + ", ".join(verification_pending[source.id])
+            + " (new admission waits on the live qualification)."
+        )
+        downgraded_declaration = source.declaration.model_copy(update={"status": "Pending", "notes": notes})
+        sources[index] = source.model_copy(update={"declaration": downgraded_declaration})
+        source_declarations[source.id] = downgraded_declaration
     for source in backend_map.sources:
         evidence = source_declarations[source.source_id].grading_environment
         expected = evidence.model_dump(mode="json") if evidence is not None else None
