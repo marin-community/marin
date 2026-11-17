@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bind PDBThink's original machine limits to its sole native verifier."""
+"""Apply PDBThink's versioned, user-approved Daytona verifier allocation."""
 
 import argparse
 import hashlib
@@ -9,15 +9,17 @@ import json
 import tomllib
 from collections import Counter
 from pathlib import Path
+from typing import Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.licenses import require_license
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.execution_applicability import is_nonagentic_task
 from taskcompendium.harbor.execution import native_execution_limits
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.pdbthink.tasks import DATASET, REVISION
@@ -29,8 +31,28 @@ SOURCE = "OpenAthena:pdbthink-coordinate-tasks"
 NATIVE_CONFIGURATION = "source_archive/task.toml"
 
 
+class VerifierAllocationDeviation(BaseModel):
+    """The approved change from the archived native grader allocation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    version: Literal["2026.11.17.1"] = "2026.11.17.1"
+    authority: Literal["user ruling 2026-11-17"] = "user ruling 2026-11-17"
+    ruling: Literal["/Users/benfeuer/Documents/experiments/active/atlas-rulings/pdbthink-daytona-limits-20261117.md"] = (
+        "/Users/benfeuer/Documents/experiments/active/atlas-rulings/pdbthink-daytona-limits-20261117.md"
+    )
+    original: ExecutionRequirements
+    approved: ExecutionRequirements
+
+
+def allocation_deviation(native: ExecutionRequirements) -> VerifierAllocationDeviation:
+    if (native.cpus, native.memory_mb, native.storage_mb) != (1, 512, 1024):
+        raise ValueError("PDBThink ruling requires the original 1 CPU / 512 MiB / 1024 MiB allocation")
+    return VerifierAllocationDeviation(original=native, approved=native.model_copy(update={"memory_mb": 1024}))
+
+
 def repair_task(task: TaskSpec) -> TaskSpec:
-    """Copy the archived native limits into PDBThink's explicit verifier allocation."""
+    """Apply the approved grader allocation while preserving the source task."""
     if (task.source.dataset, task.source.revision) != (DATASET, REVISION):
         raise ValueError("Verifier repair requires the original pinned PDBThink source")
     if not is_nonagentic_task(task) or task.completion_protocol != "tool_free_single":
@@ -43,7 +65,7 @@ def repair_task(task: TaskSpec) -> TaskSpec:
     native = native_execution_limits(tomllib.loads(resource_bytes(configurations[0]).decode())).requirements
     if native is None or task.execution_requirements != native:
         raise ValueError("PDBThink task limits differ from its archived original configuration")
-    return task.model_copy(update={"verifier_execution_requirements": native})
+    return task.model_copy(update={"verifier_execution_requirements": allocation_deviation(native).approved})
 
 
 def repair_cohort(source: Path, output: Path, *, expected_sha256: str, expected_tasks: int) -> dict:
@@ -55,6 +77,7 @@ def repair_cohort(source: Path, output: Path, *, expected_sha256: str, expected_
     ledger = output / "verifier-repair.jsonl"
     expected: dict[str, tuple[str, str]] = {}
     allocations: Counter[str] = Counter()
+    deviations: dict[str, VerifierAllocationDeviation] = {}
     with pq.ParquetWriter(tasks, TASK_SCHEMA, compression="zstd") as writer, ledger.open("w") as evidence:
         for batch in pq.ParquetFile(source).iter_batches(batch_size=4):
             rows = []
@@ -67,6 +90,9 @@ def repair_cohort(source: Path, output: Path, *, expected_sha256: str, expected_
                 repaired = repair_task(original)
                 allocation = repaired.verifier_execution_requirements
                 assert allocation is not None
+                assert original.execution_requirements is not None
+                deviation = allocation_deviation(original.execution_requirements)
+                deviations[deviation.model_dump_json()] = deviation
                 if repaired.model_dump(mode="json", exclude={"verifier_execution_requirements"}) != document:
                     raise ValueError("PDBThink repair would change other source task fields")
                 encoded = repaired.model_dump_json()
@@ -82,6 +108,7 @@ def repair_cohort(source: Path, output: Path, *, expected_sha256: str, expected_
                             "original_task_sha256": before,
                             "repaired_task_sha256": after,
                             "runtime_sha256": runtime_sha256,
+                            "allocation_deviation": deviation.model_dump(mode="json"),
                         }
                     )
                     + "\n"
@@ -101,8 +128,9 @@ def repair_cohort(source: Path, output: Path, *, expected_sha256: str, expected_
         "retained_content_sha256": content_sha256,
         "ledger_sha256": file_sha256(StoragePath(str(ledger))),
         "verifier_allocation_counts": dict(allocations),
+        "allocation_deviations": [deviation.model_dump(mode="json") for deviation in deviations.values()],
         "changed_fields": ["verifier_execution_requirements"],
-        "scope": "Native verifier allocation repair; no oracle, quality or admission qualification",
+        "scope": "Versioned grader allocation deviation; no oracle, quality or admission qualification",
     }
     (output / "verifier-repair.json").write_text(json.dumps(receipt, indent=2) + "\n")
     return receipt

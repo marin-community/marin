@@ -138,18 +138,24 @@ publishing a retention plan. Preserve both reports and every matched evaluation
 ID; do not hand-drop or resample tasks. A changed reference or population
 inventory requires a new artifact version.
 
-### Native verifier allocation repair
+### Versioned Daytona verifier allocation
 
 PDBThink's converted tasks declare their original machine limits but omit a
 separate verifier allocation. The oracle runner would otherwise choose its
-larger fallback allocation for that verifier. `pdbthink_verifier_repair` copies
-each archived `source_archive/task.toml` allocation into the typed
-`verifier_execution_requirements` field after verifying that it matches the
-task's existing limits. Prompts, grader code, resource files and runtime bytes stay
-unchanged. The output includes a complete before/after task-hash ledger.
+larger fallback allocation for that verifier. Under the user ruling of
+2026-11-17 (`experiments/active/atlas-rulings/pdbthink-daytona-limits-20261117.md`
+in the experiment workspace), `pdbthink_verifier_repair` gives the grader
+1 CPU, 1024 MiB memory and 1024 MiB disk, which Daytona can express in whole
+GiB. It verifies the original `source_archive/task.toml` allocation
+(1 CPU, 512 MiB memory, 1024 MiB disk) first and preserves that task allocation,
+phase deadlines and network deny.
+Prompts, grader code, resource files and runtime bytes stay unchanged.
+The output includes a `VerifierAllocationDeviation` at version `2026.11.17.1`
+and a complete before/after task-hash ledger.
 
-Run this projection on the pinned lexical-retained publication in a CPU job
-in its storage region:
+Run this projection on the lexical-retained publication in a CPU job in its
+storage region. Take the input pin, Parquet SHA and retained count from its
+`PublicationReceipt`:
 
 ```bash
 python -m experiments.post_training.task_curation.pdbthink_verifier_repair \

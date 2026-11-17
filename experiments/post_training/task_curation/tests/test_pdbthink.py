@@ -26,7 +26,11 @@ from taskcompendium.runtime.resources import resource_bytes
 from experiments.post_training.task_curation.datasets.pdbthink.tasks import BASE, REVISION, convert, decode, sources
 from experiments.post_training.task_curation.environment_fidelity import environment_unused
 from experiments.post_training.task_curation.oracle_filter import native_verifier_profile
-from experiments.post_training.task_curation.pdbthink_verifier_repair import repair_cohort, repair_task
+from experiments.post_training.task_curation.pdbthink_verifier_repair import (
+    VerifierAllocationDeviation,
+    repair_cohort,
+    repair_task,
+)
 from experiments.post_training.task_curation.remediation_publish import TASK_SCHEMA
 
 FIXTURE = Path(__file__).with_name("fixtures") / "pdbthink" / "g02-native.json"
@@ -149,7 +153,7 @@ def test_training_decoder_rejects_heldout_rows_before_reading_archives():
     ]
 
 
-def test_native_verifier_repair_exports_original_limits_without_changing_payload(tmp_path):
+def test_verifier_deviation_exports_one_gib_without_changing_actor_or_payload(tmp_path):
     task, _ = native_task()
     assert task.execution_requirements is not None
     repaired = repair_task(task)
@@ -157,8 +161,8 @@ def test_native_verifier_repair_exports_original_limits_without_changing_payload
     directory = tmp_path / "native"
     write_harbor_task(repaired, directory, task.execution_requirements)
     resolved = initial_verifier_requirements(task.execution_requirements, native_verifier_profile(directory))
-    assert resolved.memory_mb == 512 and resolved.storage_mb == 1024
-    assert resolved == task.execution_requirements
+    assert task.execution_requirements.memory_mb == repaired.execution_requirements.memory_mb == 512
+    assert resolved == task.execution_requirements.model_copy(update={"memory_mb": 1024})
 
 
 def test_native_verifier_repair_writes_complete_hash_bound_population_and_keeps_runtime(tmp_path):
@@ -186,8 +190,12 @@ def test_native_verifier_repair_writes_complete_hash_bound_population_and_keeps_
     assert receipt["tasks"] == len(ledger) == len(written) == 2
     for before, after, evidence in zip(rows, written, ledger, strict=True):
         original, repaired = json.loads(before["task_spec"]), json.loads(after["task_spec"])
-        assert repaired.pop("verifier_execution_requirements") == task.execution_requirements.model_dump(mode="json")
+        allocation = task.execution_requirements.model_copy(update={"memory_mb": 1024})
+        assert repaired.pop("verifier_execution_requirements") == allocation.model_dump(mode="json")
         assert original == repaired
         assert before["runtime"] == after["runtime"] == "{ }"
         assert evidence["original_task_sha256"] == before["task_sha256"]
         assert evidence["repaired_task_sha256"] == after["task_sha256"] != before["task_sha256"]
+        deviation = VerifierAllocationDeviation.model_validate(evidence["allocation_deviation"])
+        assert deviation.original == task.execution_requirements and deviation.approved == allocation
+        assert receipt["allocation_deviations"] == [deviation.model_dump(mode="json")]
