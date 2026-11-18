@@ -263,7 +263,9 @@ class GpuFamily(StrEnum):
 def gpu_family() -> GpuFamily:
     """Family of the default backend's first GPU, for picking kernels and tile configs.
 
-    Cached after the first call. Call it at trace or run time, never at import time.
+    Cached for the whole process after the first call. Call it at trace or run time, never at import time.
+    Tests that stub ``jax.default_backend`` or ``jax.devices`` must call ``gpu_family.cache_clear()`` before
+    and after, or they see a family left over from an earlier test.
     """
     if jax.default_backend() != "gpu":
         return GpuFamily.OTHER
@@ -287,11 +289,12 @@ def is_amd_instinct() -> bool:
 
 @ft.cache
 def device_kind() -> str:
-    """``device_kind`` of the first device, or ``""`` when there is none. Cached after the first call."""
-    devices = jax.devices()
-    if not devices:
-        return ""
-    return devices[0].device_kind
+    """``device_kind`` of the default backend's first device.
+
+    Cached for the whole process after the first call. Tests that stub ``jax.devices`` must call
+    ``device_kind.cache_clear()`` before and after, or they see a kind left over from an earlier test.
+    """
+    return jax.devices()[0].device_kind
 
 
 def _jittable_dg_einsum(

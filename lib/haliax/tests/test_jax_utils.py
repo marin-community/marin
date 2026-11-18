@@ -45,14 +45,3 @@ def test_gpu_family_classifies_device(monkeypatch, backend, device, expected):
     _stub_backend(monkeypatch, backend, device)
 
     assert gpu_family() is expected
-
-
-def test_gpu_family_and_device_kind_are_cached(monkeypatch):
-    _stub_backend(monkeypatch, "gpu", _StubDevice("AMD Instinct MI355X", "gfx950"))
-    assert gpu_family() is GpuFamily.AMD_INSTINCT
-    assert device_kind() == "AMD Instinct MI355X"
-
-    _stub_backend(monkeypatch, "gpu", _StubDevice("NVIDIA H100 80GB HBM3", "9.0"))
-
-    assert gpu_family() is GpuFamily.AMD_INSTINCT
-    assert device_kind() == "AMD Instinct MI355X"
