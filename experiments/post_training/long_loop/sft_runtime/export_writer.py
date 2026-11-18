@@ -23,6 +23,10 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.moe_hero_ep.ops.export_metadata import split_expert_names
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
+from experiments.post_training.long_loop.sft_runtime.deletion_masking import (
+    apply_hard_mask,
+    deletion_mask_state_dict,
+)
 from experiments.post_training.long_loop.sft_runtime.model import (
     GrugModelConfig,
     Transformer,
@@ -95,6 +99,12 @@ def export_weights(
     ):
         with timing.span("checkpoint_restore"):
             model = restore(config.checkpoint, config.metadata_digest, config.model, mesh)
+        mask_state_dict: dict[str, jax.Array] | None = None
+        if model.deletion_alpha is not None:
+            with timing.span("deletion_hard_mask"):
+                model = apply_hard_mask(model)
+                mask_state_dict = deletion_mask_state_dict(model)
+                mask_shards, _ = _shard_hf_checkpoint(mask_state_dict, max_shard_size=DEFAULT_MAX_SHARD_SIZE)
         with timing.span("bf16_conversion_and_shard_plan"):
             model = jax.tree.map(lambda x: x.astype(jnp.bfloat16) if eqx.is_inexact_array(x) else x, model)
             jax.block_until_ready(model)
@@ -115,6 +125,23 @@ def export_weights(
         payload_size = sum(x.size * x.dtype.itemsize for x in state_dict.values())
         weight_map = {name: record.filename for record in records for name in record.tensor_names}
 
+        deletion_mask_info: dict | None = None
+        if mask_state_dict is not None:
+            with timing.span("deletion_mask_upload"):
+                mask_records = save_hf_shards(
+                    mask_shards,
+                    lambda keys: {name: mask_state_dict[name] for name in keys},
+                    str(root / "deletion-mask"),
+                    export_host_budget_bytes=1,
+                    max_concurrent_shards=1,
+                    tensor_names=None,
+                )
+            deletion_mask_info = {
+                "destination": "deletion-mask",
+                "format": "packed-uint8-np-packbits",
+                "tensors": {name: record.filename for record in mask_records for name in record.tensor_names},
+            }
+
         def finish():
             write_export_json(root / "config.json", hf_config)
             write_export_json(
@@ -129,6 +156,7 @@ def export_weights(
                     "shards": [asdict(record) for record in records],
                     "mesh": dict(mesh.shape),
                     "process_count": jax.process_count(),
+                    "deletion_mask": deletion_mask_info,
                 },
             )
 

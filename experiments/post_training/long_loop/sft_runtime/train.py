@@ -76,6 +76,20 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
+from experiments.post_training.long_loop.sft_runtime.deletion_masking import (
+    WANDA_SAMPLE_STRIDE,
+    DeletionTrainConfig,
+    DeletionTuningSettings,
+    alpha_ramp_jax,
+    apply_deletion_init,
+    capture_expert_input_norms,
+    deletion_logit_filter,
+    deletion_regularizer,
+    deletion_sparsity,
+    wanda_delete_threshold,
+    wanda_score_samples,
+    with_deletion_eval_mode,
+)
 from experiments.post_training.long_loop.sft_runtime.model import (
     OFFLOAD_CARRY_REMAT_MODE,
     GrugModelConfig,
@@ -468,6 +482,8 @@ class GrugRunConfig:
     # restores checkpoints benefits from a deep budget.
     max_retries_preemption: int = 0
     max_retries_failure: int = 0
+    deletion_tuning: DeletionTuningSettings | None = None
+    """When set, train only per-weight gate logits (Deletion Tuning) and freeze everything else."""
     max_task_failures: int = 10
 
 
@@ -733,7 +749,7 @@ class GrugTrainState:
     step: jax.Array
     params: Transformer
     master_params: Transformer | None
-    opt_state: optax.OptState
+    opt_state: optax.OptState | None
     ema_params: Transformer | None
     pending_qb_betas: jax.Array
 
@@ -802,7 +818,7 @@ def _tree_to_memory_kind(tree, memory_kind: str):
 def initial_state(
     model_config: GrugModelConfig,
     *,
-    optimizer: optax.GradientTransformation,
+    optimizer: optax.GradientTransformation | None,
     mp: jmp.Policy,
     key: PRNGKeyArray,
     ema_beta: float | None,
@@ -814,13 +830,13 @@ def initial_state(
     if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
         master_params = _FP32_POLICY.cast_to_param(initialized_params)
         params = mp.cast_to_param(master_params)
-        opt_state = optimizer.init(master_params)
+        opt_state = optimizer.init(master_params) if optimizer is not None else None
         master_params = _tree_to_memory_kind(master_params, "pinned_host")
     else:
         params = mp.cast_to_param(initialized_params)
         master_params = None
-        opt_state = optimizer.init(params)
-    if offload_opt_state:
+        opt_state = optimizer.init(params) if optimizer is not None else None
+    if offload_opt_state and opt_state is not None:
         opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
     return GrugTrainState(
         step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
@@ -830,6 +846,14 @@ def initial_state(
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
     )
+
+
+def _deletion_eval_params(state: GrugTrainState, deletion: bool) -> Transformer:
+    """The evaluation model: EMA when present, with the hard mask under Deletion Tuning."""
+    model = state.ema_params if state.ema_params is not None else state.params
+    if deletion:
+        model = with_deletion_eval_mode(model)
+    return model
 
 
 def _drop_metrics(
@@ -919,7 +943,9 @@ def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
     )
 
 
-def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, *, loss_denominator=None):
+def _loss_and_grads(
+    params, batch, mp: jmp.Policy, z_loss: float | None, *, loss_denominator=None, deletion_lam: float | None = None
+):
     def loss_fn(model):
         model = eqx.tree_at(
             lambda m: m.stacked_blocks.stacked.mlp.router_bias,
@@ -938,14 +964,26 @@ def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, *, loss
         if loss_denominator is not None:
             loss = loss / loss_denominator
             metrics = {**metrics, "train/cross_entropy_loss": loss}
+        if deletion_lam is not None:
+            # The sparse-weight term is not token-based, so it joins after the
+            # per-token denominator division; its gradient reaches only the logits.
+            regularizer = deletion_regularizer(model, deletion_lam)
+            loss = loss + regularizer
+            metrics = {
+                **metrics,
+                "train/deletion_regularizer": regularizer,
+                "train/deletion_sparsity": deletion_sparsity(model),
+            }
         return loss, metrics
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
 
 
-def _accumulated_loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, steps: int):
+def _accumulated_loss_and_grads(
+    params, batch, mp: jmp.Policy, z_loss: float | None, steps: int, deletion_lam: float | None = None
+):
     if steps == 1:
-        return _loss_and_grads(params, batch, mp, z_loss)
+        return _loss_and_grads(params, batch, mp, z_loss, deletion_lam=deletion_lam)
     batch_size = batch.tokens.shape[0]
     if batch_size % steps:
         raise ValueError(f"Batch size {batch_size} must divide into {steps} microbatches")
@@ -960,7 +998,9 @@ def _accumulated_loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | N
 
     def accumulate(grads, microbatch):
         microbatch = eqx.combine(microbatch, shared)
-        (loss, metrics), new_grads = _loss_and_grads(params, microbatch, mp, z_loss, loss_denominator=denominator)
+        (loss, metrics), new_grads = _loss_and_grads(
+            params, microbatch, mp, z_loss, loss_denominator=denominator, deletion_lam=deletion_lam
+        )
         grads = jax.tree.map(lambda total, value: total + value.astype(jnp.float32), grads, new_grads)
         return grads, (loss, metrics)
 
@@ -990,9 +1030,15 @@ def _accumulated_loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | N
 
 
 def _compute_diagnostic_watch_stats(
-    params, batch, mp: jmp.Policy, z_loss: float | None, watch_config: WatchConfig, accumulation_steps: int
+    params,
+    batch,
+    mp: jmp.Policy,
+    z_loss: float | None,
+    watch_config: WatchConfig,
+    accumulation_steps: int,
+    deletion_lam: float | None = None,
 ):
-    (_, _), grads = _accumulated_loss_and_grads(params, batch, mp, z_loss, accumulation_steps)
+    (_, _), grads = _accumulated_loss_and_grads(params, batch, mp, z_loss, accumulation_steps, deletion_lam=deletion_lam)
     return compute_watch_stats(
         watch_targets=watch_config.watch_targets,
         include_norms=watch_config.include_norms,
@@ -1012,6 +1058,7 @@ def _make_diagnostic_watch_step(
     watch_config: WatchConfig,
     balance_rows: bool = False,
     accumulation_steps: int = 1,
+    deletion_lam: float | None = None,
 ):
     watch_targets = (
         tuple(t.strip() for t in watch_config.watch_targets.split(","))
@@ -1028,7 +1075,9 @@ def _make_diagnostic_watch_step(
     def diagnostic_watch_step(params: Transformer, batch):
         if balance_rows:
             batch = balance_attention_rows(batch)
-        return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config, accumulation_steps)
+        return _compute_diagnostic_watch_stats(
+            params, batch, mp, z_loss, diagnostic_watch_config, accumulation_steps, deletion_lam=deletion_lam
+        )
 
     return diagnostic_watch_step
 
@@ -1045,9 +1094,11 @@ def _make_train_step(
     special_token_ids: tuple[int, ...] = (),
     special_token_lr_multiplier: float = 1.0,
     accumulation_steps: int = 1,
+    deletion: DeletionTrainConfig | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
+    deletion_lam = deletion.settings.lam if deletion is not None else None
     if watch_config is not None:
         if isinstance(watch_config.watch_targets, str):
             watch_targets = tuple(t.strip() for t in watch_config.watch_targets.split(","))
@@ -1067,11 +1118,19 @@ def _make_train_step(
             # Moves rows between batch shards; see `balance_attention_rows` for its effect on the loss.
             batch = balance_attention_rows(batch)
         (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
-            train_params, batch, mp, z_loss, accumulation_steps
+            train_params, batch, mp, z_loss, accumulation_steps, deletion_lam=deletion_lam
         )
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
-        updates, opt_state = optimizer.update(grads, opt_state_in, train_params)
+        if deletion is not None:
+            # Only the gate logits receive updates and optimizer state; the
+            # frozen weights' gradients are partitioned out entirely.
+            trainable_grads, frozen_grads = eqx.partition(grads, deletion.filter_tree)
+            trainable_params, _ = eqx.partition(train_params, deletion.filter_tree)
+            trainable_updates, opt_state = optimizer.update(trainable_grads, opt_state_in, trainable_params)
+            updates = eqx.combine(trainable_updates, jax.tree.map(jnp.zeros_like, frozen_grads))
+        else:
+            updates, opt_state = optimizer.update(grads, opt_state_in, train_params)
         updates = scale_special_token_updates(updates, special_token_ids, special_token_lr_multiplier)
         params = optax.apply_updates(train_params, updates)
         master_params = None
@@ -1081,6 +1140,17 @@ def _make_train_step(
             params,
             train_params.stacked_blocks.stacked.mlp.router_bias,
         )
+
+        if deletion is not None:
+            # The alpha ramp is a schedule input, never a learned parameter.
+            next_step = state.step + one
+            params = eqx.tree_at(
+                lambda m: m.deletion_alpha,
+                params,
+                alpha_ramp_jax(
+                    next_step, deletion.total_steps, deletion.settings.alpha_start, deletion.settings.alpha_end
+                ),
+            )
 
         if ema_beta is None:
             ema_params = None
@@ -1143,6 +1213,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
+    deletion_settings = config.deletion_tuning
+    if deletion_settings is not None:
+        deletion_settings = dataclasses.replace(deletion_settings, total_steps=trainer.num_train_steps)
+    deletion_lam = deletion_settings.lam if deletion_settings is not None else None
+    # Deletion Tuning builds its optimizer state after the gate logits exist;
+    # initializing over the frozen tree would allocate moments for every weight.
+    state_optimizer = None if deletion_settings is not None else optimizer
     diagnostic_watch_step = None
     inline_watch_config = watch_config if watch_config.is_enabled else None
     if watch_config.is_enabled and config.trainer.watch_mode == WatchMode.DIAGNOSTIC:
@@ -1152,20 +1229,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             watch_config=watch_config,
             balance_rows=config.trainer.balance_attention_rows,
             accumulation_steps=config.trainer.gradient_accumulation_steps,
+            deletion_lam=deletion_lam,
         )
         inline_watch_config = None
-    train_step = _make_train_step(
-        optimizer,
-        trainer.mp,
-        z_loss_weight=config.trainer.z_loss_weight,
-        ema_beta=config.trainer.ema_beta,
-        watch_config=inline_watch_config,
-        offload_opt_state=config.trainer.offload_opt_state,
-        balance_rows=config.trainer.balance_attention_rows,
-        special_token_ids=config.trainer.special_token_ids,
-        special_token_lr_multiplier=config.trainer.special_token_lr_multiplier,
-        accumulation_steps=config.trainer.gradient_accumulation_steps,
-    )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
     if config.trainer.data_seed is not None:
@@ -1206,7 +1272,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         def _init_state(model_rng):
             return initial_state(
                 config.model,
-                optimizer=optimizer,
+                optimizer=state_optimizer,
                 mp=trainer.mp,
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
@@ -1261,6 +1327,69 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 batch_schedule=batch_schedule,
                 mesh=mesh,
             )
+
+        deletion_train_config = None
+        if deletion_settings is not None:
+            if int(state.step) == 0:
+                with timing.span("deletion_initialization"):
+                    if train_loader is None:
+                        raise ValueError("Deletion Tuning calibration requires training data")
+                    calibration_batches = itertools.islice(
+                        train_loader.iter_from_step(0), max(1, deletion_settings.calibration_sequences)
+                    )
+                    routed_norms, shared_norms = capture_expert_input_norms(
+                        state.params,
+                        calibration_batches,
+                        max_sequences=deletion_settings.calibration_sequences,
+                    )
+                    score_samples = wanda_score_samples(
+                        state.params, deletion_settings, routed_norms, shared_norms, stride=WANDA_SAMPLE_STRIDE
+                    )
+                    threshold = wanda_delete_threshold(score_samples, deletion_settings.eta)
+                    levanter.tracker.log_summary(
+                        {
+                            "deletion/wanda_threshold": threshold,
+                            "deletion/wanda_sample_count": int(score_samples.size),
+                        }
+                    )
+                    deletion_model = apply_deletion_init(
+                        state.params,
+                        deletion_settings,
+                        routed_norms,
+                        shared_norms,
+                        threshold=threshold,
+                        key=jax.random.PRNGKey(deletion_settings.seed),
+                    )
+                    trainable_params, _ = eqx.partition(deletion_model, deletion_logit_filter(deletion_model))
+                    opt_state = optimizer.init(trainable_params)
+                    if config.trainer.offload_opt_state:
+                        opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
+                    if config.trainer.master_param_mode == MasterParamMode.FP32_PINNED_HOST:
+                        master_params = _tree_to_memory_kind(_FP32_POLICY.cast_to_param(deletion_model), "pinned_host")
+                    else:
+                        master_params = None
+                    state = dataclasses.replace(
+                        state, params=deletion_model, master_params=master_params, opt_state=opt_state
+                    )
+            deletion_train_config = DeletionTrainConfig(
+                settings=deletion_settings,
+                filter_tree=deletion_logit_filter(state.params),
+                total_steps=trainer.num_train_steps,
+            )
+
+        train_step = _make_train_step(
+            optimizer,
+            trainer.mp,
+            z_loss_weight=config.trainer.z_loss_weight,
+            ema_beta=config.trainer.ema_beta,
+            watch_config=inline_watch_config,
+            offload_opt_state=config.trainer.offload_opt_state,
+            balance_rows=config.trainer.balance_attention_rows,
+            special_token_ids=config.trainer.special_token_ids,
+            special_token_lr_multiplier=config.trainer.special_token_lr_multiplier,
+            accumulation_steps=config.trainer.gradient_accumulation_steps,
+            deletion=deletion_train_config,
+        )
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
@@ -1341,7 +1470,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
-            eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
+            eval_model_getter=lambda s: _deletion_eval_params(s, deletion_settings is not None),
             opt_state_getter=lambda s: s.opt_state,
         )
         if progress_watchdog is not None:
@@ -1418,7 +1547,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         ),
                         set_mesh(_mesh),
                     ):
-                        model = _reshard_tree_to_mesh(step.model, _mesh)
+                        model = _reshard_tree_to_mesh(
+                            with_deletion_eval_mode(step.model) if deletion_settings is not None else step.model,
+                            _mesh,
+                        )
                         with jax_config.enable_pgle(False):
                             log_dict = eval_model(_ev, model, prefix=_prefix)
                         levanter.tracker.log(log_dict, step=step_count)

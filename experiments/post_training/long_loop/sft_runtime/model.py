@@ -9,6 +9,7 @@ All layers are MoE (no dense layers).
 """
 
 import dataclasses
+import functools
 import math
 from dataclasses import dataclass
 from enum import StrEnum
@@ -761,9 +762,17 @@ class GatedNorm(eqx.Module):
 
 
 class DenseMLP(eqx.Module):
+    """Always-on shared expert (SwiGLU)."""
+
     w_gate: jax.Array
     w_up: jax.Array
     w_down: jax.Array
+    gate_logits: jax.Array | None = None
+    """Per-weight deletion-tuning logits for this shared expert's gate projection."""
+    up_logits: jax.Array | None = None
+    """Per-weight deletion-tuning logits for this shared expert's up projection (V3 scope)."""
+    down_logits: jax.Array | None = None
+    """Per-weight deletion-tuning logits for this shared expert's down projection (V3 scope)."""
 
     @staticmethod
     def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
@@ -784,17 +793,111 @@ class DenseMLP(eqx.Module):
         x: Float[Array, "B S D"],
         *,
         activation: MoeActivation = ActivationFunctionEnum.silu,
+        deletion_alpha: jax.Array | None = None,
+        deletion_hard: jax.Array | None = None,
     ) -> Float[Array, "B S D"]:
         if isinstance(activation, ActivationFunctionEnum):
             activation_fn = activation.to_jax_fn()
         else:
             activation_fn = activation
 
+        w_gate = self.w_gate
+        w_up = self.w_up
+        w_down = self.w_down
+        if self.gate_logits is not None:
+            if deletion_alpha is None or deletion_hard is None:
+                raise ValueError("deletion-tuned shared experts require deletion_alpha and deletion_hard")
+            w_gate = deletion_mask(self.gate_logits, w_gate, deletion_alpha, deletion_hard)
+            w_up = deletion_mask(self.up_logits, w_up, deletion_alpha, deletion_hard)
+            w_down = deletion_mask(self.down_logits, w_down, deletion_alpha, deletion_hard)
+
         x_flat = _flatten_tokens(x)
-        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
-        up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
+        gate = jnp.einsum("td,dm->tm", x_flat, w_gate)
+        up = jnp.einsum("td,dm->tm", x_flat, w_up)
+        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, w_down, out_sharding=_token_spec())
         return _unflatten_tokens(out_flat, x)
+
+
+def deletion_mask(logits: jax.Array, weight: jax.Array, alpha: jax.Array, hard: jax.Array) -> jax.Array:
+    """The deletion-tuning mask times the frozen weight: ``W * sigmoid(alpha * G)``.
+
+    The weight enters through ``stop_gradient`` so the forward's gradient
+    reaches only the logits. The pretrained weight never moves because the
+    training step partitions its gradient out of the update. The hard/soft
+    switch mixes arithmetically: a scalar ``jnp.where`` would broadcast a
+    replicated condition against sharded cases, which explicit sharding
+    rejects.
+    """
+    soft = jax.nn.sigmoid(jax.lax.stop_gradient(alpha).astype(jnp.float32) * logits.astype(jnp.float32))
+    hard_mask = (logits > 0).astype(soft.dtype)
+    hard_f = hard.astype(soft.dtype)
+    mask = soft * (1.0 - hard_f) + hard_mask * hard_f
+    return jax.lax.stop_gradient(weight) * mask
+
+
+def _deletion_masked_expert_mlp(
+    expert_mlp: MoEExpertMlp,
+    gate_logits: jax.Array,
+    up_logits: jax.Array | None,
+    down_logits: jax.Array | None,
+    deletion_alpha: jax.Array | None,
+    deletion_hard: jax.Array | None,
+) -> MoEExpertMlp:
+    """Replace the expert weights with their masked versions for one forward."""
+    if deletion_alpha is None or deletion_hard is None:
+        raise ValueError("deletion-tuned experts require deletion_alpha and deletion_hard")
+    w_gate = deletion_mask(gate_logits, expert_mlp.w_gate, deletion_alpha, deletion_hard)
+    w_up = expert_mlp.w_up
+    w_down = expert_mlp.w_down
+    if up_logits is not None:
+        w_up = deletion_mask(up_logits, expert_mlp.w_up, deletion_alpha, deletion_hard)
+    if down_logits is not None:
+        w_down = deletion_mask(down_logits, expert_mlp.w_down, deletion_alpha, deletion_hard)
+    return dataclasses.replace(expert_mlp, w_gate=w_gate, w_up=w_up, w_down=w_down)
+
+
+def _local_wanda_sums(x, selected_experts, token_valid, *, num_experts):
+    """Per-shard per-expert sum of squared input activations plus assignment counts."""
+    valid_f = token_valid.astype(jnp.float32)[:, None]
+    squared = jnp.square(x.astype(jnp.float32)) * valid_f
+    one_hot = jax.nn.one_hot(selected_experts, num_experts).astype(jnp.float32) * valid_f[:, None, :]
+    # Sum over tokens and selection slots: each (expert, channel) accumulates the
+    # squared activations of every token routed to that expert.
+    sums = jnp.einsum("tke,td->ed", one_hot, squared)
+    counts = jnp.sum(one_hot, axis=(0, 1))
+    channel_sums = jnp.sum(squared, axis=0)
+    channel_counts = jnp.sum(valid_f)
+    return sums[None, :, :], counts[None, :], channel_sums[None, :], channel_counts[None]
+
+
+def wanda_input_sums_local(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    token_valid: jax.Array,
+    mesh: jax.sharding.AbstractMesh,
+    *,
+    batch_axes: tuple[str, ...],
+    num_experts: int,
+) -> dict[str, jax.Array]:
+    """Shard-local Wanda calibration statistics, shaped like the routing stats partials.
+
+    ``sums`` accumulates ``x_j^2`` per (expert, input channel) over the tokens
+    routed to that expert; ``channel_sums`` accumulates over every valid token
+    (what the always-on shared experts read). The caller stacks these over
+    layers and reduces over the batch-shard axis.
+    """
+    sums, counts, channel_sums, channel_counts = shard_map(
+        functools.partial(_local_wanda_sums, num_experts=num_experts),
+        mesh=mesh,
+        in_specs=(P(batch_axes, None), P(batch_axes, None), P(batch_axes)),
+        out_specs=(P(batch_axes, None, None), P(batch_axes, None), P(batch_axes, None), P(batch_axes)),
+    )(x, selected_experts, token_valid)
+    return {
+        "wanda_input_sums_local": sums,
+        "wanda_input_counts_local": counts,
+        "wanda_channel_sums_local": channel_sums,
+        "wanda_channel_counts_local": channel_counts,
+    }
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
@@ -971,6 +1074,14 @@ class MoEMLP(eqx.Module):
     latent_norm: RMSNorm | None
     w_latent_up: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
+    gate_logits: jax.Array | None = None
+    """Per-weight deletion-tuning logits for the routed experts' gate projection."""
+    up_logits: jax.Array | None = None
+    """Per-weight deletion-tuning logits for the routed experts' up projection (V3 scope)."""
+    down_logits: jax.Array | None = None
+    """Per-weight deletion-tuning logits for the routed experts' down projection (V3 scope)."""
+    capture_input_sums: bool = eqx.field(static=True, default=False)
+    """Emit Wanda calibration statistics alongside the routed output."""
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
@@ -1022,6 +1133,9 @@ class MoEMLP(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         token_valid: Bool[Array, "B S"],
+        *,
+        deletion_alpha: jax.Array | None = None,
+        deletion_hard: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         x_flat = _flatten_tokens(x)
         token_valid_flat = _flatten_tokens(token_valid)
@@ -1111,7 +1225,28 @@ class MoEMLP(eqx.Module):
             )
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(routed_input)
-        moe_out = self.expert_mlp(
+        if self.capture_input_sums:
+            router_stats.update(
+                wanda_input_sums_local(
+                    routed_input,
+                    selected_experts,
+                    token_valid_flat,
+                    get_abstract_mesh(),
+                    batch_axes=_token_axes(get_abstract_mesh()),
+                    num_experts=self.cfg.num_experts,
+                )
+            )
+        expert_mlp = self.expert_mlp
+        if self.gate_logits is not None:
+            expert_mlp = _deletion_masked_expert_mlp(
+                expert_mlp,
+                self.gate_logits,
+                self.up_logits,
+                self.down_logits,
+                deletion_alpha,
+                deletion_hard,
+            )
+        moe_out = expert_mlp(
             routed_input,
             selected_experts.astype(jnp.int32),
             combine_weights,
@@ -1198,6 +1333,8 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
+        deletion_alpha: jax.Array | None = None,
+        deletion_hard: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         # A remat policy acts on named intermediates, and a block argument is not one. This
         # reassignment routes every use below through the name, which lets the policy offload it.
@@ -1213,10 +1350,15 @@ class Block(eqx.Module):
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
-        mlp_out, router_stats = self.mlp(mlp_in, token_valid)
+        mlp_out, router_stats = self.mlp(mlp_in, token_valid, deletion_alpha=deletion_alpha, deletion_hard=deletion_hard)
         if self.shared is not None:
             for shared_expert in self.shared:
-                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
+                mlp_out = mlp_out + shared_expert(
+                    mlp_in,
+                    activation=ActivationFunctionEnum.silu,
+                    deletion_alpha=deletion_alpha,
+                    deletion_hard=deletion_hard,
+                )
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
         x = x + mlp_out
@@ -1239,6 +1381,10 @@ class Transformer(eqx.Module):
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
+    deletion_alpha: jax.Array | None = None
+    """Current alpha of the deletion-tuning ramp; None outside Deletion Tuning."""
+    deletion_hard: jax.Array | None = None
+    """Whether forwards apply the hard mask (evaluation/export) instead of the soft one."""
 
     @staticmethod
     def init(
@@ -1359,11 +1505,17 @@ class Transformer(eqx.Module):
                 layer_mask,
                 use_long,
                 use_long,
+                deletion_alpha=self.deletion_alpha,
+                deletion_hard=self.deletion_hard,
             )
 
         hidden, stacked_router_stats = jax.lax.scan(
             _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
         )
+        wanda_sums = stacked_router_stats.pop("wanda_input_sums_local", None)
+        wanda_counts = stacked_router_stats.pop("wanda_input_counts_local", None)
+        wanda_channel_sums = stacked_router_stats.pop("wanda_channel_sums_local", None)
+        wanda_channel_counts = stacked_router_stats.pop("wanda_channel_counts_local", None)
         # One cross-device reduction for the whole stack of layers, instead of one inside every
         # scan iteration. See `moe_routing_stats_local`.
         reduced_router_stats = reduce_moe_routing_stats(
@@ -1384,6 +1536,12 @@ class Transformer(eqx.Module):
             "margin_min_per_layer": stacked_router_stats["margin_min"],
             "margin_max_per_layer": stacked_router_stats["margin_max"],
         }
+        if wanda_sums is not None:
+            # Sum the batch-shard partials (a sharded-axis sum is the cross-replica collective).
+            router_metrics["wanda_input_sums_per_layer"] = jnp.sum(wanda_sums, axis=1)
+            router_metrics["wanda_input_counts_per_layer"] = jnp.sum(wanda_counts, axis=1)
+            router_metrics["wanda_channel_sums_per_layer"] = jnp.sum(wanda_channel_sums, axis=1)
+            router_metrics["wanda_channel_counts_per_layer"] = jnp.sum(wanda_channel_counts, axis=1)
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
 

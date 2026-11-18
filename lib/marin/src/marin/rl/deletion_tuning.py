@@ -190,6 +190,35 @@ class MaskEntry:
     file_name: str
 
 
+def build_mask_artifact(keep_masks: Mapping[str, np.ndarray]) -> tuple[dict, dict[str, bytes]]:
+    """Build the mask artifact in memory: a manifest dict plus zstd blobs per entry.
+
+    Use this where the artifact must travel through a storage layer that is not
+    a local filesystem; :func:`write_mask_artifact` is the local-file wrapper.
+    """
+    entries = []
+    blobs: dict[str, bytes] = {}
+    for name, keep_mask in sorted(keep_masks.items()):
+        if keep_mask.dtype != np.bool_:
+            raise ValueError(f"keep mask for {name} must be boolean, got {keep_mask.dtype}")
+        packed = np.packbits(keep_mask.reshape(-1)).tobytes()
+        compressed = zstandard.compress(packed)
+        file_name = f"{name}.mask.bin"
+        blobs[file_name] = compressed
+        entries.append(
+            {
+                "name": name,
+                "shape": [int(dim) for dim in keep_mask.shape],
+                "kept": int(np.count_nonzero(keep_mask)),
+                "deleted": int(keep_mask.size - np.count_nonzero(keep_mask)),
+                "sha256": hashlib.sha256(compressed).hexdigest(),
+                "file_name": file_name,
+            }
+        )
+    manifest = {"format": MASK_ARTIFACT_FORMAT, "entries": entries}
+    return manifest, blobs
+
+
 def write_mask_artifact(directory: Path | str, keep_masks: Mapping[str, np.ndarray]) -> list[MaskEntry]:
     """Write the compact adapter: bit-packed keep-masks, zstd-compressed.
 
@@ -208,31 +237,23 @@ def write_mask_artifact(directory: Path | str, keep_masks: Mapping[str, np.ndarr
     """
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
+    manifest, blobs = build_mask_artifact(keep_masks)
     entries: list[MaskEntry] = []
-    for name, keep_mask in sorted(keep_masks.items()):
-        if keep_mask.dtype != np.bool_:
-            raise ValueError(f"keep mask for {name} must be boolean, got {keep_mask.dtype}")
-        packed = np.packbits(keep_mask.reshape(-1)).tobytes()
-        compressed = zstandard.compress(packed)
-        file_name = f"{name}.mask.bin"
-        target = directory / file_name
+    for entry in manifest["entries"]:
+        target = directory / entry["file_name"]
         if target.exists():
             raise FileExistsError(f"mask artifact file already exists: {target}")
-        target.write_bytes(compressed)
+        target.write_bytes(blobs[entry["file_name"]])
         entries.append(
             MaskEntry(
-                name=name,
-                shape=tuple(int(dim) for dim in keep_mask.shape),
-                kept=int(np.count_nonzero(keep_mask)),
-                deleted=int(keep_mask.size - np.count_nonzero(keep_mask)),
-                sha256=hashlib.sha256(compressed).hexdigest(),
-                file_name=file_name,
+                name=entry["name"],
+                shape=tuple(entry["shape"]),
+                kept=entry["kept"],
+                deleted=entry["deleted"],
+                sha256=entry["sha256"],
+                file_name=entry["file_name"],
             )
         )
-    manifest = {
-        "format": MASK_ARTIFACT_FORMAT,
-        "entries": [dataclasses.asdict(entry) for entry in entries],
-    }
     manifest_path = directory / MASK_MANIFEST_NAME
     if manifest_path.exists():
         raise FileExistsError(f"mask artifact manifest already exists: {manifest_path}")
