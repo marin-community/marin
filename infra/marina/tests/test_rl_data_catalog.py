@@ -3852,6 +3852,19 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
         ambiguity = next(row for row in legend["defects"] if row["id"] == "ambiguity")
         assert ambiguity["count"] == 1
         assert ambiguity["sources"] == [{"id": "Marin:math", "name": before["declaration"]["display_name"], "count": 1}]
+        if not shared_batch:
+            catalog_query(
+                "UPDATE atlas_raw_reviews SET reviewer=CAST(:reviewer AS JSONB) "
+                "WHERE load_id=:load AND pipeline_key=:key AND task_id=:task",
+                {
+                    "reviewer": json.dumps({"changed": "canary"}),
+                    "load": load_id,
+                    "key": key,
+                    "task": items[0]["task_id"],
+                },
+            )
+            with pytest.raises(ValueError, match="Stored atlas_raw_reviews differs"):
+                load_content_reviews(staged, load_id, "Marin:math", catalog_query)
         if shared_batch == "chunked":
             catalog_query(
                 "DELETE FROM atlas_review_batch_chunks WHERE load_id=:load AND pipeline_key=:key AND chunk_index=0",

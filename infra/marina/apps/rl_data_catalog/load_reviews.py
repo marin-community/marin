@@ -387,38 +387,28 @@ def load_content_reviews(staged: dict, load_id: str, source_id: str, query: Appl
                 f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS r({columns}) ON CONFLICT DO NOTHING",
                 {"load": load_id, "rows": body},
             )["row_count"]
-            identity_column = {
-                "atlas_populations": "cohort",
-                "atlas_items": "task_id",
-                "atlas_raw_reviews": "task_id",
-                "atlas_review_batches": "batch_key",
-                "atlas_review_batch_chunks": "batch_key",
-                "atlas_review_batch_tasks": "task_id",
-            }.get(table)
-            identity_filter = ""
-            parameters = {"load": load_id, "key": key, "rows": body}
-            if identity_column is not None:
-                identity_filter = (
-                    f" AND {identity_column} IN (SELECT value FROM jsonb_array_elements_text(CAST(:ids AS JSONB)))"
-                )
-                parameters["ids"] = json.dumps([row[identity_column] for row in json.loads(body)])
-            if table == "atlas_review_batch_chunks":
-                # One batch can span several requests; select only this request's exact compound keys.
-                identity_filter += (
-                    " AND (batch_key,chunk_index) IN (SELECT batch_key,chunk_index "
-                    "FROM jsonb_to_recordset(CAST(:chunk_keys AS JSONB)) "
-                    "AS expected(batch_key TEXT,chunk_index INTEGER))"
-                )
-                parameters["chunk_keys"] = json.dumps(
-                    [{name: row[name] for name in ("batch_key", "chunk_index")} for row in json.loads(body)]
-                )
-            actual = query(
-                f"SELECT {names} FROM {table} WHERE load_id=:load AND pipeline_key=:key " + identity_filter,
-                {name: value for name, value in parameters.items() if name != "rows"},
-            )["rows"]
-            actual_json = sorted(json.dumps(row, sort_keys=True, ensure_ascii=False) for row in actual)
-            expected_json = sorted(json.dumps(row, sort_keys=True, ensure_ascii=False) for row in json.loads(body))
-            if actual_json != expected_json:
+            identities = {
+                "atlas_populations": ("cohort",),
+                "atlas_items": ("task_id",),
+                "atlas_raw_reviews": ("task_id",),
+                "atlas_review_batches": ("batch_key",),
+                "atlas_review_batch_chunks": ("batch_key", "chunk_index"),
+                "atlas_review_batch_tasks": ("task_id",),
+            }.get(table, ())
+            join = " AND ".join(f"stored.{name}=expected.{name}" for name in ("pipeline_key", *identities))
+            fields = names.split(",")
+            stored_fields = ",".join(f"stored.{name}" for name in fields)
+            expected_fields = ",".join(f"expected.{name}" for name in fields)
+            try:
+                matched = query(
+                    f"SELECT COUNT(*) AS matched FROM jsonb_to_recordset(CAST(:rows AS JSONB)) "
+                    f"AS expected({columns}) JOIN {table} stored ON stored.load_id=:load AND {join} "
+                    f"WHERE ROW({stored_fields}) IS NOT DISTINCT FROM ROW({expected_fields})",
+                    {"load": load_id, "rows": body},
+                )["rows"][0]["matched"]
+            except Exception as error:
+                raise RuntimeError(f"{table} exact readback failed for {key}, {len(json.loads(body))} rows") from error
+            if matched != len(json.loads(body)):
                 raise ValueError(f"Stored {table} differs from its sealed panel")
         counts[table] = count
     materialize_cohort_summaries(lambda sql, params: query(sql, params)["rows"], load_id, pipeline_key=key)
