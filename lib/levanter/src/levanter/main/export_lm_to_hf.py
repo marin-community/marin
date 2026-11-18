@@ -57,6 +57,7 @@ class ConvertLmConfig:
     override_vocab_size: Optional[int] = None  # if specified, override the vocab size in the config
     config_overrides: Optional[dict] = None  # if specified, override the config with these values
     hf_generation_eos_token_ids: list[int] | None = None
+    hf_generation_config_defaults: dict[str, Any] | None = None
 
     use_cpu: bool = False
 
@@ -127,6 +128,7 @@ def main(config: ConvertLmConfig):
             max_concurrent_shards=config.max_concurrent_shards,
             dtype=jnp.dtype(config.export_dtype) if config.export_dtype is not None else None,
             generation_config=build_generation_config(tokenizer, config.hf_generation_eos_token_ids),
+            generation_config_defaults=config.hf_generation_config_defaults,
             field_dtype_overrides=config.trainer.field_dtype_overrides,
         )
 
