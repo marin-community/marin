@@ -192,12 +192,34 @@ def _audit_moment_cast(path, source, converted):
     if source.ndim and math.prod(source.shape[1:]) >= (1 << 31):
         raise ValueError(f"moment slice too large for exact uint32 counts: {path}")
     sharding = source.sharding
-    if not isinstance(sharding, jax.sharding.NamedSharding):
+    if not isinstance(sharding, jax.sharding.NamedSharding) or not isinstance(
+        converted.sharding, jax.sharding.NamedSharding
+    ):
         raise ValueError(f"moment source requires NamedSharding: {path}")
-    replicated = jax.sharding.NamedSharding(sharding.mesh, jax.sharding.PartitionSpec())
-    lost_flag, nonfinite_flag, source_subnormal, nonzero, lost, subnormal, min_bits, max_relative = jax.device_get(
-        jax.jit(_device_moment_stats, out_shardings=replicated)(source, converted)
+    replicated = jax.sharding.NamedSharding(sharding.mesh, jax.sharding.PartitionSpec()).with_memory_kind("device")
+    source_device = (
+        source if sharding.memory_kind == "device" else jax.device_put(source, sharding.with_memory_kind("device"))
     )
+    converted_device = None
+    try:
+        converted_device = (
+            converted
+            if converted.sharding.memory_kind == "device"
+            else jax.device_put(converted, converted.sharding.with_memory_kind("device"))
+        )
+        local_fp32 = max((shard.data.nbytes for shard in source_device.addressable_shards), default=0)
+        local_bf16 = max((shard.data.nbytes for shard in converted_device.addressable_shards), default=0)
+        logger.info(
+            "C_AUDIT_DEVICE_BYTES path=%s process=%d fp32=%d bf16=%d", path, jax.process_index(), local_fp32, local_bf16
+        )
+        lost_flag, nonfinite_flag, source_subnormal, nonzero, lost, subnormal, min_bits, max_relative = jax.device_get(
+            jax.jit(_device_moment_stats, out_shardings=replicated)(source_device, converted_device)
+        )
+    finally:
+        if source_device is not source:
+            source_device.delete()
+        if converted_device is not None and converted_device is not converted:
+            converted_device.delete()
     total_nonzero = sum(int(x) for x in np.asarray(nonzero).reshape(-1))
     total_lost = sum(int(x) for x in np.asarray(lost).reshape(-1))
     total_subnormal = sum(int(x) for x in np.asarray(subnormal).reshape(-1))
@@ -246,8 +268,17 @@ def _restore_one_leaf_at_a_time(target, checkpoint, *, mesh):
         if value.dtype != target_leaf.dtype:
             if value.dtype != jnp.float32 or target_leaf.dtype != jnp.bfloat16:
                 raise ValueError(f"unsupported restored dtype conversion: {value.dtype} to {target_leaf.dtype}")
-            converted = value.astype(jnp.bfloat16)
-            converted.block_until_ready()
+            cast_value = value.astype(jnp.bfloat16)
+            target_sharding = target_leaf.sharding
+            if target_sharding is not None and cast_value.sharding != target_sharding:
+                converted = jax.device_put(cast_value, target_sharding)
+                converted.block_until_ready()
+                if cast_value.sharding.memory_kind != target_sharding.memory_kind:
+                    cast_value.delete()
+                del cast_value
+            else:
+                converted = cast_value
+                converted.block_until_ready()
             if _is_moment_path(key):
                 audit_started = time.monotonic()
                 if jax.process_index() == 0:
@@ -270,9 +301,24 @@ def _restore_one_leaf_at_a_time(target, checkpoint, *, mesh):
                     logger.info("C_MOMENT_AUDIT start index=%d/%d path=%s", index, len(leaves), key)
                 if not isinstance(value.sharding, jax.sharding.NamedSharding):
                     raise ValueError(f"moment source requires NamedSharding: {key}")
-                replicated = jax.sharding.NamedSharding(value.sharding.mesh, jax.sharding.PartitionSpec())
-                nonfinite = jax.jit(_has_nonfinite, out_shardings=replicated)(value)
-                if bool(jax.device_get(nonfinite)):
+                replicated = jax.sharding.NamedSharding(
+                    value.sharding.mesh, jax.sharding.PartitionSpec()
+                ).with_memory_kind("device")
+                value_device = (
+                    value
+                    if value.sharding.memory_kind == "device"
+                    else jax.device_put(value, value.sharding.with_memory_kind("device"))
+                )
+                try:
+                    local_fp32 = max((shard.data.nbytes for shard in value_device.addressable_shards), default=0)
+                    logger.info(
+                        "C_AUDIT_DEVICE_BYTES path=%s process=%d fp32=%d bf16=0", key, jax.process_index(), local_fp32
+                    )
+                    nonfinite = bool(jax.device_get(jax.jit(_has_nonfinite, out_shardings=replicated)(value_device)))
+                finally:
+                    if value_device is not value:
+                        value_device.delete()
+                if nonfinite:
                     raise ValueError(f"nonfinite FP32 moment in {key}")
                 logger.info(
                     "carried_moment_cast path=%s process=%d dtype=%s cast=none; retained exactly",

@@ -274,3 +274,44 @@ def test_host_reference_and_device_audit_agree(cpu_mesh, caplog):
     )
     assert actual_min == expected_min
     np.testing.assert_allclose(float(stats[7]), expected_max, rtol=1e-6)
+
+
+def test_pinned_host_moment_audit_moves_only_temporaries_and_frees_them(cpu_mesh, monkeypatch):
+    host = jax.sharding.NamedSharding(cpu_mesh, jax.sharding.PartitionSpec()).with_memory_kind("pinned_host")
+    source = jax.device_put(np.asarray([1.25, -0.75, 0.0, 3.5], dtype=np.float32), host)
+    converted = source.astype(jnp.bfloat16)
+    put = jax.device_put
+    temporary = []
+
+    def track(value, sharding, *args, **kwargs):
+        out = put(value, sharding, *args, **kwargs)
+        if value is source or value is converted:
+            temporary.append(out)
+        return out
+
+    monkeypatch.setattr(jax, "device_put", track)
+    carried_restore._audit_moment_cast("opt_state/adam/nu/fixture", source, converted)
+    assert len(temporary) == 2 and all(v.is_deleted() for v in temporary)
+    assert not source.is_deleted() and not converted.is_deleted()
+    assert source.sharding.memory_kind == "pinned_host"
+    assert converted.sharding.memory_kind == "pinned_host"
+
+
+def test_pinned_host_audit_frees_temporary_copies_on_gate_failure(cpu_mesh, monkeypatch):
+    host = jax.sharding.NamedSharding(cpu_mesh, jax.sharding.PartitionSpec()).with_memory_kind("pinned_host")
+    source = jax.device_put(np.asarray([1.25, -0.75], dtype=np.float32), host)
+    wrong = jax.device_put(np.asarray([1.25, 0.0], dtype=jnp.bfloat16), host)
+    put = jax.device_put
+    temporary = []
+
+    def track(value, sharding, *args, **kwargs):
+        out = put(value, sharding, *args, **kwargs)
+        if value is source or value is wrong:
+            temporary.append(out)
+        return out
+
+    monkeypatch.setattr(jax, "device_put", track)
+    with pytest.raises(ValueError, match="nonzero FP32 moment became BF16 zero"):
+        carried_restore._audit_moment_cast("opt_state/adam/nu/fixture", source, wrong)
+    assert len(temporary) == 2 and all(v.is_deleted() for v in temporary)
+    assert not source.is_deleted() and not wrong.is_deleted()
