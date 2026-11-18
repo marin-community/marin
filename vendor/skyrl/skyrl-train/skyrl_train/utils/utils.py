@@ -447,9 +447,6 @@ def _iter_config_kwargs(node):
             yield (key,), value
 
 
-CONFIGURED_BATCH_BUILDER_KEY = "configured_batch_builder"
-
-
 _OUTCOME_LOSSES = frozenset(
     {
         PolicyLossType.REGULAR,
@@ -524,7 +521,6 @@ def validate_cfg(cfg: DictConfig):
         if reason and builder is BatchBuilder.WORKER:
             raise ValueError(f"trainer.batch_builder=worker does not support {reason}")
         if builder is BatchBuilder.AUTO:
-            OmegaConf.update(cfg.trainer, CONFIGURED_BATCH_BUILDER_KEY, builder.value, force_add=True)
             cfg.trainer.batch_builder = (BatchBuilder.DRIVER if reason else BatchBuilder.WORKER).value
             description = f"{cfg.trainer.batch_builder} ({reason})" if reason else cfg.trainer.batch_builder
             logger.info(f"Resolved trainer.batch_builder=auto to {description}")

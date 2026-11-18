@@ -460,7 +460,7 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
     if message is None:
         check()
     else:
-        match = rf"trainer\.batch_builder={cfg.trainer.batch_builder} .*{message}" if row_case else message
+        match = f"^Policy-worker batch assembly: .*{message}" if row_case else message
         with pytest.raises(ValueError, match=match):
             check()
 

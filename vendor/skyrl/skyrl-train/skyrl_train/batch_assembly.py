@@ -29,7 +29,7 @@ from skyrl_train.trajectory_runners.types import BatchFields, TrajectoryBatch
 from skyrl_train.utils.advantage_estimators import batch_advantages, compute_advantages_and_returns
 from marinskyrl.runtime_options import OUTCOME_ADVANTAGE_ESTIMATORS
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
-from skyrl_train.utils.utils import CONFIGURED_BATCH_BUILDER_KEY, moe_router_replay_requested
+from skyrl_train.utils.utils import moe_router_replay_requested
 
 
 @dataclass(frozen=True)
@@ -89,7 +89,6 @@ def plan_worker_batch(
     num_experts: int | None,
 ) -> tuple[BatchPlan, dict[str, float]]:
     """Validate admitted groups and retain their global layout and metrics."""
-    builder = cfg.trainer.get(CONFIGURED_BATCH_BUILDER_KEY, cfg.trainer.batch_builder)
     facts = tuple(group.row_facts for group in groups)
     replay = moe_router_replay_requested(cfg)
     for group, rows in zip(groups, facts, strict=True):
@@ -108,10 +107,10 @@ def plan_worker_batch(
             ),
         ):
             if unsupported:
-                raise ValueError(f"trainer.batch_builder={builder} group {group.uid!r} does not support {reason}")
+                raise ValueError(f"Policy-worker batch assembly: group {group.uid!r} does not support {reason}")
     if sum(len(group.response_len) for group in facts) % dp_size:
         raise ValueError(
-            f"trainer.batch_builder={builder} groups {tuple(group.uid for group in groups)!r}: rows requiring DP padding"
+            f"Policy-worker batch assembly: groups {tuple(group.uid for group in groups)!r}: rows requiring DP padding"
         )
     fields = BatchFields.from_groups([group.fields for group in facts])
     if not replay:
