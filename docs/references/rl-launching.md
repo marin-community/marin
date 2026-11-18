@@ -319,6 +319,9 @@ The model binding cannot set sampling, task subsets, sandbox resources, harness
 deadlines or the judge. The graph checks the prepared task bytes and model
 manifest before GPU allocation, then writes `canonical-evaluation.json` with the
 protocol hash beside the run outputs. Sandbox resources come from each task.
+The bound tokenizer must map the frozen stop IDs to `<|end_of_text|>` and
+`<|eot_id|>`; an incompatible tokenizer fails before allocation. Retained
+trajectories use the supplied run identity.
 
 ## Pre-launch review
 

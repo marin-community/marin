@@ -95,6 +95,11 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(inputs))
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
     monkeypatch.setenv("TOGETHER_API_KEY", "test-counterpart-key")
+    token_content = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
+    monkeypatch.setattr(
+        "experiments.evaluation.micro210.AutoTokenizer.from_pretrained",
+        lambda *args, **kwargs: SimpleNamespace(convert_ids_to_tokens=token_content.__getitem__),
+    )
     binding = Micro210Model(str(model_dir), "sha256:" + hashlib.sha256(manifest).hexdigest(), "test/tokenizer", "a" * 40)
     step = micro210_step(binding, name="test/micro210", version="2026.11.18")
     with pytest.raises(ValueError, match="eval_override_storage_mb"):
@@ -133,11 +138,16 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
     )
     assert "eval_override_storage_mb" not in submitted[1]["skyrl"]["terminal_bench"]["harbor"]
+    assert submitted[1]["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
     altered = yaml.safe_load(config.skyrl.launch_config_yaml)
     altered["skyrl"]["terminal_bench"]["harbor"]["eval_override_storage_mb"] = 131072
     submitted.clear()
     with pytest.raises(ValueError, match="launch_config_yaml"):
         run_micro210(replace(config, skyrl=replace(config.skyrl, launch_config_yaml=yaml.safe_dump(altered))))
+    assert submitted == []
+    token_content[128009] = "ordinary-token"
+    with pytest.raises(ValueError, match="incompatible stop token ID: 128009"):
+        run_micro210(config)
     assert submitted == []
     (inputs / "rollouts.parquet").write_bytes(b"changed-tasks")
     submitted.clear()

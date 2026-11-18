@@ -35,6 +35,7 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from transformers import AutoTokenizer
 
 from experiments.evaluation.micro210_policy import (
     MODEL_IDENTITY_PREFIX,
@@ -47,6 +48,7 @@ from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 PREPARED_INPUTS = (
     "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3/" "documents/mochi-exp3-final-eval-inputs/2026.11.18.61"
 )
+STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,14 @@ def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
     manifest = (StoragePath(evaluation.model.uri) / MODEL_MANIFEST_FILENAME).read_bytes()
     if MODEL_IDENTITY_PREFIX + hashlib.sha256(manifest).hexdigest() != evaluation.model.identity:
         raise ValueError("Micro210 model export manifest differs from the model binding")
+    tokenizer = AutoTokenizer.from_pretrained(
+        evaluation.model.tokenizer_uri, revision=evaluation.model.tokenizer_revision, trust_remote_code=False
+    )
+    generator = policy["evaluation"]["config"]["generator"]
+    for sampling in ("sampling_params", "eval_sampling_params"):
+        for token_id in generator[sampling]["stop_token_ids"]:
+            if tokenizer.convert_ids_to_tokens(token_id) != STOP_TOKEN_CONTENT[token_id]:
+                raise ValueError(f"Canonical Micro210 tokenizer has incompatible stop token ID: {token_id}")
 
 
 def run_micro210(config: Micro210Run) -> SkyRLRun:
@@ -144,6 +154,7 @@ def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides)
         run = builder(context)
         document = yaml.safe_load(run.launch_config_yaml)
         document["ray"].update(policy["ray_timeouts"])
+        document["skyrl"]["generator"]["trajectory_retention"]["run_id"] = binding.run_id
         rendered = yaml.safe_dump(document)
         return Micro210Run(
             replace(run, launch_config_yaml=rendered),
