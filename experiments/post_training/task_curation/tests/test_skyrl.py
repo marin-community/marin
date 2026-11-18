@@ -23,7 +23,8 @@ from taskcompendium.models import (
     TextMessage,
     VerifyitGrader,
 )
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, IntendedUse
+from taskcompendium.pipeline.sources import SourceFormat
 from taskcompendium.pipeline.sources import SourceShard, staged_raw_file_rows
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
@@ -31,6 +32,9 @@ from taskcompendium.runtime.task_grading import grade_task
 from experiments.post_training.task_curation.datasets.skyrl import code, ifeval, math, mcq, preference
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
+from experiments.post_training.task_curation.source import SourceInfo
+from finestore.rl.curation import SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.pipeline import CurationRecipe, source_files
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
@@ -44,6 +48,37 @@ RECIPES = {
     for module in (math, code, ifeval, mcq, preference)
     for source in module.sources()
 }
+# The HARDMath rhs remediation variant is registered separately (its registry receipts
+# are pending); the tests exercise its converter through the same recipe shape.
+HARDMATH_RHS_RECIPE = cast(
+    CurationRecipe,
+    math.math_source(
+        math.MathSource(
+            "hardmath_rhs",
+            math.HfSource(
+                "pafitis/HARDMath_processed_training",
+                "937e9f10356e31e854f6efb9a2507f1e200c8b25",
+                ("data/train-00000-of-00001.parquet",),
+                SourceFormat.PARQUET,
+            ),
+            math.convert_hardmath_rhs,
+            IntendedUse.TRAIN,
+            math.HARDMATH_RUBRIC,
+            info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="hardmath",
+                upstream_name="hardmath",
+                subset=None,
+                variant="rhs",
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.PAFITIS,
+                family="math-answer",
+                tags=("rlvr", "single-turn", "private", "remediated", "gym/aime"),
+            ),
+        )
+    ).config,
+)
+RECIPES["hardmath_rhs"] = HARDMATH_RHS_RECIPE
 
 SUM_TESTS = {"inputs": ["1 2\n"], "outputs": ["3\n"]}
 SUM_SOLUTION = "a, b = map(int, input().split())\nprint(a + b)"
