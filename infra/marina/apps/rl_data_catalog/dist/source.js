@@ -324,25 +324,31 @@ function render(data, sourceId, auxiliary) {
     });
   }
 }
-const sourceId = new URLSearchParams(location.hash.slice(1)).get('source_id');
-window.addEventListener('hashchange', () => location.reload());
-if (!sourceId) $('message').textContent = 'Open a source from the Atlas to see its evidence.';
-else {
-  $('sections').setAttribute('aria-busy', 'true');
-  sourceJson(`api/source?${new URLSearchParams({source_id: sourceId})}`, SOURCE_DEADLINE_MS)
-    .then(data => {
-      // Restricted sources never request supplementary content or task reviews.
-      const auxiliary = data.data_restriction === 'private_always' || data.declaration.data_restriction === 'private_always' ? {} : {
-        progress: sourceJson('measurements/content-progress.json'),
-        inventory: sourceJson('measurements/oracle-inventory.json'),
-        labels: sourceJson('api/source-labels'),
-        pending: sourceJson('measurements/pending-filtered-releases.json'),
-      };
-      render(data, sourceId, auxiliary);
-      $('sections').setAttribute('aria-busy', 'false');
-    }).catch(error => {
-      $('title').textContent = 'Source evidence';
-      $('message').textContent = error.message; $('message').classList.add('error');
-      $('sections').setAttribute('aria-busy', 'false');
-    });
-}
+if (!window.AtlasSourceBootstrap) {
+  // The HTML already contains an error if even the independent bootstrap failed.
+  const reload = document.getElementById('source-reload');
+  reload.href = location.href;
+  reload.addEventListener('click', event => { event.preventDefault(); location.reload(); });
+} else window.AtlasSourceBootstrap.run(() => {
+  const sourceId = new URLSearchParams(location.hash.slice(1)).get('source_id');
+  window.addEventListener('hashchange', () => location.reload());
+  if (!sourceId) $('message').textContent = 'Open a source from the Atlas to see its evidence.';
+  else {
+    $('title').textContent = 'Loading source…';
+    $('sections').setAttribute('aria-busy', 'true');
+    sourceJson(`api/source?${new URLSearchParams({source_id: sourceId})}`, SOURCE_DEADLINE_MS)
+      .then(data => {
+        // Restricted sources never request supplementary content or task reviews.
+        const auxiliary = data.data_restriction === 'private_always' || data.declaration.data_restriction === 'private_always' ? {} : {
+          progress: sourceJson('measurements/content-progress.json'),
+          inventory: sourceJson('measurements/oracle-inventory.json'),
+          labels: sourceJson('api/source-labels'),
+          pending: sourceJson('measurements/pending-filtered-releases.json'),
+        };
+        render(data, sourceId, auxiliary);
+        $('sections').setAttribute('aria-busy', 'false');
+      }).catch(error => {
+        window.AtlasSourceBootstrap.fail(error);
+      });
+  }
+});

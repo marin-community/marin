@@ -7,6 +7,7 @@ import pytest
 from marina.journeys import Journey
 from playwright.sync_api import Error, expect
 
+from infra.marina.apps.rl_data_catalog.readability import AUDIT
 from infra.marina.apps.rl_data_catalog.release_browser import browser_json, report_failed_request, report_failed_response
 
 APP_ROOT = "a/fb11c931-5861-4878-8bb5-a964d652b45f"
@@ -119,5 +120,43 @@ def test_auxiliary_audit_network_failure_identifies_request(journey: Journey, ca
         assert url in str(failure.value) and "HTTP unavailable" in str(failure.value)
         report_failed_request(request.value)
         assert url in caplog.text and "body prefix unavailable" in caplog.text
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("theme,width", [("light", 1440), ("light", 390), ("dark", 1440), ("dark", 390)])
+@pytest.mark.parametrize("asset", ["common.js", "difficulty.js", "source.js", "source-bootstrap.js"])
+def test_failed_source_asset_shows_error_and_reload_recovers_same_source(
+    journey: Journey, theme: str, width: int, asset: str
+) -> None:
+    page = journey.page.context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    try:
+        page.set_viewport_size({"width": width, "height": 1000})
+        page.emulate_media(color_scheme=theme)
+        page.goto(f"{journey.origin}/{APP_ROOT}/")
+        root = page.url
+        page.route("**/" + asset, lambda route: route.fulfill(status=500, body=""))
+        page.goto(root + "source.html#source_id=Marin%3Aclean")
+        expect(page.locator("#title")).to_have_text("Source evidence", timeout=5000)
+        expect(page.locator("#message.error")).to_be_visible()
+        expect(page.locator("#message")).not_to_have_text("")
+        reload = page.get_by_role("link", name="Reload page", exact=True)
+        expect(reload).to_be_visible()
+        assert not errors, errors
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        report = page.evaluate(AUDIT, {})
+        assert not report["findings"], report["findings"]
+        reload.focus()
+        assert not page.evaluate(AUDIT, {"mode": "focus"})["findings"]
+        page.screenshot(path=str(journey.shots / f"asset-error-{asset}-{theme}-{width}.png"))
+        page.unroute("**/" + asset)
+        with page.expect_navigation(wait_until="domcontentloaded"):
+            reload.click()
+        expect(page.locator("#title")).to_have_text("clean", timeout=5000)
+        expect(page.locator("#sections")).to_have_attribute("aria-busy", "false", timeout=5000)
+        expect(page.get_by_role("link", name="Reload page", exact=True)).to_be_hidden()
+        assert page.url.endswith("#source_id=Marin%3Aclean")
     finally:
         page.close()

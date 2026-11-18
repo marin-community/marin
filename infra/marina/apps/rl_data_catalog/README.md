@@ -37,7 +37,9 @@ Each supplementary request has an 8-second deadline and its own visible error;
 the core request has a 15-second deadline. The embedded assessment report loads
 only when expanded; QC chips still open the paged review list directly. The
 Review Archive page and navigation entry are removed; archived data and APIs
-remain intact.
+remain intact. Failed required scripts on the Source Evidence page show an error
+and a **Reload page** action that preserves the source selection. The initial HTML
+contains the fallback, so it remains visible if the bootstrap script cannot execute.
 
 Catalog loading stores the counts and grades from the `atlas_cohort_summary`
 SQL view in `atlas_cohort_summaries` before making the new catalog snapshot
