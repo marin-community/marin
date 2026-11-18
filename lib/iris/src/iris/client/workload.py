@@ -105,6 +105,10 @@ class AttemptStatus:
     node_name: str
     terminal_reason: str
     output_archive: TaskOutputArchive | None
+    topology: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "topology", MappingProxyType(dict(self.topology)))
 
 
 @dataclass(frozen=True, slots=True)

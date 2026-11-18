@@ -22,23 +22,8 @@ import json
 import sys
 from datetime import datetime, timedelta
 
-from finestore.eval import (
-    SAMPLES_PREFIX,
-    SAMPLES_SUFFIX,
-    Choice,
-    EvalSample,
-    EvaluationStore,
-    Grading,
-    Message,
-    SampleKind,
-    sample_to_archive_row,
-    write_sample_parquet,
-)
-from finestore.schema import arrow_schema
-from finestore.store import DataStore
-from fsspec.core import url_to_fs
-from marin.evaluation.metric_selection import base_metric, declared_metric
-from marin.evaluation.records import (
+from evalrecords.metric_selection import base_metric, declared_metric
+from evalrecords.records import (
     RECORD_FILE,
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
@@ -59,7 +44,22 @@ from marin.evaluation.records import (
     TaskCoverage,
     write_record,
 )
-from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
+from finestore.eval import (
+    SAMPLES_PREFIX,
+    SAMPLES_SUFFIX,
+    Choice,
+    EvalSample,
+    EvaluationStore,
+    Grading,
+    Message,
+    SampleKind,
+    sample_to_archive_row,
+    write_sample_parquet,
+)
+from finestore.schema import arrow_schema
+from finestore.store import DataStore
+from fsspec.core import url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection
 from taskcompendium.evaluation.spec import EvaluationProtocol, LikelihoodMetric, Metric, Sampling, TrialPolicy

@@ -169,19 +169,22 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "stop_token,stop_reason,content,reward",
+    "stop_token,stop_reason,content,reward,skip_special_tokens",
     [
-        (98, "stop", ",2]\n```", 1.0),
-        (97, "stop", ",2]\n```", 1.0),
-        (99, "stop", ",2]\n```", 1.0),
-        (98, "length", ",2]\n```<|eot_id|>", 0.0),
+        (98, "stop", ",2]\n```", 1.0, None),
+        (97, "stop", ",2]\n```", 1.0, None),
+        (99, "stop", ",2]\n```", 1.0, None),
+        (98, "length", ",2]\n```<|eot_id|>", 0.0, None),
+        (98, "stop", ",2]\n```<|eot_id|>", 0.0, False),
     ],
-    ids=["llama-turn-end", "qwen-turn-end", "eos", "length-stop"],
+    ids=["llama-turn-end", "qwen-turn-end", "eos", "length-stop", "retain-special-tokens"],
 )
-async def test_assistant_prefix_worker_grades_a_code_fence_without_its_stop_token(
-    task_inputs, stop_token, stop_reason, content, reward
+async def test_assistant_prefix_worker_applies_configured_stop_token_retention(
+    task_inputs, stop_token, stop_reason, content, reward, skip_special_tokens
 ):
     config, request = task_inputs
+    if skip_special_tokens is not None:
+        config.sampling_params.skip_special_tokens = skip_special_tokens
     prefix, expected = "```json\n[1", "```json\n[1,2]\n```"
     task = request.rows[0].spec.task.model_copy(
         update={

@@ -13,11 +13,26 @@ from types import SimpleNamespace
 
 import pytest
 from evaldash.app import Ingestor, MemoryRecordStore
-from evaldash.curated import import_curated_record
 from evaldash.metrics import build_comparison, build_model_detail, build_panel, panel_request
 from evaldash.record_reconciliation import VerificationSchedule, _inspect_record
 from evaldash.results_db import ObservationKind, SourceState
 from evaldash.samples import _archive_task_table
+from evalrecords.records import (
+    BenchmarkMetadataRef,
+    BenchmarkMetricRef,
+    CuratedRef,
+    CuratedSettings,
+    EvalRef,
+    EvalRunRecord,
+    EvalTaskRef,
+    HardwareRef,
+    ModelRef,
+    Provenance,
+    TaskCoverage,
+    write_record,
+)
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt
+from evalrecords.rollout_results import logical_samples, score_curated_record
 from finestore.eval import (
     EvalSample,
     EvaluationStore,
@@ -33,24 +48,8 @@ from fray.local_backend import LocalClient
 from marin.evaluation.dataset_evaluator import DatasetEvaluator
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import (
-    BenchmarkMetadataRef,
-    BenchmarkMetricRef,
-    CuratedRef,
-    CuratedSettings,
-    EvalRef,
-    EvalRunRecord,
-    EvalTaskRef,
-    HardwareRef,
-    ModelRef,
-    Provenance,
-    TaskCoverage,
-    write_record,
-)
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.execution.artifact import write_artifact
-from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT, Attempt
-from marin.rollouts.evaluation_results import logical_samples
 from taskcompendium.evaluation.corpus import EvaluationManifest, evaluation_protocol
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection
 from taskcompendium.evaluation.spec import EvaluationProtocol, LikelihoodMetric, Metric, Sampling, TrialPolicy
@@ -270,7 +269,7 @@ def test_regional_curation_builds_compare_and_grader_changes_remain_separate(raw
                         (1, 0, "finished", "graded", {"accuracy": 0.0}, {}),
                     ],
                 )
-                records.append(import_curated_record(record))
+                records.append(score_curated_record(record))
     finally:
         client.shutdown()
     comparison = build_comparison(records[:2], panel_request(), ("east", "west"))
@@ -300,7 +299,7 @@ def test_raw_ingestion_and_browser_choose_terminal_trials_without_counting_retri
     assert sorted(dict(sample["metrics"])["accuracy"] for sample in samples) == [0, 1]
     table = _archive_task_table(raw_run.results_path, "colors")
     assert sorted(dict(row["metrics"])["accuracy"] for row in table.to_pylist()) == [0, 1]
-    assert import_curated_record(raw_run).canonical_metrics["colors"]["accuracy"] == 0.5
+    assert score_curated_record(raw_run).canonical_metrics["colors"]["accuracy"] == 0.5
 
 
 @pytest.mark.parametrize(
@@ -338,7 +337,7 @@ def test_native_summary_reuses_historical_scores_in_panel_comparison_and_history
             (1, 0, "finished", "graded", {native_metric: 0.0}, {}),
         ],
     )
-    native = import_curated_record(raw_run)
+    native = score_curated_record(raw_run)
     historical = raw_run.model_copy(
         update={
             "run_id": "historical",
@@ -416,7 +415,7 @@ def test_native_summary_reuses_historical_scores_in_panel_comparison_and_history
 )
 def test_raw_import_uses_the_protocol_reduction(raw_run, summary, metric, observations, expected):
     write_observations(raw_run, summary=summary, metrics=(metric,), observations=observations)
-    result = import_curated_record(raw_run)
+    result = score_curated_record(raw_run)
     assert result.metrics["colors"][metric] == pytest.approx(expected)
     assert result.metrics["colors"][f"color=red/{metric}"] == pytest.approx(expected)
 
@@ -425,7 +424,7 @@ def test_failed_and_unfinished_trials_remain_missing_coverage(raw_run):
     write_observations(
         raw_run, observations=[(0, 0, "finished", "infra_error", {}, {}), (1, 0, "started", None, {}, {})]
     )
-    result = import_curated_record(raw_run)
+    result = score_curated_record(raw_run)
     assert result.metrics["colors"] == {}
     assert result.coverage["colors"].n_scored == 0
     assert result.coverage["colors"].errors == {"infra_error": 1, "unfinished": 1}
@@ -447,7 +446,7 @@ def test_likelihood_evidence_does_not_require_generation_grader_detail(raw_run):
         EvaluationStore(store)
         with store.transaction() as transaction:
             transaction.table("samples").add(sample_to_archive_row(sample, trial_id=row["trial_id"]))
-    result = import_curated_record(raw_run)
+    result = score_curated_record(raw_run)
     assert result.metrics["colors"]["accuracy"] == 1
     assert result.coverage["colors"].n_scored == 1
 
@@ -517,7 +516,7 @@ def test_policy_finalization_uses_the_same_scored_trial_coverage_as_evaldash(raw
         "experiments.evaluation.policy_finalization.remote_inference", lambda _config: nullcontext(session)
     )
     monkeypatch.setattr(DatasetEvaluator, "__call__", lambda *_a, **_k: EvaluationOutcome(metrics={}))
-    expected = import_curated_record(raw_run).coverage
+    expected = score_curated_record(raw_run).coverage
     if second_outcome == "infra_error":
         with pytest.raises(EvaluationError) as caught:
             executor(None, raw_run.results_path, {}, backend_state=lambda: None)

@@ -10,7 +10,7 @@ from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
 from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.harness.external import AgentCompletion
-from rolloutengine.models import LimitReached, ModelTurn, Prompt, RolloutEnded, RolloutLimits
+from rolloutengine.models import ContextRecovery, LimitReached, ModelTurn, Prompt, RolloutEnded, RolloutLimits
 from taskcompendium.models import TaskSpec
 from skyrl_gym.task_records import StepReward
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -66,6 +66,8 @@ async def run_harbor_trial(
 
 class HarborTrialHarness:
     """Let Harbor finish verification after the model reaches its rollout limit."""
+
+    context_recovery = ContextRecovery.AFTER_TURN
 
     def __init__(self, run_trial: Callable[[AgentCompletion], Awaitable[TrialResult]], reward_key: str) -> None:
         self.run_trial = run_trial

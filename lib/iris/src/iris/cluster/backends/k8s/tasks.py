@@ -43,6 +43,7 @@ from iris.cluster.backends.k8s.output_contract import (
     output_uploader_environment,
 )
 from iris.cluster.config import EgressAllowlistConfig, NodeHealthConfig, TaskOutputPolicy
+from iris.cluster.constraints import AttributeValue, Constraint, evaluate_constraint
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -69,6 +70,7 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
+    DEFAULT_SANDBOX_RUNTIME_CLASS,
     DEFAULT_TASK_CACHE_DIR,
     EGRESS_LABEL,
     NVIDIA_GPU_RESOURCE,
@@ -147,7 +149,7 @@ from iris.cluster.stats.tables import (
     TaskEventSeverity,
     stats_timestamp,
 )
-from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
+from iris.cluster.types import AttemptUid, CoschedulingConfig, JobName, WellKnownAttribute, get_gpu_count
 from iris.preemption import SHUTDOWN_MARGIN, resolve_termination_grace
 from iris.resources.limits import ResourceLimitReason
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -217,7 +219,6 @@ _MAX_POD_NAME_LEN = 63
 # Map well-known Iris constraint keys to their k8s node label keys.
 _CONSTRAINT_KEY_TO_NODE_LABEL: dict[str, str] = {
     "pool": "iris.pool",
-    "region": "iris.region",
 }
 
 # Kubernetes label values: max 63 chars, alphanumeric plus [-_.], must start/end alphanumeric.
@@ -282,6 +283,9 @@ _KUEUE_WORKLOAD_EVICTION_REASON_PREFIX = "WorkloadEvicted"
 # transitions.py owns retries). See .agents/projects/20260529_iris_k8s_gang_admission.md.
 _KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
 _KUEUE_POD_GROUP_TOTAL = "kueue.x-k8s.io/pod-group-total-count"
+_KUEUE_ROLE_HASH = "kueue.x-k8s.io/role-hash"
+# The Pod integration in Kueue v0.18 supports at most ten PodSets per Workload.
+_KUEUE_MAX_POD_SETS = 10
 _KUEUE_QUEUE_NAME = "kueue.x-k8s.io/queue-name"
 _KUEUE_JOB_UID = "kueue.x-k8s.io/job-uid"
 _KUEUE_PRIORITY_CLASS = "kueue.x-k8s.io/priority-class"
@@ -388,6 +392,19 @@ def _constraints_to_node_selector(
                 f"only CONSTRAINT_OP_EQ is supported for nodeSelector mapping"
             )
     return node_selector
+
+
+def _region_constraint_error(constraints: Sequence[job_pb2.Constraint], regions: Sequence[str]) -> str | None:
+    # Iris regions identify the backend, not a Kubernetes node label. CoreWeave
+    # advertises US-EAST-08A while its nodes carry region US-EAST-08.
+    required = [
+        Constraint.from_proto(c)
+        for c in constraints
+        if c.key == WellKnownAttribute.REGION and c.mode != job_pb2.CONSTRAINT_MODE_PREFERRED
+    ]
+    if not required or any(all(evaluate_constraint(AttributeValue(region), c) for c in required) for region in regions):
+        return None
+    return f"Region constraints do not match Kubernetes backend regions {sorted(regions)}"
 
 
 def _task_hash(task_id: str) -> str:
@@ -568,6 +585,7 @@ class PodConfig:
     logship_image: str = ""
     cache_dir: str = DEFAULT_TASK_CACHE_DIR
     service_account: str = ""
+    sandbox_runtime_class: str = DEFAULT_SANDBOX_RUNTIME_CLASS
     host_network: bool = False
     controller_address: str | None = None
     managed_label: str = ""
@@ -882,6 +900,21 @@ def _topology_request_annotations(
     return {_KUEUE_PREFERRED_TOPOLOGY: node_label}
 
 
+def _validate_locality_groups(
+    coscheduling: job_pb2.CoschedulingConfig, num_tasks: int, gpu_count: int, config: PodConfig
+) -> None:
+    CoschedulingConfig(coscheduling.group_by, tuple(coscheduling.group_sizes)).validate(num_tasks)
+    if len(coscheduling.group_sizes) > _KUEUE_MAX_POD_SETS:
+        raise PodManifestError(f"Kueue supports at most {_KUEUE_MAX_POD_SETS} coscheduling groups per job")
+    binding = config.kueue_topologies.get(coscheduling.group_by)
+    if binding is None or binding.mode != TopologyMode.REQUIRED:
+        raise PodManifestError("coscheduling group_sizes requires a required topology level")
+    for size in coscheduling.group_sizes:
+        _topology_request_annotations(
+            binding, group_by=coscheduling.group_by, num_tasks=size, gpu_count=gpu_count, task_ref="locality group"
+        )
+
+
 def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
     """Whether the task pod joins its node's network, when the cluster enables host networking.
 
@@ -1120,16 +1153,26 @@ def _build_pod_manifest(
                 "kubernetes_provider.kueue.topologies or use a known level."
             )
         labels[_KUEUE_POD_GROUP_NAME] = _pod_group_name(task_id, attempt_id)
-        # Per-pod ordinal within the gang (0..total-1). Kueue's TAS assigns each pod a domain
-        # rank from it; for the sliced level it makes slice membership rank-contiguous.
-        labels[_KUEUE_POD_GROUP_POD_INDEX] = str(task_id.task_index)
+        pod_index = task_id.task_index
+        group_size = run_req.num_tasks
+        if run_req.coscheduling.group_sizes:
+            _validate_locality_groups(run_req.coscheduling, run_req.num_tasks, gpu_count, config)
+            if pod_index is None:
+                raise PodManifestError("Locality groups require a task ordinal")
+            for group_index, group_size in enumerate(run_req.coscheduling.group_sizes):
+                if pod_index < group_size:
+                    # Role hashes separate otherwise identical PodSets. TAS indexes Pods within each set.
+                    metadata["annotations"][_KUEUE_ROLE_HASH] = f"iris-group-{group_index}"
+                    break
+                pod_index -= group_size
+        labels[_KUEUE_POD_GROUP_POD_INDEX] = str(pod_index)
         metadata["annotations"].update(
             {
                 _KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks),
                 **_topology_request_annotations(
                     topo,
                     group_by=group_by,
-                    num_tasks=run_req.num_tasks,
+                    num_tasks=group_size,
                     gpu_count=gpu_count,
                     task_ref=run_req.task_id,
                 ),
@@ -1208,7 +1251,7 @@ def _build_pod_manifest(
     # gVisor isolates the whole pod via a node RuntimeClass; the container
     # securityContext stays at the DEFAULT posture (see _security_context).
     if run_req.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX):
-        spec["runtimeClassName"] = "gvisor"
+        spec["runtimeClassName"] = config.sandbox_runtime_class
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
         spec["enableServiceLinks"] = False
@@ -1391,7 +1434,9 @@ def _pod_failure_state(pod: dict) -> int:
     return job_pb2.TASK_STATE_FAILED
 
 
-def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | None = None) -> TaskUpdate:
+def _task_update_from_pod(
+    entry: RunningTaskEntry, pod: dict, workload: dict | None = None, node: dict | None = None
+) -> TaskUpdate:
     """Build a TaskUpdate from a Kubernetes Pod dict.
 
     A control-plane disruption (Kueue preemption, node drain, API eviction) is
@@ -1412,10 +1457,22 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     # update (not only the terminal one) so a later preemption that deletes the pod
     # still leaves the identity persisted.
     metadata = pod.get("metadata", {})
+    spec = pod.get("spec", {})
+    # TAS can pin only the hostname. Read domain values from the assigned Node.
+    annotations = metadata.get("annotations", {})
+    topology_keys = {
+        annotations.get(_KUEUE_REQUIRED_TOPOLOGY),
+        annotations.get(_KUEUE_SLICE_REQUIRED_TOPOLOGY),
+        annotations.get(_KUEUE_PREFERRED_TOPOLOGY),
+        _KUEUE_SINGLE_POD_TOPOLOGY,
+    }
+    node_labels = node.get("metadata", {}).get("labels", {}) if node is not None else {}
+    topology = {key: value for key, value in node_labels.items() if key in topology_keys}
     identity = {
         "pod_name": metadata.get("name") or None,
         "pod_uid": metadata.get("uid") or None,
-        "node_name": pod.get("spec", {}).get("nodeName") or None,
+        "node_name": spec.get("nodeName") or None,
+        "topology": topology or None,
     }
 
     if phase == "Pending":
@@ -2624,6 +2681,17 @@ class K8sTaskProvider:
         return None
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if error := _region_constraint_error(
+            request.constraints, sorted(self.descriptor.advertised_attributes.get(WellKnownAttribute.REGION, ()))
+        ):
+            return error
+        if request.coscheduling.group_sizes:
+            try:
+                _validate_locality_groups(
+                    request.coscheduling, request.replicas, get_gpu_count(request.resources.device), self.pods
+                )
+            except ValueError as error:
+                return str(error)
         if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
             return None
         return validate_coreweave_credentials(task_secret_values(request.environment))
@@ -2879,6 +2947,10 @@ class K8sTaskProvider:
 
     def _apply_pod(self, run_req: job_pb2.RunTaskRequest) -> None:
         """Create or update the Pod for a task attempt."""
+        if error := _region_constraint_error(
+            run_req.constraints, sorted(self.descriptor.advertised_attributes.get(WellKnownAttribute.REGION, ()))
+        ):
+            raise PodManifestError(error)
         manifest = _build_pod_manifest(run_req, self.pods)
 
         task_id_name = JobName.from_wire(run_req.task_id)
@@ -3424,7 +3496,9 @@ class K8sTaskProvider:
                 continue
 
             self._pod_unresolved_counts.pop(entry, None)
-            update = _task_update_from_pod(entry, pod, workload)
+            update = _task_update_from_pod(
+                entry, pod, workload, node=nodes_by_name.get(pod.get("spec", {}).get("nodeName", ""))
+            )
             updates.append(update)
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":

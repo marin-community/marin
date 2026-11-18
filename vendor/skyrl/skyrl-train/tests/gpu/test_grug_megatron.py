@@ -29,7 +29,6 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from transformers import AutoTokenizer
 
 import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Grug bridge
-from skyrl_train.distributed.dispatch import concatenate_outputs_after_mesh_dispatch
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, _offloaded_muon_direction_in_grad_
 from skyrl_train.distributed.megatron.megatron_utils import load_megatron_optimizer, offload_megatron_optimizer
 from skyrl_train.distributed.megatron.optimizer import HybridDeviceOptimizer
@@ -46,6 +45,10 @@ from tests.gpu.grug_megatron_policy import (
     _config as _config,
     _init_policy as _init_policy,
     _train_step as _train_step,
+    PROMPT_LENGTH,
+    RESPONSE_LENGTH,
+    _megatron_response_logprobs,
+    _padded_batch,
 )
 from tests.gpu.grug_serving import (
     GRUG_BIAS_NAMES as BIAS_NAMES,
@@ -61,9 +64,6 @@ from tests.gpu.grug_serving import (
 from tests.gpu.grug_tiny_checkpoint import TOY_SHAPE, write_tiny_checkpoint
 from tests.gpu.utils import init_worker_with_type
 from skyrl_train.weight_sync.expert_block.driver import ExpertBlockSync
-
-RESPONSE_LENGTH = 8
-PROMPT_LENGTH = 12
 
 
 def _spot_check_name(suffix: str) -> str:
@@ -122,7 +122,6 @@ def embedding_preprocess_model(request, tmp_path):
             expert_model_parallel_size=1,
             expert_tensor_parallel_size=1,
             bf16=provider.bf16,
-            attention_backend="fused" if provider.bf16 else "unfused",
         )
         provider.recompute_granularity = "full"
         provider.recompute_method = "uniform"
@@ -170,58 +169,6 @@ def test_grug_embedding_recompute_preserves_gradients_and_reduces_saved_activati
         assert saved_bytes[1] < saved_bytes[0], saved_bytes
 
 
-def _padded_batch(
-    pad_token_id: int,
-    batch_size: int = 4,
-    prompt_length: int = PROMPT_LENGTH,
-    response_length: int = RESPONSE_LENGTH,
-    variable_lengths: bool = False,
-) -> TrainingInputBatch:
-    """Return a bf16-friendly batch with left and right padding and fixed content.
-
-    With ``variable_lengths`` each row's body is shorter than the previous one, as rollouts
-    are, so consecutive micro-batches have different widths.
-    """
-    generator = torch.Generator().manual_seed(5)
-    full_body_length = prompt_length + response_length
-    total_length = full_body_length + 6
-    pad_before = [3, 0, 5, 1]
-    sequences = []
-    masks = []
-    # Each row loses this many tokens relative to the previous one; the last row still
-    # keeps some response tokens once total padding is accounted for.
-    shrink = response_length // (2 * batch_size) if variable_lengths else 0
-    for row in range(batch_size):
-        body_length = full_body_length - shrink * row
-        body = torch.randint(10, 500, (body_length,), generator=generator).tolist()
-        before = pad_before[row % len(pad_before)]
-        after = total_length - body_length - before
-        assert after < response_length, (row, after, response_length)
-        sequences.append([pad_token_id] * before + body + [pad_token_id] * after)
-        masks.append([0] * before + [1] * body_length + [0] * after)
-    sequences = torch.tensor(sequences, dtype=torch.long)
-    attention_mask = torch.tensor(masks, dtype=torch.long)
-    response_mask = attention_mask[:, -response_length:]
-    zeros = torch.zeros(batch_size, response_length, dtype=torch.float32)
-    advantages = torch.linspace(-1.0, 1.0, response_length).unsqueeze(0).repeat(batch_size, 1)
-    batch = TrainingInputBatch(
-        {
-            "sequences": sequences,
-            "attention_mask": attention_mask,
-            "action_log_probs": zeros.clone(),
-            "base_action_log_probs": zeros.clone(),
-            "rollout_logprobs": zeros.clone(),
-            "values": zeros.clone(),
-            "returns": zeros.clone(),
-            "advantages": advantages,
-            "loss_mask": response_mask.clone(),
-            "response_mask": response_mask.clone(),
-        }
-    )
-    batch.metadata = {"response_length": response_length, "global_step": 0}
-    return batch
-
-
 def _hf_response_logprobs_direct(model_path: str, batch: TrainingInputBatch) -> torch.Tensor:
     model = GrugMoeForCausalLM.from_pretrained(model_path, dtype=torch.bfloat16, attn_implementation="eager")
     model.eval().to("cuda")
@@ -239,11 +186,6 @@ def _hf_response_logprobs_direct(model_path: str, batch: TrainingInputBatch) -> 
 @ray.remote(num_gpus=1)
 def _hf_response_logprobs(model_path: str, batch: TrainingInputBatch) -> torch.Tensor:
     return _hf_response_logprobs_direct(model_path, batch)
-
-
-def _megatron_response_logprobs(policy, batch: TrainingInputBatch) -> torch.Tensor:
-    outputs = ray.get(policy.async_run_ray_method("mesh", "forward", data=batch))
-    return concatenate_outputs_after_mesh_dispatch(policy.actor_infos, outputs)["output"].float()
 
 
 def _assert_logprobs_close(actual: torch.Tensor, expected: torch.Tensor, response_mask: torch.Tensor) -> None:
@@ -378,11 +320,11 @@ def test_grug_megatron_eval_forward_is_independent_of_peer_rank_batch(
     prompt_length: int,
     response_length: int,
 ):
-    """A rank's log-probs must not change when only the peer expert-parallel rank's rows change.
+    """Explicit BI keeps a rank's log-probs fixed when only another rank's rows change.
 
     Expert parallelism co-batches tokens from every rank in the expert group, so a
-    composition-dependent kernel would make old log-probs depend on which rows the
-    other ranks happened to hold.
+    composition-dependent kernel violates BI. Ordinary RL instead checks scoring
+    versus training at TRAIN_EVAL_LOGPROB_MAX_ABS_TOLERANCE with matching batches.
     """
     require_hoppers(world_size)
     model_path = tmp_path / "model"
@@ -391,6 +333,7 @@ def test_grug_megatron_eval_forward_is_independent_of_peer_rank_batch(
         model_path, max_position_embeddings=4096, num_experts_per_tok=num_experts_per_tok, shape=shape
     )
     cfg = _config(str(model_path), world_size=world_size, pp=pp, ep=ep)
+    cfg.trainer.algorithm.batch_invariant = True
     pad_token_id = AutoTokenizer.from_pretrained(model_path).pad_token_id
     rows = _padded_batch(pad_token_id, batch_size=6, prompt_length=prompt_length, response_length=response_length)
     first = rows.slice(0, 4)

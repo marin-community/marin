@@ -3,11 +3,15 @@ from __future__ import annotations
 import math
 
 import ray
+import torch
 
+from skyrl_train.distributed.dispatch import concatenate_outputs_after_mesh_dispatch
 from skyrl_train.training_batch import TrainingInputBatch
 from tests.gpu.utils import get_test_actor_config, init_worker_with_type
 
 ROLLOUT_WORLD_SIZE = 2
+RESPONSE_LENGTH = 8
+PROMPT_LENGTH = 12
 
 
 def _config(model_path: str, *, world_size: int, pp: int, ep: int):
@@ -63,3 +67,60 @@ def _train_step(policy, batch: TrainingInputBatch) -> dict[str, float]:
     status = train_output.metadata["train_status"]
     assert math.isfinite(status["policy_loss"])
     return status
+
+
+def _padded_batch(
+    pad_token_id: int,
+    batch_size: int = 4,
+    prompt_length: int = PROMPT_LENGTH,
+    response_length: int = RESPONSE_LENGTH,
+    variable_lengths: bool = False,
+) -> TrainingInputBatch:
+    """Return a bf16-friendly batch with left and right padding and fixed content.
+
+    With ``variable_lengths`` each row's body is shorter than the previous one, as rollouts
+    are, so consecutive micro-batches have different widths.
+    """
+    generator = torch.Generator().manual_seed(5)
+    full_body_length = prompt_length + response_length
+    total_length = full_body_length + 6
+    pad_before = [3, 0, 5, 1]
+    sequences = []
+    masks = []
+    # Each row loses this many tokens relative to the previous one; the last row still
+    # keeps some response tokens once total padding is accounted for.
+    shrink = response_length // (2 * batch_size) if variable_lengths else 0
+    for row in range(batch_size):
+        body_length = full_body_length - shrink * row
+        body = torch.randint(10, 500, (body_length,), generator=generator).tolist()
+        before = pad_before[row % len(pad_before)]
+        after = total_length - body_length - before
+        assert after < response_length, (row, after, response_length)
+        sequences.append([pad_token_id] * before + body + [pad_token_id] * after)
+        masks.append([0] * before + [1] * body_length + [0] * after)
+    sequences = torch.tensor(sequences, dtype=torch.long)
+    attention_mask = torch.tensor(masks, dtype=torch.long)
+    response_mask = attention_mask[:, -response_length:]
+    zeros = torch.zeros(batch_size, response_length, dtype=torch.float32)
+    advantages = torch.linspace(-1.0, 1.0, response_length).unsqueeze(0).repeat(batch_size, 1)
+    batch = TrainingInputBatch(
+        {
+            "sequences": sequences,
+            "attention_mask": attention_mask,
+            "action_log_probs": zeros.clone(),
+            "base_action_log_probs": zeros.clone(),
+            "rollout_logprobs": zeros.clone(),
+            "values": zeros.clone(),
+            "returns": zeros.clone(),
+            "advantages": advantages,
+            "loss_mask": response_mask.clone(),
+            "response_mask": response_mask.clone(),
+        }
+    )
+    batch.metadata = {"response_length": response_length, "global_step": 0}
+    return batch
+
+
+def _megatron_response_logprobs(policy, batch: TrainingInputBatch) -> torch.Tensor:
+    outputs = ray.get(policy.async_run_ray_method("mesh", "forward", data=batch))
+    return concatenate_outputs_after_mesh_dispatch(policy.actor_infos, outputs)["output"].float()
