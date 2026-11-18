@@ -4,15 +4,20 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import torch
 from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
 from skyrl_gym.verification import VerificationResult
-from skyrl_train.trainer import RayPPOTrainer
+from skyrl_train.batch_assembly import BatchPlan, assemble_slice
+from skyrl_train.batch_metrics import reward_metrics, rollout_metrics
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
+from skyrl_train.objective.reduction import policy_data_weights
+from skyrl_train.rollouts.buffer import RowFacts
+from skyrl_train.trainer import RayPPOTrainer
+from skyrl_train.utils.span_tagger import SPAN_OTHER, SPAN_THINK
 from skyrl_train.utils.utils import validate_cfg
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
-from skyrl_train.batch_metrics import reward_metrics, rollout_metrics
-from skyrl_train.rollouts.buffer import RowFacts
 
 
 class RecordedRows:
@@ -146,17 +151,29 @@ def test_reward_mean_uses_compensated_totals(token_rewards):
     assert metrics["reward/avg_raw_reward"] == 0.2
 
 
-def test_step_wise_shaping_metrics_read_the_final_outcome():
+def test_step_wise_batch_preserves_shaping_metrics_and_span_weights():
     neutral = {"non_termination": 0.0, "successful_length": 0.0, "overlong": 0.0}
     batch = {
         "prompt_token_ids": [[0], [0, 1]],
-        "response_ids": [[1], [2]],
-        "loss_masks": [[1], [1]],
+        "response_ids": [[1, 2], [2]],
+        "loss_masks": [[1, 1], [1]],
         "is_last_step": [False, True],
-        "rewards": [0.0, 0.5],
+        "rewards": [[0.0, 0.0], [0.5]],
         "unshaped_rewards": [0.0, 1.0],
         "reward_shaping_components": [neutral, {**neutral, "successful_length": -0.5}],
+        "response_span_tags": [[SPAN_THINK, SPAN_OTHER], [SPAN_THINK]],
     }
-    metrics = rollout_metrics([RowFacts.from_batch(batch)], tis_lcs_alert_threshold=1.0)
+    facts = RowFacts.from_batch(batch)
+    metrics = rollout_metrics([facts], tis_lcs_alert_threshold=1.0)
     assert metrics["generate/reward_shaping/outcome_reward_mean"] == 1.0
     assert metrics["generate/reward_shaping/shaped_reward_mean"] == 0.5
+
+    plan = BatchPlan(
+        global_step=0, uids=("g", "g"), facts=(facts,), fields=facts.fields, rollout_staleness=None, num_experts=None
+    )
+    algorithm = OmegaConf.create(
+        {"policy_loss_type": "regular", "off_policy_correction": "none", "off_policy_correction_rules": []}
+    )
+    training_input = assemble_slice(plan, range(2), batch, pad_token_id=0, algorithm=algorithm)
+    weights = policy_data_weights(training_input["loss_mask"], training_input.get("response_span_tags"), 0.25)
+    torch.testing.assert_close(weights, torch.tensor([[0.25, 1.0], [0.25, 0.0]]), rtol=0, atol=0)
