@@ -659,19 +659,8 @@ export interface LaunchGroup {
 }
 
 // Playground reports: model feedback saved by the marin-serve dashboard's Report issue button.
-export const REPORT_STATUSES = ['new', 'triaged', 'filed', 'wont_fix'] as const
-export type ReportStatus = (typeof REPORT_STATUSES)[number]
-
-interface ReportTriage {
-  status: ReportStatus
-  notes: string
-  github_issue: string | null
-  triage_updated_at: string | null
-  triage_updated_by: string | null
-}
-
 // One row of /api/playground-reports, newest first.
-export interface ReportSummary extends ReportTriage {
+export interface ReportSummary {
   report_id: string
   created_at: string
   model: string
@@ -709,8 +698,8 @@ export interface PlaygroundConversation {
   messages: PlaygroundMessage[]
 }
 
-// /api/playground-reports/{id}: the stored report object plus its source and triage state.
-export interface ReportDetail extends ReportTriage {
+// /api/playground-reports/{id}: the stored report object plus its source.
+export interface ReportDetail {
   report_id: string
   source_url: string
   created_at: string

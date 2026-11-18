@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Playground reports: ingest from the serve dashboard's objects, listing, and triage."""
+"""Playground reports: ingest from the serve dashboard's objects, listing, and detail."""
 
 import json
 from pathlib import Path
@@ -65,39 +65,13 @@ def test_ingest_copies_new_reports_once_and_skips_malformed_objects(tmp_path):
         summaries = client.get("/playground-reports").json()
         detail = client.get("/playground-reports/2026-11-17-205725-aaaa").json()
 
-    assert [(row["report_id"], row["status"]) for row in summaries] == [
-        ("2026-11-18-090000-bbbb", "new"),
-        ("2026-11-17-205725-aaaa", "new"),
-    ]
+    assert [row["report_id"] for row in summaries] == ["2026-11-18-090000-bbbb", "2026-11-17-205725-aaaa"]
     assert summaries[1]["reporter"] == "Ada"
     assert summaries[1]["has_conversation"] is True
     assert "report" not in summaries[1]
     assert detail["report"]["conversation"] == conversation
     assert detail["serving"]["tensor_parallel_size"] == 4
     assert detail["source_url"].endswith("2026-11-17/205725-aaaa.json")
-
-
-def test_triage_survives_reingest_and_rejects_unknown_reports_and_statuses(tmp_path):
-    engine = _engine()
-    prefix = tmp_path / "model-feedback"
-    _write_report(prefix, "2026-11-18", "090000-bbbb", "2026-11-18T09:00:00+00:00", description="Too verbose.")
-    ingest_reports(engine, (str(prefix),))
-
-    with _client(engine, prefix) as client:
-        updated = client.post(
-            "/playground-reports/2026-11-18-090000-bbbb/triage",
-            json={"status": "filed", "notes": "Same as the verbosity regression.", "github_issue": " #12345 "},
-        )
-        ingest_reports(engine, (str(prefix),))
-        after_reingest = client.get("/playground-reports").json()[0]
-        unknown = client.post("/playground-reports/missing/triage", json={"status": "triaged"})
-        bad_status = client.post("/playground-reports/2026-11-18-090000-bbbb/triage", json={"status": "done"})
-
-    assert updated.status_code == 200
-    assert updated.json()["notes"] == "Same as the verbosity regression."
-    assert (after_reingest["status"], after_reingest["github_issue"]) == ("filed", "#12345")
-    assert unknown.status_code == 404
-    assert bad_status.status_code == 422
 
 
 def test_local_store_reports_that_playground_reports_need_postgres():

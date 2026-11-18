@@ -4,15 +4,14 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatTimestamp } from '@/utils/formatting'
-import { REPORT_STATUSES, type ReportSummary } from '@/types/api'
-import StatusChip from '@/components/shared/StatusChip.vue'
+import type { ReportSummary } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import FilterBar, { type Facet } from '@/components/shared/FilterBar.vue'
 
 const route = useRoute()
 const router = useRouter()
 
-const FACET_KEYS = ['model', 'status', 'reporter'] as const
+const FACET_KEYS = ['model', 'reporter'] as const
 
 function queryValue(key: string): string {
   const value = route.query[key]
@@ -43,14 +42,12 @@ function distinct(values: string[]): string[] {
 
 const facets = computed<Facet[]>(() => [
   { key: 'model', label: 'Model', searchable: true, options: distinct(reports.value.map((r) => r.model)) },
-  { key: 'status', label: 'Status', options: [...REPORT_STATUSES] },
   { key: 'reporter', label: 'Reporter', options: distinct(reports.value.map((r) => r.reporter)) },
 ])
 
 const shown = computed(() =>
   reports.value.filter((r) =>
     (!selected.value.model || r.model === selected.value.model) &&
-    (!selected.value.status || r.status === selected.value.status) &&
     (!selected.value.reporter || r.reporter === selected.value.reporter),
   ),
 )
@@ -91,7 +88,6 @@ const resultLabel = computed(() => {
             <th class="px-3 py-2 text-left">Reporter</th>
             <th class="px-3 py-2 text-left">What went wrong</th>
             <th class="px-3 py-2 text-left">Chat</th>
-            <th class="px-3 py-2 text-left">Status</th>
             <th class="px-3 py-2 text-left"></th>
           </tr>
         </thead>
@@ -106,7 +102,6 @@ const resultLabel = computed(() => {
             <td class="px-3 py-2 whitespace-nowrap text-text-secondary">{{ row.reporter || '—' }}</td>
             <td class="px-3 py-2 max-w-[48ch] truncate" :title="row.description">{{ row.description }}</td>
             <td class="px-3 py-2 text-text-secondary">{{ row.has_conversation ? 'yes' : 'omitted' }}</td>
-            <td class="px-3 py-2"><StatusChip :status="row.status" /></td>
             <td class="px-3 py-2 text-right">
               <RouterLink
                 :to="`/reports/${encodeURIComponent(row.report_id)}`"

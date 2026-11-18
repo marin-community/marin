@@ -1,25 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Playground reports: model-feedback reports saved by the marin-serve dashboard, with triage state.
+"""Playground reports: model-feedback reports saved by the marin-serve dashboard.
 
 The serve dashboard's Report issue button writes one immutable JSON object per report under
 ``{prefix}/{YYYY-MM-DD}/{id}.json`` (see ``marin.inference.model_feedback``). The scheduled ingest job
-copies objects it has not seen into ``playground_reports``. Triage edits live in a separate table, so
-reading a report again never overwrites them.
+copies objects it has not seen into ``playground_reports``.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from enum import StrEnum
 from typing import Literal
 
 import sqlalchemy
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.filesystem.factory import open_url, url_to_fs
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, Table, Text
+from sqlalchemy import Boolean, Column, DateTime, Index, Table, Text
 from sqlalchemy.engine import Engine
 
 from .results_db import _dialect_insert, json_type, metadata
@@ -31,13 +29,6 @@ DEFAULT_REPORT_PREFIXES = (
     "s3://marin-us-east-02a/marin/model-feedback",
 )
 MAX_REPORT_SUMMARIES = 1000
-
-
-class ReportStatus(StrEnum):
-    NEW = "new"
-    TRIAGED = "triaged"
-    FILED = "filed"
-    WONT_FIX = "wont_fix"
 
 
 reports = Table(
@@ -52,26 +43,6 @@ reports = Table(
     Column("has_conversation", Boolean, nullable=False),
     Column("record", json_type, nullable=False),
     Index("playground_reports_created_at", "created_at"),
-)
-
-report_triage = Table(
-    "playground_report_triage",
-    metadata,
-    Column(
-        "report_id",
-        Text,
-        ForeignKey("playground_reports.report_id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    Column("status", Text, nullable=False),
-    Column("notes", Text, nullable=False),
-    Column("github_issue", Text),
-    Column("updated_at", DateTime(timezone=True), nullable=False),
-    Column("updated_by", Text),
-    CheckConstraint(
-        f"status IN ({', '.join(repr(status.value) for status in ReportStatus)})",
-        name="playground_report_triage_status",
-    ),
 )
 
 
@@ -94,14 +65,6 @@ class FeedbackRecord(BaseModel):
     created_at: datetime
     serving: dict[str, object]
     report: FeedbackReport
-
-
-class TriageUpdate(BaseModel):
-    """A reviewer's edit to one report's triage state."""
-
-    status: ReportStatus
-    notes: str = ""
-    github_issue: str | None = None
 
 
 def list_report_paths(prefix: str) -> list[str]:
@@ -176,32 +139,9 @@ def ingest_reports(engine: Engine, prefixes: tuple[str, ...]) -> tuple[str, ...]
     return tuple(failed)
 
 
-def _triage_fields(row: sqlalchemy.RowMapping) -> dict:
-    return {
-        "status": row["status"] or ReportStatus.NEW.value,
-        "notes": row["notes"] or "",
-        "github_issue": row["github_issue"],
-        "triage_updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
-        "triage_updated_by": row["updated_by"],
-    }
-
-
-def _joined(*columns) -> sqlalchemy.Select:
-    triage = (
-        report_triage.c.status,
-        report_triage.c.notes,
-        report_triage.c.github_issue,
-        report_triage.c.updated_at,
-        report_triage.c.updated_by,
-    )
-    return sqlalchemy.select(*columns, *triage).select_from(
-        reports.outerjoin(report_triage, reports.c.report_id == report_triage.c.report_id)
-    )
-
-
 def fetch_report_summaries(engine: Engine, limit: int = MAX_REPORT_SUMMARIES) -> list[dict]:
-    """The newest reports without their conversations, each with its triage state."""
-    stmt = _joined(
+    """The newest reports without their conversations."""
+    stmt = sqlalchemy.select(
         reports.c.report_id,
         reports.c.created_at,
         reports.c.model,
@@ -219,42 +159,21 @@ def fetch_report_summaries(engine: Engine, limit: int = MAX_REPORT_SUMMARIES) ->
             "reporter": row["reporter"],
             "description": row["description"],
             "has_conversation": row["has_conversation"],
-            **_triage_fields(row),
         }
         for row in rows
     ]
 
 
 def fetch_report(engine: Engine, report_id: str) -> dict | None:
-    """One report's stored object, source, and triage state; None for an unknown ID."""
-    stmt = _joined(reports.c.report_id, reports.c.source_url, reports.c.record).where(reports.c.report_id == report_id)
+    """One report's stored object and source; None for an unknown ID."""
+    stmt = sqlalchemy.select(reports.c.report_id, reports.c.source_url, reports.c.record).where(
+        reports.c.report_id == report_id
+    )
     with engine.begin() as conn:
         row = conn.execute(stmt).mappings().one_or_none()
     if row is None:
         return None
-    return {"report_id": row["report_id"], "source_url": row["source_url"], **row["record"], **_triage_fields(row)}
-
-
-def update_triage(engine: Engine, report_id: str, update: TriageUpdate, updated_by: str | None) -> dict | None:
-    """Replace one report's triage state; None when the report is unknown."""
-    values = {
-        "report_id": report_id,
-        "status": update.status.value,
-        "notes": update.notes,
-        "github_issue": (update.github_issue or "").strip() or None,
-        "updated_at": datetime.now(UTC),
-        "updated_by": updated_by,
-    }
-    with engine.begin() as conn:
-        exists = conn.execute(sqlalchemy.select(reports.c.report_id).where(reports.c.report_id == report_id)).first()
-        if exists is None:
-            return None
-        insert = _dialect_insert(conn, report_triage)
-        changed = {name: insert.excluded[name] for name in values if name != "report_id"}
-        conn.execute(
-            insert.values(values).on_conflict_do_update(index_elements=[report_triage.c.report_id], set_=changed)
-        )
-    return fetch_report(engine, report_id)
+    return {"report_id": row["report_id"], "source_url": row["source_url"], **row["record"]}
 
 
 def _utc_iso(value: datetime) -> str:

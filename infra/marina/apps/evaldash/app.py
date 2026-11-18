@@ -1478,7 +1478,7 @@ def _control_router(
 
 
 def _reports_router(engine: Engine | None) -> APIRouter:
-    """Playground report list, detail, and triage; the local store has no database to serve them from."""
+    """Playground report list and detail; the local store has no database to serve them from."""
     router = APIRouter()
     unavailable = JSONResponse({"detail": "playground reports require the postgres store"}, status_code=503)
 
@@ -1493,15 +1493,6 @@ def _reports_router(engine: Engine | None) -> APIRouter:
         if engine is None:
             return unavailable
         report = await asyncio.to_thread(playground_reports.fetch_report, engine, report_id)
-        if report is None:
-            return JSONResponse({"detail": "unknown report_id"}, status_code=404)
-        return JSONResponse(report)
-
-    @router.post("/playground-reports/{report_id}/triage")
-    async def api_report_triage(report_id: str, update: playground_reports.TriageUpdate) -> JSONResponse:
-        if engine is None:
-            return unavailable
-        report = await asyncio.to_thread(playground_reports.update_triage, engine, report_id, update, _current_user())
         if report is None:
             return JSONResponse({"detail": "unknown report_id"}, status_code=404)
         return JSONResponse(report)
