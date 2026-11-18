@@ -517,6 +517,10 @@ class TaskSpecTrial(Trial):
                 raise ValueError("Declared TaskSpec CPU and memory require cgroup enforcement")
         else:
             kwargs.pop("provisioning")
+            # trial_attempt_timeout_sec selects the JOB provider wait policy in the
+            # shellbox Daytona path; the TaskSpec path pins that policy unconditionally,
+            # so consume the argument instead of rejecting it.
+            kwargs.pop("trial_attempt_timeout_sec", None)
             unknown = kwargs.keys() - {"ttl_minutes", "create_timeout"}
             if unknown:
                 raise ValueError(f"Unsupported TaskSpec Daytona arguments: {sorted(unknown)}")

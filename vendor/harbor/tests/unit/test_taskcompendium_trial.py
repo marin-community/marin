@@ -213,6 +213,56 @@ class FileMachine(LocalGradingMachine):
         return result
 
 
+@pytest.mark.asyncio
+async def test_declarative_task_spec_accepts_attempt_timeout_argument(tmp_path, monkeypatch):
+    """The campaign passes trial_attempt_timeout_sec to every Daytona task; the TaskSpec
+    path pins the JOB provider wait policy that argument selects and must consume it
+    instead of rejecting the whole attempt."""
+    build = DockerBuildContext(files=(
+        inline_resource("Dockerfile", b"FROM ubuntu:24.04\nWORKDIR /app\nCOPY initial value\n"),
+        inline_resource("initial", b"base"),
+    ))
+    environment = EnvironmentRequirements(capabilities=("shell",), command_semantics=CommandSemantics.LINUX_PROCESS,
+                                          docker_build=build, working_directory="/app")
+    source_check = 'if [ "$(cat value)" = gold ]; then printf 1; else printf 0; fi > collected.txt'
+    task = TaskSpec(
+        id="declared-build-attempt-timeout", source=Source(dataset="fixture", revision="pin", row="0", importer_revision="1"),
+        context=ConversationInput(events=(TextMessage(role="user", content="Replace value with gold."),)),
+        answer_type=AnswerType.WORKSPACE_STATE, answer_format=PlainText(), environment_requirements=environment,
+        grader=ScriptGrader(argv=("cp", "/source-reward.txt", "/logs/verifier/reward.txt"), environment=environment, answer_path=None, timeout=None,
+                            collect=(VerifierCommand(argv=("bash", "-c", source_check), cwd="/app"),),
+                            artifacts=(VerifierArtifact(source="/app/collected.txt", target="/source-reward.txt", kind=ArtifactKind.FILE),),
+                            reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),))),
+        resources=ResourceGroups(worker=(inline_resource("app/gold", b"gold"),), oracle=(inline_resource("solution/solve.sh", b"cp gold value\n"),)),
+        integrity_contract=RootDeliveryContract(dependency_state=SharedDependencyState.AGENT_MUTABLE,
+                           verifier_files=(DeliveredVerifierFile(name="state.sh", mode=0o755, sha256=hashlib.sha256(source_check.encode()).hexdigest()),),
+                           undeclared_deadline=True),
+    )
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS, docker_build=DockerBuildExecution.DECLARATIVE)
+    machines = Machines(tmp_path / "sandboxes", disk_pool=object())
+    original_create = machines.create
+
+    async def create(spec):
+        machine = await original_create(spec)
+        machine.local("/tmp").mkdir()
+        machine.local("/app/value").write_bytes((spec.source.context / "initial").read_bytes())
+        return machine
+
+    monkeypatch.setattr(machines, "create", create)
+    monkeypatch.setattr(adapter, "DaytonaDeclarativeMachineFactory", lambda client, **kwargs: machines)
+    trial = await Trial.create(TrialConfig(
+        task=TaskConfig(path=directory), trial_name="candidate", trials_dir=tmp_path / "trials",
+        agent=AgentConfig(name="nop", model_name=None, kwargs={}),
+        environment=EnvironmentConfig(type="daytona", kwargs={
+            "provisioning": "declarative", "trial_attempt_timeout_sec": 900.0,
+        }),
+    ), host_capabilities=HostCapabilities(daytona=DaytonaConnection("fixture-key", "https://offline.invalid", "us")))
+    result = await trial.run()
+    assert result.exception_info is None, result.exception_info
+    assert result.verifier_result.rewards == {"reward": 0.0}
+
+
 @dataclass
 class Machines:
     """Machine boundary: use real verifier subprocesses, with guest paths rooted in tmp_path."""
