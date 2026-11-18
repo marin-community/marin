@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 import pytest
+from shellbox.backends.local import machine as machine_module
 from shellbox.backends.local.launch import COMMAND_NICENESS
 from shellbox.backends.local.machine import (
     NPROC_HEADROOM,
@@ -1541,3 +1542,24 @@ def test_prepared_local_task_applies_startup_overrides_with_private_writable_roo
     assert {
         path.relative_to(image.layout): path.read_bytes() for path in image.layout.rglob("*") if path.is_file()
     } == original
+
+
+def test_apply_sandbox_apt_config_writes_the_no_sandbox_configuration(tmp_path):
+    """Image machines get apt configured to run as root inside the capability-less sandbox."""
+    (tmp_path / "etc" / "apt" / "apt.conf.d").mkdir(parents=True)
+    machine_module._apply_sandbox_apt_config(tmp_path)
+    config = tmp_path / machine_module.SANDBOX_APT_CONFIG_RELATIVE
+    assert 'APT::Sandbox::User "root";' in config.read_text()
+
+
+def test_apply_sandbox_apt_config_skips_images_without_apt(tmp_path):
+    machine_module._apply_sandbox_apt_config(tmp_path)
+    assert not (tmp_path / machine_module.SANDBOX_APT_CONFIG_RELATIVE).exists()
+
+
+def test_apply_sandbox_apt_config_never_clobbers_an_existing_config(tmp_path):
+    config = tmp_path / machine_module.SANDBOX_APT_CONFIG_RELATIVE
+    config.parent.mkdir(parents=True)
+    config.write_text('APT::Sandbox::User "_apt";\n')
+    machine_module._apply_sandbox_apt_config(tmp_path)
+    assert config.read_text() == 'APT::Sandbox::User "_apt";\n'

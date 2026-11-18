@@ -268,6 +268,33 @@ def _sandbox_argv(
     return argv
 
 
+SANDBOX_APT_CONFIG_RELATIVE = Path("etc/apt/apt.conf.d/90-shellbox-no-sandbox.conf")
+"""Where local image machines get the no-sandbox apt configuration."""
+
+SANDBOX_APT_CONFIG_TEXT = (
+    "# The local sandbox drops all capabilities, so apt cannot drop to _apt; run as root.\n"
+    "# Written by the harness at machine creation, never by a task.\n"
+    'APT::Sandbox::User "root";\n'
+)
+
+
+def _apply_sandbox_apt_config(root: Path) -> None:
+    """Let apt run as root inside capability-less local image machines.
+
+    bwrap sandboxes run commands with all capabilities dropped, so apt's own privilege
+    drop (setgroups/seteuid to _apt) fails with EPERM and any apt-get setup dies at exit
+    100. The harness writes the no-sandbox configuration into the machine's rootfs at
+    creation; task contracts (their setup commands) stay untouched.
+    """
+    apt_directory = root / SANDBOX_APT_CONFIG_RELATIVE.parent
+    if not apt_directory.is_dir():
+        return
+    config = root / SANDBOX_APT_CONFIG_RELATIVE
+    if config.exists():
+        return
+    config.write_text(SANDBOX_APT_CONFIG_TEXT)
+
+
 def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
     """``bwrap`` alone, or the bundled bwrap followed by any bwrap on ``PATH``; the caller probes each in turn."""
     if sys.platform != "linux":
@@ -1476,6 +1503,7 @@ class LocalMachineFactory:
             image = await asyncio.shield(preparation)
             if image.user not in (None, "", "0", "0:0"):
                 raise UnsupportedMachineSpec("Prepared local images currently support only root USER")
+            _apply_sandbox_apt_config(image.root)
             effective = replace(spec, workdir=spec.workdir or image.workdir)
             machine = LocalMachine(
                 effective,
