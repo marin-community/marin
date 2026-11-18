@@ -212,7 +212,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "single-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(

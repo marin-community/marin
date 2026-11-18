@@ -598,7 +598,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
-            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("license:cc-by-4.0", "gym/nemotron_ultra"),
             count=1884,
         ),
         f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_REBENCH}": SourceInfo(
@@ -612,7 +612,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
-            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("license:cc-by-4.0", "gym/nemotron_ultra"),
             count=5307,
         ),
         "swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
@@ -1106,7 +1106,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
-            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("license:cc-by-4.0", "gym/nemotron_ultra"),
             count=2838,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -1118,7 +1118,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
-            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("license:cc-by-4.0", "gym/nemotron_ultra"),
             count=11060,
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
@@ -1130,7 +1130,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="tool-use",
-            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("license:cc-by-4.0", "gym/nemotron_ultra"),
             count=20035,
         ),
         "ultra_sft_step3200_toolcall_schema": SourceInfo(
@@ -1348,7 +1348,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
-            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("license:cc-by-4.0", "gym/nemotron_ultra"),
             count=2838,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -1360,7 +1360,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
-            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("license:cc-by-4.0", "gym/nemotron_ultra"),
             count=11060,
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
@@ -1372,7 +1372,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="tool-use",
-            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("license:cc-by-4.0", "gym/nemotron_ultra"),
             count=20035,
         ),
         "ultra_sft_step3200_toolcall_schema": SourceInfo(
