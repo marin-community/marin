@@ -315,4 +315,6 @@ def test_hard_mask_export_reloads_to_the_hard_mask_forward(mesh, tmp_path):
             dtype=jnp.float32,
         )
         actual = np.asarray(reloaded.activations(tokens, key=None))
-        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)
+        # the deletion-multiply and stored-zero paths can lower differently, so
+        # allow last-ulp noise; a structural mismatch is orders of magnitude larger
+        np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
