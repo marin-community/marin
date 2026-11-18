@@ -41,7 +41,11 @@ def copy_object(source_uri: str, target_uri: str) -> dict:
 
 def mirror_shard(shard_dir: str, source_root: str, target_root: str) -> dict:
     shard = StoragePath(shard_dir)
-    entries = sorted(str(path) for path in shard.walk() if (StoragePath(str(path))).isfile())
+    entries = []
+    for dirpath, _dirnames, filenames in shard.walk():
+        for name in filenames:
+            entries.append(str(dirpath / name))
+    entries.sort()
     if not entries:
         raise ValueError(f"Source shard has no objects: {shard_dir}")
     relative = str(shard.relative_to(StoragePath(source_root)))
@@ -49,7 +53,7 @@ def mirror_shard(shard_dir: str, source_root: str, target_root: str) -> dict:
         raise ValueError(f"Shard lies outside the source root: {shard_dir}")
     objects = []
     for source_uri in entries:
-        target_uri = str(StoragePath(target_root) / relative / str(StoragePath(source_uri)).relative_to(shard))
+        target_uri = str(StoragePath(target_root) / relative / str(StoragePath(source_uri).relative_to(shard)))
         objects.append(copy_object(source_uri, target_uri))
     written = [object for object in objects if (StoragePath(object["path"])).isfile()]
     if len(written) != len(entries):
