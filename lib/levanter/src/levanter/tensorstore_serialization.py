@@ -752,7 +752,6 @@ class _Wave:
         self.pending = 0
         self.bytes = 0
         self.error: BaseException | None = None
-        self.closing = False
         self.stores: dict[str, ts.Future] = {}
         self.writes: list[ts.WriteFutures] = []
         promise, self.future = ts.Promise.new()
@@ -761,10 +760,8 @@ class _Wave:
     def open_store(self, path: str, metadata: dict, context: ts.Context, *, create: bool) -> ts.Future:
         store = self.stores.get(path)
         if store is None:
-            # The trailing slash is the OCDBT path separator. Without it, zarr.json is appended
-            # onto the array name and a reader looking up ``path/zarr.json`` finds nothing.
             spec = {"driver": ARRAY_DRIVER, "metadata": metadata}
-            kvstore = self.bound / f"{path}/"
+            kvstore = _array_kvstore(self.bound, path)
             if create:
                 store = ts.open(spec, kvstore=kvstore, create=True, open=True, context=context)
             else:
@@ -872,7 +869,7 @@ class _ManifestWaves:
             self._close_if_ready(wave)
 
     def _ensure_wave(self) -> _Wave:
-        if self._wave is None or self._wave.closing:
+        if self._wave is None:
             # A non-atomic transaction commits metadata and chunks as separate manifest versions.
             # An atomic one over the single OCDBT database is one version, and all or nothing.
             txn = ts.Transaction(atomic=True)
@@ -882,13 +879,12 @@ class _ManifestWaves:
         return self._wave
 
     def _close_if_ready(self, wave: _Wave) -> None:
-        if wave.closing or wave.pending != 0 or wave is not self._wave:
+        if wave.pending != 0 or wave is not self._wave:
             return
         # A writer the loop has not scheduled yet must still be able to join this wave.
         # Close early only when a later writer is already blocked on the budget.
         if self._finished != self._expected and not self._gate.has_waiters:
             return
-        wave.closing = True
         self._wave = None
         held = wave.bytes
         wave.bytes = 0
@@ -965,7 +961,7 @@ def _checkpoint_writes(
             if region is None:
                 continue
 
-            def stage_shard(shard=shard, region=region, plan=plan):
+            def stage_shard(shard=shard, region=region):
                 async def stage():
                     return await _transfer_shard_to_pageable_host(shard, region.local_slice)
 
@@ -1031,27 +1027,6 @@ def _future_error(fut: ts.Future) -> BaseException | None:
     except BaseException as error:
         return error
     return None
-
-
-def _uses_manifest_waves(
-    file_io_locking: FileIoLocking | None,
-    jobs: Sequence[_CheckpointWrite],
-    config: TensorStoreWriteConfig,
-) -> bool:
-    """Whether this save commits one manifest version per staging wave.
-
-    Lock-file commits are serialized across NFS clients, so a save that spills into several
-    waves commits once per wave. A save that fits in the budget commits each chunk as it is
-    staged: one transaction would defer all of its I/O to the commit. Other locking modes
-    always commit per chunk, because TensorStore already batches those commits.
-
-    Each process decides from its own share, so processes may take different paths. Both paths
-    reach the same one metadata barrier under lock files, so that does not deadlock.
-    """
-    if file_io_locking != "lockfile":
-        return False
-    staged = sum(job.num_bytes for job in jobs)
-    return staged > config.max_staged_host_bytes
 
 
 def _publish_array_metadata(checkpoint_dir: str, context: ts.Context, tspecs: Sequence[dict]) -> None:
@@ -1238,7 +1213,9 @@ def _serialize_arrays(
     # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
     context = _tensorstore_write_context(config, file_io_locking)
     jobs = _checkpoint_writes(arrays, tspecs, plans)
-    if _uses_manifest_waves(file_io_locking, jobs, config):
+    # Each process chooses from its own share; both lock-file paths reach one metadata barrier.
+    use_waves = file_io_locking == "lockfile" and sum(job.num_bytes for job in jobs) > config.max_staged_host_bytes
+    if use_waves:
         gate, commit_futures = _write_in_manifest_waves(jobs, tspecs, config, checkpoint_dir, context)
     else:
         # A fitting multi-process save still commits each chunk on its own, and those commits

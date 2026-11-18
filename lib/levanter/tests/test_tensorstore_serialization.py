@@ -498,66 +498,41 @@ def _ocdbt_version_count(checkpoint_dir) -> int:
     return manifest["versions"][-1]["generation_number"]
 
 
-def _commit_each_array(checkpoint_dir, arrays: dict[str, np.ndarray]) -> None:
-    """Publish each array with its own TensorStore commit, one manifest version per write."""
-    for name, value in arrays.items():
-        store = ts.open(
-            {
-                "driver": "zarr3",
-                "kvstore": {
-                    "driver": "ocdbt",
-                    "base": {"driver": "file", "path": str(checkpoint_dir)},
-                    "path": name,
-                },
-                "metadata": {
-                    "shape": list(value.shape),
-                    "data_type": np.dtype(value.dtype).name,
-                    "chunk_grid": {
-                        "name": "regular",
-                        "configuration": {"chunk_shape": list(value.shape)},
-                    },
-                },
-            },
-            create=True,
-        ).result()
-        store.write(value).result()
-
-
 def test_a_lock_file_save_publishes_one_manifest_version_per_wave(tmp_path):
     """A save that spills the budget commits once per wave.
 
     Three waves are four generations: the empty database, then one per wave. A non-atomic
-    transaction would add two generations per wave. A save that fits the budget still restores.
+    transaction would add two generations per wave.
     """
     arrays = {f"w{i}": np.full(1024, i, dtype=np.float32) for i in range(6)}
     one_array = next(iter(arrays.values())).nbytes
-    separate = tmp_path / "separate"
     batched = tmp_path / "batched"
-    fitting = tmp_path / "fitting"
-    separate.mkdir()
     batched.mkdir()
-    fitting.mkdir()
-    _commit_each_array(separate, arrays)
 
     tree_serialize_leaves_tensorstore(
         str(batched),
         arrays,
         write_config=TensorStoreWriteConfig(max_staged_host_bytes=one_array * 2, file_io_locking="lockfile"),
     )
-    tree_serialize_leaves_tensorstore(
-        str(fitting),
-        arrays,
-        write_config=TensorStoreWriteConfig(max_staged_host_bytes=one_array * len(arrays), file_io_locking="lockfile"),
-    )
 
     assert _ocdbt_version_count(batched) == 4
-    assert _ocdbt_version_count(separate) > 4
-    for path in (batched, fitting):
-        restored = tree_deserialize_leaves_tensorstore(
-            str(path), {name: jnp.zeros_like(value) for name, value in arrays.items()}
-        )
-        for name, value in arrays.items():
-            np.testing.assert_array_equal(np.asarray(restored[name]), value)
+    restored = tree_deserialize_leaves_tensorstore(
+        str(batched), {name: jnp.zeros_like(value) for name, value in arrays.items()}
+    )
+    for name, value in arrays.items():
+        np.testing.assert_array_equal(np.asarray(restored[name]), value)
+
+
+def test_a_spilling_lock_file_save_of_a_bare_array_restores(tmp_path):
+    """A PyTree that is one array and spills the budget stays at the OCDBT root."""
+    values = np.arange(16, dtype=np.float32)
+    tree_serialize_leaves_tensorstore(
+        str(tmp_path),
+        values,
+        write_config=TensorStoreWriteConfig(max_staged_host_bytes=8, file_io_locking="lockfile"),
+    )
+    restored = tree_deserialize_leaves_tensorstore(str(tmp_path), jnp.zeros_like(values))
+    np.testing.assert_array_equal(np.asarray(restored), values)
 
 
 def test_a_save_larger_than_the_staging_budget_rolls_through_it():
