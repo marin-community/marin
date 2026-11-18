@@ -47,9 +47,35 @@ const PROXY_METRIC_NAMES = {
 const RECENT_STATS_FILTER = () => `timestamp_ms >= ${Date.now() - 5 * 60 * 1000}`
 
 // Scope to this cluster's own rows. A hub finelog also holds child rows stamped
-// with their origin cluster; local writes leave `cluster` empty/NULL, so this
-// filter shows only the cluster whose dashboard is open (no cross-cluster mixing).
-const LOCAL_CLUSTER_FILTER = "(cluster IS NULL OR cluster = '')"
+// with their origin cluster. A finelog that names its own cluster stores its own
+// rows under that name; rows written before it did leave `cluster` empty/NULL.
+// So this filter shows only the cluster whose dashboard is open (no cross-cluster
+// mixing). The finelog reports its own name, if any, at /api/server.
+const SERVER_INFO_PATH = '/proxy/system.log-server/api/server'
+const ownCluster = ref('')
+
+function sqlString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+function localClusterFilter(): string {
+  const empty = "cluster IS NULL OR cluster = ''"
+  if (!ownCluster.value) return `(${empty})`
+  return `(${empty} OR cluster = ${sqlString(ownCluster.value)})`
+}
+
+// Rows written before the finelog named its cluster share series with the
+// named rows, so a counter does not split when the name is set.
+function originCluster(): string {
+  return `COALESCE(NULLIF(cluster, ''), ${sqlString(ownCluster.value || 'local')})`
+}
+
+async function loadOwnCluster(): Promise<void> {
+  const resp = await fetch(SERVER_INFO_PATH)
+  if (!resp.ok) throw new Error(`GET ${SERVER_INFO_PATH}: HTTP ${resp.status}`)
+  const info = (await resp.json()) as { store?: { cluster?: string } }
+  ownCluster.value = info.store?.cluster ?? ''
+}
 
 function statsSql(): string {
   const names = Object.values(METRIC_NAMES).map((name) => `'${name}'`).join(', ')
@@ -57,7 +83,7 @@ function statsSql(): string {
 WITH telemetry AS (
   SELECT * FROM "telemetry_v1.iris.rpc"
 ), filtered AS (
-  SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+  SELECT ${originCluster()} AS origin_cluster,
          name, value, timestamp_ms, seq,
          json_get(attributes_json, 'service') AS rpc_service,
          json_get(attributes_json, 'method') AS method,
@@ -67,7 +93,7 @@ WITH telemetry AS (
   FROM telemetry
   WHERE service = 'iris-controller' AND name IN (${names})
     AND ${RECENT_STATS_FILTER()}
-    AND ${LOCAL_CLUSTER_FILTER}
+    AND ${localClusterFilter()}
 )
 SELECT name, value, to_timestamp_millis(timestamp_ms) AS ts,
        rpc_service AS service, method, upstream, status, le
@@ -84,7 +110,7 @@ function proxySql(): string {
 WITH telemetry AS (
   SELECT * FROM "telemetry_v1.iris.rpc"
 ), filtered AS (
-  SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+  SELECT ${originCluster()} AS origin_cluster,
          name, value, timestamp_ms, seq,
          json_get(attributes_json, 'scope') AS scope,
          json_get(attributes_json, 'endpoint') AS endpoint,
@@ -95,7 +121,7 @@ WITH telemetry AS (
   FROM telemetry
   WHERE service = 'iris-controller' AND name IN (${names})
     AND ${RECENT_STATS_FILTER()}
-    AND ${LOCAL_CLUSTER_FILTER}
+    AND ${localClusterFilter()}
 )
 SELECT name, value, to_timestamp_millis(timestamp_ms) AS ts,
        scope, endpoint, method, route_kind, status, le
@@ -113,7 +139,16 @@ function refreshAll() {
   refreshProxy()
 }
 useAutoRefresh(refreshAll, DEFAULT_REFRESH_MS)
-onMounted(refreshAll)
+onMounted(async () => {
+  try {
+    await loadOwnCluster()
+  } catch (e) {
+    // Without the name the panel can show only rows written before the finelog
+    // named its cluster; say so rather than silently showing nothing.
+    console.warn('RpcStatsPanel: could not read the finelog cluster name', e)
+  }
+  refreshAll()
+})
 
 type SortKey = 'method' | 'count' | 'errorCount' | 'inFlight' | 'p50' | 'p95' | 'p99' | 'last'
 const sortKey = ref<SortKey>('p95')
