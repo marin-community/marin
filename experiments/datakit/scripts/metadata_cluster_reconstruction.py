@@ -94,6 +94,12 @@ def _canonical_artifact_path(path: str) -> str:
     return path.replace("s3://marin-na/marin/", "s3://marin-us-east-02a/marin/", 1)
 
 
+def _within_provider_root(path: str, root: str) -> bool:
+    # Provider inventories name literal keys; preserve repeated separators.
+    boundary = root if root.endswith("/") else root + "/"
+    return path.startswith(boundary)
+
+
 def _provider_kind(source: dict) -> tuple[str, str | None]:
     recipe = _recipe(source["recipe"])
     if (
@@ -161,7 +167,7 @@ def _provider_kind(source: dict) -> tuple[str, str | None]:
             or len(paths) != expected_files
             or paths != sorted(set(paths))
             or not root
-            or any(not path.startswith(root.rstrip("/") + "/") for path in paths)
+            or any(not _within_provider_root(path, root) for path in paths)
         ):
             return "blocked", "The frozen original download inventory must replace its known partial regional copy"
     if recipe.transform is ProviderTransform.BIODIVERSITY:
@@ -197,9 +203,10 @@ def _provider_kind(source: dict) -> tuple[str, str | None]:
     providers = source["provider_references"]
     if not providers or any(not value.get("dataset") or not value.get("revision") for value in providers):
         return "blocked", "An original-provider snapshot and replay stage have not been established"
-    roots = [_canonical_artifact_path(value["artifact"]).rstrip("/") + "/" for value in providers]
+    roots = [_canonical_artifact_path(value["artifact"]) for value in providers]
     if any(
-        not any(_canonical_artifact_path(path).startswith(root) for root in roots) for path in source["provider_paths"]
+        not any(_within_provider_root(_canonical_artifact_path(path), root) for root in roots)
+        for path in source["provider_paths"]
     ):
         return "blocked", "Provider files are outside their frozen original download roots"
     return "hugging_face_original_snapshot", None
@@ -339,11 +346,7 @@ def _source(plan: dict, name: str) -> dict:
 
 
 def migrate_unversioned_source_roots(plan: dict) -> dict[str, str]:
-    """Recover explicit output roots for the first, already running unversioned plan.
-
-    This migration is only used while preparing a replacement plan. Worker APIs
-    require source_roots and never infer a legacy path.
-    """
+    """Return the original source roots recorded by an unversioned plan."""
     return {
         source["marin_source"]: prefix_join(
             plan["output_prefix"], "source=" + hashlib.sha256(source["marin_source"].encode()).hexdigest()[:16]

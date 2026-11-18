@@ -600,3 +600,12 @@ def test_swh_historical_empty_policy_cannot_classify_an_unrelated_source_as_read
     assert kind == "blocked"
     assert blocked is not None
     assert "restricted to its frozen v1 source" in blocked
+
+
+def test_provider_inventory_does_not_collapse_distinct_object_keys(tmp_path):
+    plan, _, _ = _inputs(tmp_path)
+    source = plan["sources"][0]
+    source["provider_references"][0]["artifact"] += "//"
+    kind, reason = reconstruction._provider_kind(source)
+    assert kind == "blocked"
+    assert reason == "Provider files are outside their frozen original download roots"
