@@ -13,6 +13,7 @@ evaluating with the hard mask.
 """
 
 import dataclasses
+import itertools
 import logging
 
 import equinox as eqx
