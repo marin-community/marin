@@ -43,6 +43,8 @@ from skyrl_train.workers.megatron.megatron_worker import MegatronPolicyWorkerBas
 
 from experiments.post_training.long_loop.replica_parameter_receipts import (
     ParameterReceipt,
+    comparator_snapshot,
+    known_group_minmax,
     parameter_sha256,
     replica_differences,
     replica_iteration_differences,
@@ -155,6 +157,32 @@ class ReplicaProbeWorker(MegatronPolicyWorkerBase):
             )
             for name in sender.sources
         }
+        entry = comparator_snapshot(sender.sources, groups)
+        entry.update(
+            {
+                "worker_rank": self._rank,
+                "worker_local_rank": self._local_rank,
+                "sender_trainer": asdict(sender.trainer),
+                "host": socket.gethostname(),
+                "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+                "current_cuda_device": torch.cuda.current_device(),
+                "gpu_uuid": str(torch.cuda.get_device_properties(torch.cuda.current_device()).uuid),
+                "nccl_buffer_size": os.environ.get("NCCL_BUFFSIZE"),
+                "sender_parallel_state_is_probe_module": sender.parallel_state is mpu,
+                "sender_dense_members": dist.get_process_group_ranks(
+                    sender.parallel_state.get_data_parallel_group(with_context_parallel=True)
+                ),
+                "sender_expert_members": dist.get_process_group_ranks(
+                    sender.parallel_state.get_expert_data_parallel_group()
+                ),
+            }
+        )
+        write_receipt(f"{self.output_prefix}/{phase}-comparator-entry-rank{dist.get_rank()}.json", entry)
+        known = known_group_minmax(groups, next(iter(sender.sources.values())).device)
+        write_receipt(
+            f"{self.output_prefix}/{phase}-known-minmax-rank{dist.get_rank()}.json",
+            {"rank": dist.get_rank(), "reports": known},
+        )
         started = time.monotonic()
         report = compare_replicas(sender.sources, groups, dist.get_rank(), version)
         write_receipt(
@@ -165,10 +193,16 @@ class ReplicaProbeWorker(MegatronPolicyWorkerBase):
                 "source_iteration_order": list(sender.sources),
             },
         )
+        write_receipt(
+            f"{self.output_prefix}/{phase}-comparator-exit-rank{dist.get_rank()}.json",
+            comparator_snapshot(sender.sources, groups),
+        )
         failures = torch.tensor(int(report.mismatched_bytes != 0), device="cuda")
         dist.all_reduce(failures, op=dist.ReduceOp.MAX)
         if failures.item():
             raise RuntimeError(f"Production byte comparator found divergent replicas at {phase}")
+        if not all(row["passed"] for row in known):
+            raise RuntimeError(f"Known-input MIN/MAX failed on live replica groups at {phase}")
 
 
 def worker(args: argparse.Namespace) -> None:

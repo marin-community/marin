@@ -7,6 +7,7 @@ import hashlib
 from dataclasses import asdict, dataclass
 
 import torch
+import torch.distributed as dist
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,79 @@ def parameter_sha256(parameter: torch.Tensor, chunk_bytes: int = 16 << 20) -> st
     for start in range(0, raw.numel(), chunk_bytes):
         digest.update(raw[start : start + chunk_bytes].cpu().numpy().tobytes())
     return digest.hexdigest()
+
+
+def comparator_snapshot(sources: dict[str, torch.Tensor], groups: dict[str, dist.ProcessGroup]) -> dict:
+    """Capture the live sender storage and the exact groups passed to comparison."""
+    bindings = {}
+    for group in groups.values():
+        identity = str(id(group))
+        if identity in bindings:
+            continue
+        bindings[identity] = {
+            "local_object_id": id(group),
+            "group_name": group.group_name,
+            "group_description": group.group_desc,
+            "members": dist.get_process_group_ranks(group),
+            "backend": dist.get_backend(group),
+            "group_rank": dist.get_rank(group),
+        }
+    return {
+        "rank": dist.get_rank(),
+        "groups": bindings,
+        "parameters": [
+            {
+                "name": name,
+                "group_object_id": str(id(groups[name])),
+                "tensor_object_id": id(source),
+                "data_ptr": source.data_ptr(),
+                "storage_ptr": source.untyped_storage().data_ptr(),
+                "storage_offset": source.storage_offset(),
+                "stride": list(source.stride()),
+                "shape": list(source.shape),
+                "dtype": str(source.dtype),
+                "device": str(source.device),
+                "nbytes": source.numel() * source.element_size(),
+                "sha256": parameter_sha256(source),
+            }
+            for name, source in sources.items()
+        ],
+    }
+
+
+def known_group_minmax(groups: dict[str, dist.ProcessGroup], device: torch.device) -> list[dict]:
+    """Check known int32 inputs on the comparison's live process-group handles."""
+    unique = {id(group): group for group in groups.values()}
+    rank = dist.get_rank()
+    reports = []
+    for identity, group in unique.items():
+        members = dist.get_process_group_ranks(group)
+        for count in [1024, 4194305, 16777216]:
+            base = torch.arange(count, dtype=torch.int32, device=device).remainder_(128)
+            source = base + rank
+            before = parameter_sha256(source)
+            low, high = source.clone(), source.clone()
+            dist.all_reduce(low, op=dist.ReduceOp.MIN, group=group)
+            dist.all_reduce(high, op=dist.ReduceOp.MAX, group=group)
+            low_errors = int(low.ne(base + min(members)).sum().item())
+            high_errors = int(high.ne(base + max(members)).sum().item())
+            after = parameter_sha256(source)
+            reports.append(
+                {
+                    "group_object_id": str(identity),
+                    "group_name": group.group_name,
+                    "members": members,
+                    "elements": count,
+                    "input_sha256": before,
+                    "input_after_sha256": after,
+                    "min_sha256": parameter_sha256(low),
+                    "max_sha256": parameter_sha256(high),
+                    "min_errors": low_errors,
+                    "max_errors": high_errors,
+                    "passed": low_errors == high_errors == 0 and before == after,
+                }
+            )
+    return reports
 
 
 def replica_differences(receipts: list[ParameterReceipt]) -> list[dict]:
