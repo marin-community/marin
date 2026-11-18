@@ -52,6 +52,22 @@ jobs:
             --index experiments/post_training/task_curation/source_fingerprint_index.json \
             --output atlas-overlap-inputs/fingerprints.json --changed-output atlas-overlap-inputs/changed.json
           echo "changed=$(python -c 'import json; print("true" if json.load(open("atlas-overlap-inputs/changed.json")) else "false")')" >> "$GITHUB_OUTPUT"
+      - name: Audit census receipt evidence for changed shards
+        run: |
+          shards=()
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then
+              shards+=("$file")
+            fi
+          done < <(git diff --name-only "$BASE_REF"...HEAD -- experiments/post_training/task_curation/datasets/daytona_census_receipts)
+          if [ "${#shards[@]}" -gt 0 ]; then
+            uv run --no-sync python -m experiments.post_training.task_curation.census_binding \
+              --audit-receipt-evidence \
+              --shard-dir experiments/post_training/task_curation/datasets/daytona_census_receipts \
+              --shard-files "${shards[@]}"
+          else
+            echo "No receipt shard changes; census evidence audit skipped"
+          fi
       - name: Stage generated overlap inputs outside the workspace bundle
         if: steps.prepare.outputs.changed == 'true'
         run: |

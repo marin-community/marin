@@ -6,6 +6,7 @@
 import hashlib
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -24,8 +25,12 @@ from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.census_binding import (
     ActorCensusReceipt,
+    audit_receipt_evidence,
     bind_actor_census,
     integrity_summary_for_actor,
+)
+from experiments.post_training.task_curation.census_binding import (
+    main as census_binding_main,
 )
 from experiments.post_training.task_curation.grading_binding import bind_grading_census
 from experiments.post_training.task_curation.grading_census import GradingCensusInput, census_source
@@ -226,3 +231,91 @@ def test_grading_census_retains_task_exceptions_and_clears_evidence_for_changed_
     pq.write_table(pa.table({"task_spec": encoded[:-1]}), specs / "part-000000.parquet")
     with pytest.raises(ValueError, match="input count differs"):
         census_source(GradingCensusInput(population=population, input=binding), str(tmp_path / "changed-census"))
+
+
+def write_evidence_artifact(root: Path, result: dict) -> str:
+    """Write a census evidence artifact with an embedded result; return its URL."""
+    path = root / "census" / ".artifact.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"result": result}) + "\n")
+    return str(path)
+
+
+def evidence_result(source, converter_version: str = "1") -> dict:
+    return {
+        "source_id": source.info.id,
+        "dataset_id": source.dataset.name,
+        "dataset_revision": source.dataset.revision,
+        "converter_version": converter_version,
+        "converter_revision": "a" * 40,
+        "task_count": 1,
+        "task_specs_sha256": "b" * 64,
+    }
+
+
+def with_evidence_url(receipt: ActorCensusReceipt, url: str) -> ActorCensusReceipt:
+    return receipt.model_copy(update={"input": receipt.input.model_copy(update={"evidence_url": url})})
+
+
+def test_receipt_evidence_audit_accepts_a_coherent_receipt(tmp_path):
+    source = number_source(tmp_path / "input")
+    url = write_evidence_artifact(tmp_path, evidence_result(source))
+    audit_receipt_evidence({source.info.id: with_evidence_url(census_receipt(source), url)})
+
+
+def test_receipt_evidence_audit_refuses_a_rewritten_measurement(tmp_path):
+    source = number_source(tmp_path / "input")
+    stale = replace(source, config=replace(source.config, dataset=replace(source.dataset, revision="c" * 40)))
+    # The evidence measured the stale pin; the receipt claims the current pin.
+    url = write_evidence_artifact(tmp_path, evidence_result(stale))
+    with pytest.raises(ValueError, match="refused re-pin-without-census bindings") as failure:
+        audit_receipt_evidence({source.info.id: with_evidence_url(census_receipt(source), url)})
+    assert "(dataset_revision)" in str(failure.value)
+
+
+def test_receipt_evidence_audit_refuses_converter_identity_drift(tmp_path):
+    source = number_source(tmp_path / "input")
+    url = write_evidence_artifact(tmp_path, evidence_result(source, converter_version="measured-converter"))
+    with pytest.raises(ValueError, match="re-measure the census"):
+        audit_receipt_evidence({source.info.id: with_evidence_url(census_receipt(source), url)})
+
+
+def test_receipt_evidence_audit_requires_an_embedded_result(tmp_path):
+    source = number_source(tmp_path / "input")
+    path = tmp_path / "legacy" / ".artifact.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"config": {}}) + "\n")
+    with pytest.raises(ValueError, match="no embedded result"):
+        audit_receipt_evidence({source.info.id: with_evidence_url(census_receipt(source), str(path))})
+
+
+def test_census_binding_writer_refuses_a_record_its_evidence_contradicts(tmp_path, monkeypatch):
+    source = number_source(tmp_path / "input")
+    write_evidence_artifact(tmp_path, evidence_result(source, converter_version="measured-converter"))
+    record = {
+        **evidence_result(source),
+        "path": str(tmp_path / "census"),
+        "daytona_safety": "not_applicable",
+        "daytona_snapshot_count": 0,
+        "daytona_machine_slots": 0,
+        "daytona_execution_failures": 0,
+        "daytona_count_basis": "Full source census",
+        "daytona_unsafe_reasons": [],
+        "daytona_unsafe_details": {},
+        "daytona_unsafe_counts": {},
+        "daytona_roles": {"agent": {}, "grader": {}},
+        "actor_environment_counts": {},
+        "empty_declared_environment_tasks": {"agent": 1, "grader": 1},
+        "snapshot_sizes": {},
+        "execution_failures": {},
+        "mapping_failures": {},
+        "integrity_contracts": None,
+    }
+    censuses = tmp_path / "census.json"
+    censuses.write_text(json.dumps([record]) + "\n")
+    monkeypatch.setattr(
+        "sys.argv",
+        ["census_binding", "--censuses", str(censuses), "--output-dir", str(tmp_path / "receipts")],
+    )
+    with pytest.raises(ValueError, match="disagrees with the receipt binding"):
+        census_binding_main()

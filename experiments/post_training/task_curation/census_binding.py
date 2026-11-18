@@ -11,10 +11,16 @@ from pathlib import Path
 
 from finestore.rl.curation import ActorCensusInput, DaytonaMeasurement, IntegrityContractSummary
 from pydantic import BaseModel, ConfigDict, model_validator
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 
-from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
+from experiments.post_training.task_curation.receipt_shards import (
+    read_receipt_shards,
+    receipts_from_documents,
+    write_receipt_shards,
+)
+from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource
 from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId, canonical_source_id
 
@@ -44,6 +50,56 @@ class ActorCensusReceipt(BaseModel):
         if self.measurement.daytona_machine_slots > self.input.measured_tasks:
             raise ValueError("Actor slots exceed the measured task population")
         return self
+
+
+EVIDENCE_FIELDS = (
+    # The measurement-defining fields a receipt may never claim beyond its evidence.
+    ("dataset_id", lambda receipt: receipt.measurement.dataset_id),
+    ("dataset_revision", lambda receipt: receipt.measurement.dataset_revision),
+    ("task_count", lambda receipt: receipt.input.measured_tasks),
+    ("task_specs_sha256", lambda receipt: receipt.input.task_specs_sha256),
+    ("converter_version", lambda receipt: receipt.input.converter_version),
+    ("converter_revision", lambda receipt: receipt.input.converter_revision),
+)
+
+
+def evidence_record(evidence_url: str) -> Mapping:
+    """Read a census evidence artifact's embedded measurement record."""
+    document = json.loads(StoragePath(evidence_url).read_bytes())
+    record = document.get("result")
+    if record is None:
+        raise ValueError(f"Census evidence artifact carries no embedded result: {evidence_url}")
+    return record
+
+
+def check_receipt_evidence(receipt: ActorCensusReceipt) -> None:
+    """Refuse a census receipt that claims a measurement its evidence does not support.
+
+    The receipt binds an input pin, content hash and converter identity; the evidence
+    artifact at ``input.evidence_url`` carries the census those claims must describe. A
+    receipt disagreeing with its own evidence was rewritten without re-measurement (the
+    re-pin-without-census defect), and re-measuring at the declared pin is the only repair.
+    """
+    record = evidence_record(receipt.input.evidence_url)
+    mismatches = [name for name, claimed in EVIDENCE_FIELDS if record.get(name) != claimed(receipt)]
+    if mismatches:
+        raise ValueError(
+            f"Census receipt evidence disagrees with the receipt binding for {receipt.source_id} "
+            f"({', '.join(sorted(mismatches))}): re-measure the census at the declared pin instead of "
+            f"rebinding ({receipt.input.evidence_url})"
+        )
+
+
+def audit_receipt_evidence(receipts: Mapping[str, ActorCensusReceipt]) -> None:
+    """Audit every receipt against its own evidence, naming every mismatched source."""
+    failures = []
+    for source_id in sorted(receipts):
+        try:
+            check_receipt_evidence(receipts[source_id])
+        except ValueError as error:
+            failures.append(f"{source_id}: {error}")
+    if failures:
+        raise ValueError("Census receipt evidence audit refused re-pin-without-census bindings:\n" + "\n".join(failures))
 
 
 def bind_actor_census(source: RlDataSource, receipt: ActorCensusReceipt | None) -> RlDataSource:
@@ -164,10 +220,38 @@ def integrity_summary_for_actor(actor: Mapping, integrity: Mapping) -> Integrity
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--censuses", type=Path, nargs="+", required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--censuses", type=Path, nargs="+", required=False)
+    parser.add_argument("--output-dir", type=Path, required=False)
     parser.add_argument("--integrity-censuses", type=Path, nargs="*", default=[])
+    parser.add_argument(
+        "--audit-receipt-evidence",
+        action="store_true",
+        help="Audit committed receipt shards against their evidence artifacts instead of binding",
+    )
+    parser.add_argument("--shard-dir", type=Path, help="Receipt shard directory for --audit-receipt-evidence")
+    parser.add_argument(
+        "--shard-files",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="Audit only these shard files (CI scopes to the diff); default audits the whole --shard-dir",
+    )
     args = parser.parse_args()
+    configure_coreweave_s3()
+    if args.audit_receipt_evidence:
+        if args.shard_dir is None:
+            parser.error("--audit-receipt-evidence requires --shard-dir")
+        load_json = read_registry_json
+        if args.shard_files:
+            documents = {path.name: load_json(path) for path in args.shard_files}
+            receipts = receipts_from_documents(documents, ActorCensusReceipt, "census")
+        else:
+            receipts = read_receipt_shards(args.shard_dir, ActorCensusReceipt, "census", load_json=load_json)
+        audit_receipt_evidence(receipts)
+        print(json.dumps({"audited_sources": len(receipts), "state": "ok"}))
+        return
+    if args.censuses is None or args.output_dir is None:
+        parser.error("binding requires --censuses and --output-dir")
     integrities = {}
     for path in args.integrity_censuses:
         for record in json.loads(path.read_text()):
@@ -181,6 +265,7 @@ def main() -> None:
             integrity = integrities.get(canonical_source_id(record["source_id"]))
             summary = None if integrity is None else integrity_summary_for_actor(record, integrity)
             receipt = receipt_from_census(record, summary)
+            check_receipt_evidence(receipt)
             if receipt.source_id in receipts:
                 raise ValueError(f"Duplicate actor census: {receipt.source_id}")
             receipts[receipt.source_id] = receipt.model_dump(mode="json")
