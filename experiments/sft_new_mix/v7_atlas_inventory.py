@@ -71,10 +71,12 @@ def build_source_entry(name: str, shards: list[dict], source_revision: str) -> d
             "supervised_prediction_positions": supervised,
         },
         "expected_shards": len(shards),
+        "complete": True,
         "loss_mode": "chat_assistant_only",
         "loss_weights_indexing": "prediction",
         "loss_weights_key": "loss_weights",
         "source_revision": source_revision,
+        "teacher_only": False,
         "shards": shards,
     }
 
