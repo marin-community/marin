@@ -60,7 +60,9 @@ def local_ray(monkeypatch):
 
 @pytest.mark.parametrize("slow_role", [None, "primary", "secondary"])
 @pytest.mark.parametrize("training_fails", [False, True])
-def test_close_preserves_workload_result_and_reports_upload_timeout(local_ray, monkeypatch, slow_role, training_fails):
+def test_close_preserves_workload_result_and_reports_upload_timeout(
+    local_ray, monkeypatch, tmp_path, slow_role, training_fails
+):
     uploads = {}
     warnings = []
 
@@ -76,7 +78,8 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(local_ray, m
     training_error = RuntimeError("training failed")
 
     def workload():
-        with Tracking("project", "experiment", backends="wandb", config=OmegaConf.create({})) as tracker:
+        config = OmegaConf.create({"trainer": {"export_path": str(tmp_path)}})
+        with Tracking("project", "experiment", backends=("wandb",), config=config) as tracker:
             tracker.log({"loss": 0.5}, step=7)
             if training_fails:
                 raise training_error
