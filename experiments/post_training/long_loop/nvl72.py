@@ -42,6 +42,7 @@ SMOKE_BATCH_GROUPS = 2
 SMOKE_BUDGET_SECONDS = 3600
 SEED = 20261020
 COORDINATOR_QUEUE_ALLOWANCE_HOURS = 48
+SNOWBALL_INFINIBAND_PORTS = "=ibp0:1,ibp1:1,ibp2:1,ibp3:1"
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
     policy_num_nodes=12,
@@ -174,6 +175,18 @@ SNOWBALL_THREE_RACK = replace(
     output_name="checkpoints/snowball-three-rack-smoke",
     megatron=replace(MEGATRON, pipeline_model_parallel_size=2),
     data_namespace="documents/snowball-three-rack",
+    # The measured hosts expose both IB and RoCE ports. Keep the smoke on IB;
+    # the all-GPU launch gate checks the new allocation before model loading.
+    patch=PROFILES["three-rack"].patch.merge(
+        RecipePatch(
+            extra_env={
+                "NCCL_BUFFSIZE": str(sections.Policy().nccl_buffer_size_bytes),
+                "NCCL_NET": "IB",
+                "NCCL_IB_DISABLE": "0",
+                "NCCL_IB_HCA": SNOWBALL_INFINIBAND_PORTS,
+            }
+        )
+    ),
 )
 PROFILES = MappingProxyType(
     {

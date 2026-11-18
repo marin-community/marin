@@ -65,6 +65,24 @@ def test_normal_run_binds_distinct_training_and_heldout_data(run_spec, tmp_path)
     assert launch["inputs"]["validation_data"][0]["local_path"] != launch["inputs"]["train_data"][0]["local_path"]
 
 
+def test_snowball_three_rack_uses_ib_ports_on_mixed_link_hosts(run_spec, tmp_path):
+    output = tmp_path / "launch.yaml"
+    spec = replace(run_spec, profile="snowball-three-rack")
+    with build_context(BuildContext(versions=VersionCodex(default="2026.11.18.62"))):
+        run_from_spec(spec, smoke=True, config_output=output)
+    environment = yaml.safe_load(output.read_text())["skyrl"]["extra_env"]
+    assert environment["NCCL_BUFFSIZE"] == "4194304"
+    # Port inventory recorded on both hosts of the .63 diagnostic.
+    links = {f"ibp{index}:1": "InfiniBand" for index in range(4)}
+    links.update({f"mlx5_{index}:1": "Ethernet" for index in range(9)})
+    mask = environment["NCCL_IB_HCA"]
+    assert mask.startswith("=")
+    selected = set(mask[1:].split(","))
+    assert selected == {port for port, layer in links.items() if layer == "InfiniBand"}
+    assert "mlx5_2:1" not in selected
+    assert environment["NCCL_NET"] == "IB" and environment["NCCL_IB_DISABLE"] == "0"
+
+
 def test_snowball_geometry_rejects_mochi_profile_and_build_rejects_changed_data(run_spec, tmp_path):
     model = {"num_hidden_layers": 26, "num_attention_heads": 20, "num_experts": 256}
     for profile in ("snowball-one-rack", "snowball-three-rack"):
