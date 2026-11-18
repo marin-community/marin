@@ -232,7 +232,7 @@ def _initialize_deletion(model, *, config, trainer, settings: DeletionTrainSetti
     sample_parts = []
     for block in model.transformer.blocks:
         mlp = block.mlp
-        broadcast = jnp.asarray(routed_norms, dtype=jnp.float32).reshape(routed_norms.shape + (1,))
+        broadcast = jnp.asarray(routed_norms, dtype=jnp.float32).reshape((*routed_norms.shape, 1))
         scores = jnp.abs(mlp.expert_mlp.w_gate) * broadcast
         strided = scores[..., ::WANDA_SAMPLE_STRIDE]
         sample_parts.append(strided.reshape(strided.shape[0], -1))
