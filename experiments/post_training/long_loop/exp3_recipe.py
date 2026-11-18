@@ -112,7 +112,11 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         raise ValueError("Exp3 requires explicit H100 resources")
     mesh = draccus.decode(MeshConfig, recipe["mesh"])
     mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
-    gate = draccus.decode(InitialEvalMatchConfig, recipe["initial_eval_match"])
+    # A null gate opts a candidate out of the initial-eval identity check (the
+    # Deletion Tuning init deliberately perturbs the masked weights).
+    gate = None
+    if recipe["initial_eval_match"] is not None:
+        gate = draccus.decode(InitialEvalMatchConfig, recipe["initial_eval_match"])
     return SFTSpec(
         name=name,
         version=version,

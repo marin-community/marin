@@ -1,0 +1,109 @@
+{
+  "deletion_tuning": {
+    "alpha_end": 1000.0,
+    "alpha_start": 100.0,
+    "calibration_sequences": 64,
+    "eta": 0.00048828125,
+    "lam": 1e-05,
+    "lr": 0.0005,
+    "scope": "routed_gate",
+    "seed": 0
+  },
+  "dispatch": {
+    "entrypoint": "experiments.deletion_tuning.levanter_train:run_deletion_train_lm",
+    "job_name": "sft-v1-sft-2026.11.18.1-7f2c80860163",
+    "output_path": "s3://marin-us-east-02a/marin/users/benfeuer/snowball-deletion-tuning",
+    "resources": {
+      "container_profile": null,
+      "cpu": 64.0,
+      "device": {
+        "count": 8,
+        "kind": "gpu",
+        "variant": "H100"
+      },
+      "device_alternatives": null,
+      "disk": "512GB",
+      "image": null,
+      "preemptible": false,
+      "ram": "1500GB",
+      "regions": null,
+      "replicas": 32,
+      "target_cluster": null,
+      "zone": null
+    },
+    "timeout_seconds": 18000
+  },
+  "fingerprint": "942db825",
+  "initial_eval_match": null,
+  "job_shape": {
+    "calibration_batches": 64,
+    "duration_hours": 5.0,
+    "global_batch": 256,
+    "gpus": {
+      "count": 8,
+      "replicas": 32,
+      "total": 256,
+      "variant": "H100"
+    },
+    "h100_hour_guard": 1280,
+    "h100_hour_point_estimate": 969,
+    "mesh": {
+      "axes": {
+        "data": 1,
+        "expert": 8,
+        "model": 1,
+        "replica": 1
+      },
+      "compute_mapping": {
+        "batch": [
+          "replica_dcn",
+          "data",
+          "expert"
+        ],
+        "position": "context"
+      },
+      "dcn_axes": {
+        "context": 32,
+        "replica_dcn": 1
+      }
+    },
+    "num_train_steps": 75,
+    "sequence_length": 262144,
+    "target_positions": 5033164800
+  },
+  "name": "deletion-tuning/v1-sft",
+  "not_yet_wired": [
+    "hard-mask export (deleted weights zeroed) and the packed mask artifact on the Levanter path: the resolved run would export the standard HF checkpoint of the frozen weights; the mask artifact export must land before the Micro210 row"
+  ],
+  "optimizer": {
+    "adamc_weight_decay": false,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "clip_update_norm": null,
+    "cooldown": null,
+    "cycle_length": null,
+    "cycles": null,
+    "decay": null,
+    "default_weight_decay_mask": null,
+    "epsilon": 1e-08,
+    "haps": null,
+    "learning_rate": 0.0005,
+    "lr_schedule": "constant",
+    "max_grad_norm": 1.0,
+    "min_lr_ratio": 0.1,
+    "nesterov": false,
+    "rewarmup": 0.0,
+    "skip_bad_steps": false,
+    "type": "adam",
+    "update_rms_clipping": null,
+    "warmup": 0,
+    "weight_decay": 0.0,
+    "weight_decay_modules": null
+  },
+  "release": {
+    "sha256": "3e2161945e1adc60c9edcdb6b0d7395946966dc4e0d16b88660fbc38989603f5",
+    "training_ready": true,
+    "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/release-complete-v5.json"
+  },
+  "version": "2026.11.18.1"
+}

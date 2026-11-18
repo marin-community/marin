@@ -9,14 +9,11 @@ optimizer state to the gate logits; the pod runner installs the seam around
 marin's standard runner; and the HF config reload preserves the Deletion block.
 """
 
-import dataclasses
-from datetime import timedelta
 from functools import partial
 from types import SimpleNamespace
 
 import draccus
 import equinox as eqx
-import haliax as hax
 import jax
 import jax.numpy as jnp
 import jmp

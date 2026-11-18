@@ -56,6 +56,7 @@ from marin.execution.lazy import StepContext
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.deletion_tuning.levanter_train import DeletionHFModel, run_deletion_train_lm
+from experiments.deletion_tuning.v1_smoke import run_smoke
 from experiments.post_training.long_loop.exp3_production import (
     GEOMETRY,
     DataRelease,
@@ -78,7 +79,7 @@ DATA_RELEASE_URI = (
 DATA_RELEASE_SHA256 = "3e2161945e1adc60c9edcdb6b0d7395946966dc4e0d16b88660fbc38989603f5"
 
 EXP3_UPDATES = GEOMETRY.updates
-V1_UPDATES = EXP3_UPDATES // 10
+V1_UPDATES = round(EXP3_UPDATES / 10)
 V1_CALIBRATION_BATCHES = 64
 V1_ALPHA_START = 1e2
 V1_ALPHA_END = 1e3
@@ -126,9 +127,9 @@ def v1_recipe(production_recipe: dict) -> dict:
     controls (mesh, resources, packing, gates) carry over untouched except for
     the recorded overrides.
     """
-    assert EXP3_UPDATES == 746 and V1_UPDATES == 75, (
-        f"the V1 length decision assumes 746 Exp3 updates, got {EXP3_UPDATES}"
-    )
+    assert (
+        EXP3_UPDATES == 746 and V1_UPDATES == 75
+    ), f"the V1 length decision assumes 746 Exp3 updates -> 75, got {EXP3_UPDATES} -> {V1_UPDATES}"
     recipe = copy.deepcopy(production_recipe)
     if recipe["format"] != "sft_spec" or recipe["profile"] != "snowball_exp3":
         raise ValueError("V1 must build on the Exp3 production SFT recipe")
@@ -301,8 +302,6 @@ def _deletion_summary(train_config: dict) -> dict:
 @click.option("--smoke", is_flag=True, help="Run the DT main end to end on CPU at toy scale (no submission).")
 def main(output: Path | None, smoke: bool) -> None:
     if smoke:
-        from experiments.deletion_tuning.v1_smoke import run_smoke
-
         run_smoke()
         return
     summary = dry_run(output)

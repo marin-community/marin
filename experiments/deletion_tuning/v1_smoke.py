@@ -24,8 +24,8 @@ from pathlib import Path
 
 import haliax as hax
 import jax
-import jmp
 import jax.numpy as jnp
+import jmp
 from fray.types import ResourceConfig
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.main.train_lm import TrainLmConfig
@@ -165,7 +165,9 @@ def run_smoke(output_root: Path | None = None) -> dict:
         corpus = root / "corpus.jsonl"
         _tiny_corpus(corpus)
         cache = root / "cache"
-        tokenize(TokenizeConfig(train_paths=[str(corpus)], validation_paths=[], cache_path=str(cache), tokenizer=tokenizer))
+        tokenize(
+            TokenizeConfig(train_paths=[str(corpus)], validation_paths=[], cache_path=str(cache), tokenizer=tokenizer)
+        )
         hf_dir = _save_tiny_hf(_tiny_config(tokenizer), root / "base-hf")
         output_path = root / "run"
         pod_config = TrainLmOnPodConfig(
