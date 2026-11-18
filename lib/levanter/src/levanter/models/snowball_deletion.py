@@ -287,17 +287,16 @@ def apply_hard_mask(model):
         weight_field = parts[-1]
         logits_field = weight_field.replace("w_", "", 1) + "_logits"
 
-        def weight_where(m, parts=parts):
-            obj = m
+        def navigate(obj, parts=parts):
             for part in parts:
-                obj = getattr(obj, part)
+                obj = obj[int(part)] if part.isdigit() else getattr(obj, part)
             return obj
 
+        def weight_where(m, parts=parts):
+            return navigate(m, parts)
+
         def logits_where(m, parts=parts[:-1], logits_field=logits_field):
-            obj = m
-            for part in parts:
-                obj = getattr(obj, part)
-            return getattr(obj, logits_field)
+            return getattr(navigate(m, parts), logits_field)
 
         keep = (logits > 0).astype(weight.dtype)
         updated = _tree_replace(weight_where, updated, weight * keep)
