@@ -1,0 +1,13 @@
+experiment: X0242
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: document n-gram count cache mixed into output
+    flags:
+    - --model-set
+    - ngram_cache_mixture=true
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
