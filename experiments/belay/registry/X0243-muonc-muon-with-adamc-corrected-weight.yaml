@@ -4,7 +4,7 @@ name: 'MuonC: Muon with AdamC-corrected weight decay'
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6974283352
@@ -26,3 +26,10 @@ trials:
     muonc_decay_mult: '0.5'
   commit: ee7cfd9913
   priority: batch
+  loss:
+  - 3.0878
+  delta:
+  - 0.0445
+  steps: 3030
+  baseline: belay-X0243-control 3.0432 (same commit, seed 0)
+  step_time_change: -1%
