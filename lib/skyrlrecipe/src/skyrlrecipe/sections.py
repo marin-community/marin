@@ -776,7 +776,7 @@ class TrajectoryRetention(Section):
     sample_count_per_step: int = field(1)
     sample_fraction: int | float = field(0.0)
     eval_sample_fraction: Annotated[int | float, Field(ge=0, le=1)] | None = field(None)
-    "Optional eval-only override of the train fraction"
+    "null uses sample_fraction for evaluation as well."
     always_retain_failures: bool = field(True)
     always_retain_non_terminating: bool = field(True)
     always_retain_loops: bool = field(True)
@@ -793,6 +793,7 @@ class TrajectoryRetention(Section):
     model_path: str = unset_field()
     model_source_identity: str = unset_field()
     model_checkpoint_step: NonNegativeInt | None = field(None)
+    "Evaluation-only runs have no optimizer step; retain the bound checkpoint provenance."
     resume_path: str = unset_field()
     inference_backend: Literal["vllm"] = unset_field()
 

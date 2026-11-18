@@ -534,7 +534,8 @@ generator:
     phases: [train]
     sample_count_per_step: 1
     sample_fraction: 0.0
-    eval_sample_fraction: null  # Optional eval-only override of the train fraction
+    # null uses sample_fraction for evaluation as well.
+    eval_sample_fraction: null
     always_retain_failures: true
     always_retain_non_terminating: true
     always_retain_loops: true
@@ -550,6 +551,7 @@ generator:
     redact_fields: []
     model_path: ${trainer.policy.model.path}
     model_source_identity: ${trainer.policy.model.source_identity}
+    # Evaluation-only runs have no optimizer step; retain the bound checkpoint provenance.
     model_checkpoint_step: null
     resume_path: ${trainer.resume_path}
     inference_backend: ${generator.backend}
