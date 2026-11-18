@@ -1159,7 +1159,7 @@ def stored_text(raw):
 
 
 @pytest.mark.asyncio
-async def test_reuse_gives_each_unseeded_trial_its_own_stored_response(tmp_path, run_config):
+async def test_reuse_answers_identical_requests_with_each_trial_s_own_stored_response(tmp_path, run_config):
     config = run_config.model_copy(update={"source_limit": None})
     strict = publish_colors_corpus(tmp_path, "strict")
     lenient = publish_colors_corpus(tmp_path, "lenient", converter=convert_ignoring_case)
@@ -1186,7 +1186,7 @@ async def test_reuse_gives_each_unseeded_trial_its_own_stored_response(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_reuse_asks_the_model_for_changed_requests_and_keeps_them_retryable_without_one(tmp_path, run_config):
+async def test_reuse_asks_the_model_for_a_row_whose_prompt_changed(tmp_path, run_config):
     config = run_config.model_copy(update={"source_limit": None})
     strict = publish_colors_corpus(tmp_path, "strict")
     reworded = publish_colors_corpus(
@@ -1194,16 +1194,32 @@ async def test_reuse_asks_the_model_for_changed_requests_and_keeps_them_retryabl
     )
     source, output = str(tmp_path / "stored"), str(tmp_path / "regraded")
     await run_evaluation((strict,), source, config, ScriptedModel(dict.fromkeys(COLORS, "red")), machine_factories={})
-
-    with pytest.raises(EvaluationInfrastructureError, match="3 evaluation attempts failed"):
-        await run_evaluation((reworded,), output, config, no_model, machine_factories={}, reuse_from=source)
     model = ScriptedModel({"colors/1?": "red"})
+
     await run_evaluation((reworded,), output, config, model, machine_factories={}, reuse_from=source)
 
     assert model.asked == {"colors/1?": 3}
     evidence = terminal_evidence(output).values()
     assert {attempt["outcome"] for attempt, _ in evidence} == {"graded"}
     assert Counter(raw[REUSED_FROM_RUN] is not None for _, raw in evidence) == {True: 6, False: 3}
+
+
+@pytest.mark.asyncio
+async def test_reuse_asks_the_model_when_a_sampling_option_changed(tmp_path, run_config):
+    config = run_config.model_copy(update={"source_limit": None})
+    strict = publish_colors_corpus(tmp_path, "strict")
+    lenient = publish_colors_corpus(tmp_path, "lenient", converter=convert_ignoring_case)
+    source, output = str(tmp_path / "stored"), str(tmp_path / "regraded")
+    await run_evaluation((strict,), source, config, ScriptedModel(dict.fromkeys(COLORS, "red")), machine_factories={})
+    seeded = config.model_copy(update={"seed": 7})
+    model = ScriptedModel(dict.fromkeys(COLORS, "Red"))
+
+    await run_evaluation((lenient,), output, seeded, model, machine_factories={}, reuse_from=source)
+
+    assert model.asked == dict.fromkeys(COLORS, 3)
+    for attempt, raw in terminal_evidence(output).values():
+        assert raw[REUSED_FROM_RUN] is None
+        assert (stored_text(raw), raw["grade"]["reward"], attempt["completion_tokens"]) == ("Red", 1, 1)
 
 
 @pytest.mark.asyncio
