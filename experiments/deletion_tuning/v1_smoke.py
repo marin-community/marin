@@ -42,6 +42,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
+from marin.rl.deletion_tuning import read_mask_artifact
 from marin.training.training import TrainLmOnPodConfig
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -191,6 +192,14 @@ def run_smoke(output_root: Path | None = None) -> dict:
 
         exports = sorted(str(path) for path in output_path.rglob("*.safetensors"))
         assert exports, "the smoke must produce the end-of-run HF export"
+        mask_dirs = sorted(output_path.rglob("deletion-mask"))
+        assert mask_dirs, "the smoke export must carry the deletion-mask artifact"
+        keep_masks = read_mask_artifact(mask_dirs[0])
+        expected_entries = [f"transformer.blocks.{i}.mlp.expert_mlp.w_gate" for i in range(2)]
+        assert sorted(keep_masks) == expected_entries, sorted(keep_masks)
+        for mask in keep_masks.values():
+            assert mask.shape == (4, 16, 16)
+            assert mask.any() and not mask.all()
         summary = {
             "steps": SMOKE_STEPS,
             "calibration_batches": 1,
@@ -200,6 +209,10 @@ def run_smoke(output_root: Path | None = None) -> dict:
             "optimizer": "AdamW constant lr 5e-4, weight decay 0, on the gate logits only",
             "alpha_ramp": [V1_ALPHA_START, V1_ALPHA_END],
             "hf_export": exports[:1],
+            "mask_artifact": {
+                "entries": sorted(keep_masks),
+                "kept": int(sum(int(mask.sum()) for mask in keep_masks.values())),
+            },
         }
         logger.info("smoke complete: %s", json.dumps(summary, indent=2))
         if output_root is not None:

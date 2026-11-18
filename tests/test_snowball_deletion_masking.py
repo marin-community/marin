@@ -9,7 +9,9 @@ leaves the frozen weights untouched, and the regularizer rides the aux-loss
 hook during training only.
 """
 
+import dataclasses
 import math
+from pathlib import Path
 
 import equinox as eqx
 import haliax as hax
@@ -208,7 +210,7 @@ def test_alpha_ramp_matches_core():
 
 
 def test_wanda_capture_shard_local_stats(mesh):
-    """The shard-local Wanda capture runs under shard_map and counts valid tokens.
+    """The shard-local Wanda capture runs under shard_map and counts valid tokens."""
 
     Operand shapes mirror the model's call: flattened tokens, per-token expert
     selections, and a 1-D validity mask, all sharded over the batch axes.
@@ -240,3 +242,79 @@ def test_wanda_capture_shard_local_stats(mesh):
     # the channel sums total the squared activations over all tokens
     expected = float((x.astype(np.float64) ** 2).sum())
     np.testing.assert_allclose(channel.sum(), expected, rtol=1e-5)
+
+
+def test_apply_hard_mask_zeroes_deleted_weights(mesh):
+    """The deployment model zeroes deleted weights and drops the gate logits."""
+    from levanter.models.snowball_deletion import apply_hard_mask, deletion_keep_masks
+
+    with jax.set_mesh(mesh):
+        model = _install_logits(_init_model(_tiny_config(), mesh))
+        masks = deletion_keep_masks(model)
+        assert sorted(masks) == [
+            "transformer.blocks.0.mlp.expert_mlp.w_gate",
+            "transformer.blocks.1.mlp.expert_mlp.w_gate",
+        ]
+        assert masks["transformer.blocks.0.mlp.expert_mlp.w_gate"].shape == (4, 8, 8)
+        hard = apply_hard_mask(model)
+        w0 = np.asarray(model.transformer.blocks[0].mlp.expert_mlp.w_gate)
+        h0 = np.asarray(hard.transformer.blocks[0].mlp.expert_mlp.w_gate)
+        keep0 = masks["transformer.blocks.0.mlp.expert_mlp.w_gate"]
+        np.testing.assert_array_equal(h0[keep0], w0[keep0])
+        np.testing.assert_array_equal(h0[~keep0], np.zeros_like(h0[~keep0]))
+        for block in hard.transformer.blocks:
+            assert block.mlp.gate_logits is None
+        assert hard.transformer.deletion_alpha is None
+        assert hard.transformer.deletion_hard is None
+        # a non-DT model has no masks and is returned unchanged in structure
+        plain = _init_model(_tiny_config(), mesh)
+        assert deletion_keep_masks(plain) == {}
+        unchanged = apply_hard_mask(plain)
+        np.testing.assert_array_equal(
+            np.asarray(unchanged.transformer.blocks[0].mlp.expert_mlp.w_gate),
+            np.asarray(plain.transformer.blocks[0].mlp.expert_mlp.w_gate),
+        )
+
+
+def _materialize_tokenizer_fixture(dest_dir) -> str:
+    """The vendored offline tokenizer fixture as a loadable directory (vocab 5027)."""
+    import json
+    import shutil
+
+    root = Path(__file__).resolve().parents[1]
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy(root / "lib" / "levanter" / "tests" / "gpt2_tokenizer.json", dest_dir / "tokenizer.json")
+    shutil.copy(root / "lib" / "levanter" / "tests" / "gpt2_tokenizer_config.json", dest_dir / "tokenizer_config.json")
+    (dest_dir / "config.json").write_text(json.dumps({"model_type": "gpt2", "vocab_size": 5027}))
+    return str(dest_dir)
+
+
+def test_hard_mask_export_reloads_to_the_hard_mask_forward(mesh, tmp_path):
+    """The exported checkpoint (deleted weights zeroed) reloads to the hard-mask forward."""
+    from levanter.models.snowball_deletion import apply_hard_mask
+
+    tokenizer = _materialize_tokenizer_fixture(tmp_path / "tokenizer")
+    with jax.set_mesh(mesh):
+        config = dataclasses.replace(_tiny_config(), vocab_size=5027, tokenizer=tokenizer)
+        model = _install_logits(_init_model(config, mesh))
+        tokens = _tokens()
+
+        def hard_forward(m):
+            flipped = eqx.tree_at(lambda mm: mm.transformer.deletion_hard, m, jnp.asarray(1.0))
+            return np.asarray(flipped.activations(tokens, key=None))
+
+        expected = hard_forward(model)
+        hard_model = apply_hard_mask(model)
+        export_config = dataclasses.replace(config, deletion_tuning=None)
+        converter = export_config.hf_checkpoint_converter()
+        export_dir = str(tmp_path / "hard-export")
+        converter.save_pretrained(hard_model, export_dir, dtype=jnp.float32)
+        reloaded = converter.load_pretrained(
+            export_config.model_type,
+            config=export_config,
+            axis_mapping=None,
+            dtype=jnp.float32,
+        )
+        actual = np.asarray(reloaded.activations(tokens, key=None))
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)

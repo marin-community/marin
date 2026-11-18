@@ -19,6 +19,7 @@ spec's pod config to that entrypoint.
 
 import dataclasses
 import itertools
+import json
 import logging
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -28,6 +29,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
+import levanter.adaptor as adaptor_module
 import levanter.callbacks
 import levanter.main.train_lm as train_lm_module
 import numpy as np
@@ -35,15 +37,21 @@ from levanter.models.snowball import SnowballLMHeadModel
 from levanter.models.snowball_deletion import (
     WANDA_SAMPLE_STRIDE,
     DeletionTuningScope,
+    apply_hard_mask,
+    deletion_keep_masks,
     deletion_trainable_filter,
     down_norms,
     init_gate_logits_jax,
     wanda_delete_threshold,
 )
 from levanter.trainer import Trainer
+from marin.rl.deletion_tuning import MASK_MANIFEST_NAME, build_mask_artifact
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.sft.launcher import HFModel, _levanter_train_job
+
+_original_save_hf_checkpoint_callback = adaptor_module.save_hf_checkpoint_callback
 
 logger = logging.getLogger(__name__)
 
@@ -304,17 +312,56 @@ def deletion_settings_from_config(config) -> DeletionTrainSettings:
     )
 
 
+def _deletion_export_callback(base_path, converter, **kwargs):
+    """Wrap the standard HF export callback with the hard mask and the mask artifact.
+
+    The exported checkpoint carries the hard-masked weights (deleted entries
+    zeroed) and no gate logits; the packed keep-mask artifact lands beside the
+    shards under ``deletion-mask/``.
+    """
+    std_cb = _original_save_hf_checkpoint_callback(base_path, converter, **kwargs)
+
+    def cb(step):
+        masks = deletion_keep_masks(step.eval_model)
+        if not masks:
+            std_cb(step)
+            return
+        hard_model = apply_hard_mask(step.eval_model)
+        hard_step = dataclasses.replace(step, state=dataclasses.replace(step.state, model=hard_model))
+        std_cb(hard_step)
+        export_dir = prefix_join(str(base_path), f"step-{step.step}")
+        artifact_dir = prefix_join(export_dir, "deletion-mask")
+        manifest, blobs = build_mask_artifact(masks)
+        for file_name, blob in blobs.items():
+            StoragePath(prefix_join(artifact_dir, file_name)).write_bytes(blob)
+        StoragePath(prefix_join(artifact_dir, MASK_MANIFEST_NAME)).write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+        )
+        deleted = sum(entry["deleted"] for entry in manifest["entries"])
+        kept = sum(entry["kept"] for entry in manifest["entries"])
+        logger.info(
+            "deletion-mask artifact written to %s (%d entries, %d kept, %d deleted)",
+            artifact_dir,
+            len(manifest["entries"]),
+            kept,
+            deleted,
+        )
+
+    return cb
+
+
 @contextmanager
 def _deletion_train_lm_seam(settings: DeletionTrainSettings, num_layers: int):
-    """Install the DT trainer and DT model loader over ``levanter.main.train_lm``.
+    """Install the DT trainer, DT model loader, and DT export over ``levanter.main.train_lm``.
 
-    The standard main constructs ``Trainer`` and loads the model through two
-    module globals; this swaps them for the Deletion variants and restores them
-    afterwards, so the whole standard init/eval/checkpoint flow is reused
-    verbatim.
+    The standard main constructs ``Trainer``, loads the model, and installs the
+    HF export through three module globals; this swaps them for the Deletion
+    variants and restores them afterwards, so the whole standard
+    init/eval/checkpoint/export flow is reused verbatim.
     """
     original_loader = train_lm_module._load_lm_model_from_configured_source
     original_trainer_cls = train_lm_module.Trainer
+    adaptor_module.save_hf_checkpoint_callback = _deletion_export_callback
 
     def deletion_loader(**kwargs):
         model = original_loader(**kwargs)
@@ -331,6 +378,7 @@ def _deletion_train_lm_seam(settings: DeletionTrainSettings, num_layers: int):
     finally:
         train_lm_module._load_lm_model_from_configured_source = original_loader
         train_lm_module.Trainer = original_trainer_cls
+        adaptor_module.save_hf_checkpoint_callback = _original_save_hf_checkpoint_callback
 
 
 def main(config):

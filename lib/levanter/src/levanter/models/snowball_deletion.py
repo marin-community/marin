@@ -246,3 +246,60 @@ def pack_keep_masks(logits: jax.Array) -> jax.Array:
     groups = flat.reshape((*lead, flat.shape[-1] // 8, 8)).astype(jnp.uint8)
     weights = jnp.asarray([128, 64, 32, 16, 8, 4, 2, 1], dtype=jnp.uint8)
     return jnp.sum(groups * weights, axis=-1).astype(jnp.uint8)
+
+
+def _masked_matrices(model: SnowballLMHeadModel):
+    """Yield ``(path, weight, logits)`` for every masked matrix carrying logits."""
+    for index, block in enumerate(model.transformer.blocks):
+        mlp = block.mlp
+        if mlp.gate_logits is not None:
+            yield f"transformer.blocks.{index}.mlp.expert_mlp.w_gate", mlp.expert_mlp.w_gate, mlp.gate_logits
+        if mlp.up_logits is not None:
+            yield f"transformer.blocks.{index}.mlp.expert_mlp.w_up", mlp.expert_mlp.w_up, mlp.up_logits
+        if mlp.down_logits is not None:
+            yield f"transformer.blocks.{index}.mlp.expert_mlp.w_down", mlp.expert_mlp.w_down, mlp.down_logits
+        shared = block.shared
+        if shared.gate_logits is not None:
+            yield f"transformer.blocks.{index}.shared.w_gate", shared.w_gate, shared.gate_logits
+        if shared.up_logits is not None:
+            yield f"transformer.blocks.{index}.shared.w_up", shared.w_up, shared.up_logits
+        if shared.down_logits is not None:
+            yield f"transformer.blocks.{index}.shared.w_down", shared.w_down, shared.down_logits
+
+
+def deletion_keep_masks(model: SnowballLMHeadModel) -> dict[str, np.ndarray]:
+    """Boolean keep masks per masked matrix, keyed by the Levanter parameter path."""
+    masks: dict[str, np.ndarray] = {}
+    for path, _weight, logits in _masked_matrices(model):
+        masks[path] = np.asarray(logits > 0)
+    return masks
+
+
+def apply_hard_mask(model: SnowballLMHeadModel) -> SnowballLMHeadModel:
+    """The deployment model: deleted weights zeroed and the gate logits dropped.
+
+    The exported checkpoint carries plain weights (deleted entries zero), so a
+    standard reload reproduces the hard-mask forward exactly.
+    """
+    updated = model
+    for path, weight, logits in _masked_matrices(model):
+        keep = (logits > 0).astype(weight.dtype)
+        parts = path.split(".")
+        weight_field = parts[-1]
+        block_index = int(parts[2])
+        is_shared = ".shared." in path
+
+        def weight_where(m, block_index=block_index, is_shared=is_shared, weight_field=weight_field):
+            matrix = m.transformer.blocks[block_index].shared if is_shared else m.transformer.blocks[block_index].mlp
+            return getattr(matrix, weight_field)
+
+        def logits_where(m, block_index=block_index, is_shared=is_shared, weight_field=weight_field):
+            matrix = m.transformer.blocks[block_index].shared if is_shared else m.transformer.blocks[block_index].mlp
+            return getattr(matrix, weight_field.replace("w_", "") + "_logits")
+
+        updated = _tree_replace(weight_where, updated, weight * keep)
+        updated = _tree_replace(logits_where, updated, None)
+    # the deployed checkpoint is a plain Snowball: no deletion state at all
+    updated = _tree_replace(lambda m: m.transformer.deletion_alpha, updated, None)
+    updated = _tree_replace(lambda m: m.transformer.deletion_hard, updated, None)
+    return updated
