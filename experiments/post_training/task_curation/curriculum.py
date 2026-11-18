@@ -27,6 +27,13 @@ def _recipe_identity(pipeline: object) -> str:
 
 
 def _entry(label: str, source: RlDataSource, weight: float | None) -> CurriculumEntry:
+    """One curriculum entry over a catalog source: its sampling label, pin, recipe identity, and weight.
+
+    ``label`` is the sampling key the trainer resolves rows by: the pool row's
+    ``teacher_route`` value. A curriculum samples only a pool whose rows carry its
+    labels, so a label may name a route or a stamped source population rather than
+    the catalog name; ``source`` is always the catalog invocation name.
+    """
     dataset = source.dataset
     if dataset is None:
         raise ValueError(f"source {label} has no pinned dataset; curricula record pinned sources only")
@@ -34,7 +41,7 @@ def _entry(label: str, source: RlDataSource, weight: float | None) -> Curriculum
         raise ValueError(f"source {label} has no curation pipeline; curricula record runnable sources only")
     return CurriculumEntry(
         label=label,
-        source=label,
+        source=source.name,
         version=source.version,
         pin=SourcePin(name=dataset.name, revision=dataset.revision, url=dataset.url),
         recipe=_recipe_identity(source.pipeline),

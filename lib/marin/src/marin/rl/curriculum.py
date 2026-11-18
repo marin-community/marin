@@ -6,9 +6,9 @@
 A curriculum is the RL analog of :func:`marin.experiment.data.mixture`: the experiment states the
 policy — which sources, at what weights or in what order — and the trainer executes it. The object
 records each source's pinned dataset identity and recipe, a sampling mode, and the seed. The mode is
-either ``weighted`` (weight-random draws that compose every training window into the exact weighted
-mixture, the vendored trainer's ``weighted_quotas`` behavior) or ``ordered`` (a deterministic stage
-sequence the trainer consumes in order).
+either ``weighted`` (weight-random draws whose every training window composes the weights'
+largest-remainder integer apportionment, the vendored trainer's ``weighted_quotas`` behavior) or
+``ordered`` (a deterministic stage sequence the trainer consumes in order).
 
 The fingerprint covers the source pins, the weights, the stage order and quotas, and the seed.
 An RL run's launch document records the intended curriculum, and the run's artifact record names
@@ -28,7 +28,8 @@ class SamplingMode(StrEnum):
     """How the trainer draws its task mix from a curriculum's sources."""
 
     WEIGHTED = "weighted"
-    """Weighted random: every training window composes the exact weighted mixture."""
+    """Weighted random: every training window composes the weights' largest-remainder
+    integer apportionment, so a window's per-source quotas are whole groups."""
     ORDERED = "ordered"
     """Ordered: the trainer consumes the declared stage sequence in order, deterministically."""
 
@@ -47,7 +48,8 @@ class CurriculumEntry:
     """One source population a curriculum samples, with its pinned provenance and weight."""
 
     label: str
-    """The sampling key the trainer resolves rows by (a ``teacher_route`` value)."""
+    """The sampling key the trainer resolves rows by: the pool row's ``teacher_route``
+    value. A curriculum samples only a pool whose rows carry its labels."""
     source: str
     """The catalog invocation name (a ``runnable_sources()`` key)."""
     version: str
