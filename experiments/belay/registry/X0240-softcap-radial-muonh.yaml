@@ -1,0 +1,12 @@
+id: X0240
+slug: softcap-radial-muonh
+name: Softcap radial MuonH
+category: Optimizers
+summary: 'Track: speedrun'
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6968062224
+  author: WhenWen
+  approved_by: WhenWen (trusted)
