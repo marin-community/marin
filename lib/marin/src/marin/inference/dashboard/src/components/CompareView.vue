@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { fetchHealth, fetchInfo } from '../lib/api'
 import { comparisonBaseUrl, comparisonTurns } from '../lib/comparison'
+import { isSendKey } from '../lib/composer_keys'
 import type { PreferenceChoice } from '../lib/comparison'
 import { loadComparison, newComparison, saveComparison } from '../lib/comparison_storage'
 import type { SamplingParams, ServingInfo } from '../lib/types'
@@ -117,7 +118,7 @@ async function send() {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (event.isComposing || event.key !== 'Enter' || event.shiftKey) return
+  if (!isSendKey(event)) return
   event.preventDefault()
   send()
 }

@@ -188,7 +188,7 @@ function clearHistory() {
         @clear="clearHistory"
       />
       <main class="flex min-w-0 flex-1 flex-col">
-        <div class="flex shrink-0 items-center gap-1 border-b border-surface-border px-4">
+        <div class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-surface-border px-2 sm:px-4">
           <button
             v-if="mode !== 'compare'"
             class="mr-1 rounded-lg px-2 py-1 text-text-muted transition-colors hover:text-text md:hidden"
@@ -203,7 +203,7 @@ function clearHistory() {
           <button
             v-for="tab in ['chat', 'compare', 'completion'] as const"
             :key="tab"
-            class="border-b-2 px-3 py-2 text-sm capitalize transition-colors"
+            class="shrink-0 border-b-2 px-2 py-2 text-sm capitalize transition-colors sm:px-3"
             :class="
               mode === tab
                 ? 'border-accent font-semibold text-text'
@@ -243,7 +243,8 @@ function clearHistory() {
             </svg>
             <span class="hidden sm:inline">Report issue</span>
           </button>
-          <label class="flex items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary">
+          <!-- Below sm, max tokens moves into the More options panel. -->
+          <label class="hidden items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary sm:flex">
             Max tokens
             <input
               v-model.number="params.maxTokens"
