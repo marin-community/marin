@@ -135,7 +135,7 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
 
     def secret(name):
         secrets.append(name)
-        assert with_judge and name == difficulty_campaign.GLM_BULK_TOKEN_ENV
+        assert with_judge and name == difficulty_campaign.TOGETHER_API_KEY_ENV
         return "fixture-judge-key"
 
     def launch(prepared_path, config_path, local_root, output, api_key, recovery_arguments, judge, daytona_api_key=None):
@@ -192,7 +192,7 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
     difficulty_campaign.main()
     assert probes == ([Solver.SMALL, Solver.HOSTED] if with_judge else [Solver.SMALL])
     assert set(downloads) == {difficulty_campaign.SOLVER_MODELS[solver] for solver in probes}
-    assert secrets == ([difficulty_campaign.GLM_BULK_TOKEN_ENV] if with_judge else [])
+    assert secrets == ([difficulty_campaign.TOGETHER_API_KEY_ENV] if with_judge else [])
     (config,) = launches
     serving = json.loads((output / "serving.json").read_text())
     if with_judge:
