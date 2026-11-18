@@ -4,8 +4,20 @@ An SFT mix is [`mixture()`](https://github.com/marin-community/marin/blob/main/l
 over versioned artifact handles. Every component carries a `name@version` identity
 and a fingerprint, so the exact mix of a run is recoverable from its
 `.artifact.json` record. This page defines the three layers of a mix (source,
-variant, mix) and the recovery procedure. RL task sets are versioned through the
-Atlas registry ([RL Data Atlas](rl-data-atlas.md)) and are out of scope here.
+variant, mix) and the recovery procedure.
+
+RL task sources are cataloged as `RlDataSource` entries
+([source.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py);
+`all_sources()` in
+[sources.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py))
+with pinned inputs and a
+[`SourceRecipe`](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/models.py),
+and their curation receipts live in the Atlas registry
+([RL Data Atlas](rl-data-atlas.md)). RL task mixes (which sources, route weights
+via `weighted_quotas` in
+[domain_sampling.py](https://github.com/marin-community/marin/blob/main/vendor/skyrl/skyrl-train/skyrl_train/domain_sampling.py),
+input versions) currently have no versioned mix object and are out of scope for
+this doc.
 
 ## Source
 
