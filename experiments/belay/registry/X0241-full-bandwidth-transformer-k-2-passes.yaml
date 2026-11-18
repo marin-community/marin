@@ -12,3 +12,9 @@ intake:
   approved_by: ClassicLarry
 code_commits:
 - f3624da1475d34eb9578b29758141baa5633191d
+potential:
+  score: 5
+  rationale: 'No result yet: FBT K=2 speedrun not launched (held by node cap; control line escalated) -> 5'
+  model: claude-opus-5-5
+  date: '2026-11-18'
+  inputs_digest: abb80d7e554f
