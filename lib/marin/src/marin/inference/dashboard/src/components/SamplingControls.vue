@@ -22,7 +22,8 @@ const customInstructions = defineModel<string>('customInstructions', { default: 
         type="number"
         min="1"
         step="1"
-        class="w-24 rounded-lg border border-surface-border bg-surface px-2 py-1.5 text-sm text-text"
+        title="Maximum output tokens generated for each response"
+        class="w-24 rounded-lg border border-surface-border bg-surface px-2 py-1.5 text-sm text-text outline-none transition-colors focus:border-accent"
       />
     </label>
     <label class="flex flex-col gap-1 text-xs text-text-muted">
