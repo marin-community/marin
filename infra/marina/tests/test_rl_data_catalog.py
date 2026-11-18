@@ -3712,8 +3712,9 @@ def test_archived_lineage_panel_grandfathered_with_marker(catalog_database, cata
 
 @pytest.mark.parametrize("shared_batch", [False, True, "chunked"])
 def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
-    catalog_database, catalog_query, tmp_path, shared_batch
+    catalog_database, catalog_query, tmp_path, shared_batch, monkeypatch
 ):
+    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.server.reviews.QC_INVENTORY_BATCH", 1)
     root = str(tmp_path / "sample-browse")
     publish_sample(root, "sample-browse")
     load_catalog(CurationCatalog(root), catalog_query)
@@ -3729,6 +3730,12 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
     ][0]
     old_key = before["assessment_key"]
     load_id = before["load_id"]
+    catalog_query(
+        "INSERT INTO atlas_sources SELECT (jsonb_populate_record(NULL::atlas_sources, "
+        "to_jsonb(s)||jsonb_build_object('id','Marin:unreviewed','assessment_key',NULL))).* "
+        "FROM atlas_sources s WHERE load_id=:load AND id='Marin:math'",
+        {"load": load_id},
+    )
     key = "qc:" + "b" * 64
     assessment = catalog_query(
         "SELECT * FROM atlas_assessments WHERE load_id=:load AND pipeline_key=:key", {"load": load_id, "key": old_key}
@@ -3822,6 +3829,12 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
         )["rows"]
         == []
     )
+    if shared_batch == "chunked":
+        # A previous loader stored identical chunked evidence before the scalar count column existed.
+        catalog_query(
+            "UPDATE atlas_review_batches SET chunk_count=0 WHERE load_id=:load AND pipeline_key=:key",
+            {"load": load_id, "key": key},
+        )
     assert not any(load_content_reviews(staged, load_id, "Marin:math", catalog_query).values())
     after = catalog_query("SELECT load_id,declaration,assessment_key FROM atlas_sources WHERE id='Marin:math'", {})[
         "rows"
@@ -3844,6 +3857,12 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
         detail = client.get("/evidence", params={"source_id": "Marin:math", "task_id": items[0]["task_id"]}).json()
         assert detail["raw_review"] == expected_raw[0]["record"]
         inventory = client.get("/qc/inventory").json()
+        assert (
+            len(inventory["panels"])
+            == catalog_query("SELECT COUNT(*) AS count FROM atlas_sources WHERE load_id=:load", {"load": load_id})[
+                "rows"
+            ][0]["count"]
+        )
         panel = next(row for row in inventory["panels"] if row["source_id"] == "Marin:math")
         assert panel["task_count"] == panel["raw_count"] == 3
         assert panel["linked_count"] == (3 if shared_batch else 0)

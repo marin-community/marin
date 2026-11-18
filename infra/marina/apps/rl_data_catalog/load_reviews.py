@@ -353,7 +353,7 @@ def load_content_reviews(staged: dict, load_id: str, source_id: str, query: Appl
                 {"pipeline_key": key, "batch_key": row["batch_key"], "chunk_index": index, "payload": part}
                 for index, part in enumerate(chunks)
             )
-        stored_batches.append({**row, "record": record})
+        stored_batches.append({**row, "record": record, "chunk_count": record.get("payload_chunks", 0)})
     ensure_tables(
         query,
         (
@@ -364,10 +364,19 @@ def load_content_reviews(staged: dict, load_id: str, source_id: str, query: Appl
             "atlas_raw_reviews",
         ),
     )
+    query("ALTER TABLE atlas_review_batches ADD COLUMN IF NOT EXISTS chunk_count INTEGER NOT NULL DEFAULT 0", {})
+    # Old chunked records contain only small hash/size/count metadata; avoid detoasting unchunked payloads.
+    query(
+        "UPDATE atlas_review_batches SET chunk_count=CASE WHEN pg_column_size(record)<1024 "
+        "THEN COALESCE(CAST(record->>'payload_chunks' AS INTEGER),0) ELSE 0 END "
+        "WHERE load_id=:load AND pipeline_key=:key AND chunk_count=0 "
+        "AND CASE WHEN pg_column_size(record)<1024 THEN record ? 'payload_chunks' ELSE FALSE END",
+        {"load": load_id, "key": key},
+    )
     key = staged["assessment"]["pipeline_key"]
     counts = {}
     for table, rows, columns in [
-        ("atlas_review_batches", stored_batches, "pipeline_key TEXT,batch_key TEXT,record JSONB"),
+        ("atlas_review_batches", stored_batches, "pipeline_key TEXT,batch_key TEXT,record JSONB,chunk_count INTEGER"),
         ("atlas_review_batch_chunks", chunk_rows, "pipeline_key TEXT,batch_key TEXT,chunk_index INTEGER,payload TEXT"),
         ("atlas_review_batch_tasks", links, "pipeline_key TEXT,task_id TEXT,batch_key TEXT"),
         ("atlas_assessments", [staged["assessment"]], TABLE_COLUMNS["assessments"]),

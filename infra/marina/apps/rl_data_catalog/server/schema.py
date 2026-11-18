@@ -6,8 +6,9 @@
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS atlas_review_batches (
     load_id TEXT NOT NULL,pipeline_key TEXT NOT NULL,batch_key TEXT NOT NULL,record JSONB NOT NULL,
-    PRIMARY KEY(load_id,pipeline_key,batch_key)
+    chunk_count INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(load_id,pipeline_key,batch_key)
 );
+ALTER TABLE atlas_review_batches ADD COLUMN IF NOT EXISTS chunk_count INTEGER NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS atlas_review_batch_chunks (
     load_id TEXT NOT NULL,pipeline_key TEXT NOT NULL,batch_key TEXT NOT NULL,chunk_index INTEGER NOT NULL,
     payload TEXT NOT NULL,PRIMARY KEY(load_id,pipeline_key,batch_key,chunk_index),
