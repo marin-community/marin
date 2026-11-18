@@ -11,6 +11,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.licenses import LicenseDecision, LicenseDecisionKind, LicenseReceipt
@@ -460,6 +462,8 @@ class TestLicenseGate:
 class TestCohortConversion:
     """The merge stage's first step: winners converted through the tracked source's own converter."""
 
+    FIXTURE_ENV = EnvironmentRequirements(command_semantics="linux_process", packages_lock="s3://fixture/lock")
+
     @staticmethod
     def _report() -> dict:
         return {
@@ -547,6 +551,11 @@ class TestCohortConversion:
         monkeypatch.setattr(lane, "load_folder_rows", lambda repo, folders, revision=None: rows)
         monkeypatch.setattr(lane, "tracked_instruction_hashes", lambda uris: self._instruction_hashes())
         monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: runtimes)
+        monkeypatch.setattr(
+            lane,
+            "tracked_grader_environment",
+            lambda uris: self.FIXTURE_ENV,
+        )
         return lane.convert_cohort(
             tracked_source_id=TRACKED_SOURCE,
             report=report,
@@ -604,6 +613,11 @@ class TestCohortConversion:
         monkeypatch.setattr(lane, "load_folder_rows", counting_rows)
         monkeypatch.setattr(lane, "tracked_instruction_hashes", lambda uris: self._instruction_hashes())
         monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: self._runtime_join())
+        monkeypatch.setattr(
+            lane,
+            "tracked_grader_environment",
+            lambda uris: self.FIXTURE_ENV,
+        )
         output_root = str(tmp_path / "cohort")
         report = self._single_winner_report()
         manifests = [
@@ -640,12 +654,14 @@ class TestCohortConversion:
         monkeypatch.setattr(lane, "load_folder_rows", lambda repo, folders, revision=None: rows)
         monkeypatch.setattr(lane, "tracked_instruction_hashes", lambda uris: self._instruction_hashes())
         monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: self._runtime_join())
+        monkeypatch.setattr(lane, "tracked_grader_environment", lambda uris: self.FIXTURE_ENV)
         # Pre-seed the conversion dir with a map entry for task_0 but no shards.
         identity = lane.canonical_sha256(
             {
                 "recipe_version": self._recipe(monkeypatch, tmp_path).version,
                 "drop_wrapper_solve_sh": False,
                 "report": self._single_winner_report(),
+                "grader_environment": self.FIXTURE_ENV.model_dump(mode="json"),
             }
         )[:16]
         root = StoragePath(str(tmp_path / "cohort")) / f"conversion-{identity}"
@@ -757,6 +773,7 @@ class TestDropWrapperSolveSh:
         instruction_hash = next(content_rows([converted.model_dump(mode="json")])).instruction_hash
         monkeypatch.setattr(lane, "tracked_instruction_hashes", lambda uris: {"tracked-0": instruction_hash})
         monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: {instruction_hash: {"shape": {}}})
+        monkeypatch.setattr(lane, "tracked_grader_environment", lambda uris: TestCohortConversion.FIXTURE_ENV)
         output_root = str(tmp_path / "cohort")
         manifest = lane.convert_cohort(
             tracked_source_id=TRACKED_SOURCE,
@@ -771,6 +788,37 @@ class TestDropWrapperSolveSh:
         )
         assert manifest["normalization"] == {"dropped_wrapper_solve_sh": 1}
         assert manifest["counts"] == {"converted": 1}
+
+
+def _spec_json(environment: dict) -> dict:
+    """A minimal tracked TaskSpec JSON carrying only the grader environment binding."""
+    return {"id": "tracked-x", "grader": {"environment": environment}}
+
+
+def _write_spec_parquet(path, rows):
+    table = pa.Table.from_pylist([{"task_spec": json.dumps(row["task_spec"])} for row in rows])
+    pq.write_table(table, path)
+    return str(path)
+
+
+class TestTrackedGraderEnvironment:
+    """The conversion binds the tracked source's production grader environment from its specs pin."""
+
+    def test_reads_the_environment_every_row_binds(self, tmp_path):
+        environment = {"command_semantics": "linux_process", "packages_lock": "s3://bucket/lock"}
+        uri = _write_spec_parquet(tmp_path / "specs.parquet", [{"task_spec": _spec_json(environment)}])
+        bound = lane.tracked_grader_environment((uri,))
+        assert bound == EnvironmentRequirements.model_validate(environment)
+
+    def test_mixed_bindings_fail_loudly(self, tmp_path):
+        first = {"command_semantics": "linux_process", "packages_lock": "s3://bucket/lock-a"}
+        second = {"command_semantics": "linux_process", "packages_lock": "s3://bucket/lock-b"}
+        uri = _write_spec_parquet(
+            tmp_path / "specs.parquet",
+            [{"task_spec": _spec_json(first)}, {"task_spec": _spec_json(second)}],
+        )
+        with pytest.raises(ValueError, match="mixes grader environments"):
+            lane.tracked_grader_environment((uri,))
 
 
 class TestPrepareModeArgs:

@@ -33,22 +33,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256, task_identity
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import EnvironmentRequirements, TaskSpec
 from taskcompendium.pipeline.conversion import row_source, row_task_id
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, RawRow, ReviewStatus
 from taskcompendium.pipeline.repair import ComparativeOutcome, RepairMatchClass
 
 from experiments.post_training.task_curation.full_qc import LONG_REQUEST_TIMEOUT, ReviewerVersion, local_reviewer
-from experiments.post_training.task_curation.images.build import EnvironmentArtifact, identity_digest
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
 from experiments.post_training.task_curation.oracle_filter import NegativeControlPolicy, calibrate_cohort, filter_cohort
-from experiments.post_training.task_curation.pipeline import (
-    environment_requirements,
-    planned_lock_url,
-    source_recipe,
-)
+from experiments.post_training.task_curation.pipeline import source_recipe
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.repair_candidates import (
     CANDIDATE_REPO,
@@ -709,18 +704,50 @@ def winner_paths(winners: list[Mapping[str, Any]]) -> list[str]:
     return [str(pair["candidate_task_id"]).rsplit(":", 1)[-1] for pair in winners]
 
 
-def cohort_conversion_context(recipe) -> ConversionContext:
-    """The production conversion context: the recipe's own grader environment binding.
+def tracked_grader_environment(spec_uris: tuple[str, ...]) -> "EnvironmentRequirements":
+    """The tracked source's production grader environment, read from its specs pin.
 
-    The binding is the artifact the tracked source's own admission built — the deterministic
-    environment-artifact lock under the active prefix — so the winners' graders run under
-    exactly the environment their tracked counterparts ran under.
+    Candidates must be graded under exactly the environment the tracked tasks run under.
+    Re-resolving a fresh planned environment-artifact identity instead would point the trials
+    at an artifact nobody ever built (its lock does not exist), failing every calibration on
+    infrastructure. Every tracked row must bind the same environment; mixed bindings fail loudly.
     """
-    built = EnvironmentArtifact(
-        path=str(StoragePath(planned_lock_url(recipe.grader)).parent),
-        identity=identity_digest(recipe.grader),
-    )
-    return ConversionContext({}, environment_requirements(recipe.grader, built))
+    binding: tuple[str, dict[str, Any]] | None = None
+    for uri in spec_uris:
+        with tempfile.TemporaryFile() as local:
+            with StoragePath(uri).open("rb") as remote:
+                shutil.copyfileobj(remote, local)
+            local.seek(0)
+            with pq.ParquetFile(local) as handle:
+                if "task_spec" not in handle.schema_arrow.names:
+                    raise ValueError(f"Tracked specs input has no task_spec column: {uri}")
+                for batch in handle.iter_batches(batch_size=16, columns=["task_spec"]):
+                    for raw in batch.column("task_spec").to_pylist():
+                        spec = json.loads(raw) if isinstance(raw, str) else raw
+                        environment = (spec.get("grader") or {}).get("environment")
+                        if environment is None:
+                            raise ValueError(f"Tracked spec has no grader environment: {uri}")
+                        fingerprint = canonical_sha256(environment)
+                        if binding is None:
+                            binding = (fingerprint, environment)
+                        elif fingerprint != binding[0]:
+                            raise ValueError(
+                                f"Tracked specs pin mixes grader environments: {binding[0][:12]} vs {fingerprint[:12]}"
+                            )
+    if binding is None:
+        raise ValueError("The tracked specs pin is empty")
+    logger.info("Tracked grader environment %s from %d specs inputs", binding[0][:12], len(spec_uris))
+    return EnvironmentRequirements.model_validate(binding[1])
+
+
+def cohort_conversion_context(recipe, tracked_spec_uris: tuple[str, ...]) -> ConversionContext:
+    """The production conversion context: the tracked source's own grader environment binding.
+
+    The binding comes from the tracked source's specs pin — the exact environment the tracked
+    source's own admission graded under — so the winners' graders run under the same
+    environment their tracked counterparts run under.
+    """
+    return ConversionContext({}, tracked_grader_environment(tracked_spec_uris))
 
 
 def convert_cohort(
@@ -749,7 +776,7 @@ def convert_cohort(
     recipe = recipes.get(tracked_source_id)
     if recipe is None:
         raise ValueError(f"No configured source recipe for {tracked_source_id}")
-    context = cohort_conversion_context(recipe)
+    context = cohort_conversion_context(recipe, tracked_spec_uris)
     # The production conversion path: the recipe lowered to a SourceRecipe, whose SourceFiles
     # carries the dataset identity, decode and converter that row_source and the row bind need.
     recipe_source = source_recipe(recipe, {}, context.grader_environment)
@@ -777,6 +804,7 @@ def convert_cohort(
             "recipe_version": recipe.version,
             "drop_wrapper_solve_sh": drop_wrapper_solve_sh,
             "report": report,
+            "grader_environment": context.grader_environment.model_dump(mode="json"),
         }
     )[:16]
     root = StoragePath(output_root) / f"conversion-{identity}"
