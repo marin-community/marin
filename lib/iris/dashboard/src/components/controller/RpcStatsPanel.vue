@@ -53,6 +53,7 @@ const RECENT_STATS_FILTER = () => `timestamp_ms >= ${Date.now() - 5 * 60 * 1000}
 // mixing). The finelog reports its own name, if any, at /api/server.
 const SERVER_INFO_PATH = '/proxy/system.log-server/api/server'
 const ownCluster = ref('')
+const ownClusterError = ref('')
 
 function sqlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`
@@ -143,9 +144,9 @@ onMounted(async () => {
   try {
     await loadOwnCluster()
   } catch (e) {
-    // Without the name the panel can show only rows written before the finelog
-    // named its cluster; say so rather than silently showing nothing.
-    console.warn('RpcStatsPanel: could not read the finelog cluster name', e)
+    // Without the name the panel shows only rows written before the finelog
+    // named its cluster, so the counts may be partial.
+    ownClusterError.value = `Could not read the finelog's cluster name (${e}); counts may be partial.`
   }
   refreshAll()
 })
@@ -416,6 +417,12 @@ function avgMs(row: MethodRow): number {
       class="px-4 py-3 text-sm text-status-danger bg-status-danger-bg rounded-lg border border-status-danger-border"
     >
       {{ error }}
+    </div>
+    <div
+      v-if="ownClusterError"
+      class="px-4 py-3 text-sm text-status-warning bg-status-warning-bg rounded-lg border border-status-warning-border"
+    >
+      {{ ownClusterError }}
     </div>
 
     <!-- Summary strip -->
