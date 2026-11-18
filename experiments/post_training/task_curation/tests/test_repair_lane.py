@@ -620,6 +620,55 @@ class TestCohortConversion:
         assert manifests[1]["counts"] == {"already_done": 1}
         assert manifests[0]["conversion_identity"] == manifests[1]["conversion_identity"]
 
+    def test_resume_reconverts_winners_whose_shards_were_lost(self, monkeypatch, tmp_path):
+        """A failed attempt may leave map entries whose spec shards never flushed."""
+        monkeypatch.setattr(
+            lane,
+            "configured_sources",
+            lambda: [
+                type(
+                    "S",
+                    (),
+                    {"info": type("I", (), {"id": TRACKED_SOURCE})(), "config": self._recipe(monkeypatch, tmp_path)},
+                )()
+            ],
+        )
+        rows = [{"path": "task_0", "task_binary": _fixture_binary("keep me")}]
+        monkeypatch.setattr(lane, "load_folder_rows", lambda repo, folders, revision=None: rows)
+        monkeypatch.setattr(lane, "tracked_instruction_hashes", lambda uris: self._instruction_hashes())
+        monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: self._runtime_join())
+        # Pre-seed the conversion dir with a map entry for task_0 but no shards.
+        identity = lane.canonical_sha256(
+            {
+                "recipe_version": self._recipe(monkeypatch, tmp_path).version,
+                "drop_wrapper_solve_sh": False,
+                "report": self._single_winner_report(),
+            }
+        )[:16]
+        root = StoragePath(str(tmp_path / "cohort")) / f"conversion-{identity}"
+        root.mkdirs()
+        entry = {
+            "candidate_task_id": f"{CANDIDATE_SOURCE}:task_0",
+            "tracked_task_id": "tracked-0",
+            "converted_task_id": "converted-task_0",
+            "status": "converted",
+            "rejection": None,
+        }
+        (root / "task-map.jsonl").write_text(json.dumps(entry) + "\n")
+        manifest = lane.convert_cohort(
+            tracked_source_id=TRACKED_SOURCE,
+            report=self._single_winner_report(),
+            folders=("fixture_v1",),
+            repo="fixture/validated-tasks",
+            candidate_revision="eafe9b38",
+            tracked_uris=(),
+            tracked_spec_uris=(),
+            output_root=str(tmp_path / "cohort"),
+        )
+        assert manifest["counts"] == {"converted": 1}
+        shards = sorted(str(p) for p in StoragePath(manifest["shards_root"]).ls())
+        assert len(shards) == 1
+
     def test_missing_runtime_binding_fails_loudly(self, monkeypatch, tmp_path):
         rows = [{"path": "task_0", "task_binary": _fixture_binary("keep me")}]
         with pytest.raises(ValueError, match="No tracked runtime binding"):

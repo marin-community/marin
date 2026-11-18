@@ -781,10 +781,25 @@ def convert_cohort(
     root.mkdirs()
     done: dict[str, dict[str, Any]] = {}
     map_path = root / "task-map.jsonl"
+    specs_done: set[str] = set()
+    pending_dir = root / "converted-pending"
+    if pending_dir.exists():
+        for shard in pending_dir.ls():
+            with tempfile.TemporaryFile() as local:
+                with shard.open("rb") as remote:
+                    shutil.copyfileobj(remote, local)
+                local.seek(0)
+                with pq.ParquetFile(local) as handle:
+                    for batch in handle.iter_batches(batch_size=256, columns=["winner_candidate_task_id"]):
+                        specs_done.update(batch.column("winner_candidate_task_id").to_pylist())
     if map_path.exists():
         for line in map_path.read_text().splitlines():
             if line.strip():
                 entry = json.loads(line)
+                # A winner whose map entry exists but whose spec shard was lost (a failed
+                # attempt between the map append and the shard flush) must reconvert.
+                if entry["status"] == "converted" and entry["candidate_task_id"] not in specs_done:
+                    continue
                 done[entry["candidate_task_id"]] = entry
     buffer: list[tuple[str, dict[str, Any], TaskSpec, dict[str, Any]]] = []
     counts = Counter()
@@ -829,7 +844,6 @@ def convert_cohort(
         else:
             counts["rejected"] += 1
     if buffer:
-        pending_dir = root / "converted-pending"
         pending_dir.mkdirs()
         existing = {p.name for p in pending_dir.ls()} if pending_dir.exists() else set()
         index = 0
