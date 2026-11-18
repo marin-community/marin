@@ -130,14 +130,18 @@ class RankResult:
     census: NcclCensus
 
 
-def build_variants() -> list[Variant]:
-    """Build the environment matrix: the workaround, each variable alone, and IB hints."""
+def build_variants(extra_env: dict[str, str] | None = None) -> list[Variant]:
+    """Build the environment matrix: the workaround, each variable alone, and IB hints.
+
+    ``extra_env`` appends one ``env_overlay`` variant carrying caller-supplied
+    variables, for example a measured per-host ``NCCL_IB_HCA`` set.
+    """
     all_three = {
         "NCCL_NET": "Socket",
         "NCCL_IB_DISABLE": "1",
         "NCCL_SOCKET_FAMILY": "AF_INET",
     }
-    return [
+    variants = [
         Variant("baseline_default_env"),
         Variant("net_socket_only", {"NCCL_NET": "Socket"}),
         Variant("ib_disable_only", {"NCCL_IB_DISABLE": "1"}),
@@ -148,6 +152,9 @@ def build_variants() -> list[Variant]:
         Variant("ib_hca_mlx5_1", {"NCCL_IB_HCA": "mlx5_1"}),
         Variant("ib_gid_index_0", {"NCCL_IB_GID_INDEX": "0"}),
     ]
+    if extra_env:
+        variants.append(Variant("env_overlay", dict(extra_env)))
+    return variants
 
 
 def parse_nccl_census(lines: list[str]) -> NcclCensus:
@@ -233,6 +240,8 @@ def spawn_worker(
     )
     if os.environ.get("PROBE_INIT_TIMEOUT"):
         env["PROBE_INIT_TIMEOUT"] = os.environ["PROBE_INIT_TIMEOUT"]
+    if os.environ.get("PROBE_BUFFER_BYTES"):
+        env["PROBE_BUFFER_BYTES"] = os.environ["PROBE_BUFFER_BYTES"]
     cmd = [sys.executable, str(Path(__file__).resolve()), "--mode", "worker", "--variant", variant.name]
     log_file: IO[bytes] = open(log_path, "wb")  # noqa: SIM115 - closed in collect_worker after the child exits
     output_file: IO[bytes] = open(output_path, "wb")  # noqa: SIM115 - closed in collect_worker after the child exits
@@ -366,7 +375,7 @@ def run_launcher(args: argparse.Namespace) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     selected = set(args.variants.split(",")) if args.variants else None
     results = []
-    for offset, variant in enumerate(build_variants()):
+    for offset, variant in enumerate(build_variants(extra_env=args.env_pairs)):
         if selected is not None and variant.name not in selected:
             continue
         logger.info("[task %s] variant %s starting", task_index, variant.name)
@@ -383,6 +392,7 @@ def run_launcher(args: argparse.Namespace) -> None:
             "num_tasks": num_tasks,
             "local_gpus": local_gpus,
             "host": job_info.advertise_host,
+            "ib_ports": collect_ib_port_inventory(),
         },
         "results": results,
     }
@@ -422,8 +432,13 @@ def run_gate(args: argparse.Namespace) -> None:
         world_size = num_tasks * local_gpus
     ctx = iris_ctx()
     endpoint_name = f"{ENDPOINT_BASE_NAME}-gate-attempt-{job_info.attempt_id}"
+    gate_variants = [
+        variant
+        for variant in build_variants(extra_env=args.env_pairs or None)
+        if variant.name in ("baseline_default_env", "env_overlay")
+    ]
     if task_index == 0:
-        base_port = allocate_port_block(1)
+        base_port = allocate_port_block(len(gate_variants))
         master_host = job_info.advertise_host
         endpoint_id = ctx.registry.register(endpoint_name, f"{master_host}:{base_port}")
         logger.info("gate: registered rendezvous %s at %s:%d", endpoint_name, master_host, base_port)
@@ -433,18 +448,55 @@ def run_gate(args: argparse.Namespace) -> None:
 
     log_dir = RESULT_DIR / f"gate-task{task_index}"
     log_dir.mkdir(parents=True, exist_ok=True)
-    baseline = next(variant for variant in build_variants() if variant.name == "baseline_default_env")
     rank_offset = task_index if args.gate_coverage == "first-pair" else task_index * local_gpus
-    result = run_variant(baseline, rank_offset, local_gpus, world_size, master_host, base_port, log_dir)
+    results = []
+    for offset, variant in enumerate(gate_variants):
+        results.append(
+            run_variant(variant, rank_offset, local_gpus, world_size, master_host, base_port + offset, log_dir)
+        )
     if task_index == 0:
         ctx.registry.unregister(endpoint_id)
-    verdict = gate_verdict(result["pass"], [rank["transports"] for rank in result["ranks"]])
-    print(json.dumps({"gate": {"task_index": task_index, "verdict": verdict, "result": result}}))
+    verdicts = [gate_verdict(result["pass"], [rank["transports"] for rank in result["ranks"]]) for result in results]
+    verdict = next((item for item in verdicts if item != "pass"), "pass")
+    print(
+        json.dumps(
+            {
+                "gate": {
+                    "task_index": task_index,
+                    "verdict": verdict,
+                    "results": results,
+                    "ib_ports": collect_ib_port_inventory(),
+                }
+            }
+        )
+    )
     if verdict != "pass":
-        for rank in result["ranks"]:
-            for line in rank["error_tail"]:
-                print(line, file=sys.stderr)
+        for result in results:
+            for rank in result["ranks"]:
+                for line in rank["error_tail"]:
+                    print(line, file=sys.stderr)
         raise SystemExit(f"gate: interconnect check failed ({verdict}); refusing to start the trainer")
+
+
+def collect_ib_port_inventory() -> list[dict[str, str]]:
+    """Read the host's InfiniBand device/port states from sysfs.
+
+    Returns one record per port with the device name, port number, state and
+    link layer, so a launch record carries the measured link-layer inventory.
+    """
+    inventory: list[dict[str, str]] = []
+    for device_path in sorted(Path("/sys/class/infiniband").glob("*")):
+        device = device_path.name
+        for port_path in sorted((device_path / "ports").iterdir()):
+            if not port_path.is_dir():
+                continue
+            record = {"device": device, "port": port_path.name}
+            for field_name in ("state", "link_layer", "rate"):
+                value = port_path / field_name
+                if value.exists():
+                    record[field_name] = value.read_text().strip()
+            inventory.append(record)
+    return inventory
 
 
 def gate_verdict(passed: bool, rank_transports: list[list[str]]) -> str:
@@ -469,6 +521,7 @@ def run_worker_mode(args: argparse.Namespace) -> None:
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
     init_timeout = int(os.environ.get("PROBE_INIT_TIMEOUT", PROCESS_GROUP_TIMEOUT_SECONDS))
+    buffer_bytes = int(os.environ.get("PROBE_BUFFER_BYTES", ALLREDUCE_BYTES))
     dist.init_process_group("nccl", timeout=datetime.timedelta(seconds=init_timeout))
     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
     device = torch.device("cuda", torch.cuda.current_device())
@@ -483,22 +536,22 @@ def run_worker_mode(args: argparse.Namespace) -> None:
         torch.cuda.synchronize()
         return (time.perf_counter() - start) / iterations
 
-    tensor = torch.empty(ALLREDUCE_BYTES // 2, dtype=torch.bfloat16, device=device)
+    tensor = torch.empty(buffer_bytes // 2, dtype=torch.bfloat16, device=device)
 
     def run_all_reduce() -> None:
         dist.all_reduce(tensor)
 
     all_reduce_seconds = bench(run_all_reduce, ALLREDUCE_ITERATIONS)
-    all_reduce_bandwidth = ALLREDUCE_BYTES / all_reduce_seconds * 2 * (world_size - 1) / world_size / 1e9
+    all_reduce_bandwidth = buffer_bytes / all_reduce_seconds * 2 * (world_size - 1) / world_size / 1e9
 
-    a2a_input = torch.empty(ALLTOALL_BYTES // 2, dtype=torch.bfloat16, device=device)
+    a2a_input = torch.empty(buffer_bytes // 2, dtype=torch.bfloat16, device=device)
     a2a_output = torch.empty_like(a2a_input)
 
     def run_all_to_all() -> None:
         dist.all_to_all_single(a2a_output, a2a_input)
 
     all_to_all_seconds = bench(run_all_to_all, ALLTOALL_ITERATIONS)
-    all_to_all_bandwidth = ALLTOALL_BYTES / all_to_all_seconds * (world_size - 1) / world_size / 1e9
+    all_to_all_bandwidth = buffer_bytes / all_to_all_seconds * (world_size - 1) / world_size / 1e9
 
     payload = {
         "variant": args.variant,
@@ -544,12 +597,28 @@ def main() -> None:
         help="Gate mode: first-pair checks tasks 0+1 one GPU each; all-gpus joins every task with all local GPUs",
     )
     parser.add_argument(
+        "--env",
+        action="append",
+        metavar="KEY=VALUE",
+        help="Extra environment overlay run as the 'env_overlay' variant (repeatable)",
+    )
+    parser.add_argument(
+        "--buffer-bytes",
+        type=int,
+        help="Worker buffer size in bytes for both collectives (default 64 MiB)",
+    )
+    parser.add_argument(
         "--rendezvous-timeout-seconds",
         type=int,
         help="Launcher: how long a peer waits for the coordinator's registry entry (default: init timeout)",
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    args.env_pairs = {key: value for key, _, value in (item.partition("=") for item in args.env or [])}
+    if not args.env_pairs:
+        args.env_pairs = None
+    if args.buffer_bytes:
+        os.environ["PROBE_BUFFER_BYTES"] = str(args.buffer_bytes)
     if args.init_timeout_seconds:
         os.environ["PROBE_INIT_TIMEOUT"] = str(args.init_timeout_seconds)
     if args.mode == "launcher":
