@@ -1,52 +1,40 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Exp3 long-loop RL curriculum: the exact task mix the .55 restart trained on.
+"""The Exp3 long-loop RL curriculum: the task mix the .55 restart enforced.
 
 Run ``users/benfeuer/checkpoints/mochi-exp3-rl-ib-2026.11.17.55`` (W&B
 ``marin-community/marin-long-loop/f7m70xhc``) trained 20 updates on two pinned
-parquet releases with exact consumed route quotas: every 64-group training batch
-admitted 32 agentic groups and 32 nonagentic groups, drawn uniformly within each
-route pool by seeded passes over the merged manifests. The recipe's
-``data.sampling`` stayed at its default (``kind: null``), so the mix came from the
-rollout buffer's consumed route quotas, not from ``weighted_quotas``.
+parquet releases. The recipe's ``data.sampling`` stayed at its default
+(``kind: null``): the run routed groups through the rollout buffer's consumed
+route quotas, admitting exactly 32 agentic and 32 nonagentic groups per
+64-group batch, and drew uniformly within each route pool by seeded passes over
+the merged manifests.
 
-This module records that mix as the equivalent weighted curriculum over the seven
-``data_source`` populations the run's telemetry resolves reward domains by. Each
-source's weight is its route's batch share times its row share inside the route
-pool, so composing every training window with these weights reproduces the run's
-per-window composition exactly at the route level; within each route the
-trainer's largest-remainder apportionment realizes the row-share weights as
-integer per-source quotas, rounded within one group per window. The seed is the
-run's trainer seed. Resolving the curriculum against the
-catalog reproduces what .55 consumed, source by source; the per-source task
-counts come from the adopted releases' pinned provenance, so the curriculum and
-the release verification cannot drift apart.
+This module records that enforced mix as a weighted curriculum keyed by the
+routes the buffer admitted: 0.5 agentic and 0.5 nonagentic, which compose every
+64-group window into the exact 32/32 split the run ran. Per-source composition is
+provenance, not sampler policy — the run never enforced per-source weights — so
+the adopted releases pin the per-source row counts (``verify_release`` checks
+them) and the PR description carries the per-source shares, sampled counts, and
+rewards.
 
 Sampling contract: the trainer's domain-weighted sampler resolves pool rows by
 their ``teacher_route`` column and rejects unknown routes. The recorded .55
-parquets carry ``data_source`` provenance and no ``teacher_route`` column — the
-run routed groups through ``source_routes`` and consumed route quotas, not
-through this sampler. A launch that samples this curriculum therefore needs a
-pool whose rows carry these labels (the per-source stamp is the planned
-``teacher_route`` stamping follow-up); against the recorded pool the curriculum
-is the mix's record, not an executable sampler config.
+parquets carry ``data_source`` provenance and no ``teacher_route`` column, so a
+launch that samples this curriculum needs a route-stamped pool; against the
+recorded pool the curriculum is the mix's record, not an executable sampler
+config.
+
+Seed: the run's trainer seed, 20261020.
 """
 
 from types import MappingProxyType
 
-from marin.rl.curriculum import RlCurriculum, SamplingMode
+from marin.rl.curriculum import RlCurriculum
 
-from experiments.post_training.task_curation.curriculum import curriculum_entry
-from experiments.post_training.task_curation.datasets.long_loop_rl import (
-    AGENTIC_RELEASE_NAME,
-    AGENTIC_TRAIN_SOURCE,
-    NONAGENTIC_RELEASE_NAME,
-    REASONING_GYM_SOURCE,
-    agentic_release,
-    nonagentic_release,
-)
-from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.curriculum import weighted_curriculum
+from experiments.post_training.task_curation.datasets.long_loop_rl import AGENTIC_RELEASE, NONAGENTIC_RELEASE
 
 CURRICULUM_NAME = "long-loop/exp3-rl"
 CURRICULUM_VERSION = "2026.11.17.55"
@@ -57,84 +45,15 @@ SEED = 20261020
 BATCH_GROUPS = 64
 ROUTE_QUOTAS = MappingProxyType({"agentic": 32, "nonagentic": 32})
 
-AGENTIC_RELEASE = agentic_release()
-NONAGENTIC_RELEASE = nonagentic_release()
-
-SOURCE_ROUTES = MappingProxyType(
-    {
-        AGENTIC_TRAIN_SOURCE: "agentic",
-        "PRIME-RL/Eurus-2-RL-Data": "nonagentic",
-        "nvidia/Nemotron-RL-Ultra-Training-Blends": "nonagentic",
-        "nvidia/OpenScience": "nonagentic",
-        REASONING_GYM_SOURCE: "nonagentic",
-        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": "nonagentic",
-        "open-thoughts/TaskTrove": "nonagentic",
-    }
-)
-
-SOURCE_RELEASES = MappingProxyType(
-    {
-        AGENTIC_TRAIN_SOURCE: AGENTIC_RELEASE_NAME,
-        "PRIME-RL/Eurus-2-RL-Data": NONAGENTIC_RELEASE_NAME,
-        "nvidia/Nemotron-RL-Ultra-Training-Blends": NONAGENTIC_RELEASE_NAME,
-        "nvidia/OpenScience": NONAGENTIC_RELEASE_NAME,
-        REASONING_GYM_SOURCE: NONAGENTIC_RELEASE_NAME,
-        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": NONAGENTIC_RELEASE_NAME,
-        "open-thoughts/TaskTrove": NONAGENTIC_RELEASE_NAME,
-    }
-)
-
-
-def _source_counts() -> dict[str, int]:
-    """The per-source task counts, read from the adopted releases' pinned provenance."""
-    counts: dict[str, int] = {}
-    for release in (AGENTIC_RELEASE, NONAGENTIC_RELEASE):
-        config = release.config
-        if config is None:
-            raise ValueError(f"adopted release {release.name} has no configuration")
-        for member in config.members:
-            if member.source_counts:
-                counts.update(member.source_counts)
-    return counts
-
-
-SOURCE_ROWS = MappingProxyType(_source_counts())
-
-
-def release_catalog() -> dict[str, RlDataSource]:
-    """The two adopted releases, keyed by catalog name."""
-    return {AGENTIC_RELEASE_NAME: AGENTIC_RELEASE, NONAGENTIC_RELEASE_NAME: NONAGENTIC_RELEASE}
-
-
-def weights() -> dict[str, float]:
-    """Per-source expected group share under the run's consumed route quotas.
-
-    Each route's batch share is its consumed quota over the 64-group batch; within
-    a route, seeded passes draw every pool row uniformly, so a source's share of
-    that route's groups is its row share of the route pool.
-    """
-    route_rows = {
-        route: sum(SOURCE_ROWS[label] for label in SOURCE_ROWS if SOURCE_ROUTES[label] == route)
-        for route in ROUTE_QUOTAS
-    }
-    return {
-        label: (
-            (ROUTE_QUOTAS[SOURCE_ROUTES[label]] / BATCH_GROUPS) * (SOURCE_ROWS[label] / route_rows[SOURCE_ROUTES[label]])
-        )
-        for label in SOURCE_ROWS
-    }
+WEIGHTS = MappingProxyType({"agentic": 0.5, "nonagentic": 0.5})
 
 
 def exp3_rl_curriculum() -> RlCurriculum:
-    """The .55 run's task mix as a versioned weighted curriculum over the seven sources."""
-    catalog = release_catalog()
-    return RlCurriculum(
-        name=CURRICULUM_NAME,
-        version=CURRICULUM_VERSION,
-        mode=SamplingMode.WEIGHTED,
-        entries=tuple(
-            curriculum_entry(label, catalog[SOURCE_RELEASES[label]], weight) for label, weight in weights().items()
-        ),
-        stages=(),
+    """The .55 run's enforced mix: exact 32/32 route quotas per 64-group window."""
+    return weighted_curriculum(
+        CURRICULUM_NAME,
+        CURRICULUM_VERSION,
+        weights=dict(WEIGHTS),
         seed=SEED,
+        catalog={"agentic": AGENTIC_RELEASE, "nonagentic": NONAGENTIC_RELEASE},
     )
