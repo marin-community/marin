@@ -3,7 +3,6 @@
 
 """Preserve FineEnvs native tasks while binding their public inputs to pinned images."""
 
-import gzip
 import hashlib
 import io
 import shlex
@@ -12,29 +11,21 @@ import tomllib
 from collections.abc import Iterator
 from decimal import Decimal
 from functools import partial
-from pathlib import Path, PurePosixPath
-from tempfile import TemporaryDirectory
+from pathlib import PurePosixPath
 
 import pyarrow.parquet as pq
 from finestore.rl.curation import ContentEvidenceReference
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.harbor.root_delivery import REWARD_PATH, home_restore_commands, shell_quiesce_command
+from taskcompendium.harbor.root_delivery import TEST_EXIT, TEST_OUTPUT, native_file_reward_grader
 from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
 from taskcompendium.models import (
-    ArtifactKind,
-    FileReward,
     ResourceGroups,
-    RewardFile,
-    RewardFileFormat,
-    ScriptGrader,
     TaskSpec,
-    VerifierArtifact,
     VerifierCommand,
 )
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.runtime.staging import resource_files, write_archive
 
 from experiments.post_training.task_curation.datasets.facet.images import pinned_json
 from experiments.post_training.task_curation.datasets.fineenvs.artifacts import GroupedInputImage
@@ -65,10 +56,7 @@ CONTRACT_SHA = "e3179104ebff6933a2054c9ccdb692cfdc4d7626e186bbfaf06ee21881e0ad29
 NATIVE_SETUP_REVISION = "c313b7b18f5245619a13da12e6943d703ea5b0fb"
 NATIVE_VERIFIER_SETUP_SHA = "97be873552fe710949ad3fe1825a9d083a78523bc69d1b1dd036604a7271baf9"
 NATIVE_SETUP_REVIEW_SHA = "051a80e170b933230ad4fd0e1459f44bd9901e2b399e388a9959c2fc73358517"
-TEST_OUTPUT = "/logs/verifier/test-output.txt"
-TEST_EXIT = "/logs/verifier/exit-code.txt"
 SETUP_OUTPUT = "/logs/verifier/setup-output.txt"
-COPIED_REWARD = "/source-reward.txt"
 WORKDIR = "/workdir"
 RUBRIC = """Compare the public instruction with the unchanged native verifier and oracle.
 Public setup_files/setup.sh runs before the actor. Private tests/setup.sh runs immediately
@@ -86,7 +74,11 @@ def read_fineenvs_rows(
     summary = pinned_json(INPUT_SUMMARY.uri, INPUT_SUMMARY.sha256)
     pinned_json(PREFIX + "/inputs/native-setup-protocol-v1.json", SETUP_PROTOCOL_SHA)
     published = pinned_json(images_reference.uri, images_reference.sha256)
-    if published["image_count"] != 10 or published["input_set_count"] != 419 or published["task_counts"] != TASK_COUNTS:
+    if (
+        not 1 <= published["image_count"] <= 10
+        or published["input_set_count"] != 419
+        or published["task_counts"] != TASK_COUNTS
+    ):
         raise ValueError("FineEnvs image publication does not cover the frozen native population")
     images = {}
     groups = set()
@@ -103,7 +95,7 @@ def read_fineenvs_rows(
             if signature in images:
                 raise ValueError("FineEnvs input set is assigned to multiple images")
             images[signature] = row
-    if groups != set(range(10)) or images.keys() != summary["input_groups"].keys():
+    if groups != set(range(published["image_count"])) or images.keys() != summary["input_groups"].keys():
         raise ValueError("FineEnvs published images differ from the complete input-set census")
     contracts = {row["task"]: row for row in summary["task_contracts"] if row["folder"] == folder}
     if len(contracts) != TASK_COUNTS[folder]:
@@ -215,12 +207,6 @@ def convert_fineenvs(row: RawRow, context: ConversionContext) -> TaskSpec | Impo
         for name, resource in resources.items()
         if name.startswith("tests/")
     )
-    with TemporaryDirectory(prefix="fineenvs-verifier-") as temporary:
-        archive = Path(temporary) / "tests.tar"
-        write_archive(archive, resource_files(private, ""), [])
-        compressed = io.BytesIO()
-        with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0) as writer:
-            writer.write(archive.read_bytes())
     signature = row.data["fineenvs_input_signature"]
     inert = "/opt/fineenvs-inputs/" + signature
     setup = (
@@ -238,9 +224,6 @@ def convert_fineenvs(row: RawRow, context: ConversionContext) -> TaskSpec | Impo
             "capabilities": ("shell",),
             "setup_commands": (setup,),
         }
-    )
-    transport = environment.model_copy(
-        update={"working_directory": "/", "setup_commands": (), "environment_variables": {}}
     )
     execute = VerifierCommand(
         argv=(
@@ -275,24 +258,7 @@ def convert_fineenvs(row: RawRow, context: ConversionContext) -> TaskSpec | Impo
             "resources": ResourceGroups(
                 all=task.resources.all, worker=public, oracle=task.resources.oracle, verifier=archived
             ),
-            "grader": ScriptGrader(
-                argv=("cp", COPIED_REWARD, REWARD_PATH),
-                cwd="/",
-                environment=transport,
-                answer_path=None,
-                collect=(
-                    shell_quiesce_command(),
-                    *home_restore_commands(compressed.getvalue(), restore_root="/tests"),
-                    execute,
-                ),
-                artifacts=(
-                    VerifierArtifact(source=TEST_OUTPUT, target="/source-test-output.txt", kind=ArtifactKind.FILE),
-                    VerifierArtifact(source=TEST_EXIT, target="/source-exit-code.txt", kind=ArtifactKind.FILE),
-                    VerifierArtifact(source=REWARD_PATH, target=COPIED_REWARD, kind=ArtifactKind.FILE),
-                ),
-                reward=FileReward(files=(RewardFile(path=REWARD_PATH, format=RewardFileFormat.NUMBER),)),
-                timeout=config["verifier"]["timeout_sec"],
-            ),
+            "grader": native_file_reward_grader(environment, private, execute, config["verifier"]["timeout_sec"]),
             "integrity_contract": RootDeliveryContract(
                 dependency_state=SharedDependencyState.AGENT_MUTABLE,
                 agent_user=None,

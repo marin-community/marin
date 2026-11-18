@@ -18,11 +18,25 @@ parser, which runs host-side.
 """
 
 import base64
+import gzip
+import io
 import shlex
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
 
-from taskcompendium.models import VerifierCommand
+from taskcompendium.models import (
+    ArtifactKind,
+    EnvironmentRequirements,
+    FileReward,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
+    TaskResource,
+    VerifierArtifact,
+    VerifierCommand,
+)
+from taskcompendium.runtime.staging import resource_files, write_archive
 
 QUARANTINE_KILL_SIGNAL = "9"
 # The delivered payload is argv-embedded; keep a conservative bound so the
@@ -30,6 +44,9 @@ QUARANTINE_KILL_SIGNAL = "9"
 MAX_DELIVERY_BYTES = 512 * 1024
 DELIVERY_ROOT = "/tests"
 REWARD_PATH = "/logs/verifier/reward.txt"
+TEST_OUTPUT = "/logs/verifier/test-output.txt"
+TEST_EXIT = "/logs/verifier/exit-code.txt"
+COPIED_REWARD = "/source-reward.txt"
 
 
 @dataclass(frozen=True)
@@ -186,16 +203,7 @@ HOME_RESTORE_CHUNK_BYTES = 48 * 1024
 """Raw bytes per chunk; base64 renders ~64 KiB, well inside the argv cap."""
 
 
-def home_restore_commands(
-    archive: bytes, *, restore_root: str = "/home", chunk_bytes: int = HOME_RESTORE_CHUNK_BYTES
-) -> tuple[VerifierCommand, ...]:
-    """Deliver the original compressed capture archive in chunks and restore it verbatim.
-
-    The archive carries the exact member modes and mtimes, so ``tar`` reproduces
-    them without any per-file repair. Each chunk renders under ~64 KiB of argv
-    (encoded chunks are multiples of four so ``base64 -d`` decodes them
-    standalone); the staging file is removed after the restore.
-    """
+def _archive_chunk_commands(archive: bytes, restore_root: str, chunk_bytes: int) -> tuple[VerifierCommand, ...]:
     if not archive:
         raise ValueError("The home delivery archive is empty")
     encoded = base64.b64encode(archive)
@@ -221,6 +229,21 @@ def home_restore_commands(
                 cwd="/",
             )
         )
+    return tuple(commands)
+
+
+def home_restore_commands(
+    archive: bytes, *, restore_root: str = "/home", chunk_bytes: int = HOME_RESTORE_CHUNK_BYTES
+) -> tuple[VerifierCommand, ...]:
+    """Deliver the original compressed capture archive in chunks and restore it verbatim.
+
+    The archive carries the exact member modes and mtimes, so ``tar`` reproduces
+    them without any per-file repair. Each chunk renders under ~64 KiB of argv
+    (encoded chunks are multiples of four so ``base64 -d`` decodes them
+    standalone); the staging file is removed after the restore.
+    """
+    commands = _archive_chunk_commands(archive, restore_root, chunk_bytes)
+    staging = PurePosixPath(restore_root) / ".capture.tar.gz"
     # Reproduce the source's RESTORE_GRADING_ARTIFACTS exactly (taskset.py at
     # pinned b41d875): each archive member must be a plain relative filename and
     # its destination is removed (rm -rf) before extraction, so a destination the
@@ -241,8 +264,7 @@ def home_restore_commands(
             f"rm -f {shlex.quote(str(staging))}",
         )
     )
-    commands.append(VerifierCommand(argv=("bash", "-c", restore), cwd="/"))
-    return tuple(commands)
+    return (*commands, VerifierCommand(argv=("bash", "-c", restore), cwd="/"))
 
 
 def multiswe_run_command(
@@ -351,3 +373,65 @@ def shell_quiesce_command() -> VerifierCommand:
     spared), and a failed kill fails the command instead of silently passing.
     """
     return VerifierCommand(argv=("bash", "-c", SHELL_QUIESCE_SCRIPT), cwd="/")
+
+
+def native_file_reward_grader(
+    environment: EnvironmentRequirements,
+    private_files: tuple[TaskResource, ...],
+    execute: VerifierCommand,
+    timeout: float,
+) -> ScriptGrader:
+    """Restore native private files after the actor and collect its numeric reward.
+
+    File order, contents, modes and timestamps are retained in the delivered
+    archive. The caller supplies the source's execution command and deadline.
+    """
+    with TemporaryDirectory(prefix="native-verifier-") as temporary:
+        archive = Path(temporary) / "tests.tar"
+        write_archive(archive, resource_files(private_files, ""), [])
+        compressed = io.BytesIO()
+        with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0) as writer:
+            writer.write(archive.read_bytes())
+    restore = home_restore_commands(compressed.getvalue(), restore_root="/tests")
+    if any("/" in resource.path for resource in private_files):
+        roots = set()
+        for resource in private_files:
+            path = PurePosixPath(resource.path)
+            if path.is_absolute() or ".." in path.parts:
+                raise ValueError(f"Native verifier path escapes its private root: {resource.path}")
+            roots.add(path.parts[0])
+        # Replace each private top-level member before tar extraction so an
+        # actor-created directory or parent symlink cannot redirect the upload.
+        script = "\n".join(
+            (
+                "set -euo pipefail",
+                *("rm -rf -- " + shlex.quote("/tests/" + name) for name in sorted(roots)),
+                "tar -C /tests -xzf /tests/.capture.tar.gz",
+                "rm -f /tests/.capture.tar.gz",
+            )
+        )
+        restore = (
+            *_archive_chunk_commands(compressed.getvalue(), "/tests", HOME_RESTORE_CHUNK_BYTES),
+            VerifierCommand(argv=("bash", "-c", script), cwd="/"),
+        )
+    transport = environment.model_copy(
+        update={"working_directory": "/", "setup_commands": (), "environment_variables": {}}
+    )
+    return ScriptGrader(
+        argv=("cp", COPIED_REWARD, REWARD_PATH),
+        cwd="/",
+        environment=transport,
+        answer_path=None,
+        collect=(
+            shell_quiesce_command(),
+            *restore,
+            execute,
+        ),
+        artifacts=(
+            VerifierArtifact(source=TEST_OUTPUT, target="/source-test-output.txt", kind=ArtifactKind.FILE),
+            VerifierArtifact(source=TEST_EXIT, target="/source-exit-code.txt", kind=ArtifactKind.FILE),
+            VerifierArtifact(source=REWARD_PATH, target=COPIED_REWARD, kind=ArtifactKind.FILE),
+        ),
+        reward=FileReward(files=(RewardFile(path=REWARD_PATH, format=RewardFileFormat.NUMBER),)),
+        timeout=timeout,
+    )

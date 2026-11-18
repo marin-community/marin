@@ -47,6 +47,7 @@ def native_row(tmp_path, private_setup=b'printf "private\\n" >> "$TRIAL_TRACE"\n
         "setup_files/inputs/coordinates.csv": payload,
         "tests/setup.sh": private_setup,
         "tests/test.sh": verifier,
+        "tests/__pycache__/grader.cpython-312.pyc": b"\x00native-private-cache\xff",
         "solution/solve.sh": b"printf original > result\n",
     }
     archive = io.BytesIO()
@@ -207,6 +208,12 @@ def test_native_setup_runs_in_its_own_phase_and_source_zero_skips_checks(
     assert not (tmp_path / "tests/setup.sh").exists()
     with (tmp_path / "trace").open("a") as stream:
         stream.write("actor\n")
+    actor_directory = tmp_path / "actor-cache"
+    actor_directory.mkdir()
+    sentinel = actor_directory / "sentinel"
+    sentinel.write_text("actor-owned file")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/__pycache__").symlink_to(actor_directory, target_is_directory=True)
     if expected_reward is None:
         with pytest.raises(subprocess.CalledProcessError) as error:
             for command in task.grader.collect[1:]:
@@ -219,3 +226,8 @@ def test_native_setup_runs_in_its_own_phase_and_source_zero_skips_checks(
         assert (tmp_path / "logs/verifier/reward.txt").read_text() == expected_reward
 
     assert (tmp_path / "trace").read_text() == expected_trace
+    assert (tmp_path / "tests/__pycache__/grader.cpython-312.pyc").read_bytes() == files[
+        "tests/__pycache__/grader.cpython-312.pyc"
+    ]
+    assert not (tmp_path / "tests/__pycache__").is_symlink()
+    assert sentinel.read_text() == "actor-owned file"

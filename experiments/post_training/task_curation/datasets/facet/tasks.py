@@ -3,37 +3,26 @@
 
 """FACET terminal packages bound to their preserved pristine image digests."""
 
-import gzip
 import hashlib
-import io
 import json
 import tomllib
 from collections.abc import Iterator
 from functools import partial
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import pyarrow.parquet as pq
 from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.harbor.root_delivery import REWARD_PATH, home_restore_commands, shell_quiesce_command
+from taskcompendium.harbor.root_delivery import TEST_EXIT, TEST_OUTPUT, native_file_reward_grader
 from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
 from taskcompendium.models import (
-    ArtifactKind,
-    FileReward,
     ResourceGroups,
-    RewardFile,
-    RewardFileFormat,
-    ScriptGrader,
     TaskSpec,
-    VerifierArtifact,
     VerifierCommand,
 )
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.runtime.staging import resource_files, write_archive
 
 from experiments.post_training.task_curation.datasets.facet.artifacts import PreservedImage
 from experiments.post_training.task_curation.datasets.facet.images import (
@@ -60,9 +49,6 @@ PUBLISHED_IMAGES = ContentEvidenceReference(
 )
 PRIVATE_NAMES = frozenset({"setup.sh", "test.sh", "test_state.py"})
 WORKDIR = "/task_file"
-TEST_OUTPUT = "/logs/verifier/test-output.txt"
-TEST_EXIT = "/logs/verifier/exit-code.txt"
-COPIED_REWARD = "/source-reward.txt"
 RUBRIC = """Compare the public terminal instruction with the original native verifier and solution.
 The pinned image preserves the source SIF filesystem and runtime metadata. Public setup_files
 are uploaded before the actor; private tests are restored only after the actor stops.
@@ -153,12 +139,6 @@ def convert_facet(row: RawRow, context: ConversionContext) -> TaskSpec | ImportR
     for name, resource in private.items():
         if int(resource.mode, 8) != (0o644 if name == "test_state.py" else 0o755):
             raise ValueError("FACET native verifier mode changed")
-    with TemporaryDirectory(prefix="facet-verifier-") as temporary:
-        archive = Path(temporary) / "tests.tar"
-        write_archive(archive, resource_files(tuple(private.values()), ""), [])
-        compressed = io.BytesIO()
-        with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0) as writer:
-            writer.write(archive.read_bytes())
     image = row.data["facet_image"]
     environment = task.environment_requirements.model_copy(
         update={
@@ -166,13 +146,6 @@ def convert_facet(row: RawRow, context: ConversionContext) -> TaskSpec | ImportR
             "docker_build": None,
             "working_directory": WORKDIR,
             "capabilities": ("shell",),
-        }
-    )
-    transport = environment.model_copy(
-        update={
-            "working_directory": "/",
-            "setup_commands": (),
-            "environment_variables": {},
         }
     )
     execute = VerifierCommand(
@@ -197,23 +170,8 @@ def convert_facet(row: RawRow, context: ConversionContext) -> TaskSpec | ImportR
             "resources": ResourceGroups(
                 all=task.resources.all, worker=public, oracle=task.resources.oracle, verifier=archived
             ),
-            "grader": ScriptGrader(
-                argv=("cp", COPIED_REWARD, REWARD_PATH),
-                cwd="/",
-                environment=transport,
-                answer_path=None,
-                collect=(
-                    shell_quiesce_command(),
-                    *home_restore_commands(compressed.getvalue(), restore_root="/tests"),
-                    execute,
-                ),
-                artifacts=(
-                    VerifierArtifact(source=TEST_OUTPUT, target="/source-test-output.txt", kind=ArtifactKind.FILE),
-                    VerifierArtifact(source=TEST_EXIT, target="/source-exit-code.txt", kind=ArtifactKind.FILE),
-                    VerifierArtifact(source=REWARD_PATH, target=COPIED_REWARD, kind=ArtifactKind.FILE),
-                ),
-                reward=FileReward(files=(RewardFile(path=REWARD_PATH, format=RewardFileFormat.NUMBER),)),
-                timeout=config["verifier"]["timeout_sec"],
+            "grader": native_file_reward_grader(
+                environment, tuple(private.values()), execute, config["verifier"]["timeout_sec"]
             ),
             "integrity_contract": RootDeliveryContract(
                 dependency_state=SharedDependencyState.AGENT_MUTABLE,
