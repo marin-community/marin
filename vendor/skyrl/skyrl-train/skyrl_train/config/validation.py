@@ -3,7 +3,7 @@
 from omegaconf import DictConfig
 from marinskyrl.inference_placement import validate_expert_block_transport
 from marinskyrl.runtime_options import GDNBackend, R3Transport, reference_model_required
-from skyrl_train.config.placement_geometry import validate_colocated_engine_geometry
+from skyrl_train.config.placement_geometry import num_rollout_gpus, validate_colocated_engine_geometry
 
 
 def validate_batch_invariant_config(cfg: DictConfig) -> None:
@@ -146,14 +146,9 @@ def validate_training_settings(cfg: DictConfig) -> None:
         gpus_per_node = cfg.trainer.placement.policy_num_gpus_per_node
         validate_colocated_engine_geometry(tensor_pipeline_size=tp_pp_size, gpus_per_node=gpus_per_node)
         num_policy_gpus = cfg.trainer.placement.policy_num_gpus_per_node * cfg.trainer.placement.policy_num_nodes
-        num_rollout_gpus = (
-            cfg.generator.num_inference_engines
-            * cfg.generator.inference_engine_tensor_parallel_size
-            * cfg.generator.inference_engine_pipeline_parallel_size
-            * cfg.generator.inference_engine_data_parallel_size
-        )
-        assert num_policy_gpus == num_rollout_gpus, (
-            f"num_policy_gpus ({num_policy_gpus}) and num_rollout_gpus ({num_rollout_gpus}) must be the same when colocating all models"
+        rollout_gpus = num_rollout_gpus(cfg)
+        assert num_policy_gpus == rollout_gpus, (
+            f"num_policy_gpus ({num_policy_gpus}) and num_rollout_gpus ({rollout_gpus}) must be the same when colocating all models"
         )
 
     else:

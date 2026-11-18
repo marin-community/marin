@@ -15,7 +15,6 @@ from marinskyrl.runtime_options import EvaluationRunner
 from skyrl_train.evaluation_profiles import (
     named_evaluation_metrics,
     evaluation_profile_config,
-    resolve_evaluation_profiles,
     validate_generation_profiles,
 )
 from skyrl_train.config.rollout_validation import EntrypointOperation
@@ -74,7 +73,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
         return results
 
     async def _evaluate(self) -> dict[str, Any]:
-        profiles = resolve_evaluation_profiles(self.cfg)
+        profiles = self.evaluation_profiles
         validate_generation_profiles(profiles)
         datasets = self.get_named_eval_datasets()
         assert self.eval_dataset is not None, "The evaluation only entrypoint requires an eval dataset is provided"
@@ -143,6 +142,10 @@ class EvalOnlyEntrypoint(BasePPOExp):
                     trajectory_sink=trajectory_sink,
                 )
                 results.update(named_evaluation_metrics(profile_results, name))
+            if local_engines and profiles:
+                snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
+                for sink in configured_inference_sinks():
+                    sink.publish(snapshot, 0)
         finally:
             try:
                 await trajectory_runner.shutdown()

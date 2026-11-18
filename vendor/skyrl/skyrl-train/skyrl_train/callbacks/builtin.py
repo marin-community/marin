@@ -23,6 +23,7 @@ import contextlib
 import json
 import math
 import os
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
@@ -1020,7 +1021,9 @@ def _add_inference_stats_callback(cfg: DictConfig, callbacks: List[TrainerCallba
         callbacks.append(InferenceStatsCallback(log_every_steps=interval))
 
 
-def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
+def create_default_callbacks(
+    cfg: DictConfig, *, evaluation_profiles: Mapping[str, EvaluationProfile] | None = None
+) -> List[TrainerCallback]:
     """
     Create the default set of callbacks based on trainer configuration.
 
@@ -1055,7 +1058,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
     # Check for new-style explicit callback configuration
     if has_explicit_callbacks(cfg):
         logger.info("Using explicit callback configuration from YAML")
-        callbacks = create_callbacks_from_config(cfg)
+        callbacks = create_callbacks_from_config(cfg, evaluation_profiles=evaluation_profiles)
         token_budget = _configured_distillation_token_budget(cfg)
         configured_budget_callbacks = [
             callback for callback in callbacks if isinstance(callback, DistillationTokenBudgetCallback)
@@ -1231,7 +1234,9 @@ def create_callback_from_config(callback_config: Dict[str, Any]) -> TrainerCallb
         raise ValueError(f"Invalid parameters for callback '{callback_type}': {e}") from e
 
 
-def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
+def create_callbacks_from_config(
+    cfg: DictConfig, *, evaluation_profiles: Mapping[str, EvaluationProfile] | None = None
+) -> List[TrainerCallback]:
     """
     Create callbacks from explicit YAML configuration.
 
@@ -1256,7 +1261,7 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
     if callbacks_config is None:
         return []
 
-    profiles = resolve_evaluation_profiles(cfg)
+    profiles = resolve_evaluation_profiles(cfg) if evaluation_profiles is None else evaluation_profiles
     validate_evaluation_schedule(cfg, profiles)
     callbacks = []
     for callback_config in callbacks_config:
