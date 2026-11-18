@@ -283,20 +283,23 @@ def apply_hard_mask(model):
     """
     updated = model
     for path, weight, logits in _masked_matrices(model):
-        keep = (logits > 0).astype(weight.dtype)
-        parts = path.split(".")
+        parts = tuple(path.split("."))
         weight_field = parts[-1]
-        block_index = int(parts[2])
-        is_shared = ".shared." in path
+        logits_field = weight_field.replace("w_", "", 1) + "_logits"
 
-        def weight_where(m, block_index=block_index, is_shared=is_shared, weight_field=weight_field):
-            matrix = m.transformer.blocks[block_index].shared if is_shared else m.transformer.blocks[block_index].mlp
-            return getattr(matrix, weight_field)
+        def weight_where(m, parts=parts):
+            obj = m
+            for part in parts:
+                obj = getattr(obj, part)
+            return obj
 
-        def logits_where(m, block_index=block_index, is_shared=is_shared, weight_field=weight_field):
-            matrix = m.transformer.blocks[block_index].shared if is_shared else m.transformer.blocks[block_index].mlp
-            return getattr(matrix, weight_field.replace("w_", "") + "_logits")
+        def logits_where(m, parts=parts[:-1], logits_field=logits_field):
+            obj = m
+            for part in parts:
+                obj = getattr(obj, part)
+            return getattr(obj, logits_field)
 
+        keep = (logits > 0).astype(weight.dtype)
         updated = _tree_replace(weight_where, updated, weight * keep)
         updated = _tree_replace(logits_where, updated, None)
     # the deployed checkpoint is a plain Snowball: no deletion state at all
