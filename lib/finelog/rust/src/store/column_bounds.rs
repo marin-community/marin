@@ -7,10 +7,9 @@
 //! from Parquet footers for segments written before the column was flagged.
 //!
 //! An object segment's bounds are stored in its `object_segments.column_bounds`
-//! (catalog migration 0007; NULL when none are recorded) and in its checkpoint
-//! `CatalogSegment`. An older binary that knows 0007 leaves the column alone and
-//! drops the checkpoint field; the backfill restores what it drops after the
-//! next upgrade.
+//! (NULL when none are recorded) and in its checkpoint `CatalogSegment`. A row
+//! or checkpoint written without them reads back as no bounds, and the backfill
+//! fills them in.
 
 use std::collections::BTreeMap;
 
