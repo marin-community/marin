@@ -5,11 +5,14 @@
 # * Orbax: https://github.com/google/orbax/blob/11d2934ecfff77e86b5e07d0fef02b67eff4511b/orbax/checkpoint/pytree_checkpoint_handler.py#L312
 import asyncio
 import collections
+import contextlib
 import ctypes
+import errno
 import logging
 import math
 import os
 import pathlib
+import socket
 import sys
 import threading
 import time
@@ -53,6 +56,17 @@ KVSTORE_DRIVER = "ocdbt"
 _FILE_KVSTORE_DRIVER = "file"
 # TensorStore's file driver writes a key through "<key>.__lock" and renames it into place.
 _LOCK_FILE_SUFFIX = ".__lock"
+# Orders manifest commits across processes. TensorStore's lock excludes writers but does not
+# refresh another client's cached directory entry, so a commit can rename over a newer manifest.
+_COMMIT_ORDER_LOCK_NAME = ".commit-order.lock"
+_COMMIT_ORDER_TIMEOUT_S = 600
+# A live save refreshes this file. The next save removes lock files only after it is gone or stale.
+_WRITER_LEASE_NAME = ".writer-lease"
+_WRITER_LEASE_REFRESH_S = 30
+_WRITER_LEASE_STALE_S = 90
+_AT_FDCWD = -100
+_AT_STATX_FORCE_SYNC = 0x2000
+_STATX_BASIC_STATS = 0x7FF
 # JAX's memory kind for host memory a device can address. Offloaded optimizer state lives here.
 _HOST_MEMORY_KIND = "pinned_host"
 _PAGEABLE_HOST_MEMORY_KIND = "unpinned_host"
@@ -313,34 +327,257 @@ def _file_io_locking(config: TensorStoreWriteConfig, checkpoint_dir: str) -> Fil
     return None
 
 
-def _remove_abandoned_lock_files(checkpoint_dir: str) -> None:
-    """Delete lock files that an interrupted save left in a local checkpoint directory.
-
-    Callers run this before any process opens the checkpoint's stores, so every lock file present
-    belongs to a commit that can no longer finish. Removing it leaves the OCDBT database as OS
-    locking would see it: the last committed manifest, plus unreferenced data files.
-    """
+def _checkpoint_directory(checkpoint_dir: str) -> str | None:
     kvstore = build_kvstore_spec(checkpoint_dir)
-    if kvstore["driver"] != _FILE_KVSTORE_DRIVER or not os.path.isdir(kvstore["path"]):
+    if kvstore["driver"] != _FILE_KVSTORE_DRIVER:
+        return None
+    return kvstore["path"]
+
+
+def _delete_lock_files(directory: str) -> None:
+    if not os.path.isdir(directory):
         return
-    for lock_file in pathlib.Path(kvstore["path"]).rglob(f"*{_LOCK_FILE_SUFFIX}"):
+    for lock_file in pathlib.Path(directory).rglob(f"*{_LOCK_FILE_SUFFIX}"):
         logger.warning("Removing lock file %s abandoned by an interrupted save", lock_file)
         lock_file.unlink(missing_ok=True)
 
 
-def _prepare_file_io_locking(config: TensorStoreWriteConfig, checkpoint_dir: str) -> FileIoLocking | None:
-    """Resolve the save's locking mode and, for ``lockfile``, clear abandoned lock files.
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
-    Call once every process has finished its previous save and before any opens this one's stores.
-    Process 0 sweeps while the others wait at a barrier, so no lock file it removes is held by a
-    live commit.
+
+def _read_writer_lease(path: str) -> tuple[str, int] | None:
+    try:
+        text = pathlib.Path(path).read_text()
+    except FileNotFoundError:
+        return None
+    host, _, pid = text.strip().partition(" ")
+    if not host or not pid.isdigit():
+        return None
+    return host, int(pid)
+
+
+def _writer_lease_is_live(path: str) -> bool:
+    """A lease is live when its local process still exists, or a remote one refreshed it recently."""
+    parsed = _read_writer_lease(path)
+    if parsed is None:
+        return False
+    host, pid = parsed
+    if host == socket.gethostname():
+        # This process is between saves when it reads its own lease. A crashed save has a different pid.
+        if pid == os.getpid():
+            return False
+        return _pid_alive(pid)
+    try:
+        age = time.time() - os.stat(path).st_mtime
+    except FileNotFoundError:
+        return False
+    return age < _WRITER_LEASE_STALE_S
+
+
+def _locks_may_be_removed(directory: str) -> bool:
+    """False while a live save holds the directory. A stale or absent lease leaves the locks abandoned."""
+    path = os.path.join(directory, _WRITER_LEASE_NAME)
+    return not (os.path.exists(path) and _writer_lease_is_live(path))
+
+
+class _WriterLease:
+    """Names the save that currently owns a checkpoint directory."""
+
+    def __init__(self, directory: str):
+        self.path = os.path.join(directory, _WRITER_LEASE_NAME)
+        self._directory = directory
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _create(self) -> None:
+        fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        try:
+            os.write(fd, f"{socket.gethostname()} {os.getpid()}\n".encode())
+        finally:
+            os.close(fd)
+
+    def _refresh(self) -> None:
+        while not self._stop.wait(_WRITER_LEASE_REFRESH_S):
+            try:
+                os.utime(self.path)
+            except FileNotFoundError:
+                return
+
+    def try_acquire(self) -> bool:
+        """Take the directory if its lease is absent or stale. A live lease is left untouched."""
+        if not _locks_may_be_removed(self._directory):
+            return False
+        if os.path.lexists(self.path):
+            try:
+                os.unlink(self.path)
+            except FileNotFoundError:
+                pass
+        try:
+            self._create()
+        except FileExistsError:
+            return False
+        # The previous writer is gone. Its lock files can no longer belong to a live commit.
+        _delete_lock_files(self._directory)
+        self._thread = threading.Thread(target=self._refresh, daemon=True)
+        self._thread.start()
+        return True
+
+    def acquire(self) -> None:
+        deadline = time.monotonic() + _COMMIT_ORDER_TIMEOUT_S
+        while not self.try_acquire():
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Timed out waiting for the checkpoint writer holding {self.path}")
+            time.sleep(0.05)
+
+    def release(self) -> None:
+        self._stop.set()
+        try:
+            os.unlink(self.path)
+        except FileNotFoundError:
+            pass
+
+
+def _claim_writer_lease(checkpoint_dir: str) -> _WriterLease | None:
+    directory = _checkpoint_directory(checkpoint_dir)
+    if directory is None:
+        return None
+    os.makedirs(directory, exist_ok=True)
+    lease = _WriterLease(directory)
+    lease.acquire()
+    return lease
+
+
+def _release_lease_when_commits_finish(lease: _WriterLease, commit_futures: Sequence[ts.Future]) -> None:
+    if not commit_futures:
+        lease.release()
+        return
+    remaining = len(commit_futures)
+    lock = threading.Lock()
+
+    def finished(future: ts.Future) -> None:
+        nonlocal remaining
+        del future
+        with lock:
+            remaining -= 1
+            if remaining == 0:
+                lease.release()
+
+    for future in commit_futures:
+        future.add_done_callback(finished)
+
+
+def _prepare_file_io_locking(
+    config: TensorStoreWriteConfig, checkpoint_dir: str
+) -> tuple[FileIoLocking | None, _WriterLease | None]:
+    """Resolve the save's locking mode and claim the directory before removing stale lock files.
+
+    Process 0 takes the writer lease, then deletes lock files. A lease whose process is still
+    running, or whose remote holder refreshed it within ``_WRITER_LEASE_STALE_S``, blocks that
+    sweep. The other processes wait at the barrier until the sweep has finished.
     """
     file_io_locking = _file_io_locking(config, checkpoint_dir)
+    lease = None
+    if file_io_locking == "lockfile" and jax.process_index() == 0:
+        lease = _claim_writer_lease(checkpoint_dir)
     if file_io_locking == "lockfile":
-        if jax.process_index() == 0:
-            _remove_abandoned_lock_files(checkpoint_dir)
         jax_utils.barrier_sync()
-    return file_io_locking
+    return file_io_locking, lease
+
+
+def _revalidate_directory(directory: str) -> None:
+    """Ask the file server for ``directory``'s current entries.
+
+    An NFS client answers later lookups from its directory cache and can keep opening the inode
+    from before another client replaced the file. ``statx(AT_STATX_FORCE_SYNC)`` refreshes that
+    cache. A kernel without ``statx`` leaves the cache as it is.
+    """
+    buffer = ctypes.create_string_buffer(256)
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.statx.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_uint, ctypes.c_void_p]
+    libc.statx.restype = ctypes.c_int
+    if libc.statx(_AT_FDCWD, os.fsencode(directory), _AT_STATX_FORCE_SYNC, _STATX_BASIC_STATS, buffer) == 0:
+        return
+    error = ctypes.get_errno()
+    if error == errno.ENOSYS:
+        return
+    raise OSError(error, os.strerror(error), directory)
+
+
+class _HeldCommit:
+    def __init__(self, path: str, fd: int):
+        self.path = path
+        self._fd: int | None = fd
+
+    def release(self) -> None:
+        fd = self._fd
+        if fd is None:
+            return
+        self._fd = None
+        os.close(fd)
+        try:
+            os.unlink(self.path)
+        except FileNotFoundError:
+            pass
+
+
+class _CommitOrder:
+    """Serialize one directory's manifest commits across processes.
+
+    The holder refreshes the directory, then publishes. The next holder therefore rewrites the
+    manifest the previous holder left, rather than a copy cached before that publish.
+    """
+
+    def __init__(self, directory: str):
+        self.directory = directory
+        self._path = os.path.join(directory, _COMMIT_ORDER_LOCK_NAME)
+
+    def acquire(self) -> _HeldCommit:
+        deadline = time.monotonic() + _COMMIT_ORDER_TIMEOUT_S
+        while True:
+            try:
+                fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                break
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Timed out waiting to commit {self.directory}; {self._path} is still held")
+                time.sleep(0.02)
+        os.write(fd, f"{socket.gethostname()} {os.getpid()}\n".encode())
+        return _HeldCommit(self._path, fd)
+
+    @contextlib.contextmanager
+    def hold(self):
+        held = self.acquire()
+        try:
+            _revalidate_directory(self.directory)
+            yield
+        finally:
+            held.release()
+
+
+def _prepare_commit_order(checkpoint_dir: str) -> _CommitOrder | None:
+    """Order manifest commits when several processes share a filesystem checkpoint.
+
+    Process 0 removes a lock left by a save that died mid-commit. Every process then waits, so
+    no one is holding the lock that removal deletes. Call this only after the writer lease is held,
+    so a live save is not the owner of that lock.
+    """
+    directory = _checkpoint_directory(checkpoint_dir)
+    if jax.process_count() <= 1 or directory is None:
+        return None
+    if jax.process_index() == 0 and os.path.isdir(directory):
+        abandoned = os.path.join(directory, _COMMIT_ORDER_LOCK_NAME)
+        if os.path.lexists(abandoned):
+            logger.warning("Removing commit lock %s abandoned by an interrupted save", abandoned)
+            os.unlink(abandoned)
+    jax_utils.barrier_sync()
+    return _CommitOrder(directory)
 
 
 def _tensorstore_write_context(config: TensorStoreWriteConfig, file_io_locking: FileIoLocking | None) -> ts.Context:
@@ -797,12 +1034,14 @@ class _ManifestWaves:
         expected_writes: int,
         *,
         create_metadata: bool,
+        commit_order: _CommitOrder | None,
     ):
         self._base = base
         self._context = context
         self._gate = gate
         self._expected = expected_writes
         self._create_metadata = create_metadata
+        self._commit_order = commit_order
         self._finished = 0
         self._wave: _Wave | None = None
         self._lock = threading.Lock()
@@ -893,9 +1132,15 @@ class _ManifestWaves:
             wave.fail(wave.error)
             self._gate.release(held)
             return
+        held_commit = None
         try:
+            if self._commit_order is not None:
+                held_commit = self._commit_order.acquire()
+                _revalidate_directory(self._commit_order.directory)
             commit = wave.txn.commit_async()
         except BaseException as error:
+            if held_commit is not None:
+                held_commit.release()
             wave.fail(error)
             self._gate.release(held)
             return
@@ -907,6 +1152,9 @@ class _ManifestWaves:
                 wave.fail(error)
             else:
                 wave.succeed()
+            finally:
+                if held_commit is not None:
+                    held_commit.release()
             self._gate.release(held)
 
         commit.add_done_callback(committed)
@@ -990,35 +1238,48 @@ def _array_kvstore(base: ts.KvStore, path: str) -> ts.KvStore:
     return base / f"{path}/"
 
 
-def _commit_array_metadata(base: ts.KvStore, context: ts.Context, tspecs: Sequence[dict]) -> None:
+def _commit_array_metadata(
+    base: ts.KvStore,
+    context: ts.Context,
+    tspecs: Sequence[dict],
+    commit_order: _CommitOrder | None,
+) -> None:
     """Publish every array's metadata in one transaction.
 
     Two processes must not create the same ``zarr.json`` in separate transactions: the second
     commit fails with ``ALREADY_EXISTS``. One process publishes the metadata, then every process
     commits only the chunks it owns.
     """
-    txn = ts.Transaction(atomic=True)
-    bound = base.with_transaction(txn)
-    opened: list[ts.Future] = []
-    seen: set[str] = set()
-    for tspec in tspecs:
-        path = tspec["kvstore"].get("path", "")
-        if path in seen:
-            continue
-        seen.add(path)
-        opened.append(
-            ts.open(
-                {"driver": ARRAY_DRIVER, "metadata": tspec["metadata"]},
-                kvstore=_array_kvstore(bound, path),
-                create=True,
-                open=True,
-                context=context,
+
+    def publish() -> None:
+        txn = ts.Transaction(atomic=True)
+        bound = base.with_transaction(txn)
+        opened: list[ts.Future] = []
+        seen: set[str] = set()
+        for tspec in tspecs:
+            path = tspec["kvstore"].get("path", "")
+            if path in seen:
+                continue
+            seen.add(path)
+            opened.append(
+                ts.open(
+                    {"driver": ARRAY_DRIVER, "metadata": tspec["metadata"]},
+                    kvstore=_array_kvstore(bound, path),
+                    create=True,
+                    open=True,
+                    context=context,
+                )
             )
-        )
-    for future in opened:
-        future.result()
-    if opened:
-        txn.commit_sync()
+        for future in opened:
+            future.result()
+        if opened:
+            txn.commit_sync()
+
+    if commit_order is None:
+        publish()
+        return
+    with commit_order.hold():
+        publish()
 
 
 def _future_error(fut: ts.Future) -> BaseException | None:
@@ -1029,7 +1290,12 @@ def _future_error(fut: ts.Future) -> BaseException | None:
     return None
 
 
-def _publish_array_metadata(checkpoint_dir: str, context: ts.Context, tspecs: Sequence[dict]) -> None:
+def _publish_array_metadata(
+    checkpoint_dir: str,
+    context: ts.Context,
+    tspecs: Sequence[dict],
+    commit_order: _CommitOrder | None,
+) -> None:
     """Process 0 commits every array's metadata, and the others wait before opening it.
 
     Opening ``zarr.json`` reads the manifest without the lock. On NFS that read fails with
@@ -1041,7 +1307,7 @@ def _publish_array_metadata(checkpoint_dir: str, context: ts.Context, tspecs: Se
             {"driver": KVSTORE_DRIVER, "base": build_kvstore_spec(checkpoint_dir)},
             context=context,
         ).result()
-        _commit_array_metadata(base, context, tspecs)
+        _commit_array_metadata(base, context, tspecs, commit_order)
     jax_utils.barrier_sync()
 
 
@@ -1051,6 +1317,7 @@ def _write_each_chunk(
     config: TensorStoreWriteConfig,
     context: ts.Context,
     checkpoint_dir: str,
+    commit_order: _CommitOrder | None,
     *,
     published_metadata: bool,
 ) -> tuple[HostByteBudget, list[ts.Future]]:
@@ -1098,9 +1365,28 @@ def _write_each_chunk(
                 # for large bfloat16 chunks. Let it copy the staged snapshot instead.
                 write = target.write(data)
                 write.commit.add_done_callback(write_finished)
-                write.commit.force()
+                if commit_order is None:
+                    write.commit.force()
+                    return
+                order = commit_order
             except BaseException as error:
                 promise.set_exception(error)
+                return
+
+            def publish_latest() -> None:
+                try:
+                    # Refresh and rewrite the manifest another client last published. Releasing
+                    # the lock before result() returns lets the next client reopen that file.
+                    with order.hold():
+                        write.commit.force()
+                        write.commit.result()
+                except BaseException as error:
+                    # A commit that started reports through write_finished. One that did not
+                    # must still settle the promise, or the save waits on it forever.
+                    if not commit_future.done():
+                        promise.set_exception(error)
+
+            threading.Thread(target=publish_latest, daemon=True).start()
 
         def write_finished(future: ts.Future) -> None:
             error = _future_error(future)
@@ -1134,6 +1420,7 @@ def _write_in_manifest_waves(
     config: TensorStoreWriteConfig,
     checkpoint_dir: str,
     context: ts.Context,
+    commit_order: _CommitOrder | None,
 ) -> tuple[HostByteBudget, list[ts.Future]]:
     """Commit the chunks staged together as one atomic manifest commit per wave."""
     # Assigned before the first acquire. A waiter calls it once the gate exists.
@@ -1169,7 +1456,7 @@ def _write_in_manifest_waves(
         share_metadata = jax.process_count() > 1 and bool(tspecs)
         if share_metadata:
             if jax.process_index() == 0:
-                _commit_array_metadata(await open_base(), context, tspecs)
+                _commit_array_metadata(await open_base(), context, tspecs, commit_order)
             jax_utils.barrier_sync()
         if not jobs:
             return
@@ -1179,6 +1466,7 @@ def _write_in_manifest_waves(
             gate,
             len(jobs),
             create_metadata=not share_metadata,
+            commit_order=commit_order,
         )
         await asyncio.gather(*(stage_write(job, waves) for job in jobs))
 
@@ -1207,67 +1495,86 @@ def _serialize_arrays(
     """
     manager.wait_until_finished()
 
-    file_io_locking = _prepare_file_io_locking(config, checkpoint_dir)
+    file_io_locking, writer_lease = _prepare_file_io_locking(config, checkpoint_dir)
+    handed_off = False
+    try:
+        commit_order = _prepare_commit_order(checkpoint_dir)
 
-    # JAX's process-lifetime context accumulates caches across saves, since each save writes a
-    # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
-    context = _tensorstore_write_context(config, file_io_locking)
-    jobs = _checkpoint_writes(arrays, tspecs, plans)
-    # Each process chooses from its own share; both lock-file paths reach one metadata barrier.
-    use_waves = file_io_locking == "lockfile" and sum(job.num_bytes for job in jobs) > config.max_staged_host_bytes
-    if use_waves:
-        gate, commit_futures = _write_in_manifest_waves(jobs, tspecs, config, checkpoint_dir, context)
-    else:
-        # A fitting multi-process save still commits each chunk on its own, and those commits
-        # replace the manifest while another process may be opening it.
-        published_metadata = file_io_locking == "lockfile" and jax.process_count() > 1 and bool(tspecs)
-        if published_metadata:
-            _publish_array_metadata(checkpoint_dir, context, tspecs)
-        gate, commit_futures = _write_each_chunk(
-            jobs, tspecs, config, context, checkpoint_dir, published_metadata=published_metadata
+        # JAX's process-lifetime context accumulates caches across saves, since each save writes a
+        # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
+        context = _tensorstore_write_context(config, file_io_locking)
+        jobs = _checkpoint_writes(arrays, tspecs, plans)
+        # Each process chooses from its own share; both lock-file paths reach one metadata barrier.
+        use_waves = (
+            file_io_locking == "lockfile" and sum(job.num_bytes for job in jobs) > config.max_staged_host_bytes
         )
-    logger.info(
-        "Checkpoint staged %.2f GiB peak against a %.2f GiB budget across %d writes "
-        "in %d manifest commits (about %.0f GiB of host memory while in flight)",
-        gate.peak_bytes / 1024**3,
-        config.max_staged_host_bytes / 1024**3,
-        len(jobs),
-        len(commit_futures),
-        _STAGED_BYTE_OVERHEAD * gate.peak_bytes / 1024**3,
-    )
-    staged_host_bytes = gate.peak_bytes
+        if use_waves:
+            gate, commit_futures = _write_in_manifest_waves(
+                jobs, tspecs, config, checkpoint_dir, context, commit_order
+            )
+        else:
+            # A fitting multi-process save still commits each chunk on its own, and those commits
+            # replace the manifest while another process may be opening it.
+            published_metadata = file_io_locking == "lockfile" and jax.process_count() > 1 and bool(tspecs)
+            if published_metadata:
+                _publish_array_metadata(checkpoint_dir, context, tspecs, commit_order)
+            gate, commit_futures = _write_each_chunk(
+                jobs,
+                tspecs,
+                config,
+                context,
+                checkpoint_dir,
+                commit_order,
+                published_metadata=published_metadata,
+            )
+        if writer_lease is not None:
+            _release_lease_when_commits_finish(writer_lease, commit_futures)
+            handed_off = True
+        logger.info(
+            "Checkpoint staged %.2f GiB peak against a %.2f GiB budget across %d writes "
+            "in %d manifest commits (about %.0f GiB of host memory while in flight)",
+            gate.peak_bytes / 1024**3,
+            config.max_staged_host_bytes / 1024**3,
+            len(jobs),
+            len(commit_futures),
+            _STAGED_BYTE_OVERHEAD * gate.peak_bytes / 1024**3,
+        )
+        staged_host_bytes = gate.peak_bytes
 
-    _trim_host_memory_after_commits(commit_futures)
+        _trim_host_memory_after_commits(commit_futures)
 
-    # Private to AsyncManager. Its own `serialize` calls these.
-    manager._add_futures(commit_futures)
-    if on_staged is not None:
-        on_staged(staged_host_bytes)
-    if on_local_commit is not None:
-        remaining = len(commit_futures)
-        callback_lock = threading.Lock()
-        local_status = "local_completed"
+        # Private to AsyncManager. Its own `serialize` calls these.
+        manager._add_futures(commit_futures)
+        if on_staged is not None:
+            on_staged(staged_host_bytes)
+        if on_local_commit is not None:
+            remaining = len(commit_futures)
+            callback_lock = threading.Lock()
+            local_status = "local_completed"
 
-        def local_write_finished(future: ts.Future) -> None:
-            nonlocal remaining, local_status
-            try:
-                future.result()
-                failed = False
-            except BaseException:
-                failed = True
-            with callback_lock:
-                if failed:
-                    local_status = "local_failed"
-                remaining -= 1
-                if remaining == 0:
-                    on_local_commit(local_status)
+            def local_write_finished(future: ts.Future) -> None:
+                nonlocal remaining, local_status
+                try:
+                    future.result()
+                    failed = False
+                except BaseException:
+                    failed = True
+                with callback_lock:
+                    if failed:
+                        local_status = "local_failed"
+                    remaining -= 1
+                    if remaining == 0:
+                        on_local_commit(local_status)
 
-        for future in commit_futures:
-            future.add_done_callback(local_write_finished)
-        if not commit_futures:
-            on_local_commit(local_status)
-    manager._start_async_commit(commit_callback)
-    return staged_host_bytes
+            for future in commit_futures:
+                future.add_done_callback(local_write_finished)
+            if not commit_futures:
+                on_local_commit(local_status)
+        manager._start_async_commit(commit_callback)
+        return staged_host_bytes
+    finally:
+        if writer_lease is not None and not handed_off:
+            writer_lease.release()
 
 
 def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Sharding]:
