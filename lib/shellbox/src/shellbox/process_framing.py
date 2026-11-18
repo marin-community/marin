@@ -8,6 +8,8 @@ uses only the standard library so its source can accompany standalone guests.
 Raw subprocess pipes do not use this encoding.
 """
 
+from __future__ import annotations
+
 import base64
 from collections.abc import Iterator
 
