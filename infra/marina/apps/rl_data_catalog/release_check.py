@@ -26,6 +26,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import requests
 from marina.client import MarinaRequestError, applet_query, bearer_token, marina_request, marina_token_provider
+from marina.testing import test_database_environment
 from playwright.sync_api import Route, sync_playwright
 
 from .prepare_preview import (
@@ -425,12 +426,14 @@ def browser_checks(
             browser.close()
 
 
-def run_command(command: list[str], label: str, artifacts: Path, receipt: ReleaseReceipt) -> None:
+def run_command(
+    command: list[str], label: str, artifacts: Path, receipt: ReleaseReceipt, *, env: dict[str, str] | None = None
+) -> None:
     LOGGER.info("Gate: %s", label)
     receipt.gate = label
     log = artifacts / f"{label}.log"
     with log.open("x") as output:
-        result = subprocess.run(command, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT)
+        result = subprocess.run(command, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT, env=env)
     receipt.commands.append(CommandResult(label, command, result.returncode, str(log)))
     if result.returncode:
         raise RuntimeError(f"{label} failed (exit {result.returncode}); see {log}")
@@ -515,41 +518,44 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
             "ls-files", str(APP_SOURCE), "docs/references/rl-data-atlas.md", "docs/references/task-curation.md"
         ).splitlines()
         run_command(["./infra/pre-commit.py", *lint_paths], "lint", artifacts, receipt)
-        run_command(
-            [
-                "uv",
-                "run",
-                "--no-sync",
-                "pytest",
-                "infra/marina/tests/test_rl_data_catalog.py",
-                "infra/marina/tests/test_private_tier.py",
-                "experiments/post_training/task_curation/tests/test_oracle_admitted_release.py",
-                str(APP_SOURCE / "tests"),
-                "-q",
-            ],
-            "api-count-tests",
-            artifacts,
-            receipt,
-        )
-        run_command(
-            [
-                "uv",
-                "run",
-                "--no-sync",
-                "marina",
-                "journey",
-                "rl_data_catalog",
-                "--apps-dir",
-                str(ROOT / "infra/marina/apps"),
-                "-k",
-                "not full_browser",
-                "--shots",
-                str(artifacts / "journeys"),
-            ],
-            "browser-journeys",
-            artifacts,
-            receipt,
-        )
+        with test_database_environment() as environment:
+            run_command(
+                [
+                    "uv",
+                    "run",
+                    "--no-sync",
+                    "pytest",
+                    "infra/marina/tests/test_rl_data_catalog.py",
+                    "infra/marina/tests/test_private_tier.py",
+                    "experiments/post_training/task_curation/tests/test_oracle_admitted_release.py",
+                    str(APP_SOURCE / "tests"),
+                    "-q",
+                ],
+                "api-count-tests",
+                artifacts,
+                receipt,
+                env=environment,
+            )
+            run_command(
+                [
+                    "uv",
+                    "run",
+                    "--no-sync",
+                    "marina",
+                    "journey",
+                    "rl_data_catalog",
+                    "--apps-dir",
+                    str(ROOT / "infra/marina/apps"),
+                    "-k",
+                    "not full_browser",
+                    "--shots",
+                    str(artifacts / "journeys"),
+                ],
+                "browser-journeys",
+                artifacts,
+                receipt,
+                env=environment,
+            )
     with requests.Session() as session, ExitStack() as resources:
         receipt.gate = "production-version"
         production = app_details(args.service_url, PRODUCTION_APP_ID, session)

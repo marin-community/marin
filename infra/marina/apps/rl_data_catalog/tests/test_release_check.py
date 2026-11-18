@@ -149,7 +149,11 @@ def test_release_cli_persists_failed_gate_receipt_and_exits_nonzero(
             return "infra/marina/apps/rl_data_catalog/release_check.py\n"
         return "a" * 40
 
+    real_run = subprocess.run
+
     def process(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command[0] == "docker":
+            return real_run(command, **kwargs)
         return subprocess.CompletedProcess(command, 7 if failure == "command" and command[0] != "git" else 0)
 
     def response(session: Any, method: str, url: str, **kwargs: Any) -> requests.Response:

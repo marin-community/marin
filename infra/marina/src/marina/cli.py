@@ -6,6 +6,7 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 from contextlib import nullcontext
@@ -16,7 +17,6 @@ from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import click
-import pytest
 import uvicorn
 
 from marina.applets import (
@@ -56,6 +56,7 @@ from marina.runtime import load_runtime_config
 from marina.server import CLOUD_RUN_SERVICE_ENV, MarinaConfig, create_app
 from marina.sources import discover_apps
 from marina.table_load import read_table, table_statements
+from marina.testing import test_database_environment
 
 # Source inspection and previews use this directory; production serving uses Postgres.
 DEFAULT_APPS_DIR = Path(__file__).resolve().parents[2] / "apps"
@@ -672,7 +673,9 @@ def journey(
         args.append("--journey-headed")
     if keyword:
         args += ["-k", keyword]
-    raise SystemExit(pytest.main(args))
+    with test_database_environment() as environment:
+        result = subprocess.run([sys.executable, "-m", "pytest", *args], env=environment)
+    raise SystemExit(result.returncode)
 
 
 @cli.command()

@@ -20,6 +20,16 @@ authenticate with `uv run iris login`, and install Chromium with
 Docker, so a working Docker daemon is required. Alternatively,
 `MARINA_TEST_DATABASE_URL` may point to a test server where the test user can
 create/drop throwaway databases; never set it to a serving database.
+`release_check` owns one disposable Postgres server for its local API tests and
+browser journeys. It passes the server URL to child processes through
+`MARINA_TEST_DATABASE_URL`, then removes the container and anonymous volume
+when those commands finish or fail. `marina journey` also keeps ownership in its
+parent process, so an abrupt pytest exit cannot skip cleanup. SIGTERM sent to
+the owning process runs the same cleanup; removal failures fail the run.
+A server supplied through `MARINA_TEST_DATABASE_URL` is borrowed, never stopped.
+Cleanup uses the exact container name created by the run, not a prefix sweep.
+The `marina.local-postgres.owner-pid` label is diagnostic ownership metadata.
+
 Sync this checkout's own environment with
 `uv sync --frozen --package marin-marina --package marin-dupekit --group test`;
 the deduplication package is needed by the repository-wide type check. Do not reuse editable
