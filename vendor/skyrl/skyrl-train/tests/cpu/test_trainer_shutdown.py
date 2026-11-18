@@ -1,4 +1,6 @@
+import asyncio
 from collections import Counter
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -35,8 +37,8 @@ class Clock:
         return Timer()
 
 
-@pytest.mark.asyncio
-async def test_shutdown_releases_all_roles_without_a_late_process_failure(monkeypatch):
+@pytest.fixture
+def shutdown_case(monkeypatch):
     clock = Clock()
     exits = []
     releases = []
@@ -78,12 +80,42 @@ async def test_shutdown_releases_all_roles_without_a_late_process_failure(monkey
     trainer._speculator_refresh_task = None
     trainer.policy_model = trainer.critic_model = trainer.ref_model = None
 
-    await trainer.shutdown()
-    await trainer.shutdown()
+    return trainer, clock, exits, releases
+
+
+def test_shutdown_releases_all_roles_without_a_late_process_failure(shutdown_case):
+    trainer, clock, exits, releases = shutdown_case
+    asyncio.run(trainer.shutdown())
+    asyncio.run(trainer.shutdown())
+    trainer.finish_shutdown()
     clock.advance(1000)
 
     assert exits == []
     assert Counter(releases) == Counter(["context", "sync", "teacher", "http", "rollout", "evaluation", "sink", "inference"])
+
+
+def test_shutdown_keeps_process_guard_while_executor_work_remains(shutdown_case, monkeypatch):
+    trainer, clock, exits, _ = shutdown_case
+    release_thread = threading.Event()
+
+    def process_exit(code):
+        exits.append(code)
+        release_thread.set()
+
+    monkeypatch.setattr("skyrl_train.trainer.os._exit", process_exit)
+
+    async def shutdown_with_executor():
+        pending = asyncio.get_running_loop().run_in_executor(None, release_thread.wait)
+        try:
+            await trainer.shutdown()
+            clock.advance(301)
+        finally:
+            release_thread.set()
+            await pending
+
+    asyncio.run(shutdown_with_executor())
+    trainer.finish_shutdown()
+    assert exits == [1]
 
 
 def test_stuck_shutdown_still_exits_with_failure(monkeypatch):
