@@ -27,6 +27,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from rigging.filesystem.buckets import filesystem_for
 
 from experiments.post_training.long_loop.comparator_differential import run_ray_control, write_json
+from experiments.post_training.long_loop.nccl_runtime_receipts import runtime_receipt
 from experiments.post_training.long_loop.replica_parameter_receipts import parameter_sha256
 from experiments.post_training.nccl_transport_probe import allocate_port_block, wait_for_rendezvous
 
@@ -108,49 +109,6 @@ def configured_environment(profile: str) -> dict[str, str]:
         env.pop(key, None)
     env.update(profile_environment(profile))
     return env
-
-
-def runtime_receipt() -> dict:
-    """Capture versions and transport settings, excluding unrelated environment values."""
-    libraries = []
-    paths = set()
-    for line in Path("/proc/self/maps").read_text().splitlines():
-        if "libnccl.so" in line and line.split()[-1].startswith("/"):
-            paths.add(line.split()[-1])
-    for path in sorted(paths):
-        digest = hashlib.sha256()
-        with open(path, "rb") as stream:
-            for block in iter(lambda: stream.read(1 << 20), b""):
-                digest.update(block)
-        libraries.append({"path": path, "sha256": digest.hexdigest()})
-    config_files = []
-    for path in dict.fromkeys(["/etc/nccl.conf", str(Path.home() / ".nccl.conf"), os.environ.get("NCCL_CONF_FILE", "")]):
-        if not path or not Path(path).is_file():
-            continue
-        raw = Path(path).read_bytes()
-        config_files.append(
-            {
-                "path": path,
-                "sha256": hashlib.sha256(raw).hexdigest(),
-                "settings": [
-                    line for line in raw.decode(errors="replace").splitlines() if line.strip().startswith("NCCL_")
-                ],
-            }
-        )
-    return {
-        "torch_version": str(torch.__version__),
-        "torch_git": torch.version.git_version,
-        "torch_cuda": torch.version.cuda,
-        "nccl_version": torch.cuda.nccl.version(),
-        "loaded_nccl_libraries": libraries,
-        "nccl_config_files": config_files,
-        "environment": {
-            key: value
-            for key, value in os.environ.items()
-            if key.startswith(("NCCL_", "TORCH_NCCL_", "TORCH_FR_"))
-            or key in ("CUDA_DEVICE_MAX_CONNECTIONS", "CUDA_VISIBLE_DEVICES", "PYTORCH_CUDA_ALLOC_CONF")
-        },
-    }
 
 
 def group_layouts(world: int) -> list[tuple[str, list[int]]]:
@@ -491,16 +449,111 @@ def task(args) -> None:
             raise RuntimeError("Completed environment matrix reproduces collective corruption; inspect rank receipts")
 
 
+def task_api(args) -> None:
+    """Run direct-NCCL and Gloo-parent ProcessGroup controls in fresh workers."""
+    info = get_job_info()
+    if info is None or info.num_tasks != args.nodes or torch.cuda.device_count() != GPUS_PER_NODE:
+        raise ValueError("API controls require the configured four-GB200 tasks")
+    pin_socket_ifname()
+    ctx = iris_ctx()
+    for api in ("process-group", "direct-nccl"):
+        for profile in ("fifo-262144", "fifo-1048576"):
+            name = f"nccl-api-{info.attempt_id}-{api}-{profile}"
+            endpoint = None
+            if info.task_index == 0:
+                master, port = info.advertise_host, allocate_port_block(1)
+                endpoint = ctx.registry.register(name, f"{master}:{port}")
+            else:
+                master, port = wait_for_rendezvous(ctx.resolver, name, timeout=180)
+            directory = Path(f"/tmp/{name}")
+            try:
+                subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "torch.distributed.run",
+                        f"--nnodes={info.num_tasks}",
+                        "--nproc-per-node=4",
+                        f"--node-rank={info.task_index}",
+                        f"--master-addr={master}",
+                        f"--master-port={port}",
+                        "-m",
+                        "experiments.post_training.long_loop.nccl_api_reproducer",
+                        f"--api={api}",
+                        f"--profile={profile}",
+                        f"--output-directory={directory}",
+                    ],
+                    env=configured_environment(profile),
+                    check=True,
+                    timeout=240,
+                )
+                for rank in range(info.task_index * GPUS_PER_NODE, (info.task_index + 1) * GPUS_PER_NODE):
+                    stem = f"{api}-{profile}-rank{rank}"
+                    report = json.loads((directory / f"{stem}.json").read_text())
+                    raw = (directory / f"{stem}.log").read_bytes()
+                    report["nccl_log"] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+                    filesystem, path = filesystem_for(f"{args.output_prefix}/nccl-logs/{stem}.log")
+                    with filesystem.open(path, "wb") as stream:
+                        stream.write(raw)
+                    write_json(f"{args.output_prefix}/{stem}.json", report)
+            finally:
+                if endpoint is not None:
+                    ctx.registry.unregister(endpoint)
+    # This CPU-only barrier makes every uploaded report visible before the verdict.
+    name = f"nccl-api-final-{info.attempt_id}"
+    endpoint = None
+    if info.task_index == 0:
+        master, port = info.advertise_host, allocate_port_block(1)
+        endpoint = ctx.registry.register(name, f"{master}:{port}")
+    else:
+        master, port = wait_for_rendezvous(ctx.resolver, name, timeout=180)
+    try:
+        dist.init_process_group(
+            "gloo",
+            init_method=f"tcp://{master}:{port}",
+            rank=info.task_index,
+            world_size=info.num_tasks,
+            timeout=timedelta(seconds=120),
+        )
+        dist.barrier()
+        if info.task_index == 0:
+            outcomes = []
+            for api in ("process-group", "direct-nccl"):
+                for profile in ("fifo-262144", "fifo-1048576"):
+                    for rank in range(info.num_tasks * GPUS_PER_NODE):
+                        filesystem, path = filesystem_for(f"{args.output_prefix}/{api}-{profile}-rank{rank}.json")
+                        with filesystem.open(path) as stream:
+                            outcomes.append(json.load(stream))
+            write_json(
+                f"{args.output_prefix}/receipt.json",
+                {
+                    "completed": all(row["completed"] for row in outcomes),
+                    "rank_reports": len(outcomes),
+                    "all_correct": all(row["passed"] for row in outcomes),
+                    "failed_case_count": sum(not case["passed"] for row in outcomes for case in row["cases"]),
+                },
+            )
+            if not all(row["passed"] for row in outcomes):
+                raise RuntimeError("Completed direct-NCCL matrix reproduces corruption; inspect receipts")
+    finally:
+        if dist.is_initialized():
+            dist.destroy_process_group()
+        if endpoint is not None:
+            ctx.registry.unregister(endpoint)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=["task", "driver", "worker"], default="task")
+    parser.add_argument("--mode", choices=["task", "driver", "worker", "api-task"], default="task")
     parser.add_argument("--nodes", type=int, default=8)
     parser.add_argument("--launcher", choices=["torchrun", "ray"], default="torchrun")
     parser.add_argument("--profile", choices=tuple(PROFILE_ENVIRONMENTS), default="production")
     parser.add_argument("--suite", choices=tuple(SUITES), default="launcher")
     parser.add_argument("--output-prefix", required=True)
     args = parser.parse_args()
-    if args.mode == "task":
+    if args.mode == "api-task":
+        task_api(args)
+    elif args.mode == "task":
         task(args)
     elif args.mode == "driver":
         driver(args)
