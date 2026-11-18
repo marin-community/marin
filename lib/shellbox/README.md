@@ -52,6 +52,7 @@ the command's other temporary files.
 If command execution fails or is cancelled, later sandbox-deletion failures are
 attached as exception notes. Cleanup failure after a successful command still
 raises an error.
+
 Set `command_polling=True` on `DaytonaMachineFactory` to execute commands in
 provider sessions with short status requests. This opt-in mode keeps `run`'s
 caller deadline, separate bounded output files and process cleanup.
@@ -62,11 +63,16 @@ and failure counts. Five consecutive transient status errors stop the command.
 Each polled command creates and deletes a provider session.
 In Harbor, set `environment.kwargs.command_polling`;
 SkyRL exposes it as `terminal_bench_config.harbor.daytona_command_polling`.
+
 The session stays open through output collection, so a failure to read the output
-files can still include bounded provider diagnostics. If neither the command nor
-the machine specifies a working directory, commands use the image's working
-directory. Each command reopens that path, including after a command deletes
-and recreates the directory.
+files can still include provider diagnostics, limited to 4,096 characters.
+If neither the command nor the machine specifies a working directory, commands
+use the image's working directory. Each command enters its working directory
+anew, including after a command deletes and recreates it.
+After cleaning up a failed session creation, the sandbox can run another command.
+A failed submission can have started the command. Cleanup must then stop that
+process group or close the sandbox.
+
 Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
 expired jobs about once a minute. An expired, killed or preempted machine raises
 `MachineTerminated`; uncertain command failures are not replayed.

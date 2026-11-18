@@ -367,18 +367,40 @@ class DaytonaMachine:
             raise
 
     @asynccontextmanager
-    async def _poll_command(self, path: str) -> AsyncIterator[_CompletedCommand]:
+    async def _command_session(self) -> AsyncIterator[str]:
         """Keep the session available until output and diagnostics have been read."""
-        process = self.sandbox.process
         name = f"shellbox-run-{uuid.uuid4().hex}"
-        creation = asyncio.create_task(process.create_session(name, request_timeout=INTERRUPT_TIMEOUT))
+        creation = asyncio.create_task(self.sandbox.process.create_session(name, request_timeout=INTERRUPT_TIMEOUT))
         primary_error = None
+        try:
+            await asyncio.shield(creation)
+            yield name
+        except BaseException as error:
+            primary_error = error
+            raise
+        finally:
+            if not creation.done():
+                try:
+                    await finish_owned(creation)
+                except BaseException as error:
+                    if primary_error is not None:
+                        primary_error.add_note(f"Daytona command session creation failed ({type(error).__name__})")
+            cleanup = own_cleanup(self._delete_command_session(name))
+            if primary_error is None:
+                await await_cleanup(cleanup)
+            else:
+                try:
+                    await finish_owned(cleanup)
+                except BaseException as error:
+                    primary_error.add_note(f"Daytona command session cleanup failed: {error!r}")
+
+    async def _poll_command(self, path: str, name: str) -> _CompletedCommand:
+        process = self.sandbox.process
         polling = ExponentialBackoff(initial=0.2, maximum=MAX_COMMAND_POLL_DELAY, factor=1.5)
         retry = ExponentialBackoff(initial=0.5, maximum=MAX_COMMAND_POLL_DELAY, factor=2)
         requests = failures = consecutive_failures = 0
         started = time.monotonic()
         try:
-            await asyncio.shield(creation)
             response = await process.execute_session_command(
                 name,
                 SessionExecuteRequest(command=shlex.join(("/bin/sh", path)), run_async=True, suppress_input_echo=True),
@@ -402,12 +424,8 @@ class DaytonaMachine:
                 consecutive_failures = 0
                 retry.reset()
                 if status.exit_code is not None:
-                    yield _CompletedCommand(status.exit_code, name, response.cmd_id)
-                    return
+                    return _CompletedCommand(status.exit_code, name, response.cmd_id)
                 await sleep(polling.next_interval())
-        except BaseException as error:
-            primary_error = error
-            raise
         finally:
             logger.info(
                 "Daytona command status polling finished: requests=%d failures=%d seconds=%.3f",
@@ -415,20 +433,6 @@ class DaytonaMachine:
                 failures,
                 time.monotonic() - started,
             )
-            if not creation.done():
-                try:
-                    await finish_owned(creation)
-                except BaseException as error:
-                    if primary_error is not None:
-                        primary_error.add_note(f"Daytona command session creation failed ({type(error).__name__})")
-            cleanup = own_cleanup(self._delete_command_session(name))
-            if primary_error is None:
-                await await_cleanup(cleanup)
-            else:
-                try:
-                    await finish_owned(cleanup)
-                except BaseException as error:
-                    primary_error.add_note(f"Daytona command session cleanup failed: {error!r}")
 
     async def run(self, command: Command) -> Result:
         async with AsyncExitStack() as sessions:
@@ -497,11 +501,14 @@ class DaytonaMachine:
                     lines.append(_control_script(script))
                     script = "\n".join(lines) + "\n"
                 await self.sandbox.fs.upload_file_stream(script.encode(), script_path)
-                started = True
                 if self.command_polling:
-                    command_session = await sessions.enter_async_context(self._poll_command(script_path))
+                    session_id = await sessions.enter_async_context(self._command_session())
+                    # The provider may accept the command before the submission request fails.
+                    started = True
+                    command_session = await self._poll_command(script_path, session_id)
                     exit_code = command_session.exit_code
                 else:
+                    started = True
                     response = await self.sandbox.process.exec(
                         _control_command(shlex.join(("/bin/sh", script_path))),
                         cwd=command.cwd or self.spec.workdir or None,

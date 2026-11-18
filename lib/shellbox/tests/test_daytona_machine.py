@@ -821,6 +821,78 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
 
 
 @pytest.mark.requires_host_setsid
+@pytest.mark.parametrize("accepted", [False, True])
+def test_daytona_session_creation_failure_preserves_machine_files(tmp_path, accepted):
+    provider_error = TimeoutError("Provider session creation timed out")
+
+    class FailedCreation(LocalProcess):
+        fail = False
+
+        async def create_session(self, name, request_timeout=None):
+            if not self.fail or accepted:
+                await super().create_session(name, request_timeout=request_timeout)
+            if self.fail:
+                raise provider_error
+
+    async def scenario():
+        client = LocalDaytona()
+        process = client.sandbox.process = FailedCreation()
+        machine = await DaytonaMachineFactory(lambda: client, command_polling=True).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            await machine.run(Command(("sh", "-c", "printf preserved > state")))
+            process.fail = True
+            with pytest.raises(TimeoutError) as caught:
+                await machine.run(Command(("printf", "must-not-run")))
+            assert caught.value is provider_error
+            assert not client.deleted and not process.sessions
+            process.fail = False
+            following = await machine.run(Command(("cat", "state")))
+            assert (following.exit_code, following.stdout) == (0, b"preserved")
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
+def test_daytona_submission_timeout_stops_accepted_command(tmp_path):
+    provider_error = TimeoutError("Provider submission response timed out")
+
+    class FailedSubmission(LocalProcess):
+        fail = False
+
+        async def execute_session_command(self, name, request, timeout=None):
+            response = await super().execute_session_command(name, request, timeout=timeout)
+            if self.fail:
+                async with asyncio.timeout(5):
+                    while not (tmp_path / "child.pid").exists() or not (tmp_path / "child.pid").read_text().strip():
+                        await asyncio.sleep(0)
+                raise provider_error
+            return response
+
+    async def scenario():
+        client = LocalDaytona()
+        process = client.sandbox.process = FailedSubmission()
+        machine = await DaytonaMachineFactory(lambda: client, command_polling=True).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            process.fail = True
+            with pytest.raises(TimeoutError) as caught:
+                await machine.run(Command(("sh", "-c", "sleep 3600 & echo $! > child.pid; wait")))
+            assert caught.value is provider_error
+            assert not process.sessions
+            process.fail = False
+            await assert_child_stopped(machine, int((tmp_path / "child.pid").read_text()))
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
 @pytest.mark.parametrize("cleanup_fails", [False, True])
 def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_path, monkeypatch, cleanup_fails):
     provider_error = TimeoutError("Provider status request timed out")
