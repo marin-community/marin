@@ -29,7 +29,8 @@ def test_published_genomeqa_excludes_reduced_budget_without_truncating_prompt(tm
     dataset = sources()[0].config
     source = tmp_path / "source"
     source.mkdir()
-    (source / "rows.jsonl").write_text(
+    (source / "binary").mkdir()
+    (source / "binary/rows.jsonl").write_text(
         json.dumps(
             {
                 "id": 0,
@@ -49,7 +50,7 @@ def test_published_genomeqa_excludes_reduced_budget_without_truncating_prompt(tm
     )
     recipe = replace(
         source_recipe(dataset.recipe, {"prompt": str(source)}, environment),
-        source=SourceFiles("synthetic", "fixture", ("rows.jsonl",), SourceFormat.JSONL),
+        source=SourceFiles("synthetic", "fixture", ("binary/rows.jsonl",), SourceFormat.JSONL),
     )
     protocol = dataset.protocol.model_copy(update={"expected_population": 1})
     output = str(tmp_path / "published")

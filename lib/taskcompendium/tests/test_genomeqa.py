@@ -150,6 +150,12 @@ def test_pinned_population_validates_both_formats_before_publication(tmp_path, m
         loaded = list(source.read_genomeqa(StoragePath(str(path)), context))
         assert len(loaded) == len({(row["subtask"], row["id"]) for row in loaded}) == 2600
         total += len(loaded)
+        other_format = "mcq" if answer_format == "binary" else "binary"
+        locator = Source(
+            dataset="GenomeQA", revision="fixture", row=f"{other_format}/data.parquet:0", importer_revision="fixture"
+        )
+        with pytest.raises(ValueError, match=f"{other_format} input contains {answer_format} data"):
+            source.convert_genomeqa(RawRow("fixture", locator, loaded[0]), context)
         rows[0]["question"] = "Changed synthetic DNA: TTTT"
         pq.write_table(pa.Table.from_pylist(rows), path)
         with pytest.raises(ValueError):

@@ -93,6 +93,9 @@ def render_question(row: dict) -> str:
 
 def convert_genomeqa(row: RawRow, context: ConversionContext) -> TaskSpec:
     data = dict(row.data)
+    declared_format = row.source.row.partition("/")[0]
+    if data["format"] != declared_format:
+        raise ValueError(f"GenomeQA {declared_format} input contains {data['format']} data")
     prompt = load_system_prompt(str(context.inputs["prompt"] / PROMPT_FILENAME))
     task = conversation_task(
         row,
