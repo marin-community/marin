@@ -9,15 +9,14 @@ from collections.abc import Callable
 from types import MappingProxyType
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 from fray.types import ResourceConfig
-from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
+from marin.datakit.download.audit_exclusions import audit_exclusion_step, load_excluded_ids
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import checked_openai_chat_document, load_parquet_batched
 from marin.execution.step_spec import StepSpec
@@ -88,9 +87,9 @@ QWEN38_SOURCES = frozenset(
         "open_swe_traces/v1_2/minisweagent/qwen38_27b/swe_rebench_v2",
     }
 )
-EXCLUSION_DATASET_ID = "Min-Li/marin-sft-data-audit"
 EXCLUSION_REVISION = "fb186cd8902777e24cb4c433398aaec9af0ecd6b"
 EXCLUSION_FILE = "open_swe/pinned_f967cba3/exclusions.parquet"
+_TRAJECTORY_ID_FIELD = "trajectory_id"
 
 # The Qwen3.8-27B mini-swe-agent teacher was prompted with the NeMo-Skills template
 # nemo_skills/prompt/config/eval/swe-bench/mini-swe-agent/swebench.yaml at commit
@@ -130,15 +129,9 @@ def restore_solution_originality(row: dict) -> dict:
     messages = row["messages"]
     task = messages[1]["content"]
     if task.count(SOLUTION_ORIGINALITY_ANCHOR) != 1 or not task.endswith(SOLUTION_ORIGINALITY_ANCHOR):
-        raise ValueError(f"Task message of {row['trajectory_id']} does not end with the template anchor")
+        raise ValueError(f"Task message of {row[_TRAJECTORY_ID_FIELD]} does not end with the template anchor")
     restored_task = task.removesuffix(TASK_END_TAG) + "\n" + SOLUTION_ORIGINALITY_SECTION + "\n" + TASK_END_TAG
     return {**row, "messages": [messages[0], {**messages[1], "content": restored_task}, *messages[2:]]}
-
-
-def excluded_trajectory_ids(exclusion_path: str) -> frozenset[str]:
-    """Load the pinned Qwen3.8 trace exclusions from the downloaded Parquet file."""
-    with open_url(prefix_join(exclusion_path, EXCLUSION_FILE), "rb") as source:
-        return frozenset(pq.read_table(source, columns=["trajectory_id"]).column("trajectory_id").to_pylist())
 
 
 def row_to_chat_doc(row: dict) -> list[dict]:
@@ -167,7 +160,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
         linked_messages,
         HF_DATASET_ID,
         counter_prefix="open_swe_traces/chat",
-        source_id=row["trajectory_id"],
+        source_id=row[_TRAJECTORY_ID_FIELD],
         resolved=row["resolved"],
         chat_template_kwargs={"tools": tools},
     )
@@ -183,7 +176,7 @@ def transform_chat(
     pipeline = (
         Dataset.from_files(prefix_join(input_path, "**/*.parquet"))
         .flat_map(load_parquet_batched)
-        .filter(lambda row: row["trajectory_id"] not in excluded_ids)
+        .filter(lambda row: row[_TRAJECTORY_ID_FIELD] not in excluded_ids)
         .map(repair_row)
         .flat_map(row_to_chat_doc)
         .write_parquet(
@@ -200,11 +193,8 @@ def open_swe_traces_chat_normalize_steps(source_name: str) -> tuple[StepSpec, ..
     glob, _ = OPEN_SWE_TRACES_PARTITIONS[source_name]
     raw = download_hf_step(f"raw/{source_name}", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION, hf_urls_glob=[glob])
     if source_name in QWEN38_SOURCES:
-        exclusions = download_hf_step(
-            "raw/open-swe-traces-audit-exclusions",
-            hf_dataset_id=EXCLUSION_DATASET_ID,
-            revision=EXCLUSION_REVISION,
-            hf_urls_glob=[EXCLUSION_FILE],
+        exclusions = audit_exclusion_step(
+            "raw/open-swe-traces-audit-exclusions", revision=EXCLUSION_REVISION, exclusion_files=[EXCLUSION_FILE]
         )
         deps = [raw, exclusions]
 
@@ -212,7 +202,9 @@ def open_swe_traces_chat_normalize_steps(source_name: str) -> tuple[StepSpec, ..
             transform_chat(
                 raw.output_path,
                 output_path,
-                excluded_ids=excluded_trajectory_ids(exclusions.output_path),
+                excluded_ids=load_excluded_ids(
+                    exclusions.output_path, exclusion_files=[EXCLUSION_FILE], id_column=_TRAJECTORY_ID_FIELD
+                ),
                 repair_row=restore_solution_originality,
             )
 
