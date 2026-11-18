@@ -106,6 +106,8 @@ def _install_logits(model: SnowballLMHeadModel) -> SnowballLMHeadModel:
 
 def _production_recipe() -> dict:
     """The Exp3 production recipe shape V1 overlays (only the fields V1 reads)."""
+    model = draccus.encode(_tiny_snowball())
+    model.pop("type", None)
     return {
         "format": "sft_spec",
         "profile": "snowball_exp3",
@@ -120,7 +122,7 @@ def _production_recipe() -> dict:
             "num_train_steps": 746,
             "training_budget": {"duration": "20h", "finalization_reserve": "40m", "update_reserve": "10m"},
         },
-        "model": (lambda encoded: (encoded.pop("type"), encoded)[1])(draccus.encode(_tiny_snowball())),
+        "model": model,
     }
 
 

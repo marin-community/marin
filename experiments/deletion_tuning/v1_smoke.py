@@ -8,21 +8,22 @@ module from the ``v1_sft`` dry-run so the two entries share constants without
 a circular import).
 
 Runs the production V1 pod entrypoint (``run_deletion_train_lm``) over a tiny
-Snowball config, a tiny local corpus, and the vendored offline tokenizer
-fixture. Everything about the entry is real except the scale and the data: the
-pod preparation, the DT seam, the HF reload with the Deletion block preserved,
-the Wanda calibration over a training batch, the gate-logit init, the AdamW
-logit-only optimizer state, the alpha ramp, and the end-of-run HF export.
+Snowball config and a toy corpus. Everything about the entry is real except
+the scale and the corpus: the pod preparation, the DT seam, the HF reload with
+the Deletion block preserved, the Wanda calibration over a training batch, the
+gate-logit init, the AdamW logit-only optimizer state, the alpha ramp, and the
+end-of-run HF export. The tokenizer is the production in-region one the Exp3
+SFT run consumed.
 
-Scale deviations from the production spec (recorded): local offline tokenizer
-fixture and toy corpus instead of the Exp3 V5 caches, toy geometry, three
-steps, and no Snowball SFT controls (the fixture tokenizer has no chat
-special-token IDs and plain batches carry no prediction weights).
+Scale deviations from the production spec (recorded): toy geometry and corpus,
+three steps, and no Snowball SFT controls (plain batches carry no prediction
+weights). The corpus and token cache stage into the region's temporary prefix
+because the tokenize pipeline runs on workers that share storage, not local
+task paths.
 """
 
 import json
 import logging
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -41,6 +42,8 @@ from levanter.utils.mesh import MeshConfig
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from marin.training.training import TrainLmOnPodConfig
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.deletion_tuning.levanter_train import run_deletion_train_lm
 from experiments.deletion_tuning.v1_sft import (
@@ -54,31 +57,22 @@ from experiments.deletion_tuning.v1_sft import (
 
 logger = logging.getLogger(__name__)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-LOCAL_TOKENIZER_FILE = REPO_ROOT / "lib" / "levanter" / "tests" / "gpt2_tokenizer.json"
-LOCAL_TOKENIZER_CONFIG = REPO_ROOT / "lib" / "levanter" / "tests" / "gpt2_tokenizer_config.json"
-LOCAL_TOKENIZER_VOCAB_SIZE = 5027
-LOCAL_TOKENIZER_EOS_TOKEN_ID = 5026
+# The tokenizer the Exp3 production SFT consumed (the release data config's
+# tokenizer), already in-region; the Snowball vocab pairs with it.
+TOKENIZER_URI = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
+SMOKE_PREFIX = "s3://marin-us-east-02a/tmp/ttl=7d/benfeuer/snowball-deletion-tuning/smoke/2026.11.18.1"
+SNOWBALL_EOS_TOKEN_IDS = (128001, 128009)
 SMOKE_STEPS = 3
 SEQ_LEN = 64
 
 
-def _materialize_tokenizer(dest_dir: Path) -> str:
-    """Lay out the vendored offline tokenizer fixture as a loadable tokenizer directory."""
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy(LOCAL_TOKENIZER_FILE, dest_dir / "tokenizer.json")
-    shutil.copy(LOCAL_TOKENIZER_CONFIG, dest_dir / "tokenizer_config.json")
-    (dest_dir / "config.json").write_text(json.dumps({"model_type": "gpt2", "vocab_size": LOCAL_TOKENIZER_VOCAB_SIZE}))
-    return str(dest_dir)
-
-
-def _tiny_corpus(corpus_path: Path) -> None:
-    """A toy corpus long enough to fill the smoke's three batches."""
+def _tiny_corpus(corpus_uri: str) -> None:
+    """A toy corpus long enough to fill the smoke's three batches, staged in-region."""
     lines = []
     for index in range(64):
-        words = " ".join(str((index * 7 + word) % 5000) for word in range(40))
+        words = " ".join(str((index * 7 + word) % 50000) for word in range(40))
         lines.append(json.dumps({"text": f"{words} {words}"}))
-    corpus_path.write_text("\n".join(lines) + "\n")
+    StoragePath(corpus_uri).write_text("\n".join(lines) + "\n")
 
 
 def _tiny_config(tokenizer: str) -> SnowballConfig:
@@ -93,7 +87,6 @@ def _tiny_config(tokenizer: str) -> SnowballConfig:
             calibration_sequences=1,
             seed=0,
         ),
-        vocab_size=LOCAL_TOKENIZER_VOCAB_SIZE,
         hidden_dim=16,
         intermediate_dim=16,
         shared_expert_intermediate_dim=16,
@@ -120,11 +113,13 @@ def _save_tiny_hf(config: SnowballConfig, hf_dir: Path) -> str:
     return str(hf_dir)
 
 
-def _smoke_train_config(tokenizer: str, hf_dir: str, corpus: Path, cache: Path, output_path: Path) -> TrainLmConfig:
+def _smoke_train_config(
+    tokenizer: str, hf_dir: str, corpus_uri: str, cache_uri: str, output_path: Path
+) -> TrainLmConfig:
     tokenize_config = TokenizeConfig(
-        train_paths=[str(corpus)],
+        train_paths=[corpus_uri],
         validation_paths=[],
-        cache_path=str(cache),
+        cache_path=cache_uri,
         tokenizer=tokenizer,
     )
     data = lm_mixture_data_config(components={"smoke": tokenize_config}, weights={"smoke": 1.0})
@@ -138,6 +133,7 @@ def _smoke_train_config(tokenizer: str, hf_dir: str, corpus: Path, cache: Path, 
         model=_tiny_config(tokenizer),
         optimizer=v1_optimizer(),
         trainer=TrainerConfig(
+            id="dt-v1-smoke",
             train_batch_size=2,
             num_train_steps=SMOKE_STEPS,
             per_device_parallelism=1,
@@ -156,7 +152,7 @@ def _smoke_train_config(tokenizer: str, hf_dir: str, corpus: Path, cache: Path, 
         pad_tokenizer_to_match_model=True,
         hf_save_steps=SMOKE_STEPS + 1,
         hf_save_dtype="bfloat16",
-        hf_generation_eos_token_ids=[LOCAL_TOKENIZER_EOS_TOKEN_ID],
+        hf_generation_eos_token_ids=list(SNOWBALL_EOS_TOKEN_IDS),
         global_gradient_clip=1,
         data_seed=0,
     )
@@ -164,22 +160,22 @@ def _smoke_train_config(tokenizer: str, hf_dir: str, corpus: Path, cache: Path, 
 
 def run_smoke(output_root: Path | None = None) -> dict:
     """Run the V1 pod entrypoint end to end at toy scale and report what ran."""
+    configure_coreweave_s3()
     with tempfile.TemporaryDirectory(prefix="v1-sft-smoke-") as tmp:
         root = Path(tmp)
-        tokenizer = _materialize_tokenizer(root / "tokenizer")
-        corpus = root / "corpus.jsonl"
-        _tiny_corpus(corpus)
-        cache = root / "cache"
+        corpus_uri = f"{SMOKE_PREFIX}/corpus.jsonl"
+        cache_uri = f"{SMOKE_PREFIX}/cache"
+        _tiny_corpus(corpus_uri)
         tokenize(
-            TokenizeConfig(train_paths=[str(corpus)], validation_paths=[], cache_path=str(cache), tokenizer=tokenizer)
+            TokenizeConfig(train_paths=[corpus_uri], validation_paths=[], cache_path=cache_uri, tokenizer=TOKENIZER_URI)
         )
-        hf_dir = _save_tiny_hf(_tiny_config(tokenizer), root / "base-hf")
+        hf_dir = _save_tiny_hf(_tiny_config(TOKENIZER_URI), root / "base-hf")
         output_path = root / "run"
         pod_config = TrainLmOnPodConfig(
             output_path=str(output_path),
             resources=ResourceConfig.with_cpu(),
             env_vars={"WANDB_API_KEY": "", "WANDB_MODE": "disabled", "JAX_TRACEBACK_FILTERING": "off"},
-            train_config=_smoke_train_config(tokenizer, hf_dir, corpus, cache, output_path),
+            train_config=_smoke_train_config(TOKENIZER_URI, hf_dir, corpus_uri, cache_uri, output_path),
         )
         run_deletion_train_lm(pod_config)
 
@@ -190,7 +186,7 @@ def run_smoke(output_root: Path | None = None) -> dict:
             "calibration_batches": 1,
             "sequence_length": SEQ_LEN,
             "batch_size": 2,
-            "vocab": LOCAL_TOKENIZER_VOCAB_SIZE,
+            "tokenizer": TOKENIZER_URI,
             "optimizer": "AdamW constant lr 5e-4, weight decay 0, on the gate logits only",
             "alpha_ramp": [V1_ALPHA_START, V1_ALPHA_END],
             "hf_export": exports[:1],
