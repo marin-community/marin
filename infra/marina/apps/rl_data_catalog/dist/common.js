@@ -31,8 +31,27 @@ for (const navigation of document.querySelectorAll('.atlas-tabs')) {
   }));
 }
 
-function qualityChip(quality, sourceId, prefix = '') {
+function qualityExplanationText(explanation) {
+  if (!explanation) return '';
+  const full = explanation.full, sample = explanation.sample;
+  const reasons = {
+    no_recorded_full_review: 'No recorded FULL review',
+    full_review_other_input: `Recorded FULL review is for another input (${full?.input.dataset_id} @ ${full?.input.dataset_revision})`,
+    full_review_incomplete: `Recorded FULL review is incomplete (${number.format(full?.reviewed)} of ${number.format(full?.population)} tasks reviewed)`,
+    full_review_not_finalized: 'Recorded FULL review has not established FULL coverage for this input',
+    full_review_input_unverified: 'Recorded FULL review input identity is incomplete',
+  };
+  const parts = [reasons[explanation.code]];
+  if (sample?.reviewed != null) {
+    const selected = sample.selected == null ? '' : ` of ${number.format(sample.selected)} selected tasks`;
+    const population = sample.population == null ? '' : ` (${number.format(sample.population)} retained tasks)`;
+    parts.push(`SAMPLE: ${number.format(sample.reviewed)}${selected} reviewed${population}`);
+  }
+  return parts.filter(Boolean).join('. ');
+}
+function qualityChip(quality, sourceId, prefix = '', explanation = null) {
   const chip = node(['FULL', 'SAMPLE'].includes(quality) ? 'a' : 'span', `${prefix}${quality}`, `chip level level-${quality.toLowerCase()}`);
+  chip.title = qualityExplanationText(explanation);
   if (chip.tagName === 'A') {
     chip.href = `assessment.html?source=${encodeURIComponent(sourceId)}`;
     chip.setAttribute('aria-label', `${prefix}${quality}: browse task reviews`);

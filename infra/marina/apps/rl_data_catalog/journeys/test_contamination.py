@@ -477,7 +477,7 @@ def test_pending_review_is_quick_without_a_result(journey: Journey, theme: str) 
     expect(pending).to_have_count(0)
     page.locator("#show-all").check()
     expect(pending.locator(".level")).to_have_text("QUICK")
-    expect(pending.locator(".level")).to_have_attribute("title", "SAMPLE review in progress")
+    expect(pending.locator(".level")).to_have_attribute("title", re.compile("SAMPLE review in progress"))
     expect(pending.locator("td").nth(5)).to_have_text("Not assessed")
     expect(pending.locator(".issue-rate-cell")).to_have_text("—")
     for width in (1440, 390):

@@ -4069,3 +4069,52 @@ def test_staged_rollout_pages_keep_attempt_identity_and_exact_content(catalog_da
     assert catalog_query(
         "SELECT measurement FROM atlas_difficulty WHERE measurement_id=:id", {"id": measured.measurement_id}
     )["rows"] == [{"measurement": measurement}]
+
+
+def test_quality_explanation_inventory_detail_and_cache_follow_full_receipt_inputs(
+    catalog_database, catalog_query, tmp_path
+):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "quality-explanations")
+    load_catalog(CurationCatalog(root), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        initial = client.get("/sources").json()["sources"][0]
+        assert initial["quality_explanation"]["code"] == "no_recorded_full_review"
+        source_id = initial["id"]
+        panel = {
+            "source_id": source_id,
+            "dataset_id": initial["dataset_id"],
+            "dataset_revision": initial["dataset_revision"],
+            "converter_version": initial["pipeline"]["version"],
+            "task_specs_sha256": initial["actor_census_input"]["task_specs_sha256"],
+            "retained_tasks": initial["actor_census_input"]["measured_tasks"],
+        }
+        receipt = {"artifact": {"uri": "s3://fixture/full-review", "sha256": "a" * 64}, "panel": panel}
+        with catalog_database.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                INSERT INTO atlas_review_current (load_id,source_id,pipeline_key,receipt)
+                SELECT load_id,id,assessment_key,CAST(:receipt AS JSONB) FROM atlas_sources WHERE id=:source
+            """
+                ),
+                {"source": source_id, "receipt": json.dumps(receipt)},
+            )
+        current = client.get("/sources", params={"projection": "table"}).json()["sources"][0]
+        assert current["quality_explanation"]["code"] == "full_review_incomplete"
+        detail = client.get("/source", params={"source_id": source_id}).json()
+        assert detail["quality_explanation"] == current["quality_explanation"]
+        assert current["quality"] == initial["quality"]
+        assert current["filtration"] == initial["filtration"]
+        receipt["panel"]["dataset_revision"] = "c" * 40
+        with catalog_database.begin() as connection:
+            connection.execute(
+                text("UPDATE atlas_review_current SET receipt=CAST(:receipt AS JSONB)"), {"receipt": json.dumps(receipt)}
+            )
+        archived = client.get("/sources").json()["sources"][0]
+        assert archived["quality_explanation"]["code"] == "full_review_other_input"
+        assert archived["quality_explanation"]["full"]["different_fields"] == ["dataset_revision"]
+        assert (
+            archived["quality_explanation"]
+            == client.get("/source", params={"source_id": source_id}).json()["quality_explanation"]
+        )

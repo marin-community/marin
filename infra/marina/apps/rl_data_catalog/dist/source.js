@@ -117,8 +117,8 @@ function render(data, sourceId, auxiliary) {
   $('title').textContent = d.display_name;
   $('message').textContent = `${d.origin} · ${d.id} · catalog snapshot ${data.catalog.snapshot_id}`;
   const result = data.result;
-  const qualityBadge = qualityChip(data.quality, sourceId, 'Quality ');
-  if (data.quality_review_status) qualityBadge.title = data.quality_review_status;
+  const qualityBadge = qualityChip(data.quality, sourceId, 'Quality ', data.quality_explanation);
+  if (data.quality_review_status) qualityBadge.title = [qualityBadge.title, data.quality_review_status].filter(Boolean).join('. ');
   $('labels').replaceChildren(
     qualityBadge,
     node('span', result ? `Result ${resultLabels[result]}${data.result_provisional ? ' · provisional' : ''}` : 'Result not assessed', `chip quality-${result ? resultClasses[result] : 'unassessed'}${result && data.result_provisional ? ' result-provisional' : ''}`),
@@ -175,7 +175,12 @@ function render(data, sourceId, auxiliary) {
     admitted: d.oversight_evidence.admitted,
   });
   sections.push(card('Oversight evidence', [
-    ['Level', qualityChip(data.quality, sourceId, 'Quality ')],
+    ['Level', qualityChip(data.quality, sourceId, 'Quality ', data.quality_explanation)],
+    ['Why not FULL', qualityExplanationText(data.quality_explanation)],
+    ['SAMPLE receipt', data.quality_explanation?.sample?.receipt && pointer(data.quality_explanation.sample.receipt)],
+    ['Recorded FULL receipt', data.quality_explanation?.full?.receipt && pointer(data.quality_explanation.full.receipt.uri)],
+    ['Recorded FULL input', data.quality_explanation?.full?.input],
+    ['Different input fields', data.quality_explanation?.full?.different_fields?.join(', ')],
     ['Basis', data.quality === 'FULL' ? 'Whole-source QA for the current input' : data.quality === 'SAMPLE' ? 'Sampled content review for the current input' : 'Current-input conversion only'],
     ...(receiptRow ? [receiptRow] : []),
     ['Reviewed', data.quality === 'QUICK' ? null : d.quality_result?.reviewed ?? d.independent_qc?.reviewed],

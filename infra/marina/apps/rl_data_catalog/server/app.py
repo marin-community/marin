@@ -38,6 +38,7 @@ from .identity_measurements import IDENTITY_REVIEWS_SQL, IDENTITY_SURVEY_SQL
 from .inventory_state import CachedInventory, inventory_input_key
 from .licensing import license_projection
 from .quality import intended_use, issue_rate, quality_display, result, review_coverage
+from .quality_evidence import full_review_records, quality_explanation
 from .restrictions import (
     PRIVATE_TEXT_MARKER,
     declaration_restriction,
@@ -101,6 +102,7 @@ TABLE_SOURCE_FIELDS = frozenset(
         "task_count",
         "quality",
         "quality_review_status",
+        "quality_explanation",
         "review_scope",
         "review_coverage",
         "filtration",
@@ -501,6 +503,7 @@ def create_api(services: AppletServices) -> FastAPI:
                 return cached.payload
             measurements = difficulty_records(connection)
             contracts = contract_records(connection)
+            full_reviews = full_review_records(connection)
             rows = [
                 dict(row)
                 for row in connection.execute(
@@ -561,6 +564,9 @@ def create_api(services: AppletServices) -> FastAPI:
                         "curation": row["curation"],
                         "quality": display.quality,
                         "quality_review_status": display.review_status,
+                        "quality_explanation": quality_explanation(
+                            row["declaration"], display.quality, full_reviews.get(row["id"], [])
+                        ),
                         "review_scope": display.quality.value,
                         "review_coverage": review_coverage(row["declaration"], row["review_completeness"]),
                         "filtration": filtration(row["declaration"], counts.get(row["id"])),
@@ -979,6 +985,7 @@ def create_api(services: AppletServices) -> FastAPI:
                     "original_source_id": original_source_id(source_id),
                 },
             ).scalar_one_or_none()
+            full_reviews = full_review_records(connection, canonical_source_id(source_id))
             groups, overlaps = loaded_duplicate_projection(connection, source["load_id"])
             load = loaded_catalog(connection)
             coverage = source_coverage(connection, {canonical_source_id(source_id): source["declaration"]}).get(
@@ -987,6 +994,11 @@ def create_api(services: AppletServices) -> FastAPI:
             difficulty = difficulty_summary(
                 source["declaration"], difficulty_records(connection, source_id).get(canonical_source_id(source_id), [])
             )
+        explanation = quality_explanation(
+            source["declaration"],
+            quality_display(source["declaration"], source["curation"], source["assessment_key"]).quality,
+            full_reviews.get(canonical_source_id(source_id), []),
+        )
         declaration = license_projection(source["declaration"])
         declaration = restriction_projection(declaration)
         if private:
@@ -1015,6 +1027,7 @@ def create_api(services: AppletServices) -> FastAPI:
             "archived_reviews": reviews,
             "quality": display.quality,
             "quality_review_status": display.review_status,
+            "quality_explanation": explanation,
             "review_scope": display.quality.value,
             "review_coverage": review_coverage(declaration, source["review_completeness"]),
             "review_completeness": source["review_completeness"],

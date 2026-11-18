@@ -37,6 +37,13 @@ SELECT md5(jsonb_build_array(
     (SELECT md5(string_agg(jsonb_build_array(s.pipeline_key,s.cohort,s.xmin::text)::text,','
         ORDER BY s.pipeline_key,s.cohort,s.version))
         FROM atlas_cohort_summaries s WHERE s.load_id=:load_id),
+    (SELECT md5(string_agg(jsonb_build_array(q.load_id,q.source_id,q.xmin::text,
+        a.xmin::text,l.xmin::text,s.xmin::text)::text,',' ORDER BY q.load_id,q.source_id))
+        FROM atlas_review_current q JOIN atlas_assessments a USING (load_id,pipeline_key)
+        JOIN atlas_loads l USING (load_id)
+        LEFT JOIN atlas_cohort_summaries s ON s.load_id=q.load_id AND s.pipeline_key=q.pipeline_key
+            AND s.cohort='admitted'
+        WHERE a.scope='full'),
     (SELECT md5(string_agg(jsonb_build_array(measurement_id,xmin::text)::text,','
         ORDER BY measurement_id))
         FROM atlas_difficulty),

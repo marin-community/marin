@@ -172,8 +172,8 @@ function sourceRow(row, others, canonical) {
     examples.title = row.filtration.reason;
     const filtration = node('td', undefined, 'filtration-cell'); filtration.append(filtrationChip(row.filtration));
     const use = node('td', useLabels[value(row, 'use')], 'use-cell');
-    const quality = node('td'); quality.append(qualityChip(row.quality, row.id));
-    if (row.quality_review_status) quality.firstElementChild.title = row.quality_review_status;
+    const quality = node('td'); quality.append(qualityChip(row.quality, row.id, '', row.quality_explanation));
+    if (row.quality_review_status) quality.firstElementChild.title = [quality.firstElementChild.title, row.quality_review_status].filter(Boolean).join('. ');
     const result = node('td'), key = resultKey(row);
     const provisional = row.result && row.result_provisional;
     const badge = node('span', resultLabels[key] + (provisional ? ' · provisional' : ''), `chip quality-${resultClasses[key]}${provisional ? ' result-provisional' : ''}`);
