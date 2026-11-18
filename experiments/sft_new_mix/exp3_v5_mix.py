@@ -20,16 +20,18 @@ versioned handles so any run's mix is recoverable from its records:
   three-phase weight schedule (boundaries 0/250/500), the full-permutation feistel shuffle,
   the release's cache catalog, and the per-source IID validation reservation.
 
-The training run's consumed data config is recorded in
-``fixtures/exp3_v5_data.json`` (byte-identical to the release member the run consumed);
-the per-source seal manifest in ``fixtures/exp3_v5_source_seals.json`` is derived from the
-release's ``cache_catalog.json`` and ``source_loss.json``. Both fixtures carry the SHA-256
-digests they were verified against, checked at import.
+The training run's consumed data config is recorded in ``fixtures/exp3_v5_data.json``
+(byte-exact to the release member the run consumed, plus the hook-required trailing
+newline the loader strips and re-verifies); the per-source seal manifest in
+``fixtures/exp3_v5_source_seals.json`` pins each source's ledger digest, row and token
+counts, and loss mode. Both fixtures carry the SHA-256 digests they were verified against,
+checked at import. The exact content-addressed shard paths live in the SHA-pinned cache
+catalog, not in the repository; :func:`exp3_v5_seal_check` verifies every one of them at
+run time.
 
-The Exp3 runtime added one packing control this mix records but current ``main`` does not
-implement: bounded-lookahead packing (cap 256, lookahead 128) lived on the long-loop fork
-only. The geometry is pinned in every seal record; reproducing it in training needs that
-packing change, not a different mix.
+The Exp3 runtime packed documents with bounded lookahead (cap 256, lookahead 128); every
+seal record pins that geometry so the run's packing stays recoverable. A consumer packs
+with its own policy; the mix definition does not set it.
 """
 
 import hashlib
@@ -41,12 +43,11 @@ from pathlib import Path
 import click
 from levanter.data.text.datasets import LmDataConfig
 from levanter.store.cache import CacheOptions
-from rigging.filesystem.storage_path import StoragePath, prefix_join
-
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from marin.experiment.data import mixture
 from marin.processing.tokenize.tokenize import TokenizedCache
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 EXP3_V5_VERSION = "2026.11.16"
 """The release's creation date; the identity version of every handle in this mix."""
@@ -68,23 +69,36 @@ def _load_fixture(filename: str, sha256: str) -> dict:
     return json.loads(raw)
 
 
+def _load_release_data() -> dict:
+    """The release's ``data.json``, byte-exact after the fixture's trailing newline.
+
+    The newline hook requires a terminated last line, so the fixture stores the release
+    member plus one newline byte; the digest check covers the member's exact bytes.
+    """
+    raw = (_FIXTURES / "exp3_v5_data.json").read_bytes()
+    content = raw[:-1] if raw.endswith(b"\n") else raw
+    expected = _RELEASE["artifacts"]["data.json"]["sha256"]
+    if hashlib.sha256(content).hexdigest() != expected:
+        raise ValueError(f"exp3_v5_data.json: content does not match the release member digest {expected}")
+    return json.loads(content)
+
+
 _RELEASE = _load_fixture("exp3_v5_release.json", _RELEASE_SHA256)
 """The byte-identical release document. Its ``artifacts`` pins every member's digest."""
 
-_DATA = _load_fixture(
-    "exp3_v5_data.json",
-    _RELEASE["artifacts"]["data.json"]["sha256"],
-)
+_DATA = _load_release_data()
 """The release's ``data.json`` — the ``LmDataConfig`` the Exp3 SFT run consumed."""
 
 _MANIFEST = _load_fixture(
     "exp3_v5_source_seals.json",
-    "d90720614efd0d66daeff0ba2549dd44db4e8592aa8f7dbff97eb606fc0d4c9b",
+    "782a6b8b25b758a4a32f10e9f419841ae5e975890f6f63e21043c9f18e1d3782",
 )
-"""Per-source seal manifest derived from the release's cache catalog and loss spec.
+"""Per-source seal manifest derived from the release's cache catalog.
 
-The manifest is a pure function of the two SHA-pinned release members named in its
-``derived_from`` block, so regenerating it from an unchanged release is byte-stable."""
+Each source pins its catalog-entry digest (the canonical entry JSON, sorted keys), row
+and token counts, shard count, and loss mode. The manifest is a pure function of the two
+SHA-pinned release members named in its ``derived_from`` block, so regenerating it from
+an unchanged release is byte-stable."""
 
 _SEALS = _MANIFEST["sources"]
 
@@ -105,7 +119,10 @@ _STOP_STRATEGY = _DATA["stop_strategy"]
 
 # The 434 components share one packing/format shape; extract it once and hold the mix to it.
 _SHAPE_KEYS = ("format", "pack", "split", "flat_cache")
-_SHAPES = {json.dumps({key: component[key] for key in _SHAPE_KEYS}, sort_keys=True) for component in _DATA["components"].values()}
+_SHAPES = {
+    json.dumps({key: component[key] for key in _SHAPE_KEYS}, sort_keys=True)
+    for component in _DATA["components"].values()
+}
 if len(_SHAPES) != 1:
     raise ValueError(f"release components do not share one shape: {_SHAPES}")
 _SHAPE = json.loads(next(iter(_SHAPES)))
@@ -114,7 +131,7 @@ _FLAT_CACHE = _SHAPE["flat_cache"]
 _SPLIT = _SHAPE["split"]
 _FORMAT = dict(_SHAPE["format"], type="prebuilt")
 _PACKING_LOOKAHEAD = next(iter(_DATA["components"].values()))["packing_lookahead"]
-assert _PACKING_LOOKAHEAD == 128  # bounded-lookahead packing: long-loop fork runtime, recorded but not on main
+assert _PACKING_LOOKAHEAD == 128  # the Exp3 runtime's bounded-lookahead packing, recorded as provenance
 assert _MANIFEST["geometry"]["cache_dir"] == _CACHE_ROOT
 assert _MANIFEST["geometry"]["pack"] == _PACK and _MANIFEST["geometry"]["packing_lookahead"] == _PACKING_LOOKAHEAD
 
@@ -141,7 +158,11 @@ exp3_v5_cache_catalog = ArtifactStep.adopt(
 
 
 def _seal_config(name: str) -> dict:
-    """The fingerprinted seal record for one source: its exact sealed cache, as literals."""
+    """The fingerprinted seal record for one source: its exact sealed cache, as literals.
+
+    The entry digest pins the source's catalog entry — the ledger that carries the
+    content-addressed shard paths, per-shard row counts, and loss metadata.
+    """
     seal = _SEALS[name]
     return {
         "source_name": name,
@@ -157,20 +178,34 @@ def _seal_config(name: str) -> dict:
         "input_ids_tokens": seal["input_ids_tokens"],
         "loss_weights_tokens": seal["loss_weights_tokens"],
         "loss_mode": seal["loss_mode"],
-        "teacher_only": seal["teacher_only"],
-        "shards": list(seal["shards"]),
+        "shards": seal["shards"],
+        "entry_sha256": seal["entry_sha256"],
         "release": {"uri": _RELEASE_URI, "sha256": _RELEASE_SHA256},
         "cache_catalog": {"uri": _CATALOG_URI, "sha256": _CATALOG_SHA256},
     }
 
 
-def _verify_shards(config: dict) -> None:
-    """Fail the step unless every content-addressed shard of this seal still exists."""
-    missing = [shard for shard in config["shards"] if not StoragePath(prefix_join(config["cache_dir"], shard)).exists()]
+def _entry_digest(entry: dict) -> str:
+    """The canonical digest of a cache-catalog entry (sorted-key JSON)."""
+    return hashlib.sha256(json.dumps(entry, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _register_seal(_config: dict) -> None:
+    """Register the sealed cache. The step's record is the deliverable; the data is
+    neither read nor moved. ``exp3_v5_seal_check`` verifies the sealed content."""
+
+
+def _verify_shard_paths(cache_dir: str, shards: list[str]) -> None:
+    """Fail unless every content-addressed shard cache exists under ``cache_dir``."""
+    missing = []
+    for shard in shards:
+        if not StoragePath(prefix_join(cache_dir, shard)).exists():
+            missing.append(shard)
+        if len(missing) >= 5:
+            break
     if missing:
         raise FileNotFoundError(
-            f"{config['source_name']}: {len(missing)}/{len(config['shards'])} sealed shard caches are "
-            f"missing under {config['cache_dir']} (first: {missing[0]})"
+            f"{len(missing)} or more sealed shard caches are missing under {cache_dir} (first: {missing[0]})"
         )
 
 
@@ -178,9 +213,9 @@ def _verify_shards(config: dict) -> None:
 def exp3_v5_sources() -> dict[str, ArtifactStep[TokenizedCache]]:
     """One sealed-cache handle per release source, keyed by the mixture's component name.
 
-    Each handle is a ``TokenizedCache`` step that writes a seal record (its config is pure
-    literals: the exact shard paths, counts, and loss mode) and whose function verifies the
-    sealed shards exist. The data is never copied or recomputed; the record is what makes the
+    Each handle is a ``TokenizedCache`` step that writes a seal record; its config is pure
+    literals (the entry digest, counts, and loss mode), so the fingerprint pins the exact
+    sealed content. The data is never copied or recomputed; the record is what makes the
     source's cache addressable, and ``mixture`` reads it at run time.
     """
     return {
@@ -188,7 +223,7 @@ def exp3_v5_sources() -> dict[str, ArtifactStep[TokenizedCache]]:
             name=name,
             version=EXP3_V5_VERSION,
             artifact_type=TokenizedCache,
-            run=_verify_shards,
+            run=_register_seal,
             build_config=lambda _ctx, _name=name: _seal_config(_name),
             deps=(exp3_v5_cache_catalog,),
         )
@@ -197,19 +232,29 @@ def exp3_v5_sources() -> dict[str, ArtifactStep[TokenizedCache]]:
 
 
 def exp3_v5_seal_check() -> ArtifactStep[Artifact]:
-    """Verify the sealed cache catalog against the pinned release digests and manifest.
+    """Verify the sealed release against the pinned digests and the seal manifest.
 
-    Reads the catalog once, checks its SHA-256, and cross-checks every source's row count,
-    shard count, and loss mode against the committed seal manifest plus the release totals.
-    Declare this handle among a consumer's dependencies so the seal is verified before the
-    mix is used.
+    Reads the cache catalog once, checks its SHA-256 and every source's entry digest, and
+    cross-checks row counts, shard counts, and loss modes against the manifest and the
+    release totals; then verifies that every content-addressed shard cache exists. Declare
+    this handle among a consumer's dependencies so the seal is verified before the mix is
+    used.
     """
-    expected = {name: {"rows": s["rows"], "shards": len(s["shards"]), "loss_mode": s["loss_mode"]} for name, s in _SEALS.items()}
+    expected = {
+        name: {
+            "rows": s["rows"],
+            "shards": s["shards"],
+            "loss_mode": s["loss_mode"],
+            "entry_sha256": s["entry_sha256"],
+        }
+        for name, s in _SEALS.items()
+    }
     totals = {
         "sources": len(_SEALS),
         "rows": sum(s["rows"] for s in _SEALS.values()),
         "input_ids_tokens": sum(s["input_ids_tokens"] for s in _SEALS.values()),
         "loss_weights_tokens": sum(s["loss_weights_tokens"] for s in _SEALS.values()),
+        "shards": sum(s["shards"] for s in _SEALS.values()),
     }
 
     def build_config(_ctx: StepContext) -> dict:
@@ -228,6 +273,7 @@ def exp3_v5_seal_check() -> ArtifactStep[Artifact]:
         catalog = json.loads(raw)["splits"]["train"]
         if set(catalog) != set(config["expected_sources"]):
             raise ValueError("cache catalog sources differ from the seal manifest")
+        shards: list[str] = []
         for name, entry in catalog.items():
             ledger = entry["ledger"]
             want = config["expected_sources"][name]
@@ -237,9 +283,21 @@ def exp3_v5_seal_check() -> ArtifactStep[Artifact]:
                 raise ValueError(f"{name}: {ledger['total_num_rows']} rows, manifest pins {want['rows']}")
             if len(ledger["finished_shards"]) != want["shards"]:
                 raise ValueError(f"{name}: {len(ledger['finished_shards'])} shards, manifest pins {want['shards']}")
+            if _entry_digest(entry) != want["entry_sha256"]:
+                raise ValueError(f"{name}: catalog entry digest differs from the manifest pin")
             loss_mode = ledger.get("metadata", {}).get("preprocessor_metadata", {}).get("loss_mode")
             if loss_mode != want["loss_mode"]:
                 raise ValueError(f"{name}: loss mode {loss_mode!r}, manifest pins {want['loss_mode']!r}")
+            shards.extend(ledger["finished_shards"])
+        observed = {
+            "sources": len(catalog),
+            "rows": sum(entry["ledger"]["total_num_rows"] for entry in catalog.values()),
+            "shards": len(shards),
+        }
+        for key, value in observed.items():
+            if value != config["expected_totals"][key]:
+                raise ValueError(f"{key}: {value}, manifest pins {config['expected_totals'][key]}")
+        _verify_shard_paths(config["cache_dir"], shards)
 
     return ArtifactStep(
         name="sft-mixes/exp3-v5/seal-check",

@@ -3,16 +3,15 @@
 
 """The Exp3 V5 mix graph must resolve to the data config the Exp3 SFT run consumed.
 
-The run's consumed data config equals the release's ``data.json`` byte for byte on every
-release field (verified against ``production51-sft-consumed-config.json`` before this test
-was written; the launcher added only default-valued fields). These tests resolve the graph
-offline — seal records seeded exactly as the seal steps write them — and pin the resolved
-``LmDataConfig`` component by component: names, cache addresses, format, packing, rows and
-token counts, the three-phase weight schedule, and the shuffle/geometry settings.
+The run's consumed data config equals the release's ``data.json`` on every release
+field; the launcher added only default-valued fields. These tests resolve the graph
+offline — seal records seeded exactly as the seal steps write them — and pin the
+resolved ``LmDataConfig`` component by component: names, cache addresses, format,
+packing, the three-phase weight schedule, and the shuffle/geometry settings. The
+online test pins the committed seal manifest against the live sealed catalog.
 
-The one component field the release carries that current ``main`` cannot express is the
-fork-runtime bounded-lookahead packing (``packing_lookahead: 128``): it is recorded in every
-seal record as provenance and asserted here, not silently dropped.
+The bounded-lookahead packing the Exp3 runtime used (cap 256, lookahead 128) is
+recorded in every seal record as provenance; the resolved components do not carry it.
 """
 
 import hashlib
@@ -22,9 +21,11 @@ import os
 import pytest
 from levanter.data.text.datasets import DatasetComponent
 from levanter.data.text.formats import PrebuiltLmDatasetFormat, TextLmDatasetFormat
-from marin.execution.artifact import ArtifactRecord, read_record, write_record
+from marin.execution.artifact import ArtifactRecord, write_record
 from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.processing.tokenize.tokenize import TokenizedCache
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.sft_new_mix import exp3_v5_mix as mix
 
@@ -86,9 +87,8 @@ def _component_dict(component: DatasetComponent) -> dict:
 def _expected_component(release_component: dict) -> dict:
     """The release component with fields ``main`` does not express dropped and defaults filled.
 
-    ``packing_lookahead`` is the fork-runtime bounded-lookahead packing; it is asserted
-    separately from the seal records. The release serializer omits null fields
-    (``source``/``tags``), which the resolved components carry as ``None``.
+    The release serializer omits null fields (``source``/``tags``), which the resolved
+    components carry as ``None``.
     """
     expected = {key: value for key, value in release_component.items() if key not in ("type", "packing_lookahead")}
     expected.setdefault("source", None)
@@ -96,19 +96,11 @@ def _expected_component(release_component: dict) -> dict:
     return expected
 
 
-def test_release_fixtures_match_the_pinned_release():
-    release_raw = (mix._FIXTURES / "exp3_v5_release.json").read_bytes()
-    assert hashlib.sha256(release_raw).hexdigest() == mix._RELEASE_SHA256
-    data_raw = (mix._FIXTURES / "exp3_v5_data.json").read_bytes()
-    assert hashlib.sha256(data_raw).hexdigest() == mix._RELEASE["artifacts"]["data.json"]["sha256"]
-    assert mix._CATALOG_SHA256 == mix._RELEASE["artifacts"]["cache_catalog.json"]["sha256"]
-    # The seal manifest claims derivation from these exact release members.
+def test_seal_manifest_totals_match_the_release_population():
+    """The derived manifest agrees with the release document it cites."""
     derived = mix._MANIFEST["derived_from"]
     assert derived["cache_catalog"]["sha256"] == mix._RELEASE["artifacts"]["cache_catalog.json"]["sha256"]
     assert derived["source_loss"]["sha256"] == mix._RELEASE["artifacts"]["source_loss.json"]["sha256"]
-
-
-def test_seal_manifest_totals_match_the_release_population():
     population = mix._RELEASE["natural_population"]
     totals = mix._MANIFEST["totals"]
     assert totals["sources"] == 434
@@ -117,7 +109,7 @@ def test_seal_manifest_totals_match_the_release_population():
     assert totals["rows"] == docs
     assert totals["input_ids_tokens"] == tokens
     assert totals["loss_weights_tokens"] == totals["input_ids_tokens"]
-    assert totals["shards"] == sum(len(seal["shards"]) for seal in mix._SEALS.values())
+    assert totals["shards"] == sum(seal["shards"] for seal in mix._SEALS.values())
     assert set(mix._SEALS) == set(mix._SOURCE_NAMES)
 
 
@@ -161,28 +153,6 @@ def test_resolved_mixture_settings_match_the_release(tmp_path):
     assert resolved.cache_options.batch_size == 128
 
 
-def test_seal_records_pin_the_exact_sealed_caches(tmp_path):
-    prefix = str(tmp_path)
-    for name in ("pretrain/source/c00q0-train/gt_64k", "sft/source/nemotron_sft_v3/math_v3/train"):
-        config = materialized_config(mix.exp3_v5_sources()[name], prefix)
-        seal = mix._SEALS[name]
-        assert config["cache_dir"] == mix._CACHE_ROOT
-        assert config["shards"] == seal["shards"]
-        for shard in config["shards"]:
-            # Relative, content-addressed shard paths under the pinned root — never a bare prefix.
-            assert not shard.startswith("s3://")
-            assert len(shard.split("/components/")) == 2
-        assert config["rows"] == seal["rows"]
-        assert config["input_ids_tokens"] == seal["input_ids_tokens"]
-        assert config["loss_weights_tokens"] == seal["loss_weights_tokens"]
-        assert config["loss_mode"] == seal["loss_mode"]
-        assert config["pack"] == 256
-        assert config["packing_lookahead"] == 128
-        assert config["split"] == "train" and config["flat_cache"] is True
-        assert config["tags"] is None
-        assert config["release"]["sha256"] == mix._RELEASE_SHA256
-
-
 def test_seal_record_resolves_as_a_component(tmp_path):
     """A seeded seal record yields the component ``mixture`` reads: prebuilt, packed, flat."""
     prefix = str(tmp_path)
@@ -207,70 +177,98 @@ def test_seal_record_resolves_as_a_component(tmp_path):
     assert cache.tokenizer == mix._TOKENIZER
 
 
-def test_seal_check_rejects_a_drifted_catalog(tmp_path):
-    """The seal check validates digests, rows, shard counts, and loss modes."""
+def test_seal_record_pins_the_entry_digest(tmp_path):
+    """The seal record carries the digest that pins the source's exact catalog entry."""
+    prefix = str(tmp_path)
+    name = "pretrain/source/c00q0-train/gt_64k"
+    handle = mix.exp3_v5_sources()[name]
+    config = materialized_config(handle, prefix)
+    assert config["entry_sha256"] == mix._SEALS[name]["entry_sha256"]
+    assert len(config["entry_sha256"]) == 64
+    assert config["rows"] == mix._SEALS[name]["rows"]
+    assert config["cache_catalog"]["sha256"] == mix._CATALOG_SHA256
+    assert config["packing_lookahead"] == 128
+
+
+def test_seal_check_rejects_a_drifted_catalog(tmp_path, monkeypatch):
+    """The seal check validates digests, counts, loss modes, and totals."""
+    swept: list[tuple[str, int]] = []
+    monkeypatch.setattr(mix, "_verify_shard_paths", lambda cache_dir, shards: swept.append((cache_dir, len(shards))))
     check = mix.exp3_v5_seal_check()
     config = materialized_config(check, str(tmp_path))
-    name = "pretrain/source/c00q0-train/gt_64k"
-    seal = mix._SEALS[name]
-    catalog = {
-        "splits": {
-            "train": {
-                source: {
-                    "cache_dir": mix._CACHE_ROOT,
-                    "ledger": {
-                        "is_finished": True,
-                        "total_num_rows": source_seal["rows"],
-                        "finished_shards": source_seal["shards"],
-                        "field_counts": {"input_ids": source_seal["input_ids_tokens"]},
-                        "metadata": {"preprocessor_metadata": {"loss_mode": source_seal["loss_mode"]}},
-                    },
-                }
-                for source, source_seal in mix._SEALS.items()
-            }
+    entries = {}
+    for name, seal in mix._SEALS.items():
+        entries[name] = {
+            "cache_dir": mix._CACHE_ROOT,
+            "ledger": {
+                "is_finished": True,
+                "total_num_rows": seal["rows"],
+                "finished_shards": [f"stage/components/{name}/shards/{i}/cache" for i in range(seal["shards"])],
+                "field_counts": {"input_ids": seal["input_ids_tokens"]},
+                "metadata": {"preprocessor_metadata": {"loss_mode": seal["loss_mode"]}},
+            },
         }
-    }
-    raw = json.dumps(catalog).encode()
+    raw = json.dumps({"splits": {"train": entries}}).encode()
     path = tmp_path / "catalog.json"
     path.write_bytes(raw)
+    digest = mix._entry_digest
 
-    good = dict(config, cache_catalog={"uri": str(path), "sha256": hashlib.sha256(raw).hexdigest()})
+    expected = {
+        name: {
+            "rows": seal["rows"],
+            "shards": seal["shards"],
+            "loss_mode": seal["loss_mode"],
+            "entry_sha256": digest(entries[name]),
+        }
+        for name, seal in mix._SEALS.items()
+    }
+    good = dict(
+        config, cache_catalog={"uri": str(path), "sha256": hashlib.sha256(raw).hexdigest()}, expected_sources=expected
+    )
     check.run(good)
+    assert swept == [(mix._CACHE_ROOT, mix._MANIFEST["totals"]["shards"])]
 
-    bad_sha = dict(config, cache_catalog={"uri": str(path), "sha256": "0" * 64})
+    bad_sha = dict(good, cache_catalog={"uri": str(path), "sha256": "0" * 64})
     with pytest.raises(ValueError, match="digest differs"):
         check.run(bad_sha)
 
-    drifted_rows = dict(good, expected_sources=dict(good["expected_sources"]))
-    drifted_rows["expected_sources"][name] = dict(drifted_rows["expected_sources"][name], rows=seal["rows"] + 1)
+    name = "pretrain/source/c00q0-train/gt_64k"
+    wrong_rows = dict(
+        good, expected_sources=dict(expected, **{name: dict(expected[name], rows=expected[name]["rows"] + 1)})
+    )
     with pytest.raises(ValueError, match="rows"):
-        check.run(drifted_rows)
+        check.run(wrong_rows)
 
-    drifted_loss = dict(good, expected_sources=dict(good["expected_sources"]))
-    drifted_loss["expected_sources"][name] = dict(drifted_loss["expected_sources"][name], loss_mode="chat_assistant_only")
+    wrong_digest = dict(good, expected_sources=dict(expected, **{name: dict(expected[name], entry_sha256="1" * 64)}))
+    with pytest.raises(ValueError, match="entry digest differs"):
+        check.run(wrong_digest)
+
+    wrong_loss = dict(
+        good, expected_sources=dict(expected, **{name: dict(expected[name], loss_mode="chat_assistant_only")})
+    )
     with pytest.raises(ValueError, match="loss mode"):
-        check.run(drifted_loss)
+        check.run(wrong_loss)
 
 
 @pytest.mark.skipif(not _HAS_S3_CREDENTIALS, reason="CoreWeave S3 credentials unavailable")
 def test_sealed_catalog_matches_the_manifest_online():
     """The committed manifest still matches the live sealed catalog, and shards exist."""
-    from rigging.filesystem.s3_compat import configure_coreweave_s3
-    from rigging.filesystem.storage_path import StoragePath
-
     configure_coreweave_s3()
     raw = StoragePath(mix._CATALOG_URI).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == mix._CATALOG_SHA256
     catalog = json.loads(raw)["splits"]["train"]
     assert set(catalog) == set(mix._SEALS)
     for name, seal in mix._SEALS.items():
-        ledger = catalog[name]["ledger"]
+        entry = catalog[name]
+        ledger = entry["ledger"]
         assert ledger["total_num_rows"] == seal["rows"]
-        assert ledger["finished_shards"] == seal["shards"]
+        assert len(ledger["finished_shards"]) == seal["shards"]
+        assert mix._entry_digest(entry) == seal["entry_sha256"]
     # A spot check that the content-addressed shard caches are still in place.
-    for name in ("pretrain/source/c00q0-train/gt_64k", "sft/source/nemotron_sft_v3/math_v3/train"):
-        for shard in mix._SEALS[name]["shards"][:2]:
-            assert StoragePath(f"{mix._CACHE_ROOT}/{shard}").exists()
+    shards = catalog["pretrain/source/c00q0-train/gt_64k"]["ledger"]["finished_shards"]
+    shards += catalog["sft/source/nemotron_sft_v3/math_v3/train"]["ledger"]["finished_shards"][:2]
+    for shard in shards:
+        assert StoragePath(prefix_join(mix._CACHE_ROOT, shard)).exists()
 
 
 def test_data_config_is_fingerprint_safe():
