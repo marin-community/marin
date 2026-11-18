@@ -344,7 +344,16 @@ async def test_late_relay_failure_stops_active_trial_without_cancelling_neighbor
 
 
 @pytest.mark.parametrize(
-    "failure", ["collection", "collection_deadline", "teardown", "teardown_deadline", "teardown_cancelled"]
+    "failure",
+    [
+        "collection",
+        "collection_deadline",
+        "teardown",
+        "teardown_deadline",
+        "teardown_cancelled",
+        "teardown_cancelled_after_collection",
+        "teardown_cancelled_before_stop_error",
+    ],
 )
 async def test_runtime_failure_preserves_reward_only_after_verification(tmp_path, monkeypatch, failure):
     factory = ProcessTaskFactory(tmp_path / "guest")
@@ -355,38 +364,43 @@ async def test_runtime_failure_preserves_reward_only_after_verification(tmp_path
     )
     stop_started = asyncio.Event()
     release_stop = asyncio.Event()
+    cancel_at_stop = failure.startswith("teardown_cancelled")
+    gated_stop = cancel_at_stop or failure == "teardown_deadline"
 
     async def fail():
         if failure == "collection_deadline":
             await asyncio.Event().wait()
         raise RuntimeError("Required runtime output unavailable")
 
-    if failure.startswith("collection"):
+    if "collection" in failure:
         if failure == "collection_deadline":
             trial.config.trial_cleanup_grace_sec = 0.2
         monkeypatch.setattr(trial.agent_environment, "collect_runtime_logs", fail)
-    else:
+    if failure.startswith("teardown"):
         original_stop = trial.agent_environment.stop
 
-        if failure in {"teardown_deadline", "teardown_cancelled"}:
+        if gated_stop:
             monkeypatch.setattr("harbor.trial.trial.ENVIRONMENT_STOP_TIMEOUT_SEC", 0.2)
 
         async def failed_stop(delete):
-            stop_started.set()
             await original_stop(delete)
-            if failure in {"teardown_deadline", "teardown_cancelled"}:
+            stop_started.set()
+            if gated_stop:
                 await release_stop.wait()
-            else:
+            if not gated_stop or failure == "teardown_cancelled_before_stop_error":
                 await fail()
 
         monkeypatch.setattr(trial.agent_environment, "stop", failed_stop)
 
     try:
-        if failure == "teardown_cancelled":
+        if cancel_at_stop:
             async with asyncio.timeout(5):
                 task = asyncio.create_task(trial.run())
                 await stop_started.wait()
                 task.cancel()
+                if failure == "teardown_cancelled_before_stop_error":
+                    await asyncio.sleep(0)
+                    release_stop.set()
                 with pytest.raises(asyncio.CancelledError):
                     await task
         else:
@@ -395,7 +409,7 @@ async def test_runtime_failure_preserves_reward_only_after_verification(tmp_path
         release_stop.set()
         await asyncio.gather(*trial.pending_cleanup_tasks(), return_exceptions=True)
     stored = TrialResult.model_validate_json(trial.paths.result_path.read_text())
-    if failure == "teardown_cancelled":
+    if cancel_at_stop:
         assert stored.exception_info.exception_type == "CancelledError"
         assert stored.completion is None and stored.verifier_result is None
         return

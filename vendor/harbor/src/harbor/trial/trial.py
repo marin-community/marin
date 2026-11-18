@@ -341,8 +341,10 @@ class Trial(ABC):
                         try:
                             await cleanup()
                         except BaseException as cleanup_error:
-                            if not isinstance(cleanup_error, asyncio.CancelledError):
-                                self._environment_cleanup_failed = True
+                            if isinstance(cleanup_error, asyncio.CancelledError):
+                                cleanup_failure = cleanup_error
+                                continue
+                            self._environment_cleanup_failed = True
                             verifier = self.result.verifier_result
                             preserve_reward = (
                                 isinstance(cleanup_error, Exception)
@@ -1427,6 +1429,8 @@ class Trial(ABC):
             raise
         except Exception as exc:
             self._environment_cleanup_failed = True
+            if cancellation is not None:
+                raise cancellation from exc
             raise EnvironmentStopError("Environment teardown failed") from exc
         if cancellation is not None:
             raise cancellation

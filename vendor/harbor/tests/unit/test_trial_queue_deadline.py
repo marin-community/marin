@@ -755,20 +755,31 @@ async def test_cancelling_queued_trial_does_not_start_or_retry_it(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("verified", [False, True])
+@pytest.mark.parametrize(
+    "grading", ["ungraded", "verified", "empty", "unpersisted", "slow_hook"]
+)
 async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(
-    tmp_path: Path, monkeypatch, verified: bool
+    tmp_path: Path, monkeypatch, grading: str
 ) -> None:
-    never = asyncio.Event()
+    release_publication = asyncio.Event()
+    publication_started = asyncio.Event()
 
     async def hang(trial: FakeTrial) -> None:
-        if verified:
-            trial.result.verifier_result = VerifierResult(rewards={"reward": 0.0})
+        if grading != "ungraded":
+            rewards = {} if grading == "empty" else {"reward": 0.0}
+            trial.result.verifier_result = VerifierResult(rewards=rewards)
+            trial.result.exception_info = ExceptionInfo.from_exception(
+                AgentTimeoutError("Agent ran out of time before verification")
+            )
             trial.first_phase_timeout = TimeoutError("Agent session cleanup timed out")
-        await never.wait()
+        await asyncio.Event().wait()
 
     async def reverify(trial: FakeTrial) -> None:
         trial.result.verifier_result = VerifierResult(rewards={"reward": 1.0})
+
+    async def hold_verified_hook(_event: TrialHookEvent) -> None:
+        publication_started.set()
+        await release_publication.wait()
 
     config = _config(tmp_path, "hung", attempt_timeout=0.05, cleanup_grace=0.2)
     _install_factory(
@@ -776,22 +787,57 @@ async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(
         {("hung", 0): FakeTrial(config, 0, hang), ("hung", 1): FakeTrial(config, 1, reverify)},
     )
     retry = RetryConfig(
-        max_retries=1, include_exceptions={"TimeoutError"}, min_wait_sec=0, max_wait_sec=0
+        max_retries=1,
+        include_exceptions={"AgentTimeoutError", "TimeoutError"},
+        min_wait_sec=0,
+        max_wait_sec=0,
     )
+    queue = TrialQueue(n_concurrent=1, retry_config=retry)
+    if grading == "slow_hook":
+        queue.on_result_persistence_started(hold_verified_hook)
+    if grading == "unpersisted":
+        writer = artifact_writer.get_artifact_writer()
+        submit_required = writer.submit_required
 
-    async with asyncio.timeout(1):
-        result = await TrialQueue(n_concurrent=1, retry_config=retry).submit(config)
+        async def hold_verified_write(path, producer, **kwargs):
+            if TrialResult.model_validate_json(producer()).verifier_result is not None:
+                publication_started.set()
+                await release_publication.wait()
+            return await submit_required(path, producer, **kwargs)
 
-    selected = TrialResult.model_validate_json((tmp_path / "trials" / "hung" / "result.json").read_text())
+        monkeypatch.setattr(writer, "submit_required", hold_verified_write)
+
+    try:
+        async with asyncio.timeout(3):
+            result = await queue.submit(config)
+    finally:
+        release_publication.set()
+
+    selected = TrialResult.model_validate_json(
+        (tmp_path / "trials" / "hung" / "result.json").read_text()
+    )
     assert selected == result
+    if grading in {"slow_hook", "unpersisted"}:
+        assert publication_started.is_set()
+    if grading == "empty":
+        assert selected.trial_relpath == "hung/attempts/001"
+        assert selected.verifier_result.rewards == {"reward": 1.0}
+        return
     assert selected.trial_relpath == "hung/attempts/000"
-    if verified:
-        assert selected.verifier_result is not None and selected.verifier_result.rewards == {"reward": 0.0}
-        assert selected.exception_info is None and selected.completion is None
-        assert [error.exception_type for error in selected.secondary_exception_info] == ["TimeoutError"]
+    if grading in {"verified", "slow_hook"}:
+        assert selected.verifier_result is not None
+        assert selected.verifier_result.rewards == {"reward": 0.0}
+        assert selected.exception_info.exception_type == "AgentTimeoutError"
+        assert selected.completion is None
+        assert [error.exception_type for error in selected.secondary_exception_info] == [
+            "TimeoutError"
+        ]
     else:
         assert selected.verifier_result is None
-        assert selected.exception_info.exception_type == "TrialTimeoutError"
+        expected = (
+            "ArtifactPersistenceError" if grading == "unpersisted" else "TrialTimeoutError"
+        )
+        assert selected.exception_info.exception_type == expected
 
 
 @pytest.mark.unit
