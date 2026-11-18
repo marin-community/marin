@@ -560,7 +560,7 @@ class RayPPOTrainer:
 
     @staticmethod
     def _start_exit_watchdog(timeout: int = 300) -> threading.Timer:
-        """Bound cleanup beyond its sequential 240-second cooperative deadlines."""
+        """Return a cancellable process-failure timer for stalled cleanup."""
 
         def _force_exit():
             logger.error(
