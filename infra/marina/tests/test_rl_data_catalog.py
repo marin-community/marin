@@ -1169,8 +1169,14 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
                     "jsonb_set(declaration, '{dataset_revision}', '\"new-current-pin\"'::jsonb)"
                 )
             )
-        assert client.get("/sources").json()["sources"][0]["coverage"] is None
-        assert client.get("/source", params={"source_id": "Marin:a"}).json()["coverage"] is None
+        # The stale-pin projection names the last-computed revision instead of clearing:
+        # the alignment exists but predates the pin, so it cannot present as current.
+        stale = {
+            "last_computed_dataset_revision": FIXTURE_REVISION,
+            "unavailable_reason": f"Not yet computed for this pin (last computed at {FIXTURE_REVISION})",
+        }
+        assert client.get("/sources").json()["sources"][0]["coverage"] == stale
+        assert client.get("/source", params={"source_id": "Marin:a"}).json()["coverage"] == stale
         assert client.get("/curriculum").json()["totals"] == first["totals"]
 
 
@@ -3711,6 +3717,82 @@ def test_all_unsupported_without_a_profile_conflict_still_blocks(catalog_databas
     publish_sample(root, "plain-unsupported", source_id="Marin:plain")
     catalog = CurationCatalog(root)
     flipped = _unsupported_profile_survey(catalog, "Marin:plain", grader_demands_network=False)
+    with pytest.raises(ValueError, match="Backend admission blocked"):
+        load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+
+
+def test_docker_build_preparation_gate_ships_as_typed_pending(catalog_database, catalog_query, tmp_path):
+    """An all-unsupported Available source whose grader fails only on the unresolved Docker
+    build gate loads as Pending: the gate is a source preparation requirement, not a
+    backend capability gap, and the image preparation re-admits it."""
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "build-pending", source_id="Marin:buildgate")
+    catalog = CurationCatalog(root)
+    survey = catalog_backend_map(catalog)
+    row = next(s for s in survey.sources if s.source_id == "Marin:buildgate")
+    count = row.task_count or 1
+    backends = {
+        backend: fit.model_copy(
+            update={
+                "support": FitSupport.UNSUPPORTED,
+                "task_counts": {FitSupport.UNSUPPORTED: count},
+                "roles": {
+                    "agent": {FitSupport.PARTIAL: count},
+                    "grader": {FitSupport.UNSUPPORTED: count},
+                },
+                "blockers": {"agent:non_root_user": count},
+                "validation_errors": {
+                    "grader: Unresolved Docker build context must be built and pinned before execution": count
+                },
+            }
+        )
+        for backend, fit in row.backends.items()
+    }
+    flipped = survey.model_copy(
+        update={
+            "sources": [
+                row.model_copy(update={"backends": backends}) if s.source_id == "Marin:buildgate" else s
+                for s in survey.sources
+            ]
+        }
+    )
+    result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    served = _source_load_row(catalog_query, result["load_id"], "Marin:buildgate")
+    assert served["status"] == "Pending"
+    assert "Backend preparation pending: the grader Docker build context is unresolved" in served["notes"]
+
+
+def test_docker_build_gate_with_other_validation_errors_still_blocks(catalog_database, catalog_query, tmp_path):
+    """An all-unsupported source whose grader fails on something besides the build gate
+    keeps the hard blocker: only the source preparation gate downgrades."""
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "other-gate", source_id="Marin:othergate")
+    catalog = CurationCatalog(root)
+    survey = catalog_backend_map(catalog)
+    row = next(s for s in survey.sources if s.source_id == "Marin:othergate")
+    count = row.task_count or 1
+    backends = {
+        backend: fit.model_copy(
+            update={
+                "support": FitSupport.UNSUPPORTED,
+                "task_counts": {FitSupport.UNSUPPORTED: count},
+                "roles": {
+                    "agent": {FitSupport.UNSUPPORTED: count},
+                    "grader": {FitSupport.UNSUPPORTED: count},
+                },
+                "validation_errors": {"grader: Network capability requires an allow network policy": count},
+            }
+        )
+        for backend, fit in row.backends.items()
+    }
+    flipped = survey.model_copy(
+        update={
+            "sources": [
+                row.model_copy(update={"backends": backends}) if s.source_id == "Marin:othergate" else s
+                for s in survey.sources
+            ]
+        }
+    )
     with pytest.raises(ValueError, match="Backend admission blocked"):
         load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
 

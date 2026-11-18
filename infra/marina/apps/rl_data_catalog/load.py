@@ -297,6 +297,30 @@ def _grader_network_profile_pending(backend_row: BackendSourceMap, backend_map: 
     return needs_network and grader_profile is not None and grader_profile.network is NetworkPolicy.DENY
 
 
+UNRESOLVED_DOCKER_BUILD_GATE = "Unresolved Docker build context must be built and pinned before execution"
+
+
+def _docker_build_preparation_pending(backend_row: BackendSourceMap) -> bool:
+    """Whether the source's grader role fails only on its own unresolved Docker builds.
+
+    The survey's build-pinning gate is a source preparation requirement, not a backend
+    capability gap: the grader images are simply not built yet, and a maintained image
+    preparation re-admits the source. Callers gate this on no runnable production
+    backend, so a runnable sibling never triggers it.
+    """
+    fits = backend_row.backends
+    grader_fails = [
+        (message, count)
+        for fit in fits.values()
+        if fit.roles.get("grader", {}).get("unsupported")
+        for message, count in fit.validation_errors.items()
+        if message.startswith("grader:")
+    ]
+    if not grader_fails:
+        return False
+    return all(UNRESOLVED_DOCKER_BUILD_GATE in message for message, _ in grader_fails)
+
+
 def load_catalog(
     catalog: CurationCatalog,
     query: AppletQuery,
@@ -428,6 +452,19 @@ def load_catalog(
                 # unadmitted, with the unsupported evidence and the conflict
                 # visible — until a maintained per-source profile binding lands.
                 downgraded[source.id] = "Backend profile pending: grader needs network allow."
+            elif (
+                source.declaration.status == "Available"
+                and not has_runnable_production_support(verdicts, backend_map.deployment_classes)
+                and _docker_build_preparation_pending(backend_row)
+            ):
+                # The build-pinning gate is a source preparation requirement: the grader
+                # images are not built yet, so the survey cannot qualify any backend.
+                # Ships as typed Pending until the image-preparation lane pins them.
+                downgraded[source.id] = (
+                    "Backend preparation pending: the grader Docker build context is unresolved on every "
+                    "task (the surveyed production backends cannot run unpinned images); the image "
+                    "preparation lane re-admits the source with pinned grader images."
+                )
             else:
                 raise ValueError(f"Backend admission blocked: {source.id}: {blocker}")
         if pending:
