@@ -26,13 +26,17 @@
 
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Request, State};
+use axum::http::{Method, StatusCode};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use connectrpc::{ConnectRpcService, Limits, Router as ConnectRouter};
 
 use crate::proto::finelog::logging::LogServiceExt;
 use crate::proto::finelog::stats::StatsServiceExt;
+use crate::read_executor::read_executor;
 use crate::server::auth::{auth_gate, AuthInterceptor, AuthPolicy};
 use crate::server::forwarding::ForwardingConfig;
 use crate::server::ingest_health::IngestHealth;
@@ -58,6 +62,8 @@ pub struct ServerConfig {
     pub max_concurrent_fetch_logs: usize,
     /// Concurrent Query cap.
     pub max_concurrent_query: usize,
+    /// Shared admission budget for Query and FetchLogs.
+    pub max_concurrent_reads: usize,
     /// Concurrent telemetry request cap; excess requests receive HTTP 429.
     pub max_concurrent_telemetry: usize,
     /// Accepted batch IDs retained for process-local retry deduplication.
@@ -81,6 +87,7 @@ impl Default for ServerConfig {
             debug_admin: false,
             max_concurrent_fetch_logs: MAX_CONCURRENT_FETCH_LOGS,
             max_concurrent_query: MAX_CONCURRENT_QUERY,
+            max_concurrent_reads: read_executor().cpus().len(),
             max_concurrent_telemetry: telemetry::DEFAULT_MAX_CONCURRENT_REQUESTS,
             telemetry_dedupe_capacity: telemetry::DEFAULT_DEDUPE_CAPACITY,
             slow_rpc_threshold_ms: DEFAULT_SLOW_RPC_THRESHOLD_MS,
@@ -144,6 +151,7 @@ fn build_connect_service(
         .with_interceptor(ConcurrencyInterceptor::new(
             config.max_concurrent_fetch_logs,
             config.max_concurrent_query,
+            config.max_concurrent_reads,
         ))
 }
 
@@ -204,6 +212,7 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
     app = spa::spa_routes(app, spa::vue_dist_dir(), connect_service.clone());
 
     app.fallback_service(connect_service)
+        .layer(axum::middleware::from_fn(dispatch_reads))
         // Transport layer: rewrite legacy /iris.logging.LogService/* onto
         // /finelog.logging.LogService/* before routing.
         .layer(axum::middleware::from_fn(
@@ -216,4 +225,29 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
         .layer(axum::middleware::from_fn(
             forwarded_prefix::strip_forwarded_prefix,
         ))
+}
+
+async fn dispatch_reads(request: Request, next: Next) -> Response {
+    if request.method() != Method::POST
+        || !matches!(
+            request.uri().path(),
+            "/finelog.stats.StatsService/Query" | "/finelog.logging.LogService/FetchLogs"
+        )
+    {
+        return next.run(request).await;
+    }
+    match read_executor()
+        .run(async move { next.run(request).await })
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::error!(%error, "read request task failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "read request task failed",
+            )
+                .into_response()
+        }
+    }
 }

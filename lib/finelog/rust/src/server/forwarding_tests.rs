@@ -651,6 +651,95 @@ fn forwarding_read_window_is_bounded_by_ordered_segment_ranges() {
 }
 
 #[test]
+fn ship_batches_preserves_a_read_larger_than_the_string_offset_limit() {
+    let data = Arc::new(StringArray::from(vec!["x".repeat(1 << 20)]));
+    let schema = Arc::new(ArrowSchema::new(vec![
+        Field::new(IMPLICIT_SEQ_COLUMN, DataType::Int64, false),
+        Field::new("data", DataType::Utf8, false),
+        Field::new(IMPLICIT_CLUSTER_COLUMN, DataType::Utf8, true),
+    ]));
+    // Share a small buffer across source batches. Concatenating this read would
+    // require a Utf8 array above 2 GiB, while each source batch remains valid.
+    let batches = (1..=2049)
+        .map(|seq| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![seq])),
+                    data.clone(),
+                    Arc::new(StringArray::from(vec![None::<&str>])),
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    let shipped = ship_batches(
+        QueryResult {
+            schema,
+            batches,
+            timings: Default::default(),
+        },
+        SOURCE_CLUSTER,
+    )
+    .unwrap();
+    let mut bytes = 0;
+    for (index, (batch, seqs)) in shipped.iter().enumerate() {
+        assert!(batch.column_by_name(IMPLICIT_SEQ_COLUMN).is_none());
+        assert_eq!(seqs.values(), &[(index + 1) as i64]);
+        let body = batch.column_by_name("data").unwrap().as_string::<i32>();
+        assert_eq!(body.value(0), data.value(0));
+        bytes += body.value(0).len();
+        assert_eq!(
+            batch
+                .column_by_name(IMPLICIT_CLUSTER_COLUMN)
+                .unwrap()
+                .as_string::<i32>()
+                .value(0),
+            SOURCE_CLUSTER
+        );
+    }
+    assert!(bytes > i32::MAX as usize);
+}
+
+#[test]
+fn bounded_batch_coalescing_preserves_rows_and_sequence_order() {
+    let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+        "data",
+        DataType::Utf8,
+        false,
+    )]));
+    let batches = (0..12)
+        .map(|index| {
+            let data = format!("{index}:{}", "x".repeat(400));
+            (
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(StringArray::from(vec![data]))],
+                )
+                .unwrap(),
+                Int64Array::from(vec![(index + 1) * 10]),
+            )
+        })
+        .collect();
+    let chunks = chunk_batches_by_bytes(batches, 4096).unwrap();
+    assert!(chunks.len() > 1);
+    let mut received = Vec::new();
+    for (ipc, last_seq) in chunks {
+        assert!(ipc.len() <= 4096);
+        let batch = decode_one_record_batch(&ipc).unwrap();
+        let data = batch.column_by_name("data").unwrap().as_string::<i32>();
+        received.extend(data.iter().map(|value| value.unwrap().to_string()));
+        assert_eq!(last_seq, received.len() as i64 * 10);
+    }
+    assert_eq!(
+        received,
+        (0..12)
+            .map(|index| format!("{index}:{}", "x".repeat(400)))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn chunk_by_bytes_splits_and_pairs_each_chunk_with_its_last_seq() {
     let batch = RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![Field::new(

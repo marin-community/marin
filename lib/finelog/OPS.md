@@ -64,6 +64,18 @@ column to every row; producers do not declare it, but SQL queries can select it.
 
 ## Diagnosing query latency
 
+Public Query and FetchLogs RPCs share an admission budget equal to half the
+available CPU count, rounded down with a minimum of one. Their per-method caps
+still apply. Reads run on a separate Tokio executor whose async and blocking
+workers use only that CPU set on Linux and run at lower scheduling priority.
+Background maintenance uses the same executor; scheduled durability flushes and
+ingestion retain the ordinary executor and blocking pool. Ingestion can use all
+CPUs, including those excluded from reads. A single-CPU deployment has separate
+workers and lower read priority but cannot reserve a separate CPU.
+`GET /api/server` exposes the selected CPU IDs as `readCpus`; startup logs report
+the read-worker count and priority. On other platforms, worker counts are
+bounded without Linux CPU affinity.
+
 Start with the server's stage timings when unrelated log and SQL requests slow
 down together. For the GCE hub:
 
@@ -655,6 +667,8 @@ up to four namespace turns concurrently, and starts another round immediately
 while work remains. A log turn reads up to one million rows; other tables read
 up to 200,000. Requests retain their byte limit, and log chunks ship serially
 to preserve order. Independent tables can overlap their durable hub writes.
+Scan results remain separate Arrow batches until byte-bounded coalescing, so
+large log reads do not exceed the 2 GiB Utf8 offset limit before request chunking.
 Hub or network failures get three attempts, then leave the affected cursor in place and yield to
 the next namespace. The same batch is retried on the next sweep; exhaustion does
 not discard it.
