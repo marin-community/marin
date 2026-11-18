@@ -215,9 +215,6 @@ extra_env:
   DAYTONA_TARGET: us
   OT_AGENT_RAY_OBJECT_STORE_CAP_GIB: '32'
   PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-  NCCL_NET: Socket
-  NCCL_IB_DISABLE: '1'
-  NCCL_SOCKET_FAMILY: AF_INET
   VERIFYIT_JUDGE_MODEL: openai/gpt-oss-120b
 terminal_bench:
   harbor:

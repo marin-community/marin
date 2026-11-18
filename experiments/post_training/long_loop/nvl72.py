@@ -151,9 +151,6 @@ PROFILES = MappingProxyType(
                     ),
                 ),
                 extra_env={
-                    "NCCL_NET": "IB",
-                    "NCCL_IB_DISABLE": "0",
-                    "NCCL_IB_HCA": "ibp",
                     "NCCL_DEBUG": "INFO",
                     "NCCL_DEBUG_SUBSYS": "INIT,NET",
                 },
