@@ -28,9 +28,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use connectrpc::interceptor::{UnaryRequest, UnaryResponse};
+use connectrpc::spec::Spec;
 use connectrpc::{async_trait, ConnectError, Interceptor, Next, RequestContext};
 use tokio::sync::Semaphore;
 
+use crate::proto::finelog::logging::LOG_SERVICE_FETCH_LOGS_SPEC;
+use crate::proto::finelog::stats::STATS_SERVICE_QUERY_SPEC;
 use crate::query::{query_timeout, run_within_query_timeout};
 
 /// Default per-method slow-RPC threshold.
@@ -43,6 +46,24 @@ pub const DEFAULT_SLOW_RPC_THRESHOLD_MS: i64 = 7000;
 /// wedges the process.
 pub const MAX_CONCURRENT_FETCH_LOGS: usize = 4;
 pub const MAX_CONCURRENT_QUERY: usize = 2;
+
+#[derive(Clone, Copy)]
+pub(crate) enum ReadProcedure {
+    FetchLogs,
+    Query,
+}
+
+const READ_PROCEDURES: [(Spec, ReadProcedure); 2] = [
+    (LOG_SERVICE_FETCH_LOGS_SPEC, ReadProcedure::FetchLogs),
+    (STATS_SERVICE_QUERY_SPEC, ReadProcedure::Query),
+];
+
+pub(crate) fn read_procedure(path: &str) -> Option<ReadProcedure> {
+    READ_PROCEDURES
+        .iter()
+        .find(|(spec, _)| spec.procedure == path)
+        .map(|(_, procedure)| *procedure)
+}
 
 /// The dispatched method's short name (`"FetchLogs"`, `"Query"`, ...), or `None`
 /// when the spec is absent (manual `route_*` registration without `with_spec`).
@@ -133,12 +154,10 @@ impl ConcurrencyInterceptor {
         }
     }
 
-    /// The semaphore for `method`, or `None` for an uncapped method.
-    fn semaphore_for(&self, method: &str) -> Option<&Arc<Semaphore>> {
-        match method {
-            "FetchLogs" => Some(&self.fetch),
-            "Query" => Some(&self.query),
-            _ => None,
+    fn semaphore_for(&self, procedure: ReadProcedure) -> &Arc<Semaphore> {
+        match procedure {
+            ReadProcedure::FetchLogs => &self.fetch,
+            ReadProcedure::Query => &self.query,
         }
     }
 }
@@ -162,9 +181,14 @@ impl Interceptor for ConcurrencyInterceptor {
         next: Next<'_>,
     ) -> Result<UnaryResponse, ConnectError> {
         let method = method_name(&req.ctx).unwrap_or("");
-        let Some(sem) = self.semaphore_for(method) else {
+        let Some(procedure) = req
+            .ctx
+            .spec()
+            .and_then(|spec| read_procedure(spec.procedure))
+        else {
             return next.run(req).await;
         };
+        let sem = self.semaphore_for(procedure);
         // Pre-acquire shed: a request that arrived already past its deadline is
         // not worth queuing.
         if deadline_expired(&req.ctx) {
