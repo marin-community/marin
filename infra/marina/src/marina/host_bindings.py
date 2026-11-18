@@ -1,9 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hostname validation and the one-time import of revision-configured applet hosts."""
+"""Hostname validation, DNS zone resolution and the one-time import of revision-configured applet hosts."""
 
 import re
+from collections.abc import Iterable
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -18,6 +19,25 @@ def normalize_hostname(hostname: str) -> str:
     if HOSTNAME_PATTERN.fullmatch(hostname) is None:
         raise ValueError("hostname must be a DNS name without a scheme, port, or path")
     return hostname
+
+
+def dns_zone_name(hostname: str, zone_names: Iterable[str]) -> str:
+    """Return the most specific configured DNS zone that contains ``hostname``."""
+    matches = [zone for zone in zone_names if hostname == zone or hostname.endswith(f".{zone}")]
+    if not matches:
+        raise ValueError(f"no DNS zone is configured for {hostname}")
+    return max(matches, key=len)
+
+
+def host_resource_slug(hostname: str, zone_name: str, primary_zone_name: str) -> str:
+    """Name a host's Pulumi resources by its first label, qualified outside the primary zone.
+
+    Hosts in the primary zone keep their first label so existing resource names do not change.
+    """
+    label = hostname.split(".")[0]
+    if zone_name == primary_zone_name:
+        return label
+    return f"{label}-{zone_name.replace('.', '-')}"
 
 
 def migrate_host_bindings(connection: Connection) -> None:

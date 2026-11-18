@@ -34,7 +34,7 @@ import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.marina import PUBLIC_APPLET_SERVICE
 from marina.database_setup import LOOM_DATABASE_USER
-from marina.host_bindings import normalize_hostname
+from marina.host_bindings import dns_zone_name, host_resource_slug, normalize_hostname
 from marina.releases import require_current_main
 from marina.runtime import JobRunner, load_runtime_config
 
@@ -58,6 +58,8 @@ READER_GROUP = "eng-all@openathena.ai"
 MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
 # Google's shared frontend for Cloud Run domain mappings; vanity CNAMEs point here.
 CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
+# The Cloudflare zone of Marina's own hosts. Its hosts keep first-label resource names.
+PRIMARY_DNS_ZONE = "oa.dev"
 HOST_APPS = {"echo.oa.dev": "echo", "evaldash.oa.dev": "evaldash"}
 MARINA_HOST = "marina.oa.dev"
 APPLET_HOST = "applets.marina.oa.dev"
@@ -134,6 +136,11 @@ def main() -> None:
     if not isinstance(applet_domains, list) or not all(isinstance(host, str) for host in applet_domains):
         raise ValueError("marin-marina:applet_domains must be a list of host names")
     applet_domains = [normalize_hostname(host) for host in applet_domains]
+    dns_zones = config.get_object("dns_zones") or {}
+    if not isinstance(dns_zones, dict) or not all(
+        isinstance(name, str) and isinstance(zone_id, str) for name, zone_id in dns_zones.items()
+    ):
+        raise ValueError("marin-marina:dns_zones must map DNS zone names to Cloudflare zone IDs")
     gcp_provider = gcp.Provider("gcp", project=PROJECT)
     child = pulumi.ResourceOptions(provider=gcp_provider)
 
@@ -377,9 +384,9 @@ def main() -> None:
     # Vanity hosts: a Cloud Run domain mapping per host routes it to the service and provisions
     # the managed cert; a DNS-only Cloudflare CNAME points the host at Cloud Run's frontend
     # (a Cloudflare proxy would block cert issuance). Mappings are immutable and carry
-    # server-set metadata, so those fields are ignored. Set marin-marina:dns_zone_id to enable.
-    dns_zone_id = config.get("dns_zone_id")
-    if dns_zone_id:
+    # server-set metadata, so those fields are ignored. Each host's record goes in the most specific
+    # zone of marin-marina:dns_zones that contains it. Set dns_zones to enable.
+    if dns_zones:
         hosts = {
             MARINA_HOST: (SERVICE, service),
             APPLET_HOST: (SERVICE, service),
@@ -388,7 +395,8 @@ def main() -> None:
             **{host: (SERVICE, service) for host in applet_domains},
         }
         for host, (route_name, route_service) in hosts.items():
-            slug = host.split(".")[0]
+            zone_name = dns_zone_name(host, dns_zones)
+            slug = host_resource_slug(host, zone_name, PRIMARY_DNS_ZONE)
             gcp.cloudrun.DomainMapping(
                 f"{slug}-domain",
                 name=host,
@@ -402,7 +410,7 @@ def main() -> None:
             )
             cloudflare.DnsRecord(
                 f"{slug}-dns",
-                zone_id=dns_zone_id,
+                zone_id=dns_zones[zone_name],
                 name=host,
                 type="CNAME",
                 content=CLOUD_RUN_FRONTEND,
