@@ -14,12 +14,18 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
+from evalrecords.records import RunStatus
 from iris.client.client import IrisClient
 from iris.cluster.client import remote_client
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation.hardware import Platform
-from marin.evaluation.records import RunStatus
-from marin.evaluation.runner import EvaluationBatch, EvaluationError, _record
+from marin.evaluation.runner import (
+    EvaluationBatch,
+    EvaluationError,
+    SubmittedEvaluation,
+    SubmittedEvaluationBatch,
+    _record,
+)
 from marin.execution.step_runner import StepRunner
 from marin.inference.iris import RemoteInferenceStartupError
 
@@ -145,6 +151,62 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
     assert config.verifier_env_keys == ()
     assert json.loads(config.stable_policy_json)["environment"]["kwargs"] == {"judge_access": "runtime"}
     assert batch.judge.api_model == "qwen3-0.6b"
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_coreweave_launch_without_storage_credentials_fails_before_submission(
+    tmp_path, submitted_batches, monkeypatch, dry_run
+):
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path / "no-secrets"))
+    monkeypatch.delenv("CW_KEY_ID")
+    command = [*_command(tmp_path), "--federated_cluster", "cw-rno2a", *(["--dry-run"] if dry_run else [])]
+
+    result = CliRunner().invoke(cli, command)
+
+    assert result.exit_code != 0
+    assert "CW_KEY_ID" in result.output
+    assert submitted_batches == []
+
+
+@pytest.mark.parametrize(
+    "status,exit_code",
+    [(RunStatus.SUCCEEDED, 0), (RunStatus.INFRA_FAILED, 1), (None, 1)],
+    ids=["succeeded", "failed-record", "no-record"],
+)
+def test_waiting_launch_exits_nonzero_unless_every_evaluation_succeeds(tmp_path, monkeypatch, status, exit_code):
+    job = SimpleNamespace(
+        job_id="/test/eval",
+        wait=lambda **_kwargs: SimpleNamespace(state=job_pb2.JOB_STATE_FAILED, error="peer rejected the handoff"),
+    )
+
+    def launch(batch, _client):
+        if status is not None:
+            for evaluation in batch.evaluations:
+                _record(batch, evaluation.identity, status, None, {}, {}, {})
+        return SubmittedEvaluationBatch(
+            group_id=batch.group_id,
+            job=job,
+            records_prefix=batch.records_prefix,
+            model_name=batch.model.name,
+            evaluations=tuple(
+                SubmittedEvaluation(evaluation.identity.run_id, evaluation.identity.eval_ref.name)
+                for evaluation in batch.evaluations
+            ),
+        )
+
+    @contextmanager
+    def client(**_kwargs):
+        yield None
+
+    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", client)
+    monkeypatch.setattr("experiments.evaluation.cli.launch_group", launch)
+    command = [argument for argument in _command(tmp_path) if argument != "--no-wait"]
+
+    result = CliRunner().invoke(cli, command)
+
+    assert result.exit_code == exit_code, result.output
+    if status is None:
+        assert "peer rejected the handoff" in result.output
 
 
 def test_launch_selects_across_documents_and_adds_harbor_configs(

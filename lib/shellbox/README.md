@@ -44,6 +44,14 @@ Iris commands and file transfer use the existing `ExecInContainer` RPC and requi
 `/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
 for commands and directory transfer.
+Daytona uploads each control wrapper into a private command directory before execution,
+so nested shell quoting does not enlarge the argument sent to its execution API.
+The original argv, stdin, environment and working directory are preserved;
+Linux limits still apply to each original argument. The wrapper is removed with
+the command's other temporary files.
+If command execution fails or is cancelled, later sandbox-deletion failures are
+attached as exception notes. Cleanup failure after a successful command still
+raises an error.
 Set `command_polling=True` on `DaytonaMachineFactory` to execute commands in
 provider sessions with short status requests. This opt-in mode keeps `run`'s
 caller deadline, separate bounded output files and process cleanup.
@@ -52,6 +60,11 @@ Status polling backs off from 0.2 to about 5 seconds and retries transient
 request failures without resubmitting the command. Logs report status-request
 and failure counts. Harbor accepts the `command_polling` environment option;
 SkyRL exposes it as `terminal_bench_config.harbor.daytona_command_polling`.
+The session stays open through output collection, so a failure to read the output
+files can still include bounded provider diagnostics. If neither the command nor
+the machine specifies a working directory, commands use the image's working
+directory. Each command reopens that path, including after a command deletes
+and recreates the directory.
 Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
 expired jobs about once a minute. An expired, killed or preempted machine raises
 `MachineTerminated`; uncertain command failures are not replayed.
