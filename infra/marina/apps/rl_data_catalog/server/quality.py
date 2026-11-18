@@ -33,6 +33,23 @@ class QualityDisplay:
     review_status: str | None
 
 
+def sample_coverage_status(declaration: dict[str, Any], level: Quality) -> str | None:
+    """Show the reviewed/retained coverage a SAMPLE source's evidence records.
+
+    The oversight evidence carries the reviewed coverage that carried prior
+    reviews joined onto the fixed panel; the Atlas shows it beside the SAMPLE
+    label. Sources without recorded coverage keep a bare label.
+    """
+    if level is not Quality.SAMPLE:
+        return None
+    evidence = declaration.get("oversight_evidence") or {}
+    reviewed = evidence.get("reviewed")
+    retained = (declaration.get("within_source_dedup") or {}).get("unique_count")
+    if not isinstance(reviewed, int) or reviewed <= 0 or not isinstance(retained, int) or retained <= 0:
+        return None
+    return f"SAMPLE, {reviewed:,} of {retained:,} reviewed"
+
+
 def quality_display(
     declaration: dict[str, Any], curation: dict[str, Any] | None, assessment_key: str | None
 ) -> QualityDisplay:
@@ -43,7 +60,7 @@ def quality_display(
     level = quality(declaration, curation)
     if level != Quality.QUICK and declaration.get("quality_result") is None and assessment_key is None:
         return QualityDisplay(Quality.QUICK, "SAMPLE review in progress")
-    return QualityDisplay(level, None)
+    return QualityDisplay(level, sample_coverage_status(declaration, level))
 
 
 @dataclass(frozen=True)

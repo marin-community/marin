@@ -130,11 +130,13 @@ def write_receipt(
     reviews: dict[str, ReviewRecord],
     *,
     reviewer=REVIEWER,
+    panel_ids=None,
+    name="receipt",
 ) -> SampleQCReceipt:
     """Write a frozen SAMPLE panel receipt with one observation per panel member."""
-    root = tmp_path / "receipt"
-    root.mkdir(parents=True)
-    panel_ids = sorted(tasks_by_id)
+    root = tmp_path / name
+    root.mkdir(parents=True, exist_ok=True)
+    panel_ids = sorted(tasks_by_id) if panel_ids is None else sorted(panel_ids)
     panel_rows = [
         {"task_id": task_id, "task_spec": json.dumps(tasks_by_id[task_id]), "runtime": "{}"} for task_id in panel_ids
     ]
@@ -343,7 +345,7 @@ def test_sample_recovery_outcome_rules():
         for index in range(100)
     )
     panel = tuple(good_review(f"task-{index:03d}") for index in range(100))
-    outcome = sample_recovery_outcome(SOURCE_ID, 200, panel, carried, reviewer=REVIEWER)
+    outcome = sample_recovery_outcome(SOURCE_ID, 200, panel, carried, reviewers=(REVIEWER,))
     assert outcome.level is OversightLevel.FULL and outcome.full is True
     assert outcome.coverage_conclusive == 200
     assert outcome.panel_result.reviewed == 100
@@ -354,7 +356,7 @@ def test_sample_recovery_outcome_rules():
             ReviewRecord(task_id="task-096", status=ReviewStatus.UNAVAILABLE, verdict=None, detail="judge down"),
         )
     )
-    outcome = sample_recovery_outcome(SOURCE_ID, 200, partial_panel, carried[:4], reviewer=REVIEWER)
+    outcome = sample_recovery_outcome(SOURCE_ID, 200, partial_panel, carried[:4], reviewers=(REVIEWER,))
     assert outcome.level is OversightLevel.SAMPLE and outcome.full is False
     assert outcome.panel_result.reviewed == 96
     assert outcome.panel_result.unavailable_count == 1
@@ -368,7 +370,7 @@ def test_sample_recovery_outcome_rules():
         current_task_id="task-000",
         review=good_review("task-000"),
     )
-    outcome = sample_recovery_outcome(SOURCE_ID, 200, partial_panel, (*carried[:4], redundant), reviewer=REVIEWER)
+    outcome = sample_recovery_outcome(SOURCE_ID, 200, partial_panel, (*carried[:4], redundant), reviewers=(REVIEWER,))
     assert outcome.carried_reviews == 4
     assert outcome.coverage_conclusive == 100
 

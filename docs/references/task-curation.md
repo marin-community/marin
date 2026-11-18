@@ -230,7 +230,11 @@ until its current-pin admission receipt exists.
   Carried reviews for tasks the panel observed are redundant and do not count.
   The level promotes to FULL only when the merged observations cover every
   retained task under the existing completeness and waiver rules.
-  Run the plan as an in-region CPU job when a population is
+  `sample_review_recovery` surveys the registry's superseded SAMPLE receipts
+  and recovers every source in one in-region job; the recovered coverage binds
+  on the declaration's oversight evidence, and the Atlas Quality display shows
+  it as `SAMPLE, <reviewed> of <retained> reviewed`.
+  Run the carry-forward plan as an in-region CPU job when a population is
   large:
 
   ```bash

@@ -23,9 +23,8 @@ class RegistryReference(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-def read_registry_json(path: Path) -> dict[str, Any]:
+def read_registry_document(reference: RegistryReference) -> dict[str, Any]:
     """Download an exact registry revision and verify its bytes before decoding."""
-    reference = RegistryReference.model_validate_json(path.read_bytes())
     downloaded = hf_hub_download(
         repo_id=reference.repo,
         repo_type="dataset",
@@ -39,6 +38,12 @@ def read_registry_json(path: Path) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise ValueError(f"Registry document must contain an object: {reference.path}")
     return document
+
+
+def read_registry_json(path: Path) -> dict[str, Any]:
+    """Download an exact registry revision and verify its bytes before decoding."""
+    reference = RegistryReference.model_validate_json(path.read_bytes())
+    return read_registry_document(reference)
 
 
 def _require_complete_shard_family(

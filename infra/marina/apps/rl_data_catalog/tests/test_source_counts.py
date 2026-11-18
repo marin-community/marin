@@ -74,6 +74,32 @@ def test_sample_tolerance_display_preserves_counts_and_full_finality(provisional
         assert displayed.quality.value == "SAMPLE"
 
 
+def test_sample_coverage_display_uses_the_recorded_oversight_coverage() -> None:
+    declaration = {
+        "id": "Marin:recovered",
+        "oversight": "sample",
+        "oversight_evidence": {"level": "sample", "reviewed": 212767, "verification": "carried evidence"},
+        "within_source_dedup": {"unique_count": 438810},
+        "quality_result": {"reviewed": 96, "sample_count": 100},
+    }
+    displayed = quality_display(declaration, None, None)
+    assert displayed.quality.value == "SAMPLE"
+    assert displayed.review_status == "SAMPLE, 212,767 of 438,810 reviewed"
+
+
+def test_sample_coverage_display_stays_bare_without_recorded_coverage() -> None:
+    declaration = {
+        "id": "Marin:plain",
+        "oversight": "sample",
+        "oversight_evidence": {"level": "sample", "reviewed": None, "verification": "panel only"},
+        "within_source_dedup": {"unique_count": 438810},
+        "quality_result": {"reviewed": 96, "sample_count": 100},
+    }
+    displayed = quality_display(declaration, None, None)
+    assert displayed.quality.value == "SAMPLE"
+    assert displayed.review_status is None
+
+
 @pytest.mark.parametrize(
     "status,admitted,state",
     [("Excluded", 0, "excluded"), ("Deprecated", 0, "excluded"), ("Pending", None, "pending")],

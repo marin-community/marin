@@ -120,6 +120,10 @@ def population_identities(
     return identities
 
 
+class NormalizationRefused(ValueError):
+    """The absent-versus-null normalization does not hold for this population pair."""
+
+
 class ContractNormalization(BaseModel):
     """Typed absent-versus-explicit-null equivalence between two contract pins.
 
@@ -170,7 +174,7 @@ def build_normalization_receipt(
     """
     spec_field = TaskSpec.model_fields.get(field)
     if spec_field is None or spec_field.default is not None:
-        raise ValueError(f"Normalization requires a TaskSpec field whose documented default is None: {field}")
+        raise NormalizationRefused(f"Normalization requires a TaskSpec field whose documented default is None: {field}")
     original = SourceTextPopulation.raw_load(original_artifact)
     reissued = SourceTextPopulation.raw_load(reissued_artifact)
     original_documents = {document["id"]: document for document in _population_documents(original)}
@@ -185,16 +189,18 @@ def build_normalization_receipt(
         earlier_has = field in earlier_document
         current_has = field in current_document
         if earlier_has == current_has:
-            raise ValueError(
+            raise NormalizationRefused(
                 f"Normalization refused for {task_id}: {field} must be absent on one side and present on the other"
             )
         present = earlier_document if earlier_has else current_document
         if present[field] is not None:
-            raise ValueError(f"Normalization refused for {task_id}: {field} is explicitly set to a non-null value")
+            raise NormalizationRefused(
+                f"Normalization refused for {task_id}: {field} is explicitly set to a non-null value"
+            )
         if contract_identity(earlier_document, normalized_fields={field}) != contract_identity(
             current_document, normalized_fields={field}
         ):
-            raise ValueError(f"Normalization refused for {task_id}: the contracts differ beyond {field}")
+            raise NormalizationRefused(f"Normalization refused for {task_id}: the contracts differ beyond {field}")
         normalized_identity = contract_identity(earlier_document, normalized_fields={field})
         normalized_map[task_id] = normalized_identity
         evidence_rows.append(
@@ -206,7 +212,7 @@ def build_normalization_receipt(
             }
         )
     if not shared:
-        raise ValueError(f"Normalization refused: the populations share no tasks: {source_id}")
+        raise NormalizationRefused(f"Normalization refused: the populations share no tasks: {source_id}")
     table = pa.Table.from_pylist(evidence_rows, schema=NORMALIZATION_EVIDENCE_SCHEMA)
     with StoragePath(evidence_url).open("wb", auto_mkdir=True) as stream:
         pq.write_table(table, stream, compression="zstd")
@@ -645,6 +651,27 @@ def merged_review_result(
     )
 
 
+def panel_observations(receipt: SampleQCReceipt) -> tuple[ReviewRecord, ...]:
+    """Read a receipt's fixed-panel observations with their frozen bytes verified."""
+    panel = receipt.review.panel
+    if file_sha256(StoragePath(panel.panel_path)) != panel.panel_sha256:
+        raise ValueError(f"Sample panel changed: {receipt.source_id}")
+    records = StoragePath(receipt.review.records_path)
+    if file_sha256(records) != receipt.review.records_sha256:
+        raise ValueError(f"Sample observations changed after review: {receipt.source_id}")
+    with records.open("rb") as stream:
+        rows = pq.read_table(stream).to_pylist()
+    reviews = []
+    for row in rows:
+        review = ReviewRecord.model_validate_json(row["review"])
+        if review.task_id != row["task_id"]:
+            raise ValueError(f"Sample observation belongs to another task: {receipt.source_id}")
+        reviews.append(review)
+    if len(reviews) != panel.sample_size or len({review.task_id for review in reviews}) != panel.sample_size:
+        raise ValueError(f"Sample observations do not cover the panel exactly once: {receipt.source_id}")
+    return tuple(reviews)
+
+
 class SampleRecovery(BaseModel):
     """One source's recovered evidence under the augmented SAMPLE oversight rules.
 
@@ -666,8 +693,9 @@ class SampleRecovery(BaseModel):
     level: OversightLevel
     full: bool
     panel_result: SourceQualityResult
-    reviewer: dict
-    """The carried reviews' original reviewer identity, recorded verbatim."""
+    reviewers: tuple[dict, ...]
+    """Every carried review's original reviewer identity, recorded verbatim and
+    never relabeled; the current receipt's reviewer stands when nothing carries."""
 
 
 def sample_recovery_outcome(
@@ -676,7 +704,7 @@ def sample_recovery_outcome(
     panel_reviews: tuple[ReviewRecord, ...],
     carried: tuple[CarriedReview, ...],
     *,
-    reviewer: dict,
+    reviewers: tuple[dict, ...],
 ) -> SampleRecovery:
     """Recover one source's SAMPLE evidence with carried prior reviews joined in.
 
@@ -705,7 +733,7 @@ def sample_recovery_outcome(
         level=merged.level,
         full=merged.level is OversightLevel.FULL,
         panel_result=panel_result,
-        reviewer=reviewer,
+        reviewers=reviewers,
     )
 
 
