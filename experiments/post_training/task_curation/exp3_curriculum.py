@@ -15,11 +15,22 @@ This module records that mix as the equivalent weighted curriculum over the seve
 ``data_source`` populations the run's telemetry resolves reward domains by. Each
 source's weight is its route's batch share times its row share inside the route
 pool, so composing every training window with these weights reproduces the run's
-per-window composition exactly at the route level and in expectation within each
-route. The seed is the run's trainer seed. Resolving the curriculum against the
+per-window composition exactly at the route level; within each route the
+trainer's largest-remainder apportionment realizes the row-share weights as
+integer per-source quotas, rounded within one group per window. The seed is the
+run's trainer seed. Resolving the curriculum against the
 catalog reproduces what .55 consumed, source by source; the per-source task
 counts come from the adopted releases' pinned provenance, so the curriculum and
 the release verification cannot drift apart.
+
+Sampling contract: the trainer's domain-weighted sampler resolves pool rows by
+their ``teacher_route`` column and rejects unknown routes. The recorded .55
+parquets carry ``data_source`` provenance and no ``teacher_route`` column — the
+run routed groups through ``source_routes`` and consumed route quotas, not
+through this sampler. A launch that samples this curriculum therefore needs a
+pool whose rows carry these labels (the per-source stamp is the planned
+``teacher_route`` stamping follow-up); against the recorded pool the curriculum
+is the mix's record, not an executable sampler config.
 """
 
 from types import MappingProxyType
@@ -39,6 +50,9 @@ from experiments.post_training.task_curation.source import RlDataSource
 
 CURRICULUM_NAME = "long-loop/exp3-rl"
 CURRICULUM_VERSION = "2026.11.17.55"
+RUN_ID = "users/benfeuer/checkpoints/mochi-exp3-rl-ib-2026.11.17.55"
+WANDB_RUN = "marin-community/marin-long-loop/f7m70xhc"
+
 SEED = 20261020
 BATCH_GROUPS = 64
 ROUTE_QUOTAS = MappingProxyType({"agentic": 32, "nonagentic": 32})
