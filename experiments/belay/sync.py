@@ -16,6 +16,7 @@ import logging
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import s3fs
@@ -23,7 +24,7 @@ import wandb
 
 from experiments.belay.branch import git
 from experiments.belay.config import CONFIG, COREWEAVE_S3_ENDPOINT
-from experiments.belay.page import call, gh_api, mark_reviewed, page_state, session_credentials
+from experiments.belay.page import TERMINAL_RUN_STATES, call, gh_api, mark_reviewed, page_state, session_credentials
 from experiments.belay.registry_entry import reset_registry_checkout
 from experiments.belay.submit import iris_jobs, job_started
 
@@ -80,6 +81,58 @@ def run_total_steps(config: dict) -> int | None:
     return config.get("stop_after_steps") or trainer.get("num_train_steps")
 
 
+@dataclass(frozen=True)
+class IrisRun:
+    """A Belay run as Iris lists it: its coordinator job, its training job (once placed) and their joint state."""
+
+    job_id: str
+    train_id: str | None
+    state: str
+    submitted_at: str
+
+
+def iris_runs() -> dict[str, IrisRun]:
+    """Every Belay run on Iris, by run name, from its coordinator job and its training child."""
+    coords, trains = {}, {}
+    for job in iris_jobs():
+        parts = job.job_id.strip("/").split("/")
+        if len(parts) == 2 and parts[1].endswith("-coord"):
+            coords[parts[1].removesuffix("-coord")] = job
+        elif len(parts) == 3 and parts[1].endswith("-coord"):
+            trains[parts[1].removesuffix("-coord")] = job
+    runs = {}
+    for name, coord in coords.items():
+        train = trains.get(name)
+        state = _run_state(coord.state, None if train is None else train.state)
+        runs[name] = IrisRun(coord.job_id, None if train is None else train.job_id, state, coord.submitted_at)
+    return runs
+
+
+def light_sync() -> dict:
+    """The dispatch watch's minute check: report each run the page still shows live that Iris shows ended (which
+    queues its run_finished event), then return what dispatch needs: the queued event ids, whether a session is
+    running, and whether dispatch is on. Iris only: no W&B, storage, registry or GitHub, which the full sync does."""
+    state = call("agent/state")
+    live = {r["name"] for r in state["runs"] if r["state"] not in TERMINAL_RUN_STATES}
+    ended = []
+    if live:
+        runs = iris_runs()
+        ended = [
+            {"name": name, "job_id": run.job_id, "state": run.state, "nodes": 1, "submitted_at": run.submitted_at}
+            for name, run in runs.items()
+            if name in live and run.state in TERMINAL_RUN_STATES
+        ]
+    if ended:
+        call("agent/sync/runs", {"runs": ended})
+        state = call("agent/state")
+    return {
+        "ended": [r["name"] for r in ended],
+        "queued_event_ids": [e["id"] for e in state["queued"]],
+        "session_active": any(s["state"] == "running" for s in state["sessions"]),
+        "dispatch_enabled": state["settings"]["dispatch_enabled"],
+    }
+
+
 class Watcher:
     """One pass (``tick``) reports Belay's Iris runs with their W&B progress, the registry's results when the registry
     branch moved, and storage use at most hourly. ``token`` is the local demo's service token; on Marina the caller's
@@ -108,26 +161,16 @@ class Watcher:
 
     def runs(self) -> list[dict]:
         self.wandb = wandb.Api()  # a fresh client per tick: Api caches each Run it has loaded
-        coords, trains, submitted = {}, {}, {}
-        for job in iris_jobs():
-            parts = job.job_id.strip("/").split("/")
-            if len(parts) == 2 and parts[1].endswith("-coord"):
-                name = parts[1].removesuffix("-coord")
-                coords[name] = (job.job_id, job.state)
-                submitted[name] = job.submitted_at
-            elif len(parts) == 3 and parts[1].endswith("-coord"):
-                trains[parts[1].removesuffix("-coord")] = (job.job_id, job.state)
         reports = []
-        for name, (job_id, coord_state) in coords.items():
-            train_id, train_state = trains.get(name, (None, None))
-            state = _run_state(coord_state, train_state)
+        for name, run in iris_runs().items():
+            job_id, train_id, state, submitted_at = run.job_id, run.train_id, run.state, run.submitted_at
             report = {
                 "name": name,
                 "job_id": job_id,
                 "state": state,
                 "nodes": 1,
                 "total_steps": None,
-                "submitted_at": submitted.get(name),
+                "submitted_at": submitted_at,
             }
             if name in self.final:
                 report.update(self.final[name])
