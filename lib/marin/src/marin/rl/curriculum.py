@@ -10,14 +10,13 @@ either ``weighted`` (weight-random draws that compose every training window into
 mixture, the vendored trainer's ``weighted_quotas`` behavior) or ``ordered`` (a deterministic stage
 sequence the trainer consumes in order).
 
-The fingerprint covers the source pins, the weights, the stage order and quotas, and the seed, so
-two curricula sample identically iff they fingerprint identically. An RL run's launch document
-records the full curriculum and the run's artifact record names it, so any run's task mix is
-recoverable. See ``docs/references/rl-curricula.md``.
+The fingerprint covers the source pins, the weights, the stage order and quotas, and the seed.
+An RL run's launch document records the intended curriculum, and the run's artifact record names
+it. The training pool remains a separate input. See ``docs/references/rl-curricula.md``.
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import cast
 
@@ -66,7 +65,7 @@ class CurriculumStage:
 
     label: str
     quota: int | None = None
-    """Prompts consumed before the next stage; ``None`` runs one full pass over the label's rows."""
+    """Prompts consumed before the next stage; ``None`` draws the pool's row count."""
 
 
 @dataclass(frozen=True)
@@ -79,7 +78,7 @@ class RlCurriculum:
     entries: tuple[CurriculumEntry, ...]
     stages: tuple[CurriculumStage, ...]
     seed: int
-    fingerprint: str
+    fingerprint: str = field(init=False)
 
     def __post_init__(self) -> None:
         validate_path_segment("name", self.name)
