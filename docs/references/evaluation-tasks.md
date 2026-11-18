@@ -18,7 +18,6 @@ remain separate work; this path produces no headline score or legacy
 | `marin.rollouts.evaluation` | Corpus scheduling, attempt bookkeeping, FineStore writes, resume, and reuse of stored model responses |
 | `rolloutengine` | Single-attempt execution, harnesses, and chat, completion, and likelihood transport |
 | `experiments.evaluation.task_driver` | CLI, endpoint and credential binding, retry/backoff, Shellbox factories, and Iris submission |
-| `experiments.evaluation.regrade_report` | Per-attempt grade comparison of a regraded run with the run it reused |
 | Shellbox | Machine isolation, resource access, and outer execution deadlines |
 
 `EvaluationCorpusRecipe` in `experiments.evaluation.preparation` binds source
@@ -258,26 +257,6 @@ Raw evidence names the source root, its run identity, and the evidence blob in
 that reuses its own response after a grading failure does. The source root is
 not part of the run identity. Without `--local`, the run goes to Iris as usual,
 and the source root must be shared object storage as well.
-
-Compare the regraded run with its source:
-
-```bash
-uv run --package marin-core --group test python \
-  -m experiments.evaluation.regrade_report \
-  --source scratch/eval-run \
-  --regrade scratch/eval-run-regraded \
-  --changes scratch/eval-run-changes.jsonl
-```
-
-For each benchmark the report counts the regraded run's terminal attempts and
-those that reused the source attempt's own model response. Over the reused
-attempts scored in both runs, it gives the mean reward before and after and how
-many rewards rose or fell. `--changes` writes each reused attempt whose outcome,
-reward, or extracted answer changed, with both grades, as JSON lines. Attempts
-that needed a new model response are not compared. The grade before is that of
-the source attempt whose evidence blob the provenance names, so a source run
-resumed after the regrade still pairs. A run with two corpora of one benchmark
-is refused.
 
 ## Summary semantics
 
