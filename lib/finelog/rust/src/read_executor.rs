@@ -11,14 +11,15 @@ use tokio::task::{JoinError, JoinSet};
 
 const READ_NICE: i32 = if cfg!(target_os = "linux") { 5 } else { 0 };
 
-/// CPU-bounded workers owned by one public RPC server.
+/// Public-read workers owned by one RPC server.
 pub struct ReadExecutor {
     runtime: Option<Runtime>,
     cpus: Vec<usize>,
 }
 
 impl ReadExecutor {
-    /// Reserve half the process CPU budget from public read execution.
+    /// Use half the available worker budget, rounded down with a minimum of one.
+    /// Reserve separate CPU capacity only on multicore Linux hosts.
     pub fn for_process() -> io::Result<Self> {
         let (available, parallelism) = process_capacity()?;
         let parallelism = parallelism.min(available.len());
@@ -52,7 +53,7 @@ impl ReadExecutor {
         })
     }
 
-    /// CPU IDs selected for this executor's workers.
+    /// Selected Linux CPU IDs, or synthetic worker indices on other platforms.
     pub fn cpus(&self) -> &[usize] {
         &self.cpus
     }
@@ -204,29 +205,9 @@ mod tests {
                 }
             },
         ));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-            )
-            .await
-            .unwrap()
-        });
-        let (started, started_rx) = tokio::sync::oneshot::channel();
-        let (release, release_rx) = std::sync::mpsc::channel::<()>();
-        let worker = Arc::clone(&executor);
-        let blocked = tokio::spawn(async move {
-            worker
-                .run(async move {
-                    started.send(()).unwrap();
-                    let _ = release_rx.recv();
-                })
-                .await
-                .unwrap()
-        });
-        started_rx.await.unwrap();
+        let (address, server) = crate::server::test_support::serve_app(app).await;
+        let (release, blocked) =
+            crate::test_support::block_worker(executor.runtime.as_ref().unwrap().handle()).await;
         let mut query = tokio::spawn(async move {
             crate::server::test_support::stats_client(address)
                 .query(crate::proto::finelog::stats::QueryRequest::default().with_sql("SELECT 1"))

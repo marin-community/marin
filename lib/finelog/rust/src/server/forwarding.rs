@@ -1048,7 +1048,7 @@ where
         let scan_elapsed = scan_started.elapsed();
 
         let encode_started = Instant::now();
-        let rows = ship_batches(result, &self.config.cluster)?;
+        let rows = prepare_forward_batches(result, &self.config.cluster)?;
         let encode_elapsed = encode_started.elapsed();
         let row_count: usize = rows.iter().map(|(batch, _)| batch.num_rows()).sum();
         let complete_window = row_count < batch_rows as usize;
@@ -1335,7 +1335,7 @@ fn quote_ident(name: &str) -> String {
 }
 
 /// Stamp each batch's origin and return its source sequences separately.
-fn ship_batches(
+fn prepare_forward_batches(
     result: QueryResult,
     cluster: &str,
 ) -> Result<Vec<(RecordBatch, Int64Array)>, StatsError> {

@@ -651,7 +651,7 @@ fn forwarding_read_window_is_bounded_by_ordered_segment_ranges() {
 }
 
 #[test]
-fn ship_batches_preserves_a_read_larger_than_the_string_offset_limit() {
+fn prepare_forward_batches_preserves_a_read_larger_than_the_string_offset_limit() {
     let data = Arc::new(StringArray::from(vec!["x".repeat(1 << 20)]));
     let schema = Arc::new(ArrowSchema::new(vec![
         Field::new(IMPLICIT_SEQ_COLUMN, DataType::Int64, false),
@@ -673,7 +673,7 @@ fn ship_batches_preserves_a_read_larger_than_the_string_offset_limit() {
             .unwrap()
         })
         .collect();
-    let shipped = ship_batches(
+    let shipped = prepare_forward_batches(
         QueryResult {
             schema,
             batches,
@@ -721,7 +721,8 @@ fn bounded_batch_coalescing_preserves_rows_and_sequence_order() {
             )
         })
         .collect();
-    let chunks = chunk_batches_by_bytes(batches, 4096).unwrap();
+    let max_bytes = 4096;
+    let chunks = chunk_batches_by_bytes(batches, max_bytes).unwrap();
     assert!(chunks.len() > 1);
     assert!(
         chunks.len() < 12,
@@ -729,7 +730,7 @@ fn bounded_batch_coalescing_preserves_rows_and_sequence_order() {
     );
     let mut received = Vec::new();
     for (ipc, last_seq) in chunks {
-        assert!(ipc.len() <= 4096);
+        assert!(ipc.len() <= max_bytes);
         let batch = decode_one_record_batch(&ipc).unwrap();
         let data = batch.column_by_name("data").unwrap().as_string::<i32>();
         received.extend(data.iter().map(|value| value.unwrap().to_string()));

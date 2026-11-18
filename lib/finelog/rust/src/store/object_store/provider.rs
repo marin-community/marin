@@ -38,7 +38,7 @@ impl Provider {
             let (bucket, prefix) = split_bucket_and_prefix(rest);
             let backend = object_store::gcp::GoogleCloudStorageBuilder::from_env()
                 .with_bucket_name(bucket)
-                .with_http_connector(ingestion_connector()?)
+                .with_http_connector(store_http_connector()?)
                 .build()
                 .map_err(|error| {
                     StatsError::Internal(format!("build gcs store {bucket:?}: {error}"))
@@ -83,7 +83,7 @@ impl Provider {
     ) -> Result<Self, StatsError> {
         let backend = builder
             .with_bucket_name(bucket)
-            .with_http_connector(ingestion_connector()?)
+            .with_http_connector(store_http_connector()?)
             .build()
             .map_err(|error| StatsError::Internal(format!("build s3 store {bucket:?}: {error}")))?;
         Ok(Self {
@@ -261,11 +261,11 @@ impl Provider {
     }
 }
 
-fn ingestion_connector() -> Result<SpawnedReqwestConnector, StatsError> {
-    // Capture the store-opening runtime, before a query can open a pooled
-    // connection on a CPU-bound read worker and strand later flush uploads.
+fn store_http_connector() -> Result<SpawnedReqwestConnector, StatsError> {
+    // Keep HTTP I/O with the runtime that opened the store, regardless of
+    // which runtime later polls individual reads or writes.
     let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
-        StatsError::Internal(format!("open remote store on ingestion runtime: {error}"))
+        StatsError::Internal(format!("open remote store on its I/O runtime: {error}"))
     })?;
     Ok(SpawnedReqwestConnector::new(runtime))
 }
@@ -348,13 +348,7 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            let (started, started_rx) = tokio::sync::oneshot::channel();
-            let (release, release_rx) = std::sync::mpsc::channel::<()>();
-            let blocked = reads.spawn(async move {
-                started.send(()).unwrap();
-                let _ = release_rx.recv();
-            });
-            started_rx.await.unwrap();
+            let (release, blocked) = crate::test_support::block_worker(reads.handle()).await;
             let upload = tokio::time::timeout(
                 Duration::from_secs(5),
                 backend.put(

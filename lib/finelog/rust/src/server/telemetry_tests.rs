@@ -117,16 +117,7 @@ async fn serve_with_config(store: Arc<Store>, config: ServerConfig) -> SocketAdd
         config,
         Arc::new(ReadExecutor::for_process().unwrap()),
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
+    let (addr, _) = crate::server::test_support::serve_app(app).await;
     addr
 }
 

@@ -227,7 +227,7 @@ mod tests {
         let result = run_chain(
             &chain,
             request(
-                "/finelog.stats.StatsService/Query",
+                STATS_SERVICE_QUERY_SPEC.procedure,
                 Some(Instant::now() + Duration::from_millis(25)),
             ),
             |_| async {
@@ -247,7 +247,7 @@ mod tests {
         let release = Notify::new();
         let query = run_chain(
             &chain,
-            request("/finelog.stats.StatsService/Query", None),
+            request(STATS_SERVICE_QUERY_SPEC.procedure, None),
             |_| async {
                 release.notified().await;
                 Ok(ok_response())
@@ -257,7 +257,7 @@ mod tests {
         assert!(futures::poll!(query.as_mut()).is_pending());
         let fetch = run_chain(
             &chain,
-            request("/finelog.logging.LogService/FetchLogs", None),
+            request(LOG_SERVICE_FETCH_LOGS_SPEC.procedure, None),
             |_| async { Ok(ok_response()) },
         );
         futures::pin_mut!(fetch);
@@ -281,8 +281,8 @@ mod tests {
     async fn read_deadline_cancels_handler_and_releases_admission() {
         let chain: Vec<Arc<dyn Interceptor>> = vec![Arc::new(ConcurrencyInterceptor::new(1))];
         for procedure in [
-            "/finelog.stats.StatsService/Query",
-            "/finelog.logging.LogService/FetchLogs",
+            STATS_SERVICE_QUERY_SPEC.procedure,
+            LOG_SERVICE_FETCH_LOGS_SPEC.procedure,
         ] {
             let held = Semaphore::new(1);
             let result = run_chain(&chain, request(procedure, None), |_| async {
@@ -350,7 +350,7 @@ mod tests {
         // A 1ms threshold against a 20ms terminal -> exactly one WARN.
         let n = slow_warn_count(
             SlowRpcInterceptor::new(1),
-            "/finelog.logging.LogService/FetchLogs",
+            LOG_SERVICE_FETCH_LOGS_SPEC.procedure,
             Duration::from_millis(20),
         )
         .await;
@@ -362,7 +362,7 @@ mod tests {
         // A huge threshold against a fast terminal -> no WARN.
         let n = slow_warn_count(
             SlowRpcInterceptor::new(100_000),
-            "/finelog.stats.StatsService/Query",
+            STATS_SERVICE_QUERY_SPEC.procedure,
             Duration::from_millis(1),
         )
         .await;
@@ -376,7 +376,7 @@ mod tests {
             .with_method_threshold("FetchLogs", 0);
         let n = slow_warn_count(
             interceptor,
-            "/finelog.logging.LogService/FetchLogs",
+            LOG_SERVICE_FETCH_LOGS_SPEC.procedure,
             Duration::from_millis(20),
         )
         .await;
@@ -389,7 +389,7 @@ mod tests {
         let interceptor = SlowRpcInterceptor::new(1).with_method_threshold("Query", 0);
         let n = slow_warn_count(
             interceptor,
-            "/finelog.logging.LogService/FetchLogs",
+            LOG_SERVICE_FETCH_LOGS_SPEC.procedure,
             Duration::from_millis(20),
         )
         .await;
@@ -427,7 +427,7 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 run_chain(
                     &chain,
-                    request("/finelog.logging.LogService/FetchLogs", None),
+                    request(LOG_SERVICE_FETCH_LOGS_SPEC.procedure, None),
                     move |_req| {
                         let in_flight = Arc::clone(&in_flight);
                         let peak = Arc::clone(&peak);
@@ -532,7 +532,7 @@ mod tests {
         let past = Instant::now() - Duration::from_secs(1);
         let result = run_chain(
             &chain,
-            request("/finelog.logging.LogService/FetchLogs", Some(past)),
+            request(LOG_SERVICE_FETCH_LOGS_SPEC.procedure, Some(past)),
             move |_req| {
                 let ran2 = Arc::clone(&ran2);
                 async move {

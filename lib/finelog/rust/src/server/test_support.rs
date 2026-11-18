@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use axum::response::IntoResponse;
+use axum::Router;
 use connectrpc::client::{ClientBody, ClientConfig, ServiceTransport};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client as HyperClient;
@@ -138,6 +139,21 @@ pub fn stats_client(addr: SocketAddr) -> StatsServiceClient<TestTransport> {
     StatsServiceClient::new(transport, config)
 }
 
+/// Serve a test app with the same connection metadata as the production listener.
+pub async fn serve_app(app: Router) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    (addr, server)
+}
+
 /// Serve `store` on an ephemeral loopback port under `policy`, counting the RPC
 /// requests that reach it. Returns the address and that counter.
 pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<RequestStats>) {
@@ -161,16 +177,7 @@ pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<Re
             }
         },
     ));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
+    let (addr, _) = serve_app(app).await;
     (addr, requests)
 }
 
@@ -221,16 +228,7 @@ pub async fn serve_with_outage(
             }
         },
     ));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
+    let (addr, _) = serve_app(app).await;
     (addr, requests, outage)
 }
 
@@ -293,10 +291,6 @@ async fn serve_error(
             }
         },
     ));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+    let (addr, _) = serve_app(app).await;
     (addr, requests)
 }

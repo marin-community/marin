@@ -39,8 +39,8 @@ pub struct RemoteObjectStore {
 /// Build the remote store from `remote_log_dir`, or `None` when sync is
 /// disabled (empty string).
 ///
-/// Open cloud providers within the ingestion Tokio runtime. Their HTTP I/O
-/// stays there even when scans execute on another runtime.
+/// Open cloud providers within the Tokio runtime that will own their HTTP I/O.
+/// It stays there even when operations are polled on another runtime.
 ///
 /// `gs://bucket/sub/dir` -> a GCS store on `bucket` with prefix `sub/dir`.
 /// `s3://bucket/sub/dir` -> an S3-compatible store on `bucket` with prefix
