@@ -372,6 +372,30 @@ def scale_with_grug_muonh_radial(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+def _multi_transform_when_used(
+    transforms: dict[str, optax.GradientTransformation],
+    optional: dict[str, optax.GradientTransformation],
+    labels_fn,
+) -> optax.GradientTransformationExtraArgs:
+    """``optax.multi_transform`` over ``transforms`` plus each ``optional`` group that labels some parameter, so a model
+    without that parameter keeps its optimizer state unchanged."""
+
+    def build(params) -> optax.GradientTransformationExtraArgs:
+        used = set(jax.tree.leaves(labels_fn(params)))
+        groups = {**transforms, **{name: tx for name, tx in optional.items() if name in used}}
+        return optax.multi_transform(
+            {name: _named_scope_transform(f"opt_{name}", tx) for name, tx in groups.items()}, labels_fn
+        )
+
+    def init_fn(params):
+        return build(params).init(params)
+
+    def update_fn(updates, state, params=None, **extra_args):
+        return build(params).update(updates, state, params, **extra_args)
+
+    return optax.GradientTransformationExtraArgs(init_fn, update_fn)
+
+
 def _is_matrix_stack(x) -> bool:
     return hasattr(x, "ndim") and x.ndim >= 2
 
@@ -384,6 +408,10 @@ _ADAM_LEAVES = re.compile(
     r"(?:^|\.)(value_embed|ve_lambda|ve_gate|head_ve_lambda|head_ve_gate|head_ve_gain|qk_mult"
     r"|pointer_w|pointer_b|pointer_open)$"
 )
+# ``full_bandwidth_passes``' zero-initialised W_fuse: plain Muon at the MuonH LR (a hyperball step keeps a zero matrix at
+# zero), in its own group present only when the model has it.
+_FULL_BANDWIDTH_FUSE = re.compile(r"(?:^|\.)full_bandwidth_fuse$")
+FULL_BANDWIDTH_MUON_GROUP = "full_bandwidth_muon"
 # Matrices whose output passes through a scale-removing norm, so their radial gradient is zero: the softmax layers'
 # q/k projections under the q/k norms (``qk_norm``, or ``mla_q_norm``/``mla_k_norm``), the MLA KV down-projection
 # (``kv_latent_norm``) and the MoE latent down-projection (``latent_norm``). They keep plain MuonH under
@@ -489,6 +517,20 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 _match_named_update_sharding(),
             )
 
+        def muon_at(lr):
+            return optax.chain(
+                _grug_scale_with_muon(
+                    momentum=self.momentum,
+                    nesterov=self.nesterov,
+                    steps=self.backend_steps,
+                    muon_eps=self.muon_epsilon,
+                    coefficient_type=self.coefficient_type,
+                    pre_norm=self.muon_pre_norm,
+                ),
+                optax.scale(-lr),
+                _match_named_update_sharding(),
+            )
+
         def adam_moments(beta1, beta2):
             if not self.adam_ademamix_alpha:
                 return optax.scale_by_adam(beta1, beta2, self.epsilon)
@@ -545,8 +587,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if self.muonh_radial_softcap:
                 transforms["muonh_radial"] = muonh_radial_at(learning_rate)
                 transforms["kda_beta_radial"] = muonh_radial_at(learning_rate * KDA_BETA_LR_MULT)
-            return optax.multi_transform(
-                {name: _named_scope_transform(f"opt_{name}", tx) for name, tx in transforms.items()}, self.create_mask
+            return _multi_transform_when_used(
+                transforms, {FULL_BANDWIDTH_MUON_GROUP: muon_at(learning_rate)}, self.create_mask
             )
 
         return optax.inject_hyperparams(optimizer)(learning_rate=learning_rate_schedule, adam_lr=adam_lr_schedule)
@@ -575,6 +617,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
         def group_fn(param, path):
             path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
+            if _FULL_BANDWIDTH_FUSE.search(path_lower):
+                return FULL_BANDWIDTH_MUON_GROUP
             kda_leaf = _kda_leaf(path_lower)
             if kda_leaf == _KDA_BETA_LEAF:
                 return "kda_beta_adam" if self.kda_beta_group == "adam" else self.kda_beta_group

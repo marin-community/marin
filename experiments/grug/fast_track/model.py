@@ -54,7 +54,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 from experiments.grug.fast_track.cplm import CopyHead, bound_case_tables, plus_nll
 from experiments.grug.fast_track.key_offset import partial_key_offset
 from experiments.grug.fast_track.pointer import PointerHead, pointer_candidates, pointer_mixture_nll
-from experiments.grug.fast_track.qb_balancing import qb_beta_hist
+from experiments.grug.fast_track.qb_balancing import qb_beta_hist, qb_beta_hist_pooled
 from experiments.grug.fast_track.router_metrics import (
     local_routing_stats,
     reduce_router_stats,
@@ -89,6 +89,10 @@ _ENTROPY_PRED = "entropy_pred"
 _ENTROPY_CHUNK = 1024
 # Per-layer branch-output stats, stacked over layers like the router stats.
 _OUTSTAT_PREFIX = "outstat/"
+# ``full_bandwidth_passes``: each MoE layer's routing margins ``[T, E]`` (stop-gradient), pooled over the passes into
+# one QB threshold, and the earlier passes' final hidden states ``[passes - 1, B, S, D]``, from the forward to the loss.
+_QB_MARGINS = "qb_margins"
+_FULL_BANDWIDTH_EARLIER = "full_bandwidth_earlier_hidden"
 
 # Kimi K3's KDA layer: low-rank forget-gate width, and the per-token log-decay floor
 # ``g = -KDA_MIN_LOG_DECAY * sigmoid(...)``.
@@ -481,8 +485,19 @@ class GrugModelConfig:
     up to 8 candidate next tokens copied from after the most recent earlier unigram and bigram matches in its
     document, trained and evaluated on the mixture loss. Its zero-initialised ``w`` ``[D, 8]``, ``b`` ``[8, 8]`` and
     ``o`` are on Adam without decay. Excludes ``cplm_plus`` and ``lm_head_bilinear``."""
+    full_bandwidth_passes: int = 0
+    """Full Bandwidth Transformer (arXiv 2608.08888): the trunk runs this many passes over the sequence with every
+    weight shared, and pass ``p``'s input at token ``t`` is ``rms_norm(x_t + W_fuse rms_norm(h_{t-1}))``, ``x_t`` the
+    pass-1 input (the normed embedding) and ``h_{t-1}`` pass ``p - 1``'s final hidden state (the lm_head input) at
+    the previous token. Position 0 and every document start take the plain ``x_t``. ``W_fuse`` ``[D, D]`` is
+    zero-initialised, on plain Muon at the MuonH LR (no hyperball, no decay). Each pass has its own AttnRes history,
+    KDA state and routing; the QB bias is fitted once per batch from every pass's routing margins. Training loss:
+    pass 1's CE plus the mean CE of the later passes; evaluation scores the last pass. 0: off (one pass); else >= 2.
+    Excludes ``cplm_plus`` and ``pointer_mixture``."""
 
     def __post_init__(self) -> None:
+        if self.full_bandwidth_passes and (self.full_bandwidth_passes < 2 or self.cplm_plus or self.pointer_mixture):
+            raise ValueError("full_bandwidth_passes must be 0 or >= 2, and excludes cplm_plus and pointer_mixture")
         if self.lm_head_value_embeds and (
             not (self.mla and self.attn_res) or self.value_embeds != ValueEmbeds.NONE or self.lm_head_bilinear
         ):
@@ -1299,6 +1314,8 @@ class MoEMLP(eqx.Module):
         router_stats[f"{_OUTSTAT_PREFIX}moe_active_k"] = jnp.asarray(float(k), jnp.float32)
         router_stats["margin_min"] = margin_min
         router_stats["margin_max"] = margin_max
+        if self.cfg.full_bandwidth_passes:
+            router_stats[_QB_MARGINS] = reshard(jax.lax.stop_gradient(router_logits - alpha), P(_BATCH_AXES, None))
 
         routed_input = x_flat
         if self.w_latent_down is not None and self.latent_norm is not None:
@@ -1955,6 +1972,7 @@ class Transformer(eqx.Module):
     token_embed_ngram_space: Float[Array, " D"] | None
     token_embed_ngram_case: Float[Array, "C D"] | None
     spelling_ngram_norm: RMSNorm | None
+    full_bandwidth_fuse: Float[Array, "D D"] | None  # cfg.full_bandwidth_passes: W_fuse, zero-initialised
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -2046,6 +2064,11 @@ class Transformer(eqx.Module):
             token_embed_ngram_space=token_embed_ngram_space,
             token_embed_ngram_case=token_embed_ngram_case,
             spelling_ngram_norm=spelling_ngram_norm,
+            full_bandwidth_fuse=(
+                reshard(jnp.zeros((cfg.hidden_dim, cfg.hidden_dim), jnp.float32), P(None, None))
+                if cfg.full_bandwidth_passes
+                else None
+            ),
             config=cfg,
         )
 
@@ -2158,69 +2181,125 @@ class Transformer(eqx.Module):
         short_lower_bounds = _batch_reshard(short_lower_bounds)
         valid = _batch_reshard(valid)
 
-        final_gate_stats: dict[str, jax.Array] = {}
-        if cfg.attn_res:
-            hidden, stacked_router_stats, final_gate_stats = self._attn_res_layers(
-                hidden,
-                token_ids,
-                long_mask.with_fa4_bounds(long_lower_bounds, valid),
-                long_mask.with_fa4_bounds(short_lower_bounds, valid),
-                layer_skip,
-                extra_mlp_active,
-                self._spelling_sources(token_ids),
-                self._head_value_embeds(token_ids) if cfg.lm_head_value_embeds else None,
-            )
-        else:
-            if layer_skip is not None:
-                raise ValueError("layer_skip needs attn_res")
-            # One compiled Block body scanned over the stacked layers; per-layer short/long is a
-            # Bool[num_layers] scan input, and the FA4 metadata is selected per layer with jnp.where.
-            mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every)
+        def trunk(
+            hidden: Float[Array, "B S D"], grad_probe: Float[Array, "B S"] | None
+        ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+            """One pass of the layers and the final norms over the trunk input ``hidden``."""
+            final_gate_stats: dict[str, jax.Array] = {}
+            if cfg.attn_res:
+                hidden, stacked_router_stats, final_gate_stats = self._attn_res_layers(
+                    hidden,
+                    token_ids,
+                    long_mask.with_fa4_bounds(long_lower_bounds, valid),
+                    long_mask.with_fa4_bounds(short_lower_bounds, valid),
+                    layer_skip,
+                    extra_mlp_active,
+                    self._spelling_sources(token_ids),
+                    self._head_value_embeds(token_ids) if cfg.lm_head_value_embeds else None,
+                )
+            else:
+                if layer_skip is not None:
+                    raise ValueError("layer_skip needs attn_res")
+                # One compiled Block body scanned over the stacked layers; per-layer short/long is a
+                # Bool[num_layers] scan input, and the FA4 metadata is selected per layer with jnp.where.
+                mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every)
 
-            def _scan_layer(
-                carry_hidden: Float[Array, "B S D"], scan_inputs: tuple[Block, jax.Array]
-            ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-                layer, layer_use_long_mask = scan_inputs
-                use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
-                lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
-                layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
-                return eqx.filter_checkpoint(layer, policy=None)(carry_hidden, layer_mask, use_long, use_long)
+                def _scan_layer(
+                    carry_hidden: Float[Array, "B S D"], scan_inputs: tuple[Block, jax.Array]
+                ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+                    layer, layer_use_long_mask = scan_inputs
+                    use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
+                    lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
+                    layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
+                    return eqx.filter_checkpoint(layer, policy=None)(carry_hidden, layer_mask, use_long, use_long)
 
-            hidden, stacked_router_stats = jax.lax.scan(
-                _scan_layer, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
+                hidden, stacked_router_stats = jax.lax.scan(
+                    _scan_layer, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
+                )
+            if cfg.dense_mlp:
+                router_metrics: dict[str, jax.Array] = {}
+            else:
+                # One cross-device reduction for the whole layer stack, not one per layer (see router_metrics).
+                reduced_router_stats = reduce_router_stats(
+                    stacked_router_stats,
+                    num_experts=cfg.num_experts,
+                    num_experts_per_token=cfg.num_experts_per_token,
+                    num_tokens=batch_size * seq_len,
+                )
+                router_metrics = {
+                    "routing_entropy_per_layer": reduced_router_stats["routing_entropy"],
+                    "routing_counts_per_layer": reduced_router_stats["routing_counts"],
+                    "load_balancing_loss_per_layer": reduced_router_stats["load_balancing_loss"],
+                    "router_z_loss_per_layer": reduced_router_stats["router_z_loss"],
+                    "qb_beta_per_layer": reduced_router_stats["qb_beta"],
+                    "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
+                    "sender_capacity_overflow_per_layer": stacked_router_stats["sender_capacity_overflow"],
+                    "receiver_capacity_overflow_per_layer": stacked_router_stats["receiver_capacity_overflow"],
+                    "margin_min_per_layer": stacked_router_stats["margin_min"],
+                    "margin_max_per_layer": stacked_router_stats["margin_max"],
+                }
+                router_metrics.update({k: v for k, v in stacked_router_stats.items() if k.startswith(_OUTSTAT_PREFIX)})
+                if _QB_MARGINS in stacked_router_stats:
+                    router_metrics[_QB_MARGINS] = stacked_router_stats[_QB_MARGINS]
+            router_metrics.update(final_gate_stats)
+            if grad_probe is not None:
+                rms = jnp.sqrt(jnp.mean(jnp.square(jax.lax.stop_gradient(hidden).astype(jnp.float32)), axis=-1))
+                router_metrics[FINAL_NORM_INPUT_RMS_KEY] = rms
+                hidden = lm_head_grad_probe(hidden, grad_probe, jnp.asarray(jnp.inf, jnp.float32))
+            hidden = self.final_norm(hidden)
+            if self.final_gated_norm is not None:
+                hidden = self.final_gated_norm(hidden)
+            return hidden, router_metrics
+
+        if not cfg.full_bandwidth_passes:
+            return trunk(hidden, pre_norm_grad_probe)
+        return self._full_bandwidth(hidden, _sconv_segment_ids(mask), trunk, pre_norm_grad_probe)
+
+    def _full_bandwidth(
+        self,
+        embedded: Float[Array, "B S D"],
+        segment_ids: Int[Array, "B S"] | None,
+        trunk,
+        pre_norm_grad_probe: Float[Array, "B S"] | None,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        """``full_bandwidth_passes`` passes of ``trunk``; returns the last pass's hidden state and router metrics,
+        with the QB thresholds fitted to every pass's margins and the earlier passes' hidden states
+        (``_FULL_BANDWIDTH_EARLIER``)."""
+        cfg = self.config
+        assert self.full_bandwidth_fuse is not None
+        fuse = self.full_bandwidth_fuse.astype(embedded.dtype)
+        # Position 0 and every document start read no previous token: they keep the plain input.
+        plain = jnp.zeros(embedded.shape[:2], jnp.bool_).at[:, 0].set(True)
+        if segment_ids is not None:
+            plain = plain | (segment_ids != jnp.pad(segment_ids[:, :-1], ((0, 0), (1, 0))))
+        plain = _batch_reshard(plain)[..., None]
+        hidden, metrics = trunk(embedded, None)
+        hiddens = [hidden]
+        margins = [metrics.pop(_QB_MARGINS, None)]
+        for p in range(1, cfg.full_bandwidth_passes):
+            previous = jnp.pad(hidden[:, :-1], ((0, 0), (1, 0), (0, 0)))
+            fused = rms_norm(embedded + _proj(rms_norm(previous), fuse, out_sharding=_batch_spec()))
+            last = p == cfg.full_bandwidth_passes - 1
+            hidden, metrics = trunk(jnp.where(plain, embedded, fused), pre_norm_grad_probe if last else None)
+            hiddens.append(hidden)
+            margins.append(metrics.pop(_QB_MARGINS, None))
+        if margins[0] is not None:
+            stacked = jnp.stack(margins, axis=1)  # [L, passes, T, E]
+            metrics["qb_beta_per_layer"] = jnp.stack(
+                [
+                    qb_beta_hist_pooled(
+                        stacked[layer],
+                        get_abstract_mesh(),
+                        target_share=cfg.num_experts_per_token / cfg.num_experts,
+                        num_experts=cfg.num_experts,
+                        n_bins=_QB_HIST_BINS,
+                        batch_axes=_BATCH_AXES,
+                    )
+                    for layer in range(stacked.shape[0])
+                ]
             )
-        if cfg.dense_mlp:
-            router_metrics: dict[str, jax.Array] = {}
-        else:
-            # One cross-device reduction for the whole layer stack, not one per layer (see router_metrics).
-            reduced_router_stats = reduce_router_stats(
-                stacked_router_stats,
-                num_experts=cfg.num_experts,
-                num_experts_per_token=cfg.num_experts_per_token,
-                num_tokens=batch_size * seq_len,
-            )
-            router_metrics = {
-                "routing_entropy_per_layer": reduced_router_stats["routing_entropy"],
-                "routing_counts_per_layer": reduced_router_stats["routing_counts"],
-                "load_balancing_loss_per_layer": reduced_router_stats["load_balancing_loss"],
-                "router_z_loss_per_layer": reduced_router_stats["router_z_loss"],
-                "qb_beta_per_layer": reduced_router_stats["qb_beta"],
-                "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
-                "sender_capacity_overflow_per_layer": stacked_router_stats["sender_capacity_overflow"],
-                "receiver_capacity_overflow_per_layer": stacked_router_stats["receiver_capacity_overflow"],
-                "margin_min_per_layer": stacked_router_stats["margin_min"],
-                "margin_max_per_layer": stacked_router_stats["margin_max"],
-            }
-            router_metrics.update({k: v for k, v in stacked_router_stats.items() if k.startswith(_OUTSTAT_PREFIX)})
-        router_metrics.update(final_gate_stats)
-        if pre_norm_grad_probe is not None:
-            rms = jnp.sqrt(jnp.mean(jnp.square(jax.lax.stop_gradient(hidden).astype(jnp.float32)), axis=-1))
-            router_metrics[FINAL_NORM_INPUT_RMS_KEY] = rms
-            hidden = lm_head_grad_probe(hidden, pre_norm_grad_probe, jnp.asarray(jnp.inf, jnp.float32))
-        hidden = self.final_norm(hidden)
-        if self.final_gated_norm is not None:
-            hidden = self.final_gated_norm(hidden)
-        return hidden, router_metrics
+        metrics[_FULL_BANDWIDTH_EARLIER] = jnp.stack(hiddens[:-1])
+        return hidden, metrics
 
     def _attn_res_layers(
         self,
@@ -2436,6 +2515,7 @@ class Transformer(eqx.Module):
         probe_metrics = {} if final_norm_rms is None else {FINAL_NORM_INPUT_RMS_KEY: final_norm_rms}
         entropy_pred = router_metrics.pop(_ENTROPY_PRED, None)
         outstats = {k: router_metrics.pop(k) for k in list(router_metrics) if k.startswith(_OUTSTAT_PREFIX)}
+        earlier_hidden = router_metrics.pop(_FULL_BANDWIDTH_EARLIER, None)
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
@@ -2456,20 +2536,19 @@ class Transformer(eqx.Module):
                 head_in, token_ids, labels, loss_weight, mask, reduction, logsumexp_weight, loss_dtype
             )
         else:
-            cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
-                head_in,
-                self.output_proj,
-                labels,
-                weight=loss_weight,
-                reduction=reduction,
-                logsumexp_weight=logsumexp_weight,
-                dtype=loss_dtype,
-                implementation="xla_fast_bwd",
-                block_sizes=_CE_BLOCK_SIZES,
-                logit_soft_cap=self.config.logit_soft_cap,
+            cross_entropy_loss = self._vocab_cross_entropy(
+                head_in, labels, loss_weight, reduction, logsumexp_weight, loss_dtype
             )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
+        full_bandwidth_metrics: dict[str, jax.Array] = {}
+        if earlier_hidden is not None and train_terms:
+            # Pass 1's CE plus the mean CE of the later passes; evals score the last pass alone.
+            ce_args = (labels, loss_weight, reduction, logsumexp_weight, loss_dtype)
+            earlier_ce = [self._vocab_cross_entropy(self._head_input(h), *ce_args) for h in earlier_hidden]
+            loss = earlier_ce[0] + (sum(earlier_ce[1:]) + cross_entropy_loss) / len(earlier_ce)
+            for p, ce in enumerate([*earlier_ce, cross_entropy_loss]):
+                full_bandwidth_metrics[f"train/full_bandwidth/pass{p + 1}_cross_entropy"] = ce
         entropy_metrics: dict[str, jax.Array] = {}
         if entropy_pred is not None and train_terms:
             target = _vocab_entropy(self._head_input(hidden), self.output_proj, self.config.logit_soft_cap)
@@ -2502,8 +2581,10 @@ class Transformer(eqx.Module):
                 **final_gate_metrics,
                 **entropy_metrics,
                 **copy_metrics,
+                **full_bandwidth_metrics,
             }
         summarized_metrics = summarize_router_metrics(router_metrics)
+        summarized_metrics.update(full_bandwidth_metrics)
         summarized_metrics.update(final_gate_metrics)
         summarized_metrics.update(entropy_metrics)
         summarized_metrics.update(copy_metrics)
@@ -2521,6 +2602,28 @@ class Transformer(eqx.Module):
         summarized_metrics["moe/sender_dropped_assignments"] = router_metrics["sender_capacity_overflow_per_layer"]
         summarized_metrics["moe/receiver_dropped_assignments"] = router_metrics["receiver_capacity_overflow_per_layer"]
         return loss, summarized_metrics
+
+    def _vocab_cross_entropy(
+        self,
+        head_in: Float[Array, "B S E"],
+        labels: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        reduction: str,
+        logsumexp_weight: float | None,
+        loss_dtype: jnp.dtype,
+    ) -> jax.Array:
+        return fused_linear_softmax_cross_entropy_loss(
+            head_in,
+            self.output_proj,
+            labels,
+            weight=loss_weight,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            dtype=loss_dtype,
+            implementation="xla_fast_bwd",
+            block_sizes=_CE_BLOCK_SIZES,
+            logit_soft_cap=self.config.logit_soft_cap,
+        )
 
     def _copy_mixture_loss(
         self,
@@ -2727,4 +2830,4 @@ def forward_flops_per_token(model: Transformer) -> float:
         heads = attn.a_log.shape[-1]
         d_k, d_v = attn.w_q.shape[-1] // heads, attn.w_v.shape[-1] // heads
         core += model.kda_blocks.num_layers * heads * (6 * d_k * d_v + 4 * cfg.kda_chunk_size * (d_k + d_v))
-    return matmul + core
+    return (matmul + core) * max(1, cfg.full_bandwidth_passes)
