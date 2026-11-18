@@ -16,6 +16,7 @@ from shellbox.process_framing import (
     CHUNK_BYTES,
     EXIT,
     FRAME_BYTES,
+    PAD,
     STDERR,
     STDIN,
     STDOUT,
@@ -23,6 +24,10 @@ from shellbox.process_framing import (
     decode_frame,
     encode_frame,
 )
+
+# Daytona's SDK withholds a websocket message shorter than three bytes until
+# more output arrives, which would stall a frame whose newline arrives alone.
+STDOUT_TRAILER = encode_frame(PAD, b"")
 
 
 def main() -> None:
@@ -55,14 +60,14 @@ def main() -> None:
             with contextlib.suppress(BrokenPipeError):
                 child.stdin.close()
 
-    def output_stream(source, target, prefix: bytes) -> None:
+    def output_stream(source, target, prefix: bytes, trailer: bytes) -> None:
         while data := os.read(source.fileno(), CHUNK_BYTES):
-            target.write(encode_frame(prefix, data))
+            target.write(encode_frame(prefix, data) + trailer)
             target.flush()
 
     threading.Thread(target=input_stream, daemon=True).start()
-    stdout = threading.Thread(target=output_stream, args=(child.stdout, sys.stdout.buffer, STDOUT))
-    stderr = threading.Thread(target=output_stream, args=(child.stderr, sys.stderr.buffer, STDERR))
+    stdout = threading.Thread(target=output_stream, args=(child.stdout, sys.stdout.buffer, STDOUT, STDOUT_TRAILER))
+    stderr = threading.Thread(target=output_stream, args=(child.stderr, sys.stderr.buffer, STDERR, b""))
     stdout.start()
     stderr.start()
     # Keep the leader unreaped until its descendants are stopped, preventing
@@ -72,7 +77,7 @@ def main() -> None:
     code = child.wait()
     stdout.join()
     stderr.join()
-    sys.stdout.buffer.write(encode_frame(EXIT, str(code).encode()))
+    sys.stdout.buffer.write(encode_frame(EXIT, str(code).encode()) + STDOUT_TRAILER)
     sys.stdout.buffer.flush()
 
 

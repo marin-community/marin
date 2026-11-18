@@ -14,6 +14,9 @@ from collections.abc import Iterator
 CHUNK_BYTES = 65536
 FRAME_BYTES = 1 + 4 * ((CHUNK_BYTES + 2) // 3)
 STDIN, STDOUT, STDERR, EXIT = b"I", b"D", b"E", b"X"
+# An empty frame that receivers discard. Writers may end output with it so a
+# transport that holds back a short final message holds padding, not data.
+PAD = b"P"
 
 
 def encode_frame(kind: bytes, data: bytes) -> bytes:

@@ -17,7 +17,17 @@ from shellbox import process_framing
 from shellbox.backends.daytona import bridge
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT
 from shellbox.machine import MachineTerminated
-from shellbox.process_framing import CHUNK_BYTES, EXIT, STDERR, STDIN, STDOUT, FrameDecoder, decode_frame, encode_frame
+from shellbox.process_framing import (
+    CHUNK_BYTES,
+    EXIT,
+    PAD,
+    STDERR,
+    STDIN,
+    STDOUT,
+    FrameDecoder,
+    decode_frame,
+    encode_frame,
+)
 from shellbox.process_session import BoundedByteBuffer, StreamProcessSession, own_cleanup
 
 # The provider image need not have Shellbox installed. Supply the shared codec
@@ -105,6 +115,8 @@ class DaytonaProcessSession(StreamProcessSession):
     async def _receive_stdout(self, text: str) -> None:
         for frame in self._stdout_frames.feed(text.encode("ascii")):
             kind, data = decode_frame(frame)
+            if kind == PAD:
+                continue
             if self._code is not None:
                 raise ValueError("Daytona process output followed its exit frame")
             if kind == EXIT:
