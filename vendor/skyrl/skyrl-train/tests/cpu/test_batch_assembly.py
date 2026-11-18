@@ -11,6 +11,8 @@ from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
 from skyrl_train.utils.utils import validate_cfg
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
+from skyrl_train.batch_metrics import reward_metrics, rollout_metrics
+from skyrl_train.rollouts.buffer import RowFacts
 
 
 class RecordedRows:
@@ -128,3 +130,33 @@ def test_verified_closure_trainer_preserves_rollouts_and_trains_verified_repairs
     assert tokenizer.decode(repaired, clean_up_tokenization_spaces=False) == 'assistant [{"a":1 }]'
     assert batch["student_topk_indices"][batch["ftpo_chosen_mask"]].tolist() == [candidates[1]]
     assert trainer.all_metrics["ftpo/selected_boundaries"] == 1
+
+
+@pytest.mark.parametrize("token_rewards", [False, True], ids=["scalar", "token"])
+def test_reward_mean_uses_compensated_totals(token_rewards):
+    values = [2.0**110, 2.0**54, 1.0, -(2.0**54), -(2.0**110)]
+    response_lengths = [5, 1, 1, 1, 1] if token_rewards else [1] * 5
+    batch = {
+        "prompt_token_ids": [[0]] * 5,
+        "response_ids": [[1] * length for length in response_lengths],
+        "rewards": [values, [0.0], [0.0], [0.0], [0.0]] if token_rewards else values,
+        "loss_masks": [[1] * length for length in response_lengths],
+    }
+    metrics = reward_metrics([RowFacts.from_batch(batch)], ["g0"] * 5, n_samples_per_prompt=1)
+    assert metrics["reward/avg_raw_reward"] == 0.2
+
+
+def test_step_wise_shaping_metrics_read_the_final_outcome():
+    neutral = {"non_termination": 0.0, "successful_length": 0.0, "overlong": 0.0}
+    batch = {
+        "prompt_token_ids": [[0], [0, 1]],
+        "response_ids": [[1], [2]],
+        "loss_masks": [[1], [1]],
+        "is_last_step": [False, True],
+        "rewards": [0.0, 0.5],
+        "unshaped_rewards": [0.0, 1.0],
+        "reward_shaping_components": [neutral, {**neutral, "successful_length": -0.5}],
+    }
+    metrics = rollout_metrics([RowFacts.from_batch(batch)], tis_lcs_alert_threshold=1.0)
+    assert metrics["generate/reward_shaping/outcome_reward_mean"] == 1.0
+    assert metrics["generate/reward_shaping/shaped_reward_mean"] == 0.5
