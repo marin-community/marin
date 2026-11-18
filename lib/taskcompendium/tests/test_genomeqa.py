@@ -59,6 +59,7 @@ def completion(content, *, reasoning=None, finish="stop", refusal=None):
 def test_final_answer_grading_preserves_protocol(response, options, answer, failure):
     grade = grade_genomeqa("B", options, 1, response)
     assert grade.detail["metrics"]["accuracy"] == (answer == "B")
+    assert grade.detail["metrics"]["unanswered"] == (answer == "")
     assert grade.detail["genomeqa_parsing"]["failure"] == failure
     assert grade.detail["genomeqa_parsing"]["answer"] == answer
 

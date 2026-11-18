@@ -53,7 +53,6 @@ def grade_genomeqa(expected: str, options: str, cell_weight: float, response: st
             "accuracy": correct,
             MACRO_METRIC: correct,
             "unanswered": float(not answer),
-            "parse_failure": float(failure is not None),
         },
         metric_weights={MACRO_METRIC: cell_weight},
         genomeqa_parsing={"selected_span": selected, "answer": answer, "failure": failure},

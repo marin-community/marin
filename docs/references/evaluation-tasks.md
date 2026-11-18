@@ -319,7 +319,8 @@ conflicting, and invalid answers receive zero. The shared `final_only` selector 
 final content. For validation reports, count `length` and `content_filter` stops
 from the archived model turns.
 
-Each verdict carries `accuracy`, `genomeqa_macro`, and parsing diagnostics. The
+Each verdict reports `accuracy`, `genomeqa_macro`, and `unanswered`. When
+no answer can be extracted, the grading detail records the reason. The
 macro metric gives motif questions weight 5 and other questions weight 1, so
 each of the six biological subtasks and its two formats contributes equally.
 Accuracy remains unweighted for actual correct counts. Evaluation items retain
