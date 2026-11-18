@@ -3,7 +3,6 @@
 
 """Executed QUICK releases recovered from the retired source ledger."""
 
-from pathlib import Path
 
 from finestore.rl.curation import (
     ConvertedExamples,
@@ -17,13 +16,13 @@ from finestore.rl.curation import (
 from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.pipeline.models import IntendedUse
 
+from experiments.post_training.task_curation import retirement
 from experiments.post_training.task_curation.native_release import import_native_quick
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_REASON, CROSSCODE_EVAL_SOURCE_IDS
 
-LEDGER = Path(__file__).parents[1] / "retired-inventory-only.json"
 RETIRED_ORIGINS = {
     "Harbor Hub": SourceOrigin.HARBOR_HUB,
     "Task Trove": SourceOrigin.TASKTROVE,
@@ -33,7 +32,9 @@ RETIRED_ORIGINS = {
 
 def sources() -> list[RlDataSource[PrebuiltCohort]]:
     result = []
-    for entry in read_registry_json(LEDGER)["entries"]:
+    # The retired-inventory ledger belongs to the retirement module; reading it
+    # through one path keeps the fixture boundary and the pin in one place.
+    for entry in read_registry_json(retirement.RETIREMENTS_PATH)["entries"]:
         if entry["disposition"] != "quick_converted":
             continue
         release = entry["disposition_release"]

@@ -8,6 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finestore.rl.difficulty import DifficultySample
+from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -16,7 +17,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.task_curation import driver
+from experiments.post_training.task_curation import driver, inventory, publication_gate
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
 from experiments.post_training.task_curation.full_qc_inputs import InputConfig
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, HostedJudgeEndpoint
@@ -48,6 +49,12 @@ def offline_registry(request, monkeypatch):
 
     request.getfixturevalue("isolated_admission_census")
     monkeypatch.setattr(driver, "all_sources", lambda: {})
+    # Selection restriction tiers come from the configured estate, which offline
+    # unit tests cannot assemble; synthetic selections declare no private source.
+    # Patch every importing module's binding, not only the defining one.
+    open_tier = lambda source_id: DataRestriction.OPEN  # noqa: E731
+    monkeypatch.setattr(publication_gate, "configured_restriction", open_tier)
+    monkeypatch.setattr(inventory, "configured_restriction", open_tier)
 
 
 @pytest.fixture(scope="session")

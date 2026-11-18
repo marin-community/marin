@@ -41,11 +41,20 @@ def configured_restriction(source_id: str) -> DataRestriction:
 
 
 def _configured_source(source_id: str):
-    """The configured RlDataSource for one id, or None.
+    """The code-configured RlDataSource for one id, or None.
 
     The local import breaks the cycle with ``sources``, which binds these guards
-    into the source graph.
+    into the source graph. The restriction tier is a code declaration, so the
+    lookup reads the configured populations directly: assembling the full estate
+    would demand registry documents just to answer a tier question, which no
+    offline unit test can provide. Both sides match through the canonical
+    identity, since selection inputs carry original spellings.
     """
-    from experiments.post_training.task_curation.sources import all_sources  # noqa: PLC0415
+    from experiments.post_training.task_curation.sources import configured_sources  # noqa: PLC0415
+    from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id  # noqa: PLC0415
 
-    return all_sources().get(source_id)
+    canonical = canonical_source_id(source_id)
+    return next(
+        (source for source in configured_sources() if canonical_source_id(source.info.id) == canonical),
+        None,
+    )

@@ -159,6 +159,7 @@ class SelectionInput:
     source_id: str
     family: str
     root: str
+    data_restriction: str
 
 
 @dataclass(frozen=True)
@@ -552,9 +553,10 @@ def selection_restriction(sources: tuple[SelectionInput, ...]) -> str:
 
     A selection containing a PRIVATE_ALWAYS source is itself private, so every
     derived artifact inherits the tag and a private-training-only selection can
-    never be re-labeled open downstream.
+    never be re-labeled open downstream. The tiers bind at plan time, when the
+    configured estate is available; the running step stays estate-free.
     """
-    if any(configured_restriction(source.source_id) is DataRestriction.PRIVATE_ALWAYS for source in sources):
+    if any(source.data_restriction == DataRestriction.PRIVATE_ALWAYS.value for source in sources):
         return DataRestriction.PRIVATE_ALWAYS.value
     return DataRestriction.OPEN.value
 
@@ -630,7 +632,14 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
     def build_config(ctx: StepContext) -> SelectionConfig:
         return SelectionConfig(
             tuple(
-                SelectionInput(original_source_id(source_id), recipe.sources[source_id], ctx.artifact_path(step))
+                SelectionInput(
+                    original_source_id(source_id),
+                    recipe.sources[source_id],
+                    ctx.artifact_path(step),
+                    # The tier binds at plan time, where the configured estate is
+                    # available; the selection step itself stays estate-free.
+                    configured_restriction(original_source_id(source_id)).value,
+                )
                 for source_id, step in inputs.items()
             ),
             stored_recipe,

@@ -26,6 +26,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from experiments.post_training.task_curation import native_release
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation import retirement
 from experiments.post_training.task_curation.datasets import native_releases
 from experiments.post_training.task_curation.datasets.native_harbor import native_task, unpack_native
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
@@ -222,7 +223,7 @@ def test_native_registration_requires_actor_receipt_for_its_private_pin(source_i
     release = entry["disposition_release"]
     release.pop("daytona_measurement", None)
     ledger = tmp_path / "ledger.json"
-    monkeypatch.setattr(native_releases, "LEDGER", ledger)
+    monkeypatch.setattr(retirement, "RETIREMENTS_PATH", ledger)
     monkeypatch.setattr(native_releases, "read_registry_json", lambda path: json.loads(path.read_text()))
     ledger.write_text(json.dumps({"entries": [entry]}))
     assert native_releases.sources() == []
