@@ -96,6 +96,7 @@ nav:
       - Agent Workflows: dev-guide/agent-workflows.md
       - Experiment Records: dev-guide/experiment-records.md
       - Research Engineering: dev-guide/research-engineering.md
+      - Large Data In Git: dev-guide/large-data.md
       - Writing Style:
           - House Style: dev-guide/writing-style/index.md
           - Public Communication Conventions: dev-guide/writing-style/conventions.md
