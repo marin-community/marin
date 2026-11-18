@@ -9,7 +9,12 @@ from dataclasses import asdict, replace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import ActorCensusInput, ContentEvidenceReference, SourceQualityResult
+from finestore.rl.curation import (
+    ActorCensusInput,
+    ContentEvidenceReference,
+    SamplePanelCurrency,
+    SourceQualityResult,
+)
 from marin.execution.artifact import ArtifactRecord, read_record, result_type_name, write_record
 from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
@@ -27,6 +32,7 @@ from experiments.post_training.task_curation.difficulty_samples import (
     prepare_sample,
     relocated_panel,
 )
+from experiments.post_training.task_curation.full_content_binding import RetainedLineageProof
 from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.full_qc_review import ContractBatch, write_observations
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
@@ -242,9 +248,79 @@ def test_sample_review_keeps_full_population_identity_and_reuses_exact_panel_evi
     assert bound.info.quality_result == first.result
     assert bound.info.oversight is None
     assert bound.admission_blockers == source.admission_blockers
-    stale = replace(source, config=replace(source.config, dataset=replace(source.dataset, revision="changed")))
+    # A population whose bytes actually changed refuses: the panel never reviewed them.
+    changed = replace(
+        source,
+        config=replace(source.config, dataset=replace(source.dataset, revision="changed")),
+        info=replace(
+            source.info,
+            actor_census_input=source.info.actor_census_input.model_copy(
+                update={
+                    "dataset_revision": "changed",
+                    "task_specs_sha256": "changed-" + source.info.actor_census_input.task_specs_sha256,
+                },
+            ),
+        ),
+    )
     with pytest.raises(ValueError, match="another current population"):
-        bind_sample_result(stale, receipt)
+        bind_sample_result(changed, receipt)
+
+
+@pytest.mark.parametrize("payload_revision", ["4"])
+def test_byte_identical_repin_panel_binds_current_pin_over_the_lineage_label(
+    sample_panel, review_server, tmp_path, payload_revision
+):
+    """A panel whose digest equals the new pin's census binds CURRENT_PIN, not archived."""
+    reviewer = ChatReviewer(
+        OpenAIChatClient(f"http://127.0.0.1:{review_server.server_port}/v1", "unused", timeout=2),
+        local_reviewer(ReviewerVersion.V3, payload_revision=payload_revision),
+        query_cache_root=str(tmp_path / "cache"),
+    )
+    receipt = sample_qc_receipt(review_panel(sample_panel, reviewer, str(tmp_path / "reviews")).path)
+    source = number_source(tmp_path / "numbers")
+    source = replace(
+        source,
+        config=replace(
+            source.config,
+            dataset=SourceReference("fixture/repinned", "repinned-revision", "fixture"),
+        ),
+        info=replace(
+            source.info,
+            id=sample_panel.source_id,
+            origin=SourceOrigin.TASKTROVE,
+            upstream_dataset="fixture",
+            oversight=None,
+            actor_census_input=ActorCensusInput(
+                dataset_id="fixture/repinned",
+                dataset_revision="repinned-revision",
+                converter_version=sample_panel.converter_version,
+                converter_revision="fixture",
+                measured_tasks=sample_panel.retained_tasks,
+                task_specs_sha256=sample_panel.task_specs_sha256,
+                evidence_url=sample_panel.evidence_url,
+            ),
+        ),
+    )
+    lineage = RetainedLineageProof(
+        source_id=sample_panel.source_id,
+        original_dataset_id=sample_panel.dataset_id,
+        original_dataset_revision=sample_panel.dataset_revision,
+        original_unique_count=sample_panel.retained_tasks,
+        retained_content_sha256=sample_panel.task_specs_sha256,
+        original_input=ActorCensusInput(
+            dataset_id=sample_panel.dataset_id,
+            dataset_revision=sample_panel.dataset_revision,
+            converter_version=sample_panel.converter_version,
+            converter_revision="fixture",
+            measured_tasks=sample_panel.retained_tasks,
+            task_specs_sha256=sample_panel.task_specs_sha256,
+            evidence_url=sample_panel.evidence_url,
+        ),
+    )
+    bound = bind_sample_result(source, receipt, retained_lineage=lineage)
+    assert bound.info.independent_qc.panel_currency is SamplePanelCurrency.CURRENT_PIN
+    assert str(sample_panel.task_specs_sha256[:12]) in bound.info.independent_qc.method
+    assert "re-pin" in bound.info.independent_qc.method
 
 
 def test_changed_sample_bytes_are_refused_before_review(sample_panel):

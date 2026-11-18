@@ -145,43 +145,58 @@ def bind_sample_result[ConfigT: CatalogConfig](
         panel.retained_tasks,
     )
     if not full_match:
-        identity_current = (
-            content_identity is not None
-            and (
-                source.info.id,
-                dataset.name,
-                dataset.revision,
-                source.version,
-            )
-            == (receipt.source_id, panel.dataset_id, panel.dataset_revision, panel.converter_version)
-            and panel_matches_identity(receipt, actor, content_identity)
+        # Byte identity at the current pin outranks the lineage label: a panel whose
+        # recorded digest and task count equal the current actor census reviewed exactly
+        # the served population's bytes, whatever release carried them before.
+        byte_identical = (
+            panel.task_specs_sha256 == actor.task_specs_sha256 and panel.retained_tasks == actor.measured_tasks
         )
-        if retained_lineage is not None and sample_matches_lineage(receipt, retained_lineage, content_identity):
-            result = receipt.review.result
-            return replace(
-                source,
-                info=replace(
-                    source.info,
-                    quality_result=result,
-                    independent_qc=IndependentQC(
-                        verdict=result.verdict,
-                        method=lineage_note("", retained_lineage, "Archived SAMPLE content panel"),
-                        reviewed=result.reviewed,
-                        evidence_url=receipt.review.path,
-                        panel_currency=SamplePanelCurrency.ARCHIVED_LINEAGE,
-                    ),
-                ),
+        if not byte_identical:
+            identity_current = (
+                content_identity is not None
+                and (
+                    source.info.id,
+                    dataset.name,
+                    dataset.revision,
+                    source.version,
+                )
+                == (receipt.source_id, panel.dataset_id, panel.dataset_revision, panel.converter_version)
+                and panel_matches_identity(receipt, actor, content_identity)
             )
-        if not identity_current:
-            raise ValueError(f"Sample Result belongs to another current population: {source.info.id}")
+            if retained_lineage is not None and sample_matches_lineage(receipt, retained_lineage, content_identity):
+                result = receipt.review.result
+                return replace(
+                    source,
+                    info=replace(
+                        source.info,
+                        quality_result=result,
+                        independent_qc=IndependentQC(
+                            verdict=result.verdict,
+                            method=lineage_note("", retained_lineage, "Archived SAMPLE content panel"),
+                            reviewed=result.reviewed,
+                            evidence_url=receipt.review.path,
+                            panel_currency=SamplePanelCurrency.ARCHIVED_LINEAGE,
+                        ),
+                    ),
+                )
+            if not identity_current:
+                raise ValueError(f"Sample Result belongs to another current population: {source.info.id}")
     source = clear_stale_full_content_result(source)
     if source.info.full_content_result_binding is not None:
         return source
     result = receipt.review.result
     if actor.task_specs_sha256 == panel.task_specs_sha256:
+        cross_pin = not full_match
         method = (
             f"SAMPLE content panel: seed {panel.sample_seed}, {panel.sample_size} selected / "
             f"{panel.retained_tasks} current tasks; pinned GLM-5.3 v3; execution qualification pending"
+            + (
+                f"; the panel's recorded population digest equals the current pin's actor census "
+                f"digest ({actor.task_specs_sha256[:12]}), so the reviewed bytes are the served "
+                f"population's across the {panel.dataset_revision[:12]} re-pin"
+                if cross_pin
+                else ""
+            )
         )
     else:
         # The panel was drawn at this pin before a byte-identical re-serialization;
