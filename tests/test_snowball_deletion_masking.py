@@ -18,6 +18,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from haliax import Axis
+from jax.sharding import PartitionSpec as P
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.models.snowball_deletion import (
@@ -207,19 +208,24 @@ def test_alpha_ramp_matches_core():
 
 
 def test_wanda_capture_shard_local_stats(mesh):
-    """The shard-local Wanda capture runs under shard_map and counts valid tokens."""
-    batch, seq, experts, hidden = 2, 4, 4, 3
+    """The shard-local Wanda capture runs under shard_map and counts valid tokens.
+
+    Operand shapes mirror the model's call: flattened tokens, per-token expert
+    selections, and a 1-D validity mask, all sharded over the batch axes.
+    """
+    tokens, experts, hidden = 4, 4, 3
     rng = np.random.default_rng(7)
-    x = hax.named(rng.normal(size=(batch, seq, hidden)).astype(np.float32), ("batch", "sequence", "mlp"))
-    selected = hax.named(rng.integers(0, experts, size=(batch, seq)).astype(np.int32), ("batch", "sequence"))
-    valid = hax.named(np.ones((batch, seq), dtype=bool), ("batch", "sequence"))
+    x = rng.normal(size=(tokens, hidden)).astype(np.float32)
+    selected = rng.integers(0, experts, size=(tokens, 1)).astype(np.int32)
+    valid = np.ones((tokens,), dtype=bool)
+    spec = P(("data",), None)
     with jax.set_mesh(mesh):
         stats = wanda_input_sums_local(
-            x.array,
-            selected.array,
-            valid.array,
-            jax.sharding.Mesh(jax.devices(), ("expert",)),
-            batch_axes=("batch", "sequence"),
+            jax.sharding.reshard(jnp.asarray(x), spec),
+            jax.sharding.reshard(jnp.asarray(selected), spec),
+            jax.sharding.reshard(jnp.asarray(valid), P(("data",))),
+            mesh,
+            batch_axes=("data",),
             num_experts=experts,
         )
     sums = np.asarray(stats["wanda_input_sums_local"])
@@ -229,8 +235,8 @@ def test_wanda_capture_shard_local_stats(mesh):
     assert sums.shape[-3:] == (1, experts, hidden)
     assert counts.shape[-2:] == (1, experts)
     # every valid token routes to exactly one expert, so the per-expert counts sum to it
-    assert counts.sum() == batch * seq
-    np.testing.assert_allclose(channel_counts.sum(), batch * seq)
+    assert counts.sum() == tokens
+    np.testing.assert_allclose(channel_counts.sum(), tokens)
     # the channel sums total the squared activations over all tokens
-    expected = float((x.array.astype(np.float64) ** 2).sum())
+    expected = float((x.astype(np.float64) ** 2).sum())
     np.testing.assert_allclose(channel.sum(), expected, rtol=1e-5)
