@@ -3,11 +3,11 @@
 
 """Behavior tests for the repair-candidate lane: matching, comparative review, decisions."""
 
-import collections
 import io
 import json
 import tarfile
 import threading
+from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
@@ -518,11 +518,19 @@ class TestCohortConversion:
         )
 
     @staticmethod
-    def _runtime_join():
-        """A runtime join keyed by the tracked task IDs of the two fixture winners."""
-        return {"tracked-0": {"shape": {"agent_timeout_sec": 300}}, "tracked-1": {"shape": {"agent_timeout_sec": 300}}}
+    def _instruction_hashes():
+        """The fixture prepared population: tracked task ID -> instruction hash."""
+        return {"tracked-0": "hash-0", "tracked-1": "hash-1", "tracked-2": "hash-2"}
 
-    def test_converts_accepted_winners_and_skips_the_rest(self, monkeypatch, tmp_path):
+    @staticmethod
+    def _runtime_join():
+        """A runtime join keyed by the tracked instruction hashes of the fixture winners."""
+        return {
+            "hash-0": {"shape": {"agent_timeout_sec": 300}},
+            "hash-1": {"shape": {"agent_timeout_sec": 300}},
+        }
+
+    def _convert(self, monkeypatch, tmp_path, report, *, rows, runtimes, output_root, **kwargs):
         monkeypatch.setattr(
             lane,
             "configured_sources",
@@ -534,25 +542,30 @@ class TestCohortConversion:
                 )()
             ],
         )
-        monkeypatch.setattr(
-            lane,
-            "load_folder_rows",
-            lambda repo, folders, revision=None: [
-                {"path": "task_0", "task_binary": _fixture_binary("keep me")},
-                {"path": "task_1", "task_binary": _fixture_binary("keep me too")},
-                {"path": "task_2", "task_binary": _fixture_binary("reject me")},
-            ],
-        )
-        monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: self._runtime_join())
-        output_root = str(tmp_path / "cohort")
-        manifest = lane.convert_cohort(
+        monkeypatch.setattr(lane, "load_folder_rows", lambda repo, folders, revision=None: rows)
+        monkeypatch.setattr(lane, "tracked_instruction_hashes", lambda uris: self._instruction_hashes())
+        monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: runtimes)
+        return lane.convert_cohort(
             tracked_source_id=TRACKED_SOURCE,
-            report=self._report(),
+            report=report,
             folders=("fixture_v1",),
             repo="fixture/validated-tasks",
             candidate_revision="eafe9b38",
+            tracked_uris=(),
             tracked_spec_uris=(),
             output_root=output_root,
+            **kwargs,
+        )
+
+    def test_converts_accepted_winners_and_skips_the_rest(self, monkeypatch, tmp_path):
+        rows = [
+            {"path": "task_0", "task_binary": _fixture_binary("keep me")},
+            {"path": "task_1", "task_binary": _fixture_binary("keep me too")},
+            {"path": "task_2", "task_binary": _fixture_binary("reject me")},
+        ]
+        output_root = str(tmp_path / "cohort")
+        manifest = self._convert(
+            monkeypatch, tmp_path, self._report(), rows=rows, runtimes=self._runtime_join(), output_root=output_root
         )
         assert manifest["counts"] == {"converted": 2, "rejected": 1}
         assert manifest["conversion_identity"]
@@ -575,6 +588,7 @@ class TestCohortConversion:
             calls.append(1)
             return [{"path": "task_0", "task_binary": _fixture_binary("keep me")}]
 
+        rows = [{"path": "task_0", "task_binary": _fixture_binary("keep me")}]
         monkeypatch.setattr(
             lane,
             "configured_sources",
@@ -587,81 +601,58 @@ class TestCohortConversion:
             ],
         )
         monkeypatch.setattr(lane, "load_folder_rows", counting_rows)
+        monkeypatch.setattr(lane, "tracked_instruction_hashes", lambda uris: self._instruction_hashes())
         monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: self._runtime_join())
         output_root = str(tmp_path / "cohort")
         report = self._single_winner_report()
-        lane.convert_cohort(
-            tracked_source_id=TRACKED_SOURCE,
-            report=report,
-            folders=("fixture_v1",),
-            repo="fixture/validated-tasks",
-            candidate_revision="eafe9b38",
-            tracked_spec_uris=(),
-            output_root=output_root,
-        )
-        manifest = lane.convert_cohort(
-            tracked_source_id=TRACKED_SOURCE,
-            report=report,
-            folders=("fixture_v1",),
-            repo="fixture/validated-tasks",
-            candidate_revision="eafe9b38",
-            tracked_spec_uris=(),
-            output_root=output_root,
-        )
-        assert manifest["counts"] == {"already_done": 1}
-
-    def test_missing_runtime_binding_fails_loudly(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(
-            lane,
-            "configured_sources",
-            lambda: [
-                type(
-                    "S",
-                    (),
-                    {"info": type("I", (), {"id": TRACKED_SOURCE})(), "config": self._recipe(monkeypatch, tmp_path)},
-                )()
-            ],
-        )
-        monkeypatch.setattr(
-            lane,
-            "load_folder_rows",
-            lambda repo, folders, revision=None: [{"path": "task_0", "task_binary": _fixture_binary("keep me")}],
-        )
-        monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: collections.defaultdict(dict))
-        with pytest.raises(ValueError, match="No tracked runtime binding"):
+        manifests = [
             lane.convert_cohort(
                 tracked_source_id=TRACKED_SOURCE,
-                report=self._single_winner_report(),
+                report=report,
                 folders=("fixture_v1",),
                 repo="fixture/validated-tasks",
                 candidate_revision="eafe9b38",
+                tracked_uris=(),
                 tracked_spec_uris=(),
+                output_root=output_root,
+            )
+            for _ in range(2)
+        ]
+        assert manifests[0]["counts"] == {"converted": 1}
+        assert manifests[1]["counts"] == {"already_done": 1}
+        assert manifests[0]["conversion_identity"] == manifests[1]["conversion_identity"]
+
+    def test_missing_runtime_binding_fails_loudly(self, monkeypatch, tmp_path):
+        rows = [{"path": "task_0", "task_binary": _fixture_binary("keep me")}]
+        with pytest.raises(ValueError, match="No tracked runtime binding"):
+            self._convert(
+                monkeypatch,
+                tmp_path,
+                self._single_winner_report(),
+                rows=rows,
+                runtimes={},
                 output_root=str(tmp_path / "cohort"),
             )
 
     def test_missing_winner_row_fails_loudly(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(
-            lane,
-            "configured_sources",
-            lambda: [
-                type(
-                    "S",
-                    (),
-                    {"info": type("I", (), {"id": TRACKED_SOURCE})(), "config": self._recipe(monkeypatch, tmp_path)},
-                )()
-            ],
-        )
-        monkeypatch.setattr(lane, "load_folder_rows", lambda repo, folders, revision=None: [])
         with pytest.raises(ValueError, match="missing from the candidate folders"):
-            lane.convert_cohort(
-                tracked_source_id=TRACKED_SOURCE,
-                report=self._report(),
-                folders=("fixture_v1",),
-                repo="fixture/validated-tasks",
-                candidate_revision="eafe9b38",
-                tracked_spec_uris=(),
+            self._convert(
+                monkeypatch,
+                tmp_path,
+                self._report(),
+                rows=[],
+                runtimes=self._runtime_join(),
                 output_root=str(tmp_path / "cohort"),
             )
+
+
+def manifest_counts(output_root: str) -> dict:
+    import glob
+
+    maps = sorted(glob.glob(f"{output_root}/conversion-*/task-map.jsonl"))
+    latest = maps[-1]
+    entries = [json.loads(line) for line in open(latest).read().splitlines() if line.strip()]
+    return dict(Counter(entry["status"] for entry in entries))
 
 
 def _fixture_binary(instruction: str, *, solve_sh: str | None = None) -> bytes:
@@ -721,7 +712,12 @@ class TestDropWrapperSolveSh:
                 {"path": "task_0", "task_binary": _fixture_binary("keep me", solve_sh=self.WRAPPER)}
             ],
         )
-        monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: TestCohortConversion._runtime_join())
+        from experiments.post_training.task_curation.task_neighbors import content_rows
+
+        converted = spec("converted-task_0", "keep me")
+        instruction_hash = next(content_rows([converted.model_dump(mode="json")])).instruction_hash
+        monkeypatch.setattr(lane, "tracked_instruction_hashes", lambda uris: {"tracked-0": instruction_hash})
+        monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: {instruction_hash: {"shape": {}}})
         output_root = str(tmp_path / "cohort")
         manifest = lane.convert_cohort(
             tracked_source_id=TRACKED_SOURCE,
@@ -729,6 +725,7 @@ class TestDropWrapperSolveSh:
             folders=("fixture_v1",),
             repo="fixture/validated-tasks",
             candidate_revision="eafe9b38",
+            tracked_uris=(),
             tracked_spec_uris=(),
             output_root=output_root,
             drop_wrapper_solve_sh=True,

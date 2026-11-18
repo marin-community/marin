@@ -641,13 +641,9 @@ def strip_wrapper_solve_sh(task_binary: bytes) -> bytes | None:
         return buffer.getvalue()
 
 
-def tracked_runtimes(uris: tuple[str, ...]) -> dict[str, dict[str, Any]]:
-    """Each tracked TaskSpec's original runtime binding, keyed by its normalized instruction hash.
-
-    The tracked sources' lexical specs carry the lowered task and the runtime binding their
-    own oracle trials ran under; a repair of the same task reuses that binding.
-    """
-    runtimes: dict[str, dict[str, Any]] = {}
+def tracked_instruction_hashes(uris: tuple[str, ...]) -> dict[str, str]:
+    """Each prepared tracked task's normalized instruction hash, keyed by its task ID."""
+    hashes: dict[str, str] = {}
     for uri in uris:
         with tempfile.TemporaryFile() as local:
             with StoragePath(uri).open("rb") as remote:
@@ -655,21 +651,43 @@ def tracked_runtimes(uris: tuple[str, ...]) -> dict[str, dict[str, Any]]:
             local.seek(0)
             with pq.ParquetFile(local) as handle:
                 names = handle.schema_arrow.names
-                if "lowered_task_spec" in names:
-                    column = "lowered_task_spec"
-                elif "task_spec" in names:
-                    column = "task_spec"
-                else:
-                    raise ValueError(f"Tracked specs input has no task-spec column: {uri}")
-                for batch in handle.iter_batches(batch_size=32, columns=[column]):
-                    for encoded in batch.column(column).to_pylist():
-                        lowered = json.loads(encoded)
-                        task = TaskSpec.model_validate(lowered["task"] if "task" in lowered else lowered)
-                        runtime = lowered.get("runtime") if "task" in lowered else None
+                if not {"task_id", "instruction_hash"} <= set(names):
+                    raise ValueError(f"Tracked population input has no id+instruction columns: {uri}")
+                for batch in handle.iter_batches(batch_size=256, columns=["task_id", "instruction_hash"]):
+                    for task_id, instruction_hash in zip(
+                        batch.column("task_id").to_pylist(), batch.column("instruction_hash").to_pylist()
+                    ):
+                        hashes.setdefault(task_id, instruction_hash)
+    if not hashes:
+        raise ValueError("The tracked population carries no task rows")
+    return hashes
+
+
+def tracked_runtimes(spec_uris: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+    """Each tracked TaskSpec's original runtime binding, keyed by its normalized instruction hash.
+
+    The tracked sources' specs parquets carry the runtime binding as its own column beside the
+    full serialized TaskSpec; a repair of the same task reuses that binding.
+    """
+    runtimes: dict[str, dict[str, Any]] = {}
+    for uri in spec_uris:
+        with tempfile.TemporaryFile() as local:
+            with StoragePath(uri).open("rb") as remote:
+                shutil.copyfileobj(remote, local)
+            local.seek(0)
+            with pq.ParquetFile(local) as handle:
+                names = handle.schema_arrow.names
+                if "runtime" not in names or "task_spec" not in names:
+                    raise ValueError(f"Tracked specs input has no task_spec+runtime columns: {uri}")
+                for batch in handle.iter_batches(batch_size=32, columns=["task_spec", "runtime"]):
+                    for encoded, runtime in zip(
+                        batch.column("task_spec").to_pylist(), batch.column("runtime").to_pylist()
+                    ):
                         if runtime is None:
                             continue
+                        task = TaskSpec.model_validate_json(encoded)
                         row = next(content_rows([task.model_dump(mode="json")]))
-                        runtimes.setdefault(row.instruction_hash, runtime)
+                        runtimes.setdefault(row.instruction_hash, json.loads(runtime))
     if not runtimes:
         raise ValueError("The tracked specs carry no runtime bindings")
     return runtimes
@@ -706,6 +724,7 @@ def convert_cohort(
     folders: tuple[str, ...],
     repo: str,
     candidate_revision: str,
+    tracked_uris: tuple[str, ...],
     tracked_spec_uris: tuple[str, ...],
     output_root: str,
     shard_size: int = 256,
@@ -728,6 +747,7 @@ def convert_cohort(
     # The production conversion path: the recipe lowered to a SourceRecipe, whose SourceFiles
     # carries the dataset identity, decode and converter that row_source and the row bind need.
     recipe_source = source_recipe(recipe, {}, context.grader_environment)
+    tracked_hashes: dict[str, str] | None = None
     runtime_join: dict[str, dict[str, Any]] | None = None
     winners = accepted_winners(report)
     paths = set(winner_paths(winners))
@@ -789,12 +809,16 @@ def convert_cohort(
         with (root / "task-map.jsonl").open("a", auto_mkdir=True) as stream:
             stream.write(json.dumps(entry) + "\n")
         if not isinstance(task, ImportRejection):
+            if tracked_hashes is None:
+                tracked_hashes = tracked_instruction_hashes(tracked_uris)
+            instruction_hash = tracked_hashes.get(winner["tracked_task_id"])
             if runtime_join is None:
                 runtime_join = tracked_runtimes(tracked_spec_uris)
-            runtime = runtime_join.get(winner["tracked_task_id"])
+            runtime = runtime_join.get(instruction_hash)
             if runtime is None:
                 raise ValueError(
-                    f"No tracked runtime binding for the winner's tracked task: {winner['tracked_task_id']}"
+                    f"No tracked runtime binding for the winner's tracked task: {winner['tracked_task_id']} "
+                    f"(instruction {instruction_hash})"
                 )
             buffer.append((candidate_id, entry, task, runtime))
             counts["converted"] += 1
@@ -974,12 +998,16 @@ def main() -> None:
         if args.with_prepare and (args.prepare_output_root is None or not args.source_revision):
             parser.error("--with-prepare requires --prepare-output-root and --source-revision")
         report = json.loads(StoragePath(args.cohort_report).read_text())
+        cohort_tracked_uris = (
+            tuple(args.tracked_parquet) if args.tracked_parquet else resolve_tracked_uris(args.tracked_source_id)
+        )
         manifest = convert_cohort(
             tracked_source_id=args.tracked_source_id,
             report=report,
             folders=tuple(args.folder),
             repo=args.repo,
             candidate_revision=args.candidate_revision,
+            tracked_uris=cohort_tracked_uris,
             tracked_spec_uris=tuple(args.tracked_specs or ()),
             output_root=args.cohort_output_root,
             drop_wrapper_solve_sh=args.drop_wrapper_solve_sh,
