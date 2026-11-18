@@ -3,9 +3,12 @@
 
 """Tests for the NCCL transport probe's log parsing and gate verdict."""
 
+import hashlib
+
 from experiments.post_training.nccl_transport_probe import (
     NcclCensus,
     gate_verdict,
+    mapped_nccl_libraries,
     parse_nccl_census,
 )
 
@@ -44,3 +47,24 @@ def test_gate_verdict_fails_closed_on_sockets_and_failures():
     assert gate_verdict(True, [["NET/Socket/0"]]) == "socket_transport"
     assert gate_verdict(True, [[], ["NET/Socket/0/Shared"]]) == "socket_transport"
     assert gate_verdict(False, [["NET/IB/0/GDRDMA"]]) == "collective_failed"
+
+
+def test_mapped_nccl_libraries_parses_proc_maps(tmp_path):
+    """The maps scanner finds libnccl entries and hashes the real files."""
+    library = tmp_path / "libnccl.so.2"
+    library.write_bytes(b"nccl-fixture-bytes")
+    maps = tmp_path / "maps"
+    maps.write_text(
+        "7f0e00000000-7f0e10000000 r-xp 00000000 08:02 1234   "
+        f"{library}\n"
+        "7f0e20000000-7f0e21000000 r-xp 00000000 08:02 5678   "
+        f"{tmp_path}/libother.so\n"
+        "7f0e30000000-7f0e31000000 r--p 00000000 00:00 0      [vvar]\n"
+    )
+    records = mapped_nccl_libraries(maps)
+    assert [record["path"] for record in records] == [str(library)]
+    assert records[0]["sha256"] == hashlib.sha256(b"nccl-fixture-bytes").hexdigest()
+
+
+def test_mapped_nccl_libraries_without_maps_is_empty(tmp_path):
+    assert mapped_nccl_libraries(tmp_path / "missing") == []

@@ -524,15 +524,21 @@ def gate_verdict(passed: bool, rank_transports: list[list[str]]) -> str:
     return "pass"
 
 
-def mapped_nccl_libraries() -> list[dict[str, str]]:
-    """Identify the mapped libnccl files in this process with their hashes."""
+def mapped_nccl_libraries(maps_path: Path = Path("/proc/self/maps")) -> list[dict[str, str]]:
+    """Identify the mapped libnccl files in this process with their hashes.
+
+    Maps lines are ``addr perms offset dev inode pathname``; the path field
+    may itself contain spaces, so split at most five times.
+    """
     records: list[dict[str, str]] = []
-    maps_path = Path("/proc/self/maps")
     if not maps_path.exists():
         return records
     seen: set[str] = set()
     for line in maps_path.read_text(errors="replace").splitlines():
-        path = line.rpartition(" ").pop().strip()
+        fields = line.split(None, 5)
+        if len(fields) < 6:
+            continue
+        path = fields[5].strip()
         if "libnccl" not in path or path in seen or not path.startswith("/"):
             continue
         seen.add(path)
@@ -576,7 +582,10 @@ def run_pynccl_init_check(device) -> dict:
         info["pynccl_init"] = "pass"
         info["nccl_library_version"] = communicator.nccl.ncclGetVersion()
         info["nccl_library_raw_version"] = communicator.nccl_version
-        info["mapped_libraries"] = mapped_nccl_libraries()
+        try:
+            info["mapped_libraries"] = mapped_nccl_libraries()
+        except Exception as inventory_error:
+            info["mapped_libraries_error"] = f"{type(inventory_error).__name__}: {inventory_error}"
     except Exception as error:
         info["pynccl_init"] = "failed"
         info["error"] = f"{type(error).__name__}: {error}"
