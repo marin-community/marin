@@ -147,10 +147,11 @@ def join_rows(
         parts = sorted(source_ids[spec.lang])
         offset = 0
         for part in parts:
+            part_key = part.removesuffix(".parquet")
             uuids = [chat_id_to_uuid[spec.lang][chat_id] for chat_id in source_ids[spec.lang][part]]
             for row, uuid in enumerate(uuids):
                 row_to_uuid[(spec.lang, offset + row)] = uuid
-                audit = audit_rows.get((spec.lang, part, row))
+                audit = audit_rows.get((spec.lang, part_key, row))
                 if audit is None or audit["uuid"] != uuid:
                     raise ValueError(f"Audit identity mismatch for {spec.lang} {part} row {row}")
                 row_stage[(spec.lang, offset + row)] = audit["our_stage"]
@@ -238,10 +239,10 @@ def main() -> None:
             row["keep_E2"] = row["keep_A"]
 
     # Option G rescue: each problem left with no accepted row keeps its shortest accepted row.
-    accepted = [row for row in rows if row["status"] == "accepted"]
-    survivors = {row["problem"] for row in accepted if not row["give_up"]}
+    accepted = [(index, row) for index, row in enumerate(rows) if row["status"] == "accepted"]
+    survivors = {row["problem"] for _index, row in accepted if not row["give_up"]}
     shortest: dict[str, tuple[int, int]] = {}
-    for index, row in enumerate(accepted):
+    for index, row in accepted:
         if row["problem"] in survivors:
             continue
         # First occurrence wins ties, matching the frozen row order (cpp parts, then python).
