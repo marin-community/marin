@@ -386,13 +386,11 @@ def _verify_carry_forward_inputs(
     panel = earlier.panel
     if (
         panel.dataset_id,
-        panel.dataset_revision,
         panel.converter_version,
         panel.retained_tasks,
         panel.task_specs_sha256,
     ) != (
         earlier_population.dataset_id,
-        earlier_population.dataset_revision,
         earlier_population.source_version,
         earlier_population.task_count,
         earlier_population.task_specs_sha256,

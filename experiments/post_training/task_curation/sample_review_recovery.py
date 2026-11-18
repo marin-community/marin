@@ -179,6 +179,9 @@ class PriorOutcome:
     reviewer_sha256: str
     carried: int
     normalization: ContractNormalization | None
+    carried_reviews: tuple = ()
+    reviewer: dict | None = None
+    refusal: str | None = None
 
 
 def recover_target(
@@ -203,48 +206,21 @@ def recover_target(
     priors: list[PriorOutcome] = []
     reviewers: list[dict] = []
     for reference in target.prior:
-        prior_receipt = read_receipt_reference(reference, target.source_id)
-        if prior_receipt.review.reviewer not in reviewers:
-            reviewers.append(prior_receipt.review.reviewer)
-        prior_population = SourceTextPopulation.raw_load(prior_receipt.review.panel.input_artifact)
-        normalization = None
-        normalized_fields: frozenset[str] = frozenset()
-        for field in normalization_fields:
-            try:
-                normalization = build_normalization_receipt(
-                    target.source_id,
-                    prior_population.path,
-                    current_population.path,
-                    field,
-                    _normalization_evidence_url(output_root, target, reference, field),
-                )
-            except NormalizationRefused as error:
-                logger.info("Normalization refused for %s from %s: %s", target.source_id, reference.revision[:12], error)
-                continue
-            normalized_fields = frozenset({field})
-            break
-        evidence = earlier_panel_evidence(
-            prior_receipt, _evidence_reference(reference), normalized_fields=normalized_fields
-        )
-        plan = plan_review_carry_forward(
-            target.source_id,
-            evidence,
-            prior_population,
-            current_population,
-            population_identities(prior_population, normalized_fields=normalized_fields),
-            current_identities(normalized_fields),
-            normalization=normalization,
-        )
-        for review in plan.carried_reviews:
-            carried.setdefault(review.task_identity_sha256, review)
-        priors.append(
-            PriorOutcome(
-                reference=reference,
-                reviewer_sha256=canonical_sha256(evidence.reviewer),
-                carried=len(plan.carried_reviews),
-                normalization=normalization,
+        try:
+            outcome = _recover_prior(
+                target, output_root, normalization_fields, reference, current_population, current_identities
             )
-        )
+        except ValueError as error:
+            logger.warning("Prior receipt refused for %s from %s: %s", target.source_id, reference.revision[:12], error)
+            priors.append(
+                PriorOutcome(reference=reference, reviewer_sha256="", carried=0, normalization=None, refusal=str(error))
+            )
+            continue
+        if outcome.reviewer not in reviewers:
+            reviewers.append(outcome.reviewer)
+        for review in outcome.carried_reviews:
+            carried.setdefault(review.task_identity_sha256, review)
+        priors.append(outcome)
     recovery = sample_recovery_outcome(
         target.source_id,
         current_population.task_count,
@@ -253,6 +229,53 @@ def recover_target(
         reviewers=tuple(reviewers) or (current_receipt.review.reviewer,),
     )
     return recovery, priors
+
+
+def _recover_prior(
+    target: RecoveryTarget,
+    output_root: str,
+    normalization_fields: tuple[str, ...],
+    reference: ReceiptReference,
+    current_population: SourceTextPopulation,
+    current_identities,
+) -> PriorOutcome:
+    """Carry one prior receipt's conclusive reviews onto the current pin."""
+    prior_receipt = read_receipt_reference(reference, target.source_id)
+    prior_population = SourceTextPopulation.raw_load(prior_receipt.review.panel.input_artifact)
+    normalization = None
+    normalized_fields: frozenset[str] = frozenset()
+    for field in normalization_fields:
+        try:
+            normalization = build_normalization_receipt(
+                target.source_id,
+                prior_population.path,
+                current_population.path,
+                field,
+                _normalization_evidence_url(output_root, target, reference, field),
+            )
+        except NormalizationRefused as error:
+            logger.info("Normalization refused for %s from %s: %s", target.source_id, reference.revision[:12], error)
+            continue
+        normalized_fields = frozenset({field})
+        break
+    evidence = earlier_panel_evidence(prior_receipt, _evidence_reference(reference), normalized_fields=normalized_fields)
+    plan = plan_review_carry_forward(
+        target.source_id,
+        evidence,
+        prior_population,
+        current_population,
+        population_identities(prior_population, normalized_fields=normalized_fields),
+        current_identities(normalized_fields),
+        normalization=normalization,
+    )
+    return PriorOutcome(
+        reference=reference,
+        reviewer_sha256=canonical_sha256(evidence.reviewer),
+        carried=len(plan.carried_reviews),
+        normalization=normalization,
+        carried_reviews=plan.carried_reviews,
+        reviewer=evidence.reviewer,
+    )
 
 
 def _evidence_reference(reference: ReceiptReference) -> ContentEvidenceReference:
@@ -294,6 +317,7 @@ def recover_queue(queue: RecoveryQueue, output_root: str, normalization_fields: 
                     "reviewer_sha256": outcome.reviewer_sha256,
                     "carried": outcome.carried,
                     "normalization_field": outcome.normalization.field if outcome.normalization else None,
+                    "refusal": outcome.refusal,
                 }
                 for outcome in priors
             ],
