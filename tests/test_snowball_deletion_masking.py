@@ -10,7 +10,9 @@ hook during training only.
 """
 
 import dataclasses
+import json
 import math
+import shutil
 from pathlib import Path
 
 import equinox as eqx
@@ -278,9 +280,6 @@ def test_apply_hard_mask_zeroes_deleted_weights(mesh):
 
 def _materialize_tokenizer_fixture(dest_dir) -> str:
     """The vendored offline tokenizer fixture as a loadable directory (vocab 5027)."""
-    import json
-    import shutil
-
     root = Path(__file__).resolve().parents[1]
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
