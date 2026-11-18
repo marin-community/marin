@@ -176,7 +176,7 @@ def test_deletion_sft_spec_swaps_optimizer_and_dispatch(monkeypatch):
     )
     monkeypatch.setattr(v1_sft_module, "exp3_sft_spec", lambda name, version, recipe: spec)
 
-    recipe = _production_recipe()
+    recipe = v1_recipe(_production_recipe())
     built = deletion_sft_spec("deletion-tuning/v1-sft", "2026.11.18.1", recipe)
 
     assert isinstance(built.optimizer, AdamConfig)

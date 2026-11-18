@@ -109,7 +109,7 @@ def _save_tiny_hf(config: SnowballConfig, hf_dir: Path) -> str:
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
         vocab = hax.Axis("vocab", config.vocab_size)
         model = SnowballLMHeadModel.init(vocab, config, key=jax.random.PRNGKey(0))
-    config.hf_checkpoint_converter().save_pretrained(model, str(hf_dir), dtype=jnp.float32)
+        config.hf_checkpoint_converter().save_pretrained(model, str(hf_dir), dtype=jnp.float32)
     return str(hf_dir)
 
 
