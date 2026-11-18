@@ -10,7 +10,13 @@ from collections.abc import Mapping
 from functools import partial
 from typing import Any
 
-from evalrecords.records import DEFAULT_EVALUATION_CONCURRENCY, JudgeIdentity, TaskEvidence, scoring_settings
+from evalrecords.records import (
+    DEFAULT_EVALUATION_CONCURRENCY,
+    JudgeIdentity,
+    TaskEvidence,
+    TaskEvidenceSetting,
+    scoring_settings,
+)
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
@@ -109,13 +115,10 @@ class EvaluationRunConfig(RunModel):
     task_machine: MachineRuntimeSpec | None = None
     verifier_machine: MachineRuntimeSpec | None = None
     judge: JudgeIdentity | None = None
-    # Omitted at the default, which matches runs started before this setting existed.
-    task_evidence: TaskEvidence = Field(
-        default=TaskEvidence.EMBEDDED, exclude_if=lambda value: value is TaskEvidence.EMBEDDED
-    )
+    task_evidence: TaskEvidenceSetting = TaskEvidence.EMBEDDED
 
 
-def task_evidence(task: TaskSpec, mode: TaskEvidence) -> dict[str, Any]:
+def saved_task_fields(task: TaskSpec, mode: TaskEvidence) -> dict[str, Any]:
     """The task fields saved with an attempt; the item always names the task in its corpus."""
     return {"task": task.model_dump(mode="json")} if mode is TaskEvidence.EMBEDDED else {}
 
@@ -346,7 +349,7 @@ async def _score_likelihood(
     )
     primary = metrics.get(protocol.primary_metric)
     raw = {
-        **task_evidence(case.task, evidence),
+        **saved_task_fields(case.task, evidence),
         "item": case.item.model_dump(mode="json"),
         "scores": [dataclasses.asdict(result) for result in results],
         "outcome": outcome,
@@ -477,7 +480,7 @@ async def _score_generation(
     sample = _sample(case, protocol, task, rollout, grade)
     turns = [step.turn for conversation in rollout.conversations for step in conversation.steps]
     raw = {
-        **task_evidence(task, config.task_evidence),
+        **saved_task_fields(task, config.task_evidence),
         "item": case.item.model_dump(mode="json"),
         "grade": dataclasses.asdict(grade),
         "conversations": [dataclasses.asdict(conversation) for conversation in rollout.conversations],

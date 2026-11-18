@@ -18,7 +18,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
@@ -425,6 +425,10 @@ class TaskEvidence(StrEnum):
     """A full copy of the TaskSpec, including hidden test resources."""
 
 
+# Omitted when embedded, which matches records and runs written before this setting existed.
+TaskEvidenceSetting = Annotated[TaskEvidence, Field(exclude_if=lambda value: value is TaskEvidence.EMBEDDED)]
+
+
 class CuratedSettings(BaseModel):
     """Recorded selection and execution settings shared by launch and dashboard readers."""
 
@@ -435,10 +439,7 @@ class CuratedSettings(BaseModel):
     seed: int | None = None
     judge: JudgeIdentity | None = None
     concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
-    # Omitted at the default, which matches records written before this setting existed.
-    task_evidence: TaskEvidence = Field(
-        default=TaskEvidence.EMBEDDED, exclude_if=lambda value: value is TaskEvidence.EMBEDDED
-    )
+    task_evidence: TaskEvidenceSetting = TaskEvidence.EMBEDDED
 
 
 def scoring_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
