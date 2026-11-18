@@ -10,10 +10,10 @@ from dataclasses import replace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import ActorCensusInput, IndependentQC
-from finestore.rl.curation import SourceQualityResult
+from finestore.rl.curation import ActorCensusInput, SourceQualityResult
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from pydantic import ValidationError
+from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.content_identity import (
     ContentIdentityReceipt,
@@ -23,13 +23,14 @@ from experiments.post_training.task_curation.content_identity import (
 )
 from experiments.post_training.task_curation.full_content_binding import RetainedLineageProof
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.sample_qc_artifacts import SamplePanel, SampleQCReview
 from experiments.post_training.task_curation.sample_qc_binding import (
     SampleQCReceipt,
     bind_sample_result,
     sample_matches_lineage,
 )
-from experiments.post_training.task_curation.source import SourceReference
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 SOURCE_ID = "OpenAthena:identity-source"
@@ -50,11 +51,11 @@ def write_population(tmp_path, name, tasks_by_id, *, rows_per_shard=2):
     for shard in range((len(items) + rows_per_shard - 1) // rows_per_shard):
         rows = [
             {"id": key, "task_spec": tasks_by_id[key], "runtime": "{}"}
-            for key, _ in items[shard * rows_per_shard:(shard + 1) * rows_per_shard]
+            for key, _ in items[shard * rows_per_shard : (shard + 1) * rows_per_shard]
         ]
         with (specs / f"part-{shard:06d}.parquet").open("wb") as stream:
             pq.write_table(pa.Table.from_pylist(rows), stream)
-        for key, _ in items[shard * rows_per_shard:(shard + 1) * rows_per_shard]:
+        for key, _ in items[shard * rows_per_shard : (shard + 1) * rows_per_shard]:
             task_specs_sha256.update(tasks_by_id[key].encode())
     population = SourceTextPopulation(
         path=str(root),
@@ -74,7 +75,8 @@ def write_population(tmp_path, name, tasks_by_id, *, rows_per_shard=2):
     )
     write_record(
         ArtifactRecord(
-            output_path=str(root), result_type=result_type_name(SourceTextPopulation),
+            output_path=str(root),
+            result_type=result_type_name(SourceTextPopulation),
             result=population.result_payload(),
         )
     )
@@ -97,10 +99,14 @@ def identity_receipt(original, reissued, tmp_path):
         dataset_id=PIN,
         dataset_revision=REVISION,
         original=PopulationDigest(
-            artifact=original.path, task_specs_sha256=original.task_specs_sha256, task_count=original.task_count,
+            artifact=original.path,
+            task_specs_sha256=original.task_specs_sha256,
+            task_count=original.task_count,
         ),
         reissued=PopulationDigest(
-            artifact=reissued.path, task_specs_sha256=reissued.task_specs_sha256, task_count=reissued.task_count,
+            artifact=reissued.path,
+            task_specs_sha256=reissued.task_specs_sha256,
+            task_count=reissued.task_count,
         ),
         identity_sha256="e" * 64,
         evidence_url=str(tmp_path / "digests.parquet"),
@@ -110,7 +116,12 @@ def identity_receipt(original, reissued, tmp_path):
 def test_builder_accepts_byte_identical_re_serialization(reserialized_pair, tmp_path):
     original, reissued = reserialized_pair
     receipt = build_identity_receipt(
-        SOURCE_ID, PIN, REVISION, original.path, reissued.path, str(tmp_path / "digests.parquet"),
+        SOURCE_ID,
+        PIN,
+        REVISION,
+        original.path,
+        reissued.path,
+        str(tmp_path / "digests.parquet"),
     )
     assert receipt.original.task_specs_sha256 == original.task_specs_sha256
     assert receipt.reissued.task_specs_sha256 == reissued.task_specs_sha256
@@ -121,13 +132,18 @@ def test_builder_accepts_byte_identical_re_serialization(reserialized_pair, tmp_
 
 
 def test_builder_refuses_one_changed_task(reserialized_pair, tmp_path):
-    original, reissued = reserialized_pair
+    original, _ = reserialized_pair
     changed = dict(TASKS)
     changed["task-002"] = json.dumps({"id": "task-002", "prompt": "changed"})
     mutated = write_population(tmp_path, "mutated", changed, rows_per_shard=2)
     with pytest.raises(ValueError, match="1 tasks differ"):
         build_identity_receipt(
-            SOURCE_ID, PIN, REVISION, original.path, mutated.path, str(tmp_path / "digests.parquet"),
+            SOURCE_ID,
+            PIN,
+            REVISION,
+            original.path,
+            mutated.path,
+            str(tmp_path / "digests.parquet"),
         )
 
 
@@ -137,7 +153,12 @@ def test_builder_refuses_count_mismatch(reserialized_pair, tmp_path):
     shorter = write_population(tmp_path, "shorter", subset, rows_per_shard=2)
     with pytest.raises(ValueError, match="task digests"):
         build_identity_receipt(
-            SOURCE_ID, PIN, REVISION, original.path, shorter.path, str(tmp_path / "digests.parquet"),
+            SOURCE_ID,
+            PIN,
+            REVISION,
+            original.path,
+            shorter.path,
+            str(tmp_path / "digests.parquet"),
         )
 
 
@@ -233,10 +254,6 @@ def test_lineage_refuses_identity_for_another_pin(reserialized_pair, tmp_path):
 
 
 def declared_source(reissued, tmp_path):
-    from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
-    from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-    from taskcompendium.pipeline.models import IntendedUse
-
     actor = ActorCensusInput(
         dataset_id=PIN,
         dataset_revision=REVISION,
@@ -273,7 +290,9 @@ def test_current_pin_panel_binds_through_identity(reserialized_pair, tmp_path):
     with pytest.raises(ValueError, match="another current population"):
         bind_sample_result(source, receipt)
     bound = bind_sample_result(
-        source, receipt, content_identity=identity_receipt(original, reissued, tmp_path),
+        source,
+        receipt,
+        content_identity=identity_receipt(original, reissued, tmp_path),
     )
     assert bound.info.quality_result == receipt.review.result
     assert "content-identity receipt" in bound.info.independent_qc.method
@@ -287,7 +306,9 @@ def test_current_pin_panel_refuses_changed_task(reserialized_pair, tmp_path):
     forged = identity_receipt(original, reissued, tmp_path).model_copy(
         update={
             "reissued": PopulationDigest(
-                artifact=reissued.path, task_specs_sha256="9" * 64, task_count=len(TASKS),
+                artifact=reissued.path,
+                task_specs_sha256="9" * 64,
+                task_count=len(TASKS),
             ),
         },
     )

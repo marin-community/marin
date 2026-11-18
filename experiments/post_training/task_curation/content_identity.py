@@ -124,14 +124,17 @@ def build_identity_receipt(
     reissued = SourceTextPopulation.raw_load(reissued_artifact)
     original_digests = population_task_digests(original)
     reissued_digests = population_task_digests(reissued)
-    differing = sorted(key for key in original_digests.keys() | reissued_digests.keys()
-                       if original_digests.get(key) != reissued_digests.get(key))
+    differing = sorted(
+        key
+        for key in original_digests.keys() | reissued_digests.keys()
+        if original_digests.get(key) != reissued_digests.get(key)
+    )
     if differing:
         raise ValueError(
             f"Content identity refused: {len(differing)} tasks differ between the conversions of "
             f"{source_id} (first: {differing[:3]})"
         )
-    for population, digests in ((original, original_digests), (reissued, reissued_digests)):
+    for population in (original, reissued):
         declared = artifact_spec_digest(population)
         if declared != population.task_specs_sha256:
             raise ValueError(
@@ -150,7 +153,10 @@ def build_identity_receipt(
         pq.write_table(table, stream, compression="zstd")
     LOGGER.info(
         "Content identity %s: %d tasks identical across %s and %s",
-        source_id, len(original_digests), original.task_specs_sha256[:12], reissued.task_specs_sha256[:12],
+        source_id,
+        len(original_digests),
+        original.task_specs_sha256[:12],
+        reissued.task_specs_sha256[:12],
     )
     return ContentIdentityReceipt(
         source_id=source_id,
@@ -173,13 +179,11 @@ def build_identity_receipt(
 
 def read_content_identity_receipts(
     path: Path = CONTENT_IDENTITY_RECEIPTS_PATH,
-    *, load_json=read_registry_json,
+    *,
+    load_json=read_registry_json,
 ) -> dict[str, ContentIdentityReceipt]:
     """Load the pinned content-identity receipts through their registry reference."""
-    return {
-        source_id: ContentIdentityReceipt.model_validate(record)
-        for source_id, record in load_json(path).items()
-    }
+    return {source_id: ContentIdentityReceipt.model_validate(record) for source_id, record in load_json(path).items()}
 
 
 def main() -> None:
