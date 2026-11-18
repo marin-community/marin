@@ -265,8 +265,8 @@ run's admission cap at two groups, use
 before updating `spec`. Use a new artifact version for the changed
 inference layout and inspect the rendered launch document before submitting it.
 
-The recipe targets the pinned published vLLM build
-`marin-vllm-gpu-20261113-0ac9dcb157ee`. CPU validation covers recipe composition,
+This example was composed for vLLM build `marin-vllm-gpu-20261113-0ac9dcb157ee`.
+CPU validation covers recipe composition,
 native launch loading, training configuration and three-domain placement, with
 and without existing inference topology declarations. It also checks the two-group
 admission override. These checks provide no GPU execution or performance evidence.
