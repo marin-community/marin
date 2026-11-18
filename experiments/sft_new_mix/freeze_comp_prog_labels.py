@@ -12,6 +12,7 @@ writes one gzip JSONL label table plus a receipt. The table feeds
 import argparse
 import gzip
 import hashlib
+import io
 import json
 import logging
 from dataclasses import dataclass
@@ -20,11 +21,20 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.sft_new_mix.exp3_runtime import configure_storage
 
 logger = logging.getLogger(__name__)
+
+
+def read_remote_parquet(uri: str) -> pq.Table:
+    """Read one small parquet object through the bucket-aware filesystem."""
+    fs = filesystem_for(uri)
+    fs = fs[0] if isinstance(fs, tuple) else fs
+    return pq.read_table(io.BytesIO(fs.cat(uri)))
+
 
 AUDIT_REVISION = "9735445ff6adb6308603f014fa833cce0b05d67d"
 AUDIT_REPO = "Min-Li/marin-sft-data-audit"
@@ -130,7 +140,7 @@ def join_rows(
     row_to_uuid: dict[tuple[str, int], str] = {}
     row_stage: dict[tuple[str, int], str] = {}
     stage_drops: dict[str, int] = {}
-    decisions = pq.read_table(f"{join_prefix}/our_row_decisions.parquet").to_pylist()
+    decisions = read_remote_parquet(f"{join_prefix}/our_row_decisions.parquet").to_pylist()
     audit_rows = {(record["lang"], record["part"], record["row"]): record for record in decisions}
     seen = 0
     for spec in specs:
