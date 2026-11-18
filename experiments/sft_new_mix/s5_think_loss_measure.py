@@ -175,7 +175,6 @@ def main() -> None:
     raw_path = hf_hub_download(
         MATH_SOURCE["dataset"], MATH_SOURCE["file"], repo_type="dataset", revision=MATH_SOURCE["revision"]
     )
-    wanted: set[str] = set()
     sampled_texts = decode_rows(math_rows, args.tokenizer_uri, args.tokenizer_sha256)
     problem_hashes = set()
     for text in sampled_texts.values():
