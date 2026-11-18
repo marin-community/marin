@@ -600,12 +600,13 @@ def create_ray_wrapped_inference_engines(
             "inference engines (trainer.placement.colocate_all=false). Colocated engines need "
             "the ray backend for shared-GPU resource management."
         )
-    # Expert-block publication needs checked receivers even for a single serving rank.
+    # Generation-only runs can share a placement group without sleeping. Verify those
+    # workers before allowing cross-node EP; expert-block publication also checks single ranks.
     verify_workers = (
         tensor_parallel_size == 1
         and (data_parallel_size > 1 or require_verified_placements)
         and not use_mp_backend
-        and (not (use_hybrid_engine or inference_engine_enable_sleep) or require_verified_placements)
+        and (not inference_engine_enable_sleep or require_verified_placements)
     )
     if require_verified_placements and not verify_workers:
         raise ValueError("Verified expert-block placements require local TP=1 vLLM workers")
