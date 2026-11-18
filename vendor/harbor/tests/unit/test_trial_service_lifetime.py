@@ -347,7 +347,7 @@ async def test_late_relay_failure_stops_active_trial_without_cancelling_neighbor
 async def test_runtime_failure_preserves_reward_only_after_verification(tmp_path, monkeypatch, failure):
     factory = ProcessTaskFactory(tmp_path / "guest")
     monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
-    reward = 0 if failure == "teardown" else 1
+    reward = 0 if failure.startswith("teardown") else 1
     trial = await Trial.create(
         trial_config(tmp_path, "runtime-failure", guest_root=tmp_path / "guest", reward=reward)
     )
