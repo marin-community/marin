@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SPEC_PATH = Path(__file__).with_name("micro210-policy.json")
-SPEC_SHA256 = "13cebe0fc688fa906dc0490e6db269a4b2c2f311289deb10d07a2690dc9e9f0d"
+SPEC_SHA256 = "37fd7d1647c7e64294205935780442b4fde8a24df9bf6e11c166826a07b660cb"
 
 
 @dataclass(frozen=True)
@@ -23,8 +23,18 @@ class Micro210Model:
 
 
 @dataclass(frozen=True)
+class Micro210Record:
+    """Serializable identity of the model, protocol and evaluation outputs."""
+
+    canonical_spec_sha256: str
+    model: Micro210Model
+    run_id: str
+    output_uri: str
+
+
+@dataclass(frozen=True)
 class Micro210Evaluation:
-    """A model binding and run address under the frozen protocol."""
+    """A model binding and output location under the frozen protocol."""
 
     model: Micro210Model
     run_id: str
@@ -36,23 +46,13 @@ class Micro210Evaluation:
             raise ValueError("Canonical Micro210 specification hash mismatch")
         return json.loads(raw)
 
-    def record(self) -> dict:
+    def record(self) -> Micro210Record:
         self.policy()
-        return {
-            "canonical_spec_sha256": SPEC_SHA256,
-            "run_id": self.run_id,
-            "output_uri": self.output_uri,
-            "model": {
-                "uri": self.model.uri,
-                "identity": self.model.identity,
-                "tokenizer_uri": self.model.tokenizer_uri,
-                "tokenizer_revision": self.model.tokenizer_revision,
-            },
-        }
+        return Micro210Record(SPEC_SHA256, self.model, self.run_id, self.output_uri)
 
 
 def micro210_evaluation(model: Micro210Model, *, run_id: str, output_uri: str, **overrides) -> Micro210Evaluation:
-    """Construct the canonical evaluation; report any attempted override by name."""
+    """Construct the canonical evaluation; name the first forbidden override."""
     if overrides:
         raise ValueError(f"Canonical Micro210 refuses override field: {next(iter(overrides))}")
     request = Micro210Evaluation(model, run_id, output_uri)

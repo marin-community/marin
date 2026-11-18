@@ -338,5 +338,4011 @@
     "seed": 20261030,
     "supported_path_count": 20,
     "tasks_per_benchmark": 10
-  }
+  },
+  "prepared_rollouts_sha256": "00cdda0654be66060d3ff77b6b44e3dc6fa470e50625ef61ef24b5d9c778bef7",
+  "selection": {
+    "attempts": 440,
+    "attempts_per_agent": {
+      "pi": 100,
+      "single-turn": 340
+    },
+    "attempts_per_benchmark": {
+      "NUPA": 10,
+      "aime24": 100,
+      "bfclparity-pi": 10,
+      "bixbench-pi": 10,
+      "cruxeval": 10,
+      "ds-1000-local": 10,
+      "gpqa-diamond": 30,
+      "gsm8k-0shot": 10,
+      "humanevalplus": 10,
+      "ifbench": 10,
+      "math500": 10,
+      "mbppplus": 10,
+      "mmlu-pro": 10,
+      "mrcr": 10,
+      "olympiadbench": 100,
+      "ot-tblite-recovery": 30,
+      "swebench-verified": 10,
+      "tb2-recovery": 30,
+      "triviaqa": 10,
+      "truthfulqa": 10
+    },
+    "attempts_per_data_source": {
+      "HaotongYang/NUPA_text": 10,
+      "HuggingFaceH4/MATH-500": 10,
+      "Idavidrein/gpqa": 30,
+      "TIGER-Lab/MMLU-Pro": 10,
+      "allenai/IFBench_test": 10,
+      "bfclparity-pi": 10,
+      "bixbench-pi": 10,
+      "cruxeval-org/cruxeval": 10,
+      "ds-1000-local": 10,
+      "evalplus/humanevalplus": 10,
+      "evalplus/mbppplus": 10,
+      "lmms-lab/olympiadbench": 100,
+      "mandarjoshi/trivia_qa": 10,
+      "openai/gsm8k": 10,
+      "openai/mrcr": 10,
+      "ot-tblite-recovery": 30,
+      "swebench-verified": 10,
+      "tb2-recovery": 30,
+      "truthfulqa/truthful_qa": 10,
+      "zwhe99/aime24": 100
+    },
+    "dataset": "open-athena/Marin-Micro-Eval-210",
+    "expanded_source_sha256": "d19c18df2d13f1056b724dd1a7732dfe738c16e0da9c8be88a431cde67f7e4a1",
+    "identities": [
+      {
+        "benchmark": "cruxeval",
+        "data_source": "cruxeval-org/cruxeval",
+        "dataset_row_uid": "0",
+        "repetition_index": 0,
+        "task_id": "cruxeval/sample_229"
+      },
+      {
+        "benchmark": "bixbench-pi",
+        "data_source": "bixbench-pi",
+        "dataset_row_uid": "1",
+        "repetition_index": 0,
+        "task_id": "bixbench-pi/bix-51-q6"
+      },
+      {
+        "benchmark": "humanevalplus",
+        "data_source": "evalplus/humanevalplus",
+        "dataset_row_uid": "2",
+        "repetition_index": 0,
+        "task_id": "humanevalplus/HumanEval/69"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "3",
+        "repetition_index": 0,
+        "task_id": "tb2-recovery/terminal-bench/raman-fitting"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "4",
+        "repetition_index": 1,
+        "task_id": "tb2-recovery/terminal-bench/raman-fitting"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "5",
+        "repetition_index": 2,
+        "task_id": "tb2-recovery/terminal-bench/raman-fitting"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "6",
+        "repetition_index": 0,
+        "task_id": "ot-tblite-recovery/malicious-package-forensics"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "7",
+        "repetition_index": 1,
+        "task_id": "ot-tblite-recovery/malicious-package-forensics"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "8",
+        "repetition_index": 2,
+        "task_id": "ot-tblite-recovery/malicious-package-forensics"
+      },
+      {
+        "benchmark": "gsm8k-0shot",
+        "data_source": "openai/gsm8k",
+        "dataset_row_uid": "9",
+        "repetition_index": 0,
+        "task_id": "gsm8k-0shot/doc:2982c63cbf6e880ce0c09928e4694370e68a2c1059e1aadcc6f5c977d82e9f79"
+      },
+      {
+        "benchmark": "ds-1000-local",
+        "data_source": "ds-1000-local",
+        "dataset_row_uid": "10",
+        "repetition_index": 0,
+        "task_id": "ds-1000-local/ds-1000/754"
+      },
+      {
+        "benchmark": "ifbench",
+        "data_source": "allenai/IFBench_test",
+        "dataset_row_uid": "11",
+        "repetition_index": 0,
+        "task_id": "ifbench/doc:378c83dee84882380f10da34e77617f45edb535b647827a835820472b2711840"
+      },
+      {
+        "benchmark": "bfclparity-pi",
+        "data_source": "bfclparity-pi",
+        "dataset_row_uid": "12",
+        "repetition_index": 0,
+        "task_id": "bfclparity-pi/bfcl-multiple-16"
+      },
+      {
+        "benchmark": "truthfulqa",
+        "data_source": "truthfulqa/truthful_qa",
+        "dataset_row_uid": "13",
+        "repetition_index": 0,
+        "task_id": "truthfulqa/doc:67d9840e2ca454640096139641e1e54b994f4e0c5f262692862a81ca397ecff3"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "14",
+        "repetition_index": 0,
+        "task_id": "olympiadbench/doc:e5b948e35311290aebf31bf20c8ac02a32b7e9bc01018ec079289286672b1702"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "15",
+        "repetition_index": 1,
+        "task_id": "olympiadbench/doc:e5b948e35311290aebf31bf20c8ac02a32b7e9bc01018ec079289286672b1702"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "16",
+        "repetition_index": 2,
+        "task_id": "olympiadbench/doc:e5b948e35311290aebf31bf20c8ac02a32b7e9bc01018ec079289286672b1702"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "17",
+        "repetition_index": 3,
+        "task_id": "olympiadbench/doc:e5b948e35311290aebf31bf20c8ac02a32b7e9bc01018ec079289286672b1702"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "18",
+        "repetition_index": 4,
+        "task_id": "olympiadbench/doc:e5b948e35311290aebf31bf20c8ac02a32b7e9bc01018ec079289286672b1702"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "19",
+        "repetition_index": 5,
+        "task_id": "olympiadbench/doc:e5b948e35311290aebf31bf20c8ac02a32b7e9bc01018ec079289286672b1702"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "20",
+        "repetition_index": 6,
+        "task_id": "olympiadbench/doc:e5b948e35311290aebf31bf20c8ac02a32b7e9bc01018ec079289286672b1702"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "21",
+        "repetition_index": 7,
+        "task_id": "olympiadbench/doc:e5b948e35311290aebf31bf20c8ac02a32b7e9bc01018ec079289286672b1702"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "22",
+        "repetition_index": 8,
+        "task_id": "olympiadbench/doc:e5b948e35311290aebf31bf20c8ac02a32b7e9bc01018ec079289286672b1702"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "23",
+        "repetition_index": 9,
+        "task_id": "olympiadbench/doc:e5b948e35311290aebf31bf20c8ac02a32b7e9bc01018ec079289286672b1702"
+      },
+      {
+        "benchmark": "triviaqa",
+        "data_source": "mandarjoshi/trivia_qa",
+        "dataset_row_uid": "24",
+        "repetition_index": 0,
+        "task_id": "triviaqa/dataset-row:5692"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "25",
+        "repetition_index": 0,
+        "task_id": "aime24/doc:2f2f1b8427ddf0da2e36c59867338d9e1230d8bc12b66fbcca605a9e1109587d"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "26",
+        "repetition_index": 1,
+        "task_id": "aime24/doc:2f2f1b8427ddf0da2e36c59867338d9e1230d8bc12b66fbcca605a9e1109587d"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "27",
+        "repetition_index": 2,
+        "task_id": "aime24/doc:2f2f1b8427ddf0da2e36c59867338d9e1230d8bc12b66fbcca605a9e1109587d"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "28",
+        "repetition_index": 3,
+        "task_id": "aime24/doc:2f2f1b8427ddf0da2e36c59867338d9e1230d8bc12b66fbcca605a9e1109587d"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "29",
+        "repetition_index": 4,
+        "task_id": "aime24/doc:2f2f1b8427ddf0da2e36c59867338d9e1230d8bc12b66fbcca605a9e1109587d"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "30",
+        "repetition_index": 5,
+        "task_id": "aime24/doc:2f2f1b8427ddf0da2e36c59867338d9e1230d8bc12b66fbcca605a9e1109587d"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "31",
+        "repetition_index": 6,
+        "task_id": "aime24/doc:2f2f1b8427ddf0da2e36c59867338d9e1230d8bc12b66fbcca605a9e1109587d"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "32",
+        "repetition_index": 7,
+        "task_id": "aime24/doc:2f2f1b8427ddf0da2e36c59867338d9e1230d8bc12b66fbcca605a9e1109587d"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "33",
+        "repetition_index": 8,
+        "task_id": "aime24/doc:2f2f1b8427ddf0da2e36c59867338d9e1230d8bc12b66fbcca605a9e1109587d"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "34",
+        "repetition_index": 9,
+        "task_id": "aime24/doc:2f2f1b8427ddf0da2e36c59867338d9e1230d8bc12b66fbcca605a9e1109587d"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "35",
+        "repetition_index": 0,
+        "task_id": "gpqa-diamond/doc:39298a78e34eb5b0679aa07aab23e20a3313d0c1cf791e080d3b6c1871d0e27f"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "36",
+        "repetition_index": 1,
+        "task_id": "gpqa-diamond/doc:39298a78e34eb5b0679aa07aab23e20a3313d0c1cf791e080d3b6c1871d0e27f"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "37",
+        "repetition_index": 2,
+        "task_id": "gpqa-diamond/doc:39298a78e34eb5b0679aa07aab23e20a3313d0c1cf791e080d3b6c1871d0e27f"
+      },
+      {
+        "benchmark": "math500",
+        "data_source": "HuggingFaceH4/MATH-500",
+        "dataset_row_uid": "38",
+        "repetition_index": 0,
+        "task_id": "math500/doc:d4120a2cf485bd0871e4e00943f2d1a13305916c97603d30fc140178ad74c26c"
+      },
+      {
+        "benchmark": "mrcr",
+        "data_source": "openai/mrcr",
+        "dataset_row_uid": "39",
+        "repetition_index": 0,
+        "task_id": "mrcr/doc:c600c61c918c73a8772dd7c833953c905ae6705d6fa003936a59b5e24e1d75f2"
+      },
+      {
+        "benchmark": "NUPA",
+        "data_source": "HaotongYang/NUPA_text",
+        "dataset_row_uid": "40",
+        "repetition_index": 0,
+        "task_id": "NUPA/doc:a2c5cdf7608cba4092bec12fb5169676ded7c5636f504cddb887ee9c677e10bb"
+      },
+      {
+        "benchmark": "mmlu-pro",
+        "data_source": "TIGER-Lab/MMLU-Pro",
+        "dataset_row_uid": "41",
+        "repetition_index": 0,
+        "task_id": "mmlu-pro/doc:254d02b6fe08359834b746e8234dd8d9094f88cc7b7986a625154e4360daf5d6"
+      },
+      {
+        "benchmark": "swebench-verified",
+        "data_source": "swebench-verified",
+        "dataset_row_uid": "42",
+        "repetition_index": 0,
+        "task_id": "swebench-verified/django__django-14539"
+      },
+      {
+        "benchmark": "mbppplus",
+        "data_source": "evalplus/mbppplus",
+        "dataset_row_uid": "43",
+        "repetition_index": 0,
+        "task_id": "mbppplus/doc:e1ab6becc3b296595fa66aac4415b7c2ddc7bc1316a0e9ee0e2871f053860570"
+      },
+      {
+        "benchmark": "cruxeval",
+        "data_source": "cruxeval-org/cruxeval",
+        "dataset_row_uid": "44",
+        "repetition_index": 0,
+        "task_id": "cruxeval/sample_204"
+      },
+      {
+        "benchmark": "bixbench-pi",
+        "data_source": "bixbench-pi",
+        "dataset_row_uid": "45",
+        "repetition_index": 0,
+        "task_id": "bixbench-pi/bix-34-q1"
+      },
+      {
+        "benchmark": "humanevalplus",
+        "data_source": "evalplus/humanevalplus",
+        "dataset_row_uid": "46",
+        "repetition_index": 0,
+        "task_id": "humanevalplus/HumanEval/20"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "47",
+        "repetition_index": 0,
+        "task_id": "tb2-recovery/terminal-bench/merge-diff-arc-agi-task"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "48",
+        "repetition_index": 1,
+        "task_id": "tb2-recovery/terminal-bench/merge-diff-arc-agi-task"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "49",
+        "repetition_index": 2,
+        "task_id": "tb2-recovery/terminal-bench/merge-diff-arc-agi-task"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "50",
+        "repetition_index": 0,
+        "task_id": "ot-tblite-recovery/ekf-localization"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "51",
+        "repetition_index": 1,
+        "task_id": "ot-tblite-recovery/ekf-localization"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "52",
+        "repetition_index": 2,
+        "task_id": "ot-tblite-recovery/ekf-localization"
+      },
+      {
+        "benchmark": "gsm8k-0shot",
+        "data_source": "openai/gsm8k",
+        "dataset_row_uid": "53",
+        "repetition_index": 0,
+        "task_id": "gsm8k-0shot/doc:04035b7bf0be62a9bfc53ac20be8a13de14b74e8fd50eae2a544bd1b8427b753"
+      },
+      {
+        "benchmark": "ds-1000-local",
+        "data_source": "ds-1000-local",
+        "dataset_row_uid": "54",
+        "repetition_index": 0,
+        "task_id": "ds-1000-local/ds-1000/964"
+      },
+      {
+        "benchmark": "ifbench",
+        "data_source": "allenai/IFBench_test",
+        "dataset_row_uid": "55",
+        "repetition_index": 0,
+        "task_id": "ifbench/doc:7b1bb7c109037f656561c8227ec550af404cd325e819bfa8f29887db76228ecb"
+      },
+      {
+        "benchmark": "bfclparity-pi",
+        "data_source": "bfclparity-pi",
+        "dataset_row_uid": "56",
+        "repetition_index": 0,
+        "task_id": "bfclparity-pi/bfcl-live-parallel-2-0-2"
+      },
+      {
+        "benchmark": "truthfulqa",
+        "data_source": "truthfulqa/truthful_qa",
+        "dataset_row_uid": "57",
+        "repetition_index": 0,
+        "task_id": "truthfulqa/doc:362c44385f22c8ebea4cd1b554cbffccfe262f5cfbed391774e51a7db27b7fa1"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "58",
+        "repetition_index": 0,
+        "task_id": "olympiadbench/doc:3d4be9c0bbc977781647e104e19cb7f9a60ccadedd9b7fb5c84b9e4b381449dc"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "59",
+        "repetition_index": 1,
+        "task_id": "olympiadbench/doc:3d4be9c0bbc977781647e104e19cb7f9a60ccadedd9b7fb5c84b9e4b381449dc"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "60",
+        "repetition_index": 2,
+        "task_id": "olympiadbench/doc:3d4be9c0bbc977781647e104e19cb7f9a60ccadedd9b7fb5c84b9e4b381449dc"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "61",
+        "repetition_index": 3,
+        "task_id": "olympiadbench/doc:3d4be9c0bbc977781647e104e19cb7f9a60ccadedd9b7fb5c84b9e4b381449dc"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "62",
+        "repetition_index": 4,
+        "task_id": "olympiadbench/doc:3d4be9c0bbc977781647e104e19cb7f9a60ccadedd9b7fb5c84b9e4b381449dc"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "63",
+        "repetition_index": 5,
+        "task_id": "olympiadbench/doc:3d4be9c0bbc977781647e104e19cb7f9a60ccadedd9b7fb5c84b9e4b381449dc"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "64",
+        "repetition_index": 6,
+        "task_id": "olympiadbench/doc:3d4be9c0bbc977781647e104e19cb7f9a60ccadedd9b7fb5c84b9e4b381449dc"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "65",
+        "repetition_index": 7,
+        "task_id": "olympiadbench/doc:3d4be9c0bbc977781647e104e19cb7f9a60ccadedd9b7fb5c84b9e4b381449dc"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "66",
+        "repetition_index": 8,
+        "task_id": "olympiadbench/doc:3d4be9c0bbc977781647e104e19cb7f9a60ccadedd9b7fb5c84b9e4b381449dc"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "67",
+        "repetition_index": 9,
+        "task_id": "olympiadbench/doc:3d4be9c0bbc977781647e104e19cb7f9a60ccadedd9b7fb5c84b9e4b381449dc"
+      },
+      {
+        "benchmark": "triviaqa",
+        "data_source": "mandarjoshi/trivia_qa",
+        "dataset_row_uid": "68",
+        "repetition_index": 0,
+        "task_id": "triviaqa/dataset-row:4588"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "69",
+        "repetition_index": 0,
+        "task_id": "aime24/doc:cfc24148570a511aee6cad7dc8e592bab3583d9b6b496b994af7ea5db6d76bb3"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "70",
+        "repetition_index": 1,
+        "task_id": "aime24/doc:cfc24148570a511aee6cad7dc8e592bab3583d9b6b496b994af7ea5db6d76bb3"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "71",
+        "repetition_index": 2,
+        "task_id": "aime24/doc:cfc24148570a511aee6cad7dc8e592bab3583d9b6b496b994af7ea5db6d76bb3"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "72",
+        "repetition_index": 3,
+        "task_id": "aime24/doc:cfc24148570a511aee6cad7dc8e592bab3583d9b6b496b994af7ea5db6d76bb3"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "73",
+        "repetition_index": 4,
+        "task_id": "aime24/doc:cfc24148570a511aee6cad7dc8e592bab3583d9b6b496b994af7ea5db6d76bb3"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "74",
+        "repetition_index": 5,
+        "task_id": "aime24/doc:cfc24148570a511aee6cad7dc8e592bab3583d9b6b496b994af7ea5db6d76bb3"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "75",
+        "repetition_index": 6,
+        "task_id": "aime24/doc:cfc24148570a511aee6cad7dc8e592bab3583d9b6b496b994af7ea5db6d76bb3"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "76",
+        "repetition_index": 7,
+        "task_id": "aime24/doc:cfc24148570a511aee6cad7dc8e592bab3583d9b6b496b994af7ea5db6d76bb3"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "77",
+        "repetition_index": 8,
+        "task_id": "aime24/doc:cfc24148570a511aee6cad7dc8e592bab3583d9b6b496b994af7ea5db6d76bb3"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "78",
+        "repetition_index": 9,
+        "task_id": "aime24/doc:cfc24148570a511aee6cad7dc8e592bab3583d9b6b496b994af7ea5db6d76bb3"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "79",
+        "repetition_index": 0,
+        "task_id": "gpqa-diamond/doc:26e69b05a4290ca5117b9cfa0d0e2e0eee1cb57c0665efb84b44f5fe69038850"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "80",
+        "repetition_index": 1,
+        "task_id": "gpqa-diamond/doc:26e69b05a4290ca5117b9cfa0d0e2e0eee1cb57c0665efb84b44f5fe69038850"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "81",
+        "repetition_index": 2,
+        "task_id": "gpqa-diamond/doc:26e69b05a4290ca5117b9cfa0d0e2e0eee1cb57c0665efb84b44f5fe69038850"
+      },
+      {
+        "benchmark": "math500",
+        "data_source": "HuggingFaceH4/MATH-500",
+        "dataset_row_uid": "82",
+        "repetition_index": 0,
+        "task_id": "math500/doc:f636955089ca054c441cbc7318bcd6757c18c1435e5a7ac33f1605e8b56f844b"
+      },
+      {
+        "benchmark": "mrcr",
+        "data_source": "openai/mrcr",
+        "dataset_row_uid": "83",
+        "repetition_index": 0,
+        "task_id": "mrcr/doc:efa0bca5ff97f6d4e743cdd80ca131330514983e8e0bab192b9a0b270abc5490"
+      },
+      {
+        "benchmark": "NUPA",
+        "data_source": "HaotongYang/NUPA_text",
+        "dataset_row_uid": "84",
+        "repetition_index": 0,
+        "task_id": "NUPA/doc:78724ad931ea209e7ad5d35d9e5bb879e9ac0a78ab2b3284d319fae0ea060bdc"
+      },
+      {
+        "benchmark": "mmlu-pro",
+        "data_source": "TIGER-Lab/MMLU-Pro",
+        "dataset_row_uid": "85",
+        "repetition_index": 0,
+        "task_id": "mmlu-pro/doc:1208c83ff65435c97f7c9b6aa8135ed7e3f3b5e0d86d56f795f188c35f6db2a1"
+      },
+      {
+        "benchmark": "swebench-verified",
+        "data_source": "swebench-verified",
+        "dataset_row_uid": "86",
+        "repetition_index": 0,
+        "task_id": "swebench-verified/sympy__sympy-15345"
+      },
+      {
+        "benchmark": "mbppplus",
+        "data_source": "evalplus/mbppplus",
+        "dataset_row_uid": "87",
+        "repetition_index": 0,
+        "task_id": "mbppplus/doc:435ea1de1f228512f901a45ca4111a42b04986730c6e11525da10c4f76c3adfd"
+      },
+      {
+        "benchmark": "cruxeval",
+        "data_source": "cruxeval-org/cruxeval",
+        "dataset_row_uid": "88",
+        "repetition_index": 0,
+        "task_id": "cruxeval/sample_144"
+      },
+      {
+        "benchmark": "bixbench-pi",
+        "data_source": "bixbench-pi",
+        "dataset_row_uid": "89",
+        "repetition_index": 0,
+        "task_id": "bixbench-pi/bix-37-q1"
+      },
+      {
+        "benchmark": "humanevalplus",
+        "data_source": "evalplus/humanevalplus",
+        "dataset_row_uid": "90",
+        "repetition_index": 0,
+        "task_id": "humanevalplus/HumanEval/25"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "91",
+        "repetition_index": 0,
+        "task_id": "tb2-recovery/terminal-bench/rstan-to-pystan"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "92",
+        "repetition_index": 1,
+        "task_id": "tb2-recovery/terminal-bench/rstan-to-pystan"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "93",
+        "repetition_index": 2,
+        "task_id": "tb2-recovery/terminal-bench/rstan-to-pystan"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "94",
+        "repetition_index": 0,
+        "task_id": "ot-tblite-recovery/pgn-chess-repair-puzzles"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "95",
+        "repetition_index": 1,
+        "task_id": "ot-tblite-recovery/pgn-chess-repair-puzzles"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "96",
+        "repetition_index": 2,
+        "task_id": "ot-tblite-recovery/pgn-chess-repair-puzzles"
+      },
+      {
+        "benchmark": "gsm8k-0shot",
+        "data_source": "openai/gsm8k",
+        "dataset_row_uid": "97",
+        "repetition_index": 0,
+        "task_id": "gsm8k-0shot/doc:ca34970cad5ef4ebb4ede75df81e15446b13d2f975f3e443e598f40de3f99de9"
+      },
+      {
+        "benchmark": "ds-1000-local",
+        "data_source": "ds-1000-local",
+        "dataset_row_uid": "98",
+        "repetition_index": 0,
+        "task_id": "ds-1000-local/ds-1000/112"
+      },
+      {
+        "benchmark": "ifbench",
+        "data_source": "allenai/IFBench_test",
+        "dataset_row_uid": "99",
+        "repetition_index": 0,
+        "task_id": "ifbench/doc:328e5b24731b11a944b6059025fbec3f07c8b1fcdbc808f4cc651345095f1b8d"
+      },
+      {
+        "benchmark": "bfclparity-pi",
+        "data_source": "bfclparity-pi",
+        "dataset_row_uid": "100",
+        "repetition_index": 0,
+        "task_id": "bfclparity-pi/bfcl-live-irrelevance-721-239-0"
+      },
+      {
+        "benchmark": "truthfulqa",
+        "data_source": "truthfulqa/truthful_qa",
+        "dataset_row_uid": "101",
+        "repetition_index": 0,
+        "task_id": "truthfulqa/doc:d4337bd51d0c6716abd592fe51248cd2268b3046cdf6826011570b1230825cde"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "102",
+        "repetition_index": 0,
+        "task_id": "olympiadbench/doc:55b40364bd952b7ef72225c56ebf68d27e59b7a5a294b7adfa4d63a269436542"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "103",
+        "repetition_index": 1,
+        "task_id": "olympiadbench/doc:55b40364bd952b7ef72225c56ebf68d27e59b7a5a294b7adfa4d63a269436542"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "104",
+        "repetition_index": 2,
+        "task_id": "olympiadbench/doc:55b40364bd952b7ef72225c56ebf68d27e59b7a5a294b7adfa4d63a269436542"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "105",
+        "repetition_index": 3,
+        "task_id": "olympiadbench/doc:55b40364bd952b7ef72225c56ebf68d27e59b7a5a294b7adfa4d63a269436542"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "106",
+        "repetition_index": 4,
+        "task_id": "olympiadbench/doc:55b40364bd952b7ef72225c56ebf68d27e59b7a5a294b7adfa4d63a269436542"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "107",
+        "repetition_index": 5,
+        "task_id": "olympiadbench/doc:55b40364bd952b7ef72225c56ebf68d27e59b7a5a294b7adfa4d63a269436542"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "108",
+        "repetition_index": 6,
+        "task_id": "olympiadbench/doc:55b40364bd952b7ef72225c56ebf68d27e59b7a5a294b7adfa4d63a269436542"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "109",
+        "repetition_index": 7,
+        "task_id": "olympiadbench/doc:55b40364bd952b7ef72225c56ebf68d27e59b7a5a294b7adfa4d63a269436542"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "110",
+        "repetition_index": 8,
+        "task_id": "olympiadbench/doc:55b40364bd952b7ef72225c56ebf68d27e59b7a5a294b7adfa4d63a269436542"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "111",
+        "repetition_index": 9,
+        "task_id": "olympiadbench/doc:55b40364bd952b7ef72225c56ebf68d27e59b7a5a294b7adfa4d63a269436542"
+      },
+      {
+        "benchmark": "triviaqa",
+        "data_source": "mandarjoshi/trivia_qa",
+        "dataset_row_uid": "112",
+        "repetition_index": 0,
+        "task_id": "triviaqa/dataset-row:12467"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "113",
+        "repetition_index": 0,
+        "task_id": "aime24/doc:9a2c5c78bf616a9faf2ea0f674979c4dd5d3ccf2843c06df995075edac3737c7"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "114",
+        "repetition_index": 1,
+        "task_id": "aime24/doc:9a2c5c78bf616a9faf2ea0f674979c4dd5d3ccf2843c06df995075edac3737c7"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "115",
+        "repetition_index": 2,
+        "task_id": "aime24/doc:9a2c5c78bf616a9faf2ea0f674979c4dd5d3ccf2843c06df995075edac3737c7"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "116",
+        "repetition_index": 3,
+        "task_id": "aime24/doc:9a2c5c78bf616a9faf2ea0f674979c4dd5d3ccf2843c06df995075edac3737c7"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "117",
+        "repetition_index": 4,
+        "task_id": "aime24/doc:9a2c5c78bf616a9faf2ea0f674979c4dd5d3ccf2843c06df995075edac3737c7"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "118",
+        "repetition_index": 5,
+        "task_id": "aime24/doc:9a2c5c78bf616a9faf2ea0f674979c4dd5d3ccf2843c06df995075edac3737c7"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "119",
+        "repetition_index": 6,
+        "task_id": "aime24/doc:9a2c5c78bf616a9faf2ea0f674979c4dd5d3ccf2843c06df995075edac3737c7"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "120",
+        "repetition_index": 7,
+        "task_id": "aime24/doc:9a2c5c78bf616a9faf2ea0f674979c4dd5d3ccf2843c06df995075edac3737c7"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "121",
+        "repetition_index": 8,
+        "task_id": "aime24/doc:9a2c5c78bf616a9faf2ea0f674979c4dd5d3ccf2843c06df995075edac3737c7"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "122",
+        "repetition_index": 9,
+        "task_id": "aime24/doc:9a2c5c78bf616a9faf2ea0f674979c4dd5d3ccf2843c06df995075edac3737c7"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "123",
+        "repetition_index": 0,
+        "task_id": "gpqa-diamond/doc:67d4e15180a800fa4f174af4e7f7629eb8fda1eb08ae96c89cbd3a0ec7f31929"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "124",
+        "repetition_index": 1,
+        "task_id": "gpqa-diamond/doc:67d4e15180a800fa4f174af4e7f7629eb8fda1eb08ae96c89cbd3a0ec7f31929"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "125",
+        "repetition_index": 2,
+        "task_id": "gpqa-diamond/doc:67d4e15180a800fa4f174af4e7f7629eb8fda1eb08ae96c89cbd3a0ec7f31929"
+      },
+      {
+        "benchmark": "math500",
+        "data_source": "HuggingFaceH4/MATH-500",
+        "dataset_row_uid": "126",
+        "repetition_index": 0,
+        "task_id": "math500/doc:86ab9d32679f3cc8101e41dd6d26aaaed23942674c97b41ced55dd7259dca94b"
+      },
+      {
+        "benchmark": "mrcr",
+        "data_source": "openai/mrcr",
+        "dataset_row_uid": "127",
+        "repetition_index": 0,
+        "task_id": "mrcr/doc:39b1292e76695d2797a80259ca9869a08063f06e202791eb2ceb3ffe6f8d223d"
+      },
+      {
+        "benchmark": "NUPA",
+        "data_source": "HaotongYang/NUPA_text",
+        "dataset_row_uid": "128",
+        "repetition_index": 0,
+        "task_id": "NUPA/doc:c5cc78c6faca005875506a928ba80d5f5dfb4aff211e42434c5de8a7c696b79b"
+      },
+      {
+        "benchmark": "mmlu-pro",
+        "data_source": "TIGER-Lab/MMLU-Pro",
+        "dataset_row_uid": "129",
+        "repetition_index": 0,
+        "task_id": "mmlu-pro/doc:f6cb472cd184dc113df2ff2620bc53a567ec39b91add6b80966f1b6431ffbe99"
+      },
+      {
+        "benchmark": "swebench-verified",
+        "data_source": "swebench-verified",
+        "dataset_row_uid": "130",
+        "repetition_index": 0,
+        "task_id": "swebench-verified/sympy__sympy-16886"
+      },
+      {
+        "benchmark": "mbppplus",
+        "data_source": "evalplus/mbppplus",
+        "dataset_row_uid": "131",
+        "repetition_index": 0,
+        "task_id": "mbppplus/doc:ebde503d6a0649c19b81517f1c688a403e8e3ee7daf087f0ef4a8079ce60d98a"
+      },
+      {
+        "benchmark": "cruxeval",
+        "data_source": "cruxeval-org/cruxeval",
+        "dataset_row_uid": "132",
+        "repetition_index": 0,
+        "task_id": "cruxeval/sample_139"
+      },
+      {
+        "benchmark": "bixbench-pi",
+        "data_source": "bixbench-pi",
+        "dataset_row_uid": "133",
+        "repetition_index": 0,
+        "task_id": "bixbench-pi/bix-45-q1"
+      },
+      {
+        "benchmark": "humanevalplus",
+        "data_source": "evalplus/humanevalplus",
+        "dataset_row_uid": "134",
+        "repetition_index": 0,
+        "task_id": "humanevalplus/HumanEval/163"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "135",
+        "repetition_index": 0,
+        "task_id": "tb2-recovery/terminal-bench/vulnerable-secret"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "136",
+        "repetition_index": 1,
+        "task_id": "tb2-recovery/terminal-bench/vulnerable-secret"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "137",
+        "repetition_index": 2,
+        "task_id": "tb2-recovery/terminal-bench/vulnerable-secret"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "138",
+        "repetition_index": 0,
+        "task_id": "ot-tblite-recovery/multi-labeller"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "139",
+        "repetition_index": 1,
+        "task_id": "ot-tblite-recovery/multi-labeller"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "140",
+        "repetition_index": 2,
+        "task_id": "ot-tblite-recovery/multi-labeller"
+      },
+      {
+        "benchmark": "gsm8k-0shot",
+        "data_source": "openai/gsm8k",
+        "dataset_row_uid": "141",
+        "repetition_index": 0,
+        "task_id": "gsm8k-0shot/doc:2082cb59d57c503b337faa87d9b45b78a47bca9445ca1d89e6a1b60c39810e2a"
+      },
+      {
+        "benchmark": "ds-1000-local",
+        "data_source": "ds-1000-local",
+        "dataset_row_uid": "142",
+        "repetition_index": 0,
+        "task_id": "ds-1000-local/ds-1000/854"
+      },
+      {
+        "benchmark": "ifbench",
+        "data_source": "allenai/IFBench_test",
+        "dataset_row_uid": "143",
+        "repetition_index": 0,
+        "task_id": "ifbench/doc:61fa4a4f1275adca1091a3050db6c03186cc4a95d75a9845bf29d8455e6f0240"
+      },
+      {
+        "benchmark": "bfclparity-pi",
+        "data_source": "bfclparity-pi",
+        "dataset_row_uid": "144",
+        "repetition_index": 0,
+        "task_id": "bfclparity-pi/bfcl-simple-python-87"
+      },
+      {
+        "benchmark": "truthfulqa",
+        "data_source": "truthfulqa/truthful_qa",
+        "dataset_row_uid": "145",
+        "repetition_index": 0,
+        "task_id": "truthfulqa/doc:f812bfb56b84243e41592de994fa304025f36d8fc0bdfbbda302922f1f4ea7b6"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "146",
+        "repetition_index": 0,
+        "task_id": "olympiadbench/doc:4fe1aa9e78bc49d3b2d9fd0572ac9182a3d86d25a8e9de56945bb4daefd765a8"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "147",
+        "repetition_index": 1,
+        "task_id": "olympiadbench/doc:4fe1aa9e78bc49d3b2d9fd0572ac9182a3d86d25a8e9de56945bb4daefd765a8"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "148",
+        "repetition_index": 2,
+        "task_id": "olympiadbench/doc:4fe1aa9e78bc49d3b2d9fd0572ac9182a3d86d25a8e9de56945bb4daefd765a8"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "149",
+        "repetition_index": 3,
+        "task_id": "olympiadbench/doc:4fe1aa9e78bc49d3b2d9fd0572ac9182a3d86d25a8e9de56945bb4daefd765a8"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "150",
+        "repetition_index": 4,
+        "task_id": "olympiadbench/doc:4fe1aa9e78bc49d3b2d9fd0572ac9182a3d86d25a8e9de56945bb4daefd765a8"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "151",
+        "repetition_index": 5,
+        "task_id": "olympiadbench/doc:4fe1aa9e78bc49d3b2d9fd0572ac9182a3d86d25a8e9de56945bb4daefd765a8"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "152",
+        "repetition_index": 6,
+        "task_id": "olympiadbench/doc:4fe1aa9e78bc49d3b2d9fd0572ac9182a3d86d25a8e9de56945bb4daefd765a8"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "153",
+        "repetition_index": 7,
+        "task_id": "olympiadbench/doc:4fe1aa9e78bc49d3b2d9fd0572ac9182a3d86d25a8e9de56945bb4daefd765a8"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "154",
+        "repetition_index": 8,
+        "task_id": "olympiadbench/doc:4fe1aa9e78bc49d3b2d9fd0572ac9182a3d86d25a8e9de56945bb4daefd765a8"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "155",
+        "repetition_index": 9,
+        "task_id": "olympiadbench/doc:4fe1aa9e78bc49d3b2d9fd0572ac9182a3d86d25a8e9de56945bb4daefd765a8"
+      },
+      {
+        "benchmark": "triviaqa",
+        "data_source": "mandarjoshi/trivia_qa",
+        "dataset_row_uid": "156",
+        "repetition_index": 0,
+        "task_id": "triviaqa/dataset-row:698"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "157",
+        "repetition_index": 0,
+        "task_id": "aime24/doc:da872cda772acb84770fb19d44f263f25e4d9c4f02a3133f41fee20ece86f5ab"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "158",
+        "repetition_index": 1,
+        "task_id": "aime24/doc:da872cda772acb84770fb19d44f263f25e4d9c4f02a3133f41fee20ece86f5ab"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "159",
+        "repetition_index": 2,
+        "task_id": "aime24/doc:da872cda772acb84770fb19d44f263f25e4d9c4f02a3133f41fee20ece86f5ab"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "160",
+        "repetition_index": 3,
+        "task_id": "aime24/doc:da872cda772acb84770fb19d44f263f25e4d9c4f02a3133f41fee20ece86f5ab"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "161",
+        "repetition_index": 4,
+        "task_id": "aime24/doc:da872cda772acb84770fb19d44f263f25e4d9c4f02a3133f41fee20ece86f5ab"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "162",
+        "repetition_index": 5,
+        "task_id": "aime24/doc:da872cda772acb84770fb19d44f263f25e4d9c4f02a3133f41fee20ece86f5ab"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "163",
+        "repetition_index": 6,
+        "task_id": "aime24/doc:da872cda772acb84770fb19d44f263f25e4d9c4f02a3133f41fee20ece86f5ab"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "164",
+        "repetition_index": 7,
+        "task_id": "aime24/doc:da872cda772acb84770fb19d44f263f25e4d9c4f02a3133f41fee20ece86f5ab"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "165",
+        "repetition_index": 8,
+        "task_id": "aime24/doc:da872cda772acb84770fb19d44f263f25e4d9c4f02a3133f41fee20ece86f5ab"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "166",
+        "repetition_index": 9,
+        "task_id": "aime24/doc:da872cda772acb84770fb19d44f263f25e4d9c4f02a3133f41fee20ece86f5ab"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "167",
+        "repetition_index": 0,
+        "task_id": "gpqa-diamond/doc:8f18a2be4e035d78427d66dc2c2e8535f4190e8b140e79d5427e8c3903bed76f"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "168",
+        "repetition_index": 1,
+        "task_id": "gpqa-diamond/doc:8f18a2be4e035d78427d66dc2c2e8535f4190e8b140e79d5427e8c3903bed76f"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "169",
+        "repetition_index": 2,
+        "task_id": "gpqa-diamond/doc:8f18a2be4e035d78427d66dc2c2e8535f4190e8b140e79d5427e8c3903bed76f"
+      },
+      {
+        "benchmark": "math500",
+        "data_source": "HuggingFaceH4/MATH-500",
+        "dataset_row_uid": "170",
+        "repetition_index": 0,
+        "task_id": "math500/doc:fe313d650a1fa2bc475d96415f759412fbe382097331d7dd078733eec00195a2"
+      },
+      {
+        "benchmark": "mrcr",
+        "data_source": "openai/mrcr",
+        "dataset_row_uid": "171",
+        "repetition_index": 0,
+        "task_id": "mrcr/doc:ecae9dbf35c775555eab4cce8537b19c5248ef5b3b6128c04c382672805b2322"
+      },
+      {
+        "benchmark": "NUPA",
+        "data_source": "HaotongYang/NUPA_text",
+        "dataset_row_uid": "172",
+        "repetition_index": 0,
+        "task_id": "NUPA/doc:7cd623919902b0e5b59f6f6f4b872f9fd7d5583c95b65c41e5fbaa9ece7ddff3"
+      },
+      {
+        "benchmark": "mmlu-pro",
+        "data_source": "TIGER-Lab/MMLU-Pro",
+        "dataset_row_uid": "173",
+        "repetition_index": 0,
+        "task_id": "mmlu-pro/doc:1bf6f9ce085f236bc19a610df880ba8a870633c3095448e15d84f588ae0a3f91"
+      },
+      {
+        "benchmark": "swebench-verified",
+        "data_source": "swebench-verified",
+        "dataset_row_uid": "174",
+        "repetition_index": 0,
+        "task_id": "swebench-verified/matplotlib__matplotlib-22865"
+      },
+      {
+        "benchmark": "mbppplus",
+        "data_source": "evalplus/mbppplus",
+        "dataset_row_uid": "175",
+        "repetition_index": 0,
+        "task_id": "mbppplus/doc:3bdbb225d0bd438ad84c5bcf5f97b92e55a553397b23bbf3b66bd66d7c22f8e6"
+      },
+      {
+        "benchmark": "cruxeval",
+        "data_source": "cruxeval-org/cruxeval",
+        "dataset_row_uid": "176",
+        "repetition_index": 0,
+        "task_id": "cruxeval/sample_182"
+      },
+      {
+        "benchmark": "bixbench-pi",
+        "data_source": "bixbench-pi",
+        "dataset_row_uid": "177",
+        "repetition_index": 0,
+        "task_id": "bixbench-pi/bix-28-q4"
+      },
+      {
+        "benchmark": "humanevalplus",
+        "data_source": "evalplus/humanevalplus",
+        "dataset_row_uid": "178",
+        "repetition_index": 0,
+        "task_id": "humanevalplus/HumanEval/130"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "179",
+        "repetition_index": 0,
+        "task_id": "tb2-recovery/terminal-bench/feal-linear-cryptanalysis"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "180",
+        "repetition_index": 1,
+        "task_id": "tb2-recovery/terminal-bench/feal-linear-cryptanalysis"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "181",
+        "repetition_index": 2,
+        "task_id": "tb2-recovery/terminal-bench/feal-linear-cryptanalysis"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "182",
+        "repetition_index": 0,
+        "task_id": "ot-tblite-recovery/acl-permissions-inheritance"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "183",
+        "repetition_index": 1,
+        "task_id": "ot-tblite-recovery/acl-permissions-inheritance"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "184",
+        "repetition_index": 2,
+        "task_id": "ot-tblite-recovery/acl-permissions-inheritance"
+      },
+      {
+        "benchmark": "gsm8k-0shot",
+        "data_source": "openai/gsm8k",
+        "dataset_row_uid": "185",
+        "repetition_index": 0,
+        "task_id": "gsm8k-0shot/doc:9e0b146811b520329442e1edcf77a2bd4214915eb217c94df7e03ce6ef5188b9"
+      },
+      {
+        "benchmark": "ds-1000-local",
+        "data_source": "ds-1000-local",
+        "dataset_row_uid": "186",
+        "repetition_index": 0,
+        "task_id": "ds-1000-local/ds-1000/217"
+      },
+      {
+        "benchmark": "ifbench",
+        "data_source": "allenai/IFBench_test",
+        "dataset_row_uid": "187",
+        "repetition_index": 0,
+        "task_id": "ifbench/doc:45d72dfa5050e9fecbdf8c0f507eae5440d5d87383c84509677a3129e545ae18"
+      },
+      {
+        "benchmark": "bfclparity-pi",
+        "data_source": "bfclparity-pi",
+        "dataset_row_uid": "188",
+        "repetition_index": 0,
+        "task_id": "bfclparity-pi/bfcl-irrelevance-154"
+      },
+      {
+        "benchmark": "truthfulqa",
+        "data_source": "truthfulqa/truthful_qa",
+        "dataset_row_uid": "189",
+        "repetition_index": 0,
+        "task_id": "truthfulqa/doc:df88b2a94ca5441ec01b85faa54046d36444acc81717c687b945a31131d69f73"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "190",
+        "repetition_index": 0,
+        "task_id": "olympiadbench/doc:06de6a2fcb16b5203fd7ec38da9010cf75e03f34d413d4cb0b11f34f7ffa7e41"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "191",
+        "repetition_index": 1,
+        "task_id": "olympiadbench/doc:06de6a2fcb16b5203fd7ec38da9010cf75e03f34d413d4cb0b11f34f7ffa7e41"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "192",
+        "repetition_index": 2,
+        "task_id": "olympiadbench/doc:06de6a2fcb16b5203fd7ec38da9010cf75e03f34d413d4cb0b11f34f7ffa7e41"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "193",
+        "repetition_index": 3,
+        "task_id": "olympiadbench/doc:06de6a2fcb16b5203fd7ec38da9010cf75e03f34d413d4cb0b11f34f7ffa7e41"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "194",
+        "repetition_index": 4,
+        "task_id": "olympiadbench/doc:06de6a2fcb16b5203fd7ec38da9010cf75e03f34d413d4cb0b11f34f7ffa7e41"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "195",
+        "repetition_index": 5,
+        "task_id": "olympiadbench/doc:06de6a2fcb16b5203fd7ec38da9010cf75e03f34d413d4cb0b11f34f7ffa7e41"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "196",
+        "repetition_index": 6,
+        "task_id": "olympiadbench/doc:06de6a2fcb16b5203fd7ec38da9010cf75e03f34d413d4cb0b11f34f7ffa7e41"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "197",
+        "repetition_index": 7,
+        "task_id": "olympiadbench/doc:06de6a2fcb16b5203fd7ec38da9010cf75e03f34d413d4cb0b11f34f7ffa7e41"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "198",
+        "repetition_index": 8,
+        "task_id": "olympiadbench/doc:06de6a2fcb16b5203fd7ec38da9010cf75e03f34d413d4cb0b11f34f7ffa7e41"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "199",
+        "repetition_index": 9,
+        "task_id": "olympiadbench/doc:06de6a2fcb16b5203fd7ec38da9010cf75e03f34d413d4cb0b11f34f7ffa7e41"
+      },
+      {
+        "benchmark": "triviaqa",
+        "data_source": "mandarjoshi/trivia_qa",
+        "dataset_row_uid": "200",
+        "repetition_index": 0,
+        "task_id": "triviaqa/dataset-row:11395"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "201",
+        "repetition_index": 0,
+        "task_id": "aime24/doc:01c717e78c86c0cce0a5bf9c9166a7c797f0dcb1e23bc120e6a076aa8b5d5e87"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "202",
+        "repetition_index": 1,
+        "task_id": "aime24/doc:01c717e78c86c0cce0a5bf9c9166a7c797f0dcb1e23bc120e6a076aa8b5d5e87"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "203",
+        "repetition_index": 2,
+        "task_id": "aime24/doc:01c717e78c86c0cce0a5bf9c9166a7c797f0dcb1e23bc120e6a076aa8b5d5e87"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "204",
+        "repetition_index": 3,
+        "task_id": "aime24/doc:01c717e78c86c0cce0a5bf9c9166a7c797f0dcb1e23bc120e6a076aa8b5d5e87"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "205",
+        "repetition_index": 4,
+        "task_id": "aime24/doc:01c717e78c86c0cce0a5bf9c9166a7c797f0dcb1e23bc120e6a076aa8b5d5e87"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "206",
+        "repetition_index": 5,
+        "task_id": "aime24/doc:01c717e78c86c0cce0a5bf9c9166a7c797f0dcb1e23bc120e6a076aa8b5d5e87"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "207",
+        "repetition_index": 6,
+        "task_id": "aime24/doc:01c717e78c86c0cce0a5bf9c9166a7c797f0dcb1e23bc120e6a076aa8b5d5e87"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "208",
+        "repetition_index": 7,
+        "task_id": "aime24/doc:01c717e78c86c0cce0a5bf9c9166a7c797f0dcb1e23bc120e6a076aa8b5d5e87"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "209",
+        "repetition_index": 8,
+        "task_id": "aime24/doc:01c717e78c86c0cce0a5bf9c9166a7c797f0dcb1e23bc120e6a076aa8b5d5e87"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "210",
+        "repetition_index": 9,
+        "task_id": "aime24/doc:01c717e78c86c0cce0a5bf9c9166a7c797f0dcb1e23bc120e6a076aa8b5d5e87"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "211",
+        "repetition_index": 0,
+        "task_id": "gpqa-diamond/doc:9c9d3ed6aef945fcdfb99526cd2f32c14acaf4fea27f9fd05d185acfab2332ac"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "212",
+        "repetition_index": 1,
+        "task_id": "gpqa-diamond/doc:9c9d3ed6aef945fcdfb99526cd2f32c14acaf4fea27f9fd05d185acfab2332ac"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "213",
+        "repetition_index": 2,
+        "task_id": "gpqa-diamond/doc:9c9d3ed6aef945fcdfb99526cd2f32c14acaf4fea27f9fd05d185acfab2332ac"
+      },
+      {
+        "benchmark": "math500",
+        "data_source": "HuggingFaceH4/MATH-500",
+        "dataset_row_uid": "214",
+        "repetition_index": 0,
+        "task_id": "math500/doc:fc6b60e85b5d74d832d4547c28d8fea7ce81382707e8272153e5b07a5321c6d6"
+      },
+      {
+        "benchmark": "mrcr",
+        "data_source": "openai/mrcr",
+        "dataset_row_uid": "215",
+        "repetition_index": 0,
+        "task_id": "mrcr/doc:30ae127c0711360f3fef7507952a978a697283fc1dd3022fff751c6c34b64497"
+      },
+      {
+        "benchmark": "NUPA",
+        "data_source": "HaotongYang/NUPA_text",
+        "dataset_row_uid": "216",
+        "repetition_index": 0,
+        "task_id": "NUPA/doc:d106ab9009658f4d081b827179945d2c01a345697802873cab6b170fb6101259"
+      },
+      {
+        "benchmark": "mmlu-pro",
+        "data_source": "TIGER-Lab/MMLU-Pro",
+        "dataset_row_uid": "217",
+        "repetition_index": 0,
+        "task_id": "mmlu-pro/doc:9da6a330a09a9c2ac7243d148f4f22b0a6196fbd3689f1c70fa4770c0a63bc9f"
+      },
+      {
+        "benchmark": "swebench-verified",
+        "data_source": "swebench-verified",
+        "dataset_row_uid": "218",
+        "repetition_index": 0,
+        "task_id": "swebench-verified/django__django-14017"
+      },
+      {
+        "benchmark": "mbppplus",
+        "data_source": "evalplus/mbppplus",
+        "dataset_row_uid": "219",
+        "repetition_index": 0,
+        "task_id": "mbppplus/doc:f26b6586a28e3c06f62bf967765a4afd5761e603b18d6a1391b106b8c15bb962"
+      },
+      {
+        "benchmark": "cruxeval",
+        "data_source": "cruxeval-org/cruxeval",
+        "dataset_row_uid": "220",
+        "repetition_index": 0,
+        "task_id": "cruxeval/sample_135"
+      },
+      {
+        "benchmark": "bixbench-pi",
+        "data_source": "bixbench-pi",
+        "dataset_row_uid": "221",
+        "repetition_index": 0,
+        "task_id": "bixbench-pi/bix-13-q2"
+      },
+      {
+        "benchmark": "humanevalplus",
+        "data_source": "evalplus/humanevalplus",
+        "dataset_row_uid": "222",
+        "repetition_index": 0,
+        "task_id": "humanevalplus/HumanEval/116"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "223",
+        "repetition_index": 0,
+        "task_id": "tb2-recovery/terminal-bench/mcmc-sampling-stan"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "224",
+        "repetition_index": 1,
+        "task_id": "tb2-recovery/terminal-bench/mcmc-sampling-stan"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "225",
+        "repetition_index": 2,
+        "task_id": "tb2-recovery/terminal-bench/mcmc-sampling-stan"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "226",
+        "repetition_index": 0,
+        "task_id": "ot-tblite-recovery/schedule-vacation"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "227",
+        "repetition_index": 1,
+        "task_id": "ot-tblite-recovery/schedule-vacation"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "228",
+        "repetition_index": 2,
+        "task_id": "ot-tblite-recovery/schedule-vacation"
+      },
+      {
+        "benchmark": "gsm8k-0shot",
+        "data_source": "openai/gsm8k",
+        "dataset_row_uid": "229",
+        "repetition_index": 0,
+        "task_id": "gsm8k-0shot/doc:9649418264b5b01aacca4ce0e5c688987753064d156e1f9a1ce691c0aee5fd6d"
+      },
+      {
+        "benchmark": "ds-1000-local",
+        "data_source": "ds-1000-local",
+        "dataset_row_uid": "230",
+        "repetition_index": 0,
+        "task_id": "ds-1000-local/ds-1000/234"
+      },
+      {
+        "benchmark": "ifbench",
+        "data_source": "allenai/IFBench_test",
+        "dataset_row_uid": "231",
+        "repetition_index": 0,
+        "task_id": "ifbench/doc:b0cc5e13f3f111196fd76fe2a510d96f2a83e92010b799f4ba575c95dbe973f5"
+      },
+      {
+        "benchmark": "bfclparity-pi",
+        "data_source": "bfclparity-pi",
+        "dataset_row_uid": "232",
+        "repetition_index": 0,
+        "task_id": "bfclparity-pi/bfcl-live-irrelevance-653-206-2"
+      },
+      {
+        "benchmark": "truthfulqa",
+        "data_source": "truthfulqa/truthful_qa",
+        "dataset_row_uid": "233",
+        "repetition_index": 0,
+        "task_id": "truthfulqa/doc:01171099b5bd6cbbf985e5abfd5615cd12f7bb734f9a527dea00e5dfc3ccaf0d"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "234",
+        "repetition_index": 0,
+        "task_id": "olympiadbench/doc:90e92b0a16307d5a1e40f70e991a820d4b3461fc2fcb889bf7e0230ddedbb83f"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "235",
+        "repetition_index": 1,
+        "task_id": "olympiadbench/doc:90e92b0a16307d5a1e40f70e991a820d4b3461fc2fcb889bf7e0230ddedbb83f"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "236",
+        "repetition_index": 2,
+        "task_id": "olympiadbench/doc:90e92b0a16307d5a1e40f70e991a820d4b3461fc2fcb889bf7e0230ddedbb83f"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "237",
+        "repetition_index": 3,
+        "task_id": "olympiadbench/doc:90e92b0a16307d5a1e40f70e991a820d4b3461fc2fcb889bf7e0230ddedbb83f"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "238",
+        "repetition_index": 4,
+        "task_id": "olympiadbench/doc:90e92b0a16307d5a1e40f70e991a820d4b3461fc2fcb889bf7e0230ddedbb83f"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "239",
+        "repetition_index": 5,
+        "task_id": "olympiadbench/doc:90e92b0a16307d5a1e40f70e991a820d4b3461fc2fcb889bf7e0230ddedbb83f"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "240",
+        "repetition_index": 6,
+        "task_id": "olympiadbench/doc:90e92b0a16307d5a1e40f70e991a820d4b3461fc2fcb889bf7e0230ddedbb83f"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "241",
+        "repetition_index": 7,
+        "task_id": "olympiadbench/doc:90e92b0a16307d5a1e40f70e991a820d4b3461fc2fcb889bf7e0230ddedbb83f"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "242",
+        "repetition_index": 8,
+        "task_id": "olympiadbench/doc:90e92b0a16307d5a1e40f70e991a820d4b3461fc2fcb889bf7e0230ddedbb83f"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "243",
+        "repetition_index": 9,
+        "task_id": "olympiadbench/doc:90e92b0a16307d5a1e40f70e991a820d4b3461fc2fcb889bf7e0230ddedbb83f"
+      },
+      {
+        "benchmark": "triviaqa",
+        "data_source": "mandarjoshi/trivia_qa",
+        "dataset_row_uid": "244",
+        "repetition_index": 0,
+        "task_id": "triviaqa/dataset-row:15192"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "245",
+        "repetition_index": 0,
+        "task_id": "aime24/doc:eb33066980dbf9cf6dd8280aee8edbedc7617f4d04f8f7a017fbcb563f440b24"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "246",
+        "repetition_index": 1,
+        "task_id": "aime24/doc:eb33066980dbf9cf6dd8280aee8edbedc7617f4d04f8f7a017fbcb563f440b24"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "247",
+        "repetition_index": 2,
+        "task_id": "aime24/doc:eb33066980dbf9cf6dd8280aee8edbedc7617f4d04f8f7a017fbcb563f440b24"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "248",
+        "repetition_index": 3,
+        "task_id": "aime24/doc:eb33066980dbf9cf6dd8280aee8edbedc7617f4d04f8f7a017fbcb563f440b24"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "249",
+        "repetition_index": 4,
+        "task_id": "aime24/doc:eb33066980dbf9cf6dd8280aee8edbedc7617f4d04f8f7a017fbcb563f440b24"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "250",
+        "repetition_index": 5,
+        "task_id": "aime24/doc:eb33066980dbf9cf6dd8280aee8edbedc7617f4d04f8f7a017fbcb563f440b24"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "251",
+        "repetition_index": 6,
+        "task_id": "aime24/doc:eb33066980dbf9cf6dd8280aee8edbedc7617f4d04f8f7a017fbcb563f440b24"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "252",
+        "repetition_index": 7,
+        "task_id": "aime24/doc:eb33066980dbf9cf6dd8280aee8edbedc7617f4d04f8f7a017fbcb563f440b24"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "253",
+        "repetition_index": 8,
+        "task_id": "aime24/doc:eb33066980dbf9cf6dd8280aee8edbedc7617f4d04f8f7a017fbcb563f440b24"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "254",
+        "repetition_index": 9,
+        "task_id": "aime24/doc:eb33066980dbf9cf6dd8280aee8edbedc7617f4d04f8f7a017fbcb563f440b24"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "255",
+        "repetition_index": 0,
+        "task_id": "gpqa-diamond/doc:9452608a77ec3cadff346092594991368bfa0459e4c56c77b31d421c35f010b5"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "256",
+        "repetition_index": 1,
+        "task_id": "gpqa-diamond/doc:9452608a77ec3cadff346092594991368bfa0459e4c56c77b31d421c35f010b5"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "257",
+        "repetition_index": 2,
+        "task_id": "gpqa-diamond/doc:9452608a77ec3cadff346092594991368bfa0459e4c56c77b31d421c35f010b5"
+      },
+      {
+        "benchmark": "math500",
+        "data_source": "HuggingFaceH4/MATH-500",
+        "dataset_row_uid": "258",
+        "repetition_index": 0,
+        "task_id": "math500/doc:206018204f4f2bacaa4997978c71927da24f163580961787f3d184ed040e295b"
+      },
+      {
+        "benchmark": "mrcr",
+        "data_source": "openai/mrcr",
+        "dataset_row_uid": "259",
+        "repetition_index": 0,
+        "task_id": "mrcr/doc:a005fc2e08f6533591c82f247270376033fa58b703b121a1e76732a134f413de"
+      },
+      {
+        "benchmark": "NUPA",
+        "data_source": "HaotongYang/NUPA_text",
+        "dataset_row_uid": "260",
+        "repetition_index": 0,
+        "task_id": "NUPA/doc:fa9f001357f4d68ae4542a3a05437052169fd28cc3b8ce6df648551d6cb3b0c5"
+      },
+      {
+        "benchmark": "mmlu-pro",
+        "data_source": "TIGER-Lab/MMLU-Pro",
+        "dataset_row_uid": "261",
+        "repetition_index": 0,
+        "task_id": "mmlu-pro/doc:0aadb315742ad9001cf607386973d4881ed3b85859861ea733b39c251cd34b91"
+      },
+      {
+        "benchmark": "swebench-verified",
+        "data_source": "swebench-verified",
+        "dataset_row_uid": "262",
+        "repetition_index": 0,
+        "task_id": "swebench-verified/pytest-dev__pytest-5262"
+      },
+      {
+        "benchmark": "mbppplus",
+        "data_source": "evalplus/mbppplus",
+        "dataset_row_uid": "263",
+        "repetition_index": 0,
+        "task_id": "mbppplus/doc:9e8589c1a6e6a162d73f6115c3586bd5f12fd9f63d5589f71055cc8b772352a3"
+      },
+      {
+        "benchmark": "cruxeval",
+        "data_source": "cruxeval-org/cruxeval",
+        "dataset_row_uid": "264",
+        "repetition_index": 0,
+        "task_id": "cruxeval/sample_212"
+      },
+      {
+        "benchmark": "bixbench-pi",
+        "data_source": "bixbench-pi",
+        "dataset_row_uid": "265",
+        "repetition_index": 0,
+        "task_id": "bixbench-pi/bix-2-q1"
+      },
+      {
+        "benchmark": "humanevalplus",
+        "data_source": "evalplus/humanevalplus",
+        "dataset_row_uid": "266",
+        "repetition_index": 0,
+        "task_id": "humanevalplus/HumanEval/121"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "267",
+        "repetition_index": 0,
+        "task_id": "tb2-recovery/terminal-bench/sam-cell-seg"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "268",
+        "repetition_index": 1,
+        "task_id": "tb2-recovery/terminal-bench/sam-cell-seg"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "269",
+        "repetition_index": 2,
+        "task_id": "tb2-recovery/terminal-bench/sam-cell-seg"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "270",
+        "repetition_index": 0,
+        "task_id": "ot-tblite-recovery/sign-vector-game"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "271",
+        "repetition_index": 1,
+        "task_id": "ot-tblite-recovery/sign-vector-game"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "272",
+        "repetition_index": 2,
+        "task_id": "ot-tblite-recovery/sign-vector-game"
+      },
+      {
+        "benchmark": "gsm8k-0shot",
+        "data_source": "openai/gsm8k",
+        "dataset_row_uid": "273",
+        "repetition_index": 0,
+        "task_id": "gsm8k-0shot/doc:29e94f62b943a9bdbbd50fcbe4757f6311b2d7668f7c594011b9607b67154ec2"
+      },
+      {
+        "benchmark": "ds-1000-local",
+        "data_source": "ds-1000-local",
+        "dataset_row_uid": "274",
+        "repetition_index": 0,
+        "task_id": "ds-1000-local/ds-1000/250"
+      },
+      {
+        "benchmark": "ifbench",
+        "data_source": "allenai/IFBench_test",
+        "dataset_row_uid": "275",
+        "repetition_index": 0,
+        "task_id": "ifbench/doc:f10b17879cf6af263afb65724ba4153a2e21ed0aebeb58dee44f644d1ec3ee1d"
+      },
+      {
+        "benchmark": "bfclparity-pi",
+        "data_source": "bfclparity-pi",
+        "dataset_row_uid": "276",
+        "repetition_index": 0,
+        "task_id": "bfclparity-pi/bfcl-irrelevance-3"
+      },
+      {
+        "benchmark": "truthfulqa",
+        "data_source": "truthfulqa/truthful_qa",
+        "dataset_row_uid": "277",
+        "repetition_index": 0,
+        "task_id": "truthfulqa/doc:c9ad9222bdb12ef7ae3fb5964e92739a7ae14a17a9faf8c59b7b063635854e5e"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "278",
+        "repetition_index": 0,
+        "task_id": "olympiadbench/doc:a384bd2625413ae98d9086ead3b2b048bfbd2a6b2680d44fc4a3342e0437da72"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "279",
+        "repetition_index": 1,
+        "task_id": "olympiadbench/doc:a384bd2625413ae98d9086ead3b2b048bfbd2a6b2680d44fc4a3342e0437da72"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "280",
+        "repetition_index": 2,
+        "task_id": "olympiadbench/doc:a384bd2625413ae98d9086ead3b2b048bfbd2a6b2680d44fc4a3342e0437da72"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "281",
+        "repetition_index": 3,
+        "task_id": "olympiadbench/doc:a384bd2625413ae98d9086ead3b2b048bfbd2a6b2680d44fc4a3342e0437da72"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "282",
+        "repetition_index": 4,
+        "task_id": "olympiadbench/doc:a384bd2625413ae98d9086ead3b2b048bfbd2a6b2680d44fc4a3342e0437da72"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "283",
+        "repetition_index": 5,
+        "task_id": "olympiadbench/doc:a384bd2625413ae98d9086ead3b2b048bfbd2a6b2680d44fc4a3342e0437da72"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "284",
+        "repetition_index": 6,
+        "task_id": "olympiadbench/doc:a384bd2625413ae98d9086ead3b2b048bfbd2a6b2680d44fc4a3342e0437da72"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "285",
+        "repetition_index": 7,
+        "task_id": "olympiadbench/doc:a384bd2625413ae98d9086ead3b2b048bfbd2a6b2680d44fc4a3342e0437da72"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "286",
+        "repetition_index": 8,
+        "task_id": "olympiadbench/doc:a384bd2625413ae98d9086ead3b2b048bfbd2a6b2680d44fc4a3342e0437da72"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "287",
+        "repetition_index": 9,
+        "task_id": "olympiadbench/doc:a384bd2625413ae98d9086ead3b2b048bfbd2a6b2680d44fc4a3342e0437da72"
+      },
+      {
+        "benchmark": "triviaqa",
+        "data_source": "mandarjoshi/trivia_qa",
+        "dataset_row_uid": "288",
+        "repetition_index": 0,
+        "task_id": "triviaqa/dataset-row:8637"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "289",
+        "repetition_index": 0,
+        "task_id": "aime24/doc:af9d45b9856d858f822aa895e4e204ecad363be5bf8c86976c6e434b5f1da522"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "290",
+        "repetition_index": 1,
+        "task_id": "aime24/doc:af9d45b9856d858f822aa895e4e204ecad363be5bf8c86976c6e434b5f1da522"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "291",
+        "repetition_index": 2,
+        "task_id": "aime24/doc:af9d45b9856d858f822aa895e4e204ecad363be5bf8c86976c6e434b5f1da522"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "292",
+        "repetition_index": 3,
+        "task_id": "aime24/doc:af9d45b9856d858f822aa895e4e204ecad363be5bf8c86976c6e434b5f1da522"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "293",
+        "repetition_index": 4,
+        "task_id": "aime24/doc:af9d45b9856d858f822aa895e4e204ecad363be5bf8c86976c6e434b5f1da522"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "294",
+        "repetition_index": 5,
+        "task_id": "aime24/doc:af9d45b9856d858f822aa895e4e204ecad363be5bf8c86976c6e434b5f1da522"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "295",
+        "repetition_index": 6,
+        "task_id": "aime24/doc:af9d45b9856d858f822aa895e4e204ecad363be5bf8c86976c6e434b5f1da522"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "296",
+        "repetition_index": 7,
+        "task_id": "aime24/doc:af9d45b9856d858f822aa895e4e204ecad363be5bf8c86976c6e434b5f1da522"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "297",
+        "repetition_index": 8,
+        "task_id": "aime24/doc:af9d45b9856d858f822aa895e4e204ecad363be5bf8c86976c6e434b5f1da522"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "298",
+        "repetition_index": 9,
+        "task_id": "aime24/doc:af9d45b9856d858f822aa895e4e204ecad363be5bf8c86976c6e434b5f1da522"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "299",
+        "repetition_index": 0,
+        "task_id": "gpqa-diamond/doc:18a4992db5b6c9e14ee4f84345c5adf7e42598148ae3d5da514058d7a6ef1ba4"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "300",
+        "repetition_index": 1,
+        "task_id": "gpqa-diamond/doc:18a4992db5b6c9e14ee4f84345c5adf7e42598148ae3d5da514058d7a6ef1ba4"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "301",
+        "repetition_index": 2,
+        "task_id": "gpqa-diamond/doc:18a4992db5b6c9e14ee4f84345c5adf7e42598148ae3d5da514058d7a6ef1ba4"
+      },
+      {
+        "benchmark": "math500",
+        "data_source": "HuggingFaceH4/MATH-500",
+        "dataset_row_uid": "302",
+        "repetition_index": 0,
+        "task_id": "math500/doc:57f2c81a5764651d7d1b28178189fcb64a4fb9679f0899e4bad0e12cc1b10554"
+      },
+      {
+        "benchmark": "mrcr",
+        "data_source": "openai/mrcr",
+        "dataset_row_uid": "303",
+        "repetition_index": 0,
+        "task_id": "mrcr/doc:aced0c1fbfa2964564ac4ad74769f671be606c464db05407e236c1ecceb84658"
+      },
+      {
+        "benchmark": "NUPA",
+        "data_source": "HaotongYang/NUPA_text",
+        "dataset_row_uid": "304",
+        "repetition_index": 0,
+        "task_id": "NUPA/doc:df2aac6132171c88d792a6bbc62876cd97d21862a36577492f8865f89746472d"
+      },
+      {
+        "benchmark": "mmlu-pro",
+        "data_source": "TIGER-Lab/MMLU-Pro",
+        "dataset_row_uid": "305",
+        "repetition_index": 0,
+        "task_id": "mmlu-pro/doc:19514e809ff901d87c556cc88360182001a7b4dbe0e927f5354d0c07f41d53db"
+      },
+      {
+        "benchmark": "swebench-verified",
+        "data_source": "swebench-verified",
+        "dataset_row_uid": "306",
+        "repetition_index": 0,
+        "task_id": "swebench-verified/django__django-12039"
+      },
+      {
+        "benchmark": "mbppplus",
+        "data_source": "evalplus/mbppplus",
+        "dataset_row_uid": "307",
+        "repetition_index": 0,
+        "task_id": "mbppplus/doc:096f5c50dd9e214ef42087671aedb6b9ae1834dcad02092c02b9a1a633907ea8"
+      },
+      {
+        "benchmark": "cruxeval",
+        "data_source": "cruxeval-org/cruxeval",
+        "dataset_row_uid": "308",
+        "repetition_index": 0,
+        "task_id": "cruxeval/sample_618"
+      },
+      {
+        "benchmark": "bixbench-pi",
+        "data_source": "bixbench-pi",
+        "dataset_row_uid": "309",
+        "repetition_index": 0,
+        "task_id": "bixbench-pi/bix-28-q6"
+      },
+      {
+        "benchmark": "humanevalplus",
+        "data_source": "evalplus/humanevalplus",
+        "dataset_row_uid": "310",
+        "repetition_index": 0,
+        "task_id": "humanevalplus/HumanEval/129"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "311",
+        "repetition_index": 0,
+        "task_id": "tb2-recovery/terminal-bench/modernize-scientific-stack"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "312",
+        "repetition_index": 1,
+        "task_id": "tb2-recovery/terminal-bench/modernize-scientific-stack"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "313",
+        "repetition_index": 2,
+        "task_id": "tb2-recovery/terminal-bench/modernize-scientific-stack"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "314",
+        "repetition_index": 0,
+        "task_id": "ot-tblite-recovery/python-api-rate-limit"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "315",
+        "repetition_index": 1,
+        "task_id": "ot-tblite-recovery/python-api-rate-limit"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "316",
+        "repetition_index": 2,
+        "task_id": "ot-tblite-recovery/python-api-rate-limit"
+      },
+      {
+        "benchmark": "gsm8k-0shot",
+        "data_source": "openai/gsm8k",
+        "dataset_row_uid": "317",
+        "repetition_index": 0,
+        "task_id": "gsm8k-0shot/doc:3430ec274a103a29b1fb0a393a2243f36298a35e7ca9aa98c3b0ed87da85fbe5"
+      },
+      {
+        "benchmark": "ds-1000-local",
+        "data_source": "ds-1000-local",
+        "dataset_row_uid": "318",
+        "repetition_index": 0,
+        "task_id": "ds-1000-local/ds-1000/270"
+      },
+      {
+        "benchmark": "ifbench",
+        "data_source": "allenai/IFBench_test",
+        "dataset_row_uid": "319",
+        "repetition_index": 0,
+        "task_id": "ifbench/doc:22606bfba346881c0ac50e7cda61386b0f3181dd0816950bad852c37e0eb4ff6"
+      },
+      {
+        "benchmark": "bfclparity-pi",
+        "data_source": "bfclparity-pi",
+        "dataset_row_uid": "320",
+        "repetition_index": 0,
+        "task_id": "bfclparity-pi/bfcl-irrelevance-13"
+      },
+      {
+        "benchmark": "truthfulqa",
+        "data_source": "truthfulqa/truthful_qa",
+        "dataset_row_uid": "321",
+        "repetition_index": 0,
+        "task_id": "truthfulqa/doc:93cbfcbf8f7bfa49dd4d778d047a79fba4efee981889b4892aa66bad8a0b3834"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "322",
+        "repetition_index": 0,
+        "task_id": "olympiadbench/doc:3188ab00a2d349376a9cc3d39565e58f728d63c9eaecfd4eb40a5b76324e55a5"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "323",
+        "repetition_index": 1,
+        "task_id": "olympiadbench/doc:3188ab00a2d349376a9cc3d39565e58f728d63c9eaecfd4eb40a5b76324e55a5"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "324",
+        "repetition_index": 2,
+        "task_id": "olympiadbench/doc:3188ab00a2d349376a9cc3d39565e58f728d63c9eaecfd4eb40a5b76324e55a5"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "325",
+        "repetition_index": 3,
+        "task_id": "olympiadbench/doc:3188ab00a2d349376a9cc3d39565e58f728d63c9eaecfd4eb40a5b76324e55a5"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "326",
+        "repetition_index": 4,
+        "task_id": "olympiadbench/doc:3188ab00a2d349376a9cc3d39565e58f728d63c9eaecfd4eb40a5b76324e55a5"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "327",
+        "repetition_index": 5,
+        "task_id": "olympiadbench/doc:3188ab00a2d349376a9cc3d39565e58f728d63c9eaecfd4eb40a5b76324e55a5"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "328",
+        "repetition_index": 6,
+        "task_id": "olympiadbench/doc:3188ab00a2d349376a9cc3d39565e58f728d63c9eaecfd4eb40a5b76324e55a5"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "329",
+        "repetition_index": 7,
+        "task_id": "olympiadbench/doc:3188ab00a2d349376a9cc3d39565e58f728d63c9eaecfd4eb40a5b76324e55a5"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "330",
+        "repetition_index": 8,
+        "task_id": "olympiadbench/doc:3188ab00a2d349376a9cc3d39565e58f728d63c9eaecfd4eb40a5b76324e55a5"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "331",
+        "repetition_index": 9,
+        "task_id": "olympiadbench/doc:3188ab00a2d349376a9cc3d39565e58f728d63c9eaecfd4eb40a5b76324e55a5"
+      },
+      {
+        "benchmark": "triviaqa",
+        "data_source": "mandarjoshi/trivia_qa",
+        "dataset_row_uid": "332",
+        "repetition_index": 0,
+        "task_id": "triviaqa/dataset-row:5212"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "333",
+        "repetition_index": 0,
+        "task_id": "aime24/doc:ebdfe27a7e6c3c7d1680fa9693769b3227aead9bbeb8f61b3c910f94ca3097a6"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "334",
+        "repetition_index": 1,
+        "task_id": "aime24/doc:ebdfe27a7e6c3c7d1680fa9693769b3227aead9bbeb8f61b3c910f94ca3097a6"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "335",
+        "repetition_index": 2,
+        "task_id": "aime24/doc:ebdfe27a7e6c3c7d1680fa9693769b3227aead9bbeb8f61b3c910f94ca3097a6"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "336",
+        "repetition_index": 3,
+        "task_id": "aime24/doc:ebdfe27a7e6c3c7d1680fa9693769b3227aead9bbeb8f61b3c910f94ca3097a6"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "337",
+        "repetition_index": 4,
+        "task_id": "aime24/doc:ebdfe27a7e6c3c7d1680fa9693769b3227aead9bbeb8f61b3c910f94ca3097a6"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "338",
+        "repetition_index": 5,
+        "task_id": "aime24/doc:ebdfe27a7e6c3c7d1680fa9693769b3227aead9bbeb8f61b3c910f94ca3097a6"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "339",
+        "repetition_index": 6,
+        "task_id": "aime24/doc:ebdfe27a7e6c3c7d1680fa9693769b3227aead9bbeb8f61b3c910f94ca3097a6"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "340",
+        "repetition_index": 7,
+        "task_id": "aime24/doc:ebdfe27a7e6c3c7d1680fa9693769b3227aead9bbeb8f61b3c910f94ca3097a6"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "341",
+        "repetition_index": 8,
+        "task_id": "aime24/doc:ebdfe27a7e6c3c7d1680fa9693769b3227aead9bbeb8f61b3c910f94ca3097a6"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "342",
+        "repetition_index": 9,
+        "task_id": "aime24/doc:ebdfe27a7e6c3c7d1680fa9693769b3227aead9bbeb8f61b3c910f94ca3097a6"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "343",
+        "repetition_index": 0,
+        "task_id": "gpqa-diamond/doc:d22f28b5535b157ea97ed785b791a51a84745d50a5db0e1633cd4249c122ea38"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "344",
+        "repetition_index": 1,
+        "task_id": "gpqa-diamond/doc:d22f28b5535b157ea97ed785b791a51a84745d50a5db0e1633cd4249c122ea38"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "345",
+        "repetition_index": 2,
+        "task_id": "gpqa-diamond/doc:d22f28b5535b157ea97ed785b791a51a84745d50a5db0e1633cd4249c122ea38"
+      },
+      {
+        "benchmark": "math500",
+        "data_source": "HuggingFaceH4/MATH-500",
+        "dataset_row_uid": "346",
+        "repetition_index": 0,
+        "task_id": "math500/doc:17ef62baa7272293118ebc024ef4db730e91ff2902143d45cf8e0c3abcc79435"
+      },
+      {
+        "benchmark": "mrcr",
+        "data_source": "openai/mrcr",
+        "dataset_row_uid": "347",
+        "repetition_index": 0,
+        "task_id": "mrcr/doc:6d0807d82314525fc14d3e7d30d5cd647fe7952af733456c5b3663d149267489"
+      },
+      {
+        "benchmark": "NUPA",
+        "data_source": "HaotongYang/NUPA_text",
+        "dataset_row_uid": "348",
+        "repetition_index": 0,
+        "task_id": "NUPA/doc:d1132a76833fc741d4c1fc80767a93a9cc7798b5cc60741a354af542491a2ebd"
+      },
+      {
+        "benchmark": "mmlu-pro",
+        "data_source": "TIGER-Lab/MMLU-Pro",
+        "dataset_row_uid": "349",
+        "repetition_index": 0,
+        "task_id": "mmlu-pro/doc:55e26fe1b342ed0f0fdfc5f8a9c12d7f266a2081b1095266e42cf700b7bb1e5c"
+      },
+      {
+        "benchmark": "swebench-verified",
+        "data_source": "swebench-verified",
+        "dataset_row_uid": "350",
+        "repetition_index": 0,
+        "task_id": "swebench-verified/django__django-16662"
+      },
+      {
+        "benchmark": "mbppplus",
+        "data_source": "evalplus/mbppplus",
+        "dataset_row_uid": "351",
+        "repetition_index": 0,
+        "task_id": "mbppplus/doc:f6158e2bc91749e70c46da9b5a23ed1603126b154feefe3e62f44b8a7f190e99"
+      },
+      {
+        "benchmark": "cruxeval",
+        "data_source": "cruxeval-org/cruxeval",
+        "dataset_row_uid": "352",
+        "repetition_index": 0,
+        "task_id": "cruxeval/sample_627"
+      },
+      {
+        "benchmark": "bixbench-pi",
+        "data_source": "bixbench-pi",
+        "dataset_row_uid": "353",
+        "repetition_index": 0,
+        "task_id": "bixbench-pi/bix-20-q2"
+      },
+      {
+        "benchmark": "humanevalplus",
+        "data_source": "evalplus/humanevalplus",
+        "dataset_row_uid": "354",
+        "repetition_index": 0,
+        "task_id": "humanevalplus/HumanEval/149"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "355",
+        "repetition_index": 0,
+        "task_id": "tb2-recovery/terminal-bench/large-scale-text-editing"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "356",
+        "repetition_index": 1,
+        "task_id": "tb2-recovery/terminal-bench/large-scale-text-editing"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "357",
+        "repetition_index": 2,
+        "task_id": "tb2-recovery/terminal-bench/large-scale-text-editing"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "358",
+        "repetition_index": 0,
+        "task_id": "ot-tblite-recovery/pdf-table-parsing"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "359",
+        "repetition_index": 1,
+        "task_id": "ot-tblite-recovery/pdf-table-parsing"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "360",
+        "repetition_index": 2,
+        "task_id": "ot-tblite-recovery/pdf-table-parsing"
+      },
+      {
+        "benchmark": "gsm8k-0shot",
+        "data_source": "openai/gsm8k",
+        "dataset_row_uid": "361",
+        "repetition_index": 0,
+        "task_id": "gsm8k-0shot/doc:97f0742feb08104eb4d40effc89b6890137f64c02f58f892cb6ea58d6e2f5e47"
+      },
+      {
+        "benchmark": "ds-1000-local",
+        "data_source": "ds-1000-local",
+        "dataset_row_uid": "362",
+        "repetition_index": 0,
+        "task_id": "ds-1000-local/ds-1000/269"
+      },
+      {
+        "benchmark": "ifbench",
+        "data_source": "allenai/IFBench_test",
+        "dataset_row_uid": "363",
+        "repetition_index": 0,
+        "task_id": "ifbench/doc:2aeeca11cef016534bf4b525cbc28f2aa798c82d01ab288be6e5c92d6e32c585"
+      },
+      {
+        "benchmark": "bfclparity-pi",
+        "data_source": "bfclparity-pi",
+        "dataset_row_uid": "364",
+        "repetition_index": 0,
+        "task_id": "bfclparity-pi/bfcl-live-simple-123-79-0"
+      },
+      {
+        "benchmark": "truthfulqa",
+        "data_source": "truthfulqa/truthful_qa",
+        "dataset_row_uid": "365",
+        "repetition_index": 0,
+        "task_id": "truthfulqa/doc:0656f66238e7c8f24e8bacd8acd2919c0d8b789bb602a96a28d95116b7c423fb"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "366",
+        "repetition_index": 0,
+        "task_id": "olympiadbench/doc:5e459e706afc91a2f44285041516e4277961b70a2cd7689d15c7ef579360eb93"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "367",
+        "repetition_index": 1,
+        "task_id": "olympiadbench/doc:5e459e706afc91a2f44285041516e4277961b70a2cd7689d15c7ef579360eb93"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "368",
+        "repetition_index": 2,
+        "task_id": "olympiadbench/doc:5e459e706afc91a2f44285041516e4277961b70a2cd7689d15c7ef579360eb93"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "369",
+        "repetition_index": 3,
+        "task_id": "olympiadbench/doc:5e459e706afc91a2f44285041516e4277961b70a2cd7689d15c7ef579360eb93"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "370",
+        "repetition_index": 4,
+        "task_id": "olympiadbench/doc:5e459e706afc91a2f44285041516e4277961b70a2cd7689d15c7ef579360eb93"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "371",
+        "repetition_index": 5,
+        "task_id": "olympiadbench/doc:5e459e706afc91a2f44285041516e4277961b70a2cd7689d15c7ef579360eb93"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "372",
+        "repetition_index": 6,
+        "task_id": "olympiadbench/doc:5e459e706afc91a2f44285041516e4277961b70a2cd7689d15c7ef579360eb93"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "373",
+        "repetition_index": 7,
+        "task_id": "olympiadbench/doc:5e459e706afc91a2f44285041516e4277961b70a2cd7689d15c7ef579360eb93"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "374",
+        "repetition_index": 8,
+        "task_id": "olympiadbench/doc:5e459e706afc91a2f44285041516e4277961b70a2cd7689d15c7ef579360eb93"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "375",
+        "repetition_index": 9,
+        "task_id": "olympiadbench/doc:5e459e706afc91a2f44285041516e4277961b70a2cd7689d15c7ef579360eb93"
+      },
+      {
+        "benchmark": "triviaqa",
+        "data_source": "mandarjoshi/trivia_qa",
+        "dataset_row_uid": "376",
+        "repetition_index": 0,
+        "task_id": "triviaqa/dataset-row:1880"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "377",
+        "repetition_index": 0,
+        "task_id": "aime24/doc:ccb450d3050088b777b0a59f39bded4f8e100127ac9cd61ec9d908200bea795b"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "378",
+        "repetition_index": 1,
+        "task_id": "aime24/doc:ccb450d3050088b777b0a59f39bded4f8e100127ac9cd61ec9d908200bea795b"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "379",
+        "repetition_index": 2,
+        "task_id": "aime24/doc:ccb450d3050088b777b0a59f39bded4f8e100127ac9cd61ec9d908200bea795b"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "380",
+        "repetition_index": 3,
+        "task_id": "aime24/doc:ccb450d3050088b777b0a59f39bded4f8e100127ac9cd61ec9d908200bea795b"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "381",
+        "repetition_index": 4,
+        "task_id": "aime24/doc:ccb450d3050088b777b0a59f39bded4f8e100127ac9cd61ec9d908200bea795b"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "382",
+        "repetition_index": 5,
+        "task_id": "aime24/doc:ccb450d3050088b777b0a59f39bded4f8e100127ac9cd61ec9d908200bea795b"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "383",
+        "repetition_index": 6,
+        "task_id": "aime24/doc:ccb450d3050088b777b0a59f39bded4f8e100127ac9cd61ec9d908200bea795b"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "384",
+        "repetition_index": 7,
+        "task_id": "aime24/doc:ccb450d3050088b777b0a59f39bded4f8e100127ac9cd61ec9d908200bea795b"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "385",
+        "repetition_index": 8,
+        "task_id": "aime24/doc:ccb450d3050088b777b0a59f39bded4f8e100127ac9cd61ec9d908200bea795b"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "386",
+        "repetition_index": 9,
+        "task_id": "aime24/doc:ccb450d3050088b777b0a59f39bded4f8e100127ac9cd61ec9d908200bea795b"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "387",
+        "repetition_index": 0,
+        "task_id": "gpqa-diamond/doc:fd0861e6615d4c8d56d64fe9a85c7e817da89ccaab982f804df28c11851f3658"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "388",
+        "repetition_index": 1,
+        "task_id": "gpqa-diamond/doc:fd0861e6615d4c8d56d64fe9a85c7e817da89ccaab982f804df28c11851f3658"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "389",
+        "repetition_index": 2,
+        "task_id": "gpqa-diamond/doc:fd0861e6615d4c8d56d64fe9a85c7e817da89ccaab982f804df28c11851f3658"
+      },
+      {
+        "benchmark": "math500",
+        "data_source": "HuggingFaceH4/MATH-500",
+        "dataset_row_uid": "390",
+        "repetition_index": 0,
+        "task_id": "math500/doc:2d5e0e8b8681b079378693b9576545f93b7796271e0bf0a8fb04311d8831e8cd"
+      },
+      {
+        "benchmark": "mrcr",
+        "data_source": "openai/mrcr",
+        "dataset_row_uid": "391",
+        "repetition_index": 0,
+        "task_id": "mrcr/doc:00d4e0eaf653ea4a12a6180bfdeb66a0660f549c85095fd7c60db8940907cd56"
+      },
+      {
+        "benchmark": "NUPA",
+        "data_source": "HaotongYang/NUPA_text",
+        "dataset_row_uid": "392",
+        "repetition_index": 0,
+        "task_id": "NUPA/doc:39da75310c725f8ff9a89c31defc90442d9ef815be64cd1eec55275166e7112b"
+      },
+      {
+        "benchmark": "mmlu-pro",
+        "data_source": "TIGER-Lab/MMLU-Pro",
+        "dataset_row_uid": "393",
+        "repetition_index": 0,
+        "task_id": "mmlu-pro/doc:574af5adce43fccace28616ab4c185d8100f7185ca8637882b71e8d1af14f30c"
+      },
+      {
+        "benchmark": "swebench-verified",
+        "data_source": "swebench-verified",
+        "dataset_row_uid": "394",
+        "repetition_index": 0,
+        "task_id": "swebench-verified/django__django-16256"
+      },
+      {
+        "benchmark": "mbppplus",
+        "data_source": "evalplus/mbppplus",
+        "dataset_row_uid": "395",
+        "repetition_index": 0,
+        "task_id": "mbppplus/doc:f35e70349deae384f1a0e17f7260dc9e7bd45abaf154bf5dbcdea86e0cab9758"
+      },
+      {
+        "benchmark": "cruxeval",
+        "data_source": "cruxeval-org/cruxeval",
+        "dataset_row_uid": "396",
+        "repetition_index": 0,
+        "task_id": "cruxeval/sample_148"
+      },
+      {
+        "benchmark": "bixbench-pi",
+        "data_source": "bixbench-pi",
+        "dataset_row_uid": "397",
+        "repetition_index": 0,
+        "task_id": "bixbench-pi/bix-6-q4"
+      },
+      {
+        "benchmark": "humanevalplus",
+        "data_source": "evalplus/humanevalplus",
+        "dataset_row_uid": "398",
+        "repetition_index": 0,
+        "task_id": "humanevalplus/HumanEval/24"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "399",
+        "repetition_index": 0,
+        "task_id": "tb2-recovery/terminal-bench/dna-assembly"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "400",
+        "repetition_index": 1,
+        "task_id": "tb2-recovery/terminal-bench/dna-assembly"
+      },
+      {
+        "benchmark": "tb2-recovery",
+        "data_source": "tb2-recovery",
+        "dataset_row_uid": "401",
+        "repetition_index": 2,
+        "task_id": "tb2-recovery/terminal-bench/dna-assembly"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "402",
+        "repetition_index": 0,
+        "task_id": "ot-tblite-recovery/build-system-task-ordering"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "403",
+        "repetition_index": 1,
+        "task_id": "ot-tblite-recovery/build-system-task-ordering"
+      },
+      {
+        "benchmark": "ot-tblite-recovery",
+        "data_source": "ot-tblite-recovery",
+        "dataset_row_uid": "404",
+        "repetition_index": 2,
+        "task_id": "ot-tblite-recovery/build-system-task-ordering"
+      },
+      {
+        "benchmark": "gsm8k-0shot",
+        "data_source": "openai/gsm8k",
+        "dataset_row_uid": "405",
+        "repetition_index": 0,
+        "task_id": "gsm8k-0shot/doc:3053717caea4c5c85fe0534f315538dd4cfac4b0132f1448548f204941376cea"
+      },
+      {
+        "benchmark": "ds-1000-local",
+        "data_source": "ds-1000-local",
+        "dataset_row_uid": "406",
+        "repetition_index": 0,
+        "task_id": "ds-1000-local/ds-1000/824"
+      },
+      {
+        "benchmark": "ifbench",
+        "data_source": "allenai/IFBench_test",
+        "dataset_row_uid": "407",
+        "repetition_index": 0,
+        "task_id": "ifbench/doc:06fa836278c6928b890c52d2bae2b6f69948408889ce30fad24ac04e575bde1a"
+      },
+      {
+        "benchmark": "bfclparity-pi",
+        "data_source": "bfclparity-pi",
+        "dataset_row_uid": "408",
+        "repetition_index": 0,
+        "task_id": "bfclparity-pi/bfcl-live-multiple-179-75-1"
+      },
+      {
+        "benchmark": "truthfulqa",
+        "data_source": "truthfulqa/truthful_qa",
+        "dataset_row_uid": "409",
+        "repetition_index": 0,
+        "task_id": "truthfulqa/doc:3ac8e08c6ae46b174545294713a774ef87980f48e2b83b24cffdf8df0cf7c245"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "410",
+        "repetition_index": 0,
+        "task_id": "olympiadbench/doc:be993510a8436b1a4721c3ed126a11e77f8c1abd695d927abb425c6d3e1d04fb"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "411",
+        "repetition_index": 1,
+        "task_id": "olympiadbench/doc:be993510a8436b1a4721c3ed126a11e77f8c1abd695d927abb425c6d3e1d04fb"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "412",
+        "repetition_index": 2,
+        "task_id": "olympiadbench/doc:be993510a8436b1a4721c3ed126a11e77f8c1abd695d927abb425c6d3e1d04fb"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "413",
+        "repetition_index": 3,
+        "task_id": "olympiadbench/doc:be993510a8436b1a4721c3ed126a11e77f8c1abd695d927abb425c6d3e1d04fb"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "414",
+        "repetition_index": 4,
+        "task_id": "olympiadbench/doc:be993510a8436b1a4721c3ed126a11e77f8c1abd695d927abb425c6d3e1d04fb"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "415",
+        "repetition_index": 5,
+        "task_id": "olympiadbench/doc:be993510a8436b1a4721c3ed126a11e77f8c1abd695d927abb425c6d3e1d04fb"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "416",
+        "repetition_index": 6,
+        "task_id": "olympiadbench/doc:be993510a8436b1a4721c3ed126a11e77f8c1abd695d927abb425c6d3e1d04fb"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "417",
+        "repetition_index": 7,
+        "task_id": "olympiadbench/doc:be993510a8436b1a4721c3ed126a11e77f8c1abd695d927abb425c6d3e1d04fb"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "418",
+        "repetition_index": 8,
+        "task_id": "olympiadbench/doc:be993510a8436b1a4721c3ed126a11e77f8c1abd695d927abb425c6d3e1d04fb"
+      },
+      {
+        "benchmark": "olympiadbench",
+        "data_source": "lmms-lab/olympiadbench",
+        "dataset_row_uid": "419",
+        "repetition_index": 9,
+        "task_id": "olympiadbench/doc:be993510a8436b1a4721c3ed126a11e77f8c1abd695d927abb425c6d3e1d04fb"
+      },
+      {
+        "benchmark": "triviaqa",
+        "data_source": "mandarjoshi/trivia_qa",
+        "dataset_row_uid": "420",
+        "repetition_index": 0,
+        "task_id": "triviaqa/dataset-row:16205"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "421",
+        "repetition_index": 0,
+        "task_id": "aime24/doc:dff2cd7ae9f63b46b8a1e37e4a1dc621bb61af6fe4ab41f0e844668c551e9591"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "422",
+        "repetition_index": 1,
+        "task_id": "aime24/doc:dff2cd7ae9f63b46b8a1e37e4a1dc621bb61af6fe4ab41f0e844668c551e9591"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "423",
+        "repetition_index": 2,
+        "task_id": "aime24/doc:dff2cd7ae9f63b46b8a1e37e4a1dc621bb61af6fe4ab41f0e844668c551e9591"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "424",
+        "repetition_index": 3,
+        "task_id": "aime24/doc:dff2cd7ae9f63b46b8a1e37e4a1dc621bb61af6fe4ab41f0e844668c551e9591"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "425",
+        "repetition_index": 4,
+        "task_id": "aime24/doc:dff2cd7ae9f63b46b8a1e37e4a1dc621bb61af6fe4ab41f0e844668c551e9591"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "426",
+        "repetition_index": 5,
+        "task_id": "aime24/doc:dff2cd7ae9f63b46b8a1e37e4a1dc621bb61af6fe4ab41f0e844668c551e9591"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "427",
+        "repetition_index": 6,
+        "task_id": "aime24/doc:dff2cd7ae9f63b46b8a1e37e4a1dc621bb61af6fe4ab41f0e844668c551e9591"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "428",
+        "repetition_index": 7,
+        "task_id": "aime24/doc:dff2cd7ae9f63b46b8a1e37e4a1dc621bb61af6fe4ab41f0e844668c551e9591"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "429",
+        "repetition_index": 8,
+        "task_id": "aime24/doc:dff2cd7ae9f63b46b8a1e37e4a1dc621bb61af6fe4ab41f0e844668c551e9591"
+      },
+      {
+        "benchmark": "aime24",
+        "data_source": "zwhe99/aime24",
+        "dataset_row_uid": "430",
+        "repetition_index": 9,
+        "task_id": "aime24/doc:dff2cd7ae9f63b46b8a1e37e4a1dc621bb61af6fe4ab41f0e844668c551e9591"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "431",
+        "repetition_index": 0,
+        "task_id": "gpqa-diamond/doc:fa4aadbc1ad3580db87436e5a71c94c886232ee800c8605dfbecd59a94b27a4e"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "432",
+        "repetition_index": 1,
+        "task_id": "gpqa-diamond/doc:fa4aadbc1ad3580db87436e5a71c94c886232ee800c8605dfbecd59a94b27a4e"
+      },
+      {
+        "benchmark": "gpqa-diamond",
+        "data_source": "Idavidrein/gpqa",
+        "dataset_row_uid": "433",
+        "repetition_index": 2,
+        "task_id": "gpqa-diamond/doc:fa4aadbc1ad3580db87436e5a71c94c886232ee800c8605dfbecd59a94b27a4e"
+      },
+      {
+        "benchmark": "math500",
+        "data_source": "HuggingFaceH4/MATH-500",
+        "dataset_row_uid": "434",
+        "repetition_index": 0,
+        "task_id": "math500/doc:4b52f38f8bbe2cff79e8e06cf8325ad4aa637185bcd6219f8983f2ebd5865a87"
+      },
+      {
+        "benchmark": "mrcr",
+        "data_source": "openai/mrcr",
+        "dataset_row_uid": "435",
+        "repetition_index": 0,
+        "task_id": "mrcr/doc:0fe6c7995f548f468a3ca8b379bf2068256f64424819d06b48bbb49e0e45794d"
+      },
+      {
+        "benchmark": "NUPA",
+        "data_source": "HaotongYang/NUPA_text",
+        "dataset_row_uid": "436",
+        "repetition_index": 0,
+        "task_id": "NUPA/doc:76ab7b75ff84d13d6c967f1197b154c5c9984535369b8e48c5fc01b7e9dd9b1c"
+      },
+      {
+        "benchmark": "mmlu-pro",
+        "data_source": "TIGER-Lab/MMLU-Pro",
+        "dataset_row_uid": "437",
+        "repetition_index": 0,
+        "task_id": "mmlu-pro/doc:37ced65c1548cc1297123c9f5c3e4e240cf158efc8481d01c886ae2751d6cb23"
+      },
+      {
+        "benchmark": "swebench-verified",
+        "data_source": "swebench-verified",
+        "dataset_row_uid": "438",
+        "repetition_index": 0,
+        "task_id": "swebench-verified/scikit-learn__scikit-learn-25747"
+      },
+      {
+        "benchmark": "mbppplus",
+        "data_source": "evalplus/mbppplus",
+        "dataset_row_uid": "439",
+        "repetition_index": 0,
+        "task_id": "mbppplus/doc:35b8ad372625034b6883b83f78521067a03988b6f32fdd53ddcf7656b1211386"
+      }
+    ],
+    "paths": 20,
+    "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+    "task_repetitions": {
+      "NUPA/doc:39da75310c725f8ff9a89c31defc90442d9ef815be64cd1eec55275166e7112b": [
+        0
+      ],
+      "NUPA/doc:76ab7b75ff84d13d6c967f1197b154c5c9984535369b8e48c5fc01b7e9dd9b1c": [
+        0
+      ],
+      "NUPA/doc:78724ad931ea209e7ad5d35d9e5bb879e9ac0a78ab2b3284d319fae0ea060bdc": [
+        0
+      ],
+      "NUPA/doc:7cd623919902b0e5b59f6f6f4b872f9fd7d5583c95b65c41e5fbaa9ece7ddff3": [
+        0
+      ],
+      "NUPA/doc:a2c5cdf7608cba4092bec12fb5169676ded7c5636f504cddb887ee9c677e10bb": [
+        0
+      ],
+      "NUPA/doc:c5cc78c6faca005875506a928ba80d5f5dfb4aff211e42434c5de8a7c696b79b": [
+        0
+      ],
+      "NUPA/doc:d106ab9009658f4d081b827179945d2c01a345697802873cab6b170fb6101259": [
+        0
+      ],
+      "NUPA/doc:d1132a76833fc741d4c1fc80767a93a9cc7798b5cc60741a354af542491a2ebd": [
+        0
+      ],
+      "NUPA/doc:df2aac6132171c88d792a6bbc62876cd97d21862a36577492f8865f89746472d": [
+        0
+      ],
+      "NUPA/doc:fa9f001357f4d68ae4542a3a05437052169fd28cc3b8ce6df648551d6cb3b0c5": [
+        0
+      ],
+      "aime24/doc:01c717e78c86c0cce0a5bf9c9166a7c797f0dcb1e23bc120e6a076aa8b5d5e87": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "aime24/doc:2f2f1b8427ddf0da2e36c59867338d9e1230d8bc12b66fbcca605a9e1109587d": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "aime24/doc:9a2c5c78bf616a9faf2ea0f674979c4dd5d3ccf2843c06df995075edac3737c7": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "aime24/doc:af9d45b9856d858f822aa895e4e204ecad363be5bf8c86976c6e434b5f1da522": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "aime24/doc:ccb450d3050088b777b0a59f39bded4f8e100127ac9cd61ec9d908200bea795b": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "aime24/doc:cfc24148570a511aee6cad7dc8e592bab3583d9b6b496b994af7ea5db6d76bb3": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "aime24/doc:da872cda772acb84770fb19d44f263f25e4d9c4f02a3133f41fee20ece86f5ab": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "aime24/doc:dff2cd7ae9f63b46b8a1e37e4a1dc621bb61af6fe4ab41f0e844668c551e9591": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "aime24/doc:eb33066980dbf9cf6dd8280aee8edbedc7617f4d04f8f7a017fbcb563f440b24": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "aime24/doc:ebdfe27a7e6c3c7d1680fa9693769b3227aead9bbeb8f61b3c910f94ca3097a6": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bfclparity-pi/bfcl-irrelevance-13": [
+        0
+      ],
+      "bfclparity-pi/bfcl-irrelevance-154": [
+        0
+      ],
+      "bfclparity-pi/bfcl-irrelevance-3": [
+        0
+      ],
+      "bfclparity-pi/bfcl-live-irrelevance-653-206-2": [
+        0
+      ],
+      "bfclparity-pi/bfcl-live-irrelevance-721-239-0": [
+        0
+      ],
+      "bfclparity-pi/bfcl-live-multiple-179-75-1": [
+        0
+      ],
+      "bfclparity-pi/bfcl-live-parallel-2-0-2": [
+        0
+      ],
+      "bfclparity-pi/bfcl-live-simple-123-79-0": [
+        0
+      ],
+      "bfclparity-pi/bfcl-multiple-16": [
+        0
+      ],
+      "bfclparity-pi/bfcl-simple-python-87": [
+        0
+      ],
+      "bixbench-pi/bix-13-q2": [
+        0
+      ],
+      "bixbench-pi/bix-2-q1": [
+        0
+      ],
+      "bixbench-pi/bix-20-q2": [
+        0
+      ],
+      "bixbench-pi/bix-28-q4": [
+        0
+      ],
+      "bixbench-pi/bix-28-q6": [
+        0
+      ],
+      "bixbench-pi/bix-34-q1": [
+        0
+      ],
+      "bixbench-pi/bix-37-q1": [
+        0
+      ],
+      "bixbench-pi/bix-45-q1": [
+        0
+      ],
+      "bixbench-pi/bix-51-q6": [
+        0
+      ],
+      "bixbench-pi/bix-6-q4": [
+        0
+      ],
+      "cruxeval/sample_135": [
+        0
+      ],
+      "cruxeval/sample_139": [
+        0
+      ],
+      "cruxeval/sample_144": [
+        0
+      ],
+      "cruxeval/sample_148": [
+        0
+      ],
+      "cruxeval/sample_182": [
+        0
+      ],
+      "cruxeval/sample_204": [
+        0
+      ],
+      "cruxeval/sample_212": [
+        0
+      ],
+      "cruxeval/sample_229": [
+        0
+      ],
+      "cruxeval/sample_618": [
+        0
+      ],
+      "cruxeval/sample_627": [
+        0
+      ],
+      "ds-1000-local/ds-1000/112": [
+        0
+      ],
+      "ds-1000-local/ds-1000/217": [
+        0
+      ],
+      "ds-1000-local/ds-1000/234": [
+        0
+      ],
+      "ds-1000-local/ds-1000/250": [
+        0
+      ],
+      "ds-1000-local/ds-1000/269": [
+        0
+      ],
+      "ds-1000-local/ds-1000/270": [
+        0
+      ],
+      "ds-1000-local/ds-1000/754": [
+        0
+      ],
+      "ds-1000-local/ds-1000/824": [
+        0
+      ],
+      "ds-1000-local/ds-1000/854": [
+        0
+      ],
+      "ds-1000-local/ds-1000/964": [
+        0
+      ],
+      "gpqa-diamond/doc:18a4992db5b6c9e14ee4f84345c5adf7e42598148ae3d5da514058d7a6ef1ba4": [
+        0,
+        1,
+        2
+      ],
+      "gpqa-diamond/doc:26e69b05a4290ca5117b9cfa0d0e2e0eee1cb57c0665efb84b44f5fe69038850": [
+        0,
+        1,
+        2
+      ],
+      "gpqa-diamond/doc:39298a78e34eb5b0679aa07aab23e20a3313d0c1cf791e080d3b6c1871d0e27f": [
+        0,
+        1,
+        2
+      ],
+      "gpqa-diamond/doc:67d4e15180a800fa4f174af4e7f7629eb8fda1eb08ae96c89cbd3a0ec7f31929": [
+        0,
+        1,
+        2
+      ],
+      "gpqa-diamond/doc:8f18a2be4e035d78427d66dc2c2e8535f4190e8b140e79d5427e8c3903bed76f": [
+        0,
+        1,
+        2
+      ],
+      "gpqa-diamond/doc:9452608a77ec3cadff346092594991368bfa0459e4c56c77b31d421c35f010b5": [
+        0,
+        1,
+        2
+      ],
+      "gpqa-diamond/doc:9c9d3ed6aef945fcdfb99526cd2f32c14acaf4fea27f9fd05d185acfab2332ac": [
+        0,
+        1,
+        2
+      ],
+      "gpqa-diamond/doc:d22f28b5535b157ea97ed785b791a51a84745d50a5db0e1633cd4249c122ea38": [
+        0,
+        1,
+        2
+      ],
+      "gpqa-diamond/doc:fa4aadbc1ad3580db87436e5a71c94c886232ee800c8605dfbecd59a94b27a4e": [
+        0,
+        1,
+        2
+      ],
+      "gpqa-diamond/doc:fd0861e6615d4c8d56d64fe9a85c7e817da89ccaab982f804df28c11851f3658": [
+        0,
+        1,
+        2
+      ],
+      "gsm8k-0shot/doc:04035b7bf0be62a9bfc53ac20be8a13de14b74e8fd50eae2a544bd1b8427b753": [
+        0
+      ],
+      "gsm8k-0shot/doc:2082cb59d57c503b337faa87d9b45b78a47bca9445ca1d89e6a1b60c39810e2a": [
+        0
+      ],
+      "gsm8k-0shot/doc:2982c63cbf6e880ce0c09928e4694370e68a2c1059e1aadcc6f5c977d82e9f79": [
+        0
+      ],
+      "gsm8k-0shot/doc:29e94f62b943a9bdbbd50fcbe4757f6311b2d7668f7c594011b9607b67154ec2": [
+        0
+      ],
+      "gsm8k-0shot/doc:3053717caea4c5c85fe0534f315538dd4cfac4b0132f1448548f204941376cea": [
+        0
+      ],
+      "gsm8k-0shot/doc:3430ec274a103a29b1fb0a393a2243f36298a35e7ca9aa98c3b0ed87da85fbe5": [
+        0
+      ],
+      "gsm8k-0shot/doc:9649418264b5b01aacca4ce0e5c688987753064d156e1f9a1ce691c0aee5fd6d": [
+        0
+      ],
+      "gsm8k-0shot/doc:97f0742feb08104eb4d40effc89b6890137f64c02f58f892cb6ea58d6e2f5e47": [
+        0
+      ],
+      "gsm8k-0shot/doc:9e0b146811b520329442e1edcf77a2bd4214915eb217c94df7e03ce6ef5188b9": [
+        0
+      ],
+      "gsm8k-0shot/doc:ca34970cad5ef4ebb4ede75df81e15446b13d2f975f3e443e598f40de3f99de9": [
+        0
+      ],
+      "humanevalplus/HumanEval/116": [
+        0
+      ],
+      "humanevalplus/HumanEval/121": [
+        0
+      ],
+      "humanevalplus/HumanEval/129": [
+        0
+      ],
+      "humanevalplus/HumanEval/130": [
+        0
+      ],
+      "humanevalplus/HumanEval/149": [
+        0
+      ],
+      "humanevalplus/HumanEval/163": [
+        0
+      ],
+      "humanevalplus/HumanEval/20": [
+        0
+      ],
+      "humanevalplus/HumanEval/24": [
+        0
+      ],
+      "humanevalplus/HumanEval/25": [
+        0
+      ],
+      "humanevalplus/HumanEval/69": [
+        0
+      ],
+      "ifbench/doc:06fa836278c6928b890c52d2bae2b6f69948408889ce30fad24ac04e575bde1a": [
+        0
+      ],
+      "ifbench/doc:22606bfba346881c0ac50e7cda61386b0f3181dd0816950bad852c37e0eb4ff6": [
+        0
+      ],
+      "ifbench/doc:2aeeca11cef016534bf4b525cbc28f2aa798c82d01ab288be6e5c92d6e32c585": [
+        0
+      ],
+      "ifbench/doc:328e5b24731b11a944b6059025fbec3f07c8b1fcdbc808f4cc651345095f1b8d": [
+        0
+      ],
+      "ifbench/doc:378c83dee84882380f10da34e77617f45edb535b647827a835820472b2711840": [
+        0
+      ],
+      "ifbench/doc:45d72dfa5050e9fecbdf8c0f507eae5440d5d87383c84509677a3129e545ae18": [
+        0
+      ],
+      "ifbench/doc:61fa4a4f1275adca1091a3050db6c03186cc4a95d75a9845bf29d8455e6f0240": [
+        0
+      ],
+      "ifbench/doc:7b1bb7c109037f656561c8227ec550af404cd325e819bfa8f29887db76228ecb": [
+        0
+      ],
+      "ifbench/doc:b0cc5e13f3f111196fd76fe2a510d96f2a83e92010b799f4ba575c95dbe973f5": [
+        0
+      ],
+      "ifbench/doc:f10b17879cf6af263afb65724ba4153a2e21ed0aebeb58dee44f644d1ec3ee1d": [
+        0
+      ],
+      "math500/doc:17ef62baa7272293118ebc024ef4db730e91ff2902143d45cf8e0c3abcc79435": [
+        0
+      ],
+      "math500/doc:206018204f4f2bacaa4997978c71927da24f163580961787f3d184ed040e295b": [
+        0
+      ],
+      "math500/doc:2d5e0e8b8681b079378693b9576545f93b7796271e0bf0a8fb04311d8831e8cd": [
+        0
+      ],
+      "math500/doc:4b52f38f8bbe2cff79e8e06cf8325ad4aa637185bcd6219f8983f2ebd5865a87": [
+        0
+      ],
+      "math500/doc:57f2c81a5764651d7d1b28178189fcb64a4fb9679f0899e4bad0e12cc1b10554": [
+        0
+      ],
+      "math500/doc:86ab9d32679f3cc8101e41dd6d26aaaed23942674c97b41ced55dd7259dca94b": [
+        0
+      ],
+      "math500/doc:d4120a2cf485bd0871e4e00943f2d1a13305916c97603d30fc140178ad74c26c": [
+        0
+      ],
+      "math500/doc:f636955089ca054c441cbc7318bcd6757c18c1435e5a7ac33f1605e8b56f844b": [
+        0
+      ],
+      "math500/doc:fc6b60e85b5d74d832d4547c28d8fea7ce81382707e8272153e5b07a5321c6d6": [
+        0
+      ],
+      "math500/doc:fe313d650a1fa2bc475d96415f759412fbe382097331d7dd078733eec00195a2": [
+        0
+      ],
+      "mbppplus/doc:096f5c50dd9e214ef42087671aedb6b9ae1834dcad02092c02b9a1a633907ea8": [
+        0
+      ],
+      "mbppplus/doc:35b8ad372625034b6883b83f78521067a03988b6f32fdd53ddcf7656b1211386": [
+        0
+      ],
+      "mbppplus/doc:3bdbb225d0bd438ad84c5bcf5f97b92e55a553397b23bbf3b66bd66d7c22f8e6": [
+        0
+      ],
+      "mbppplus/doc:435ea1de1f228512f901a45ca4111a42b04986730c6e11525da10c4f76c3adfd": [
+        0
+      ],
+      "mbppplus/doc:9e8589c1a6e6a162d73f6115c3586bd5f12fd9f63d5589f71055cc8b772352a3": [
+        0
+      ],
+      "mbppplus/doc:e1ab6becc3b296595fa66aac4415b7c2ddc7bc1316a0e9ee0e2871f053860570": [
+        0
+      ],
+      "mbppplus/doc:ebde503d6a0649c19b81517f1c688a403e8e3ee7daf087f0ef4a8079ce60d98a": [
+        0
+      ],
+      "mbppplus/doc:f26b6586a28e3c06f62bf967765a4afd5761e603b18d6a1391b106b8c15bb962": [
+        0
+      ],
+      "mbppplus/doc:f35e70349deae384f1a0e17f7260dc9e7bd45abaf154bf5dbcdea86e0cab9758": [
+        0
+      ],
+      "mbppplus/doc:f6158e2bc91749e70c46da9b5a23ed1603126b154feefe3e62f44b8a7f190e99": [
+        0
+      ],
+      "mmlu-pro/doc:0aadb315742ad9001cf607386973d4881ed3b85859861ea733b39c251cd34b91": [
+        0
+      ],
+      "mmlu-pro/doc:1208c83ff65435c97f7c9b6aa8135ed7e3f3b5e0d86d56f795f188c35f6db2a1": [
+        0
+      ],
+      "mmlu-pro/doc:19514e809ff901d87c556cc88360182001a7b4dbe0e927f5354d0c07f41d53db": [
+        0
+      ],
+      "mmlu-pro/doc:1bf6f9ce085f236bc19a610df880ba8a870633c3095448e15d84f588ae0a3f91": [
+        0
+      ],
+      "mmlu-pro/doc:254d02b6fe08359834b746e8234dd8d9094f88cc7b7986a625154e4360daf5d6": [
+        0
+      ],
+      "mmlu-pro/doc:37ced65c1548cc1297123c9f5c3e4e240cf158efc8481d01c886ae2751d6cb23": [
+        0
+      ],
+      "mmlu-pro/doc:55e26fe1b342ed0f0fdfc5f8a9c12d7f266a2081b1095266e42cf700b7bb1e5c": [
+        0
+      ],
+      "mmlu-pro/doc:574af5adce43fccace28616ab4c185d8100f7185ca8637882b71e8d1af14f30c": [
+        0
+      ],
+      "mmlu-pro/doc:9da6a330a09a9c2ac7243d148f4f22b0a6196fbd3689f1c70fa4770c0a63bc9f": [
+        0
+      ],
+      "mmlu-pro/doc:f6cb472cd184dc113df2ff2620bc53a567ec39b91add6b80966f1b6431ffbe99": [
+        0
+      ],
+      "mrcr/doc:00d4e0eaf653ea4a12a6180bfdeb66a0660f549c85095fd7c60db8940907cd56": [
+        0
+      ],
+      "mrcr/doc:0fe6c7995f548f468a3ca8b379bf2068256f64424819d06b48bbb49e0e45794d": [
+        0
+      ],
+      "mrcr/doc:30ae127c0711360f3fef7507952a978a697283fc1dd3022fff751c6c34b64497": [
+        0
+      ],
+      "mrcr/doc:39b1292e76695d2797a80259ca9869a08063f06e202791eb2ceb3ffe6f8d223d": [
+        0
+      ],
+      "mrcr/doc:6d0807d82314525fc14d3e7d30d5cd647fe7952af733456c5b3663d149267489": [
+        0
+      ],
+      "mrcr/doc:a005fc2e08f6533591c82f247270376033fa58b703b121a1e76732a134f413de": [
+        0
+      ],
+      "mrcr/doc:aced0c1fbfa2964564ac4ad74769f671be606c464db05407e236c1ecceb84658": [
+        0
+      ],
+      "mrcr/doc:c600c61c918c73a8772dd7c833953c905ae6705d6fa003936a59b5e24e1d75f2": [
+        0
+      ],
+      "mrcr/doc:ecae9dbf35c775555eab4cce8537b19c5248ef5b3b6128c04c382672805b2322": [
+        0
+      ],
+      "mrcr/doc:efa0bca5ff97f6d4e743cdd80ca131330514983e8e0bab192b9a0b270abc5490": [
+        0
+      ],
+      "olympiadbench/doc:06de6a2fcb16b5203fd7ec38da9010cf75e03f34d413d4cb0b11f34f7ffa7e41": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "olympiadbench/doc:3188ab00a2d349376a9cc3d39565e58f728d63c9eaecfd4eb40a5b76324e55a5": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "olympiadbench/doc:3d4be9c0bbc977781647e104e19cb7f9a60ccadedd9b7fb5c84b9e4b381449dc": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "olympiadbench/doc:4fe1aa9e78bc49d3b2d9fd0572ac9182a3d86d25a8e9de56945bb4daefd765a8": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "olympiadbench/doc:55b40364bd952b7ef72225c56ebf68d27e59b7a5a294b7adfa4d63a269436542": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "olympiadbench/doc:5e459e706afc91a2f44285041516e4277961b70a2cd7689d15c7ef579360eb93": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "olympiadbench/doc:90e92b0a16307d5a1e40f70e991a820d4b3461fc2fcb889bf7e0230ddedbb83f": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "olympiadbench/doc:a384bd2625413ae98d9086ead3b2b048bfbd2a6b2680d44fc4a3342e0437da72": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "olympiadbench/doc:be993510a8436b1a4721c3ed126a11e77f8c1abd695d927abb425c6d3e1d04fb": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "olympiadbench/doc:e5b948e35311290aebf31bf20c8ac02a32b7e9bc01018ec079289286672b1702": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "ot-tblite-recovery/acl-permissions-inheritance": [
+        0,
+        1,
+        2
+      ],
+      "ot-tblite-recovery/build-system-task-ordering": [
+        0,
+        1,
+        2
+      ],
+      "ot-tblite-recovery/ekf-localization": [
+        0,
+        1,
+        2
+      ],
+      "ot-tblite-recovery/malicious-package-forensics": [
+        0,
+        1,
+        2
+      ],
+      "ot-tblite-recovery/multi-labeller": [
+        0,
+        1,
+        2
+      ],
+      "ot-tblite-recovery/pdf-table-parsing": [
+        0,
+        1,
+        2
+      ],
+      "ot-tblite-recovery/pgn-chess-repair-puzzles": [
+        0,
+        1,
+        2
+      ],
+      "ot-tblite-recovery/python-api-rate-limit": [
+        0,
+        1,
+        2
+      ],
+      "ot-tblite-recovery/schedule-vacation": [
+        0,
+        1,
+        2
+      ],
+      "ot-tblite-recovery/sign-vector-game": [
+        0,
+        1,
+        2
+      ],
+      "swebench-verified/django__django-12039": [
+        0
+      ],
+      "swebench-verified/django__django-14017": [
+        0
+      ],
+      "swebench-verified/django__django-14539": [
+        0
+      ],
+      "swebench-verified/django__django-16256": [
+        0
+      ],
+      "swebench-verified/django__django-16662": [
+        0
+      ],
+      "swebench-verified/matplotlib__matplotlib-22865": [
+        0
+      ],
+      "swebench-verified/pytest-dev__pytest-5262": [
+        0
+      ],
+      "swebench-verified/scikit-learn__scikit-learn-25747": [
+        0
+      ],
+      "swebench-verified/sympy__sympy-15345": [
+        0
+      ],
+      "swebench-verified/sympy__sympy-16886": [
+        0
+      ],
+      "tb2-recovery/terminal-bench/dna-assembly": [
+        0,
+        1,
+        2
+      ],
+      "tb2-recovery/terminal-bench/feal-linear-cryptanalysis": [
+        0,
+        1,
+        2
+      ],
+      "tb2-recovery/terminal-bench/large-scale-text-editing": [
+        0,
+        1,
+        2
+      ],
+      "tb2-recovery/terminal-bench/mcmc-sampling-stan": [
+        0,
+        1,
+        2
+      ],
+      "tb2-recovery/terminal-bench/merge-diff-arc-agi-task": [
+        0,
+        1,
+        2
+      ],
+      "tb2-recovery/terminal-bench/modernize-scientific-stack": [
+        0,
+        1,
+        2
+      ],
+      "tb2-recovery/terminal-bench/raman-fitting": [
+        0,
+        1,
+        2
+      ],
+      "tb2-recovery/terminal-bench/rstan-to-pystan": [
+        0,
+        1,
+        2
+      ],
+      "tb2-recovery/terminal-bench/sam-cell-seg": [
+        0,
+        1,
+        2
+      ],
+      "tb2-recovery/terminal-bench/vulnerable-secret": [
+        0,
+        1,
+        2
+      ],
+      "triviaqa/dataset-row:11395": [
+        0
+      ],
+      "triviaqa/dataset-row:12467": [
+        0
+      ],
+      "triviaqa/dataset-row:15192": [
+        0
+      ],
+      "triviaqa/dataset-row:16205": [
+        0
+      ],
+      "triviaqa/dataset-row:1880": [
+        0
+      ],
+      "triviaqa/dataset-row:4588": [
+        0
+      ],
+      "triviaqa/dataset-row:5212": [
+        0
+      ],
+      "triviaqa/dataset-row:5692": [
+        0
+      ],
+      "triviaqa/dataset-row:698": [
+        0
+      ],
+      "triviaqa/dataset-row:8637": [
+        0
+      ],
+      "truthfulqa/doc:01171099b5bd6cbbf985e5abfd5615cd12f7bb734f9a527dea00e5dfc3ccaf0d": [
+        0
+      ],
+      "truthfulqa/doc:0656f66238e7c8f24e8bacd8acd2919c0d8b789bb602a96a28d95116b7c423fb": [
+        0
+      ],
+      "truthfulqa/doc:362c44385f22c8ebea4cd1b554cbffccfe262f5cfbed391774e51a7db27b7fa1": [
+        0
+      ],
+      "truthfulqa/doc:3ac8e08c6ae46b174545294713a774ef87980f48e2b83b24cffdf8df0cf7c245": [
+        0
+      ],
+      "truthfulqa/doc:67d9840e2ca454640096139641e1e54b994f4e0c5f262692862a81ca397ecff3": [
+        0
+      ],
+      "truthfulqa/doc:93cbfcbf8f7bfa49dd4d778d047a79fba4efee981889b4892aa66bad8a0b3834": [
+        0
+      ],
+      "truthfulqa/doc:c9ad9222bdb12ef7ae3fb5964e92739a7ae14a17a9faf8c59b7b063635854e5e": [
+        0
+      ],
+      "truthfulqa/doc:d4337bd51d0c6716abd592fe51248cd2268b3046cdf6826011570b1230825cde": [
+        0
+      ],
+      "truthfulqa/doc:df88b2a94ca5441ec01b85faa54046d36444acc81717c687b945a31131d69f73": [
+        0
+      ],
+      "truthfulqa/doc:f812bfb56b84243e41592de994fa304025f36d8fc0bdfbbda302922f1f4ea7b6": [
+        0
+      ]
+    },
+    "tasks_per_benchmark": {
+      "NUPA": 10,
+      "aime24": 10,
+      "bfclparity-pi": 10,
+      "bixbench-pi": 10,
+      "cruxeval": 10,
+      "ds-1000-local": 10,
+      "gpqa-diamond": 10,
+      "gsm8k-0shot": 10,
+      "humanevalplus": 10,
+      "ifbench": 10,
+      "math500": 10,
+      "mbppplus": 10,
+      "mmlu-pro": 10,
+      "mrcr": 10,
+      "olympiadbench": 10,
+      "ot-tblite-recovery": 10,
+      "swebench-verified": 10,
+      "tb2-recovery": 10,
+      "triviaqa": 10,
+      "truthfulqa": 10
+    },
+    "unique_source_sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794",
+    "unique_tasks": 200,
+    "wheels_revision": "d5dd315d58f0f47514dd0a2208e90e2a48541328"
+  },
+  "task_environment_sha256": "a663e5aa1fc5f61d9ef1cdd32e68aa15ec68f411b5dd58b3560640a973a88150"
 }

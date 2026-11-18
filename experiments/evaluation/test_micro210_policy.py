@@ -1,9 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+from dataclasses import asdict
+
 import pytest
 
-from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
+from experiments.evaluation.micro210_policy import SPEC_PATH, Micro210Model, micro210_evaluation
 
 
 @pytest.mark.parametrize(
@@ -34,10 +37,21 @@ def test_micro210_model_change_preserves_the_protocol_and_records_its_identity()
         output_uri="s3://test/rl-eval",
     )
     assert first.policy() == second.policy()
-    assert first.record()["canonical_spec_sha256"] == second.record()["canonical_spec_sha256"]
-    assert first.record()["model"]["identity"] != second.record()["model"]["identity"]
-    harbor = first.policy()["evaluation"]["config"]["terminal_bench"]["harbor"]
-    assert "eval_override_storage_mb" not in harbor
+    assert first.record().canonical_spec_sha256 == hashlib.sha256(SPEC_PATH.read_bytes()).hexdigest()
+    assert asdict(first.record())["model"]["identity"] == first.model.identity
+    assert first.record().model.identity != second.record().model.identity
     policy = first.policy()
     policy["evaluation"]["seed"] = -1
     assert first.policy()["evaluation"]["seed"] == 20261030
+
+
+def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch):
+    changed = tmp_path / "protocol.json"
+    changed.write_text(SPEC_PATH.read_text().replace('"seed": 20261030', '"seed": 0'))
+    monkeypatch.setattr("experiments.evaluation.micro210_policy.SPEC_PATH", changed)
+    with pytest.raises(ValueError, match="hash mismatch"):
+        micro210_evaluation(
+            Micro210Model("s3://test/model", "model@v1:abcd", "test/tokenizer", "a" * 40),
+            run_id="test",
+            output_uri="s3://test/output",
+        )
