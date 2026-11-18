@@ -14,7 +14,7 @@ import tomllib
 import uuid
 from collections import deque
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass, field, fields, replace
+from dataclasses import asdict, dataclass, fields, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
@@ -34,6 +34,7 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from skyrlrecipe import RLEntrypoint
 from skyrlrecipe.locality import RoleTopologyMode, plan_nvlink_roles
 
 from marin.evaluation.utils import discover_hf_checkpoints
@@ -98,12 +99,6 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
         )
 
 
-def _training_entrypoint() -> str:
-    from skyrlrecipe import RLEntrypoint  # noqa: PLC0415 - optional authoring dependency
-
-    return RLEntrypoint.STANDARD.value
-
-
 @dataclass(frozen=True)
 class _InferenceGeometry:
     num_inference_engines: int
@@ -141,11 +136,9 @@ class SkyRLRolePlan(_InferenceGeometry):
     policy_mini_batch_size: int
     micro_train_batch_size_per_gpu: int
     reference_num_nodes: int | None = None
-    entrypoint: str = field(default_factory=_training_entrypoint)
+    entrypoint: str = RLEntrypoint.STANDARD.value
 
     def __post_init__(self) -> None:
-        from skyrlrecipe import RLEntrypoint  # noqa: PLC0415 - optional authoring dependency
-
         selected = RLEntrypoint(self.entrypoint)
         if selected is RLEntrypoint.GENERATE:
             raise ValueError("entrypoint=generate requires SkyRLGenerationPlan")
@@ -176,19 +169,11 @@ class SkyRLRolePlan(_InferenceGeometry):
         """Count the nodes used by training and inference roles."""
         if self.colocate_all:
             return self.policy_num_nodes
-        engine_gpus = (
-            self.inference_engine_tensor_parallel_size
-            * self.inference_engine_pipeline_parallel_size
-            * self.inference_engine_data_parallel_size
-        )
         if self.uses_expert_parallel_placement:
-            rollout_gpus = self.num_inference_engines * engine_gpus
+            rollout_gpus = self.num_inference_engines * self.engine_gpus
             rollout_nodes = (rollout_gpus + self.policy_num_gpus_per_node - 1) // self.policy_num_gpus_per_node
         else:
-            engines_per_node = self.policy_num_gpus_per_node // engine_gpus
-            if not engines_per_node:
-                raise ValueError("each SkyRL inference engine must fit on one node")
-            rollout_nodes = (self.num_inference_engines + engines_per_node - 1) // engines_per_node
+            rollout_nodes = _inference_nodes(self)
         return self.policy_num_nodes + (self.reference_num_nodes or 0) + rollout_nodes
 
     def config_values(self) -> dict[str, object]:
@@ -341,8 +326,6 @@ class SkyRLGenerationPlan(_InferenceGeometry):
 
     @property
     def entrypoint(self) -> str:
-        from skyrlrecipe import RLEntrypoint  # noqa: PLC0415 - optional authoring dependency
-
         return RLEntrypoint.GENERATE.value
 
     @property

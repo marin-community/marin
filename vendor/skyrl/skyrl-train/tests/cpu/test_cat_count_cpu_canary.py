@@ -595,6 +595,17 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     cfg.generator.eval_n_samples_per_prompt = 2
     cfg.generator.eval_sampling_params.ignore_eos = True
     cfg.generator.eval_sampling_params.max_generate_length = 8
+    cfg.trainer.callbacks = [
+        {
+            "type": "evaluation",
+            "additional_evaluations": {
+                "named_profile": {
+                    "n_samples_per_prompt": 1,
+                    "sampling_params": {"ignore_eos": True, "max_generate_length": 4},
+                }
+            },
+        }
+    ]
     swapped = root / "swapped-tokenizer"
     shutil.copytree(cat_count_policy, swapped)
     tokenizer_path = swapped / "tokenizer.json"
@@ -740,8 +751,10 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     }
     assert {"generate/wall_seconds", "generate/response_tokens", "eval/all/num_attempted"} <= mirrored
     engine_rows = [row for row in cat_count_session if row["name"] == "generation_tokens_total"]
-    assert len(engine_rows) == 2
-    assert sum(row["value"] for row in engine_rows) == generated_tokens
+    assert metrics["eval/named_profile/all/num_attempted"] == len(expected) + 1
+    assert len(engine_rows) == 4
+    assert sum(row["value"] for row in engine_rows[:2]) == generated_tokens
+    assert sum(row["value"] for row in engine_rows[2:]) == generated_tokens + (len(expected) + 1) * 4
 
 
 @pytest.mark.nightly
