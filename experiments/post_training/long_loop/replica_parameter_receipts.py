@@ -46,3 +46,18 @@ def replica_differences(receipts: list[ParameterReceipt]) -> list[dict]:
             continue
         differences.append({"name": name, "group": group, "members": [asdict(row) for row in members]})
     return differences
+
+
+def replica_iteration_differences(receipts: list[ParameterReceipt], source_orders: dict[int, list[str]]) -> list[dict]:
+    """Find group members that would compare different tensors at the same collective."""
+    memberships = {(row.rank, row.name): row.group for row in receipts}
+    groups: dict[tuple[int, ...], dict[int, list[str]]] = {}
+    for rank, names in source_orders.items():
+        for name in names:
+            group = memberships[rank, name]
+            groups.setdefault(group, {}).setdefault(rank, []).append(name)
+    return [
+        {"group": group, "source_orders": orders}
+        for group, orders in sorted(groups.items())
+        if sorted(orders) != list(group) or len({tuple(order) for order in orders.values()}) != 1
+    ]

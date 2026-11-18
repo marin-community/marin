@@ -10,6 +10,7 @@ from experiments.post_training.long_loop.replica_parameter_receipts import (
     ParameterReceipt,
     parameter_sha256,
     replica_differences,
+    replica_iteration_differences,
 )
 
 
@@ -39,3 +40,13 @@ def test_matching_hashes_do_not_hide_wrong_expert_assignment():
     differences = replica_differences([parameter, replace(parameter, rank=1, hf_names=("expert64",))])
     assert differences[0]["name"] == "fc1"
     assert len(differences[0]["members"]) == 2
+
+
+def test_replica_collective_order_detects_reordered_equal_parameters():
+    first = ParameterReceipt(0, "first", (2,), "torch.float32", (0, 1), ("first",), 8, "same")
+    second = replace(first, name="second", hf_names=("second",))
+    rows = [first, second, replace(first, rank=1), replace(second, rank=1)]
+    assert replica_differences(rows) == []
+    differences = replica_iteration_differences(rows, {0: ["first", "second"], 1: ["second", "first"]})
+    assert differences == [{"group": (0, 1), "source_orders": {0: ["first", "second"], 1: ["second", "first"]}}]
+    assert replica_iteration_differences(rows, {0: ["first", "second"], 1: ["first", "second"]}) == []
