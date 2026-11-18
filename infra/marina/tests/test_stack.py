@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import importlib.util
 import json
 from pathlib import Path
@@ -34,6 +35,10 @@ class RecordingMocks(Mocks):
 
 def run_stack(config: dict[str, object]) -> RecordingMocks:
     """Run the Marina stack program against recording mocks and return its registrations."""
+    # Pulumi's mock runtime binds its futures to the current event loop, and other tests can
+    # leave the main thread without one, so the program gets its own loop.
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     mocks = RecordingMocks()
     pulumi.runtime.set_mocks(mocks, project="marin-marina", stack="test", preview=True)
     pulumi.runtime.set_all_config(
@@ -46,7 +51,11 @@ def run_stack(config: dict[str, object]) -> RecordingMocks:
         assert spec is not None and spec.loader is not None
         spec.loader.exec_module(importlib.util.module_from_spec(spec))
 
-    program()
+    try:
+        program()
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
     return mocks
 
 

@@ -52,6 +52,8 @@ test = [
     "marin-iris[controller]",
     # The evaldash ingestion tests run the real evaluation pipeline to produce their records.
     "marin-core",
+    # The stack test runs __main__.py, which imports iac and the Pulumi providers, under mocks.
+    "marin-iac[deploy]",
 ]
 dev = [{ include-group = "test" }]
 
