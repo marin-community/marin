@@ -788,7 +788,8 @@ def _build_task_shell(
     if not flashqla_enabled:
         gdn_branch = f"exec {ctrl}"
     transport_gate = (
-        f"{RL_PYTHON} {APP_DIR}/experiments/post_training/nccl_transport_probe.py --mode gate; "
+        f"{RL_PYTHON} {APP_DIR}/experiments/post_training/nccl_transport_probe.py"
+        " --mode gate --gate-coverage all-gpus; "
     )
     bash = (
         f"set -e; {spill_preflight}cd {SKYRL_HOME}; "
