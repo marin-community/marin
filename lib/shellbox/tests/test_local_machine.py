@@ -1563,3 +1563,19 @@ def test_apply_sandbox_apt_config_never_clobbers_an_existing_config(tmp_path):
     config.write_text('APT::Sandbox::User "_apt";\n')
     machine_module._apply_sandbox_apt_config(tmp_path)
     assert config.read_text() == 'APT::Sandbox::User "_apt";\n'
+
+
+def test_apply_sandbox_apt_config_makes_the_apt_state_trees_writable(tmp_path):
+    """Root without CAP_DAC_OVERRIDE must be able to write the image's _apt-owned state."""
+    (tmp_path / "etc" / "apt" / "apt.conf.d").mkdir(parents=True)
+    partial = tmp_path / "var" / "lib" / "apt" / "lists" / "partial"
+    partial.mkdir(parents=True)
+    os.chmod(partial, 0o700)
+    machine_module._apply_sandbox_apt_config(tmp_path)
+    assert (partial.stat().st_mode & 0o777) == 0o777
+
+
+def test_apply_sandbox_apt_config_ignores_missing_state_trees(tmp_path):
+    (tmp_path / "etc" / "apt" / "apt.conf.d").mkdir(parents=True)
+    machine_module._apply_sandbox_apt_config(tmp_path)
+    assert (tmp_path / machine_module.SANDBOX_APT_CONFIG_RELATIVE).exists()

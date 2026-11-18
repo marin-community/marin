@@ -278,13 +278,19 @@ SANDBOX_APT_CONFIG_TEXT = (
 )
 
 
+SANDBOX_APT_STATE_DIRECTORIES = ("/var/lib/apt", "/var/cache/apt", "/var/log/apt")
+"""The apt state trees whose image ownership assumes a capability-ful root."""
+
+
 def _apply_sandbox_apt_config(root: Path) -> None:
     """Let apt run as root inside capability-less local image machines.
 
     bwrap sandboxes run commands with all capabilities dropped, so apt's own privilege
     drop (setgroups/seteuid to _apt) fails with EPERM and any apt-get setup dies at exit
-    100. The harness writes the no-sandbox configuration into the machine's rootfs at
-    creation; task contracts (their setup commands) stay untouched.
+    100; without CAP_DAC_OVERRIDE root also cannot write the image's _apt-owned state
+    directories. The harness writes the no-sandbox configuration into the machine's
+    rootfs at creation and makes the apt state trees writable; task contracts (their
+    setup commands) stay untouched.
     """
     apt_directory = root / SANDBOX_APT_CONFIG_RELATIVE.parent
     if not apt_directory.is_dir():
@@ -293,6 +299,14 @@ def _apply_sandbox_apt_config(root: Path) -> None:
     if config.exists():
         return
     config.write_text(SANDBOX_APT_CONFIG_TEXT)
+    for name in SANDBOX_APT_STATE_DIRECTORIES:
+        tree = root / Path(name).relative_to("/")
+        if not tree.is_dir():
+            continue
+        os.chmod(tree, 0o777)
+        for path in tree.rglob("*"):
+            mode = 0o777 if path.is_dir() else 0o666
+            os.chmod(path, mode)
 
 
 def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
