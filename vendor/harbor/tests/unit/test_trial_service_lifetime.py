@@ -131,7 +131,7 @@ class ProcessTaskFactory:
 
 
 def trial_config(
-    root: Path, name: str, *, guest_root: Path, waiting: bool = False
+    root: Path, name: str, *, guest_root: Path, waiting: bool = False, reward: int = 1
 ) -> TrialConfig:
     task = root / name
     environment = task / "environment"
@@ -149,7 +149,7 @@ def trial_config(
     tests.mkdir()
     (tests / "test.sh").write_text(
         '#!/bin/sh\nset -eu\ntest "$(cat answer)" = partial\n'
-        'printf 1 > "$TEST_REWARD_PATH"\n'
+        f'printf {reward} > "$TEST_REWARD_PATH"\n'
     )
     agent = "WaitingAgent" if waiting else "PartialAnswerAgent"
     return TrialConfig(
@@ -343,13 +343,15 @@ async def test_late_relay_failure_stops_active_trial_without_cancelling_neighbor
     assert Job._is_resume_retryable_result(native)
 
 
-@pytest.mark.parametrize("failure", ["collection", "collection_deadline", "teardown"])
+@pytest.mark.parametrize("failure", ["collection", "collection_deadline", "teardown", "teardown_deadline"])
 async def test_runtime_failure_preserves_reward_only_after_verification(tmp_path, monkeypatch, failure):
     factory = ProcessTaskFactory(tmp_path / "guest")
     monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
+    reward = 0 if failure == "teardown" else 1
     trial = await Trial.create(
-        trial_config(tmp_path, "runtime-failure", guest_root=tmp_path / "guest")
+        trial_config(tmp_path, "runtime-failure", guest_root=tmp_path / "guest", reward=reward)
     )
+    release_stop = asyncio.Event()
 
     async def fail():
         if failure == "collection_deadline":
@@ -363,17 +365,28 @@ async def test_runtime_failure_preserves_reward_only_after_verification(tmp_path
     else:
         original_stop = trial.agent_environment.stop
 
+        if failure == "teardown_deadline":
+            monkeypatch.setattr("harbor.trial.trial.ENVIRONMENT_STOP_TIMEOUT_SEC", 0.2)
+
         async def failed_stop(delete):
             await original_stop(delete)
-            await fail()
+            if failure == "teardown_deadline":
+                await release_stop.wait()
+            else:
+                await fail()
 
         monkeypatch.setattr(trial.agent_environment, "stop", failed_stop)
 
-    result = await trial.run()
+    try:
+        result = await trial.run()
+    finally:
+        release_stop.set()
+        await asyncio.gather(*trial.pending_cleanup_tasks(), return_exceptions=True)
     stored = TrialResult.model_validate_json(trial.paths.result_path.read_text())
     assert Job._is_resume_retryable_result(result)
-    if failure == "teardown":
-        assert result.verifier_result.rewards == stored.verifier_result.rewards == {"reward": 1.0}
+    if failure.startswith("teardown"):
+        assert result.verifier_result is not None and stored.verifier_result is not None
+        assert result.verifier_result.rewards == stored.verifier_result.rewards == {"reward": reward}
         assert result.exception_info.exception_type == stored.exception_info.exception_type == "AgentTimeoutError"
         assert result.completion is None and stored.completion is None
         assert [error.exception_type for error in stored.secondary_exception_info] == ["EnvironmentStopError"]
