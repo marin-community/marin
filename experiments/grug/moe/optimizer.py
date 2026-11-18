@@ -275,7 +275,20 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "adamh": adamh_transform_at(learning_rate),
                 "adam": adam_transform_at(adam_lr),
             }
-            return optax.multi_transform(transforms, self.create_mask)
+
+            def checked_mask(params):
+                paths = leaf_key_paths(params)
+                labels = self.create_mask(params)
+
+                def check(param, path, label):
+                    if label == "muonh" and getattr(param, "ndim", None) == 4:
+                        name = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+                        raise ValueError(f"4-D MuonH parameter {name} requires the hero-EP optimizer")
+                    return label
+
+                return jax.tree.map(check, params, paths, labels)
+
+            return optax.multi_transform(transforms, checked_mask)
 
         return optax.inject_hyperparams(optimizer)(
             learning_rate=learning_rate_schedule,

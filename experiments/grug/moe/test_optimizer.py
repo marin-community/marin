@@ -3,6 +3,7 @@
 
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig, scale_with_grug_muonh
@@ -70,12 +71,21 @@ def test_muonh_groups_match_hero_for_stacked_and_unstacked_models(stacked):
     assert actual["output_proj"] == "adamh"
 
 
-def test_muonh_four_dimensional_expert_update_matches_backend():
+def test_muonh_four_dimensional_expert_requires_hero_optimizer():
     params = {"expert_mlp": {"w_gate": jnp.arange(1, 49, dtype=jnp.float32).reshape(2, 2, 3, 4)}}
-    grads = {"expert_mlp": {"w_gate": jnp.linspace(-0.5, 0.7, 48).reshape(2, 2, 3, 4)}}
+    config = GrugMoeMuonHConfig(learning_rate=0.02, warmup=0, max_grad_norm=None)
+    optimizer = config.build(100)
+    with pytest.raises(ValueError, match=r"expert_mlp\.w_gate.*hero-EP"):
+        optimizer.init(params)
+
+
+def test_muonh_unstacked_expert_update_matches_existing_backend():
+    params = {"expert_mlp": {"w_gate": jnp.arange(1, 25, dtype=jnp.float32).reshape(2, 3, 4)}}
+    grads = {"expert_mlp": {"w_gate": jnp.linspace(-0.5, 0.7, 24).reshape(2, 3, 4)}}
     config = GrugMoeMuonHConfig(learning_rate=0.02, warmup=0, max_grad_norm=None)
     optimizer = config.build(100)
     update, _ = optimizer.update(grads, optimizer.init(params), params)
     backend = scale_with_grug_muonh(learning_rate=config.lr_scheduler(100)(0))
     expected, _ = backend.update(grads, backend.init(params), params)
     np.testing.assert_allclose(update["expert_mlp"]["w_gate"], expected["expert_mlp"]["w_gate"], rtol=1e-6, atol=1e-7)
+    assert optax.global_norm(update) > 0
