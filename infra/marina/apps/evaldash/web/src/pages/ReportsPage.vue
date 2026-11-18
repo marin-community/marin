@@ -18,16 +18,20 @@ function queryValue(key: string): string {
   return typeof value === 'string' ? value : ''
 }
 
+// Filters, search, and sort order all live in the URL. Typing replaces the history entry, so one
+// Back undoes a whole search rather than each keystroke.
+function setQuery(values: Record<string, string>, navigate: 'push' | 'replace') {
+  const query = { ...route.query }
+  for (const [key, value] of Object.entries(values)) {
+    if (value) query[key] = value
+    else delete query[key]
+  }
+  router[navigate]({ path: '/reports', query })
+}
+
 const selected = computed<Record<string, string>>({
   get: () => Object.fromEntries(FACET_KEYS.map((key) => [key, queryValue(key)])),
-  set: (values) => {
-    const query = { ...route.query }
-    for (const key of FACET_KEYS) {
-      if (values[key]) query[key] = values[key]
-      else delete query[key]
-    }
-    router.push({ path: '/reports', query })
-  },
+  set: (values) => setQuery(Object.fromEntries(FACET_KEYS.map((key) => [key, values[key] ?? ''])), 'push'),
 })
 
 const { data, loading, error, refresh } = useApi<ReportSummary[]>(() => 'api/playground-reports')
@@ -45,21 +49,13 @@ const facets = computed<Facet[]>(() => [
   { key: 'reporter', label: 'Reporter', options: distinct(reports.value.map((r) => r.reporter)) },
 ])
 
-// Search and sort order live in the URL too, replacing the history entry so typing is one step back.
-function replaceQuery(key: string, value: string) {
-  const query = { ...route.query }
-  if (value) query[key] = value
-  else delete query[key]
-  router.replace({ path: '/reports', query })
-}
-
 const search = computed({
   get: () => queryValue('q'),
-  set: (value: string) => replaceQuery('q', value),
+  set: (value: string) => setQuery({ q: value }, 'replace'),
 })
 const oldestFirst = computed({
   get: () => queryValue('order') === 'oldest',
-  set: (value: boolean) => replaceQuery('order', value ? 'oldest' : ''),
+  set: (value: boolean) => setQuery({ order: value ? 'oldest' : '' }, 'replace'),
 })
 
 function matchesSearch(r: ReportSummary, terms: string[]): boolean {

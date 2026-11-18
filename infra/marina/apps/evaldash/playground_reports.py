@@ -11,7 +11,7 @@ copies objects it has not seen into ``playground_reports``.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal
 
 import sqlalchemy
@@ -20,10 +20,12 @@ from rigging.filesystem.factory import open_url, url_to_fs
 from sqlalchemy import Boolean, Column, DateTime, Index, Table, Text
 from sqlalchemy.engine import Engine
 
-from .results_db import _dialect_insert, json_type, metadata
+from .results_db import _dialect_insert, _utc, json_type, metadata
 
 logger = logging.getLogger(__name__)
 
+# Where marin.inference.model_feedback writes reports; EvalDash cannot import marin at runtime, and a
+# test checks the two stay in sync.
 DEFAULT_REPORT_PREFIXES = (
     "gs://marin-eval-metadata/model-feedback",
     "s3://marin-us-east-02a/marin/model-feedback",
@@ -88,7 +90,7 @@ def list_report_paths(prefix: str) -> list[str]:
 
 def report_row(url: str, record: FeedbackRecord) -> dict:
     """The ``playground_reports`` row for one parsed report object."""
-    created_at = record.created_at if record.created_at.tzinfo else record.created_at.replace(tzinfo=UTC)
+    created_at = _utc(record.created_at)
     return {
         "report_id": f"{created_at:%Y-%m-%d}-{record.id}",
         "source_url": url,
@@ -154,7 +156,7 @@ def fetch_report_summaries(engine: Engine, limit: int = MAX_REPORT_SUMMARIES) ->
     return [
         {
             "report_id": row["report_id"],
-            "created_at": _utc_iso(row["created_at"]),
+            "created_at": _utc(row["created_at"]).isoformat(),
             "model": row["model"],
             "reporter": row["reporter"],
             "description": row["description"],
@@ -174,7 +176,3 @@ def fetch_report(engine: Engine, report_id: str) -> dict | None:
     if row is None:
         return None
     return {"report_id": row["report_id"], "source_url": row["source_url"], **row["record"]}
-
-
-def _utc_iso(value: datetime) -> str:
-    return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC).isoformat()

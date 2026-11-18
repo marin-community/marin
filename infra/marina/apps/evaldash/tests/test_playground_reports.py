@@ -10,7 +10,8 @@ import sqlalchemy
 from evaldash import app as evaldash_app
 from evaldash import results_db
 from evaldash.db_migrations import apply_migrations
-from evaldash.playground_reports import ingest_reports
+from evaldash.playground_reports import DEFAULT_REPORT_PREFIXES, ingest_reports
+from marin.inference.model_feedback import COREWEAVE_FEEDBACK_PREFIX, GCS_FEEDBACK_PREFIX
 from sqlalchemy.pool import StaticPool
 from starlette.testclient import TestClient
 
@@ -81,3 +82,7 @@ def test_local_store_reports_that_playground_reports_need_postgres():
 
     with TestClient(api.app) as client:
         assert client.get("/playground-reports").status_code == 503
+
+
+def test_default_prefixes_are_where_the_serve_dashboard_writes():
+    assert set(DEFAULT_REPORT_PREFIXES) == {GCS_FEEDBACK_PREFIX, COREWEAVE_FEEDBACK_PREFIX}

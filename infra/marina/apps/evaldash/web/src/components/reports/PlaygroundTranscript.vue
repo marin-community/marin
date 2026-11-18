@@ -14,7 +14,8 @@ const ROLE_BORDER: Record<string, string> = {
   tool: 'border-l-status-warning',
 }
 
-function asJson(value: unknown): string {
+// Strings print as-is; other values print as indented JSON.
+function displayValue(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
 }
 
@@ -49,7 +50,7 @@ function label(message: PlaygroundMessage): string {
     >
       <div class="text-[10px] font-semibold uppercase tracking-wider text-text-muted">{{ label(m) }}</div>
       <template v-if="m.role === 'tool'">
-        <pre class="text-[12px] whitespace-pre-wrap font-mono">{{ asJson(m.result) }}</pre>
+        <pre class="text-[12px] whitespace-pre-wrap font-mono">{{ displayValue(m.result) }}</pre>
       </template>
       <template v-else-if="m.role === 'assistant'">
         <details v-if="m.thinking" class="text-[12px] text-text-secondary">
@@ -59,7 +60,7 @@ function label(message: PlaygroundMessage): string {
         <div v-if="m.content" class="text-[13px] whitespace-pre-wrap">{{ m.content }}</div>
         <div v-for="call in m.toolCalls ?? []" :key="call.id" class="text-[12px]">
           <span class="text-text-muted">tool call · </span><span class="font-mono">{{ call.name }}</span>
-          <pre class="mt-1 whitespace-pre-wrap font-mono text-text-secondary">{{ asJson(call.arguments) }}</pre>
+          <pre class="mt-1 whitespace-pre-wrap font-mono text-text-secondary">{{ displayValue(call.arguments) }}</pre>
         </div>
         <div v-if="m.error" class="text-[12px] text-status-danger whitespace-pre-wrap">Error: {{ m.error }}</div>
         <div v-if="m.finishReason === 'length'" class="text-[11px] text-status-warning">Stopped at the token limit.</div>
