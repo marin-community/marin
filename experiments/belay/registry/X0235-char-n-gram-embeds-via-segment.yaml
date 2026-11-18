@@ -84,6 +84,7 @@ trials:
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0235
   wandb:
   - belay-X0235d1024-seed0
+  - belay-X0235d1024-seed0-r1
   settings:
     spelling_ngram_embeds: 'true'
   commit: 8dcc84642f
