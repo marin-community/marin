@@ -9,8 +9,6 @@ from pathlib import Path
 
 from finestore.rl.difficulty import DifficultyGap, difficulty_gap_reason, require_difficulty_gaps
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.adapter import declared_execution_limits, unsupported_harbor_contract, write_harbor_task
 from taskcompendium.harbor.native_package import write_native_task
 from taskcompendium.harbor.runtime import write_source_runtime
@@ -20,9 +18,12 @@ from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 
 from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.calibration_inventory import packages_lock_exists
+from experiments.post_training.task_curation.difficulty_contracts import (
+    difficulty_task_contract,
+    resolve_receipt_vintage,
+)
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
-from experiments.post_training.task_curation.difficulty_samples import DifficultySource
-from experiments.post_training.task_curation.full_qc_inputs import task_contract
+from experiments.post_training.task_curation.difficulty_samples import DifficultySource, load_queue_sources
 from experiments.post_training.task_curation.judges import JUDGE_TIERS
 from experiments.post_training.task_curation.prebuilt import validate_native_package
 from experiments.post_training.task_curation.sample_qc import panel_task_runtimes
@@ -42,11 +43,16 @@ def source_gap_reason(gap: DifficultyGap, detail: str | None = None) -> str:
 
 def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
     tasks, runtimes = panel_task_runtimes(source.panel)
+    frozen = {selected.task_id: selected.task_sha256 for selected in source.sample.tasks}
+    for task in tasks:
+        if task.id not in frozen:
+            raise ValueError("Prepared task is outside the frozen difficulty selection")
+    # The receipt was frozen by one code state; reproduce exactly that vintage's
+    # serialization instead of assuming the current one (the hosted-v13 break).
+    vintage = resolve_receipt_vintage(frozen, tasks, runtimes)
     prepared = []
     for task, runtime in zip(tasks, runtimes, strict=True):
-        contract = task_contract(task, runtime)
-        if task.id not in {selected.task_id for selected in source.sample.tasks}:
-            raise ValueError("Prepared task is outside the frozen difficulty selection")
+        contract = difficulty_task_contract(task, runtime, vintage)
         selected = next(item for item in source.sample.tasks if item.task_id == task.id)
         if selected.task_sha256 != contract["task_sha256"]:
             raise ValueError("Prepared task differs from the frozen sample receipt")
@@ -112,14 +118,7 @@ def main() -> None:
     configure_coreweave_s3()
     if args.root.exists():
         raise FileExistsError(args.root)
-    path = StoragePath(args.sources)
-    if file_sha256(path) != args.sources_sha256:
-        raise ValueError("Difficulty sources differ from the frozen selection")
-    sources = [DifficultySource.model_validate(row) for row in json.loads(path.read_text())]
-    if args.source_id:
-        sources = [source for source in sources if source.declaration.id in args.source_id]
-        if {source.declaration.id for source in sources} != set(args.source_id):
-            raise ValueError("Requested source is absent from the frozen selection")
+    sources = load_queue_sources(args.sources, args.sources_sha256, tuple(args.source_id or ()))
     args.root.mkdir(parents=True)
     prepared = [prepare_source(source, args.root / "tasks") for source in sources]
     (args.root / "sources.json").write_text(

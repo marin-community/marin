@@ -1072,3 +1072,41 @@ def test_previous_campaign_reconstructs_an_empty_seal_for_an_attempt_with_no_com
     manifest = json.loads((root / "trials" / "model-requests-final.json").read_text())
     assert manifest["reconstructed"] is True
     assert manifest["sources"] == []
+
+
+def test_run_seal_checkpoint_keeps_own_windows_and_deltas(tmp_path):
+    """The checkpointed run seal survives a killed worker with exact own accounting."""
+    from experiments.post_training.task_curation.difficulty_trials import ModelTraffic, RunSealState
+
+    seal = RunSealState(solver="large", selection_source_ids=("Src:a", "Src:b"), started_at="2026-11-18T00:00:00+00:00")
+    traffic = ModelTraffic(receipt=None, input_tokens=120, output_tokens=45)
+    judge = ModelTraffic(receipt=None, input_tokens=7, output_tokens=3)
+    seal.record(hashlib.sha256("Src:a".encode()).hexdigest(), "Src:a", 0.25, traffic, judge)
+    seal.record(hashlib.sha256("Src:b".encode()).hexdigest(), "Src:b", 0.5, ModelTraffic(receipt=None, input_tokens=10, output_tokens=5), None)
+
+    payload = seal.payload()
+    assert payload["solver"] == "large"
+    assert payload["iris_job_id"] is None  # not running under Iris in this process
+    assert payload["selection_source_ids"] == ["Src:a", "Src:b"]
+    assert payload["sources_aggregated"] == 2
+    assert payload["own_gpu_hours"] == 0.75
+    assert payload["own_input_tokens"] == 130 and payload["own_output_tokens"] == 50
+    assert payload["judge_own_input_tokens"] == 7 and payload["judge_own_output_tokens"] == 3
+    key = hashlib.sha256("Src:a".encode()).hexdigest()
+    assert payload["sources"][key] == {
+        "source_id": "Src:a",
+        "own_gpu_hours": 0.25,
+        "own_input_tokens": 120,
+        "own_output_tokens": 45,
+        "judge_own_input_tokens": 7,
+        "judge_own_output_tokens": 3,
+    }
+
+
+def test_iris_root_job_id_derives_the_job_from_the_task_wire(monkeypatch):
+    from experiments.post_training.task_curation.difficulty_trials import iris_root_job_id
+
+    monkeypatch.setenv("IRIS_TASK_ID", "/benfeuer/atlas-difficulty-hosted-20261118-v13c/0:0")
+    assert iris_root_job_id() == "/benfeuer/atlas-difficulty-hosted-20261118-v13c"
+    monkeypatch.delenv("IRIS_TASK_ID")
+    assert iris_root_job_id() is None

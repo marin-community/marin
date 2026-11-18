@@ -1332,9 +1332,82 @@ A continuation records its parent serving and source-queue bindings before
 dispatch. Later runs verify this ancestry even when an interrupted worker never
 visited a source or wrote its aggregate; inherited scores remain reusable once.
 
+### Self-serve status: `difficulty report` and continuation `preflight`
+
+Answer campaign questions from the durable artifacts (never a hand-edited
+status log). `report` enumerates every run root under the difficulty tree, and
+answers per solver: identity, every run with its Iris job, submit/seal
+evidence and wall time, what "succeeded" sealed, per-run measured-vs-inherited
+accounting with pending and not_measured reason codes, per-run own GPU-hours
+and token deltas, current catalog totals over each frozen queue's population,
+and which runs are active right now. `--source <id>` shows one source across
+solvers; `--json` writes the document.
+
+```bash
+uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds report \
+  [--solver hosted] [--source <id>] [--prepared] [--json out.json]
+```
+
+Every figure names its basis. A run killed before its `completion.json` is
+reported as unsealed with the reconstructed-traffic flag; a run that predates
+the per-run seal reports its own GPU-hours as derived from cumulative row
+deltas. The writer records exact figures going forward: the trials worker
+maintains a checkpointed `trials/run-seal.json` — rewritten after every
+aggregated source, so a timeout kill still leaves a seal — carrying this
+attempt's own GPU-hour windows and token deltas per source, the selection, and
+the Iris job id derived from `IRIS_TASK_ID`; `completion.json` embeds its
+totals. The seal is the authoritative per-run cost record; catalog rows carry
+cumulative chain totals.
+
+Before submitting a continuation, run the preflight — the launcher runs it
+automatically on every real continuation launch and refuses to submit on any
+mismatch:
+
+```bash
+uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds preflight \
+  [--solver hosted] [--source-id <id> ...] \
+  [--previous-campaign <old-run-prefix> --previous-serving-sha256 <old-serving.json-sha256>]
+```
+
+With `--solver hosted` the preflight also checks the shared relay's serving
+pod. The launcher runs the same gate automatically on every real launch
+(continuations and hosted fresh submissions) and refuses to submit on any
+mismatch; `--receipt-stage-only` skips the local staging.
+
+The preflight reproduces the campaign's failure classes locally: it checks the
+shared relay's serving-pod liveness for hosted submissions (a pod deleted
+behind a still-running job record — the `PodDeleted` diagnostic — refuses the
+submission instead of a 30-minute probe timeout), verifies the continuation
+bindings (frozen queue digest, parent ancestry, and the parent's
+`serving.json` digest computed programmatically — a hand-truncated digest is
+named, not submitted), verifies each selected source's frozen panel against
+its census, resolves the sample receipt's contract vintage, compares every
+prepared task digest against the frozen sample receipt, and stages every
+selected source locally with the campaign's own `prepare_source` (catching
+task-validation conflicts such as a runtime packet disagreeing with its task
+specs). A mismatch refuses with the task ID, the frozen and prepared digests,
+and the field-level difference, instead of a failed Iris root.
+
+### Frozen task-contract vintages
+
+A difficulty sample receipt binds each task to `canonical_sha256` of its
+parsed TaskSpec serialization. That serialization has changed twice (the
+late-joining execution-requirement fields, then the 2026-11-17 serializer that
+omits absent fields), so receipts frozen on either side live in different
+digest spaces. `difficulty_contracts` names both recorded vintages explicitly:
+`2026-11-13-null-defaults` (absent `execution_requirements` serialized as an
+explicit null; no other late-joining field existed) and
+`2026-11-17-absent-omitted` (the current serializer). The sample freeze pins
+the current vintage explicitly, and preparation resolves each receipt's
+vintage by matching before comparing — so both the original 2026.11.13.8
+queue and the resampled 2026.11.17.5 queue prepare correctly, and a task
+whose bytes changed after its freeze fails with the precise diff under every
+recorded vintage.
+
 Per-source token and GPU figures sum available source aggregates. An interrupted
-source may lack those totals; use every campaign's final model-traffic receipt
-and Iris serving allocation durations for the complete per-model cost report.
+source may lack those totals; use every campaign's final model-traffic receipt,
+its `trials/run-seal.json`, and Iris serving allocation durations for the
+complete per-model cost report.
 
 Typed `difficulty_measurements` live in a FineStore catalog or campaign archive.
 Load them into an installed Atlas after its schema migration:

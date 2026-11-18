@@ -5,6 +5,7 @@
 
 import argparse
 import asyncio
+import dataclasses
 import hashlib
 import io
 import json
@@ -85,6 +86,95 @@ class ModelTraffic:
     receipt: ContentEvidenceReference
     input_tokens: int
     output_tokens: int
+
+
+IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
+
+
+def iris_root_job_id() -> str | None:
+    """This root task's Iris job id from the runtime environment, when running under Iris.
+
+    The task wire form is ``/user/job/<ordinal>:<attempt>``; stripping the task
+    segment yields the job id every run record should carry so the report never
+    has to guess it from job-name conventions.
+    """
+    wire = os.environ.get(IRIS_TASK_ID_ENV, "")
+    if not wire:
+        return None
+    job_id = wire.rsplit("/", 1)[0]
+    return job_id if job_id.startswith("/") else None
+
+
+@dataclass
+class RunSealState:
+    """The checkpointed per-run seal: this attempt's own windows and token deltas.
+
+    Rewritten after every aggregated source, so a killed worker still leaves a
+    usable seal (own GPU-hours and token deltas survive even when the worker
+    dies before completion.json); the in-flight source's window is excluded.
+    """
+
+    solver: str
+    selection_source_ids: tuple[str, ...]
+    started_at: str
+
+    sources_aggregated: int = 0
+    own_gpu_hours: float = 0.0
+    own_input_tokens: int = 0
+    own_output_tokens: int = 0
+    judge_own_input_tokens: int = 0
+    judge_own_output_tokens: int = 0
+    sources: dict[str, dict] = dataclasses.field(default_factory=dict)
+
+    def record(
+        self,
+        source_key: str,
+        source_id: str,
+        own_gpu_hours: float,
+        traffic: ModelTraffic,
+        judge_traffic: ModelTraffic | None,
+    ) -> None:
+        self.sources_aggregated += 1
+        self.own_gpu_hours += own_gpu_hours
+        self.own_input_tokens += traffic.input_tokens
+        self.own_output_tokens += traffic.output_tokens
+        if judge_traffic is not None:
+            self.judge_own_input_tokens += judge_traffic.input_tokens
+            self.judge_own_output_tokens += judge_traffic.output_tokens
+        row = {
+            "source_id": source_id,
+            "own_gpu_hours": round(own_gpu_hours, 6),
+            "own_input_tokens": traffic.input_tokens,
+            "own_output_tokens": traffic.output_tokens,
+        }
+        if judge_traffic is not None:
+            row["judge_own_input_tokens"] = judge_traffic.input_tokens
+            row["judge_own_output_tokens"] = judge_traffic.output_tokens
+        self.sources[source_key] = row
+
+    def payload(self) -> dict:
+        return {
+            "solver": self.solver,
+            "iris_job_id": iris_root_job_id(),
+            "started_at": self.started_at,
+            "updated_at": datetime.now(UTC).isoformat(),
+            "selection_source_ids": list(self.selection_source_ids),
+            "sources_aggregated": self.sources_aggregated,
+            "own_gpu_hours": round(self.own_gpu_hours, 6),
+            "own_input_tokens": self.own_input_tokens,
+            "own_output_tokens": self.own_output_tokens,
+            "judge_own_input_tokens": self.judge_own_input_tokens,
+            "judge_own_output_tokens": self.judge_own_output_tokens,
+            "gpu_hour_basis": (
+                "sum of this attempt's own recorded source trial windows; startup, teardown "
+                "and interrupted source windows excluded"
+            ),
+            "token_basis": (
+                "this attempt's candidate and judge relay traffic; totals inherited from the "
+                "campaign chain remain in the per-source ledgers"
+            ),
+            "sources": self.sources,
+        }
 
 
 def archive_model_traffic(
@@ -497,6 +587,12 @@ def main() -> None:
             ).model_dump(mode="json"),
         )
     key = "EMPTY" if config.api_key_secret is None else require_secret(config.api_key_secret)
+    run_seal = RunSealState(
+        solver=config.solver,
+        selection_source_ids=tuple(source.sample.source_id for source in sources),
+        started_at=datetime.now(UTC).isoformat(),
+    )
+    write_replaced_json_evidence(output / "run-seal.json", run_seal.payload())
     has_judge = any(task.judge_model is not None and task.reason is None for source in sources for task in source.tasks)
     judge = config.judge if has_judge else None
     if has_judge and judge is None:
@@ -677,6 +773,7 @@ def main() -> None:
                 seal_model_traffic(args.local_root, output)
                 if has_judge:
                     seal_model_traffic(judge_root, output / "judge")
+                own_window_gpu_hours = config.gpu_count * (time.monotonic() - started) / 3600
                 payload = dict(
                     measurement_id=uuid4().hex,
                     protocol_id=PROTOCOL_ID,
@@ -698,8 +795,7 @@ def main() -> None:
                     pending_tasks=len(source.sample.tasks),
                     attempts_receipt=receipt,
                     gpu_hours=(
-                        config.gpu_count * (time.monotonic() - started) / 3600
-                        + (0 if previous_measurement is None else previous_measurement.gpu_hours)
+                        own_window_gpu_hours + (0 if previous_measurement is None else previous_measurement.gpu_hours)
                     ),
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
@@ -736,6 +832,14 @@ def main() -> None:
                     with store.transaction() as transaction:
                         transaction.table(MEASUREMENTS).add(measurement.model_dump(mode="json"))
                 write_json_evidence(output / source_key / "measurement.json", measurement.model_dump(mode="json"))
+                run_seal.record(
+                    source_key,
+                    source.sample.source_id,
+                    own_window_gpu_hours,
+                    traffic,
+                    judge_traffic,
+                )
+                write_replaced_json_evidence(output / "run-seal.json", run_seal.payload())
                 LOGGER.info(
                     "%s %s: %s, scored=%d, solved=%d, pending=%d",
                     config.solver,

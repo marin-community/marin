@@ -45,7 +45,7 @@ from experiments.post_training.task_curation.difficulty_protocol import (
 )
 from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 from experiments.post_training.task_curation.difficulty_recovery import CampaignParent
-from experiments.post_training.task_curation.difficulty_samples import DifficultySource
+from experiments.post_training.task_curation.difficulty_samples import load_queue_sources
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
 from experiments.post_training.task_curation.difficulty_serving_probe import (
     probe_endpoint,
@@ -60,6 +60,23 @@ PRIORITY_CHOICES = ("production", "interactive", "batch", "system")
 MODEL_CACHE_ROOT = "s3://marin-rno2a"
 JOB_TIMEOUT = Duration.from_seconds(259200)
 NATIVE_CONTEXT_SAFETY_BUFFER = 0
+# The shared GLM relay queues probes behind hosted traffic; a retry succeeds
+# once the relay drains instead of killing the campaign (hosted-v13c died on a
+# single probe ReadTimeout).
+RELAY_PROBE_ATTEMPTS = 3
+
+
+def probe_with_relay_retries(solver: Solver, endpoint: str, api_model: str, api_key: str, settings: SamplingSettings):
+    """Probe a shared-relay endpoint, retrying the queue-drain timeouts."""
+    for attempt_number in range(1, RELAY_PROBE_ATTEMPTS + 1):
+        try:
+            return probe_endpoint(solver, endpoint, api_model, api_key, settings)
+        except httpx.TimeoutException as error:
+            if attempt_number == RELAY_PROBE_ATTEMPTS:
+                raise
+            LOGGER.warning("Relay probe attempt %d timed out: %s", attempt_number, error)
+    raise AssertionError("the retry loop always returns or raises on the final attempt")
+
 
 # Judge tiers Difficulty hosts itself, with the pinned model YAML and its H100 count.
 # Every non-GLM judge model a source declares must be one of these tiers.
@@ -355,14 +372,7 @@ def main() -> None:
     resumed = output.exists() and same_run_output(output, args)
     if args.local_root.exists() or (output.exists() and not resumed):
         raise FileExistsError("Preserve prior campaigns and select a new run version")
-    source_path = StoragePath(args.sources)
-    if file_sha256(source_path) != args.sources_sha256:
-        raise ValueError("Source queue differs from the frozen digest")
-    sources = [DifficultySource.model_validate(row) for row in json.loads(source_path.read_text())]
-    if args.source_id:
-        sources = [source for source in sources if source.declaration.id in args.source_id]
-        if {source.declaration.id for source in sources} != set(args.source_id):
-            raise ValueError("Requested source is absent from the frozen selection")
+    sources = load_queue_sources(args.sources, args.sources_sha256, tuple(args.source_id or ()))
     pin = PINS[args.solver]
     args.local_root.mkdir(parents=True)
     options = worker_limits(args.local_root)
@@ -428,7 +438,11 @@ def main() -> None:
         api_key,
         jobs,
     ):
-        probe = probe_endpoint(args.solver, endpoint, api_model, api_key, settings)
+        probe = (
+            probe_with_relay_retries(args.solver, endpoint, api_model, api_key, settings)
+            if args.solver == Solver.HOSTED
+            else probe_endpoint(args.solver, endpoint, api_model, api_key, settings)
+        )
         prior_serving_path = output / "serving.json"
         prior_serving = json.loads(prior_serving_path.read_text()) if resumed and prior_serving_path.exists() else None
         if prior_serving is not None:
@@ -479,24 +493,13 @@ def main() -> None:
                     else:
                         # The shared GLM relay may queue the probe behind hosted traffic; a
                         # retry succeeds once the relay drains instead of killing the campaign.
-                        for attempt_number in range(1, 4):
-                            try:
-                                judge_probe = probe_endpoint(
-                                    Solver.HOSTED,
-                                    judge_endpoint,
-                                    judge_api_model,
-                                    judge_api_key,
-                                    sampling_settings(Solver.HOSTED, []),
-                                )
-                                break
-                            except httpx.TimeoutException as error:
-                                if attempt_number == 3:
-                                    raise
-                                LOGGER.warning(
-                                    "Judge probe attempt %d timed out against the shared relay: %s",
-                                    attempt_number,
-                                    error,
-                                )
+                        judge_probe = probe_with_relay_retries(
+                            Solver.HOSTED,
+                            judge_endpoint,
+                            judge_api_model,
+                            judge_api_key,
+                            sampling_settings(Solver.HOSTED, []),
+                        )
                     judge_pin = PINS[Solver.HOSTED]
                     judge_metadata = {
                         "model": SOLVER_MODELS[Solver.HOSTED],
@@ -693,9 +696,29 @@ def main() -> None:
                 candidate.judge,
                 daytona_api_key=daytona_api_key,
             )
-            write_json_evidence(
-                output / "completion.json", {"solver": args.solver, "serving_jobs": jobs, "worker_exit": 0}
-            )
+            completion: dict = {"solver": args.solver, "serving_jobs": jobs, "worker_exit": 0}
+            run_seal_path = output / "trials" / "run-seal.json"
+            if run_seal_path.exists():
+                # The worker's checkpointed own-cost seal travels with the completion
+                # receipt: per-run GPU-hours and token deltas, not cumulative counters.
+                seal = json.loads(run_seal_path.read_text())
+                completion["run_seal"] = {
+                    name: seal[name]
+                    for name in (
+                        "iris_job_id",
+                        "started_at",
+                        "updated_at",
+                        "sources_aggregated",
+                        "own_gpu_hours",
+                        "own_input_tokens",
+                        "own_output_tokens",
+                        "judge_own_input_tokens",
+                        "judge_own_output_tokens",
+                        "gpu_hour_basis",
+                        "token_basis",
+                    )
+                }
+            write_json_evidence(output / "completion.json", completion)
 
 
 if __name__ == "__main__":

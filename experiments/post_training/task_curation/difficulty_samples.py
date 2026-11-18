@@ -20,9 +20,13 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import load_oracle_filter
 
+from experiments.post_training.task_curation.difficulty_contracts import (
+    CONTRACT_VINTAGE_ABSENT_OMITTED,
+    difficulty_task_contract,
+)
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.published_census import population_rows
-from experiments.post_training.task_curation.sample_qc import panel_tasks
+from experiments.post_training.task_curation.sample_qc import panel_task_runtimes
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory, SamplePanel
 
 LOGGER = logging.getLogger(__name__)
@@ -44,6 +48,29 @@ class OracleFilterBinding(BaseModel):
     population_count: int
     task_specs_sha256: str
     receipt: ContentEvidenceReference
+
+
+def load_queue_sources(
+    sources: str, sources_sha256: str, source_ids: tuple[str, ...] | None
+) -> list["DifficultySource"]:
+    """The frozen queue's sources, byte-verified and filtered to the selection.
+
+    Shared by the campaign launcher, the standalone preparation CLI and the
+    continuation preflight so all three parse the frozen queue identically.
+    """
+    configure_coreweave_s3()
+    path = StoragePath(sources)
+    if file_sha256(path) != sources_sha256:
+        raise ValueError("Source queue differs from the frozen digest")
+    rows = json.loads(path.read_text())
+    sources = [DifficultySource.model_validate(row) for row in rows]
+    if source_ids:
+        selected = [source for source in sources if source.declaration.id in source_ids]
+        if {source.declaration.id for source in selected} != set(source_ids):
+            missing = sorted(set(source_ids) - {source.declaration.id for source in sources})
+            raise ValueError(f"Requested sources are absent from the frozen selection: {missing}")
+        return selected
+    return sources
 
 
 def sample_oracle_state(inventory: SampleInventory, receipt: ContentEvidenceReference | None) -> dict:
@@ -164,7 +191,13 @@ def prepare_sample(
             )
             (root / "source.json").write_text(result.model_dump_json(indent=2) + "\n")
             return result
-    tasks, contracts = panel_tasks(panel)
+    tasks, runtimes = panel_task_runtimes(panel)
+    # The freeze pins its receipt vintage explicitly so a future serializer
+    # change fails loudly here instead of silently moving the digest space.
+    contracts = [
+        difficulty_task_contract(task, runtime, CONTRACT_VINTAGE_ABSENT_OMITTED)
+        for task, runtime in zip(tasks, runtimes, strict=True)
+    ]
     if filter_receipt is not None:
         filtered = load_oracle_filter(filter_receipt.uri)
         for task, contract in zip(tasks, contracts, strict=True):

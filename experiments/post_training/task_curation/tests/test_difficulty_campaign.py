@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from finestore.rl.difficulty import Solver
 from iris.rpc import job_pb2
@@ -22,6 +23,10 @@ from taskcompendium.models import TaskSpec
 from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation import difficulty_campaign
+from experiments.post_training.task_curation.difficulty_campaign import (
+    RELAY_PROBE_ATTEMPTS,
+    probe_with_relay_retries,
+)
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_sampling import sampling_settings
@@ -288,3 +293,32 @@ def test_every_judge_tier_carries_an_immutable_checkpoint_pin():
     for tier, definition in JUDGE_TIERS.items():
         assert definition.model_revision, f"{tier.value} has no immutable checkpoint pin"
         assert len(definition.model_revision) >= 40, f"{tier.value} pins a shortened revision"
+
+
+def test_relay_probe_retries_drain_timeouts(monkeypatch):
+    """The shared relay queues probes behind hosted traffic; timeouts retry (hosted-v13c)."""
+    attempts = []
+
+    def flaky_probe(solver, endpoint, api_model, api_key, settings):
+        attempts.append(len(attempts) + 1)
+        if len(attempts) < RELAY_PROBE_ATTEMPTS:
+            raise httpx.ReadTimeout("relay busy")
+        return {"tools_thinking_probe": {"completion": {"system_fingerprint": "pin"}}}
+
+    monkeypatch.setattr(difficulty_campaign, "probe_endpoint", flaky_probe)
+    probe = probe_with_relay_retries(Solver.HOSTED, "https://relay", "model", "key", object())
+    assert len(attempts) == RELAY_PROBE_ATTEMPTS
+    assert probe["tools_thinking_probe"]["completion"]["system_fingerprint"] == "pin"
+
+
+def test_relay_probe_raises_after_the_final_timeout(monkeypatch):
+    attempts = []
+
+    def always_timeout(solver, endpoint, api_model, api_key, settings):
+        attempts.append(len(attempts) + 1)
+        raise httpx.ReadTimeout("relay busy")
+
+    monkeypatch.setattr(difficulty_campaign, "probe_endpoint", always_timeout)
+    with pytest.raises(httpx.ReadTimeout):
+        probe_with_relay_retries(Solver.HOSTED, "https://relay", "model", "key", object())
+    assert len(attempts) == RELAY_PROBE_ATTEMPTS

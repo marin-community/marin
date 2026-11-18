@@ -5,12 +5,14 @@
 
 One entry point replaces the per-experiment launch, poll and export scripts:
 
-    uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds launch   [...]
-    uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds poll     [...]
-    uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds seal     [...]
-    uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds coverage [...]
+    uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds launch     [...]
+    uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds poll       [...]
+    uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds seal       [...]
+    uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds coverage   [...]
     uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds export-snapshot [...]
     uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds next-round [...]
+    uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds preflight  [...]
+    uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds report     [...]
 
 `launch` submits one round through Iris with every launch parameter explicit: the root
 federates to the serving peer (`--target-cluster`), runs privileged with the cluster
@@ -30,7 +32,14 @@ recompute, queue-digest idempotency against a ledger, then the continuation laun
 `--dry-run` prints the plan without submitting.
 
 Only `launch` and `next-round` submit; both refuse when the output root exists or an
-Iris job with the same name is already live. Everything else is read-only.
+Iris job with the same name is already live. A real continuation launch first runs
+the local `preflight` (frozen receipt comparison + continuation bindings) and
+refuses to submit on any mismatch. Everything else is read-only.
+
+`preflight` and `report` never submit: the preflight reproduces the campaign's
+receipt-stage work (panel verification, contract-vintage resolution, frozen
+digest comparison) plus the continuation bindings; the report answers per-solver
+and per-run questions from the durable artifacts and Iris job state only.
 """
 
 import argparse
@@ -42,6 +51,7 @@ import logging
 import os
 import shlex
 import subprocess
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -62,6 +72,10 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 from taskcompendium.evaluation.corpus import file_sha256
 
+from experiments.post_training.task_curation import difficulty_report
+from experiments.post_training.task_curation.difficulty_contracts import ContractVintageError
+from experiments.post_training.task_curation.difficulty_preflight import preflight_continuation
+from experiments.post_training.task_curation.difficulty_protocol import GLM_RELAY_JOB
 from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import (
     DifficultyCoverage,
     campaign_queue,
@@ -251,11 +265,45 @@ def iris_job_exists(cluster: str, job_name: str) -> bool:
     return False
 
 
+def preflight_launch(plan: LaunchPlan) -> dict[str, Any]:
+    """Fail a submission locally before Iris runs it.
+
+    The real failure classes, each caught here now: hosted-v13 died on a
+    frozen-receipt vintage mismatch, hosted-v13b on a runtime/task validation
+    conflict, hosted-v13c on a serving pod deleted behind a running relay
+    record, and small-v22 on a truncated serving digest. The gate reproduces
+    every one on the submitting machine: relay liveness for hosted, the
+    continuation bindings, the frozen-receipt comparison per selected source,
+    and full local task staging.
+    """
+    try:
+        with tempfile.TemporaryDirectory(prefix=f"{plan.job_name}-preflight-") as scratch:
+            receipt = preflight_continuation(
+                plan.sources,
+                plan.sources_sha256,
+                plan.source_ids or None,
+                plan.previous_campaign,
+                plan.previous_serving_sha256,
+                stage_root=Path(scratch) / "tasks",
+                relay_job=GLM_RELAY_JOB if plan.solver == Solver.HOSTED else None,
+            )
+    except (ContractVintageError, ValueError) as error:
+        raise RoundsError(f"launch preflight failed; refusing to submit: {error}") from error
+    LOGGER.info(
+        "launch preflight passed: %d sources, %d tasks, contract vintages %s (staged locally)",
+        receipt["sources"],
+        receipt["tasks"],
+        receipt["vintages"],
+    )
+    return receipt
+
+
 def launch_round(plan: LaunchPlan, *, dry_run: bool = False) -> dict[str, Any]:
     """Submit one round; refuses to double-submit on output root or live job.
 
     The double-submit probes (output root, live job) run only for real submissions;
-    a dry-run plan reports without provider access.
+    a dry-run plan reports without provider access. A real continuation runs the
+    local preflight first and refuses to submit on a frozen-receipt mismatch.
     """
     if not dry_run:
         configure_coreweave_s3()
@@ -263,6 +311,9 @@ def launch_round(plan: LaunchPlan, *, dry_run: bool = False) -> dict[str, Any]:
             raise RoundsError(f"output root already exists (preserve prior campaigns): {plan.output_root}")
         if iris_job_exists(ROOT_CLUSTER, plan.job_name):
             raise RoundsError(f"an Iris job named {plan.job_name} is already live; refusing to double-submit")
+        if plan.previous_campaign is not None or plan.solver == Solver.HOSTED:
+            plan_state = preflight_launch(plan)
+            LOGGER.info("preflight receipt: %s", json.dumps(plan_state, indent=2))
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     dirty = subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
     if dirty and not dry_run:
@@ -626,6 +677,18 @@ def queue_source_ids(queue: Sequence[dict[str, Any]]) -> tuple[str, ...]:
     return tuple(ids)
 
 
+def gather_source_ids(source_id: Sequence[str], source_ids_file: Path | None) -> list[str]:
+    """The launch/preflight source selection: repeated flags plus a one-per-line file."""
+    ids = list(source_id)
+    if source_ids_file:
+        ids += [
+            line.strip()
+            for line in source_ids_file.read_text().splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+    return ids
+
+
 def frozen_source_ids() -> set[str]:
     """Source ids in the frozen sample selection the campaigns measure."""
     configure_coreweave_s3()
@@ -740,17 +803,41 @@ def main() -> None:
     )
     chain.add_argument("--dry-run", action="store_true")
 
+    preflight = commands.add_parser(
+        "preflight", help="Verify a continuation's frozen receipts and bindings locally before submission."
+    )
+    preflight.add_argument("--sources", default=CAMPAIGN_QUEUE_SOURCES)
+    preflight.add_argument("--sources-sha256", default=CAMPAIGN_QUEUE_SOURCES_SHA256)
+    preflight.add_argument("--source-id", action="append", default=[])
+    preflight.add_argument("--source-ids-file", type=Path, help="One source id per line; # comments allowed.")
+    preflight.add_argument("--previous-campaign")
+    preflight.add_argument("--previous-serving-sha256")
+    preflight.add_argument(
+        "--solver",
+        choices=[solver.value for solver in Solver],
+        help="With hosted, also checks the shared relay's serving-pod liveness.",
+    )
+    preflight.add_argument(
+        "--receipt-stage-only",
+        action="store_true",
+        help="Skip local task staging; verify receipts and bindings only.",
+    )
+    preflight.add_argument("--json", type=Path)
+
+    report = commands.add_parser("report", help="Report campaign state from the durable artifacts (never STATUS.md).")
+    report.add_argument("--base", default=difficulty_report.DIFFICULTY_ROOT)
+    report.add_argument("--solver", action="append", choices=[solver.value for solver in Solver])
+    report.add_argument("--source", action="append", help="Show one source across solvers; repeatable.")
+    report.add_argument("--prepared", action="store_true", help="Read prepared.json for exact per-run selections.")
+    report.add_argument("--no-iris", action="store_true", help="Skip the Iris job listing.")
+    report.add_argument("--queue", action="append", metavar="SHA256=PATH", help="Queue path override; repeatable.")
+    report.add_argument("--json", type=Path)
+
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
     if args.command == "launch":
-        source_ids = list(args.source_id)
-        if args.source_ids_file:
-            source_ids += [
-                line.strip()
-                for line in args.source_ids_file.read_text().splitlines()
-                if line.strip() and not line.startswith("#")
-            ]
+        source_ids = gather_source_ids(args.source_id, args.source_ids_file)
         plan = LaunchPlan(
             job_name=args.job_name,
             solver=Solver(args.solver),
@@ -865,6 +952,42 @@ def main() -> None:
                 },
             )
         print(json.dumps({"sealed": True, "plan": plan, "launch": state}, indent=2, default=str))
+        return
+
+    if args.command == "preflight":
+        source_ids = gather_source_ids(args.source_id, args.source_ids_file)
+        configure_coreweave_s3()
+        with tempfile.TemporaryDirectory(prefix="difficulty-preflight-") as scratch:
+            receipt = preflight_continuation(
+                args.sources,
+                args.sources_sha256,
+                tuple(source_ids) or None,
+                args.previous_campaign,
+                args.previous_serving_sha256,
+                None if args.receipt_stage_only else Path(scratch) / "tasks",
+                relay_job=GLM_RELAY_JOB if args.solver == Solver.HOSTED else None,
+            )
+        print(json.dumps(receipt, indent=2))
+        if args.json:
+            args.json.write_text(json.dumps(receipt, indent=2) + "\n")
+        return
+
+    if args.command == "report":
+        queue_overrides = {}
+        for item in args.queue or []:
+            sha, _, path = item.partition("=")
+            queue_overrides[sha] = path
+        document = difficulty_report.build_report(
+            base=args.base,
+            solvers=tuple(args.solver or ()),
+            include_prepared=args.prepared,
+            with_iris=not args.no_iris,
+            queue_overrides=queue_overrides,
+            source_ids=tuple(args.source or ()),
+        )
+        print(difficulty_report.render_text(document))
+        if args.json:
+            args.json.write_text(json.dumps(document, indent=2, default=str) + "\n")
         return
 
     raise RoundsError(f"unknown command {args.command}")
