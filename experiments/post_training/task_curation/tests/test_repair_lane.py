@@ -44,7 +44,11 @@ from experiments.post_training.task_curation.repair_match import (
     strip_template_sections,
     strip_template_sections_rows,
 )
-from experiments.post_training.task_curation.repair_review import ComparativePair, ComparativePairReviewer
+from experiments.post_training.task_curation.repair_review import (
+    ComparativePair,
+    ComparativePairReviewer,
+    pair_alias,
+)
 from experiments.post_training.task_curation.task_neighbors import PopulationIndex, TaskContent, content_rows
 
 CANDIDATE_SOURCE = "candidate:test"
@@ -587,43 +591,54 @@ def pair(candidate_id: str, tracked_id: str) -> ComparativePair:
     )
 
 
+def aliased_verdict(candidate_id: str, outcome: ComparativeOutcome, *, fixed=(), introduced=()) -> dict:
+    """A judge reply echoing the candidate's pair alias, as the provider would."""
+    return verdict(pair_alias(candidate_id), outcome, fixed=fixed, introduced=introduced).model_dump(mode="json")
+
+
 class TestComparativeReview:
     def test_reviewed_pairs_return_typed_verdicts_and_usage(self, judge):
-        judge.verdicts["c1"] = verdict("c1", ComparativeOutcome.BETTER, fixed=["wrong_reference"]).model_dump(
-            mode="json"
-        )
-        judge.verdicts["c2"] = verdict("c2", ComparativeOutcome.WORSE, introduced=["ambiguity"]).model_dump(mode="json")
+        judge.verdicts[pair_alias("c1")] = aliased_verdict("c1", ComparativeOutcome.BETTER, fixed=["wrong_reference"])
+        judge.verdicts[pair_alias("c2")] = aliased_verdict("c2", ComparativeOutcome.WORSE, introduced=["ambiguity"])
         result = reviewer(judge).review_pairs([pair("c1", "t1"), pair("c2", "t2")])
         assert [record.status for record in result.records] == [ReviewStatus.REVIEWED, ReviewStatus.REVIEWED]
+        assert [record.task_id for record in result.records] == ["c1", "c2"]
         assert result.records[0].verdict.outcome is ComparativeOutcome.BETTER
         assert [defect.value for defect in result.records[0].verdict.defects_fixed] == ["wrong_reference"]
         assert result.records[1].verdict.outcome is ComparativeOutcome.WORSE
         assert result.usage.prompt_tokens == 20 and result.usage.completion_tokens == 10
 
-    def test_verdict_task_id_must_match_the_candidate(self, judge):
-        judge.verdicts["c1"] = verdict("other-task", ComparativeOutcome.TIE).model_dump(mode="json")
+    def test_verdict_task_id_must_match_the_pair_alias(self, judge):
+        judge.verdicts[pair_alias("c1")] = verdict("other-task", ComparativeOutcome.TIE).model_dump(mode="json")
         result = reviewer(judge).review_pairs([pair("c1", "t1")])
         assert result.records[0].status is ReviewStatus.INVALID
 
+    def test_payload_shows_the_alias_as_the_candidate_id(self, judge):
+        judge.verdicts[pair_alias("c1")] = aliased_verdict("c1", ComparativeOutcome.TIE)
+        reviewer(judge).review_pairs([pair("c1", "t1")])
+        payload = json.loads(judge.requests[0]["messages"][-1]["content"])
+        assert payload["candidate"]["id"] == pair_alias("c1")
+        assert payload["original"]["id"] == "t1"
+
     def test_invalid_verdicts_retry(self, judge):
-        judge.verdicts["c1"] = verdict("c1", ComparativeOutcome.TIE).model_dump(mode="json")
-        judge.failures["c1"] = 1
+        judge.verdicts[pair_alias("c1")] = aliased_verdict("c1", ComparativeOutcome.TIE)
+        judge.failures[pair_alias("c1")] = 1
         result = reviewer(judge).review_pairs([pair("c1", "t1")])
         assert result.records[0].status is ReviewStatus.REVIEWED
         assert len(judge.requests) == 2
 
     def test_persistent_failure_exhausts_attempts(self, judge):
-        judge.verdicts["c1"] = verdict("c1", ComparativeOutcome.TIE).model_dump(mode="json")
-        judge.failures["c1"] = 10
+        judge.verdicts[pair_alias("c1")] = aliased_verdict("c1", ComparativeOutcome.TIE)
+        judge.failures[pair_alias("c1")] = 10
         result = reviewer(judge).review_pairs([pair("c1", "t1")])
         assert result.records[0].status is ReviewStatus.UNAVAILABLE
 
     def test_pair_requests_carry_both_sides(self, judge):
-        judge.verdicts["c1"] = verdict("c1", ComparativeOutcome.TIE).model_dump(mode="json")
+        judge.verdicts[pair_alias("c1")] = aliased_verdict("c1", ComparativeOutcome.TIE)
         reviewer(judge).review_pairs([pair("c1", "t1")])
         payload = json.loads(judge.requests[0]["messages"][-1]["content"])
         assert set(payload) == {"original", "candidate"}
-        assert payload["candidate"]["id"] == "c1" and payload["original"]["id"] == "t1"
+        assert payload["candidate"]["id"] == pair_alias("c1") and payload["original"]["id"] == "t1"
         system = judge.requests[0]["messages"][0]["content"]
         assert "atlas-repair-comparative" in system
 

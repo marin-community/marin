@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.chat_requests import chat_output
 from taskcompendium.pipeline.models import ReviewStatus
@@ -48,15 +49,25 @@ COMPARATIVE_CRITERIA = (
 )
 
 
-def comparative_body(candidate: TaskSpec, original: TaskSpec, spec: ReviewerSpec) -> dict[str, Any]:
+def pair_alias(candidate_id: str) -> str:
+    """The short identifier the judge echoes back for one pair.
+
+    Verdict identity must survive providers that mangle long task IDs: the payload shows the
+    candidate under this 16-hex digest and the reviewer binds the response back through it.
+    """
+    return canonical_sha256(candidate_id)[:16]
+
+
+def comparative_body(candidate: TaskSpec, original: TaskSpec, spec: ReviewerSpec, *, alias: str) -> dict[str, Any]:
     """Build the provider request for one pair, with explicitly private verifier data."""
+    candidate_view = candidate.model_copy(update={"id": alias})
     instructions = (
         BASE_RUBRIC
         + f"\nArea rubric: {COMPARATIVE_RUBRIC_ID}@{COMPARATIVE_RUBRIC_VERSION}\nArea criteria:\n"
         + "\n".join(f"- {criterion}" for criterion in COMPARATIVE_CRITERIA)
     )
     content = json.dumps(
-        {"original": review_payload(original), "candidate": review_payload(candidate)}, ensure_ascii=False
+        {"original": review_payload(original), "candidate": review_payload(candidate_view)}, ensure_ascii=False
     )
     return {
         "model": spec.model,
@@ -101,12 +112,13 @@ class ComparativeBatchResult:
 
 
 def pair_request(pair: ComparativePair, spec: ReviewerSpec) -> dict[str, Any]:
-    """One batch-protocol request keyed by the candidate task's ID.
+    """One batch-protocol request keyed by the pair's short alias.
 
-    Task IDs are display labels; the pairing is content-matched before review.
+    Task IDs are display labels; the pairing is content-matched before review, and the
+    judge echoes the alias so identity survives long-ID mangling.
     """
-    body = comparative_body(pair.candidate, pair.original, spec)
-    return {"custom_id": pair.candidate.id, "method": "POST", "url": "/v1/chat/completions", "body": body}
+    body = comparative_body(pair.candidate, pair.original, spec, alias=pair_alias(pair.candidate.id))
+    return {"custom_id": pair_alias(pair.candidate.id), "method": "POST", "url": "/v1/chat/completions", "body": body}
 
 
 class ComparativePairReviewer:
@@ -170,7 +182,7 @@ class ComparativePairReviewer:
                     )
                     continue
                 requests.append(request)
-                request_candidates.append(pair.candidate.id)
+                request_candidates.append((pair_alias(pair.candidate.id), pair.candidate.id))
             if requests:
                 output = self.request_output(requests)
                 observed = _usage(output)
@@ -190,19 +202,24 @@ class ComparativePairReviewer:
         return ComparativeBatchResult([records[candidate_id] for candidate_id in candidate_ids], usage)
 
 
-def _parse_records(output: RequestOutput, candidate_ids: Sequence[str]) -> list[ComparativeReviewRecord]:
-    """Validate typed comparative verdicts against the candidate IDs they were requested for."""
+def _parse_records(
+    output: RequestOutput, request_candidates: Sequence[tuple[str, str]]
+) -> list[ComparativeReviewRecord]:
+    """Validate typed comparative verdicts and bind each alias back to its candidate ID."""
     parsed = typed_batch_records(
         output.output,
-        candidate_ids,
+        [alias for alias, _ in request_candidates],
         tool_name=COMPARATIVE_TOOL,
         validate=lambda value, _task_id: ComparativeVerdict.model_validate_json(value),
         identity_error="Comparative verdict task ID does not match the requested candidate",
     )
-    return [
-        ComparativeReviewRecord(task_id=record.task_id, status=record.status, verdict=record.value, detail=record.detail)
-        for record in parsed
-    ]
+    records = []
+    for (_alias, candidate_id), record in zip(request_candidates, parsed, strict=True):
+        verdict = record.value.model_copy(update={"task_id": candidate_id}) if record.value is not None else None
+        records.append(
+            ComparativeReviewRecord(task_id=candidate_id, status=record.status, verdict=verdict, detail=record.detail)
+        )
+    return records
 
 
 def _usage(output: RequestOutput) -> ComparativeUsage:

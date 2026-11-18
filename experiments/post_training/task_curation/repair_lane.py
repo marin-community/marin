@@ -28,7 +28,7 @@ from marin.inference.openai_chat import OpenAIChatClient
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_identity
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import ImportRejection, ReviewStatus
 from taskcompendium.pipeline.repair import ComparativeOutcome, RepairMatchClass
@@ -122,6 +122,8 @@ class DryRunReport(BaseModel):
     """The stage-0 gate evidence bound into every report: the approved per-folder lineage receipts."""
     unresolved_pairs: int = 0
     comparative: dict[str, Any] = Field(default_factory=dict)
+    decisions: dict[str, Any] = Field(default_factory=dict)
+    """Verdict-level per-pair decisions: ACCEPTED/REJECTED/UNADJUDICATED counts and per-pair entries."""
     diagnostics: dict[str, Any] = Field(default_factory=dict)
     usage: dict[str, int] = Field(default_factory=dict)
     review_wall_seconds: float | None = None
@@ -351,7 +353,6 @@ def comparative_summary(result: ComparativeBatchResult) -> dict[str, Any]:
         "outcomes": dict(outcomes),
         "defects_fixed": dict(defects_fixed),
         "defects_introduced": dict(defects_introduced),
-        "outcomes_enum": [outcome.value for outcome in ComparativeOutcome],
     }
 
 
@@ -499,9 +500,11 @@ def dry_run(
         return report
     result, evidence = review_pairs(workload.pairs, reviewer_version)
     summary = comparative_summary(result)
+    decisions = comparative_decisions(result, workload)
     report = report.model_copy(
         update={
             "comparative": {**summary, "judge": evidence.identity},
+            "decisions": {"summary": decision_summary(decisions), "pairs": decisions},
             "usage": {
                 "prompt_tokens": result.usage.prompt_tokens,
                 "completion_tokens": result.usage.completion_tokens,
@@ -514,6 +517,56 @@ def dry_run(
         }
     )
     return report
+
+
+def comparative_decisions(result: ComparativeBatchResult, workload: MatchedPairs) -> list[dict[str, Any]]:
+    """Bind per-pair verdicts to provisional verdict-level decisions and full failure details.
+
+    A pair is verdict-ACCEPTED when the comparison is not worse and introduces no defects,
+    verdict-REJECTED when worse, incomparable, or any defect is introduced, and
+    UNADJUDICATED when the judge never returned a valid verdict. The final replace still
+    requires the candidate's oracle and NoP qualification; these are the lane's verdict
+    counts, not admissions.
+    """
+    records = {record.task_id: record for record in result.records}
+    decisions = []
+    for pair in workload.pairs:
+        record = records[pair.candidate.id]
+        verdict = record.verdict
+        if record.status is not ReviewStatus.REVIEWED or verdict is None:
+            outcome, introduced, fixed = None, [], []
+            decision = "UNADJUDICATED"
+            reasons = [record.detail or record.status.value]
+        else:
+            outcome = verdict.outcome.value
+            introduced = [defect.value for defect in verdict.defects_introduced]
+            fixed = [defect.value for defect in verdict.defects_fixed]
+            if verdict.outcome in (ComparativeOutcome.BETTER, ComparativeOutcome.TIE) and not introduced:
+                decision = "ACCEPTED"
+                reasons = [f"comparative_outcome_{outcome}"]
+            else:
+                decision = "REJECTED"
+                reasons = [f"comparative_outcome_{outcome}"] + (["defects_introduced"] if introduced else [])
+        decisions.append(
+            {
+                "candidate_task_id": pair.candidate.id,
+                "tracked_task_id": workload.tracked_by_candidate.get(pair.candidate.id),
+                "candidate_task_sha256": task_identity(pair.candidate),
+                "status": record.status.value,
+                "outcome": outcome,
+                "defects_fixed": fixed,
+                "defects_introduced": introduced,
+                "decision": decision,
+                "reasons": reasons,
+            }
+        )
+    return decisions
+
+
+def decision_summary(decisions: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = Counter(entry["decision"] for entry in decisions)
+    reasons = Counter(reason for entry in decisions for reason in entry["reasons"] if entry["status"] != "reviewed")
+    return {"decisions": dict(counts), "failure_reasons": dict(reasons)}
 
 
 def write_report(report: DryRunReport, output_uri: str) -> None:
