@@ -23,10 +23,9 @@ from taskcompendium.pipeline.models import IntendedUse, NormalizedTask, RawRow
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.resources import resource_bytes
 
-from experiments.post_training.task_curation import native_release
+from experiments.post_training.task_curation import native_release, retirement
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
-from experiments.post_training.task_curation import retirement
 from experiments.post_training.task_curation.datasets import native_releases
 from experiments.post_training.task_curation.datasets.native_harbor import native_task, unpack_native
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
