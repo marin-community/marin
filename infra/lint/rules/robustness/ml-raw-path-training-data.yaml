@@ -1,0 +1,43 @@
+schema_version: 1
+code: ml-raw-path-training-data
+lane: robustness
+title: Training component addressed by a raw cache path or directory prefix instead of an artifact handle
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A training launch or data config that names a component by a
+  literal object-store prefix (`s3://…`, `gs://…`) or a bare directory prefix pins
+  nothing: the path's contents can change under the run, the component has no
+  `name@version` identity, and the mix cannot be recovered from the run's
+  `.artifact.json` record. The tokenizer check and the recipe-drift check also
+  fall away, because both ride on the handle's record. Build components with the
+  versioned data builders (`tokenized`, `pretokenized`, `apply`) and assemble the
+  mix with `mixture()` (`lib/marin/src/marin/experiment/data.py`); the fingerprint
+  then covers the source pin plus the transform config. Register pre-existing
+  output with `ArtifactStep.adopt(name, version, source=…)` instead of pointing at
+  it raw. See docs/references/sft-mixes.md.
+
+  **When allowed:** Tests and fixtures. The adoption builders themselves —
+  `pretokenized`, `ArtifactStep.adopt`, and `pin=` — which turn a fixed location
+  into a named, versioned handle. Raw `paths=`/`source=` inputs to `tokenized`
+  (data to tokenize, not a training component). A path read for analysis or
+  reporting that never trains a model.
+
+  **Bad example:**
+  ```python
+  data = LmDataConfig(components={          # component addressed by a raw prefix
+      "sft_v7": dataset_component(UrlDatasetSourceConfig(cache_dir="gs://marin-us-central2/tokenized/sft-v7/", ...)),
+  }, train_weights={"sft_v7": 1.0})
+
+  @dataclass
+  class MixConfig:
+      train_cache_prefix: str = "s3://marin-tokenized/sft-v5/"   # directory prefix as the component address
+  ```
+
+  **Good example:**
+  ```python
+  handle = tokenized("sft-v7", tokenizer=marin_tokenizer, raw=normalize_variant, glob="**/*.parquet", version="2026.11.05")
+  data = lambda ctx: mixture(ctx, train={handle: 1.0})
+
+  handle = ArtifactStep.adopt("sft-v7-cache", "2026.11.05", "gs://marin-us-central2/tokenized/sft-v7",
+                              kind=TokenizedCache, config={"tokenizer": marin_tokenizer})
+  ```
