@@ -144,7 +144,9 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
     """Reapply the requested Snowball runtime settings after an HF config reload.
 
     HF metadata supplies architecture fields. Keep the requested runtime settings,
-    reference checkpoint, and tokenizer.
+    reference checkpoint, tokenizer, and Deletion Tuning block (the reload drops
+    everything not visible in HF metadata, which would silently disable the
+    regularizer on a DT run).
     """
     if not isinstance(requested, SnowballConfig):
         return reloaded
@@ -159,6 +161,7 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
         fp32_activations=requested.fp32_activations,
         reference_checkpoint=requested.reference_checkpoint,
         tokenizer=requested.tokenizer,
+        deletion_tuning=requested.deletion_tuning,
     )
 
 
