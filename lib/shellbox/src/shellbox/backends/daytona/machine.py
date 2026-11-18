@@ -39,6 +39,7 @@ from shellbox.backends.daytona.provider import (
     ProviderWaitPolicy,
     cancel_provider_waits,
     provider_wait_scope,
+    read_provider_call,
     retry_provider_call,
 )
 from shellbox.backends.daytona.snapshot import (
@@ -112,38 +113,35 @@ async def _create_sandbox(
     params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams,
     timeout: float,
     *,
-    deadline: float | None = None,
     wait_policy: ProviderWaitPolicy = ProviderWaitPolicy.PHASE,
 ) -> AsyncSandbox:
-    """Recover transient or ambiguous creation under the caller-owned name."""
+    """Create once; resolve an explicit name conflict through read-only calls."""
     assert params.name is not None
-
-    async def create() -> AsyncSandbox:
-        try:
+    try:
+        with wait_policy.wait():
             return await client.create(params, timeout=timeout)
-        except DaytonaConflictError:
-            sandbox = await client.get(params.name)
-            await sandbox.wait_for_sandbox_start(timeout=timeout)
-            return sandbox
-
-    return await retry_provider_call("sandbox.create", create, deadline=deadline, wait_policy=wait_policy)
+    except DaytonaConflictError:
+        sandbox = await read_provider_call("sandbox.get", partial(client.get, params.name), wait_policy=wait_policy)
+        await read_provider_call(
+            "sandbox.status", partial(sandbox.wait_for_sandbox_start, timeout=timeout), wait_policy=wait_policy
+        )
+        return sandbox
 
 
 async def _delete_named_sandbox(
     client: AsyncDaytona, name: str, wait_policy: ProviderWaitPolicy = ProviderWaitPolicy.PHASE
 ) -> None:
-    async def delete() -> None:
+    async with wait_policy.timeout(INTERRUPT_TIMEOUT):
         try:
-            sandbox = await client.get(name)
+            sandbox = await read_provider_call("sandbox.get", partial(client.get, name), wait_policy=wait_policy)
         except DaytonaNotFoundError:
             record_sandbox_lifecycle(SandboxLifecycleEvent.ABSENT, name)
             return
         record_sandbox_lifecycle(SandboxLifecycleEvent.DELETE_REQUESTED, name, sandbox.id)
-        await client.delete(sandbox, wait=True)
+        # A timeout or 5xx response is ambiguous: reconciliation checks this exact ID.
+        with wait_policy.wait():
+            await client.delete(sandbox, wait=True)
         record_sandbox_lifecycle(SandboxLifecycleEvent.DELETED, name, sandbox.id)
-
-    async with wait_policy.timeout(INTERRUPT_TIMEOUT):
-        await wait_policy.request("sandbox.delete", delete, request_timeout=PROVIDER_REQUEST_TIMEOUT)
 
 
 class DaytonaImageBuild(StrEnum):
@@ -229,7 +227,11 @@ class DaytonaMachine:
             except DaytonaError as error:
                 if error.status_code != 400 or PENDING_SANDBOX_IP_MESSAGE not in str(error).lower():
                     raise
-                await self.sandbox.refresh_data(request_timeout=PROVIDER_REQUEST_TIMEOUT)
+                await read_provider_call(
+                    "sandbox.status",
+                    partial(self.sandbox.refresh_data, request_timeout=PROVIDER_REQUEST_TIMEOUT),
+                    wait_policy=self.provider_wait_policy,
+                )
                 if self.sandbox.state in TERMINAL_SANDBOX_STATES:
                     raise MachineTerminated(
                         f"Daytona sandbox {self.sandbox.id} cannot execute controls in state {self.sandbox.state.value}"
@@ -744,7 +746,6 @@ class DaytonaMachineFactory:
                     client,
                     params,
                     timeout=timeout,
-                    deadline=self.provider_wait_policy.startup_deadline(deadline),
                     wait_policy=self.provider_wait_policy,
                 )
                 record_sandbox_lifecycle(SandboxLifecycleEvent.CREATED, name, sandbox.id)

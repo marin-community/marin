@@ -78,95 +78,14 @@ from shellbox.machine import (
 )
 
 
-@pytest.mark.parametrize(
-    ("failure", "status"),
-    [
-        ("rejected_post", 429),
-        ("rejected_post", 400),
-        ("accepted_post", 502),
-        ("late_get", 503),
-        ("prolonged_throttle", 429),
-        ("deadline", 502),
-        ("cancelled", 429),
-    ],
-)
-def test_daytona_creation_recovers_named_sandbox_after_transient_errors(monkeypatch, failure, status):
+@pytest.mark.parametrize("status", [429, 502])
+def test_daytona_creation_is_not_replayed_after_an_ambiguous_post(status):
     async def scenario():
         requests = []
-        names = []
-        delays = []
-        waiting = asyncio.Event()
-
-        async def wait(delay):
-            delays.append(delay)
-            waiting.set()
-            if failure in {"deadline", "cancelled"}:
-                await asyncio.Future()
-
-        monkeypatch.setattr("shellbox.backends.daytona.provider.sleep", wait)
-
-        created = False
 
         async def endpoint(request):
-            nonlocal created
-            if request.headers.get("Upgrade", "").lower() == "websocket":
-                websocket = web.WebSocketResponse()
-                await websocket.prepare(request)
-                async for _ in websocket:
-                    pass
-                return websocket
             requests.append(request.method)
-            if request.method == "POST":
-                names.append((await request.json())["name"])
-                if failure == "accepted_post" and requests.count("POST") == 1:
-                    created = True
-                    return web.json_response({"message": "ambiguous creation"}, status=status)
-            if request.method == "POST" and created:
-                return web.json_response({"message": "name already exists"}, status=409)
-            if (request.method == "GET" and created and requests.count("GET") > 1) or (
-                request.method == "POST"
-                and (
-                    failure == "late_get"
-                    or (failure == "rejected_post" and requests.count("POST") == 2)
-                    or (failure == "prolonged_throttle" and requests.count("POST") == 10)
-                )
-            ):
-                created = True
-                return web.json_response(
-                    {
-                        "id": "created-once",
-                        "organizationId": "fixture",
-                        "name": "fixture",
-                        "user": "root",
-                        "env": {},
-                        "labels": {},
-                        "public": False,
-                        "networkBlockAll": False,
-                        "target": "us",
-                        "cpu": 2,
-                        "gpu": 0,
-                        "memory": 4,
-                        "disk": 10,
-                        "state": "started",
-                        "toolboxProxyUrl": (
-                            ""
-                            if failure == "late_get" and request.method == "POST"
-                            else "https://fixture.invalid/toolbox"
-                        ),
-                    }
-                )
-            return web.json_response(
-                {
-                    "message": (
-                        "bad request: failed to resolve container IP after 3 attempts: "
-                        "no IP address found. Is the Sandbox started?"
-                        if status == 400
-                        else "transient provider error"
-                    )
-                },
-                status=status,
-                headers={"Retry-After-sandbox-create": "17"},
-            )
+            return web.json_response({"message": "ambiguous creation"}, status=status)
 
         app = web.Application()
         app.router.add_route("*", "/{path:.*}", endpoint)
@@ -174,46 +93,9 @@ def test_daytona_creation_recovers_named_sandbox_after_transient_errors(monkeypa
             async with AsyncDaytona(
                 DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
             ) as client:
-                params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
-                if failure in {"rejected_post", "prolonged_throttle"}:
-                    sandbox = await _create_sandbox(client, params, 60)
-                    assert sandbox.id == "created-once"
-                    attempts = 2 if failure == "rejected_post" else 10
-                    assert requests == ["POST"] * attempts
-                    assert len(delays) == attempts - 1 and all(delay >= 17 for delay in delays)
-                elif failure == "deadline":
-                    with pytest.raises(TimeoutError):
-                        async with asyncio.timeout(None) as deadline:
-
-                            async def expire_when_waiting():
-                                await waiting.wait()
-                                deadline.reschedule(asyncio.get_running_loop().time())
-
-                            expiration = asyncio.create_task(expire_when_waiting())
-                            try:
-                                await _create_sandbox(client, params, 60)
-                            finally:
-                                await expiration
-                    assert requests == ["POST"]
-                elif failure == "cancelled":
-                    task = asyncio.create_task(_create_sandbox(client, params, 60))
-                    await waiting.wait()
-                    task.cancel()
-                    with pytest.raises(asyncio.CancelledError):
-                        await task
-                    assert requests == ["POST"]
-                else:
-                    sandbox = await _create_sandbox(client, params, 60)
-                    assert sandbox.id == "created-once"
-                    assert requests == (
-                        ["POST", "POST", "GET", "POST", "GET"]
-                        if failure == "accepted_post"
-                        else ["POST", "GET", "POST", "GET"]
-                    )
-                    assert len(delays) == (2 if failure == "accepted_post" else 1)
-                    assert all(0 < delay <= 120 for delay in delays)
-                    assert delays[-1] >= 17
-                assert set(names) == {"fixture"}
+                with pytest.raises(DaytonaError):
+                    await _create_sandbox(client, CreateSandboxFromSnapshotParams(name="owned", snapshot="fixture"), 60)
+        assert requests.count("POST") == 1 and "DELETE" not in requests
 
     asyncio.run(scenario())
 

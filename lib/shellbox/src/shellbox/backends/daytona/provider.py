@@ -86,6 +86,7 @@ async def retry_provider_call[T](
     deadline: float | None = None,
     wait_policy: ProviderWaitPolicy = ProviderWaitPolicy.PHASE,
     request_timeout: float | None = None,
+    max_attempts: int | None = None,
 ) -> T:
     """Retry transient failures until success or the caller cancels the operation.
 
@@ -98,14 +99,18 @@ async def retry_provider_call[T](
         return await request()
     try:
         with wait_policy.wait():
-            return await _retry_provider_call(operation, request, deadline, request_timeout)
+            return await _retry_provider_call(operation, request, deadline, request_timeout, max_attempts)
     except asyncio.CancelledError:
         cancel_provider_waits()
         raise
 
 
 async def _retry_provider_call[T](
-    operation: str, request: Callable[[], Awaitable[T]], deadline: float | None, request_timeout: float | None
+    operation: str,
+    request: Callable[[], Awaitable[T]],
+    deadline: float | None,
+    request_timeout: float | None,
+    max_attempts: int | None,
 ) -> T:
     backoff = ExponentialBackoff(initial=1, maximum=PROVIDER_RETRY_MAX_DELAY, factor=2, jitter=0.5)
     attempt = 0
@@ -130,6 +135,8 @@ async def _retry_provider_call[T](
             if not transient:
                 raise
             attempt += 1
+            if max_attempts is not None and attempt >= max_attempts:
+                raise
             retry_after = max(
                 (
                     int(value)
@@ -154,3 +161,19 @@ async def _retry_provider_call[T](
                 },
             )
             await sleep(delay)
+
+
+async def read_provider_call[T](
+    operation: str,
+    request: Callable[[], Awaitable[T]],
+    *,
+    wait_policy: ProviderWaitPolicy = ProviderWaitPolicy.PHASE,
+) -> T:
+    """Read provider state with at most five bounded attempts; never use for mutations."""
+    return await retry_provider_call(
+        operation,
+        request,
+        request_timeout=PROVIDER_REQUEST_TIMEOUT,
+        max_attempts=5,
+        wait_policy=wait_policy,
+    )

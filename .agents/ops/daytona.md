@@ -351,14 +351,15 @@ redact those as well as named API keys before publication.
 
 ## Transient provider errors
 
-Snapshot metadata, snapshot creation/listing and named sandbox creation retry
-HTTP 5xx, HTTP 408/429 and SDK connection/timeouts. Retry delays are capped at
-120 seconds. Retries continue until success or caller cancellation/deadline.
-The provider's HTTP 400 "failed to resolve container IP after 3 attempts"
-startup state also retries. Other 4xx errors and terminal image-build failures
-propagate. Deterministic
-snapshot names and caller-supplied sandbox names identify resources whose
-creation succeeded despite a lost response.
+Read-only sandbox get/status/absence calls use `read_provider_call`: at most five
+attempts with exponential backoff capped at 120 seconds and a 60-second request
+timeout. HTTP 5xx, 408/429, SDK connection errors and timeouts are retryable.
+Snapshot preparation retains its existing caller deadline. Other 4xx errors and
+terminal image-build failures propagate.
+
+Sandbox creation and deletion are single-shot. An explicit creation conflict can
+resolve the caller's unique name through read-only calls. An ambiguous mutation
+must be reconciled from its lifecycle evidence; it is never blindly replayed.
 
 Each retry emits `DAYTONA_PROVIDER_RETRY` with operation, attempt, status and
 delay fields. Count these events separately from task outcomes. Provider errors
@@ -372,7 +373,7 @@ Task-curation calibration and approved retries set a 72-hour overall attempt
 bound without changing the native task or environment kwargs.
 
 Under JOB, safe harness controls, artifact reads/writes and resource probes retry
-within the overall bound. Controls and named sandbox deletion use a 60-second
+within the overall bound. Controls use a 60-second
 per-call timeout; artifact transfers, snapshot operations and sandbox acquisition
 retain SDK operation settings, allowing healthy large transfers to complete.
 Request duration and retry backoff pause phase and command clocks; source-command
@@ -381,12 +382,30 @@ provider waits. Cancellation cleanup and grace use wall-clock bounds and disable
 recovery retries. Retain retry events separately from task verdicts.
 
 Retryable controls include read-only metadata/resource probes, private staging-file
-operations, fixed-content artifact transfers and named sandbox deletion.
+operations and fixed-content artifact transfers.
 Source execution remains single-shot after an ambiguous response. An ambiguous
 process-group termination falls back to sandbox teardown; it cannot safely be
-replayed after PID reuse. Named sandbox deletion and private-file cleanup are
-idempotent. External cancellation disables recovery retries during cancellation
+replayed after PID reuse. Private-file cleanup is idempotent. External cancellation disables recovery retries during cancellation
 cleanup and retains its existing cleanup deadline and primary exception.
+
+
+### Quarantined control rows
+
+`run_quarantined_trials` seals each attempt through its caller before continuing
+other rows. A row with ambiguous sandbox ownership has the typed status
+`unresolved_cleanup`, exact known IDs, unknown create requests, lifecycle hashes
+and its immutable evidence reference. It is not a scored oracle outcome.
+
+At the end of the pass, `resolve_ownership` revalidates the frozen lifecycle
+files, gets each exact ID, deletes a present owned sandbox once with `wait=True`,
+and checks absence. NotFound clears the ID. Read exhaustion or an ambiguous
+cleanup keeps the row quarantined. Only resolved rows are requeued, once; both
+attempts remain archived. Unknown create requests are never resolved by account
+lists, labels, statuses or time windows.
+
+The caller must declare physical capacity including quarantined sandboxes.
+Unresolved IDs and unknown create requests retain slots. When that capacity is
+full, unstarted rows remain explicitly deferred for a later cleared pass.
 
 ## Making a dataset Daytona-safe
 
