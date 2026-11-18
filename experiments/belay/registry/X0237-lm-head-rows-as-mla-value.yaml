@@ -40,7 +40,8 @@ trials:
   batch: X0237
   date: '2026-11-18'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0237
-  wandb: []
+  wandb:
+  - belay-X0237d512-seed0
   settings:
     lm_head_value_embeds: 'true'
   commit: 72007601d4
