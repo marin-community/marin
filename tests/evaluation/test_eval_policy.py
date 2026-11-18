@@ -80,3 +80,11 @@ def test_model_configurations_have_distinct_comparison_identities():
     assert comparison_model_name(first) == comparison_model_name(
         first.model_copy(update={"config_digest": model_config_digest(first.config)})
     )
+
+
+def test_unset_nccl_symmetric_memory_is_omitted_from_recorded_config():
+    # Records written before this setting existed have no such key. An unset value must serialize the
+    # same way, or the config digests stored in those records stop verifying.
+    config = _model().config
+    assert config is not None
+    assert "vllm_use_nccl_symm_mem" not in config.model_dump(mode="json")["serve"]

@@ -566,7 +566,10 @@ def test_evaluation_steps_record_failures_without_blocking_other_steps(tmp_path,
     assert failed.serving == succeeded.serving
     assert succeeded.provenance.eval_runtime == "test-runtime"
     assert succeeded.model.config is not None
-    assert succeeded.model.config.model_dump(mode="json") == json.loads(json.dumps(asdict(batch.model)))
+    expected_config = json.loads(json.dumps(asdict(batch.model)))
+    # An unset NCCL setting is omitted from records so that earlier records keep their config digests.
+    del expected_config["serve"]["vllm_use_nccl_symm_mem"]
+    assert succeeded.model.config.model_dump(mode="json") == expected_config
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
     assert {(row.run_id, row.status) for row in catalog_rows} == {
         ("run-failure", "failed"),
@@ -1373,7 +1376,13 @@ def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
         execution = replace(batch, records_prefix=str(tmp_path / "records"), evaluations=(evaluation,))
         _evaluate_with_session(execution, _remote_session(), orchestrator_job_id="/test")
         submitted.append(evaluation.identity)
-        return SimpleNamespace(group_id=batch.group_id, model_name=batch.model.name, evaluations=())
+        return SimpleNamespace(
+            group_id=batch.group_id,
+            job=SimpleNamespace(job_id="/test/eval"),
+            records_prefix=batch.records_prefix,
+            model_name=batch.model.name,
+            evaluations=(),
+        )
 
     monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", lambda **_kwargs: nullcontext(object()))
     monkeypatch.setattr("experiments.evaluation.cli.launch_group", launch)
