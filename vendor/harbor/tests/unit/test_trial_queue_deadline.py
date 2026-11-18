@@ -777,9 +777,10 @@ async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(
     async def reverify(trial: FakeTrial) -> None:
         trial.result.verifier_result = VerifierResult(rewards={"reward": 1.0})
 
-    async def hold_verified_hook(_event: TrialHookEvent) -> None:
-        publication_started.set()
-        await release_publication.wait()
+    async def hold_verified_hook(event: TrialHookEvent) -> None:
+        if event.result is not None and event.result.verifier_result is not None:
+            publication_started.set()
+            await release_publication.wait()
 
     config = _config(tmp_path, "hung", attempt_timeout=0.05, cleanup_grace=0.2)
     _install_factory(
