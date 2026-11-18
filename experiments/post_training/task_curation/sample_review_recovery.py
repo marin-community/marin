@@ -88,27 +88,28 @@ def read_receipt_reference(reference: ReceiptReference, source_id: str) -> Sampl
     return SampleQCReceipt.model_validate(document)
 
 
-def collect_receipt_history(documents_by_revision: dict[str, dict[str, dict]]) -> dict[str, list[ReceiptReference]]:
+def collect_receipt_history(
+    documents_by_revision: dict[str, dict[str, tuple[str, dict]]],
+) -> dict[str, list[ReceiptReference]]:
     """Group a registry's receipt documents per source, newest first.
 
-    ``documents_by_revision`` maps revision → path → parsed receipt document,
-    newest revision first. Blank shard placeholders carry nothing. A source's
-    prior evidence is every distinct document whose panel pin differs from its
-    newest revision's panel pin.
+    ``documents_by_revision`` maps revision → source ID → (part path, parsed
+    receipt document), newest revision first. Blank shard placeholders carry
+    nothing. A source's prior evidence is every distinct document whose panel
+    pin differs from its newest revision's panel pin.
     """
     revisions = list(documents_by_revision)
     newest = documents_by_revision[revisions[0]]
     current_pin = {
-        document["source_id"]: document["review"]["panel"]["dataset_revision"]
-        for document in newest.values()
-        if document
+        source_id: document["review"]["panel"]["dataset_revision"]
+        for source_id, (_, document) in newest.items()
+        if document.get("review")
     }
     history: dict[str, dict[str, ReceiptReference]] = {}
     for revision in revisions:
-        for path, document in documents_by_revision[revision].items():
-            if not document:
+        for source_id, (path, document) in documents_by_revision[revision].items():
+            if not document.get("review"):
                 continue
-            source_id = document["source_id"]
             if document["review"]["panel"]["dataset_revision"] == current_pin.get(source_id):
                 continue
             sha256 = document_sha256(document)
@@ -121,7 +122,7 @@ def survey_queue() -> RecoveryQueue:
     """Walk the registry's receipt history and build the recovery queue."""
     api = HfApi()
     revisions = [commit.commit_id for commit in api.list_repo_commits(REGISTRY_REPO, repo_type="dataset")]
-    documents_by_revision: dict[str, dict[str, dict]] = {}
+    documents_by_revision: dict[str, dict[str, tuple[str, dict]]] = {}
     for revision in revisions:
         parts = [
             name
@@ -130,29 +131,30 @@ def survey_queue() -> RecoveryQueue:
         ]
         if not parts:
             continue
-        documents_by_revision[revision] = {
-            name: json.loads(StoragePath(downloaded).read_text())
-            for name in parts
-            for downloaded in (hf_hub_download(REGISTRY_REPO, repo_type="dataset", revision=revision, filename=name),)
-        }
+        documents: dict[str, tuple[str, dict]] = {}
+        for name in parts:
+            downloaded = hf_hub_download(REGISTRY_REPO, repo_type="dataset", revision=revision, filename=name)
+            for source_id, document in json.loads(StoragePath(downloaded).read_text()).items():
+                documents[source_id] = (name, document)
+        documents_by_revision[revision] = documents
     prior = collect_receipt_history(documents_by_revision)
     newest = documents_by_revision[revisions[0]]
     current = {
-        document["source_id"]: ReceiptReference(
+        source_id: ReceiptReference(
             repo=REGISTRY_REPO,
             revision=revisions[0],
             path=path,
             sha256=document_sha256(document),
         )
-        for path, document in newest.items()
-        if document
+        for source_id, (path, document) in newest.items()
+        if document.get("review")
     }
     targets = [
         RecoveryTarget(
             source_id=source_id,
             current=current[source_id],
             prior=tuple(prior[source_id]),
-            current_population=newest[current[source_id].path]["review"]["panel"]["input_artifact"],
+            current_population=newest[source_id][1]["review"]["panel"]["input_artifact"],
         )
         for source_id in sorted(prior)
         if source_id in current

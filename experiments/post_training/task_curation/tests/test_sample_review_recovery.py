@@ -47,9 +47,9 @@ def test_collect_receipt_history_keeps_distinct_superseded_pins():
     stale_a = {"source_id": SOURCE_ID, "review": {"panel": {"dataset_revision": EARLIER_REVISION}}}
     stale_b = {"source_id": SOURCE_ID, "review": {"panel": {"dataset_revision": "c" * 40}}}
     documents = {
-        newest: {"part-000.json": current},
-        second: {"part-000.json": stale_a, "part-001.json": current},
-        oldest: {"part-002.json": stale_b},
+        newest: {SOURCE_ID: ("part-000.json", current)},
+        second: {SOURCE_ID: ("part-000.json", stale_a)},
+        oldest: {SOURCE_ID: ("part-002.json", stale_b)},
     }
     history = collect_receipt_history(documents)
     assert sorted(history) == [SOURCE_ID]
