@@ -33,3 +33,29 @@ checksum-bound provenance, including the source's typed restriction tier and
 checked license-receipt binding. Publish images to an internal or private registry
 package and verify their digests before conversion. After publication, convert the tasks, run original-oracle and no-op trials,
 complete SAMPLE review, and obtain Atlas admission.
+
+The converter's `sources(images_reference)` requires the immutable image-publication
+URI and its SHA-256 digest. It reads one native row at a time, checks the complete archive and
+every file against the sealed native census, and streams the large input files
+through checksum validation. Those files remain in the image identified by that publication; every other
+native file retains its bytes, mode and modification time in the TaskSpec.
+
+Public `/setup_files/setup.sh` executes before the actor starts, after linking the task's
+own input directory. Startup, file delivery and public setup share the native
+build timeout. After the actor stops, the original private tests are restored for
+grading. `/tests/setup.sh` executes immediately before `/tests/test.sh`, with both
+sharing the native verifier timeout. If private setup fails, checks are skipped.
+A zero that setup explicitly writes to the native reward file is retained;
+other setup failures abort grading. Verifier environment variables stay private
+until grading.
+
+This order is verified against the [original harness at
+`c313b7b18f`](https://github.com/MLI-lab/OT-next-data/tree/c313b7b18f5245619a13da12e6943d703ea5b0fb).
+The runtime verifier patch, verifier review and public task setup match their
+recorded hashes in frozen contract
+`e3179104ebff6933a2054c9ccdb692cfdc4d7626e186bbfaf06ee21881e0ad29`:
+the runtime verifier patch `97be873552fe710949ad3fe1825a9d083a78523bc69d1b1dd036604a7271baf9`,
+the verifier review `051a80e170b933230ad4fd0e1459f44bd9901e2b399e388a9959c2fc73358517`,
+and public task setup `8de3f30f61f0167785b66f68a642854ae68ee7667450d2c2a99cdfdf0509338c`.
+Converted tasks record the URI and SHA-256 digest of the protocol manifest, which
+binds this contract and the historical harness files.
