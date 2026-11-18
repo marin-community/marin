@@ -993,37 +993,19 @@ class SnowballTransformer(eqx.Module):
 
         def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag):
             layer, use_long = layer_and_flag
-            if token_valid is not None:
-                result = layer._forward(
-                    carry,
-                    short_mask,
-                    long_mask,
-                    use_long,
-                    return_routes,
-                    token_valid,
-                    deletion_alpha=self.deletion_alpha,
-                    deletion_hard=self.deletion_hard,
-                )
-                return result.output, (result.routes, result.counts, result.wanda)
-            if return_routes:
-                hidden, routes = layer.forward(
-                    carry,
-                    short_mask,
-                    long_mask,
-                    use_long,
-                    return_routes=True,
-                    deletion_alpha=self.deletion_alpha,
-                    deletion_hard=self.deletion_hard,
-                )
-                return hidden, (routes, None, None)
-            return layer(
+            # One uniform body: _forward covers all modes (routes/counts/wanda are None when
+            # not requested), so the Wanda capture works without token_valid too.
+            result = layer._forward(
                 carry,
                 short_mask,
                 long_mask,
                 use_long,
+                return_routes,
+                token_valid,
                 deletion_alpha=self.deletion_alpha,
                 deletion_hard=self.deletion_hard,
-            ), (None, None, None)
+            )
+            return result.output, (result.routes, result.counts, result.wanda)
 
         # Bound routed-expert activation memory during the backward pass as well as forward.
         hidden, (routes, counts, wanda) = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
