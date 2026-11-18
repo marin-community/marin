@@ -286,6 +286,8 @@ def apply_hard_mask(model):
         parts = tuple(path.split("."))
         weight_field = parts[-1]
         logits_field = weight_field.replace("w_", "", 1) + "_logits"
+        # routed logits live on the MoE wrapper (one hop above expert_mlp); shared logits on the DenseMLP
+        logits_parts = parts[:-2] + (logits_field,) if "expert_mlp" in parts else parts[:-1] + (logits_field,)
 
         def navigate(obj, parts=parts):
             for part in parts:
@@ -295,8 +297,8 @@ def apply_hard_mask(model):
         def weight_where(m, parts=parts):
             return navigate(m, parts)
 
-        def logits_where(m, parts=parts[:-1], logits_field=logits_field):
-            return getattr(navigate(m, parts), logits_field)
+        def logits_where(m, logits_parts=logits_parts):
+            return navigate(m, logits_parts)
 
         keep = (logits > 0).astype(weight.dtype)
         updated = _tree_replace(weight_where, updated, weight * keep)
