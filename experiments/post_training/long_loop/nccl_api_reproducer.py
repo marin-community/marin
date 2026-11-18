@@ -66,7 +66,7 @@ def run(args) -> None:
                 base = torch.arange(count, dtype=torch.int32, device=device).remainder_(128)
                 source = (base + rank).to(dtype)
                 before = parameter_sha256(source)
-                for operation in ("MIN", "MAX", "SUM"):
+                for operation in (("MIN", "MAX", "SUM") if dtype == torch.int32 else ("SUM",)):
                     result = source.clone()
                     started = time.monotonic()
                     if args.api == "direct-nccl":

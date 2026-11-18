@@ -487,16 +487,24 @@ def task_api(args) -> None:
                     check=True,
                     timeout=240,
                 )
+            finally:
+                # A failed worker still leaves useful partial inputs and error traces.
                 for rank in range(info.task_index * GPUS_PER_NODE, (info.task_index + 1) * GPUS_PER_NODE):
                     stem = f"{api}-{profile}-rank{rank}"
-                    report = json.loads((directory / f"{stem}.json").read_text())
-                    raw = (directory / f"{stem}.log").read_bytes()
-                    report["nccl_log"] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
-                    filesystem, path = filesystem_for(f"{args.output_prefix}/nccl-logs/{stem}.log")
-                    with filesystem.open(path, "wb") as stream:
-                        stream.write(raw)
+                    report_path = directory / f"{stem}.json"
+                    if not report_path.is_file():
+                        continue
+                    report = json.loads(report_path.read_text())
+                    log_path = directory / f"{stem}.log"
+                    if log_path.is_file():
+                        raw = log_path.read_bytes()
+                        report["nccl_log"] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+                        filesystem, path = filesystem_for(f"{args.output_prefix}/nccl-logs/{stem}.log")
+                        with filesystem.open(path, "wb") as stream:
+                            stream.write(raw)
+                    else:
+                        report["nccl_log"] = {"state": "not_created"}
                     write_json(f"{args.output_prefix}/{stem}.json", report)
-            finally:
                 if endpoint is not None:
                     ctx.registry.unregister(endpoint)
     # This CPU-only barrier makes every uploaded report visible before the verdict.
