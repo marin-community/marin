@@ -74,6 +74,9 @@ def sft_run(*, output: str, initializer: str, recipe: dict, run_id: str) -> None
         raise ValueError("Base import did not verify all 502 tensors")
     config = fresh_sft_config(output=output, initializer=initializer, recipe=recipe, run_id=run_id)
     (StoragePath(output) / "consumed-config.json").write_text(json.dumps(draccus.encode(config), indent=2))
+    (StoragePath(output) / "runtime-profile.json").write_text(
+        json.dumps({"worker_environment": config.launch_environment()}, indent=2) + "\n"
+    )
     run_grug(config)
     final_step = config.stop_after_steps or config.trainer.trainer.num_train_steps
     metadata = read_json(prefix_join(output, f"checkpoints/step-{final_step}/metadata.json"))

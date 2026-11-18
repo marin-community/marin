@@ -57,6 +57,7 @@ def dispatch_grug_training_run(
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
     extras: list[str] | None = None,
+    env_vars: dict[str, str] | None = None,
     termination_grace: Duration = Duration.from_seconds(60),
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
@@ -69,15 +70,16 @@ def dispatch_grug_training_run(
     per-task budget under a small cumulative one still ends the job at the cumulative limit.
 
     ``extras`` overrides the dependency extras inferred from the accelerator type.
+    ``env_vars`` overrides forwarded and default worker environment values.
     """
     safe_run_id = _safe_job_suffix(run_id)
-    env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
+    worker_env = resolve_training_env(base_env=_forwarded_env_vars() | (env_vars or {}), resources=resources)
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
         environment=create_environment(
-            env_vars=env_vars,
+            env_vars=worker_env,
             extras=extras_for_resources(resources) if extras is None else extras,
         ),
         max_retries_failure=max_retries_failure,
