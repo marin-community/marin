@@ -43,7 +43,7 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
-from marin.rl.curriculum import RlCurriculum
+from marin.rl.curriculum import RlCurriculum, entry_payload, stage_payload
 from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
     RESOLVED_LAUNCH_FILENAME,
@@ -1066,18 +1066,8 @@ def _launch_curriculum(curriculum: RlCurriculum) -> dict:
         "mode": curriculum.mode.value,
         "seed": curriculum.seed,
         "sampling": curriculum.sampling_config(),
-        "sources": [
-            {
-                "label": entry.label,
-                "source": entry.source,
-                "version": entry.version,
-                "pin": {"name": entry.pin.name, "revision": entry.pin.revision, "url": entry.pin.url},
-                "recipe": entry.recipe,
-                "weight": entry.weight,
-            }
-            for entry in curriculum.entries
-        ],
-        "stages": [{"source": stage.label, "quota": stage.quota} for stage in curriculum.stages],
+        "sources": [entry_payload(entry) for entry in curriculum.entries],
+        "stages": [stage_payload(stage) for stage in curriculum.stages],
     }
 
 

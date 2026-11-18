@@ -19,30 +19,33 @@ that produced its tasks. Curation receipts live in the [RL Data Atlas](rl-data-a
 
 ## Curriculum
 
-Build a curriculum with `rl_curriculum(...)`
+Build a curriculum with `weighted_curriculum(...)` or `ordered_curriculum(...)`
 ([curriculum.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/curriculum.py)).
-It resolves each named source against the catalog and records, per source: the catalog name, the
-source's version, its pinned dataset, and the pipeline identity. The builder rejects an unknown
-source name and a source without a pinned dataset, so a curriculum always names pinned inputs.
+The builder resolves each named source against the catalog and records, per source: the catalog
+name, the source's version, its pinned dataset, and the pipeline identity. The builder rejects an
+unknown source name and a source without a pinned dataset, so a curriculum always names pinned
+inputs.
 
-A curriculum declares one of two sampling modes:
+`weighted_curriculum(name, version, weights={source: weight}, seed=...)` declares a weight-random
+mix. The trainer composes every training window into the exact weighted mixture, the behavior of
+`weighted_quotas` in
+[domain_sampling.py](https://github.com/marin-community/marin/blob/main/vendor/skyrl/skyrl-train/skyrl_train/domain_sampling.py).
 
-- `weighted` — each source carries a positive mixture weight. The trainer composes every training
-  window into the exact weighted mixture, the behavior of `weighted_quotas` in
-  [domain_sampling.py](https://github.com/marin-community/marin/blob/main/vendor/skyrl/skyrl-train/skyrl_train/domain_sampling.py).
-- `ordered` — `stages` lists source names in the order the trainer consumes them, and `quotas`
-  bounds each stage visit in prompts (an absent quota runs one full pass over that source's rows).
-  After the last stage the sequence restarts, so a longer run cycles the declared order. The
-  trainer's `OrderedStages` sampler draws this sequence deterministically from the seed.
+`ordered_curriculum(name, version, stages=(...), quotas={source: quota}, seed=...)` declares the
+sequence the trainer consumes in order, and `quotas` bounds each stage visit in prompts (an absent
+quota runs one full pass over that source's rows). After the last stage the sequence restarts, so a
+longer run cycles the declared order. The trainer's `OrderedStages` sampler draws this sequence
+deterministically from the seed.
 
 Both modes take a `seed`. The curriculum validates itself at construction: an unknown source, an
 unpinned source, an empty stage order, and a non-positive weight or quota are errors.
 
-The curriculum's `fingerprint` hashes the canonical `{source name@version: weight}` map, the stage
-order and quotas, and the seed. The same inputs fingerprint identically; bumping a source's version,
-changing a weight, reordering stages, or changing the seed produces a different fingerprint. The
-curriculum's own `version` is identity, not content: re-badging the same mix keeps the fingerprint,
-as with every artifact.
+The curriculum's `fingerprint` hashes the canonical source entries: each one's trainer label,
+catalog `name@version`, pinned dataset (name, revision, URL), and pipeline identity. It also hashes
+the mode, the weights, the stage order and quotas, and the seed. The same inputs fingerprint
+identically; bumping a source's version, changing a weight, reordering stages, or changing the seed
+produces a different fingerprint. The curriculum's own `version` is identity, not content:
+re-badging the same mix keeps the fingerprint, as with every artifact.
 
 ## Launch with a curriculum
 
@@ -76,6 +79,6 @@ launch = yaml.safe_load(run.config["launch_config_yaml"])
 print(launch["inputs"]["curriculum"]["sources"])
 ```
 
-The identity recovers the exact mix: rebuild the curriculum with `rl_curriculum` using the recorded
+The identity recovers the exact mix: rebuild the curriculum with the matching builder using the recorded
 sources, weights, stages, and seed, and its fingerprint must equal the recorded one. A matching
 fingerprint means the rebuilt mix samples identically.

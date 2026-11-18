@@ -21,6 +21,30 @@ def _route_of(dataset: datasets.Dataset, row: int) -> str:
 
 WEIGHTS = {"math": 0.7, "swe": 0.3}
 ROUTES = ["math"] * 8 + ["swe"] * 4
+STAGES = [{"source": "math", "quota": 3}, {"source": "swe", "quota": 2}]
+
+
+def _weighted_order(dataset: datasets.Dataset) -> DomainWeightedOrder:
+    return DomainWeightedOrder(dataset, WEIGHTS, seed=7, window_size=6)
+
+
+def _ordered_order(dataset: datasets.Dataset) -> OrderedStages:
+    return OrderedStages(dataset, STAGES, seed=11, window_size=4)
+
+
+@pytest.mark.parametrize("build", [_weighted_order, _ordered_order], ids=["domain-weighted", "ordered"])
+def test_order_resumes_from_another_instance_state(build):
+    """A fresh sampler restored from a checkpoint's state continues an uninterrupted stream exactly."""
+    dataset = _route_dataset(ROUTES)
+    whole = build(dataset)
+    expected = [whole.next_index() for _ in range(18)]
+
+    checkpoint = build(dataset)
+    for _ in range(9):
+        checkpoint.next_index()
+    resumed = build(dataset)
+    resumed.load_state_dict(checkpoint.state_dict())
+    assert [resumed.next_index() for _ in range(9)] == expected[9:]
 
 
 def test_domain_weighted_windows_compose_the_exact_weighted_quotas():
@@ -31,20 +55,6 @@ def test_domain_weighted_windows_compose_the_exact_weighted_quotas():
         drawn = [_route_of(dataset, order.next_index()) for _ in range(10)]
         quotas = weighted_quotas(10, WEIGHTS, window)
         assert Counter(drawn) == Counter({name: quota for name, quota in quotas.items() if quota})
-
-
-def test_domain_weighted_order_round_trips_through_its_state():
-    dataset = _route_dataset(ROUTES)
-    whole = DomainWeightedOrder(dataset, WEIGHTS, seed=7, window_size=6)
-    expected = [whole.next_index() for _ in range(18)]
-
-    resumed = DomainWeightedOrder(dataset, WEIGHTS, seed=7, window_size=6)
-    first = [resumed.next_index() for _ in range(9)]
-    resumed.load_state_dict(resumed.state_dict())
-    assert first + [resumed.next_index() for _ in range(9)] == expected
-
-
-STAGES = [{"source": "math", "quota": 3}, {"source": "swe", "quota": 2}]
 
 
 def test_ordered_stages_yield_the_declared_sequence():
@@ -70,17 +80,6 @@ def test_ordered_stages_keep_window_draws_unique():
     for _ in range(5):
         window = [order.next_index() for _ in range(4)]
         assert len(set(window)) == 4
-
-
-def test_ordered_stages_round_trips_through_its_state():
-    dataset = _route_dataset(ROUTES)
-    whole = OrderedStages(dataset, STAGES, seed=11, window_size=4)
-    expected = [whole.next_index() for _ in range(18)]
-
-    resumed = OrderedStages(dataset, STAGES, seed=11, window_size=4)
-    first = [resumed.next_index() for _ in range(9)]
-    resumed.load_state_dict(resumed.state_dict())
-    assert first + [resumed.next_index() for _ in range(9)] == expected
 
 
 def test_ordered_stages_reject_unknown_route():
