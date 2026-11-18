@@ -1,0 +1,13 @@
+experiment: X0241
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: 'FBT: K=2 passes every step, W_fuse on Muon'
+    flags:
+    - --model-set
+    - full_bandwidth_passes=2
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
