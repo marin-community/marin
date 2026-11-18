@@ -17,6 +17,18 @@ from levanter.checkpoint_manifest import read_manifest
 from levanter.utils.jax_utils import leaf_key_paths
 
 logger = logging.getLogger(__name__)
+_EXPECTED_MOMENT_LEAVES = 36
+_OPTIMIZER_NON_MOMENT_PATHS = frozenset(
+    {
+        "opt_state/count",
+        "opt_state/hyperparams/adam_lr",
+        "opt_state/hyperparams/learning_rate",
+        "opt_state/hyperparams_states/adam_lr/count",
+        "opt_state/hyperparams_states/learning_rate/count",
+        "opt_state/inner_state/inner_states/adam/inner_state/0/count",
+        "opt_state/inner_state/inner_states/adamh/inner_state/0/count",
+    }
+)
 
 
 def _shared(state, *, legacy: bool):
@@ -78,8 +90,7 @@ def _audit_moment_cast_reference(path, source, converted, *, chunk_elements=1 <<
     """Report local shard cast statistics; reject any nonzero FP32 value becoming BF16 zero.
 
     Counts are shard-local and may include replicas; indices let a later receipt deduplicate them.
-    Bounded chunks avoid copying a full optimizer leaf to host. All ranks participate in the
-    fail decision before any raises, because subsequent restores perform collectives.
+    This reference is for small CPU fixtures only; production uses device reductions.
     """
     if chunk_elements <= 0 or chunk_elements > (1 << 24):
         raise ValueError("invalid cast-audit chunk size")
@@ -91,14 +102,15 @@ def _audit_moment_cast_reference(path, source, converted, *, chunk_elements=1 <<
     for before, after in zip(before_shards, after_shards, strict=True):
         if before.index != after.index or before.device != after.device:
             raise ValueError("cast changed shard identity")
-        a = before.data.reshape(-1)
-        b = after.data.reshape(-1)
+        # CPU-only oracle: materialize the small test shard before chunking.
+        a = np.asarray(jax.device_get(before.data)).reshape(-1)
+        b = np.asarray(jax.device_get(after.data)).reshape(-1)
         count = nonzero = lost = subnormal = nonfinite = 0
         min_abs_bits = None
         max_relative = 0.0
         for start in range(0, a.size, chunk_elements):
-            x = np.asarray(jax.device_get(a[start : start + chunk_elements]), dtype=np.float32)
-            y = np.asarray(jax.device_get(b[start : start + chunk_elements]))
+            x = np.asarray(a[start : start + chunk_elements], dtype=np.float32)
+            y = np.asarray(b[start : start + chunk_elements])
             bits = x.view(np.uint32) & np.uint32(0x7FFFFFFF)
             ybits = y.view(np.uint16) & np.uint16(0x7FFF)
             finite = bits < np.uint32(0x7F800000)
@@ -139,7 +151,6 @@ def _audit_moment_cast_reference(path, source, converted, *, chunk_elements=1 <<
         raise ValueError(f"nonzero FP32 moment became BF16 zero in {path}")
 
 
-@jax.jit
 def _device_moment_stats(source, converted):
     """Global reductions, with per-leading-slice uint32 counts for large leaves."""
     source_bits = jax.lax.bitcast_convert_type(source, jnp.uint32) & jnp.uint32(0x7FFFFFFF)
@@ -161,6 +172,7 @@ def _device_moment_stats(source, converted):
     relative = jnp.where(nonzero & ~source_subnormal, jnp.abs(converted.astype(jnp.float32) - x) / jnp.abs(x), 0.0)
     return (
         jnp.any(lost),
+        jnp.any(~finite),
         jnp.any(source_subnormal),
         count_nonzero,
         count_lost,
@@ -174,8 +186,12 @@ def _audit_moment_cast(path, source, converted):
     """Gate on globally reduced lost values, retaining exact per-slice count sums on host."""
     if source.ndim and math.prod(source.shape[1:]) >= (1 << 31):
         raise ValueError(f"moment slice too large for exact uint32 counts: {path}")
-    lost_flag, source_subnormal, nonzero, lost, subnormal, min_bits, max_relative = jax.device_get(
-        _device_moment_stats(source, converted)
+    sharding = source.sharding
+    if not isinstance(sharding, jax.sharding.NamedSharding):
+        raise ValueError(f"moment source requires NamedSharding: {path}")
+    replicated = jax.sharding.NamedSharding(sharding.mesh, jax.sharding.PartitionSpec())
+    lost_flag, nonfinite_flag, source_subnormal, nonzero, lost, subnormal, min_bits, max_relative = jax.device_get(
+        jax.jit(_device_moment_stats, out_shardings=replicated)(source, converted)
     )
     total_nonzero = sum(int(x) for x in np.asarray(nonzero).reshape(-1))
     total_lost = sum(int(x) for x in np.asarray(lost).reshape(-1))
@@ -196,6 +212,8 @@ def _audit_moment_cast(path, source, converted):
             min_nonzero,
             float(max_relative),
         )
+    if bool(nonfinite_flag):
+        raise ValueError(f"nonfinite FP32 moment in {path}")
     if bool(lost_flag):
         raise ValueError(f"nonzero FP32 moment became BF16 zero in {path}")
 
@@ -229,6 +247,12 @@ def _restore_one_leaf_at_a_time(target, checkpoint, *, mesh):
             restored.append(converted)
         else:
             if _is_moment_path(key):
+                if not isinstance(value.sharding, jax.sharding.NamedSharding):
+                    raise ValueError(f"moment source requires NamedSharding: {key}")
+                replicated = jax.sharding.NamedSharding(value.sharding.mesh, jax.sharding.PartitionSpec())
+                nonfinite = jax.jit(lambda x: jnp.any(~jnp.isfinite(x)), out_shardings=replicated)(value)
+                if bool(jax.device_get(nonfinite)):
+                    raise ValueError(f"nonfinite FP32 moment in {key}")
                 logger.info(
                     "carried_moment_cast path=%s process=%d dtype=%s cast=none; retained exactly",
                     key,
@@ -255,6 +279,10 @@ def restore_1005_carried_state(state, checkpoint: str, *, mesh, expected_step: i
     target_legacy = _shared(state, legacy=True)
     template = _fp32_template(target_legacy)
     expected = _array_specs(template)
+    optimizer_paths = {key for key in expected if key.startswith("opt_state/")}
+    moment_paths = {key for key in optimizer_paths if _is_moment_path(key)}
+    if len(moment_paths) != _EXPECTED_MOMENT_LEAVES or optimizer_paths - moment_paths != _OPTIMIZER_NON_MOMENT_PATHS:
+        raise ValueError("checkpoint optimizer moment path coverage mismatch")
     arrays = read_manifest(checkpoint).arrays
     actual = {a.path: (tuple(a.shape), str(a.dtype)) for a in arrays}
     if len(actual) != len(arrays):

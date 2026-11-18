@@ -99,6 +99,11 @@ def populated_source(target):
     return jax.tree_util.tree_map_with_path(fill, legacy)
 
 
+@pytest.fixture(autouse=True)
+def synthetic_optimizer_path_count(monkeypatch):
+    monkeypatch.setattr(carried_restore, "_EXPECTED_MOMENT_LEAVES", 8)
+
+
 @pytest.fixture
 def cpu_mesh():
     mesh = jax.sharding.Mesh(
@@ -202,7 +207,10 @@ def test_streaming_restore_deletes_each_cast_source_before_loading_next(tmp_path
 
 
 def test_moment_cast_audit_detects_nonzero_to_zero(cpu_mesh, caplog):
-    source = jnp.asarray([1.25, -0.75, 0.0], dtype=jnp.float32)
+    source = jax.device_put(
+        np.asarray([1.25, -0.75, 0.0], dtype=np.float32),
+        jax.sharding.NamedSharding(cpu_mesh, jax.sharding.PartitionSpec()),
+    )
     good = source.astype(jnp.bfloat16)
     with caplog.at_level("INFO"):
         carried_restore._audit_moment_cast("opt_state/adam/nu/weight", source, good)
@@ -222,8 +230,31 @@ def test_global_moment_audit_with_sharded_and_replicated_cpu_arrays(caplog):
         source = jax.device_put(vals, jax.sharding.NamedSharding(mesh, spec))
         converted = source.astype(jnp.bfloat16)
         stats = jax.device_get(carried_restore._device_moment_stats(source, converted))
-        assert int(np.asarray(stats[2]).sum()) == 3
-        assert int(np.asarray(stats[3]).sum()) == 0
+        assert int(np.asarray(stats[3]).sum()) == 3
+        assert int(np.asarray(stats[4]).sum()) == 0
         with caplog.at_level("INFO"):
             carried_restore._audit_moment_cast("opt_state/adam/nu/weight", source, converted)
         assert "elements=4 nonzero=3 nonzero_to_zero=0" in caplog.text
+
+
+def test_moment_audit_rejects_nonfinite_and_bad_path_coverage(cpu_mesh, tmp_path, monkeypatch):
+    sharding = jax.sharding.NamedSharding(cpu_mesh, jax.sharding.PartitionSpec())
+    source = jax.device_put(np.asarray([1.0, np.nan], dtype=np.float32), sharding)
+    with pytest.raises(ValueError, match="nonfinite FP32 moment"):
+        carried_restore._audit_moment_cast("opt_state/adam/nu/weight", source, source.astype(jnp.bfloat16))
+    target, _ = make_state()
+    path = tmp_path / "checkpoint"
+    save_checkpoint(populated_source(target), step=161750, checkpoint_path=path, is_temporary=False)
+    monkeypatch.setattr(carried_restore, "_EXPECTED_MOMENT_LEAVES", 9)
+    with pytest.raises(ValueError, match="moment path coverage mismatch"):
+        restore_1005_carried_state(restore_template_from(target), str(path), mesh=cpu_mesh, expected_step=161750)
+
+
+def test_host_reference_and_device_audit_agree(cpu_mesh, caplog):
+    sharding = jax.sharding.NamedSharding(cpu_mesh, jax.sharding.PartitionSpec())
+    source = jax.device_put(np.asarray([1.1, -2.2, 0.0, 4.4], dtype=np.float32), sharding)
+    converted = source.astype(jnp.bfloat16)
+    with caplog.at_level("INFO"):
+        carried_restore._audit_moment_cast_reference("opt_state/adam/nu/weight", source, converted, chunk_elements=2)
+        carried_restore._audit_moment_cast("opt_state/adam/nu/weight", source, converted)
+    assert caplog.text.count("nonzero=3 nonzero_to_zero=0") == len(jax.devices()) + 1
