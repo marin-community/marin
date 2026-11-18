@@ -787,8 +787,9 @@ def test_daytona_user_probe_is_bounded_and_cancellation_closes_the_machine(tmp_p
 
 
 @pytest.mark.parametrize("command_timeout", [None, 30])
+@pytest.mark.parametrize("command_polling", [False, True])
 @pytest.mark.requires_host_setsid
-def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, command_timeout):
+def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, command_timeout, command_polling):
     provider_error = TimeoutError("Provider request timed out")
 
     class FailedRequest(LocalProcess):
@@ -797,10 +798,15 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
                 raise provider_error
             return await super().exec(command, **kwargs)
 
+        async def execute_session_command(self, name, request, timeout=None):
+            if "candidate-request" in command_script(request.command):
+                raise provider_error
+            return await super().execute_session_command(name, request, timeout=timeout)
+
     async def scenario():
         client = LocalDaytona()
         client.sandbox.process = FailedRequest()
-        machine = await DaytonaMachineFactory(lambda: client).create(
+        machine = await DaytonaMachineFactory(lambda: client, command_polling=command_polling).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
         try:
@@ -924,6 +930,7 @@ def test_daytona_polling_recovers_status_and_deletion_without_replaying(tmp_path
         machine = await DaytonaMachineFactory(lambda: client, command_polling=True).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
+        delays.clear()
         process.status_failure = provider_error
         process.deletion_failure = True
         try:
@@ -931,8 +938,8 @@ def test_daytona_polling_recovers_status_and_deletion_without_replaying(tmp_path
             assert (result.exit_code, result.stdout) == (0, b"selected")
             assert (tmp_path / "effect").read_text() == "applied"
             assert not process.sessions and not client.deleted
-            if isinstance(provider_error, DaytonaRateLimitError):
-                assert any(delay >= 2 for delay in delays)
+            if isinstance(provider_error, DaytonaRateLimitError) and provider_error.headers:
+                assert delays[0] >= 2
         finally:
             await machine.close()
 

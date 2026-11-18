@@ -58,7 +58,9 @@ caller deadline, separate bounded output files and process cleanup.
 Use this mode for commands that exceed the synchronous provider gateway limit.
 Status polling backs off from 0.2 to about 5 seconds and retries transient
 request failures without resubmitting the command. Logs report status-request
-and failure counts. Harbor accepts the `command_polling` environment option;
+and failure counts. Five consecutive transient status errors stop the command.
+Each polled command creates and deletes a provider session.
+In Harbor, set `environment.kwargs.command_polling`;
 SkyRL exposes it as `terminal_bench_config.harbor.daytona_command_polling`.
 The session stays open through output collection, so a failure to read the output
 files can still include bounded provider diagnostics. If neither the command nor
