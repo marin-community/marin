@@ -67,15 +67,20 @@ def _capture_model(model: SnowballLMHeadModel) -> SnowballLMHeadModel:
     return eqx.tree_at(lambda m: tuple(block.mlp for block in m.transformer.blocks), model, capture_mlps)
 
 
-def _layer_logits(weight: jax.Array, norms: jax.Array, keys: jax.Array, settings, threshold: float) -> jax.Array:
-    """Per-layer gate logits ``[L, ...]`` from a stacked weight and its input norms."""
+def _layer_logits(weight: jax.Array, norms: jax.Array, key: jax.Array, settings, threshold: float) -> jax.Array:
+    """One layer's gate logits with the leading-axis (expert) weights and its per-channel norms.
 
-    def per_layer(w_layer, norms_layer, key_layer):
-        broadcast = norms_layer.reshape(norms_layer.shape + (1,) * (w_layer.ndim - norms_layer.ndim))
-        scores = jnp.abs(w_layer) * broadcast
-        return init_gate_logits_jax(scores, settings.eta, key_layer, threshold)
+    The layer key splits per expert so the noisy init stays independent across
+    experts; a single key would repeat the same noise pattern in every expert.
+    """
 
-    return jax.vmap(per_layer)(weight, norms, keys)
+    def per_expert(w_expert, norms_expert, key_expert):
+        broadcast = norms_expert.reshape(norms_expert.shape + (1,) * (w_expert.ndim - norms_expert.ndim))
+        scores = jnp.abs(w_expert) * broadcast
+        return init_gate_logits_jax(scores, settings.eta, key_expert, threshold)
+
+    expert_keys = jax.random.split(key, weight.shape[0])
+    return jax.vmap(per_expert)(weight, norms, expert_keys)
 
 
 def _reshard_like(logits: jax.Array, reference: jax.Array) -> jax.Array:
@@ -144,7 +149,7 @@ def apply_deletion_init(
     for index, block in enumerate(model.transformer.blocks):
         mlp = block.mlp
         gate = _reshard_like(
-            _layer_logits(mlp.expert_mlp.w_gate, norms_jax, layer_keys, settings, threshold),
+            _layer_logits(mlp.expert_mlp.w_gate, norms_jax[index], layer_keys[index], settings, threshold),
             mlp.expert_mlp.w_gate,
         )
 
@@ -154,7 +159,7 @@ def apply_deletion_init(
         updated = eqx.tree_at(gate_where, updated, gate, is_leaf=lambda x: x is None)
         if settings.masks_up_and_down:
             up = _reshard_like(
-                _layer_logits(mlp.expert_mlp.w_up, norms_jax, layer_keys, settings, threshold),
+                _layer_logits(mlp.expert_mlp.w_up, norms_jax[index], layer_keys[index], settings, threshold),
                 mlp.expert_mlp.w_up,
             )
             updated = eqx.tree_at(
@@ -164,7 +169,9 @@ def apply_deletion_init(
                 is_leaf=lambda x: x is None,
             )
             down = _reshard_like(
-                _layer_logits(mlp.expert_mlp.w_down, down_norms(norms_jax), layer_keys, settings, threshold),
+                _layer_logits(
+                    mlp.expert_mlp.w_down, down_norms(norms_jax[index]), layer_keys[index], settings, threshold
+                ),
                 mlp.expert_mlp.w_down,
             )
             updated = eqx.tree_at(
@@ -175,7 +182,7 @@ def apply_deletion_init(
             )
         if block.shared.gate_logits is not None or settings.masks_shared_experts:
             shared_gate = _reshard_like(
-                _layer_logits(block.shared.w_gate, shared_norms_jax, layer_keys, settings, threshold),
+                _layer_logits(block.shared.w_gate, shared_norms_jax[index], layer_keys[index], settings, threshold),
                 block.shared.w_gate,
             )
             updated = eqx.tree_at(
@@ -260,10 +267,10 @@ def _initialize_deletion(model, *, config, trainer, settings: DeletionTrainSetti
 
     # The delete threshold comes from a strided host-pooled subsample of the scores.
     sample_parts = []
-    for block in model.transformer.blocks:
-        mlp = block.mlp
-        broadcast = jnp.asarray(routed_norms, dtype=jnp.float32).reshape((*routed_norms.shape, 1))
-        scores = jnp.abs(mlp.expert_mlp.w_gate) * broadcast
+    norms_host = jnp.asarray(routed_norms, dtype=jnp.float32)
+    for index, block in enumerate(model.transformer.blocks):
+        norms_layer = norms_host[index]
+        scores = jnp.abs(block.mlp.expert_mlp.w_gate) * norms_layer.reshape(norms_layer.shape + (1,))
         strided = scores[..., ::WANDA_SAMPLE_STRIDE]
         sample_parts.append(strided.reshape(strided.shape[0], -1))
     pooled = np.concatenate([np.asarray(part).reshape(-1) for part in sample_parts])

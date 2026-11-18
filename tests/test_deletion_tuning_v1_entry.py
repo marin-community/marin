@@ -285,6 +285,40 @@ def test_deletion_trainer_initial_state_scopes_optimizer_to_logits(mesh):
     assert len(opt_leaves) <= 4 * logit_count + 2
 
 
+def test_apply_deletion_init_matches_the_threshold_rule(mesh):
+    """The init inserts per-layer logits whose sign split follows the Wanda threshold."""
+    settings = DeletionTrainSettings(
+        total_steps=2,
+        alpha_start=1e2,
+        alpha_end=1e3,
+        eta=1 / 64,
+        lam=1e-5,
+        lr=5e-4,
+        calibration_sequences=1,
+        seed=0,
+    )
+    with jax.set_mesh(mesh):
+        model = _init_model(_tiny_snowball(), mesh)
+        rng = np.random.default_rng(11)
+        routed = rng.uniform(0.5, 2.0, size=(2, 4, 16)).astype(np.float32)
+        shared = rng.uniform(0.5, 2.0, size=(2, 16)).astype(np.float32)
+        threshold = 1.0  # inside the score spread |W| * ||x||
+        initialized = levanter_train_module.apply_deletion_init(
+            model, settings, routed, shared, threshold=threshold, num_layers=2
+        )
+        for block in initialized.transformer.blocks:
+            assert block.mlp.gate_logits is not None
+            assert block.mlp.gate_logits.shape == block.mlp.expert_mlp.w_gate.shape
+        assert float(initialized.transformer.deletion_alpha) == 1e2
+        assert float(initialized.transformer.deletion_hard) == 0.0
+        w0 = np.asarray(model.transformer.blocks[0].mlp.expert_mlp.w_gate)
+        scores0 = np.abs(w0) * routed[0][..., None]
+        logits0 = np.asarray(initialized.transformer.blocks[0].mlp.gate_logits)
+        delete = scores0 <= threshold
+        assert delete.any() and not delete.all()
+        assert logits0[delete].mean() < 0.0 < logits0[~delete].mean()
+
+
 def test_preserve_hf_runtime_settings_keeps_deletion_tuning():
     requested = _tiny_snowball(v1_deletion_config())
     reloaded = SnowballConfig.from_hf_config(requested.to_hf_config(requested.vocab_size))
