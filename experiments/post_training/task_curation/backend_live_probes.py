@@ -50,8 +50,16 @@ def _factory(backend: str, *, storage_mb: int):
     if backend == "iris":
         from shellbox.backends.iris.machine import IrisMachineFactory  # noqa: PLC0415
 
-        return IrisMachineFactory(cluster="cw-rno2a", disk_mb=storage_mb)
+        return IrisMachineFactory(cluster="cw-rno2a")
     raise ValueError(f"The pull probe supports remote backends only: {backend}")
+
+
+def _canary_spec(backend: str, *, cpus: int, memory_mb: int, storage_mb: int) -> MachineSpec:
+    if backend == "iris":
+        # Enforcing an Iris storage limit needs a direct Kubernetes controller
+        # (the survey keeps that cell VERIFY); the pull probe must not gate on it.
+        return MachineSpec(RegistryImage(CANARY_IMAGE), cpus=cpus, memory_mb=memory_mb)
+    return MachineSpec(RegistryImage(CANARY_IMAGE), cpus=cpus, memory_mb=memory_mb, storage_mb=storage_mb)
 
 
 async def probe_internal_image_pull(
@@ -60,12 +68,7 @@ async def probe_internal_image_pull(
     """Create one machine from the internal canary image and report whether the pull works."""
     factory = _factory(backend, storage_mb=storage_mb)
     credential_env = DAYTONA_KEY_ENV if backend == "daytona" else None
-    spec = MachineSpec(
-        RegistryImage(CANARY_IMAGE),
-        cpus=cpus,
-        memory_mb=memory_mb,
-        storage_mb=storage_mb,
-    )
+    spec = _canary_spec(backend, cpus=cpus, memory_mb=memory_mb, storage_mb=storage_mb)
     machine = None
     try:
         machine = await factory.create(spec)

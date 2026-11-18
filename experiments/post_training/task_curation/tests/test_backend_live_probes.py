@@ -11,6 +11,7 @@ from shellbox.machine import UnsupportedMachineSpec
 from experiments.post_training.task_curation.backend_live_probes import (
     CANARY_IMAGE,
     PullProbeRecord,
+    _canary_spec,
     probe_internal_image_pull,
 )
 
@@ -77,3 +78,16 @@ def test_pull_probe_reports_unsupported_on_transport_failure(monkeypatch):
 def test_pull_probe_refuses_local_backends():
     with pytest.raises(ValueError, match="remote backends only"):
         asyncio.run(probe_internal_image_pull("docker"))
+
+
+def test_pull_probe_leaves_the_iris_storage_limit_undeclared():
+    # Enforcing an Iris storage limit needs a direct Kubernetes controller; the
+    # pull probe must not gate the credential check on that unenforceable cell.
+    spec = probe_spec_for_test("iris")
+    assert spec.storage_mb is None
+    daytona_spec = probe_spec_for_test("daytona")
+    assert daytona_spec.storage_mb == 8192
+
+
+def probe_spec_for_test(backend: str):
+    return _canary_spec(backend, cpus=1, memory_mb=2048, storage_mb=8192)
