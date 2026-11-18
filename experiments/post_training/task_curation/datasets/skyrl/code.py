@@ -332,7 +332,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="MarinSkyRL",
                 origin=SourceOrigin.PRIME_RL,
                 family="competitive-programming",
-                tags=("rlvr", "single-turn", "license:mit", "gym/lcb"),
+                tags=("rlvr", "license:mit", "gym/lcb"),
             ),
             config=CurationRecipe(
                 name="eurus2_code",

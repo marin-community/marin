@@ -255,7 +255,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Task Trove",
                 origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python", "excluded"),
+                tags=("agentic", "single-turn", "language:python", "excluded"),
                 count=8728,
                 notes=(
                     "Excluded pending SAMPLE/FULL QA of converter version 4. "
