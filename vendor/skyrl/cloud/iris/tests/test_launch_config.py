@@ -22,6 +22,7 @@ from cloud.iris.rl_config_translation import (
     materialize_launch_config,
     parse_rl_config,
 )
+from skyrl_train import trainer as trainer_module
 from skyrl_train.callbacks.base import TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import HFModelSaveCallback, create_default_callbacks
 from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
@@ -751,18 +752,44 @@ def test_source_launch_rejects_conflicting_author_values(tmp_path):
             load_launch_config(path)
 
 
-def test_resolved_nccl_buffers_override_inherited_small_buffer(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("colocate_all", "colocate_policy_ref"), [(True, False), (False, True), (False, False)]
+)
+def test_resolved_nccl_buffers_override_inherited_small_buffer(
+    tmp_path, monkeypatch, colocate_all, colocate_policy_ref
+):
     # A stale driver environment must not restore the NVLSTree corruption setting.
     monkeypatch.setenv("NCCL_BUFFSIZE", "262144")
     raw = raw_launch_config()
+    raw["skyrl"]["trainer"]["algorithm"]["use_kl_loss"] = True
+    raw["skyrl"]["trainer"]["placement"].update(
+        colocate_all=colocate_all, colocate_policy_ref=colocate_policy_ref
+    )
+    raw["iris"]["allocation"]["num_nodes"] = 1 if colocate_all else 2 if colocate_policy_ref else 3
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
     config = load_launch_config(path).skyrl
+    actor_environments = {}
 
-    for role in ("policy", "ref"):
-        buffer_bytes = config.trainer[role].nccl_buffer_size_bytes
-        runtime_env = _build_inference_engine_runtime_env(nccl_buffer_size_bytes=buffer_bytes)
-        assert runtime_env["env_vars"]["NCCL_BUFFSIZE"] == "4194304"
+    def record_actor_group(cfg, nodes, gpus, worker, **kwargs):
+        actor_environments[worker] = kwargs["actor_env_vars"]
+        return object()
+
+    # Replace the remote allocation boundary, then run the actual role wiring.
+    monkeypatch.setattr(trainer_module, "PPORayActorGroup", record_actor_group)
+    trainer = trainer_module.RayPPOTrainer.__new__(trainer_module.RayPPOTrainer)
+    trainer.cfg = config
+    trainer.colocate_pg = None
+    monkeypatch.setattr(trainer, "_initialize_model_actors", lambda *_args: None)
+    trainer.build_models("policy", "critic", "ref", policy_pg=object())
+    assert actor_environments == {
+        "policy": {"NCCL_BUFFSIZE": "4194304"},
+        "ref": {"NCCL_BUFFSIZE": "4194304"},
+    }
+    runtime_env = _build_inference_engine_runtime_env(
+        nccl_buffer_size_bytes=config.trainer.policy.nccl_buffer_size_bytes
+    )
+    assert runtime_env["env_vars"]["NCCL_BUFFSIZE"] == "4194304"
 
     # Keep explicit per-role tuning representable for diagnostic controls.
     raw["skyrl"]["trainer"].setdefault("policy", {})["nccl_buffer_size_bytes"] = 8388608
