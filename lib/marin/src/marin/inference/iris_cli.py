@@ -56,6 +56,8 @@ from iris.cluster.types import (
     EnvironmentSpec,
     is_job_finished,
 )
+from iris.rpc import job_pb2
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
 from rigging.secrets import resolve_secret_spec
@@ -430,6 +432,12 @@ def _wait_and_report_endpoint(
 @click.option("--memory", default="64g")
 @click.option("--disk", default="100g")
 @click.option("--max-retries-preemption", type=int, default=10)
+@click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
+    default=None,
+    help="Iris priority band for the serving job (default: the controller's default band).",
+)
 @click.option("--instances", type=click.IntRange(min=1), default=1, help="Number of Iris inference instances.")
 @click.option(
     "--broker",
@@ -515,6 +523,7 @@ def main(
     memory: str,
     disk: str,
     max_retries_preemption: int,
+    priority: str | None,
     instances: int,
     broker: bool,
     vllm_args: tuple[str, ...],
@@ -708,6 +717,7 @@ def main(
                 max_retries_failure=0,
                 max_retries_preemption=max_retries_preemption,
                 task_image=None if brokered else task_image,
+                priority_band=(priority_band_value(priority) if priority is not None else job_pb2.PRIORITY_BAND_INHERIT),
             )
             proxy_url = client.resolve_endpoint(endpoint)
             click.echo("")
