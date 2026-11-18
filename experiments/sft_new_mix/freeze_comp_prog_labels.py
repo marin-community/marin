@@ -219,7 +219,6 @@ def main() -> None:
     rows: list[dict] = []
     for spec in specs:
         labels, flags = judged_labels(spec.lang), rule_flags(spec.lang)
-        lang_rows = sorted(key[1] for key in row_to_uuid if key[0] == spec.lang)
         # Rebuild the per-part layout so the table addresses rows the way the
         # build does: source, part path, part-local row.
         source_ids = json.loads(StoragePath(f"{args.join_prefix}/source_ids.json").read_text())
