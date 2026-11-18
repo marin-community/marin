@@ -9,7 +9,7 @@ from hydra import compose, initialize_config_dir
 from skyrl_gym.verification import VerificationResult
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.utils.utils import validate_cfg
+from skyrl_train.utils.utils import resolve_batch_builder, validate_cfg
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
@@ -325,8 +325,8 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
             "g0.*route dtype without the model expert count",
         ),
         ({"trainer.algorithm.use_kl_loss": True}, "DPO and reference-model objectives"),
-        ({"trainer.algorithm.advantage_estimator": "reward"}, "configured loss and estimator"),
-        ({"trainer.algorithm.policy_loss_type": "clip_cov"}, "configured loss and estimator"),
+        ({"trainer.algorithm.advantage_estimator": "reward"}, "the configured loss and estimator"),
+        ({"trainer.algorithm.policy_loss_type": "clip_cov"}, "the configured loss and estimator"),
         ({"trainer.placement.colocate_all": True}, "colocated placement"),
         ({"trainer.algorithm.distillation": {}}, "distillation"),
         ({"trainer.trajectory_selector.type": "top_k"}, "trajectory selection"),
@@ -383,7 +383,7 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
     tmp_path, overrides, message, monkeypatch
 ):
     cfg = get_default_config()
-    cfg.trainer.batch_builder = "worker"
+    assert cfg.trainer.batch_builder == "auto"
     cfg.trainer.logger = "console"
     cfg.trainer.algorithm.use_kl_loss = False
     cfg.trainer.placement.colocate_all = False
@@ -417,8 +417,15 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
     if metadata["model_type"] == "grug_moe":
         monkeypatch.delitem(CONFIG_MAPPING._extra_content, "grug_moe", raising=False)
 
+    row_case = "rows" in overrides or any(key.startswith("batch.") for key in overrides)
+    config_reason = None if row_case else message
+    assert resolve_batch_builder(cfg) == ("driver" if config_reason else "worker", config_reason)
+    if config_reason is not None:
+        cfg.trainer.batch_builder = "worker"
+
     def check():
         validate_cfg(cfg)
+        assert cfg.trainer.batch_builder == "worker"
         group = AdmittedRollout(
             0, "g0", 0, len(batch["response_ids"]), sum(map(len, batch["response_ids"])), RowFacts.from_batch(batch)
         )

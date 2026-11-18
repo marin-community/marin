@@ -6,6 +6,7 @@ from typing import Any
 
 
 class BatchBuilder(StrEnum):
+    AUTO = "auto"
     DRIVER = "driver"
     WORKER = "worker"
 
