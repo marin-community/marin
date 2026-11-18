@@ -7,6 +7,7 @@ import json
 import re
 from copy import deepcopy
 from pathlib import Path
+from urllib.parse import urlencode
 
 import pytest
 from marina.journeys import Journey
@@ -50,6 +51,15 @@ def test_all_pages_share_navigation_labels_order_and_current_view(journey: Journ
     page = journey.page
     page.goto(f"{journey.origin}/{APP_ROOT}/")
     base = page.url
+    source = "Marin:clean"
+    evidence = page.request.get(base + "api/assessment?" + urlencode({"source_id": source})).json()
+    task = evidence["report"]["evidence"]["items"][0]["task_id"]
+    models = page.request.get(base + "api/source?" + urlencode({"source_id": source})).json()["difficulty"]["models"]
+    measurement = next(model["measurement_id"] for model in models if model.get("measurement_id"))
+    attempts = page.request.get(
+        base + "api/difficulty-attempts?" + urlencode({"source_id": source, "measurement_id": measurement})
+    ).json()
+    attempt = attempts["items"][0]["attempt_id"]
     labels = ["Status", "By source", "By curriculum", "Difficulty", "Getting started", "Review archive"]
     views = [
         ("", "By source"),
@@ -61,10 +71,10 @@ def test_all_pages_share_navigation_labels_order_and_current_view(journey: Journ
         ("source.html#source_id=Marin%3Aclean", "By source"),
         ("backends.html#source_id=Marin%3Aclean", "By source"),
         ("assessment.html?source=Marin%3Aclean", "By source"),
-        ("review.html?source=Marin%3Aclean&task=0", "By source"),
+        ("review.html?" + urlencode({"source": source, "task": task}), "By source"),
         ("defects.html", "By source"),
         ("attempts.html?source=Marin%3Aclean", "Difficulty"),
-        ("rollout.html?source=Marin%3Aclean", "Difficulty"),
+        ("rollout.html?" + urlencode({"source": source, "measurement": measurement, "attempt": attempt}), "Difficulty"),
     ]
     for path, current in views:
         page.goto(base + path)
