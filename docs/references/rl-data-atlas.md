@@ -2,7 +2,7 @@
 
 [RL Data Atlas](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
 reads a Postgres copy of the published [curation catalog](task-curation.md#run-catalog).
-This reference is synced to preview revision 29 (2026-11-17), including the
+This reference is synced to preview revision 30 (2026-11-18), including the
 stage-0 license gate; the
 admission rules are in [Current admission policy](task-curation.md#current-admission-policy).
 Every source passes the [stage-0 license gate](task-curation.md#stage-0-binding-license-gate)
@@ -231,6 +231,10 @@ filters, includes QUICK-quality/BAD-result sources and expands every group.
 **All Difficulty** is the default; selecting a model orders sources by that model's
 solve rate, highest first. Returning to All restores source-name order. Source evidence pages include exact release
 pins, deduplication ledgers, lexical measurements, QC and archived assessment packets.
+The page shows the core source evidence first. Each auxiliary ledger loads
+separately with an 8-second limit and shows its own error if it does not answer,
+so one slow ledger cannot hold the page. The Atlas has no Archive page; archived
+review data stays available through the source Evidence pages and the API.
 
 **Use** comes from the registered converter's explicit TRAIN or EVAL policy. A
 benchmark tag describes a source and never overrides TRAIN. Historical declarations
@@ -1163,7 +1167,8 @@ task or changes Quality, Result, admission, or intended use. The table shows
 four bars in this order: Small, Large, Hosted, Snowball v0.1. Select a Difficulty
 model to sort by its solve rate. Hover or focus a row for its solve count,
 denominator, Wilson 95% confidence interval, model revision, protocol and
-pre-oracle-filter status. Source details show the same bars; Evidence includes
+pre-oracle-filter status. A Difficulty cell in the main table opens that
+measurement's attempts browser directly. Source details show the same bars; Evidence includes
 sample and attempt receipts and historical observations. The attempts browser
 lists a measurement's recorded attempt records with paging and opens each
 rollout: its transcript and tool calls, model input, verifier output, and hashed
