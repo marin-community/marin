@@ -26,6 +26,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import click
 import haliax as hax
 import jax
 import jax.numpy as jnp
