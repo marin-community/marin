@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,12 @@ class Micro210Model:
     identity: str
     tokenizer_uri: str
     tokenizer_revision: str
+
+    def __post_init__(self) -> None:
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", self.identity) is None:
+            raise ValueError("model identity must pin the export manifest as sha256:<64 lowercase hex characters>")
+        if re.fullmatch(r"[0-9a-f]{40}", self.tokenizer_revision) is None:
+            raise ValueError("tokenizer_revision must be an immutable 40-character commit SHA")
 
 
 @dataclass(frozen=True)

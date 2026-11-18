@@ -285,6 +285,20 @@ A checkpoint already at or beyond the target completes without another update.
 Set `reset_global_step_on_resume=true` to count a new stage from zero instead;
 this leaves the restored optimizer and scheduler state intact.
 
+### Frozen Micro210 evaluation
+
+`python -m experiments.evaluation.micro210` builds the canonical Micro210
+evaluation graph. Supply `--model-uri`, the SHA256 of its
+`.marinskyrl-model-manifest.json` through `--model-manifest-sha256`, a tokenizer
+repository and full commit through `--tokenizer-uri` and `--tokenizer-revision`,
+and the run identity through `--name` and `--version`. The command prints the
+graph by default; `--run` submits it through Iris.
+
+The model binding cannot set sampling, task subsets, sandbox resources, harness
+deadlines or the judge. The graph checks the prepared task bytes and model
+manifest before GPU allocation, then writes `canonical-evaluation.json` with the
+protocol hash beside the run outputs. Sandbox resources come from each task.
+
 ## Pre-launch review
 
 Before submitting a large run:
