@@ -10,7 +10,7 @@ import torch
 from loguru import logger
 
 from skyrl_train.tensor_math import LOG_PROB_DELTA_CLIP
-from skyrl_train.metric_reduction import MetricReduction, LocalReduction
+from skyrl_train.metric_reduction import LocalReduction, MetricReduction, WorldReduction
 
 # Absolute-position bucket width; the async RL dashboard reads pos_first256 and pos_last256 by name.
 POSITION_WINDOW = 256
@@ -57,57 +57,89 @@ def linear_quantiles(values: torch.Tensor, probabilities: tuple[float, ...]) -> 
     return (below + (above - below) * (positions - lower)).tolist()
 
 
-def ratio_statistics(delta: torch.Tensor, *, eps_clip_low: float = 0.2, eps_clip_high: float = 0.2) -> dict[str, float]:
-    """Summarize per-token trainer-minus-sampler log-ratios over the finite tokens."""
+_RATIO_QUANTILES = (0.95, 0.99, 0.999)
+
+
+def _distributed_ratio_quantiles(
+    values: torch.Tensor, staleness_zero: torch.Tensor, reduction: WorldReduction
+) -> list[list[float]]:
+    finite = torch.isfinite(values)
+    absolute = values[finite].abs()
+    # The sign marks subset membership, including zero. Two float32 words
+    # transport each float64 value without rounding the driver's log-ratio.
+    packed = torch.where(staleness_zero[finite], -absolute, absolute).view(torch.float32)
+    received = reduction.gather_to_rank_zero(packed)
+    quantiles = values.new_zeros((2, len(_RATIO_QUANTILES)))
+    if received is not None:
+        logger.info(f"Batch mismatch quantile gather: {received.nbytes} bytes")
+        if received.numel():
+            tagged = received.view(torch.float64)
+            absolute = tagged.abs()
+            quantiles[0] = absolute.new_tensor(linear_quantiles(absolute, _RATIO_QUANTILES))
+            subset = tagged.signbit()
+            if subset.all():
+                quantiles[1] = quantiles[0]
+            elif subset.any():
+                quantiles[1] = absolute.new_tensor(linear_quantiles(absolute[subset], _RATIO_QUANTILES))
+    # Only world rank zero has a quantile, whether or not it owns a DP slice.
+    return reduction.all_reduce(quantiles, "sum").tolist()
+
+
+def ratio_statistics(
+    delta: torch.Tensor,
+    *,
+    eps_clip_low: float = 0.2,
+    eps_clip_high: float = 0.2,
+    reduction: MetricReduction = LocalReduction(),
+    quantiles: list[float] | None = None,
+) -> dict[str, float]:
+    """Summarize per-token trainer-minus-sampler log-ratios over finite tokens."""
     delta = delta.detach().double().reshape(-1)
     selected = delta.numel()
     finite = torch.isfinite(delta)
     if not finite.all():
         delta = delta[finite]
-    count = delta.numel()
-    result = {"selected_tokens": float(selected), "finite_tokens": float(count)}
+    selected, count = reduction.combine(delta.new_tensor([selected, delta.numel()]), "sum").tolist()
+    result = {"selected_tokens": selected, "finite_tokens": count}
     if selected:
         result["finite_fraction"] = count / selected
     if not count:
         return result
     absolute = delta.abs()
-    quantiles = linear_quantiles(absolute, (0.95, 0.99, 0.999))
-    maximum = delta.max()
+    if quantiles is None:
+        quantiles = linear_quantiles(absolute, _RATIO_QUANTILES)
+    maximum = reduction.combine(delta.amax() if delta.numel() else delta.new_tensor(-math.inf), "max")
+    absolute_max = reduction.combine(absolute.amax() if absolute.numel() else absolute.new_tensor(-math.inf), "max")
     weights = (delta - maximum).exp()
-    weight_sum = weights.sum()
+    weight_sum, weight_square_sum = reduction.combine(torch.stack([weights.sum(), weights.square().sum()]), "sum")
     clipped_ratio = delta.clamp(-LOG_PROB_DELTA_CLIP, LOG_PROB_DELTA_CLIP).exp()
     lower_bound = math.log1p(-eps_clip_low) if eps_clip_low < 1 else -math.inf
 
     def fraction(selection: torch.Tensor) -> float:
-        return selection.sum().item() / count
+        return reduction.combine(selection.sum(), "sum").item() / count
 
-    mean = delta.mean().item()
+    mean = reduction.mean(delta)
     result.update(
         log_ratio_mean=mean,
-        log_ratio_abs_mean=absolute.mean().item(),
+        log_ratio_abs_mean=reduction.mean(absolute),
         log_ratio_abs_p95=quantiles[0],
         log_ratio_abs_p99=quantiles[1],
         log_ratio_abs_p999=quantiles[2],
-        log_ratio_abs_max=absolute.max().item(),
+        log_ratio_abs_max=absolute_max.item(),
         lower_clip_pressure=fraction(delta < lower_bound),
         upper_clip_pressure=fraction(delta > math.log1p(eps_clip_high)),
         frac_outside_0_5_2=fraction(absolute > LOG_RATIO_DOUBLING),
         frac_below_1e_5=fraction(delta < LOG_RATIO_COLLAPSE),
-        ess_fraction=(weight_sum.square() / (count * weights.square().sum())).item(),
+        ess_fraction=(weight_sum.square() / (count * weight_square_sum)).item(),
         kl_k1=-mean,
-        kl_k3=clipped_ratio.mean().item() - mean - 1,
-        chi2=clipped_ratio.square().mean().item() - 1,
-        log_ratio_mean_squared=delta.square().mean().item(),
+        kl_k3=reduction.mean(clipped_ratio) - mean - 1,
+        chi2=reduction.mean(clipped_ratio.square()) - 1,
+        log_ratio_mean_squared=reduction.mean(delta.square()),
     )
     return result
 
 
-def _grouped_moments(
-    values: torch.Tensor,
-    groups: torch.Tensor,
-    n_groups: int,
-    clip_bounds: tuple[float, float] | None = None,
-) -> dict[str, torch.Tensor]:
+def _grouped_moments(values: torch.Tensor, groups: torch.Tensor, n_groups: int) -> dict[str, torch.Tensor]:
     """Per-group token counts and finite-token sums of delta, |delta| and the 2x indicator."""
 
     def total(weights: torch.Tensor | None = None) -> torch.Tensor:
@@ -116,21 +148,13 @@ def _grouped_moments(
     finite = torch.isfinite(values)
     finite_values = torch.where(finite, values, 0)
     absolute = finite_values.abs()
-    result = {
+    return {
         "selected": total(),
         "finite": total(finite.double()),
         "sum": total(finite_values),
         "abs_sum": total(absolute),
         "outside": total((absolute > LOG_RATIO_DOUBLING).double()),
     }
-    if clip_bounds is not None:
-        lower, upper = clip_bounds
-        result.update(
-            square_sum=total(finite_values.square()),
-            lower_clip=total((finite & (values < lower)).double()),
-            upper_clip=total((finite & (values > upper)).double()),
-        )
-    return result
 
 
 def _moment_metrics(totals: dict[str, float]) -> dict[str, float]:
@@ -144,12 +168,6 @@ def _moment_metrics(totals: dict[str, float]) -> dict[str, float]:
             log_ratio_abs_mean=totals["abs_sum"] / finite,
             frac_outside_0_5_2=totals["outside"] / finite,
         )
-        if "square_sum" in totals:
-            result.update(
-                log_ratio_mean_squared=totals["square_sum"] / finite,
-                lower_clip_pressure=totals["lower_clip"] / finite,
-                upper_clip_pressure=totals["upper_clip"] / finite,
-            )
     return result
 
 
@@ -164,7 +182,6 @@ def mismatch_ratio_metrics(
     reduction: MetricReduction = LocalReduction(),
 ) -> dict[str, float]:
     """Trainer-minus-vLLM log-ratio statistics by per-token staleness bucket and response position."""
-    local = isinstance(reduction, LocalReduction)
     mask = loss_mask.detach().cpu() > 0
     staleness = rollout_staleness.detach().cpu()
     bucket = torch.zeros(mask.shape, dtype=torch.uint8)
@@ -179,43 +196,35 @@ def mismatch_ratio_metrics(
         torch.masked_select(learner_logprobs.detach().cpu(), mask).double()
         - torch.masked_select(rollout_logprobs.detach().cpu(), mask).double()
     )
-    clip_bounds = (math.log1p(-eps_clip_low) if eps_clip_low < 1 else -math.inf, math.log1p(eps_clip_high))
     grid = {
-        key: total.view(len(MISMATCH_STALENESS_BUCKETS), 4)
-        for key, total in _grouped_moments(
-            values,
-            groups,
-            4 * len(MISMATCH_STALENESS_BUCKETS),
-            clip_bounds if not local else None,
-        ).items()
+        key: reduction.combine(total.view(len(MISMATCH_STALENESS_BUCKETS), 4), "sum")
+        for key, total in _grouped_moments(values, groups, 4 * len(MISMATCH_STALENESS_BUCKETS)).items()
     }
-    maxima = None
-    if not local:
-        grid = {key: reduction.combine(total, "sum") for key, total in grid.items()}
-        finite = torch.isfinite(values)
-        maxima = values.new_full((4 * len(MISMATCH_STALENESS_BUCKETS),), -math.inf)
-        maxima.scatter_reduce_(0, groups[finite], values[finite].abs(), reduce="amax")
-        maxima = reduction.combine(maxima.view(len(MISMATCH_STALENESS_BUCKETS), 4), "max")
     position_classes = {f"first{POSITION_WINDOW}": [1, 3], f"last{POSITION_WINDOW}": [2, 3], "middle": [0]}
-    full_statistics = {}
-    if local:
-        # Only these two buckets get the sorted statistics; the others take moments from the grid.
-        staleness0 = groups < 4
-        pooled = ratio_statistics(values, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high)
-        full_statistics = {
-            "pooled": pooled,
-            "staleness0": pooled
-            if bool(staleness0.all())
-            else ratio_statistics(values[staleness0], eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high),
-        }
+    staleness0 = groups < 4
+    quantiles = (None, None)
+    if isinstance(reduction, WorldReduction):
+        quantiles = _distributed_ratio_quantiles(values, staleness0, reduction)
+    pooled = ratio_statistics(
+        values, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high, reduction=reduction, quantiles=quantiles[0]
+    )
+    full_statistics = {
+        "pooled": pooled,
+        "staleness0": pooled
+        if isinstance(reduction, LocalReduction) and bool(staleness0.all())
+        else ratio_statistics(
+            values[staleness0],
+            eps_clip_low=eps_clip_low,
+            eps_clip_high=eps_clip_high,
+            reduction=reduction,
+            quantiles=quantiles[1],
+        ),
+    }
     bucket_rows = {"pooled": slice(None)}
     bucket_rows.update({name: slice(index, index + 1) for index, (name, _) in enumerate(MISMATCH_STALENESS_BUCKETS)})
 
     def moments(rows: slice, classes: list[int]) -> dict[str, float]:
-        result = _moment_metrics({key: total[rows][:, classes].sum().item() for key, total in grid.items()})
-        if maxima is not None and result["finite_tokens"]:
-            result["log_ratio_abs_max"] = maxima[rows][:, classes].max().item()
-        return result
+        return _moment_metrics({key: total[rows][:, classes].sum().item() for key, total in grid.items()})
 
     result = {}
     for name, rows in bucket_rows.items():

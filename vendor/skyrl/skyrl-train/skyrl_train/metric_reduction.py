@@ -31,9 +31,10 @@ class LocalReduction:
 class WorldReduction:
     """Count one contribution per ordinary DP slice in world-wide diagnostics."""
 
-    def __init__(self, all_reduce: Callable, contributes: bool):
+    def __init__(self, all_reduce: Callable, contributes: bool, collective_device: torch.device | None = None):
         self.all_reduce = all_reduce
         self.contributes = contributes
+        self.collective_device = collective_device
 
     def combine(self, values: torch.Tensor, operation: Literal["sum", "max"]) -> torch.Tensor:
         values = values.clone()
@@ -49,3 +50,27 @@ class WorldReduction:
         totals = torch.stack([values.new_tensor(values.numel(), dtype=torch.float64), values.double().sum()])
         count, total = self.combine(totals, "sum").tolist()
         return total / count if count else math.nan
+
+    def gather_to_rank_zero(self, values: torch.Tensor) -> torch.Tensor | None:
+        """Gather variable-length vectors from DP owners to world rank zero."""
+        if not self.contributes:
+            values = values[:0]
+        if not torch.distributed.is_initialized():
+            return values
+        world_size = torch.distributed.get_world_size()
+        rank = torch.distributed.get_rank()
+        size = values.new_zeros(world_size, dtype=torch.int64)
+        size[rank] = values.numel()
+        sizes = self.combine(size, "sum").tolist()
+        if not sum(sizes):
+            return values[:0] if rank == 0 else None
+        values = values.to(self.collective_device)
+        received_sizes = sizes if rank == 0 else [0] * world_size
+        received = values.new_empty(sum(received_sizes))
+        torch.distributed.all_to_all_single(
+            received,
+            values,
+            output_split_sizes=received_sizes,
+            input_split_sizes=[values.numel(), *([0] * (world_size - 1))],
+        )
+        return received.cpu() if rank == 0 else None

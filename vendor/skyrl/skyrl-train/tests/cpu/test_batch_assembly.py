@@ -429,19 +429,17 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
             check()
 
 
-def test_worker_ratio_moments_match_known_finite_token_values():
-    metrics = mismatch_ratio_metrics(
-        torch.tensor([[-1.0, 0.0, 1.0, 2.0, float("nan")]]),
-        torch.zeros(1, 5),
-        torch.ones(1, 5),
-        torch.zeros(1, 5),
-        reduction=WorldReduction(lambda values, operation: values, True),
+def test_worker_ratio_statistics_match_driver_for_mixed_staleness():
+    learner = torch.tensor([[-21.0, 0.0, 1.0, 8.125, float("nan")]], dtype=torch.float32)
+    sampler = torch.tensor([[-1.0, 0.0, 0.007812501, 0.12500001, 0.0]], dtype=torch.float32)
+    mask = torch.ones_like(learner)
+    staleness = torch.tensor([[0, 0, 1, 2, 0]])
+    expected = mismatch_ratio_metrics(learner, sampler, mask, staleness)
+    actual = mismatch_ratio_metrics(
+        learner, sampler, mask, staleness, reduction=WorldReduction(lambda values, operation: values, True)
     )
-    expected = {
-        "log_ratio_mean_squared": 1.5,
-        "lower_clip_pressure": 0.25,
-        "upper_clip_pressure": 0.5,
-        "log_ratio_abs_max": 2.0,
-    }
+    assert actual == pytest.approx(expected, rel=1e-6, abs=1e-7)
     for scope in ("pooled", "staleness0"):
-        assert {key: metrics[f"policy/mismatch/{scope}/{key}"] for key in expected} == expected
+        for quantile in ("p95", "p99", "p999"):
+            key = f"policy/mismatch/{scope}/log_ratio_abs_{quantile}"
+            assert actual[key] == expected[key]

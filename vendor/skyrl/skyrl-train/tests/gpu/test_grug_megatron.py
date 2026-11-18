@@ -49,7 +49,7 @@ from skyrl_train.rollouts.buffer import RolloutGroup
 from skyrl_train.rollouts.context import TrainingContext
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.timing_observability import StepWallTime
-from tests.batch_assertions import WORKER_OMITTED_METRICS, assert_metric_parity
+from tests.batch_assertions import assert_metric_parity
 from tests.cpu.tiny_training.tiny_model import write_gsm8k_dataset
 from skyrl_train.utils.torch_utils import logprobs_from_logits
 from tests.gpu.grug_gpu_gates import require_hoppers
@@ -1080,7 +1080,6 @@ def test_megatron_worker_batches_match_driver_update(tmp_path):
             results["worker"]["metrics"],
             results["driver"]["metrics"],
             required=required,
-            absent=WORKER_OMITTED_METRICS,
         )
     finally:
         if trainer is not None:
