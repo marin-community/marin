@@ -269,7 +269,8 @@ class FinelogConfig:
     cluster: str | None = None
 
     def __post_init__(self) -> None:
-        if self.cluster is not None and not CLUSTER_NAME_RE.fullmatch(self.cluster):
+        # YAML reads an unquoted number as an int, which fullmatch would reject with a TypeError.
+        if self.cluster is not None and not (isinstance(self.cluster, str) and CLUSTER_NAME_RE.fullmatch(self.cluster)):
             raise ValueError(f"cluster must match {CLUSTER_NAME_RE.pattern}; got {self.cluster!r}")
         if self.cluster is not None and self.forwarding is not None and self.cluster != self.forwarding.cluster:
             raise ValueError(
