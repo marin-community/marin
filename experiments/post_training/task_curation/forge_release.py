@@ -64,7 +64,9 @@ CONTROLS_CREDIT_CAP = 20
 # Every row's provenance names the forge export; the authored spec's own id and source are the author's
 # free text (zero-stripped slots, ids that collide across a capability) and are replaced.
 SOURCE_DATASET = "forge-task-records"
-IMPORTER_VERSION = "2026.11.18.1"
+IMPORTER_VERSION = "2026.11.18.2"
+# TaskSpec fields newer than main's TaskCompendium, which rejects unknown keys; omitted while unset.
+UNSET_NEWER_FIELDS = ("integrity_contract",)
 # Copies of ``taskforge.sandbox.images.GRADER_BASE_IMAGE`` and the serialized ``taskforge.spec.draft.LOCAL_CPYTHON``:
 # taskforge is not a dependency of this package. A drift fails closed, since ``restored_task`` refuses any restored
 # machine that differs from its authored spec.
@@ -255,6 +257,15 @@ def lowered_spec(record: Mapping) -> LoweredSpec:
     )
 
 
+def published_envelope(lowered: LoweredSpec) -> dict:
+    envelope = lowered.envelope()
+    task = envelope["task"]
+    for field in UNSET_NEWER_FIELDS:
+        if task.get(field) is None:
+            task.pop(field, None)
+    return envelope
+
+
 def read_records(root: str) -> list[dict]:
     base = StoragePath(root)
     rows = (base / ACCEPTED_LIST).read_text().splitlines()
@@ -281,7 +292,7 @@ def write_release(records: Sequence[Mapping], target: int, output: Path, records
     selection = select((task_summary(record) for record in records), target)
     chosen = {item.summary.id for item in selection if item.choice is Choice.SELECTED}
     lowered = [
-        {"path": record["id"], LOWERED_TASK_SPEC_COLUMN: json.dumps(lowered_spec(record).envelope())}
+        {"path": record["id"], LOWERED_TASK_SPEC_COLUMN: json.dumps(published_envelope(lowered_spec(record)))}
         for record in sorted(records, key=lambda r: r["id"])
         if record["id"] in chosen
     ]

@@ -130,6 +130,8 @@ def test_release_ids_and_provenance_come_from_the_forge_task_id(tmp_path):
         "d01.a/03": ("d01.a/03", "d01.a/03"),
     }
     assert {task["source"]["dataset"] for task in tasks.values()} == {forge_release.SOURCE_DATASET}
+    # Unset newer fields are omitted, so rows load with TaskCompendium versions that predate them.
+    assert all("integrity_contract" not in task and TaskSpec.model_validate(task) for task in tasks.values())
 
 
 def test_a_locally_sandboxed_machine_is_restored_to_the_image_its_author_named():
