@@ -28,6 +28,7 @@ from experiments.post_training.task_curation.negative_controls import (
     negative_control_from_archive,
     require_negative_control,
 )
+from experiments.post_training.task_curation.post_grade_teardowns import NOP_MACHINE_CLEANUP_AUTHORITY_MESSAGE
 from lib.taskcompendium.tests.oracle_filter_fixtures import negative_control_policy
 
 FIXTURES = Path(__file__).parent / "fixtures/negative_controls"
@@ -518,3 +519,157 @@ def test_recorded_zero_nop_before_teardown_requires_archive_and_decision_proof(t
     assert observed.trial.result["completion"] is None and observed.trial.result["verifier_result"] is None
     assert observed.trial.post_grade_teardown == proof and observed.score == 0
     assert archive.read_bytes() == original_bytes
+
+
+@pytest.fixture()
+def machine_cleanup_control(tmp_path):
+    """A retained nop control whose verdict scored 0.0 before the task machine's cleanup failed."""
+    source = json.loads((FIXTURES / "packet-runtime-fallback-index.json").read_text())["source"]
+    root = "nop-control/trials/nop"
+    cleanup = (
+        "Traceback (most recent call last):\n"
+        '  File "rolloutengine/machines.py", line 255, in _machine_ownership\n'
+        "RuntimeError: Machine cleanup failed: ['machine_close']\n"
+    )
+    with tarfile.open(FIXTURES / "packet-runtime-fallback.tar.gz") as original:
+        members = {item.name: original.extractfile(item).read() for item in original.getmembers() if item.isfile()}
+    control = json.loads(members["nop-control/negative-control.json"])
+    result = control["trial_result"]
+    result.update(
+        task_name="tasktrove-nl2bash-machine-cleanup-fixture",
+        trial_uri=f"file:///tmp/{root}",
+        verifier_result=None,
+        completion=None,
+        finished_at="2026-11-18T20:19:07Z",
+        exception_info={
+            "exception_type": "RuntimeServiceError",
+            "exception_message": "Required trial service failed",
+            "exception_traceback": f"ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)\n{cleanup}",
+        },
+    )
+    return source, root, members, control, result, tmp_path
+
+
+def _archive_machine_cleanup_control(tmp_path, root, members, control, result, verdict):
+    """Write the control archive with the given verdict and return its evidence reference."""
+    result_bytes = json.dumps(result).encode()
+    control["trial_result_path"] = f"/tmp/{root}/result.json"
+    control["trial_result_file_sha256"] = hashlib.sha256(result_bytes).hexdigest()
+    control["physical_verdict"] = verdict
+    members.update(
+        {
+            f"{root}/result.json": result_bytes,
+            f"{root}/config.json": json.dumps(result["config"]).encode(),
+            f"{root}/exception.txt": (
+                (
+                    result["exception_info"]["exception_traceback"] + "Machine cleanup failed: ['machine_close']\n"
+                ).encode()
+            ),
+            "nop-control/negative-control.json": json.dumps(control).encode(),
+        }
+    )
+    if verdict is not None:
+        members[f"{root}/verifier/verdict.json"] = json.dumps(verdict).encode()
+    else:
+        members.pop(f"{root}/verifier/verdict.json", None)
+    members.pop(f"{root}/verifier/reward.txt", None)
+    archive = tmp_path / "machine-cleanup-nop.tar.gz"
+    with tarfile.open(archive, "w:gz") as output:
+        for name, data in members.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            output.addfile(member, io.BytesIO(data))
+    return ContentEvidenceReference(uri=str(archive), sha256=hashlib.sha256(archive.read_bytes()).hexdigest())
+
+
+def test_scored_zero_nop_before_machine_cleanup_binds(tmp_path, machine_cleanup_control):
+    """A verdict scored before the post-grade machine cleanup failure binds and is conclusive."""
+    source, root, members, control, result, _ = machine_cleanup_control
+    verdict = {
+        "reward": 0.0,
+        "status": "scored",
+        "detail": {"exit_code": 0, "stderr": "", "channel": "reward.json", "metrics": {"reward": 0.0}},
+    }
+    reference = _archive_machine_cleanup_control(tmp_path, root, members, control, result, verdict)
+    digest = canonical_sha256(result)
+    decision = tmp_path / "decision.json"
+    decision.write_text(
+        json.dumps(
+            {
+                "authority_message": NOP_MACHINE_CLEANUP_AUTHORITY_MESSAGE,
+                "cases": {digest: {"task_id": result["task_name"], "reward": 0.0}},
+            }
+        )
+    )
+
+    def artifact(name):
+        return ContentEvidenceReference(
+            uri=f"{reference.uri}#{root}/{name}", sha256=hashlib.sha256(members[f"{root}/{name}"]).hexdigest()
+        )
+
+    proof = PostGradeTeardownEvidence(
+        kind="nop_verdict_before_environment_stop",
+        result_sha256=digest,
+        archive=reference,
+        result_artifact=artifact("result.json"),
+        verdict_artifact=artifact("verifier/verdict.json"),
+        teardown_exception_artifact=artifact("exception.txt"),
+        decision=ContentEvidenceReference(uri=str(decision), sha256=hashlib.sha256(decision.read_bytes()).hexdigest()),
+    )
+    arguments = {
+        "source_task_sha256": source["source_task_sha256"],
+        "source_task_checksum": source["source_task_checksum"],
+        "execution_requirements": ExecutionRequirements.model_validate(source["execution_requirements"]),
+    }
+    original = negative_control_from_archive(reference, "nop-control/negative-control.json", **arguments)
+    assert not original.conclusive
+    observed = negative_control_from_archive(
+        reference, "nop-control/negative-control.json", post_grade_teardown=proof, **arguments
+    )
+    require_negative_control(observed)
+    assert observed.conclusive and not observed.passed(None)
+    assert observed.score == 0
+    assert observed.trial.post_grade_teardown == proof
+    assert observed.trial.result == original.trial.result and observed.trial.verdict == original.trial.verdict
+
+
+def test_machine_cleanup_before_scoring_stays_unbindable(tmp_path, machine_cleanup_control):
+    """A control whose teardown failed before any scored verdict cannot bind and stays pending."""
+    source, root, members, control, result, _ = machine_cleanup_control
+    reference = _archive_machine_cleanup_control(tmp_path, root, members, control, result, verdict=None)
+    digest = canonical_sha256(result)
+    decision = tmp_path / "decision.json"
+    decision.write_text(
+        json.dumps(
+            {
+                "authority_message": NOP_MACHINE_CLEANUP_AUTHORITY_MESSAGE,
+                "cases": {digest: {"task_id": result["task_name"], "reward": 0.0}},
+            }
+        )
+    )
+
+    def artifact(name):
+        return ContentEvidenceReference(
+            uri=f"{reference.uri}#{root}/{name}", sha256=hashlib.sha256(members[f"{root}/{name}"]).hexdigest()
+        )
+
+    proof = PostGradeTeardownEvidence(
+        kind="nop_verdict_before_environment_stop",
+        result_sha256=digest,
+        archive=reference,
+        result_artifact=artifact("result.json"),
+        verdict_artifact=ContentEvidenceReference(uri=f"{reference.uri}#{root}/verifier/verdict.json", sha256="0" * 64),
+        teardown_exception_artifact=artifact("exception.txt"),
+        decision=ContentEvidenceReference(uri=str(decision), sha256=hashlib.sha256(decision.read_bytes()).hexdigest()),
+    )
+    arguments = {
+        "source_task_sha256": source["source_task_sha256"],
+        "source_task_checksum": source["source_task_checksum"],
+        "execution_requirements": ExecutionRequirements.model_validate(source["execution_requirements"]),
+    }
+    original = negative_control_from_archive(reference, "nop-control/negative-control.json", **arguments)
+    assert not original.conclusive
+    with pytest.raises(ValueError, match="Recorded grade does not precede the reported teardown failure"):
+        negative_control_from_archive(
+            reference, "nop-control/negative-control.json", post_grade_teardown=proof, **arguments
+        )

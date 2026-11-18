@@ -116,7 +116,7 @@ class PostGradeTeardownEvidence(BaseModel):
     archive: ContentEvidenceReference
     result_artifact: ContentEvidenceReference
     verdict_artifact: ContentEvidenceReference
-    reward_artifact: ContentEvidenceReference
+    reward_artifact: ContentEvidenceReference | None = Field(default=None, exclude_if=lambda value: value is None)
     oracle_exit_artifact: ContentEvidenceReference | None = Field(default=None, exclude_if=lambda value: value is None)
     teardown_exception_artifact: ContentEvidenceReference
     decision: ContentEvidenceReference
@@ -202,6 +202,21 @@ def pre_oracle_host_unavailable(result: dict[str, Any], verdict: dict | None, or
     )
 
 
+def grade_preceded_teardown(exception: dict) -> bool:
+    """The recorded exception is a teardown failure that followed the completed scoring phase.
+
+    Two archived shapes qualify: harbor's environment stop (the recorded historical class)
+    and the task machine's own post-grade cleanup failure, whose wrapper names the required
+    service and whose stack carries the machine cleanup that ran after the verdict.
+    """
+    identity = (exception.get("exception_type"), exception.get("exception_message"))
+    if identity == ("EnvironmentStopError", "Environment teardown failed"):
+        return True
+    return identity == ("RuntimeServiceError", "Required trial service failed") and (
+        "Machine cleanup failed" in (exception.get("exception_traceback") or "")
+    )
+
+
 class OracleTrialReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     path: str
@@ -261,8 +276,7 @@ class OracleTrialReceipt(BaseModel):
                     (self.result.get("verifier_result") or {}).get("rewards") is not None
                     and (self.result["verifier_result"]["rewards"] or {}).get("reward") != reward
                 )
-                or exception.get("exception_type") != "EnvironmentStopError"
-                or exception.get("exception_message") != "Environment teardown failed"
+                or not grade_preceded_teardown(exception)
                 or verdict.get("status") != "scored"
                 or verdict.get("detail", {}).get("exit_code") != 0
                 or not isinstance(reward, (int, float))
