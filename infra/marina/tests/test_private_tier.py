@@ -418,6 +418,51 @@ def canary_in_payload(payload: Any) -> bool:
     return PRIVATE_CANARY in json.dumps(payload, default=str)
 
 
+@pytest.mark.parametrize(
+    ("present", "tag", "expected"),
+    [
+        (False, None, "open"),
+        (True, "open", "open"),
+        (True, "malformed", "private_always"),
+        (True, None, "private_always"),
+        (True, "private_always", "private_always"),
+    ],
+)
+def test_status_projection_preserves_absent_and_invalid_restriction_tags(
+    catalog_database: Engine, catalog_query: AppletQuery, tmp_path: Path, present: bool, tag: Any, expected: str
+):
+    root = str(tmp_path / "status-tier-catalog")
+    stage_private_catalog(root)
+    load_tier_catalog(CurationCatalog(root), catalog_query)
+    with catalog_database.begin() as connection:
+        connection.execute(
+            text("UPDATE atlas_sources SET declaration=declaration-'data_restriction' WHERE id=:source"),
+            {"source": OPEN_SOURCE_ID},
+        )
+        if present:
+            connection.execute(
+                text(
+                    "UPDATE atlas_sources SET declaration=jsonb_set(declaration,'{data_restriction}',"
+                    "CAST(:tag AS JSONB)) WHERE id=:source"
+                ),
+                {"source": OPEN_SOURCE_ID, "tag": json.dumps(tag)},
+            )
+    services = CatalogServices(catalog_database)
+    with TestClient(create_api(cast(AppletServices, services))) as client:
+        for path in ("/sources?projection=table", "/source-statuses"):
+            response = client.get(path)
+            assert response.status_code == 200
+            source = next(row for row in response.json()["sources"] if row["id"] == OPEN_SOURCE_ID)
+            assert source["data_restriction"] == expected
+            assert source["notes"] == (OPEN_NOTES if expected == "open" else "Private data: content is not displayed.")
+    with catalog_database.connect() as connection:
+        stored = connection.execute(
+            text("SELECT declaration ? 'data_restriction' FROM atlas_sources WHERE id=:source"),
+            {"source": OPEN_SOURCE_ID},
+        ).scalar_one()
+        assert stored is present
+
+
 def test_private_source_content_never_serves(
     catalog_database: Engine, catalog_query: AppletQuery, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ):

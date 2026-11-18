@@ -464,10 +464,11 @@ def create_api(services: AppletServices) -> FastAPI:
                     SELECT id,jsonb_build_object(
                         'id',id,'display_name',declaration->'display_name','name',declaration->'name',
                         'status',declaration->'status','stage',declaration->'stage',
-                        'data_restriction',declaration->'data_restriction',
                         'exclusion_claims',declaration->'exclusion_claims','notes',declaration->'notes',
                         'dataset_id',declaration->'dataset_id','license_receipt',declaration->'license_receipt'
-                    ) AS declaration
+                    ) || CASE WHEN declaration ? 'data_restriction'
+                        THEN jsonb_build_object('data_restriction',declaration->'data_restriction')
+                        ELSE '{}'::jsonb END AS declaration
                     FROM atlas_sources WHERE load_id=:load_id ORDER BY id
                     """
                 ),
