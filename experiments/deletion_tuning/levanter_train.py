@@ -247,7 +247,10 @@ def _initialize_deletion(model, *, config, trainer, settings: DeletionTrainSetti
     """Calibrate Wanda norms on the run's training data, then insert the gate logits."""
     seq_len = config.train_seq_len or config.model.max_seq_len
     pos = config.model.max_Pos.resize(seq_len)
-    data_key = jrandom.PRNGKey(config.trainer.data_seed if config.trainer.data_seed is not None else config.trainer.seed)
+    # The calibration data key follows the launcher's data seed (a TrainLmConfig
+    # field), falling back to the trainer seed.
+    data_seed = config.data_seed if config.data_seed is not None else config.trainer.seed
+    data_key = jrandom.PRNGKey(data_seed)
     train_dataset = config.data.train_set(pos, config.trainer.batch_schedule, key=data_key)
     loader = trainer.data_loader(train_dataset)
     batches = itertools.islice(loader.iter_from_step(0), max(1, settings.calibration_sequences))
