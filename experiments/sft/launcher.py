@@ -303,8 +303,14 @@ def levanter_train_request(
     task_timeout_seconds: int = DEFAULT_SFT_TASK_TIMEOUT_SECONDS,
     processes_per_task: int = 1,
     priority: int = 0,
+    run_fn: Callable[[TrainLmOnPodConfig], None] = run_levanter_train_lm,
 ) -> JobRequest:
-    """Record the consumed configuration and construct the canonical training request."""
+    """Record the consumed configuration and construct the canonical training request.
+
+    ``run_fn`` selects the pod entrypoint: the standard ``run_levanter_train_lm``
+    by default, or a backend-specific runner over the same pod config (the
+    Deletion Tuning main dispatches its own runner this way).
+    """
     environment = resolve_training_env(pod_config.env_vars, pod_config.resources)
     environment.update(
         {
@@ -337,7 +343,7 @@ def levanter_train_request(
         )
     return JobRequest(
         name=f"sft-{pod_config.train_config.trainer.id}",
-        entrypoint=Entrypoint.from_callable(run_levanter_train_lm, args=[pod_config]),
+        entrypoint=Entrypoint.from_callable(run_fn, args=[pod_config]),
         resources=pod_config.resources,
         environment=create_environment(extras=extras_for_resources(pod_config.resources), env_vars=environment),
         timeout=Duration.from_seconds(task_timeout_seconds),
@@ -353,6 +359,7 @@ def _levanter_train_job(
     task_timeout_seconds: int = DEFAULT_SFT_TASK_TIMEOUT_SECONDS,
     processes_per_task: int = 1,
     priority: int = 0,
+    run_fn: Callable[[TrainLmOnPodConfig], None] = run_levanter_train_lm,
 ) -> None:
     """Dispatch a Levanter ``train_lm`` config as its own Fray training job."""
     job = current_client().submit(
@@ -361,6 +368,7 @@ def _levanter_train_job(
             task_timeout_seconds=task_timeout_seconds,
             processes_per_task=processes_per_task,
             priority=priority,
+            run_fn=run_fn,
         )
     )
     if pod_config.output_path is not None:
