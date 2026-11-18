@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import inspect
 import json
 import logging
 import os
@@ -242,6 +243,8 @@ def spawn_worker(
         env["PROBE_INIT_TIMEOUT"] = os.environ["PROBE_INIT_TIMEOUT"]
     if os.environ.get("PROBE_BUFFER_BYTES"):
         env["PROBE_BUFFER_BYTES"] = os.environ["PROBE_BUFFER_BYTES"]
+    if os.environ.get("PROBE_PYNCCL_INIT"):
+        env["PROBE_PYNCCL_INIT"] = os.environ["PROBE_PYNCCL_INIT"]
     cmd = [sys.executable, str(Path(__file__).resolve()), "--mode", "worker", "--variant", variant.name]
     log_file: IO[bytes] = open(log_path, "wb")  # noqa: SIM115 - closed in collect_worker after the child exits
     output_file: IO[bytes] = open(output_path, "wb")  # noqa: SIM115 - closed in collect_worker after the child exits
@@ -279,10 +282,18 @@ def collect_worker(handle: WorkerProcess) -> RankResult:
         if stripped.startswith("{"):
             payload = json.loads(stripped)
             break
+    pynccl_failed = bool(
+        payload is not None
+        and isinstance(payload.get("pynccl"), dict)
+        and payload["pynccl"].get("pynccl_init") == "failed"
+    )
+    if pynccl_failed:
+        # A failed engine-side communicator init fails the rank closed.
+        lines.append(f"pynccl init failed: {payload['pynccl'].get('error')}")
     return RankResult(
         variant=handle.variant_name,
         rank=handle.rank,
-        passed=returncode == 0 and payload is not None,
+        passed=returncode == 0 and payload is not None and not pynccl_failed,
         returncode=returncode,
         duration=round(duration, 2),
         error_tail=lines[-ERROR_TAIL_LINES:],
@@ -513,6 +524,44 @@ def gate_verdict(passed: bool, rank_transports: list[list[str]]) -> str:
     return "pass"
 
 
+def run_pynccl_init_check(device) -> dict:
+    """Initialize vLLM's PyNcclCommunicator to reproduce engine-side comm init.
+
+    The Snowball .60 restart failed in vLLM's ``PyNcclCommInitRank``, a stage
+    distinct from torch's ProcessGroupNCCL init that the collectives exercise.
+    This check runs the same init on the job's own allocation and records the
+    loaded NCCL library version, so a gate verdict also covers the engine
+    path. vLLM's constructor signature varies between versions, so the known
+    optional parameters are passed only when present.
+    """
+    info: dict[str, object] = {"stage": "pynccl_init"}
+    try:
+        # Optional vLLM import: the probe runs in environments without it.
+        from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator  # noqa: PLC0415
+
+        parameters = inspect.signature(PyNcclCommunicator.__init__).parameters
+        kwargs: dict[str, object] = {}
+        if "group" in parameters:
+            kwargs["group"] = None
+        if "device" in parameters:
+            kwargs["device"] = device
+        communicator = PyNcclCommunicator(**kwargs)
+        init = getattr(communicator, "init", None)
+        if callable(init):
+            init()
+        info["pynccl_init"] = "pass"
+        version = None
+        library = getattr(communicator, "nccl", None)
+        getter = getattr(library, "nccl_get_version", None) if library is not None else None
+        if callable(getter):
+            version = getter()
+        info["nccl_library_version"] = version
+    except Exception as error:
+        info["pynccl_init"] = "failed"
+        info["error"] = f"{type(error).__name__}: {error}"
+    return info
+
+
 def run_worker_mode(args: argparse.Namespace) -> None:
     """Run one rank's collectives and print its benchmark JSON on stdout."""
     import torch  # noqa: PLC0415
@@ -562,6 +611,8 @@ def run_worker_mode(args: argparse.Namespace) -> None:
         "allreduce_busbw_gigabytes_per_second": round(all_reduce_bandwidth, 2),
         "alltoall_busbw_gigabytes_per_second": round(all_to_all_bandwidth, 2),
     }
+    if os.environ.get("PROBE_PYNCCL_INIT"):
+        payload["pynccl"] = run_pynccl_init_check(device)
     dist.barrier()
     dist.destroy_process_group()
     print(json.dumps(payload))
@@ -608,6 +659,12 @@ def main() -> None:
         help="Worker buffer size in bytes for both collectives (default 64 MiB)",
     )
     parser.add_argument(
+        "--pynccl-init",
+        action="store_true",
+        help="Workers also initialize vLLM's PyNcclCommunicator (the engine-side comm stage)"
+        " and report the loaded NCCL version",
+    )
+    parser.add_argument(
         "--rendezvous-timeout-seconds",
         type=int,
         help="Launcher: how long a peer waits for the coordinator's registry entry (default: init timeout)",
@@ -619,6 +676,8 @@ def main() -> None:
         args.env_pairs = None
     if args.buffer_bytes:
         os.environ["PROBE_BUFFER_BYTES"] = str(args.buffer_bytes)
+    if args.pynccl_init:
+        os.environ["PROBE_PYNCCL_INIT"] = "1"
     if args.init_timeout_seconds:
         os.environ["PROBE_INIT_TIMEOUT"] = str(args.init_timeout_seconds)
     if args.mode == "launcher":
