@@ -393,10 +393,13 @@ def run_launcher(args: argparse.Namespace) -> None:
 def run_gate(args: argparse.Namespace) -> None:
     """Launch-time interconnect check: fail closed unless cross-node NCCL rides InfiniBand.
 
-    Tasks 0 and 1 of a multi-node job each run one NCCL rank over the default
-    environment and the job's own allocation. Any other task exits immediately.
-    The check passes when the census shows NET/IB or no NET transport at all
-    (intra-node NVLink), and fails with the NCCL error tail otherwise.
+    With ``--gate-coverage first-pair`` (the default), tasks 0 and 1 each run one
+    NCCL rank over the default environment; any other task exits immediately.
+    With ``--gate-coverage all-gpus``, every task joins with all of its local
+    GPUs, so communicator init exercises every GPU-to-NIC pairing (a 64-rank
+    data-parallel engine can fail on one GPU's HCA even when the first pair is
+    healthy). The check passes when the census shows NET/IB or no NET transport
+    at all (intra-node NVLink), and fails with the NCCL error tail otherwise.
     """
     import torch  # noqa: PLC0415 - torch is an optional dependency outside the vendor runtime env
 
@@ -408,10 +411,15 @@ def run_gate(args: argparse.Namespace) -> None:
     if num_tasks < 2:
         logger.info("gate: single-node job (%d task); NVLink only, nothing to assert", num_tasks)
         return
-    if task_index > 1:
-        logger.info("gate: task %d of %d does not participate; exiting", task_index, num_tasks)
-        return
-    local_gpus = min(torch.cuda.device_count(), 1)
+    if args.gate_coverage == "first-pair":
+        if task_index > 1:
+            logger.info("gate: task %d of %d does not participate; exiting", task_index, num_tasks)
+            return
+        local_gpus = 1
+        world_size = 2
+    else:
+        local_gpus = torch.cuda.device_count()
+        world_size = num_tasks * local_gpus
     ctx = iris_ctx()
     endpoint_name = f"{ENDPOINT_BASE_NAME}-gate-attempt-{job_info.attempt_id}"
     if task_index == 0:
@@ -426,7 +434,8 @@ def run_gate(args: argparse.Namespace) -> None:
     log_dir = RESULT_DIR / f"gate-task{task_index}"
     log_dir.mkdir(parents=True, exist_ok=True)
     baseline = next(variant for variant in build_variants() if variant.name == "baseline_default_env")
-    result = run_variant(baseline, task_index, local_gpus, 2, master_host, base_port, log_dir)
+    rank_offset = task_index if args.gate_coverage == "first-pair" else task_index * local_gpus
+    result = run_variant(baseline, rank_offset, local_gpus, world_size, master_host, base_port, log_dir)
     if task_index == 0:
         ctx.registry.unregister(endpoint_id)
     verdict = gate_verdict(result["pass"], [rank["transports"] for rank in result["ranks"]])
@@ -527,6 +536,12 @@ def main() -> None:
         "--init-timeout-seconds",
         type=int,
         help="Launcher: process-group init timeout for the workers (default 300)",
+    )
+    parser.add_argument(
+        "--gate-coverage",
+        choices=("first-pair", "all-gpus"),
+        default="first-pair",
+        help="Gate mode: first-pair checks tasks 0+1 one GPU each; all-gpus joins every task with all local GPUs",
     )
     parser.add_argument(
         "--rendezvous-timeout-seconds",
