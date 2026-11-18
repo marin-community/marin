@@ -5491,7 +5491,10 @@ mod tests {
         table.store.write_rows("iris.worker", &ipc, None).unwrap();
         maintenance::run(&runtime, TableWork::Flush).await.unwrap();
         compact(&table).await;
-        assert!(runtime.live_segments().iter().all(|segment| segment.level == 1));
+        assert!(runtime
+            .live_segments()
+            .iter()
+            .all(|segment| segment.level == 1));
         let mut expected = merged;
         expected.push(ColumnRange::new(4_000, 4_500));
         assert_eq!(
@@ -5549,11 +5552,10 @@ mod tests {
         let table = TimeBoundedTable::new("column_bounds_flushed", false).await;
         assert_eq!(
             table.recorded_bounds(),
-            vec![
-                Some(ColumnRange::new(1_000, 1_500)),
-                Some(ColumnRange::new(2_000, 2_500)),
-                Some(ColumnRange::new(3_000, 3_500))
-            ]
+            three_write_bounds()
+                .into_iter()
+                .map(Some)
+                .collect::<Vec<_>>()
         );
         table.cleanup();
     }
@@ -5595,11 +5597,10 @@ mod tests {
 
         assert_eq!(
             table.recorded_bounds(),
-            vec![
-                Some(ColumnRange::new(1_000, 1_500)),
-                Some(ColumnRange::new(2_000, 2_500)),
-                Some(ColumnRange::new(3_000, 3_500))
-            ]
+            three_write_bounds()
+                .into_iter()
+                .map(Some)
+                .collect::<Vec<_>>()
         );
         let sources_after: Vec<_> = table
             .store

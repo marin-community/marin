@@ -1211,7 +1211,9 @@ mod tests {
             artifacts: Default::default(),
             column_bounds: column_bounds.clone(),
         };
-        catalog.commit_object_segments(&[segment], 1, false).unwrap();
+        catalog
+            .commit_object_segments(&[segment], 1, false)
+            .unwrap();
 
         let adopted = adopt_local_segments(
             &table_dir,

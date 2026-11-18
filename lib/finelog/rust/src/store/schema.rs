@@ -760,7 +760,11 @@ pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
             schema.max_row_group_rows, MIN_CONFIGURED_ROW_GROUP_ROWS, MAX_CONFIGURED_ROW_GROUP_ROWS,
         )));
     }
-    if schema.columns.iter().any(|column| column.index.catalog_bounds) {
+    if schema
+        .columns
+        .iter()
+        .any(|column| column.index.catalog_bounds)
+    {
         let key_column = resolve_key_column(schema)?;
         if schema
             .column(&key_column)
