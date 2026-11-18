@@ -49,7 +49,24 @@ PROMPTS_SOURCE = {
     "dataset": "marin-community/openthoughts4-code-9168-prompts-glm-5.2-n4",
     "revision": "91f275562e041d798254122a7d50632e9d27badb",
 }
+MATH_WRAPPER = "Solve the following math problem. Make sure to put the answer (and only answer) inside \\boxed{}."
 END_THINK = "<|end_think|>"
+
+
+def user_turn(text: str) -> str:
+    """The decoded row's user message, without framing."""
+    return text.rsplit("<|start_header_id|>user<|end_header_id|>", 1)[-1].split("<|eot_id|>", 1)[0].strip()
+
+
+def problem_digest(problem: str) -> str:
+    return text_sha256(problem.strip())
+
+
+def math_problem(text: str) -> str:
+    user = user_turn(text)
+    if user.startswith(MATH_WRAPPER):
+        return user[len(MATH_WRAPPER) :].strip()
+    return user
 
 
 def text_sha256(text: str) -> str:
@@ -120,10 +137,8 @@ def numeric_value(answer: str) -> float | None:
 def verify_math(texts: dict[tuple[str, int], str], expected_by_problem: dict[str, str]) -> dict:
     records = []
     for (part, row), text in texts.items():
-        problem = text.rsplit("<|start_header_id|>user<|end_header_id|>", 1)[-1]
-        problem = problem.split("<|eot_id|>", 1)[0]
-        problem = re.sub(r"^Solve the following math problem.*?\\boxed\{\}\.\n+", "", problem, flags=re.S)
-        expected = expected_by_problem.get(text_sha256(problem))
+        problem = math_problem(text)
+        expected = expected_by_problem.get(problem_digest(problem))
         predicted = final_answer(text)
         record = {
             "part": part,
@@ -176,16 +191,12 @@ def main() -> None:
         MATH_SOURCE["dataset"], MATH_SOURCE["file"], repo_type="dataset", revision=MATH_SOURCE["revision"]
     )
     sampled_texts = decode_rows(math_rows, args.tokenizer_uri, args.tokenizer_sha256)
-    problem_hashes = set()
-    for text in sampled_texts.values():
-        problem = text.rsplit("<|start_header_id|>user<|end_header_id|>", 1)[-1].split("<|eot_id|>", 1)[0]
-        problem = re.sub(r"^Solve the following math problem.*?\\boxed\{\}\.\n+", "", problem, flags=re.S)
-        problem_hashes.add(text_sha256(problem))
+    problem_hashes = {problem_digest(math_problem(text)) for text in sampled_texts.values()}
     expected_by_problem: dict[str, str] = {}
     with open(raw_path) as stream:
         for line in stream:
             record = json.loads(line)
-            digest = text_sha256(record["problem"])
+            digest = problem_digest(record["problem"])
             if digest in problem_hashes and record.get("expected_answer") is not None:
                 expected_by_problem[digest] = record["expected_answer"]
     logger.info("math: %d of %d sampled problems matched in the source", len(expected_by_problem), len(problem_hashes))
@@ -209,10 +220,7 @@ def main() -> None:
     )
     prompt_rows = sample_rows(prompts_manifest, SAMPLE_SIZE)
     sampled_texts = decode_rows(prompt_rows, args.tokenizer_uri, args.tokenizer_sha256)
-    instruction_hashes = set()
-    for text in sampled_texts.values():
-        user = text.rsplit("<|start_header_id|>user<|end_header_id|>", 1)[-1].split("<|eot_id|>", 1)[0]
-        instruction_hashes.add(text_sha256(user))
+    instruction_hashes = {problem_digest(user_turn(text)) for text in sampled_texts.values()}
     lineage: dict[str, dict] = {}
     for index in range(144):
         name = f"data/train-{index:05d}-of-00144.parquet"
@@ -224,7 +232,7 @@ def main() -> None:
             columns=["instruction_seed", "source_dataset_name", "source_split_name", "prompt_index", "response_index"],
         )
         for record in table.to_pylist():
-            digest = text_sha256(record["instruction_seed"])
+            digest = problem_digest(record["instruction_seed"])
             if digest in instruction_hashes and digest not in lineage:
                 lineage[digest] = {
                     "source_dataset_name": record["source_dataset_name"],
