@@ -3231,6 +3231,20 @@ def test_full_review_rows_load_typed_and_browseable(catalog_database, catalog_qu
     assert row["result_reviewed"] == policy.reviewed
     assert row["issue_count"] == policy.issue_count
     assert row["grade"] == "bad"
+    with catalog_database.connect() as connection:
+        plan = connection.execute(
+            text(
+                "EXPLAIN (FORMAT JSON) SELECT * FROM atlas_cohort_summary " "WHERE load_id=:load AND pipeline_key=:key"
+            ),
+            {"load": load_result["load_id"], "key": full_key},
+        ).scalar_one()[0]["Plan"]
+    nodes = [plan]
+    group_keys = []
+    while nodes:
+        node = nodes.pop()
+        group_keys.extend(node.get("Group Key", []))
+        nodes.extend(node.get("Plans", []))
+    assert group_keys and not any("curation" in expression for expression in group_keys)
     services = cast(AppletServices, CatalogServices(catalog_database))
     with TestClient(create_api(services)) as client:
         page = client.get("/assessment", params={"source_id": FULL_QC_SOURCE}).json()

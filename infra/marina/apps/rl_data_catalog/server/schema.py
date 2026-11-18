@@ -270,7 +270,7 @@ SELECT p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count,
 FROM atlas_populations p JOIN atlas_assessments a USING (load_id, pipeline_key)
 LEFT JOIN atlas_items i
     ON i.load_id = p.load_id AND i.pipeline_key = p.pipeline_key AND i.cohort = p.cohort
-GROUP BY p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count, a.curation
+GROUP BY p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count
 )
 SELECT load_id, pipeline_key, cohort, population, sample_count, reviewed,
     missing_evidence, packets_with_omissions, verdict_counts,
