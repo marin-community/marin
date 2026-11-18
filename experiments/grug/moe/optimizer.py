@@ -216,7 +216,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
       Newton-Schulz orthogonalisation + Frobenius hyperball scale-invariant step.
     - ``adamh``: ``lm_head`` / ``output_proj``.
     - ``adam``: ``token_embed`` / ``router`` / ``router_bias`` / ``attn_gate``
-      / 1-D norm weights.
+      / norm weights.
 
     ``max_grad_norm`` defaults to ``None`` here (no clipping) for the 1pct-noclip
     schedule used by the May Recipe baseline.
@@ -300,7 +300,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"
-            if hasattr(param, "ndim") and param.ndim in (2, 3):
+            # Scanned norm gains keep their weight name; expert matrices gain a layer axis.
+            if path_lower.endswith(".weight"):
+                return "adam"
+            if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
                 return "muonh"
             return "adam"
 
