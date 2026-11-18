@@ -1806,6 +1806,7 @@ def test_daytona_job_wait_recovers_controls_without_replaying_source(tmp_path, m
         monkeypatch.setattr(loop, "time", lambda: now() + offset[0])
         failed = set()
         staged = set()
+        delete_requests = []
 
         async def backoff(delay):
             offset[0] += delay
@@ -1860,6 +1861,7 @@ def test_daytona_job_wait_recovers_controls_without_replaying_source(tmp_path, m
 
         class Client(LocalDaytona):
             async def delete(self, sandbox, *, wait=False):
+                delete_requests.append(sandbox.id)
                 if failure == "sandbox_cleanup" and failure not in failed:
                     failed.add(failure)
                     raise DaytonaError("Transient delete failure", status_code=503)
@@ -1886,17 +1888,25 @@ def test_daytona_job_wait_recovers_controls_without_replaying_source(tmp_path, m
                     result = await machine.run(command)
                     assert (result.exit_code, result.stdout, result.stderr) == (23, b"result", b"diagnostic")
             finally:
-                await machine.close()
+                if failure == "sandbox_cleanup":
+                    with pytest.raises(DaytonaError):
+                        await machine.close()
+                else:
+                    await machine.close()
         assert (tmp_path / "candidate-runs").read_text().splitlines() == ["one"]
         assert failed == {failure}
-        assert client.deleted and client.closed
+        assert client.closed
+        if failure == "sandbox_cleanup":
+            assert not client.deleted and delete_requests == [client.sandbox.id]
+        else:
+            assert client.deleted
         assert all(not path.exists() for path in staged)
 
     asyncio.run(scenario())
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux process and setsid contract")
-@pytest.mark.parametrize("failure", ["transient", "stalled_delete", "concurrent_close"])
+@pytest.mark.parametrize("failure", ["stalled_delete", "concurrent_close"])
 def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(tmp_path, monkeypatch, failure):
     async def scenario():
         loop = asyncio.get_running_loop()
@@ -1904,23 +1914,14 @@ def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(tmp_pa
         offset = [0.0]
         monkeypatch.setattr(loop, "time", lambda: now() + offset[0])
         entered = asyncio.Event()
-        retrying = asyncio.Event()
         interrupted = asyncio.Event()
         release = asyncio.Event()
         finish = asyncio.Event()
         closed = asyncio.Event()
 
-        async def backoff(delay):
-            retrying.set()
-            await (finish.wait() if failure == "concurrent_close" else release.wait())
-
-        monkeypatch.setattr("shellbox.backends.daytona.provider.sleep", backoff)
-
         class Client(LocalDaytona):
             async def delete(self, sandbox, *, wait=False):
                 entered.set()
-                if failure == "transient" and not release.is_set():
-                    raise DaytonaError("Provider deletion unavailable", status_code=503)
                 while not release.is_set():
                     try:
                         await release.wait()
@@ -1940,7 +1941,7 @@ def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(tmp_pa
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
         owner = asyncio.create_task(machine.close())
-        await (retrying.wait() if failure == "transient" else entered.wait())
+        await entered.wait()
         pending = asyncio.create_task(machine.close()) if failure == "concurrent_close" else owner
         if failure == "concurrent_close":
             await asyncio.sleep(0)  # Let the second caller join the already-running close.
