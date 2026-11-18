@@ -130,15 +130,19 @@ def main() -> None:
         "tokenizer_uri": tokenizer_uri,
     }
     v6_inventory = json.loads(read_pinned(args.v6_inventory, args.v6_inventory_sha256))
-    unchanged = [source for source in v6_inventory["sources"] if source["source"] not in COMP_PROG_SOURCES]
-    if len(unchanged) != len(v6_inventory["sources"]) - len(COMP_PROG_SOURCES):
-        raise ValueError("The V6 inventory does not carry the expected comp-prog entries")
-    full_inventory = {
-        **v6_inventory,
-        "sources": unchanged + entries,
-        "completed_shards": v6_inventory["completed_shards"] - (50 + 51) + EXPECTED_JOBS,
-        "expected_shards": v6_inventory["expected_shards"] - (50 + 51) + EXPECTED_JOBS,
-    }
+    replaced = {entry["source"]: entry for entry in entries}
+    sources = []
+    seen = set()
+    for source in v6_inventory["sources"]:
+        name = source.get("source")
+        if name in replaced:
+            sources.append(replaced[name])
+            seen.add(name)
+        else:
+            sources.append(source)
+    if seen != set(COMP_PROG_SOURCES):
+        raise ValueError(f"The V6 inventory does not carry the comp-prog entries: found {sorted(seen)}")
+    full_inventory = {**v6_inventory, "sources": sources}
 
     destination = StoragePath(args.destination)
     artifacts = {}
