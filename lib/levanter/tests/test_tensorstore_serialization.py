@@ -661,6 +661,13 @@ def test_a_save_after_an_interrupted_save_to_the_same_directory_commits():
         np.testing.assert_array_equal(restored, np.stack([values, values + 1, values + 2]))
 
 
+def test_a_multi_process_save_of_a_bare_array_restores():
+    """A PyTree that is one array stores it at the OCDBT root, where the restore looks for it."""
+    values = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+    for restored in eight_device_checkpoints.bare_array_roundtrip_across_processes():
+        np.testing.assert_array_equal(restored, values)
+
+
 def test_a_single_process_save_keeps_default_locking(tmp_path):
     assert tensorstore_serialization._file_io_locking(TensorStoreWriteConfig(), str(tmp_path)) is None
     explicit = TensorStoreWriteConfig(file_io_locking="os")

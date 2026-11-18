@@ -46,7 +46,7 @@ DISTRIBUTED_PROCESS_COUNT = 2
 DISTRIBUTED_ARRAY_SIZE = 4096
 _CHUNK_READ_METRIC = "/tensorstore/cache/chunk_cache/reads"
 _LOOPBACK_ADDRESS = "127.0.0.1"
-# Spawned children reach the loopback coordinator directly, not through a proxy.
+# Remove inherited proxy settings so children can reach the loopback coordinator.
 _PROXY_ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
 _PINNED_HOST_MEMORY_KIND = "pinned_host"
 _SHARED_ARRAY_NAMES = ("a", "b", "c")
@@ -205,6 +205,26 @@ def resave_after_interrupted_save_across_processes() -> list[np.ndarray]:
     """Save to a local directory twice from two processes, with a lock file abandoned in between."""
     with TemporaryDirectory() as tmpdir:
         return _run_on_distributed_processes(_resave_after_interrupted_save, f"{tmpdir}/step-10")
+
+
+def _save_and_restore_a_bare_array(process_id: int, coordinator: str, checkpoint_path: str) -> np.ndarray:
+    with _distributed_process(process_id, coordinator):
+        mesh = Mesh(np.array(jax.devices()), ("replica",))
+        split = NamedSharding(mesh, P("replica"))
+        values = np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+        with jax.set_mesh(mesh):
+            source = jax.make_array_from_callback(values.shape, split, lambda index: values[index])
+            tree_serialize_leaves_tensorstore(checkpoint_path, source)
+            restored = tree_deserialize_leaves_tensorstore(
+                checkpoint_path, jax.ShapeDtypeStruct(values.shape, values.dtype, sharding=split)
+            )
+            return np.asarray(multihost_utils.process_allgather(restored, tiled=True))
+
+
+def bare_array_roundtrip_across_processes() -> list[np.ndarray]:
+    """Save a PyTree that is a single array to a local directory from two processes, then restore it."""
+    with TemporaryDirectory() as tmpdir:
+        return _run_on_distributed_processes(_save_and_restore_a_bare_array, f"{tmpdir}/step-10")
 
 
 def _commit_waits_for_held_lock(process_id: int, coordinator: str, checkpoint_path: str) -> bool | None:

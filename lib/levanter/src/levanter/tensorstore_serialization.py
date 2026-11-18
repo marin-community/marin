@@ -983,6 +983,17 @@ def _checkpoint_writes(
     return jobs
 
 
+def _array_kvstore(base: ts.KvStore, path: str) -> ts.KvStore:
+    """The OCDBT prefix ``_create_ocdbt_spec`` gives the array at ``path``.
+
+    A non-empty path needs the trailing separator, or ``zarr.json`` is appended onto the array
+    name. A bare-array PyTree has the empty path and lives at the root, not under ``/``.
+    """
+    if not path:
+        return base
+    return base / f"{path}/"
+
+
 def _commit_array_metadata(base: ts.KvStore, context: ts.Context, tspecs: Sequence[dict]) -> None:
     """Publish every array's metadata in one transaction.
 
@@ -1002,7 +1013,7 @@ def _commit_array_metadata(base: ts.KvStore, context: ts.Context, tspecs: Sequen
         opened.append(
             ts.open(
                 {"driver": ARRAY_DRIVER, "metadata": tspec["metadata"]},
-                kvstore=bound / f"{path}/",
+                kvstore=_array_kvstore(bound, path),
                 create=True,
                 open=True,
                 context=context,
@@ -1081,10 +1092,10 @@ def _write_each_chunk(
             if base is None:
                 store = ts.open(ts.Spec(tspec_by_path[path]), create=True, open=True, context=context)
             else:
-                # The trailing slash is the OCDBT path separator. assume_metadata skips the
-                # unlocked manifest read that fails with ESTALE while another client commits.
+                # assume_metadata skips the unlocked manifest read that fails with ESTALE while
+                # another client commits.
                 spec = {"driver": ARRAY_DRIVER, "metadata": tspec_by_path[path]["metadata"]}
-                store = ts.open(spec, kvstore=base / f"{path}/", assume_metadata=True, context=context)
+                store = ts.open(spec, kvstore=_array_kvstore(base, path), assume_metadata=True, context=context)
             # Start I/O without waiting; staging never depends on open completion.
             store.force()
             stores[path] = store

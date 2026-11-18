@@ -181,7 +181,8 @@ staged bytes. A save that does not fit in `max_staged_host_bytes` batches each s
 into one atomic manifest commit. A save that fits, and every save that is not using lock
 files, commits each chunk as soon as it is staged, which overlaps staging with storage I/O.
 In either path, one process publishes the array metadata before the others open the arrays,
-and the others open it without reading it back.
+and the others open it without reading it back. Set `checkpointer.write.file_io_locking` to
+`os`, `lockfile`, or `none` to override that default.
 
 | Parameter                                  | Description                                                                            | Default |
 |--------------------------------------------|----------------------------------------------------------------------------------------|---------|
@@ -191,6 +192,7 @@ and the others open it without reading it back.
 | `checkpointer.write.max_staged_host_bytes` | Cap on host memory one process stages at once during a save.                           | 16 GiB  |
 | `checkpointer.write.cache_pool_bytes`      | Soft limit for each TensorStore write cache.                                            | 1 GiB   |
 | `checkpointer.write.data_copy_concurrency` | Maximum CPU concurrency TensorStore uses to copy and encode checkpoint data.           | 16      |
+| `checkpointer.write.file_io_locking`       | File-driver lock while a key commits: `os`, `lockfile`, or `none`. Unset uses the default above. | lock file when several processes save to a local or NFS path |
 
 #### Checkpoint Telemetry
 
