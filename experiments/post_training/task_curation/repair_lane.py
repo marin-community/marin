@@ -14,7 +14,6 @@ import io
 import json
 import logging
 import shutil
-import sys
 import tarfile
 import tempfile
 import time
@@ -888,9 +887,8 @@ def write_report(report: DryRunReport, output_uri: str) -> None:
         stream.write(payload)
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-    _argv = sys.argv[1:]
+def build_parser() -> argparse.ArgumentParser:
+    """The lane CLI; the candidate args bind only to the modes that consume them."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tracked-source-id", required=True)
     parser.add_argument(
@@ -903,9 +901,10 @@ def main() -> None:
         action="append",
         help="Full-TaskSpec parquet URIs for the tracked conversion, content-joined for review",
     )
-    parser.add_argument("--candidate-source-id", required="--cohort-report" not in " ".join(_argv))
-    parser.add_argument("--candidate-revision", required="--cohort-report" not in " ".join(_argv))
-    parser.add_argument("--folder", action="append", required="--cohort-report" not in " ".join(_argv))
+    # The candidate args bind to the cohort/report modes only; the prepare mode uses none.
+    parser.add_argument("--candidate-source-id")
+    parser.add_argument("--candidate-revision")
+    parser.add_argument("--folder", action="append")
     parser.add_argument("--repo", default=CANDIDATE_REPO)
     parser.add_argument(
         "--reviewer-version", type=ReviewerVersion, choices=list(ReviewerVersion), default=ReviewerVersion.V3
@@ -933,7 +932,22 @@ def main() -> None:
     parser.add_argument("--source-revision", default="", help="Pinned code revision declaring the controls")
     parser.add_argument("--report", required=True)
     parser.add_argument("--run", action="store_true")
+    return parser
+
+
+def require_candidate_args(parser: argparse.ArgumentParser, args: argparse.Namespace, *, prepare_mode: bool) -> None:
+    """The candidate args bind to the cohort/report modes; the prepare mode uses none."""
+    if not prepare_mode and (not args.candidate_source_id or not args.candidate_revision or not args.folder):
+        parser.error(
+            "--candidate-source-id, --candidate-revision and --folder are required outside --prepare-output-root"
+        )
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+    parser = build_parser()
     args = parser.parse_args()
+    require_candidate_args(parser, args, prepare_mode=args.prepare_output_root is not None)
     configure_coreweave_s3()
     if args.cohort_output_root is not None:
         if args.cohort_report is None:

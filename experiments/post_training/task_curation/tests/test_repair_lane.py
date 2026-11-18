@@ -739,6 +739,33 @@ class TestDropWrapperSolveSh:
         assert manifest["counts"] == {"converted": 1}
 
 
+class TestPrepareModeArgs:
+    """The prepare mode consumes no candidate args; argparse must not demand them."""
+
+    def test_prepare_argv_parses_without_candidate_args(self):
+        args = lane.build_parser().parse_args(
+            [
+                "--tracked-source-id",
+                TRACKED_SOURCE,
+                "--source-revision",
+                "eafe9b38",
+                "--cohort-root",
+                "s3://bucket/cohort",
+                "--prepare-output-root",
+                "s3://bucket/harbor",
+                "--report",
+                "s3://bucket/report.json",
+            ]
+        )
+        assert args.prepare_output_root == "s3://bucket/harbor"
+
+    def test_report_mode_still_requires_candidate_args(self):
+        parser = lane.build_parser()
+        args = parser.parse_args(["--tracked-source-id", TRACKED_SOURCE, "--report", "s3://bucket/report.json"])
+        with pytest.raises(SystemExit):
+            lane.require_candidate_args(parser, args, prepare_mode=False)
+
+
 class TestRepairDecision:
     def decision(
         self,
