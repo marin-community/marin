@@ -10,6 +10,8 @@ import torch
 class MetricReduction(Protocol):
     """Reduce diagnostic tensors at one local or distributed ownership scope."""
 
+    exact_order_statistics: bool
+
     def mean(self, values: torch.Tensor) -> float: ...
     def sum(self, values: torch.Tensor) -> torch.Tensor: ...
     def combine(self, values: torch.Tensor, operation: Literal["sum", "max"]) -> torch.Tensor: ...
@@ -17,6 +19,8 @@ class MetricReduction(Protocol):
 
 class LocalReduction:
     """Preserve local tensor arithmetic for driver diagnostics."""
+
+    exact_order_statistics = True
 
     def mean(self, values: torch.Tensor) -> float:
         return values.mean().item()
@@ -30,6 +34,8 @@ class LocalReduction:
 
 class WorldReduction:
     """Count one contribution per ordinary DP slice in world-wide diagnostics."""
+
+    exact_order_statistics = False
 
     def __init__(self, all_reduce: Callable, contributes: bool):
         self.all_reduce = all_reduce

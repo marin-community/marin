@@ -35,6 +35,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 from skyrl_train.trajectory_runners.types import BatchFields
 from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
 from skyrl_train.metric_reduction import WorldReduction
+from tests.batch_assertions import WORKER_OMITTED_METRICS
 from skyrl_train.utils.advantage_estimators import (
     compute_advantages_and_returns,
 )
@@ -445,3 +446,15 @@ def test_worker_ratio_moments_match_known_finite_token_values():
     }
     for scope in ("pooled", "staleness0"):
         assert {key: metrics[f"policy/mismatch/{scope}/{key}"] for key in expected} == expected
+
+
+def test_worker_ratio_keys_match_driver_for_mixed_staleness():
+    learner = torch.tensor([[-1.0, 0.0], [1.0, 2.0]])
+    sampler = torch.zeros_like(learner)
+    mask = torch.ones_like(learner)
+    staleness = torch.tensor([[0, 0], [1, 1]])
+    driver = mismatch_ratio_metrics(learner, sampler, mask, staleness)
+    worker = mismatch_ratio_metrics(
+        learner, sampler, mask, staleness, reduction=WorldReduction(lambda values, operation: values, True)
+    )
+    assert worker.keys() == driver.keys() - WORKER_OMITTED_METRICS

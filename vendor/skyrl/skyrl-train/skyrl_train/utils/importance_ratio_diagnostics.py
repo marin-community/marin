@@ -133,7 +133,7 @@ def _grouped_moments(
     return result
 
 
-def _moment_metrics(totals: dict[str, float]) -> dict[str, float]:
+def _moment_metrics(totals: dict[str, float], *, include_extras: bool) -> dict[str, float]:
     selected, finite = totals["selected"], totals["finite"]
     result = {"selected_tokens": selected, "finite_tokens": finite}
     if selected:
@@ -144,7 +144,7 @@ def _moment_metrics(totals: dict[str, float]) -> dict[str, float]:
             log_ratio_abs_mean=totals["abs_sum"] / finite,
             frac_outside_0_5_2=totals["outside"] / finite,
         )
-        if "square_sum" in totals:
+        if include_extras:
             result.update(
                 log_ratio_mean_squared=totals["square_sum"] / finite,
                 lower_clip_pressure=totals["lower_clip"] / finite,
@@ -164,7 +164,7 @@ def mismatch_ratio_metrics(
     reduction: MetricReduction = LocalReduction(),
 ) -> dict[str, float]:
     """Trainer-minus-vLLM log-ratio statistics by per-token staleness bucket and response position."""
-    local = isinstance(reduction, LocalReduction)
+    exact = reduction.exact_order_statistics
     mask = loss_mask.detach().cpu() > 0
     staleness = rollout_staleness.detach().cpu()
     bucket = torch.zeros(mask.shape, dtype=torch.uint8)
@@ -186,11 +186,11 @@ def mismatch_ratio_metrics(
             values,
             groups,
             4 * len(MISMATCH_STALENESS_BUCKETS),
-            clip_bounds if not local else None,
+            clip_bounds if not exact else None,
         ).items()
     }
     maxima = None
-    if not local:
+    if not exact:
         grid = {key: reduction.combine(total, "sum") for key, total in grid.items()}
         finite = torch.isfinite(values)
         maxima = values.new_full((4 * len(MISMATCH_STALENESS_BUCKETS),), -math.inf)
@@ -198,7 +198,7 @@ def mismatch_ratio_metrics(
         maxima = reduction.combine(maxima.view(len(MISMATCH_STALENESS_BUCKETS), 4), "max")
     position_classes = {f"first{POSITION_WINDOW}": [1, 3], f"last{POSITION_WINDOW}": [2, 3], "middle": [0]}
     full_statistics = {}
-    if local:
+    if exact:
         # Only these two buckets get the sorted statistics; the others take moments from the grid.
         staleness0 = groups < 4
         pooled = ratio_statistics(values, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high)
@@ -211,16 +211,21 @@ def mismatch_ratio_metrics(
     bucket_rows = {"pooled": slice(None)}
     bucket_rows.update({name: slice(index, index + 1) for index, (name, _) in enumerate(MISMATCH_STALENESS_BUCKETS)})
 
-    def moments(rows: slice, classes: list[int]) -> dict[str, float]:
-        result = _moment_metrics({key: total[rows][:, classes].sum().item() for key, total in grid.items()})
-        if maxima is not None and result["finite_tokens"]:
+    def moments(rows: slice, classes: list[int], *, include_extras: bool = False) -> dict[str, float]:
+        result = _moment_metrics(
+            {key: total[rows][:, classes].sum().item() for key, total in grid.items()}, include_extras=include_extras
+        )
+        if include_extras and maxima is not None and result["finite_tokens"]:
             result["log_ratio_abs_max"] = maxima[rows][:, classes].max().item()
         return result
 
     result = {}
     for name, rows in bucket_rows.items():
         prefix = f"policy/mismatch/{name}/"
-        metrics = {**(full_statistics.get(name) or moments(rows, [0, 1, 2, 3])), "missing_behavior": 0.0}
+        stats = full_statistics.get(name) or moments(
+            rows, [0, 1, 2, 3], include_extras=not exact and name in ("pooled", "staleness0")
+        )
+        metrics = {**stats, "missing_behavior": 0.0}
         result.update({prefix + key: value for key, value in metrics.items()})
         for position, classes in position_classes.items():
             stats = moments(rows, classes)
