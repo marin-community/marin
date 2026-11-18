@@ -1,0 +1,342 @@
+{
+  "dataset": {
+    "files": [],
+    "repo": "open-athena/Marin-Micro-Eval-210",
+    "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+    "wheels_revision": "d5dd315d58f0f47514dd0a2208e90e2a48541328"
+  },
+  "evaluation": {
+    "admission_pending": [],
+    "attempts_per_selected_task": {
+      "NUPA": 1,
+      "aime24": 10,
+      "bfclparity-pi": 1,
+      "bixbench-pi": 1,
+      "cruxeval": 1,
+      "ds-1000-local": 1,
+      "gpqa-diamond": 3,
+      "gsm8k-0shot": 1,
+      "humanevalplus": 1,
+      "ifbench": 1,
+      "math500": 1,
+      "mbppplus": 1,
+      "mmlu-pro": 1,
+      "mrcr": 1,
+      "olympiadbench": 10,
+      "ot-tblite-recovery": 3,
+      "swebench-verified": 1,
+      "tb2-recovery": 3,
+      "triviaqa": 1,
+      "truthfulqa": 1
+    },
+    "capability_origin": "https://iris.oa.dev",
+    "config": {
+      "config_groups": {
+        "terminal_bench_config": "terminal_bench"
+      },
+      "context_budget": {
+        "max_new_tokens_per_turn": 16384,
+        "max_turns": 1024,
+        "request_window_tokens": 65536
+      },
+      "data": {
+        "kind": "parquet",
+        "shuffle": false,
+        "train_data": [],
+        "val_data": []
+      },
+      "entrypoint": "generate",
+      "environment": {
+        "task_sessions": {
+          "local": {},
+          "remote_judge": {
+            "api_key_env": "JUDGE_API_KEY",
+            "base_url": "runtime://minimax-judge"
+          }
+        }
+      },
+      "extra_env": {
+        "JUDGE_BASE_URL": "runtime://minimax-judge",
+        "OPENAI_BASE_URL": "https://api.together.xyz/v1",
+        "TAU2_NL_ASSERTIONS_MODEL": "openai/openai/gpt-oss-120b",
+        "TAU2_USER_MODEL": "openai/openai/gpt-oss-120b",
+        "TAU2_USER_REASONING_EFFORT": "low",
+        "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC": "259200"
+      },
+      "generator": {
+        "backend": "vllm",
+        "chat_template": {
+          "name_or_path": null,
+          "source": "name"
+        },
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        },
+        "enable_http_endpoint": false,
+        "enforce_eager": false,
+        "engine_init_kwargs": {
+          "enable_auto_tool_choice": true,
+          "hf_overrides": {
+            "max_position_embeddings": 262144,
+            "max_seq_len": 262144
+          },
+          "tool_call_parser": "hermes"
+        },
+        "engine_init_timeout_seconds": 259200,
+        "eval_n_samples_per_prompt": 1,
+        "eval_sampling_params": {
+          "skip_special_tokens": false,
+          "stop_token_ids": [
+            128001,
+            128009
+          ],
+          "temperature": 0.7,
+          "top_p": 0.95
+        },
+        "expert_block_sync": {
+          "timeout_seconds": 259200
+        },
+        "gpu_memory_utilization": 0.85,
+        "inference_engine_data_parallel_size": 8,
+        "inference_engine_expert_parallel_size": 8,
+        "inference_engine_pipeline_parallel_size": 1,
+        "inference_engine_tensor_parallel_size": 1,
+        "max_num_seqs": 8,
+        "model_dtype": "bfloat16",
+        "model_loading": "stage_local",
+        "n_samples_per_prompt": 1,
+        "num_inference_engines": 16,
+        "run_engines_locally": true,
+        "sampling_params": {
+          "logprobs": 0,
+          "skip_special_tokens": false,
+          "stop_token_ids": [
+            128001,
+            128009
+          ],
+          "temperature": 0.7,
+          "top_p": 0.95
+        },
+        "trajectory_retention": {
+          "always_retain_failures": false,
+          "always_retain_loops": false,
+          "always_retain_non_terminating": false,
+          "enabled": true,
+          "eval_sample_fraction": 1.0,
+          "max_bytes_per_run": null,
+          "max_bytes_per_step": null,
+          "phases": [
+            "eval"
+          ],
+          "publish_timeout_seconds": 259200,
+          "required": true,
+          "reward_above": null,
+          "reward_below": null,
+          "run_id": "2026.11.09",
+          "sample_count_per_step": 0,
+          "sample_fraction": 1.0,
+          "shutdown_timeout_seconds": 259200
+        },
+        "weight_sync_pause_timeout_seconds": 259200
+      },
+      "terminal_bench": {
+        "harbor": {
+          "daytona_api_key_env": "DAYTONA_EVAL_API_KEY",
+          "daytona_provisioning": "declarative",
+          "environment_type": "daytona",
+          "eval_daytona_api_key_env": "DAYTONA_EVAL_API_KEY",
+          "eval_daytona_provisioning": "declarative",
+          "eval_timeout_override_sec": 1800,
+          "max_retries": 0,
+          "n_concurrent_trials": 8,
+          "override_timeout_sec": 1800,
+          "trial_attempt_timeout_sec": 10800,
+          "verifier_override_timeout_sec": null
+        },
+        "installed_agent": {
+          "agent": {
+            "kwargs": {
+              "compaction_reserve_tokens": 16384,
+              "mcp_adapter_version": "7.0.0",
+              "model_info": {
+                "max_input_tokens": 65536,
+                "max_output_tokens": 16384
+              },
+              "thinking": "high",
+              "thinking_format": "chat-template",
+              "version": "0.87.0"
+            },
+            "name": "pi",
+            "override_setup_timeout_sec": 360
+          },
+          "cleanup_timeout": 60,
+          "judge_model": "MiniMaxAI/MiniMax-M3-MXFP8",
+          "run_timeout": 1800,
+          "service_shutdown_timeout": 60,
+          "service_startup_timeout": 60,
+          "setup_timeout": 360,
+          "trial_reward_key": "reward"
+        }
+      },
+      "trainer": {
+        "algorithm": {
+          "use_kl_loss": false
+        },
+        "distributed": {
+          "placement_group_timeout_seconds": 259200,
+          "worker_collective_timeout_seconds": 259200
+        },
+        "eval_batch_size": 32,
+        "eval_interval": 1,
+        "evaluation_runner": "task",
+        "logger": "console",
+        "micro_train_batch_size_per_gpu": 1,
+        "placement": {
+          "colocate_all": true,
+          "colocate_policy_ref": true,
+          "policy_num_gpus_per_node": 8,
+          "policy_num_nodes": 16,
+          "ref_num_gpus_per_node": 8,
+          "ref_num_nodes": 16
+        },
+        "policy": {
+          "megatron_config": {
+            "context_parallel_size": 1,
+            "expert_model_parallel_size": 8,
+            "expert_tensor_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "tensor_model_parallel_size": 1
+          }
+        },
+        "policy_mini_batch_size": 1,
+        "project_name": "marin-long-loop",
+        "ref": {
+          "megatron_config": {
+            "context_parallel_size": 1,
+            "expert_model_parallel_size": 8,
+            "expert_tensor_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "tensor_model_parallel_size": 1
+          }
+        },
+        "resume_mode": "none",
+        "strategy": "megatron",
+        "train_batch_size": 1
+      },
+      "trajectory_runner": {
+        "max_concurrent_tasks": 128
+      }
+    },
+    "data_relative_path": "rollouts.parquet",
+    "execution": {
+      "cluster": "cw-rno2a",
+      "cluster_config": "lib/iris/config/cw-rno2a.yaml",
+      "container_profile": 4,
+      "cpu": 32,
+      "disk": "256GB",
+      "job_timeout_seconds": 259200,
+      "max_retries": 0,
+      "memory": "512GB",
+      "parent_cluster_config": "lib/iris/config/marin.yaml",
+      "priority": "production",
+      "required_env_vars": [
+        "DAYTONA_EVAL_API_KEY",
+        "DAYTONA_TARGET",
+        "TOGETHER_API_KEY",
+        "MARIN_PREFIX",
+        "MARIN_TEMP_PREFIX"
+      ],
+      "target_cluster": "cw-rno2a",
+      "wandb_entity": "marin-community"
+    },
+    "expected_expanded_attempt_count": 440,
+    "expected_rollouts": 440,
+    "expected_source_rows": 200,
+    "gpu_variant": "H100",
+    "judge": {
+      "agent": {
+        "agent_kwargs": {}
+      },
+      "apply_chat_template": true,
+      "generation": {
+        "chat_template_kwargs": {},
+        "extra_gen_kwargs": {},
+        "max_gen_toks": null,
+        "thinking_off_template_kwargs": {}
+      },
+      "identity": null,
+      "location": "MiniMaxAI/MiniMax-M3-MXFP8",
+      "name": "minimax-m3-mxfp8-olympiadbench-judge-131k",
+      "resource_hint": {
+        "cpu": 64.0,
+        "disk": "600g",
+        "gpu": {
+          "H100": 8
+        },
+        "hbm_gb": null,
+        "memory": "512g"
+      },
+      "revision": "c5454eb03678d8710e54a4e0fc681b9f3b4a3dba",
+      "serve": {
+        "auto_overrides": true,
+        "backend": "vllm",
+        "chat_template": null,
+        "data_parallel_size": null,
+        "gpu_memory_utilization": null,
+        "hf_hub_disable_xet": false,
+        "hf_overrides": null,
+        "instances": 1,
+        "limit_mm_per_prompt": "{\"image\":0,\"video\":0}",
+        "max_model_len": 131072,
+        "max_num_batched_tokens": 8192,
+        "max_num_seqs": 16,
+        "object_store_load_mode": "stage_local",
+        "pipeline_parallel_size": 1,
+        "reasoning_parser": "minimax_m3",
+        "runai_streamer_concurrency": null,
+        "runai_streamer_s3_request_timeout_ms": null,
+        "speculative": null,
+        "tensor_parallel_size": 8,
+        "tool_call_parser": null,
+        "vllm_batch_invariant": null,
+        "vllm_extra_args": [
+          "--block-size",
+          "128",
+          "--language-model-only",
+          "--enable-prefix-caching"
+        ],
+        "vllm_plugin_requirements": [],
+        "vllm_source": null,
+        "vllm_use_flashinfer_sampler": null,
+        "vllm_version": null
+      },
+      "tokenizer": null,
+      "tokenizer_revision": null
+    },
+    "judge_gpu_count": 8,
+    "name": "long-loop/micro-full",
+    "ray_timeouts": {
+      "cluster_join_timeout": 259200,
+      "driver_liveness_timeout": 259200,
+      "rendezvous_timeout": 259200
+    },
+    "role_plan": {
+      "colocate_all": true,
+      "inference_engine_data_parallel_size": 8,
+      "inference_engine_expert_parallel_size": 8,
+      "inference_engine_pipeline_parallel_size": 1,
+      "inference_engine_tensor_parallel_size": 1,
+      "micro_train_batch_size_per_gpu": 1,
+      "n_samples_per_prompt": 1,
+      "num_inference_engines": 16,
+      "policy_mini_batch_size": 1,
+      "policy_num_gpus_per_node": 8,
+      "policy_num_nodes": 16,
+      "reference_num_nodes": null,
+      "train_batch_size": 1
+    },
+    "seed": 20261030,
+    "supported_path_count": 20,
+    "tasks_per_benchmark": 10
+  }
+}
