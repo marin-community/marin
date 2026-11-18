@@ -12,9 +12,10 @@ versioned handles so any run's mix is recoverable from its records:
 - **Release seal.** The release document and its cache catalog are adopted at their exact
   URIs, with the pinned SHA-256 digests recorded in the handles' configs.
 - **One sealed-cache handle per source.** Each of the 434 mixture sources is a
-  ``TokenizedCache`` step whose fingerprinted config pins the source's exact
-  content-addressed shard paths, its row and token counts, and its loss mode. The step's
-  function verifies every shard still exists; no data is read or recomputed.
+  ``TokenizedCache`` step whose fingerprinted config pins the digest of the source's
+  cache-catalog entry — the ledger that carries the source's exact content-addressed
+  shard caches — plus its row and token counts, shard count, and loss mode. The step's
+  record is the deliverable; no data is read or recomputed.
 - **The mixture.** :func:`exp3_v5_data_config` assembles the ``LmDataConfig`` through
   :func:`marin.experiment.data.mixture`: the 434 sources at their natural weights, the
   three-phase weight schedule (boundaries 0/250/500), the full-permutation feistel shuffle,

@@ -19,7 +19,7 @@ import json
 import os
 
 import pytest
-from levanter.data.text.datasets import DatasetComponent
+from levanter.data.text.datasets import DatasetComponent, UrlDatasetSourceConfig
 from levanter.data.text.formats import PrebuiltLmDatasetFormat, TextLmDatasetFormat
 from marin.execution.artifact import ArtifactRecord, write_record
 from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
@@ -65,7 +65,21 @@ def _resolved_data_config(prefix: str):
 
 
 def _component_dict(component: DatasetComponent) -> dict:
-    """A component as the release serialized it (draccus field names, ``type`` tags aside)."""
+    """A component as the release serialized it (draccus field names, ``type`` tags aside).
+
+    The release components carry ``source: null``; marin's mixture emits an empty-URL
+    ``UrlDatasetSourceConfig`` for a built cache. They are the same thing to Levanter
+    (both mean "load from ``cache_dir``"), and the empty-URL form keeps Levanter's
+    skip-a-missing-split behavior, so the comparison normalizes it to ``None``.
+    """
+    source = component.source
+    if isinstance(source, UrlDatasetSourceConfig):
+        assert source.train_urls == [] and source.validation_urls == []
+        assert source.cache_dir == component.cache_dir and source.format == component.format
+        source_out = None
+    else:
+        assert source is None
+        source_out = None
     fmt = component.format
     if isinstance(fmt, PrebuiltLmDatasetFormat):
         fmt_dict = {"input_ids_key": fmt.input_ids_key, "loss_weights_key": fmt.loss_weights_key, "type": "prebuilt"}
@@ -74,7 +88,7 @@ def _component_dict(component: DatasetComponent) -> dict:
     else:
         raise AssertionError(f"unexpected component format {fmt!r}")
     return {
-        "source": component.source,
+        "source": source_out,
         "cache_dir": component.cache_dir,
         "format": fmt_dict,
         "pack": component.pack,
@@ -87,8 +101,8 @@ def _component_dict(component: DatasetComponent) -> dict:
 def _expected_component(release_component: dict) -> dict:
     """The release component with fields ``main`` does not express dropped and defaults filled.
 
-    The release serializer omits null fields (``source``/``tags``), which the resolved
-    components carry as ``None``.
+    The release serializer omits null fields (``source``/``tags``), which the comparison
+    normalizes the resolved components to (see :func:`_component_dict`).
     """
     expected = {key: value for key, value in release_component.items() if key not in ("type", "packing_lookahead")}
     expected.setdefault("source", None)
@@ -169,6 +183,9 @@ def test_seal_record_resolves_as_a_component(tmp_path):
     cache = TokenizedCache.raw_load(handle.path(prefix))
     component = cache.as_component()
     assert component.cache_dir == mix._CACHE_ROOT
+    # The empty-URL source keeps Levanter's skip-a-missing-split behavior for sealed caches too.
+    assert isinstance(component.source, UrlDatasetSourceConfig)
+    assert component.source.train_urls == [] and component.source.validation_urls == []
     assert component.format == PrebuiltLmDatasetFormat(input_ids_key="input_ids", loss_weights_key="loss_weights")
     assert component.pack == 256
     assert component.split == "train"

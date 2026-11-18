@@ -155,16 +155,21 @@ class TokenizedCache(Artifact):
     def as_component(self) -> DatasetComponent:
         """A Levanter mixture component pointing at this built cache.
 
-        A built cache needs no raw urls; the component carries the cache dir, format, and
-        tags, plus the recorded packing (``pack``/``split``/``flat_cache``) so a sealed or
-        adopted cache describes itself exactly as it was built.
+        A built cache carries an empty-URL source rather than ``source=None``: Levanter
+        skips a split the cache does not have when the source has no URLs for it, but
+        raises when the source is ``None``. The component also carries the recorded
+        packing (``pack``/``split``/``flat_cache``) so a sealed or adopted cache describes
+        itself exactly as it was built.
         """
+        source = UrlDatasetSourceConfig(
+            tags=self.tags, train_urls=[], validation_urls=[], cache_dir=self.cache_dir, format=self.format
+        )
         return DatasetComponent(
-            source=None,
-            cache_dir=self.cache_dir,
-            format=self.format,
+            source=source,
+            cache_dir=source.cache_dir,
+            format=source.format,
             pack=self.pack,
-            tags=self.tags,
+            tags=source.tags,
             split=self.split,
             flat_cache=self.flat_cache,
         )
