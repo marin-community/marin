@@ -27,6 +27,8 @@ from levanter.models.snowball_deletion import (
     DeletionTuningConfig,
     DeletionTuningScope,
     alpha_ramp,
+    apply_hard_mask,
+    deletion_keep_masks,
     deletion_regularizer,
     deletion_trainable_filter,
     wanda_delete_threshold,
@@ -246,8 +248,6 @@ def test_wanda_capture_shard_local_stats(mesh):
 
 def test_apply_hard_mask_zeroes_deleted_weights(mesh):
     """The deployment model zeroes deleted weights and drops the gate logits."""
-    from levanter.models.snowball_deletion import apply_hard_mask, deletion_keep_masks
-
     with jax.set_mesh(mesh):
         model = _install_logits(_init_model(_tiny_config(), mesh))
         masks = deletion_keep_masks(model)
@@ -292,8 +292,6 @@ def _materialize_tokenizer_fixture(dest_dir) -> str:
 
 def test_hard_mask_export_reloads_to_the_hard_mask_forward(mesh, tmp_path):
     """The exported checkpoint (deleted weights zeroed) reloads to the hard-mask forward."""
-    from levanter.models.snowball_deletion import apply_hard_mask
-
     tokenizer = _materialize_tokenizer_fixture(tmp_path / "tokenizer")
     with jax.set_mesh(mesh):
         config = dataclasses.replace(_tiny_config(), vocab_size=5027, tokenizer=tokenizer)
