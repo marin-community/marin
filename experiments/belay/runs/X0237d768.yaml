@@ -1,0 +1,14 @@
+experiment: X0237d768
+track: competitive-d768
+runs:
+  seed0:
+    seed: 0
+    variant: lm_head rows as gated value embeds in MLA
+    flags:
+    - --model-set
+    - lm_head_value_embeds=true
+  control:
+    seed: 0
+    variant: competitive-d768 control
+    control: true
+    shared: s7n-d768
