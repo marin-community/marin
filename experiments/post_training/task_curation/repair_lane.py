@@ -25,6 +25,7 @@ from typing import Any, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.licenses import LicenseReceipt
 from marin.inference import iris as iris_inference
 from marin.inference.openai_chat import OpenAIChatClient
@@ -42,6 +43,7 @@ from experiments.post_training.task_curation.full_qc import LONG_REQUEST_TIMEOUT
 from experiments.post_training.task_curation.images.build import EnvironmentArtifact, identity_digest
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
+from experiments.post_training.task_curation.oracle_filter import NegativeControlPolicy, calibrate_cohort, filter_cohort
 from experiments.post_training.task_curation.pipeline import (
     environment_requirements,
     planned_lock_url,
@@ -894,6 +896,77 @@ def convert_cohort(
     return manifest
 
 
+def run_oracle_campaign(
+    *,
+    tracked_source_id: str,
+    report: Mapping[str, Any],
+    folders: tuple[str, ...],
+    repo: str,
+    candidate_revision: str,
+    tracked_uris: tuple[str, ...],
+    tracked_spec_uris: tuple[str, ...],
+    work_root: Path,
+    receipt_uri: str,
+    source_revision: str,
+    environment: str = "daytona",
+    environment_kwargs: Mapping[str, Any] | None = None,
+    concurrency: int = 16,
+    drop_wrapper_solve_sh: bool = False,
+    policy: Any,
+) -> dict[str, Any]:
+    """The production oracle campaign in one in-process workflow: cohort -> Harbor export ->
+    calibration and full-population oracle trials -> collect with the standing policy -> receipt.
+
+    The prepare and calibrate stages must share one machine (the Harbor task map records
+    machine-local task paths by design, exactly as the tracked sources' own campaigns ran), so
+    the export stays in ``work_root`` for the whole job. Trial results and the receipt go to
+    the receipt URI's prefix.
+    """
+    manifest = convert_cohort(
+        tracked_source_id=tracked_source_id,
+        report=report,
+        folders=folders,
+        repo=repo,
+        candidate_revision=candidate_revision,
+        tracked_uris=tracked_uris,
+        tracked_spec_uris=tracked_spec_uris,
+        output_root=str(work_root / "cohort"),
+        drop_wrapper_solve_sh=drop_wrapper_solve_sh,
+    )
+    recipes = {source.info.id: source.config for source in configured_sources()}
+    recipe = recipes.get(tracked_source_id)
+    if recipe is None or recipe.controls is None:
+        raise ValueError(f"The tracked recipe declares no controls: {tracked_source_id}")
+    cohort_dir = work_root / "cohort" / f"conversion-{manifest['conversion_identity']}" / "converted-pending"
+    export_dir = work_root / "harbor"
+    prepare(cohort_dir, export_dir / "prepared", source_revision=source_revision, controls=recipe.controls)
+    task_map = export_dir / "prepared" / "task-map.json"
+    calibration_dir = work_root / "calibration"
+    calibrate_cohort(
+        cohort_dir,
+        task_map,
+        calibration_dir,
+        environment,
+        dict(environment_kwargs or {}),
+        concurrency,
+    )
+    trials_dir = calibration_dir / "jobs"
+    receipt = filter_cohort(
+        cohort_dir,
+        task_map,
+        trials_dir,
+        Path(receipt_uri),
+        negative_control_policy=policy,
+    )
+    return {
+        "tracked_source_id": tracked_source_id,
+        "cohort": manifest["counts"],
+        "conversion_identity": manifest["conversion_identity"],
+        "harbor_tasks": len(json.loads(task_map.read_text())),
+        "receipt": receipt.model_dump(mode="json")["admitted_count"] if hasattr(receipt, "admitted_count") else None,
+    }
+
+
 def prepare_harbor_export(
     *,
     tracked_source_id: str,
@@ -990,6 +1063,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Normalize FWeindel winners by dropping the verified pure-wrapper solution/solve.sh",
     )
     parser.add_argument(
+        "--campaign-receipt",
+        help="Run the full oracle campaign and write the receipt: cohort -> prepare -> calibrate+trials -> collect",
+    )
+    parser.add_argument("--campaign-environment", default="daytona")
+    parser.add_argument("--campaign-environment-kwargs", default='{"provisioning": "declarative"}')
+    parser.add_argument("--campaign-concurrency", type=int, default=16)
+    parser.add_argument(
         "--prepare-output-root",
         help="Output root for the native Harbor export; set with --cohort-root to run the prepare stage",
     )
@@ -1042,6 +1122,43 @@ def main() -> None:
                 source_revision=args.source_revision,
             )
         logger.info("RESULT %s", json.dumps(manifest, sort_keys=True))
+        return
+    if args.cohort_report is not None and args.campaign_receipt is not None:
+        report = json.loads(StoragePath(args.cohort_report).read_text())
+        policy = NegativeControlPolicy(
+            version=1,
+            scope="global_workspace",
+            max_identical_budget_repeats=1,
+            answer_graded="not_applicable",
+            source_deadline="non_passing_annotation",
+            source_error="non_passing_annotation",
+            decision=ContentEvidenceReference(
+                uri="s3://marin-us-east-02a/marin/rl-data/atlas/rulings/negative-controls/2026.11.14.1/negative-control-retry-policy-20261114.md",
+                sha256="245b2e0ffa7e4e576c581a27fb52e574b10d17e1b7d81712b79c19e1fe462aec",
+            ),
+        )
+        summary = run_oracle_campaign(
+            tracked_source_id=args.tracked_source_id,
+            report=report,
+            folders=tuple(args.folder),
+            repo=args.repo,
+            candidate_revision=args.candidate_revision,
+            tracked_uris=(
+                tuple(args.tracked_parquet or ())
+                if args.tracked_parquet
+                else resolve_tracked_uris(args.tracked_source_id)
+            ),
+            tracked_spec_uris=tuple(args.tracked_specs or ()),
+            work_root=Path(args.cohort_output_root),
+            receipt_uri=args.campaign_receipt,
+            source_revision=args.source_revision,
+            environment=args.campaign_environment,
+            environment_kwargs=json.loads(args.campaign_environment_kwargs) if args.campaign_environment_kwargs else {},
+            concurrency=args.campaign_concurrency,
+            drop_wrapper_solve_sh=args.drop_wrapper_solve_sh,
+            policy=policy,
+        )
+        logger.info("RESULT %s", json.dumps(summary, sort_keys=True))
         return
     if args.prepare_output_root is not None:
         if args.cohort_root is None or not args.source_revision:
