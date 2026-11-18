@@ -44,10 +44,11 @@ lm-eval-harness package:
 The Iris worker installs lm-eval through the Levanter ``lm_eval`` extra. The
 script monkey-patches ``datasets.load_dataset`` to force
 ``trust_remote_code=True`` and sets ``HF_ALLOW_CODE_EVAL=1`` before
-loading any task, so tasks shipping custom HF loading scripts (logiqa,
-piqa, ethics_*, crows_pairs_*, ...) and humaneval load without per-task
-plumbing. It also maps legacy dataset IDs such as ``gsm8k`` to their
-namespaced repositories.
+loading any task, so piqa and humaneval load without per-task plumbing. It
+also maps legacy dataset IDs such as ``gsm8k`` to their namespaced
+repositories. Tasks whose dataset is only a loading script (logiqa,
+ethics_*, crows_pairs_*, ...) do not load on ``datasets`` 4; they are in
+:data:`BEST_EFFORT_LMH_TASKS`.
 """
 
 import dataclasses
@@ -64,6 +65,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from datasets import Image as DatasetsImage
 from datasets import load_dataset
+from marin.datakit.decon import required_task_failures
 from marin.datakit.download.http_session import build_retrying_session
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -998,30 +1000,6 @@ def required_lmh_tasks() -> dict[str, int]:
     return _required_lmh_tasks(_lmh_task_names())
 
 
-def _required_lmh_task_failures(
-    required: Mapping[str, int], task_leaves: Mapping[str, list[str]], records: Mapping[str, int]
-) -> list[str]:
-    """Return one message for each required task that is not complete.
-
-    ``task_leaves`` maps each task that loaded to its leaf tasks. ``records``
-    maps each leaf task that has an artifact to its record count.
-    """
-    failures: list[str] = []
-    for task, expected_leaves in required.items():
-        leaves = task_leaves.get(task)
-        if not leaves:
-            failures.append(f"{task}: did not load")
-            continue
-        if len(leaves) != expected_leaves:
-            failures.append(
-                f"{task}: loaded {len(leaves)} leaf tasks, expected {expected_leaves} (LMH_LEAF_TASK_COUNTS)"
-            )
-        empty = sorted(leaf for leaf in leaves if not records.get(leaf))
-        if empty:
-            failures.append(f"{task}: no records for leaf tasks {empty}")
-    return failures
-
-
 def _load_task_dict(get_task_dict: Callable[[list[str]], dict], name: str, required: Container[str]) -> dict:
     """Load one lm-eval task, retrying required tasks on any error."""
     if name not in required:
@@ -1158,7 +1136,7 @@ def _prepare_lmh() -> dict[str, Any]:
             records = pq.ParquetFile(source).metadata.num_rows
         artifacts.append({"task": task_name, "artifact": artifact, "records": records})
 
-    required_failures = _required_lmh_task_failures(
+    required_failures = required_task_failures(
         required, task_leaves, {entry["task"]: entry["records"] for entry in artifacts}
     )
     if required_failures:

@@ -1274,16 +1274,34 @@ def _validate_best_effort_eval_manifest(
 
     if sorted(artifact_records) != sorted(included_tasks) or len(artifacts) != len(included_tasks):
         raise ValueError("best-effort eval artifact tasks do not match included_leaf_tasks")
-    for task, expected_leaves in required_tasks.items():
-        leaves = manifest_required_tasks.get(task)
-        if not leaves:
-            raise ValueError(f"best-effort eval manifest does not list required task {task!r}")
-        if len(leaves) != expected_leaves:
-            raise ValueError(f"required task {task!r} has {len(leaves)} leaf tasks, expected {expected_leaves}")
-        empty_leaves = sorted(leaf for leaf in leaves if not artifact_records.get(leaf))
-        if empty_leaves:
-            raise ValueError(f"required task {task!r} has no records for leaf tasks {empty_leaves}")
+    failures = required_task_failures(required_tasks, manifest_required_tasks, artifact_records)
+    if failures:
+        raise ValueError(f"best-effort eval manifest has incomplete required tasks: {failures}")
     return paths
+
+
+def required_task_failures(
+    required: Mapping[str, int], task_leaves: Mapping[str, list[str]], records: Mapping[str, int]
+) -> list[str]:
+    """Return one message for each required task that is not complete.
+
+    Args:
+        required: Each required task with its exact number of leaf tasks.
+        task_leaves: Each task that loaded with its leaf tasks.
+        records: Each leaf task that has an artifact with its record count.
+    """
+    failures: list[str] = []
+    for task, expected_leaves in required.items():
+        leaves = task_leaves.get(task)
+        if not leaves:
+            failures.append(f"{task}: did not load")
+            continue
+        if len(leaves) != expected_leaves:
+            failures.append(f"{task}: loaded {len(leaves)} leaf tasks, expected {expected_leaves}")
+        empty = sorted(leaf for leaf in leaves if not records.get(leaf))
+        if empty:
+            failures.append(f"{task}: no records for leaf tasks {empty}")
+    return failures
 
 
 def merge_eval_blooms(

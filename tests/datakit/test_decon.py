@@ -1253,7 +1253,7 @@ def test_build_eval_bloom_requires_best_effort_required_tasks(
     best_effort_manifest = best_effort_root / "_manifest.json"
     best_effort_manifest.write_text(json.dumps(manifest))
 
-    with pytest.raises(ValueError, match="required task 'required'"):
+    with pytest.raises(ValueError, match="incomplete required tasks"):
         build_eval_bloom(
             eval_data_sources=str(best_effort_root),
             output_path=str(tmp_path / "bloom"),
