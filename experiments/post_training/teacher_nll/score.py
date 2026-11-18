@@ -7,7 +7,13 @@ Each input cell is a gzipped JSONL file of rendered rows with ``input_ids`` and 
 scores the prediction of token i + 1 (the SFT row convention). One Iris job serves the student with the Marin
 vLLM fork on one node (DP over the node's GPUs, expert parallel) and sends every row as a token-id prompt with
 ``prompt_logprobs=0`` and ``max_tokens=1``. Each pass starts a fresh engine. Output, per pass and cell, is one
-JSON line per row: tokens, loss tokens, and the weighted NLL sum.
+JSON line per row: tokens, loss tokens, the weighted NLL sum, and rank sums for the Rank-Surprisal Ratio.
+
+Rank. vLLM returns each prompt token's rank as the count of vocabulary entries whose logprob is >= the token's own
+(``batched_count_greater_than`` is ``(x >= values).sum(-1)``), so it counts the token itself and every tie: it is
+1 + (strictly higher) + (other tokens with the identical logprob). RSR (arXiv 2601.14249) uses 1 + (strictly
+higher), so vLLM's rank is an upper bound that is exact when no other token ties. A tie-check cell is re-scored with
+``prompt_logprobs=100``: from the returned top 100 the strict rank, capped at 100, is exact.
 
     uv run python -m experiments.post_training.teacher_nll.score \
         --cells s3://marin-rno2a/tmp/ttl=14d/teacher-nll/cells/parity-16.jsonl.gz \
@@ -68,13 +74,15 @@ MAX_NUM_BATCHED_TOKENS = 7168
 MAX_NUM_SEQS = 32
 IN_FLIGHT = 2 * GPUS * MAX_NUM_SEQS
 REQUEST_TIMEOUT = (30.0, 30 * 60.0)
+RANK_CAP = 100
+TIE_CHECK_TOP = 100
 
 
 def _token_id(key) -> int:
     return int(str(key).removeprefix("token_id:"))
 
 
-def score_row(url: str, api_model: str, row: dict, headers: dict | None = None) -> dict:
+def score_row(url: str, api_model: str, row: dict, headers: dict | None = None, top: int = 0) -> dict:
     ids, weights = row["input_ids"], row["loss_weights"]
     if len(ids) != len(weights) or weights[-1]:
         raise ValueError(f"row {row['cell']}:{row['row']} weights do not follow the shifted convention")
@@ -86,7 +94,7 @@ def score_row(url: str, api_model: str, row: dict, headers: dict | None = None) 
             "add_special_tokens": False,
             "temperature": 0.0,
             "max_tokens": 1,
-            "prompt_logprobs": 0,
+            "prompt_logprobs": top,
             "return_tokens_as_token_ids": True,
             "return_token_ids": True,
         },
@@ -100,6 +108,8 @@ def score_row(url: str, api_model: str, row: dict, headers: dict | None = None) 
     prompt_logprobs = choice["prompt_logprobs"]
     nll = text_nll = 0.0
     loss_tokens = text_tokens = 0.0
+    rank_capped = text_rank_capped = rank_uncapped = over_cap = text_over_cap = 0.0
+    strict_capped = text_strict_capped = 0.0
     for position, weight in enumerate(weights):
         if not weight:
             continue
@@ -108,11 +118,26 @@ def score_row(url: str, api_model: str, row: dict, headers: dict | None = None) 
         logprob = float(value["logprob"] if isinstance(value, dict) else value)
         if not math.isfinite(logprob):
             raise ValueError(f"row {row['cell']}:{row['row']}: non-finite logprob at {position + 1}")
+        rank = int(value["rank"])
+        if rank < 1:
+            raise ValueError(f"row {row['cell']}:{row['row']}: rank {rank} at {position + 1}")
+        capped = min(rank, RANK_CAP)
+        is_text = ids[position + 1] < FIRST_SPECIAL_ID
         nll -= weight * logprob
         loss_tokens += weight
-        if ids[position + 1] < FIRST_SPECIAL_ID:
+        rank_capped += weight * capped
+        rank_uncapped += weight * rank
+        over_cap += weight * (rank > RANK_CAP)
+        if is_text:
             text_nll -= weight * logprob
             text_tokens += weight
+            text_rank_capped += weight * capped
+            text_over_cap += weight * (rank > RANK_CAP)
+        if top:
+            higher = sum(1 for k, v in entry.items() if k != ids[position + 1] and float(v["logprob"]) > logprob)
+            strict = min(1 + higher, RANK_CAP)  # exact while higher < top; higher == top means strict > top
+            strict_capped += weight * strict
+            text_strict_capped += weight * strict * is_text
     keys = ("cell", "source", "row", "family", "task_id", "trial", "kind")
     return {
         **{k: row.get(k) for k in keys},
@@ -121,6 +146,20 @@ def score_row(url: str, api_model: str, row: dict, headers: dict | None = None) 
         "nll_sum": nll,
         "text_loss_tokens": text_tokens,
         "text_nll_sum": text_nll,
+        "rank_sum_capped": rank_capped,
+        "text_rank_sum_capped": text_rank_capped,
+        "rank_sum_uncapped": rank_uncapped,
+        "rank_over_cap_tokens": over_cap,
+        "text_rank_over_cap_tokens": text_over_cap,
+        **(
+            {
+                "prompt_logprobs": top,
+                "strict_rank_sum_capped": strict_capped,
+                "text_strict_rank_sum_capped": text_strict_capped,
+            }
+            if top
+            else {}
+        ),
     }
 
 
@@ -137,14 +176,22 @@ def read_cells(cells: list[str]) -> dict[str, list[dict]]:
     return rows
 
 
-def score_cells(url: str, api_model: str, rows: dict[str, list[dict]], output: str, index: int, headers=None):
-    """Score every cell against one running engine and write ``pass-<index>/<cell>.jsonl``."""
-    for uri, cell_rows in rows.items():
+def score_cells(
+    url: str, api_model: str, rows: dict[str, list[dict]], output: str, index: int, headers=None, tie_check=()
+):
+    """Score every cell against one running engine and write ``pass-<index>/<cell>.jsonl``, one object per cell.
+
+    Cells in ``tie_check`` are scored again right after their plain pass, with the top ``TIE_CHECK_TOP`` prompt
+    logprobs, written as ``pass-<index>/<cell>-top100.jsonl``.
+    """
+    jobs = [(uri, top) for uri in rows for top in ((0, TIE_CHECK_TOP) if uri in tie_check else (0,))]
+    for uri, top in jobs:
+        cell_rows = rows[uri]
         started = time.monotonic()
         with ThreadPoolExecutor(IN_FLIGHT) as pool:
-            scored = list(pool.map(functools.partial(score_row, url, api_model, headers=headers), cell_rows))
+            scored = list(pool.map(functools.partial(score_row, url, api_model, headers=headers, top=top), cell_rows))
         seconds = time.monotonic() - started
-        name = uri.rsplit("/", 1)[1].removesuffix(".jsonl.gz")
+        name = uri.rsplit("/", 1)[1].removesuffix(".jsonl.gz") + (f"-top{top}" if top else "")
         StoragePath(prefix_join(output, f"pass-{index}/{name}.jsonl")).write_text(
             "".join(json.dumps(s) + "\n" for s in scored)
         )
@@ -187,11 +234,13 @@ def run_campaign_job(cells: list[str], output: str, passes: int, repo: str, revi
             score_cells(endpoint.url("completions"), endpoint.model, rows, output, index, headers)
 
 
-def run_job(cells: list[str], output: str, passes: int, repo: str, revision: str) -> None:
+def run_job(cells: list[str], output: str, passes: int, repo: str, revision: str, tie_check: list[str]) -> None:
     """Iris entrypoint: score every cell ``passes`` times, each pass in a fresh vLLM engine."""
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
     rows = read_cells(cells)
+    if not set(tie_check) <= set(rows):
+        raise ValueError(f"tie-check cells must also be in --cells: {sorted(set(tie_check) - set(rows))}")
     spec = ModelSpec(
         weights=repo,
         api_model="student",
@@ -215,6 +264,8 @@ def run_job(cells: list[str], output: str, passes: int, repo: str, revision: str
                 "--no-enable-prefix-caching",
                 "--revision",
                 revision,
+                # vLLM rejects prompt_logprobs above --max-logprobs (default 20); only the tie check needs more.
+                *(("--max-logprobs", str(TIE_CHECK_TOP)) if tie_check else ()),
             ),
         )
     )
@@ -223,7 +274,7 @@ def run_job(cells: list[str], output: str, passes: int, repo: str, revision: str
             assert launch.is_leader, "PP=1 means one task, which is the leader"
             with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as env:
                 env.wait_until_ready()
-                score_cells(f"{env.server_url}/completions", spec.api_model, rows, output, index)
+                score_cells(f"{env.server_url}/completions", spec.api_model, rows, output, index, tie_check=tie_check)
 
 
 def main() -> None:
@@ -231,6 +282,10 @@ def main() -> None:
     parser.add_argument("--cells", required=True, nargs="+", help="s3:// gzipped JSONL cell files")
     parser.add_argument("--output", required=True)
     parser.add_argument("--passes", type=int, default=1)
+    parser.add_argument(
+        "--tie-check-cells", nargs="*", default=[], help="cells also scored with top-100 prompt logprobs (direct serve)"
+    )
+    parser.add_argument("--priority", choices=("interactive", "production"), default="production")
     parser.add_argument("--repo", default=REPO, help="HF model repo to score under")
     parser.add_argument("--revision", default=REVISION, help="pinned HF commit of --repo")
     parser.add_argument("--timeout-hours", type=float, default=4.0)
@@ -245,11 +300,13 @@ def main() -> None:
     if not args.output.startswith(OUTPUT_ROOTS[args.cluster]):
         raise ValueError(f"{args.cluster} outputs go under {OUTPUT_ROOTS[args.cluster]}<N>d/")
     job_args = [args.cells, args.output, args.passes, args.repo, args.revision]
+    if args.tie_check_cells and args.serve != "direct":
+        raise ValueError("--tie-check-cells runs on the direct serve only")
     if args.serve == "campaign":
         entrypoint = Entrypoint.from_callable(run_campaign_job, args=[*job_args, args.cluster])
         resources = ResourceConfig.with_cpu(cpu=4, ram="32g", target_cluster=args.cluster)
     else:
-        entrypoint = Entrypoint.from_callable(run_job, args=job_args)
+        entrypoint = Entrypoint.from_callable(run_job, args=[*job_args, args.tie_check_cells])
         resources = ResourceConfig.with_gpu(
             "H100", count=GPUS, cpu=64, ram="512g", disk="512g", target_cluster=args.cluster
         )
@@ -261,7 +318,9 @@ def main() -> None:
             setup_scripts=[default_setup_script(packages=["marin-core"])],
             env_vars={"HF_HUB_DISABLE_XET": "1"},
         ),
-        priority=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        priority=job_pb2.PRIORITY_BAND_PRODUCTION
+        if args.priority == "production"
+        else job_pb2.PRIORITY_BAND_INTERACTIVE,
         max_retries_failure=0,
         max_retries_preemption=0,
         timeout=Duration.from_seconds(int(args.timeout_hours * 3600)),
