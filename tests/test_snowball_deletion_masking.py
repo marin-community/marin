@@ -309,6 +309,7 @@ def test_hard_mask_export_reloads_to_the_hard_mask_forward(mesh, tmp_path):
         converter.save_pretrained(hard_model, export_dir, dtype=jnp.float32)
         reloaded = converter.load_pretrained(
             export_config.model_type,
+            ref=export_dir,
             config=export_config,
             axis_mapping=None,
             dtype=jnp.float32,
