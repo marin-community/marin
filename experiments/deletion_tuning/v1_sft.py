@@ -216,7 +216,10 @@ def _resolve_dispatch(spec: SFTSpec, resources: ResourceConfig, task_timeout_sec
         runtime_args={"train_resources": resources},
     )
     pod_config = spec.model.build_train_config(ctx, spec, spec.prepared_data, resources, spec.num_train_steps)
-    return pod_config, levanter_train_request(pod_config, task_timeout_seconds=task_timeout_seconds)
+    # the dispatch DeletionHFModel.run would submit: the DT pod runner over the same pod config
+    return pod_config, levanter_train_request(
+        pod_config, task_timeout_seconds=task_timeout_seconds, run_fn=run_deletion_train_lm
+    )
 
 
 def _job_shape(spec: SFTSpec, resources: ResourceConfig) -> dict:
@@ -258,6 +261,8 @@ def dry_run(output: Path | None) -> dict:
             spec, resources, int(V1_DURATION.total_seconds()), str(Path(tmp) / "v1-sft")
         )
         consumed = json.loads((Path(tmp) / "v1-sft" / "consumed-config.json").read_text())
+    entrypoint = request.entrypoint.callable_entrypoint.callable
+    assert entrypoint is run_deletion_train_lm, "the dispatch must target the Deletion Tuning pod runner"
     train_config = consumed["train_config"]
 
     summary = {
@@ -270,7 +275,7 @@ def dry_run(output: Path | None) -> dict:
         "initial_eval_match": train_config["initial_eval_match"],
         "fingerprint": fingerprint,
         "dispatch": {
-            "entrypoint": f"{run_deletion_train_lm.__module__}:{run_deletion_train_lm.__qualname__}",
+            "entrypoint": f"{entrypoint.__module__}:{entrypoint.__qualname__}",
             "job_name": request.name,
             "resources": consumed["resources"],
             "timeout_seconds": int(V1_DURATION.total_seconds()),
