@@ -232,7 +232,10 @@ TASKS_SQL = (
                 ORDER BY sample_rank,source_id,task_id LIMIT :limit
                 )
                 SELECT p.source_id,p.task_id,p.content_hash,LEFT(d.detail->>'task_preview',600) AS task_preview,
-                    s.declaration AS source_declaration,
+                    jsonb_build_object('id',s.declaration->'id') ||
+                        CASE WHEN s.declaration ? 'data_restriction'
+                            THEN jsonb_build_object('data_restriction',s.declaration->'data_restriction')
+                            ELSE '{}'::jsonb END AS source_declaration,
                     (SELECT jsonb_agg(jsonb_build_object(
                         'subject_id',m->>'subject_id','membership_similarity',m->'membership_similarity',
                         'candidates',jsonb_build_array(jsonb_build_object(

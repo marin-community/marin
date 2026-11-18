@@ -131,6 +131,14 @@ from infra.marina.apps.rl_data_catalog.release_evidence import (
 from infra.marina.apps.rl_data_catalog.release_gateway import CandidateApi
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import canonical_source_record, create_api, migrate
+from infra.marina.apps.rl_data_catalog.server.curriculum import (
+    TASKS_SQL,
+    CoverageQuery,
+    loaded_release,
+    source_restrictions,
+    task_parameters,
+    task_response,
+)
 from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
 from infra.marina.apps.rl_data_catalog.server.quality import result
 from infra.marina.apps.rl_data_catalog.server.review_content import task_request_evidence
@@ -1164,6 +1172,49 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         assert client.get("/sources").json()["sources"][0]["coverage"] is None
         assert client.get("/source", params={"source_id": "Marin:a"}).json()["coverage"] is None
         assert client.get("/curriculum").json()["totals"] == first["totals"]
+
+
+@pytest.mark.parametrize(
+    ("present", "tag", "expected"),
+    [
+        (False, None, "open"),
+        (True, "open", "open"),
+        (True, "malformed", "private_always"),
+        (True, None, "private_always"),
+        (True, "private_always", "private_always"),
+    ],
+)
+def test_curriculum_sample_transport_omits_oversized_unused_metadata(
+    catalog_database, catalog_query, tmp_path, present, tag, expected
+):
+    path = curriculum_release(tmp_path)
+    load_curriculum(str(path), str(tmp_path / "coverage.json"), catalog_query)
+    with catalog_database.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE curriculum_sources SET declaration=(declaration-'data_restriction') || "
+                "jsonb_build_object('unused_catalog_payload',CAST(:payload AS TEXT)) WHERE source_id='Marin:a'"
+            ),
+            {"payload": "x" * (6 * 1024 * 1024)},
+        )
+        if present:
+            connection.execute(
+                text(
+                    "UPDATE curriculum_sources SET declaration=jsonb_set(declaration,'{data_restriction}',"
+                    "CAST(:tag AS JSONB)) WHERE source_id='Marin:a'"
+                ),
+                {"tag": json.dumps(tag)},
+            )
+        metadata = loaded_release(connection, "")
+        parameters = task_parameters(metadata, CoverageQuery("all", "Marin:a", ""), "", "", "all", "all", "", 50)
+        rows = [dict(row) for row in connection.execute(text(TASKS_SQL), parameters).mappings()]
+    assert rows
+    assert max(len(json.dumps(row["source_declaration"]).encode()) for row in rows) < 256
+    assert all(("data_restriction" in row["source_declaration"]) is present for row in rows)
+    response = task_response(metadata, rows, 50, source_restrictions(rows))
+    assert all(row["data_restriction"] == expected for row in response["tasks"])
+    for row in response["tasks"]:
+        assert (row["task_preview"] == "Private data: content is not displayed.") is (expected == "private_always")
 
 
 @pytest.mark.parametrize("upgrade", ["missing", "obsolete"])
