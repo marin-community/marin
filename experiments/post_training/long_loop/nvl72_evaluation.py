@@ -110,10 +110,10 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
         max_num_batched_tokens=2048,
         gpu_memory_utilization=0.90,
         enable_prefix_caching=False,
+        vllm_v1_disable_multiproc=False,
     )
     config["generator"]["engine_init_kwargs"]["moe_backend"] = serving["moe_backend"]
     config["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"] = serving_recipe["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"]
-    config["extra_env"]["VLLM_USE_V2_MODEL_RUNNER"] = "0"
     config["generator"]["enforce_eager"] = False
     for role in ("policy", "ref"):
         config["trainer"][role]["megatron_config"]["expert_model_parallel_size"] = 4
