@@ -183,7 +183,7 @@ struct ServerInfoResponse {
     /// Registration state of the namespaces this process ingests into itself.
     /// A namespace stuck here rejects every write to it, across restarts.
     ingest: Vec<NamespaceRegistration>,
-    read_cpus: Vec<usize>,
+    read_workers: usize,
     metadata_cache: MetadataCacheInfo,
     index_cache: IndexCacheInfo,
     log_tail_cache: LogTailCacheInfo,
@@ -355,7 +355,7 @@ async fn get_server(State(state): State<IntrospectionState>) -> impl IntoRespons
             ram_chunks: memory.chunks,
         },
         ingest: state.health.snapshot(),
-        read_cpus: state.reads.cpus().to_vec(),
+        read_workers: state.reads.workers(),
         metadata_cache: MetadataCacheInfo {
             limit_bytes: cache.limit_bytes as i64,
             size_bytes: cache.size_bytes as i64,

@@ -13,8 +13,9 @@
 //!   `next.run` and holds it across the handler (bounding the parquet working
 //!   set). One deadline bounds admission and the whole handler; expiry drops
 //!   queued requests and running reads with `deadline_exceeded`.
-//!   Per-method caps bound the parquet working set; CPU isolation belongs to
-//!   the read executor. Writes bypass admission. Registered AFTER SlowRpc.
+//!   Per-method caps bound the parquet working set; separate lower-priority
+//!   read workers preserve ingestion's runtime. Writes bypass admission.
+//!   Registered AFTER SlowRpc.
 //!
 //! Both identify the dispatched RPC through `ctx.spec()`. The
 //! spec is populated ONLY when the services are registered through the generated

@@ -65,10 +65,12 @@ column to every row; producers do not declare it, but SQL queries can select it.
 ## Diagnosing query latency
 
 Query and FetchLogs keep separate working-set limits (two SQL queries and four
-log fetches), while their shared executor uses half the CPUs at lower priority
-on Linux (`GET /api/server`: `readCpus`; no separate CPU reservation on single-CPU
-or non-Linux hosts). Ingestion, cloud HTTP I/O, flushes, and bounded maintenance
-retain the ordinary runtime; SQL saturation cannot consume log-fetch permits.
+log fetches) and a worker pool sized to the available CPU budget
+(`GET /api/server`: `readWorkers`). Linux read workers run ten nice levels below
+the process, capped at nice 19, and can use all idle CPUs; ingestion, cloud HTTP
+I/O, flushes, and bounded maintenance retain the ordinary runtime and priority.
+This is scheduling preference, with no CPU pinning or hard CPU reservation;
+other platforms retain separate workers without changing scheduling priority.
 
 Start with the server's stage timings when unrelated log and SQL requests slow
 down together. For the GCE hub:

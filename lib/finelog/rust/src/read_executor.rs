@@ -1,7 +1,7 @@
 // Copyright The Marin Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Isolate public reads, reserving CPUs on multicore Linux hosts.
+//! Give public reads separate workers with lower Linux scheduling priority.
 
 use std::future::Future;
 use std::io;
@@ -9,53 +9,51 @@ use std::io;
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::{JoinError, JoinSet};
 
-const READ_NICE: i32 = if cfg!(target_os = "linux") { 5 } else { 0 };
+#[cfg(target_os = "linux")]
+const READ_NICE_INCREMENT: i32 = 10;
 
 /// Public-read workers owned by one RPC server.
 pub struct ReadExecutor {
     runtime: Option<Runtime>,
-    cpus: Vec<usize>,
+    workers: usize,
 }
 
 impl ReadExecutor {
-    /// Use half the available worker budget, rounded down with a minimum of one.
-    /// Reserve separate CPU capacity only on multicore Linux hosts.
+    /// Size the pool to the process CPU budget; idle ingestion capacity is
+    /// available to reads without changing ingestion's worker pool or priority.
     pub fn for_process() -> io::Result<Self> {
-        let (available, parallelism) = process_capacity()?;
-        let parallelism = parallelism.min(available.len());
-        let count = (parallelism / 2).max(1);
-        let cpus = available[available.len() - count..].to_vec();
-        Self::on_cpus(cpus)
+        Self::with_workers(std::thread::available_parallelism()?.get())
     }
 
-    fn on_cpus(cpus: Vec<usize>) -> io::Result<Self> {
-        let count = cpus.len();
-        let worker_cpus = cpus.clone();
+    fn with_workers(workers: usize) -> io::Result<Self> {
+        #[cfg(target_os = "linux")]
+        let nice = (thread_nice(std::process::id())? + READ_NICE_INCREMENT).min(19);
         let runtime = Builder::new_multi_thread()
-            .worker_threads(count)
-            // Keep Tokio's blocking capacity for nested cache I/O; affinity
-            // bounds CPU use on both async and blocking workers.
+            .worker_threads(workers)
+            // Nested cache I/O needs Tokio's separate blocking capacity. Both
+            // kinds of worker yield CPU to ingestion at the same priority.
             .thread_name("finelog-read")
             .on_thread_start(move || {
-                restrict_read_thread(&worker_cpus).expect("configure read worker CPU affinity");
+                #[cfg(target_os = "linux")]
+                if unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, nice) } != 0 {
+                    panic!(
+                        "configure read worker priority: {}",
+                        io::Error::last_os_error()
+                    );
+                }
             })
             .enable_all()
             .build()?;
-        tracing::info!(
-            ?cpus,
-            workers = count,
-            nice = READ_NICE,
-            "read executor configured"
-        );
+        tracing::info!(workers, "read executor configured");
         Ok(Self {
             runtime: Some(runtime),
-            cpus,
+            workers,
         })
     }
 
-    /// Selected Linux CPU IDs, or synthetic worker indices on other platforms.
-    pub fn cpus(&self) -> &[usize] {
-        &self.cpus
+    /// Async read workers, independent of ingestion's runtime workers.
+    pub fn workers(&self) -> usize {
+        self.workers
     }
 
     /// Dropping the caller aborts its task instead of detaching an expired read.
@@ -84,58 +82,14 @@ impl Drop for ReadExecutor {
 }
 
 #[cfg(target_os = "linux")]
-fn cpu_affinity(thread: libc::pid_t) -> io::Result<Vec<usize>> {
-    let mut mask = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };
-    if unsafe { libc::sched_getaffinity(thread, std::mem::size_of_val(&mask), &mut mask) } != 0 {
+fn thread_nice(thread: libc::id_t) -> io::Result<i32> {
+    // -1 is also a valid nice value, so errno distinguishes failure.
+    unsafe { *libc::__errno_location() = 0 };
+    let nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, thread) };
+    if nice == -1 && io::Error::last_os_error().raw_os_error() != Some(0) {
         return Err(io::Error::last_os_error());
     }
-    Ok((0..libc::CPU_SETSIZE as usize)
-        .filter(|&cpu| unsafe { libc::CPU_ISSET(cpu, &mask) })
-        .collect())
-}
-
-#[cfg(target_os = "linux")]
-fn set_cpu_affinity(cpus: &[usize]) -> io::Result<()> {
-    let mut mask = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };
-    for &cpu in cpus {
-        unsafe { libc::CPU_SET(cpu, &mut mask) };
-    }
-    if unsafe { libc::sched_setaffinity(0, std::mem::size_of_val(&mask), &mask) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-fn process_capacity() -> io::Result<(Vec<usize>, usize)> {
-    #[cfg(target_os = "linux")]
-    {
-        // A library caller may already be pinned. Measure the cgroup-aware CPU
-        // budget with the process leader's mask without changing that caller.
-        std::thread::Builder::new()
-            .name("finelog-cpus".into())
-            .spawn(|| {
-                let cpus = cpu_affinity(std::process::id() as libc::pid_t)?;
-                set_cpu_affinity(&cpus)?;
-                Ok((cpus, std::thread::available_parallelism()?.get()))
-            })?
-            .join()
-            .expect("CPU capacity probe panicked")
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let count = std::thread::available_parallelism()?.get();
-        Ok(((0..count).collect(), count))
-    }
-}
-
-fn restrict_read_thread(_cpus: &[usize]) -> io::Result<()> {
-    #[cfg(target_os = "linux")]
-    set_cpu_affinity(_cpus)?;
-    #[cfg(target_os = "linux")]
-    if unsafe { libc::nice(READ_NICE) } == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
+    Ok(nice)
 }
 
 #[cfg(test)]
@@ -146,47 +100,46 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn async_and_blocking_reads_leave_ingestion_cpus_available() {
-        let ingress_cpus = cpu_affinity(0).unwrap();
+    async fn reads_borrow_all_cpus_without_lowering_ingestion_priority() {
+        fn affinity() -> Vec<usize> {
+            let mut mask = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };
+            assert_eq!(
+                unsafe { libc::sched_getaffinity(0, std::mem::size_of_val(&mask), &mut mask) },
+                0
+            );
+            (0..libc::CPU_SETSIZE as usize)
+                .filter(|&cpu| unsafe { libc::CPU_ISSET(cpu, &mask) })
+                .collect()
+        }
+        let ingress_cpus = affinity();
+        let ingress_nice = thread_nice(0).unwrap();
         let executor = ReadExecutor::for_process().unwrap();
-        let (async_cpus, blocking_cpus) = executor
+        let (async_cpus, async_nice, blocking_cpus, blocking_nice) = executor
             .run(async {
-                let async_cpus = cpu_affinity(0).unwrap();
-                let blocking_cpus = tokio::task::spawn_blocking(|| cpu_affinity(0))
-                    .await
-                    .unwrap()
-                    .unwrap();
-                (async_cpus, blocking_cpus)
+                let async_cpus = affinity();
+                let async_nice = thread_nice(0).unwrap();
+                let (blocking_cpus, blocking_nice) =
+                    tokio::task::spawn_blocking(|| (affinity(), thread_nice(0).unwrap()))
+                        .await
+                        .unwrap();
+                (async_cpus, async_nice, blocking_cpus, blocking_nice)
             })
             .await
             .unwrap();
-        assert_eq!(async_cpus, executor.cpus());
-        assert_eq!(blocking_cpus, executor.cpus());
-        assert_eq!(cpu_affinity(0).unwrap(), ingress_cpus);
-        if std::thread::available_parallelism().unwrap().get() > 1 {
-            assert!(async_cpus.len() < ingress_cpus.len());
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_pinned_initializer_preserves_the_process_cpu_budget() {
-        let expected = process_capacity().unwrap();
-        let first_cpu = expected.0[0];
-        let measured = std::thread::spawn(move || {
-            set_cpu_affinity(&[first_cpu]).unwrap();
-            process_capacity().unwrap()
-        })
-        .join()
-        .unwrap();
-        assert_eq!(measured, expected);
+        assert_eq!(async_cpus, ingress_cpus);
+        assert_eq!(blocking_cpus, ingress_cpus);
+        assert_eq!(affinity(), ingress_cpus);
+        assert_eq!(thread_nice(0).unwrap(), ingress_nice);
+        assert!(async_nice > ingress_nice);
+        // Blocking threads can be created by a read worker. Adding nice again
+        // would push them below async reads, starving query cache operations.
+        assert_eq!(async_nice, blocking_nice);
     }
 
     #[tokio::test]
     async fn blocked_query_dispatch_does_not_block_durable_writes() {
         let store = crate::server::test_support::disk_store("read_cpu_ingestion");
-        let cpu = *process_capacity().unwrap().0.last().unwrap();
-        let executor = Arc::new(ReadExecutor::on_cpus(vec![cpu]).unwrap());
+        let executor = Arc::new(ReadExecutor::with_workers(1).unwrap());
         let arrived = Arc::new(tokio::sync::Notify::new());
         let observed = Arc::clone(&arrived);
         let app = crate::server::build_app_with_config(
