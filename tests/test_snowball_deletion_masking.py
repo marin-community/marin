@@ -299,9 +299,9 @@ def test_hard_mask_export_reloads_to_the_hard_mask_forward(mesh, tmp_path):
 
         def hard_forward(m):
             flipped = eqx.tree_at(lambda mm: mm.transformer.deletion_hard, m, jnp.asarray(1.0))
-            return np.asarray(flipped.activations(tokens, key=None))
+            return np.asarray(flipped.activations(tokens, key=None).array)
 
-        expected = hard_forward(model)
+        expected = hard_forward(model).array
         hard_model = apply_hard_mask(model)
         export_config = dataclasses.replace(config, deletion_tuning=None)
         converter = export_config.hf_checkpoint_converter()
@@ -314,7 +314,7 @@ def test_hard_mask_export_reloads_to_the_hard_mask_forward(mesh, tmp_path):
             axis_mapping=None,
             dtype=jnp.float32,
         )
-        actual = np.asarray(reloaded.activations(tokens, key=None))
+        actual = np.asarray(reloaded.activations(tokens, key=None).array)
         assert actual.shape == expected.shape, (actual.shape, expected.shape)
         # the deletion-multiply and stored-zero paths can lower differently, so
         # allow last-ulp noise; a structural mismatch is orders of magnitude larger
