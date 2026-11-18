@@ -151,7 +151,12 @@ The selected evaluations share a `group_id`; `--run-id` sets that launch ID.
 Curated producer records
 contain launch identity, status, jobs and the raw FineStore location. Their metric
 maps stay empty. Evaldash imports the raw archive and stores its derived scores in
-its own catalog; it does not rewrite the producer's record.
+its own catalog; it does not rewrite the producer's record. The launcher prints the
+same derived coverage and scores when it waits for a launch. For a finished run:
+
+```bash
+uv run python -m experiments.evaluation.cli scores gs://marin-eval-metadata/evals/<run_id>
+```
 
 Raw stores contain protocol and manifest snapshots in `evaluation/run.json`, a
 selection ledger, append-only start/finish attempts, samples, rollouts and grading

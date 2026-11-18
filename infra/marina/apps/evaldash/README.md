@@ -358,7 +358,7 @@ uv run pytest apps/evaldash                          # unit tests; starts a thro
 uv run marina journey evaldash                          # disposable DB; screenshots under journeys-out/
 ```
 
-The image needs more than the kernel: `marin.evaluation`'s four record and statistics modules, the
+The image needs more than the kernel: `lib/evalrecords` for the record and statistics modules, the
 generated `iris.rpc`/`finelog.rpc` packages, and `lib/finestore`. `infra/marina/Dockerfile` copies
 them and `Dockerfile.dockerignore` allows them into the build context.
 

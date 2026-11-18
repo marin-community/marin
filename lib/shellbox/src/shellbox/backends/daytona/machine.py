@@ -632,7 +632,16 @@ class DaytonaMachineFactory:
             )
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
-            machine = DaytonaMachine(sandbox, spec, lifetime, output_collection_timeout=self.output_collection_timeout)
+            effective_spec = spec
+            if not spec.workdir:
+                default_cwd = await sandbox.process.exec(_control_command("pwd -L"), timeout=INTERRUPT_TIMEOUT)
+                image_workdir = default_cwd.result.removesuffix("\n")
+                if default_cwd.exit_code or not PurePosixPath(image_workdir).is_absolute():
+                    raise RuntimeError(f"Cannot resolve Daytona image workdir: {default_cwd.result!r}")
+                effective_spec = replace(spec, workdir=image_workdir)
+            machine = DaytonaMachine(
+                sandbox, effective_spec, lifetime, output_collection_timeout=self.output_collection_timeout
+            )
             if spec.workdir:
                 result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/", env={"PATH": CONTROL_PATH}))
                 if result.exit_code:

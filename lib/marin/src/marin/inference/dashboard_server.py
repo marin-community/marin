@@ -21,9 +21,11 @@ buffered JSON and reject streaming.
 command in a reconstructed ShellSim agent workspace. ``/web-search`` runs the
 optional Parallel web search tool when the server holds a Parallel API key; ``/info``
 reports whether it does. ``/chat-shares`` stores bounded, process-local snapshots
-for short chat links.
+for short chat links. ``/feedback`` saves a model-feedback report to Marin storage
+when the server has a feedback prefix.
 """
 
+import asyncio
 import dataclasses
 import importlib.resources
 import json
@@ -47,6 +49,7 @@ from starlette.routing import Route
 
 from marin.inference.chat_template_protocol import ChatTemplateProtocol
 from marin.inference.http_proxy import forwardable_request_headers, forwardable_response_headers
+from marin.inference.model_feedback import save_feedback_report
 from marin.inference.python_tool_routes import (
     invoke_tool_response,
     python_tool_definitions_response,
@@ -61,6 +64,9 @@ logger = logging.getLogger(__name__)
 MAX_SHARED_CHAT_BYTES = 512 * 1024
 MAX_SHARED_CHATS = 128
 SHARED_CHAT_ID_BYTES = 12
+MAX_FEEDBACK_BYTES = 1024 * 1024
+# Per serving process; bounds what one dashboard URL holder can write to storage.
+MAX_FEEDBACK_REPORTS = 256
 
 
 @dataclass(frozen=True)
@@ -78,6 +84,22 @@ class ServingInfo:
     chat_template_protocol: ChatTemplateProtocol = field(default_factory=ChatTemplateProtocol)
 
 
+async def _json_object_body(request: Request, max_bytes: int, label: str) -> dict[str, object] | Response:
+    """Read a bounded JSON object body, or return the error response for the caller to send."""
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            return JSONResponse({"error": f"{label} is too large"}, status_code=413)
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JSONResponse({"error": f"{label} must be valid JSON"}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": f"{label} must be a JSON object"}, status_code=400)
+    return payload
+
+
 @dataclass
 class _ChatShareStore:
     max_bytes: int = MAX_SHARED_CHAT_BYTES
@@ -86,17 +108,9 @@ class _ChatShareStore:
     chats: OrderedDict[str, bytes] = field(default_factory=OrderedDict)
 
     async def create_response(self, request: Request) -> Response:
-        body = bytearray()
-        async for chunk in request.stream():
-            body.extend(chunk)
-            if len(body) > self.max_bytes:
-                return JSONResponse({"error": "shared chat is too large"}, status_code=413)
-        try:
-            payload = json.loads(body)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return JSONResponse({"error": "shared chat must be valid JSON"}, status_code=400)
-        if not isinstance(payload, dict):
-            return JSONResponse({"error": "shared chat must be a JSON object"}, status_code=400)
+        payload = await _json_object_body(request, self.max_bytes, "shared chat")
+        if isinstance(payload, Response):
+            return payload
 
         share_id = secrets.token_urlsafe(self.id_bytes)
         while share_id in self.chats:
@@ -113,6 +127,34 @@ class _ChatShareStore:
         return Response(payload, media_type="application/json", headers={"cache-control": "no-store"})
 
 
+@dataclass
+class _FeedbackStore:
+    prefix: str
+    info: ServingInfo
+    max_bytes: int = MAX_FEEDBACK_BYTES
+    max_reports: int = MAX_FEEDBACK_REPORTS
+    saved: int = 0
+
+    async def create_response(self, request: Request) -> Response:
+        if self.saved >= self.max_reports:
+            return JSONResponse({"error": "this server has reached its feedback report limit"}, status_code=429)
+        report = await _json_object_body(request, self.max_bytes, "feedback report")
+        if isinstance(report, Response):
+            return report
+        if not str(report.get("description", "")).strip():
+            return JSONResponse({"error": "feedback report needs a description"}, status_code=400)
+        # Count before the write so concurrent requests cannot pass the limit together.
+        self.saved += 1
+        try:
+            location = await asyncio.to_thread(save_feedback_report, self.prefix, report, dataclasses.asdict(self.info))
+        except Exception:
+            self.saved -= 1
+            logger.exception("Could not save feedback report under %s", self.prefix)
+            return JSONResponse({"error": "could not save the feedback report"}, status_code=502)
+        logger.info("Saved feedback report %s", location)
+        return JSONResponse({"location": location}, status_code=201)
+
+
 def build_dashboard_app(
     *,
     upstream_base_url: str,
@@ -121,6 +163,7 @@ def build_dashboard_app(
     request_timeout_seconds: float = 600.0,
     shellsim_catalog: str = shellsim.DEFAULT_PYPI_CATALOG,
     web_search: ParallelWebSearch | None = None,
+    feedback_prefix: str | None = None,
 ) -> Starlette:
     """Build the dashboard and reverse proxy for a local serving backend.
 
@@ -131,9 +174,11 @@ def build_dashboard_app(
         request_timeout_seconds: Per-request timeout for upstream proxying.
         shellsim_catalog: Host-selected ports catalog for CPython and NumPy tools.
         web_search: Parallel credentials for the optional ``web_search`` tool; None disables it.
+        feedback_prefix: Storage prefix for model-feedback reports; None disables ``/feedback``.
     """
     state: dict[str, httpx.AsyncClient] = {}
     chat_shares = _ChatShareStore()
+    feedback = None if feedback_prefix is None else _FeedbackStore(feedback_prefix, info)
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
@@ -152,7 +197,9 @@ def build_dashboard_app(
         return HTMLResponse(DASHBOARD_HTML)
 
     async def serving_info(_request: Request) -> Response:
-        return JSONResponse({**dataclasses.asdict(info), "web_search": web_search is not None})
+        return JSONResponse(
+            {**dataclasses.asdict(info), "web_search": web_search is not None, "feedback": feedback is not None}
+        )
 
     async def health(_request: Request) -> Response:
         client = state["client"]
@@ -206,6 +253,7 @@ def build_dashboard_app(
             Route("/health", health),
             Route("/chat-shares", chat_shares.create_response, methods=["POST"]),
             Route("/chat-shares/{share_id}", chat_shares.get_response),
+            *([Route("/feedback", feedback.create_response, methods=["POST"])] if feedback else []),
             Route("/tools", python_tool_definitions_response, methods=["POST"]),
             Route("/tools/{name}", invoke_tool_response, methods=["POST"]),
             Route("/shell", shell_workspace_response, methods=["POST"]),

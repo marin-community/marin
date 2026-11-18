@@ -1,11 +1,14 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
+from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
+from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
 from levanter.grug.attention import (
@@ -16,6 +19,8 @@ from levanter.grug.attention import (
     reference_attention,
     token_validity_from_attention_mask,
 )
+
+from levanter.testing.devices import use_cpu_devices
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
@@ -261,3 +266,50 @@ def test_xla_flash_attention_broadcasts_shared_segment_ids_across_the_batch():
     shared = jnp.where(jnp.arange(q.shape[1]) < 40, 0, 1)[None, :]  # one row of segment ids for a batch of 2
     mask = AttentionMask.causal(sliding_window=20).with_segment_ids(shared)
     _assert_matches_reference(q, k, v, mask, block_size=16)
+
+
+@pytest.mark.multidevice
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("window", [None, 128])
+def test_splash_packed_context_shards_match_unsharded_output(monkeypatch, window):
+    # Interpret the actual Pallas kernel on CPU; keep segment/mask lowering unchanged.
+    monkeypatch.setattr(
+        splash_attention_kernel,
+        "make_splash_mha",
+        functools.partial(splash_attention_kernel.make_splash_mha, interpret=True),
+    )
+    rng = np.random.default_rng(73)
+    q, k, v = [rng.standard_normal((1, 512, 2, 128), dtype=np.float32) * 0.2 for _ in range(3)]
+    # Document boundaries cross context shard boundaries at 128, 256, and 384.
+    segments = np.asarray([[0] * 96 + [1] * 204 + [2] * 148 + [3] * 64], dtype=np.int32)
+    outputs = {}
+    with use_cpu_devices(4):
+        for context, packed in ((1, True), (4, True), (4, False)):
+            mesh = Mesh(
+                np.asarray(jax.devices("cpu")[:context]).reshape(1, 1, 1, context, 1),
+                ("replica_dcn", "data", "expert", "context", "model"),
+                axis_types=(AxisType.Explicit,) * 5,
+            )
+            batch_axes = ("replica_dcn", "data", "expert")
+            with jax.set_mesh(mesh):
+                q_sharding = NamedSharding(mesh, P(batch_axes, "context" if context > 1 else None, None, None))
+                kv_sharding = NamedSharding(mesh, P(batch_axes, None, None, None))
+                segment_sharding = NamedSharding(mesh, P(batch_axes, None))
+                args = (
+                    jax.device_put(q, q_sharding),
+                    jax.device_put(k, kv_sharding),
+                    jax.device_put(v, kv_sharding),
+                    jax.device_put(segments, segment_sharding),
+                )
+
+                def forward(q, k, v, segment_ids):
+                    mask = AttentionMask(
+                        is_causal=True,
+                        sliding_window=window,
+                        segment_ids=(segment_ids, segment_ids) if packed else None,
+                    )
+                    return attention(q, k, v, mask, implementation="tpu_splash")
+
+                outputs[context, packed] = np.asarray(jax.jit(forward)(*args))
+    np.testing.assert_allclose(outputs[4, True], outputs[1, True], atol=1e-3, rtol=1e-3)
+    assert np.max(np.abs(outputs[4, True] - outputs[4, False])) > 1e-2

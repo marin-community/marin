@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import types
+from dataclasses import replace
 
 import equinox as eqx
 import haliax as hax
@@ -170,7 +171,10 @@ def test_lora_load_in_peft(local_gpt2_tokenizer_path):
 
     # Local tokenizer keeps converter construction off the Hub; the base model is
     # saved/reloaded from a temp dir so the tokenizer is incidental here.
-    converter: HFCheckpointConverter = Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
+    converter: HFCheckpointConverter = replace(
+        Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter(),
+        reference_checkpoint=None,
+    )
     config = Gpt2Config(max_seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)
     Vocab = converter.Vocab
 
@@ -222,7 +226,10 @@ def test_lora_merged_load_in_hf(local_gpt2_tokenizer_path):
 
     # Local tokenizer keeps converter construction off the Hub; the base model is
     # saved/reloaded from a temp dir so the tokenizer is incidental here.
-    converter: HFCheckpointConverter = Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
+    converter: HFCheckpointConverter = replace(
+        Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter(),
+        reference_checkpoint=None,
+    )
     config = Gpt2Config(max_seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)
     Vocab = converter.Vocab
 
@@ -482,7 +489,10 @@ def test_loraize_a_zero_and_b_zero_degenerate():
 
 def test_lora_lm_load_and_merged_export_honour_field_dtype_overrides(local_gpt2_tokenizer_path, tmp_path):
     """A float32 bias override survives lora_lm's base load from a bfloat16 source and the merged export."""
-    converter = Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
+    converter = replace(
+        Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter(),
+        reference_checkpoint=None,
+    )
     config = Gpt2Config(max_seq_len=16, hidden_dim=16, num_layers=1, num_heads=2)
     overrides = {"bias": jnp.dtype("float32")}
     mp = with_field_dtype_overrides(jmp.get_policy("p=f32,c=bf16"), overrides)

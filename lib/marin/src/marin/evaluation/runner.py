@@ -33,8 +33,10 @@ from evalrecords.records import (
     record_path,
     write_record,
 )
+from evalrecords.rollout_results import score_curated_record
 from fray.client import JobHandle
 from iris.client.client import Job, iris_ctx
+from iris.rpc.proto_display import job_state_friendly
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import SecretSpec
@@ -721,7 +723,12 @@ def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceS
     )
 
 
-def _print_record(record: EvalRunRecord) -> None:
+def print_record(record: EvalRunRecord) -> None:
+    """Print a run's status, failure context, coverage and metrics.
+
+    Curated records carry no metrics; their scores are derived from the run's raw archive.
+    """
+    record = score_curated_record(record)
     print(f"{record.run_id}  [{record.status.value}]  {record.model.name} / {record.evaluation.name}")
     if record.error:
         print(f"  error: {record.error}")
@@ -733,6 +740,13 @@ def _print_record(record: EvalRunRecord) -> None:
             print(f"  last {min(len(lines), _REPORT_TAIL_LINES)} log lines of the {role} child:")
             for line in lines[-_REPORT_TAIL_LINES:]:
                 print(f"    {line}")
+    print(f"  results: {record.results_path}")
+    for task, coverage in sorted(record.coverage.items()):
+        errors = ", ".join(f"{name}={count}" for name, count in sorted(coverage.errors.items()))
+        print(
+            f"  {task:<40} scored {coverage.n_scored}/{coverage.n_attempted} selected "
+            f"of {coverage.n_benchmark}" + (f"  errors: {errors}" if errors else "")
+        )
     if not record.metrics:
         print("  (no metrics)")
         return
@@ -741,22 +755,29 @@ def _print_record(record: EvalRunRecord) -> None:
             print(f"  {task:<40} {metric:<24} {record.metrics[task][metric]:.4f}")
 
 
-def wait_and_report(batches: list[SubmittedEvaluationBatch]) -> None:
-    """Wait for submitted batches and print their durable records."""
+def wait_and_report(batches: list[SubmittedEvaluationBatch]) -> bool:
+    """Wait for submitted batches and print their durable records.
+
+    Returns whether every evaluation wrote a record with succeeded status. For one that wrote no
+    record, prints the orchestrator job's terminal state and error, which explain rejections before
+    any record exists.
+    """
     configure_coreweave_s3()
+    complete = True
     for batch in batches:
-        batch.job.wait(timeout=float("inf"), raise_on_failure=False)
+        status = batch.job.wait(timeout=float("inf"), raise_on_failure=False)
         for evaluation in batch.evaluations:
             path = record_path(batch.records_prefix, evaluation.run_id)
             try:
                 record = read_record(path)
-            except Exception:
-                logger.warning(
-                    "no readable record.json for run %s at %s",
-                    evaluation.run_id,
-                    path,
-                    exc_info=True,
-                )
+            except Exception as error:
+                complete = False
                 print(f"{evaluation.run_id}  [no record]  {batch.model_name} / {evaluation.eval_name}")
+                print(f"  job {batch.job.job_id}: {job_state_friendly(status.state)}")
+                if status.error:
+                    print(f"  error: {status.error}")
+                print(f"  record {path} is unreadable: {type(error).__name__}: {error}")
                 continue
-            _print_record(record)
+            print_record(record)
+            complete = complete and record.status is RunStatus.SUCCEEDED
+    return complete
