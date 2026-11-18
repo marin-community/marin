@@ -72,9 +72,11 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
+from experiments.post_training.long_loop.runs.e12.carried_restore import restore_1005_carried_state
 from experiments.post_training.long_loop.sft_runtime.model import (
     OFFLOAD_CARRY_REMAT_MODE,
     GrugModelConfig,
@@ -1236,16 +1238,41 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if released_initial_state:
                 state = restore_template_from(state)
 
-            state = restore_grug_state_from_checkpoint(
-                state,
-                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
-                load_checkpoint_setting=trainer.load_checkpoint,
-                mesh=mesh,
-                allow_partial=trainer.allow_partial_checkpoint,
-                template_for_candidate=lambda candidate: template_for_candidate_layout(
-                    state, candidate, config.trainer.master_param_mode
-                ),
-            )
+            if config.carried_restore_step is not None:
+                if (
+                    trainer.load_checkpoint is not True
+                    or trainer.allow_partial_checkpoint
+                    or not isinstance(trainer.load_checkpoint_path, str)
+                    or not trainer.load_checkpoint_path
+                    or not isinstance(config.optimizer, GrugMoeMuonHConfig)
+                    or config.optimizer.lr_schedule != "constant"
+                    or config.optimizer.learning_rate != 5e-6
+                    or config.optimizer.adam_lr != 5e-6
+                    or config.optimizer.warmup != 0
+                    or config.optimizer.decay != 0
+                    or config.optimizer.min_lr_ratio != 1.0
+                    or config.optimizer.beta1 != 0.9062
+                    or config.optimizer.epsilon != 3.8339433005718795e-15
+                    or config.optimizer.max_grad_norm is not None
+                    or config.optimizer.global_grad_norm != 1.0
+                    or config.optimizer.expert_normalization != "all_experts"
+                    or not config.optimizer.use_syrk
+                ):
+                    raise ValueError("carried replay requires an explicit strict checkpoint and constant MuonH LR")
+                state = restore_1005_carried_state(
+                    state, trainer.load_checkpoint_path, mesh=mesh, expected_step=config.carried_restore_step
+                )
+            else:
+                state = restore_grug_state_from_checkpoint(
+                    state,
+                    checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+                    load_checkpoint_setting=trainer.load_checkpoint,
+                    mesh=mesh,
+                    allow_partial=trainer.allow_partial_checkpoint,
+                    template_for_candidate=lambda candidate: template_for_candidate_layout(
+                        state, candidate, config.trainer.master_param_mode
+                    ),
+                )
             if config.trainer.master_param_mode == MasterParamMode.DEVICE:
                 state = take_master_as_params(state)
             if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
