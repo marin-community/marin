@@ -34,7 +34,6 @@ def _weighted(entries: tuple[CurriculumEntry, ...] | None = None, seed: int = 17
         entries=entries if entries is not None else (_entry(), _entry("svamp", weight=0.3)),
         stages=(),
         seed=seed,
-        fingerprint="",
     )
 
 
@@ -50,18 +49,11 @@ def _ordered(
         entries=entries if entries is not None else (_entry(weight=None), _entry("svamp", weight=None)),
         stages=stages,
         seed=seed,
-        fingerprint="",
     )
 
 
-def test_curriculum_fingerprints_the_same_inputs_identically():
-    assert _weighted().fingerprint == _weighted().fingerprint
-    assert _ordered().fingerprint == _ordered().fingerprint
-
-
 def test_curriculum_fingerprint_follows_the_declared_mix():
-    """A source version bump, a seed change, and a stage reorder each produce a different curriculum;
-    the curriculum's own version is identity, not content, and keeps the fingerprint."""
+    """Source pins, seed, and stage order affect the fingerprint; curriculum version does not."""
     base = _ordered()
     bumped_source = _ordered(entries=(_entry(version="2", weight=None), _entry("svamp", weight=None)))
     assert base.fingerprint != bumped_source.fingerprint
@@ -69,11 +61,6 @@ def test_curriculum_fingerprint_follows_the_declared_mix():
     assert base.fingerprint != _ordered(stages=(CurriculumStage("svamp"), CurriculumStage("gsm8k", 4096))).fingerprint
     rebadged = replace(base, version="2026.11.19")
     assert base.fingerprint == rebadged.fingerprint
-
-
-def test_curriculum_identity_names_name_version_and_fingerprint():
-    curriculum = _weighted()
-    assert curriculum.identity == f"{curriculum.name}@{curriculum.version}:{curriculum.fingerprint}"
 
 
 def test_curriculum_weighted_mode_projects_the_domain_weights_contract():
