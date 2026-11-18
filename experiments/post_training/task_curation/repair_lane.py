@@ -40,6 +40,7 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, RawRow, ReviewStatus
 from taskcompendium.pipeline.repair import ComparativeOutcome, RepairMatchClass
 
+from experiments.post_training.task_curation.difficulty_campaign import worker_limits
 from experiments.post_training.task_curation.full_qc import LONG_REQUEST_TIMEOUT, ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
@@ -988,6 +989,20 @@ def run_oracle_campaign(
     prepare(cohort_dir, export_dir / "prepared", source_revision=source_revision, controls=recipe.controls)
     task_map = export_dir / "prepared" / "task-map.json"
     calibration_dir = work_root / "calibration"
+    environment_kwargs = dict(environment_kwargs or {})
+    if environment == "local":
+        # The tracked campaigns' LOCAL route, verified against the tracked nl2bash
+        # OracleFilterReceipt: the worker's own containerd cgroup scope as the delegated
+        # parent and per-job scratch dirs. worker_limits performs the qualified worker's
+        # preparation (bubblewrap/umoci/skopeo tooling and the cgroup delegation ritual);
+        # a packages_lock-only grader environment requires this host-capable backend.
+        worker_root = work_root / "worker"
+        environment_kwargs = {
+            "image_cache": str(worker_root / "image-cache"),
+            "ttl": 172800,
+            **worker_limits(worker_root),
+            **environment_kwargs,
+        }
     export_coreweave_s3_credentials()
     calibrate_cohort(
         cohort_dir,
@@ -998,14 +1013,23 @@ def run_oracle_campaign(
         concurrency,
     )
     # Harbor writes trial outputs under calibration/<contract>/attempt-XX/jobs/oracle/...;
-    # the trial walk expects the calibration destination root itself.
+    # the trial walk expects the calibration destination root itself. The collect artifacts
+    # are written locally (pyarrow/pathlib cannot write s3 URIs) and published below.
     receipt = filter_cohort(
         cohort_dir,
         task_map,
         calibration_dir,
-        Path(receipt_uri),
+        work_root / "admitted-tasks.parquet",
         negative_control_policy=policy,
     )
+    receipt_target = str(receipt_uri)
+    receipt_dir = receipt_target.rsplit("/", 1)[0]
+    for name in ("oracle-filter.json", "admitted-tasks.parquet", "oracle-filter-summary.json", "excluded-tasks.parquet"):
+        target = receipt_target if name == "oracle-filter.json" else f"{receipt_dir}/{name}"
+        if work_root / name == Path(target):
+            continue
+        with StoragePath(target).open("wb", auto_mkdir=True) as stream:
+            stream.write((work_root / name).read_bytes())
     tasks = receipt.model_dump(mode="json").get("tasks", {})
     admitted = sum(1 for entry in tasks.values() if entry.get("exclusion_reason") is None)
     return {
@@ -1115,10 +1139,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--campaign-receipt",
-        help="Run the full oracle campaign and write the receipt: cohort -> prepare -> calibrate+trials -> collect",
+        help="Run the full campaign and write the OracleFilterReceipt JSON at this path or URI",
     )
-    parser.add_argument("--campaign-environment", default="daytona")
-    parser.add_argument("--campaign-environment-kwargs", default='{"provisioning": "declarative"}')
+    parser.add_argument("--campaign-environment", default="local")
+    parser.add_argument("--campaign-environment-kwargs", default="{}")
     parser.add_argument("--campaign-concurrency", type=int, default=16)
     parser.add_argument(
         "--prepare-output-root",

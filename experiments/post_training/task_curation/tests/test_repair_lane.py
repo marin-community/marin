@@ -1206,10 +1206,16 @@ def test_oracle_campaign_collects_trials_from_the_calibration_root(tmp_path, mon
 
     def fake_calibrate_cohort(cohort, task_map, destination, environment, environment_kwargs, concurrency):
         calls["calibration_root"] = destination
+        calls["calibration_environment"] = environment
+        calls["calibration_kwargs"] = environment_kwargs
 
     def fake_filter_cohort(cohort, task_map, jobs, output, **kwargs):
         calls["trial_root"] = jobs
         calls["policy"] = kwargs.get("negative_control_policy")
+        (output.parent / "oracle-filter.json").write_text("{}")
+        output.write_bytes(b"parquet")
+        (output.parent / "oracle-filter-summary.json").write_text("{}")
+        (output.parent / "excluded-tasks.parquet").write_bytes(b"parquet")
 
         class FakeReceipt:
             def model_dump(self, mode):
@@ -1228,6 +1234,11 @@ def test_oracle_campaign_collects_trials_from_the_calibration_root(tmp_path, mon
     monkeypatch.setattr(lane, "prepare", fake_prepare)
     monkeypatch.setattr(lane, "calibrate_cohort", fake_calibrate_cohort)
     monkeypatch.setattr(lane, "filter_cohort", fake_filter_cohort)
+    monkeypatch.setattr(
+        lane,
+        "worker_limits",
+        lambda root: {"cgroup_parent": str(root / "cgroup"), "disk_root": str(root / "sandbox-disks")},
+    )
     policy = NegativeControlPolicy(
         version=1,
         scope="global_workspace",
@@ -1249,9 +1260,15 @@ def test_oracle_campaign_collects_trials_from_the_calibration_root(tmp_path, mon
         receipt_uri=str(tmp_path / "receipt.json"),
         source_revision="7fd50fb713",
         policy=policy,
+        environment="local",
     )
     assert calls["trial_root"] == tmp_path / "calibration"
     assert calls["calibration_root"] == tmp_path / "calibration"
+    assert calls["calibration_environment"] == "local"
+    # The tracked campaigns' LOCAL route: delegated cgroup + per-job scratch dirs.
+    assert calls["calibration_kwargs"]["image_cache"] == str(tmp_path / "worker" / "image-cache")
+    assert calls["calibration_kwargs"]["ttl"] == 172800
+    assert calls["calibration_kwargs"]["disk_root"] == str(tmp_path / "worker" / "sandbox-disks")
     assert calls["policy"] == policy
     assert summary["harbor_tasks"] == 0
     assert summary["receipt_tasks"] == 3
@@ -1283,3 +1300,101 @@ class TestSubprocessCredentials:
         monkeypatch.setattr(lane, "s3_credentials", lambda store: None)
         lane.export_coreweave_s3_credentials()
         assert "AWS_ACCESS_KEY_ID" not in os.environ
+
+
+def test_oracle_campaign_publishes_collect_artifacts_to_the_receipt_uri(tmp_path, monkeypatch):
+    """filter_cohort writes locally; the four artifacts publish beside the receipt URI."""
+    (tmp_path / "cohort" / "conversion-abc" / "converted-pending").mkdir(parents=True)
+
+    class FakeInfo:
+        id = "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
+
+    class FakeConfig:
+        controls = Controls()
+
+    class FakeSource:
+        info = FakeInfo()
+        config = FakeConfig()
+
+    class FakeReceipt:
+        def model_dump(self, mode):
+            return {"tasks": {"t1": {"exclusion_reason": None}}}
+
+    uploaded = {}
+
+    class RecordingStoragePath:
+        def __init__(self, uri):
+            self.uri = uri
+
+        def open(self, mode, auto_mkdir=False):
+            uri = self.uri
+
+            class Stream:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def write(self, data):
+                    uploaded[uri] = data
+
+            return Stream()
+
+    monkeypatch.setattr(lane, "configured_sources", lambda: [FakeSource()])
+    monkeypatch.setattr(lane, "convert_cohort", lambda **kwargs: {"conversion_identity": "abc", "counts": {}})
+    monkeypatch.setattr(
+        lane,
+        "prepare",
+        lambda cohort, output, *, source_revision, controls: (
+            output.mkdir(parents=True),
+            (output / "task-map.json").write_text("{}"),
+        ),
+    )
+    monkeypatch.setattr(lane, "calibrate_cohort", lambda *args, **kwargs: None)
+
+    def fake_filter_cohort(cohort, task_map, jobs, output, **kwargs):
+        (output.parent / "oracle-filter.json").write_text("{}")
+        output.write_bytes(b"parquet")
+        (output.parent / "oracle-filter-summary.json").write_text("{}")
+        (output.parent / "excluded-tasks.parquet").write_bytes(b"parquet")
+        return FakeReceipt()
+
+    monkeypatch.setattr(lane, "filter_cohort", fake_filter_cohort)
+    monkeypatch.setattr(
+        lane,
+        "worker_limits",
+        lambda root: {"cgroup_parent": str(root / "cgroup"), "disk_root": str(root / "sandbox-disks")},
+    )
+    monkeypatch.setattr(lane, "StoragePath", RecordingStoragePath)
+    policy = NegativeControlPolicy(
+        version=1,
+        scope="global_workspace",
+        max_identical_budget_repeats=1,
+        answer_graded="not_applicable",
+        source_deadline="non_passing_annotation",
+        source_error="non_passing_annotation",
+        decision=ContentEvidenceReference(uri="s3://ruling", sha256="0" * 64),
+    )
+    lane.run_oracle_campaign(
+        tracked_source_id="TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+        report={"folders": {}},
+        folders=("nl2bash_v2",),
+        repo="FWeindel/validated-tasks",
+        candidate_revision="eafe9b38",
+        tracked_uris=("s3://tracked",),
+        tracked_spec_uris=("s3://specs",),
+        work_root=tmp_path,
+        receipt_uri="s3://bucket/run/oracle-filter.json",
+        source_revision="887056f8ef",
+        policy=policy,
+        environment="local",
+    )
+    assert sorted(uploaded) == [
+        "s3://bucket/run/admitted-tasks.parquet",
+        "s3://bucket/run/excluded-tasks.parquet",
+        "s3://bucket/run/oracle-filter-summary.json",
+        "s3://bucket/run/oracle-filter.json",
+    ]
+    for name in ("oracle-filter.json", "admitted-tasks.parquet", "oracle-filter-summary.json", "excluded-tasks.parquet"):
+        assert (tmp_path / name).exists()
