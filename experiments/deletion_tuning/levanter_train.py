@@ -24,8 +24,10 @@ import levanter.callbacks
 import numpy as np
 from levanter.models.snowball import SnowballLMHeadModel
 from levanter.models.snowball_deletion import (
+    WANDA_SAMPLE_STRIDE,
     down_norms,
     init_gate_logits_jax,
+    wanda_delete_threshold,
 )
 from levanter.trainer import Trainer
 
