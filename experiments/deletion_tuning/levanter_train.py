@@ -228,9 +228,9 @@ class DeletionTrainer(Trainer):
         settings = self.deletion_settings
         if settings is None:
             return result
-        alpha = _alpha_ramp_jax(result.state.step, settings.total_steps, settings.alpha_start, settings.alpha_end)
-        model = eqx.tree_at(lambda m: m.transformer.deletion_alpha, result.state.model, alpha)
-        return dataclasses.replace(result, state=dataclasses.replace(result.state, model=model))
+        alpha = _alpha_ramp_jax(result.new_state.step, settings.total_steps, settings.alpha_start, settings.alpha_end)
+        model = eqx.tree_at(lambda m: m.transformer.deletion_alpha, result.new_state.model, alpha)
+        return dataclasses.replace(result, new_state=dataclasses.replace(result.new_state, model=model))
 
     def add_eval_hook(self, eval_dataset, name: str | None = None):
         """Evaluate with the hard mask (deploy semantics), unlike the training forward."""
