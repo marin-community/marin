@@ -1094,36 +1094,9 @@ def main() -> None:
     args = parser.parse_args()
     require_candidate_args(parser, args, prepare_mode=args.prepare_output_root is not None)
     configure_coreweave_s3()
-    if args.cohort_output_root is not None:
-        if args.cohort_report is None:
-            parser.error("--cohort-output-root requires --cohort-report")
-        if args.with_prepare and (args.prepare_output_root is None or not args.source_revision):
-            parser.error("--with-prepare requires --prepare-output-root and --source-revision")
-        report = json.loads(StoragePath(args.cohort_report).read_text())
-        cohort_tracked_uris = (
-            tuple(args.tracked_parquet) if args.tracked_parquet else resolve_tracked_uris(args.tracked_source_id)
-        )
-        manifest = convert_cohort(
-            tracked_source_id=args.tracked_source_id,
-            report=report,
-            folders=tuple(args.folder),
-            repo=args.repo,
-            candidate_revision=args.candidate_revision,
-            tracked_uris=cohort_tracked_uris,
-            tracked_spec_uris=tuple(args.tracked_specs or ()),
-            output_root=args.cohort_output_root,
-            drop_wrapper_solve_sh=args.drop_wrapper_solve_sh,
-        )
-        if args.with_prepare:
-            manifest["harbor"] = prepare_harbor_export(
-                tracked_source_id=args.tracked_source_id,
-                cohort_root=args.cohort_output_root,
-                output_root=args.prepare_output_root,
-                source_revision=args.source_revision,
-            )
-        logger.info("RESULT %s", json.dumps(manifest, sort_keys=True))
-        return
     if args.cohort_report is not None and args.campaign_receipt is not None:
+        if not args.source_revision:
+            parser.error("--campaign-receipt requires --source-revision")
         report = json.loads(StoragePath(args.cohort_report).read_text())
         policy = NegativeControlPolicy(
             version=1,
@@ -1159,6 +1132,35 @@ def main() -> None:
             policy=policy,
         )
         logger.info("RESULT %s", json.dumps(summary, sort_keys=True))
+        return
+    if args.cohort_output_root is not None:
+        if args.cohort_report is None:
+            parser.error("--cohort-output-root requires --cohort-report")
+        if args.with_prepare and (args.prepare_output_root is None or not args.source_revision):
+            parser.error("--with-prepare requires --prepare-output-root and --source-revision")
+        report = json.loads(StoragePath(args.cohort_report).read_text())
+        cohort_tracked_uris = (
+            tuple(args.tracked_parquet) if args.tracked_parquet else resolve_tracked_uris(args.tracked_source_id)
+        )
+        manifest = convert_cohort(
+            tracked_source_id=args.tracked_source_id,
+            report=report,
+            folders=tuple(args.folder),
+            repo=args.repo,
+            candidate_revision=args.candidate_revision,
+            tracked_uris=cohort_tracked_uris,
+            tracked_spec_uris=tuple(args.tracked_specs or ()),
+            output_root=args.cohort_output_root,
+            drop_wrapper_solve_sh=args.drop_wrapper_solve_sh,
+        )
+        if args.with_prepare:
+            manifest["harbor"] = prepare_harbor_export(
+                tracked_source_id=args.tracked_source_id,
+                cohort_root=args.cohort_output_root,
+                output_root=args.prepare_output_root,
+                source_revision=args.source_revision,
+            )
+        logger.info("RESULT %s", json.dumps(manifest, sort_keys=True))
         return
     if args.prepare_output_root is not None:
         if args.cohort_root is None or not args.source_revision:

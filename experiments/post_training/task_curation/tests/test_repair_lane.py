@@ -5,6 +5,7 @@
 
 import io
 import json
+import sys
 import tarfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1047,3 +1048,83 @@ class TestMatchedPairWorkload:
         assert [workload_pair.candidate.id for workload_pair in workload.pairs] == ["c-repair"]
         assert workload.pairs[0].original.id == "t-spec-id"
         assert workload.unresolved == 0
+
+
+class TestCampaignDispatch:
+    """--campaign-receipt must route through the full oracle campaign, not the plain cohort branch."""
+
+    @staticmethod
+    def _argv(tmp_path, *, campaign: bool) -> list[str]:
+        argv = [
+            "repair_lane",
+            "--tracked-source-id",
+            "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+            "--candidate-source-id",
+            "FWeindel:validated-tasks:nl2bash",
+            "--candidate-revision",
+            "eafe9b38c0b8633a7c65541c297a21959f371854",
+            "--folder",
+            "nl2bash_v2",
+            "--tracked-specs",
+            "s3://specs/part-000000.parquet",
+            "--cohort-report",
+            "file:///report.json",
+            "--cohort-output-root",
+            str(tmp_path / "campaign"),
+            "--source-revision",
+            "6c960dae97a70400c20126958e9289c3ccf84bae",
+            "--report",
+            str(tmp_path / "lane-report.json"),
+        ]
+        if campaign:
+            argv += ["--campaign-receipt", str(tmp_path / "receipt.json")]
+        return argv
+
+    def test_campaign_receipt_runs_the_full_workflow(self, tmp_path, monkeypatch):
+        calls = {}
+
+        def fake_campaign(**kwargs):
+            calls.update(kwargs)
+            return {"tracked_source_id": kwargs["tracked_source_id"]}
+
+        def fail_convert(**kwargs):
+            raise AssertionError("plain cohort conversion must not run in campaign mode")
+
+        class FakeStoragePath:
+            def __init__(self, uri):
+                pass
+
+            def read_text(self):
+                return json.dumps({"folders": {}})
+
+        monkeypatch.setattr(lane, "configure_coreweave_s3", lambda: None)
+        monkeypatch.setattr(lane, "StoragePath", FakeStoragePath)
+        monkeypatch.setattr(lane, "resolve_tracked_uris", lambda source_id: ("s3://tracked",))
+        monkeypatch.setattr(lane, "run_oracle_campaign", fake_campaign)
+        monkeypatch.setattr(lane, "convert_cohort", fail_convert)
+        monkeypatch.setattr(sys, "argv", self._argv(tmp_path, campaign=True))
+        lane.main()
+        assert calls["tracked_source_id"] == "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
+        assert calls["work_root"] == tmp_path / "campaign"
+        assert calls["receipt_uri"] == str(tmp_path / "receipt.json")
+        assert calls["policy"] is not None
+        assert calls["source_revision"] == "6c960dae97a70400c20126958e9289c3ccf84bae"
+
+    def test_cohort_only_mode_never_invokes_the_campaign(self, tmp_path, monkeypatch):
+        def fail_campaign(**kwargs):
+            raise AssertionError("campaign must not run without --campaign-receipt")
+
+        class FakeStoragePath:
+            def __init__(self, uri):
+                pass
+
+            def read_text(self):
+                return json.dumps({"folders": {}})
+
+        monkeypatch.setattr(lane, "configure_coreweave_s3", lambda: None)
+        monkeypatch.setattr(lane, "StoragePath", FakeStoragePath)
+        monkeypatch.setattr(lane, "resolve_tracked_uris", lambda source_id: ("s3://tracked",))
+        monkeypatch.setattr(lane, "run_oracle_campaign", fail_campaign)
+        monkeypatch.setattr(lane, "convert_cohort", lambda **kwargs: {"counts": {"converted": 1}})
+        monkeypatch.setattr(sys, "argv", self._argv(tmp_path, campaign=False))
+        lane.main()
