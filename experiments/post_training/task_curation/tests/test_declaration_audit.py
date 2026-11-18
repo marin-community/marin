@@ -74,7 +74,8 @@ def test_a_lexical_receipt_at_neither_declared_nor_selected_pin_fails():
         layer=layer(),
     )
     assert findings == [
-        "lexical receipts: Test:declared-source receipt pin open-athena/example-source@" + "8" * 40
+        "lexical receipts: Test:declared-source receipt pin open-athena/example-source@"
+        + "8" * 40
         + " (2026.11.13.1) matches no declared or selected pin"
     ]
 
@@ -88,7 +89,8 @@ def test_a_retained_receipt_must_match_the_selected_release():
     assert findings == [
         "retained release receipts: Test:declared-source selects open-athena/example-release@"
         + "2" * 40
-        + " but its receipt publishes open-athena/other-release@" + "2" * 40
+        + " but its receipt publishes open-athena/other-release@"
+        + "2" * 40
     ]
 
 
@@ -162,7 +164,11 @@ def test_an_archived_original_record_counts_as_declared():
         archived_releases={"Test:archived-source": release(repo="open-athena/archived-retained", revision="6" * 40)},
     )
     findings, notes = audit_families(
-        {"census receipts": {"Test:archived-source": pin("Test:archived-source", dataset_id="open-athena/original-conversion")}},
+        {
+            "census receipts": {
+                "Test:archived-source": pin("Test:archived-source", dataset_id="open-athena/original-conversion")
+            }
+        },
         layer=archived,
         releases={"Test:archived-source": release(repo="open-athena/archived-retained", revision="6" * 40)},
     )

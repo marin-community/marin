@@ -358,7 +358,8 @@ def main() -> None:
         raise SystemExit(f"declaration audit failed with {len(findings)} mismatches")
     LOGGER.info(
         "Declaration audit OK: %d sources, all receipt families bind (%d staged-for-intake notes)",
-        len(layer.source_ids), len(notes),
+        len(layer.source_ids),
+        len(notes),
     )
 
 
