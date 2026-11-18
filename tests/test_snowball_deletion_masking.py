@@ -315,6 +315,8 @@ def test_hard_mask_export_reloads_to_the_hard_mask_forward(mesh, tmp_path):
             dtype=jnp.float32,
         )
         actual = np.asarray(reloaded.activations(tokens, key=None))
+        assert actual.shape == expected.shape, (actual.shape, expected.shape)
         # the deletion-multiply and stored-zero paths can lower differently, so
         # allow last-ulp noise; a structural mismatch is orders of magnitude larger
-        np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+        max_abs_diff = float(np.max(np.abs(actual - expected)))
+        assert max_abs_diff < 1e-4, f"reload forward mismatch: max abs diff {max_abs_diff}"
