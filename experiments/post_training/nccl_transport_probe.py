@@ -599,6 +599,11 @@ def run_pynccl_init_check(device) -> dict:
         control_group = dist.new_group(backend="gloo")
         communicator = PyNcclCommunicator(group=control_group, device=device)
         if not communicator.available or communicator.disabled:
+            if os.environ.get("VLLM_DISABLE_PYNCCL"):
+                # The engine skips the PyNccl stage under this flag too, so
+                # there is no engine-side init for the gate to assert.
+                info["pynccl_init"] = "skipped"
+                return info
             info["pynccl_init"] = "failed"
             info["error"] = (
                 "PyNcclCommunicator reported unavailable "
