@@ -1,0 +1,13 @@
+experiment: X0240
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: softcap radial MuonH, cap c=2
+    flags:
+    - --opt-set
+    - muonh_radial_softcap=2.0
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
