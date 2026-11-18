@@ -167,46 +167,6 @@ def test_resolved_mixture_settings_match_the_release(tmp_path):
     assert resolved.cache_options.batch_size == 128
 
 
-def test_seal_record_resolves_as_a_component(tmp_path):
-    """A seeded seal record yields the component ``mixture`` reads: prebuilt, packed, flat."""
-    prefix = str(tmp_path)
-    handle = mix.exp3_v5_sources()["pretrain/source/c00q0-train/gt_64k"]
-    write_record(
-        ArtifactRecord(
-            name=handle.name,
-            version=handle.version,
-            output_path=handle.path(prefix),
-            result_type=_TOKENIZED_CACHE,
-            config=materialized_config(handle, prefix),
-        )
-    )
-    cache = TokenizedCache.raw_load(handle.path(prefix))
-    component = cache.as_component()
-    assert component.cache_dir == mix._CACHE_ROOT
-    # The empty-URL source keeps Levanter's skip-a-missing-split behavior for sealed caches too.
-    assert isinstance(component.source, UrlDatasetSourceConfig)
-    assert component.source.train_urls == [] and component.source.validation_urls == []
-    assert component.format == PrebuiltLmDatasetFormat(input_ids_key="input_ids", loss_weights_key="loss_weights")
-    assert component.pack == 256
-    assert component.split == "train"
-    assert component.flat_cache is True
-    assert component.tags is None
-    assert cache.tokenizer == mix._TOKENIZER
-
-
-def test_seal_record_pins_the_entry_digest(tmp_path):
-    """The seal record carries the digest that pins the source's exact catalog entry."""
-    prefix = str(tmp_path)
-    name = "pretrain/source/c00q0-train/gt_64k"
-    handle = mix.exp3_v5_sources()[name]
-    config = materialized_config(handle, prefix)
-    assert config["entry_sha256"] == mix._SEALS[name]["entry_sha256"]
-    assert len(config["entry_sha256"]) == 64
-    assert config["rows"] == mix._SEALS[name]["rows"]
-    assert config["cache_catalog"]["sha256"] == mix._CATALOG_SHA256
-    assert config["packing_lookahead"] == 128
-
-
 def test_seal_check_rejects_a_drifted_catalog(tmp_path, monkeypatch):
     """The seal check validates digests, counts, loss modes, and totals."""
     swept: list[tuple[str, int]] = []

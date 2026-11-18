@@ -44,12 +44,10 @@ not launch training or claim a completed matched-token comparison.
 
 ## Exp3 V5 mix as an artifact graph
 
-`exp3_v5_mix.py` expresses the exact SFT mix Exp3 trained on (data release
-V5) as versioned handles: an adopted release seal, one sealed-cache
-`TokenizedCache` handle per source pinning its content-addressed shard paths
-and counts, and `exp3_v5_data_config`, which assembles the training data
-config through `mixture()` with the release's three-phase weight schedule and
-shuffle/geometry. `test_exp3_v5_mix.py` resolves the graph offline and pins it
-component by component against the release's `data.json`
-(`fixtures/`). The release remains the source of truth; the module recomputes
-nothing.
+`exp3_v5_mix.py` records the SFT mix Exp3 trained on (data release V5) as
+versioned handles. The release document and cache catalog are adopted at pinned
+digests. Each source has a `TokenizedCache` seal record that pins its catalog
+entry digest, counts, and loss mode. `exp3_v5_seal_check()` verifies the catalog
+and shard caches. `exp3_v5_data_config()` assembles the training config through
+`mixture()` with the release's weight schedule and shuffle settings. The offline
+test compares its resolved components with the release's `data.json` fixture.

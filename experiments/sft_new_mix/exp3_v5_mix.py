@@ -319,10 +319,9 @@ def exp3_v5_data_config(ctx: StepContext) -> LmDataConfig:
     """The ``LmDataConfig`` the Exp3 SFT run consumed, assembled through ``mixture``.
 
     Call this inside a consumer's ``build_config`` whose ``deps`` include
-    :func:`exp3_v5_mix_deps`. ``mixture`` reads each source's seal record at run time (so the
-    components carry the release's exact cache addresses, format, and packing) and the
-    schedule, catalog, shuffle, and validation reservations are applied verbatim from the
-    release document.
+    :func:`exp3_v5_mix_deps`. ``mixture`` reads each source's seal record at run time for
+    its format and packing. The release catalog supplies the per-source cache addresses;
+    the schedule, shuffle, and validation reservations come from the release document.
     """
     phase_weights = _SCHEDULE[0][1]
     train = {handle: phase_weights[handle.name] for handle in exp3_v5_sources().values()}
