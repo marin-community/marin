@@ -52,6 +52,9 @@ GS_RE = re.compile(r"gs://[^\s'\"`]+")
 LOG_NAMESPACE = "log"
 # Where finelog keeps object-backed tables under its remote_log_dir.
 LOG_TABLE_PREFIX = ("_finelog", "tables")
+# The hub's own cluster name. The hub stores its own rows under this name once it
+# names its cluster, and with an empty `cluster` before that.
+HUB_CLUSTER = "marin"
 # Repository-relative Iris config for the cluster whose task logs are analyzed.
 DEFAULT_IRIS_CONFIG = "lib/iris/config/marin.yaml"
 
@@ -320,9 +323,9 @@ def iter_log_rows(
 
     One query scans every source so DuckDB parallelizes across files and row
     groups; matching rows stream back in batches. Only the hub's own rows are
-    kept: ``cluster`` is NULL or empty, as in finelog's forwarder. Rows forwarded
-    from other clusters belong to attempts that are not in this controller's
-    checkpoint.
+    kept: ``cluster`` is ``HUB_CLUSTER``, or NULL or empty in rows written before
+    the hub named its cluster. Rows forwarded from other clusters belong to
+    attempts that are not in this controller's checkpoint.
     """
     if not sources:
         return
@@ -331,11 +334,11 @@ def iter_log_rows(
         SELECT key, epoch_ms, data
         FROM read_parquet(?)
         WHERE epoch_ms >= ? AND epoch_ms < ?
-          AND (cluster IS NULL OR cluster = '')
+          AND COALESCE(NULLIF(cluster, ''), ?) = ?
           AND key LIKE '/%:%'
           AND data LIKE '%gs://%'
         """,
-        [list(sources), window.start_ms, window.end_ms],
+        [list(sources), window.start_ms, window.end_ms, HUB_CLUSTER, HUB_CLUSTER],
     )
     while batch := cursor.fetchmany(ROW_BATCH_SIZE):
         yield from batch

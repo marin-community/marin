@@ -344,6 +344,36 @@ def test_near_live_vllm_alignment_preserves_original_range_limit(monkeypatch):
     assert queries == []
 
 
+def test_a_vllm_series_spanning_its_server_naming_its_cluster_stays_one_series():
+    """Rows written before the server named its cluster are empty; later ones carry the
+    route's own name. Both must land in one series, or the counter's increase is lost."""
+    database = _vllm_projection_database()
+    for cluster, timestamp, value in (("", 0, 100), ("marin", 60_000, 250), ("marin", 120_000, 310)):
+        database.execute(
+            """INSERT INTO "telemetry_v1.vllm" VALUES
+            (?, 'vllm', '/serve', 'generation_tokens_total', 'gauge', ?, '{}',
+             '{"source_temporality":"cumulative_snapshot"}', ?, 0)""",
+            [cluster, value, timestamp],
+        )
+    source = Record(
+        target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"),
+        query=lambda sql, *, max_rows: database.execute(sql).fetch_arrow_table(),
+    )
+    app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+    params = {
+        "identity_kind": "job_id",
+        "identity": "/serve",
+        "from": 60_000,
+        "to": 180_000,
+        "bucket_ms": 15_000,
+        "view": "counter_total",
+    }
+    with TestClient(app) as client:
+        response = client.get("/finelog/marin/v1/vllm/overview", params=params)
+    assert response.status_code == 200
+    assert [(row["metric"], row["value"]) for row in response.json()] == [("generated_tokens", 210.0)]
+
+
 def test_standalone_reset_window_change(standalone_overview_client):
     params = {"identity_kind": "job_id", "identity": "/serve", "from": 60_000, "to": 120_000, "bucket_ms": 15_000}
     first = standalone_overview_client.get("/finelog/marin/v1/vllm/overview", params=params)

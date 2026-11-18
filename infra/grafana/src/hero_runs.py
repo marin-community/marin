@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 import pyarrow as pa
+from config import FINELOG_HUB_CLUSTER
 from vllm_observability import sql_string
 
 TASK_STATE_FRESHNESS = timedelta(seconds=90)
@@ -49,6 +50,10 @@ PHASE_METRIC = "phase"
 INITIALIZING_PHASE = 0
 TRAINING_PHASE = 1
 FINISHED_PHASE = 2
+
+# A hub row's origin cluster, with rows written before the hub named itself
+# read as the hub.
+HUB_ORIGIN_CLUSTER_SQL = f"COALESCE(NULLIF(cluster,''),{sql_string(FINELOG_HUB_CLUSTER)})"
 
 
 class RunIdentity(Protocol):
@@ -101,7 +106,7 @@ def task_state_query(now: datetime) -> str:
     root_predicate = " OR ".join(f"root_job_id LIKE '{pattern}'" for pattern in HERO_ROOT_PATTERNS)
     return (
         "WITH samples AS ("
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS cluster, root_job_id, ts, running "
+        f"SELECT {HUB_ORIGIN_CLUSTER_SQL} AS cluster, root_job_id, ts, running "
         'FROM "iris.task_state" '
         f"WHERE ({root_predicate}) AND ts >= TIMESTAMP '{start}' "
         f"AND ts < TIMESTAMP '{end}'"
@@ -111,7 +116,7 @@ def task_state_query(now: datetime) -> str:
         "PARTITION BY cluster, root_job_id ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
         ") AS running_segment FROM samples"
         "), history AS ("
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS cluster, root_job_id, ts, running, "
+        f"SELECT {HUB_ORIGIN_CLUSTER_SQL} AS cluster, root_job_id, ts, running, "
         "MIN(CASE WHEN running > 0 THEN ts END) OVER ("
         "PARTITION BY cluster, root_job_id, running_segment"
         ") AS running_since, "
@@ -131,7 +136,7 @@ def _phase_query(now: datetime, lookback: timedelta, predicate: str) -> str:
     end = sql_epoch_ms(now)
     return (
         "WITH samples AS ("
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
+        f"SELECT {HUB_ORIGIN_CLUSTER_SQL} AS origin_cluster, "
         "run_id, job_id, execution_uid, timestamp_ms, seq "
         f"FROM {LEVANTER_METRICS_TABLE} "
         f"WHERE name = '{PHASE_METRIC}' AND process_index = 0 "
@@ -165,7 +170,7 @@ def phase_execution_query(now: datetime, runs: Sequence[RunIdentity]) -> str:
     run_predicate = run_id_predicate(runs)
     identities = sorted({(run.cluster, run.run_id) for run in runs})
     identity_predicate = " OR ".join(
-        "(" f"COALESCE(NULLIF(cluster,''),'unknown') = {sql_string(cluster)} " f"AND run_id = {sql_string(run_id)}" ")"
+        "(" f"{HUB_ORIGIN_CLUSTER_SQL} = {sql_string(cluster)} " f"AND run_id = {sql_string(run_id)}" ")"
         for cluster, run_id in identities
     )
     return _phase_query(

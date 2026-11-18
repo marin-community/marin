@@ -10,6 +10,11 @@ per entry and addresses it by name in the URL path.
 import dataclasses
 import os
 
+# The hub finelog's own cluster name. Rows the hub wrote before it named its
+# cluster have an empty `cluster`; readers map those to this name until they age
+# out of retention.
+FINELOG_HUB_CLUSTER = "marin"
+
 # Port finelog listens on, set in lib/finelog/config/{marin,marin-dev}.yaml.
 FINELOG_PORT = 10001
 
