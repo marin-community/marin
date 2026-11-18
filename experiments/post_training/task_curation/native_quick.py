@@ -142,7 +142,7 @@ def publish_quick(
         "revision": commit.oid,
         "manifest": manifest,
         "file_hashes": hashes,
-        "license_check": check_publication(entry["id"], repo, commit.oid),
+        "license_check": check_publication(entry["id"], repo, commit.oid, intended_use.value),
     }
 
 

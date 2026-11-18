@@ -112,7 +112,7 @@ def publish_raw_source(
             source_artifact=stage["artifact"],
             verified_raw_files=len(names),
             file_hashes=hashes,
-            license_check=check_publication(stage["source_id"], repo, commit.oid),
+            license_check=check_publication(stage["source_id"], repo, commit.oid, use),
         )
     receipt_path.write_text(result.model_dump_json(indent=2) + "\n", auto_mkdir=True)
     return result

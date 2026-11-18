@@ -13,6 +13,8 @@ from urllib.parse import quote, urlsplit
 import yaml
 from finestore.rl.licenses import (
     LicenseCheckVerdict,
+    LicenseDecision,
+    LicenseDecisionKind,
     LicenseEvidence,
     LicenseReceipt,
     LicenseVerdict,
@@ -23,6 +25,10 @@ from finestore.rl.licenses import (
 from huggingface_hub import DatasetCard, HfApi, hf_hub_download
 from huggingface_hub.hf_api import RepoFile
 
+from experiments.post_training.task_curation.license_binding import (
+    LICENSE_RECEIPT_INDEX,
+    read_license_receipts,
+)
 from experiments.post_training.task_curation.license_resolution import (
     LICENSE_FILENAME,
     MAX_EVIDENCE_BYTES,
@@ -216,14 +222,51 @@ def licensed_dataset_card(body: str, publication: LicensePublication, *, pretty_
     )
 
 
-def check_publication(source_id: str, dataset_id: str, revision: str) -> dict:
-    """Require the new private pin's own checker result before returning publication evidence."""
+def recorded_lineage_exception(source_id: str, dataset_id: str, revision: str, use: str) -> LicenseDecision | None:
+    """The user-cleared parent exception bound to this exact pin in the receipts registry.
+
+    A lineage receipt binds one source identity at one resolved upstream pin; its typed
+    exception decision records the user's clearance for a scoped use. Only that exact
+    combination rescues a card-check escalation: the receipt must sit at the published
+    pin, carry the resolved upstream, and hold an approved exception for this use.
+    """
+    receipt = read_license_receipts(LICENSE_RECEIPT_INDEX).get(source_id)
+    if receipt is None or (receipt.dataset_id, receipt.revision) != (dataset_id, revision):
+        return None
+    if receipt.resolved_source is None:
+        return None
+    return next(
+        (
+            decision
+            for decision in receipt.decisions
+            if decision.kind is LicenseDecisionKind.EXCEPTION and decision.approved and use in decision.scope
+        ),
+        None,
+    )
+
+
+def check_publication(source_id: str, dataset_id: str, revision: str, use: str) -> dict:
+    """Require the new private pin's own checker result before returning publication evidence.
+
+    A card-check escalation stays blocked unless the receipts registry binds this exact
+    repo@revision to a user-cleared parent lineage exception covering the publication's
+    use; the recorded decision then carries the pass and stays in the evidence. Fail
+    verdicts never clear: a restricted or banned pin fails its own publication.
+    """
     target = LicenseTarget(
         source_id, dataset_id, revision, f"https://huggingface.co/datasets/{dataset_id}/tree/{revision}"
     )
     receipt = resolve_license(target)
     result = check_license(receipt, source_license_ban(source_id, dataset_id, receipt))
     evidence = {**result.model_dump(mode="json"), "receipt": receipt.model_dump(mode="json")}
-    if result.verdict is not LicenseCheckVerdict.PASS:
-        raise ValueError(f"Published pin failed its exact-pin license check: {json.dumps(evidence)}")
-    return evidence
+    if result.verdict is LicenseCheckVerdict.PASS:
+        return evidence
+    if result.verdict is LicenseCheckVerdict.ESCALATE:
+        exception = recorded_lineage_exception(source_id, dataset_id, revision, use)
+        if exception is not None:
+            return {
+                **evidence,
+                "verdict": LicenseCheckVerdict.PASS.value,
+                "lineage_exception": exception.model_dump(mode="json"),
+            }
+    raise ValueError(f"Published pin failed its exact-pin license check: {json.dumps(evidence)}")

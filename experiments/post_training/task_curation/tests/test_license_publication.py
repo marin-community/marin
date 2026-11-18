@@ -244,7 +244,7 @@ def test_new_private_pin_rechecks_restrictive_terms(tmp_path, monkeypatch):
     monkeypatch.setattr(license_publication, "resolve_license", lambda target: receipt)
     monkeypatch.setattr(license_publication, "source_license_ban", lambda source, dataset, actual: None)
     with pytest.raises(ValueError, match="Published pin failed"):
-        license_publication.check_publication(receipt.source_id, "open-athena/new-private-pin", "c" * 40)
+        license_publication.check_publication(receipt.source_id, "open-athena/new-private-pin", "c" * 40, "train")
 
 
 def test_native_publication_binds_the_input_receipt_before_reading_tasks(tmp_path):
@@ -293,4 +293,113 @@ def test_new_private_pin_cannot_hide_a_resolved_upstream_ban(monkeypatch):
     licensing.license_bans.cache_clear()
     monkeypatch.setattr(license_publication, "resolve_license", lambda target: receipt)
     with pytest.raises(ValueError, match="Recorded upstream ban"):
-        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision)
+        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+
+
+def lineage_receipt(revision: str, scope: list[str], *, with_source: bool = True) -> LicenseReceipt:
+    """An escalating receipt at one pin, carrying a typed lineage exception decision."""
+    receipt = source_receipt(b"---\nlicense: other\n---\nCustom terms document.\n").model_copy(
+        update={"revision": revision}
+    )
+    if with_source:
+        receipt = receipt.model_copy(
+            update={
+                "resolved_source": LicenseSourcePin(
+                    dataset_id="fixture/upstream-parent",
+                    revision="d" * 40,
+                    url=f"https://huggingface.co/datasets/fixture/upstream-parent/tree/{'d' * 40}",
+                    declaration=license_evidence("https://example.test/declaration", b"declared", "wrapper_source"),
+                )
+            }
+        )
+    decision = LicenseDecision(
+        kind="exception",
+        approved=True,
+        who="Fixture user ruling",
+        when="2026-11-15T00:00:00+00:00",
+        source_id=receipt.source_id,
+        dataset_id=receipt.dataset_id,
+        revision=revision,
+        scope=scope,
+        rationale="Fixture lineage exception for the user-cleared parent",
+        evidence_urls=["https://huggingface.co/datasets/fixture/upstream-parent/tree/" + "d" * 40],
+        issue_url="https://github.com/marin-community/marin/issues/11497",
+    )
+    return receipt.model_copy(update={"decisions": [decision]})
+
+
+def registered_lineage(monkeypatch, receipt: LicenseReceipt) -> None:
+    monkeypatch.setattr(license_publication, "resolve_license", lambda target: receipt)
+    monkeypatch.setattr(license_publication, "source_license_ban", lambda source, dataset, actual: None)
+    monkeypatch.setattr(license_publication, "read_license_receipts", lambda path: {receipt.source_id: receipt})
+
+
+def test_check_publication_passes_on_the_recorded_lineage_exception(tmp_path, monkeypatch):
+    receipt = lineage_receipt(REVISION, ["train"])
+    registered_lineage(monkeypatch, receipt)
+    evidence = license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+    assert evidence["verdict"] == "PASS"
+    assert evidence["rule_id"] == "E1"
+    assert evidence["lineage_exception"]["scope"] == ["train"]
+    assert evidence["lineage_exception"]["approved"] is True
+
+
+def test_check_publication_ignores_a_lineage_exception_at_another_pin(tmp_path, monkeypatch):
+    receipt = lineage_receipt(REVISION, ["train"])
+    registered = lineage_receipt("e" * 40, ["train"])
+    registered_lineage(monkeypatch, receipt)
+    monkeypatch.setattr(license_publication, "read_license_receipts", lambda path: {registered.source_id: registered})
+    with pytest.raises(ValueError, match="Published pin failed"):
+        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+
+
+def test_check_publication_ignores_a_lineage_exception_out_of_scope(tmp_path, monkeypatch):
+    receipt = lineage_receipt(REVISION, ["eval"])
+    registered_lineage(monkeypatch, receipt)
+    with pytest.raises(ValueError, match="Published pin failed"):
+        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+
+
+def test_check_publication_ignores_a_missing_lineage_receipt(tmp_path, monkeypatch):
+    receipt = lineage_receipt(REVISION, ["train"])
+    registered_lineage(monkeypatch, receipt)
+    monkeypatch.setattr(license_publication, "read_license_receipts", lambda path: {})
+    with pytest.raises(ValueError, match="Published pin failed"):
+        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+
+
+def test_check_publication_ignores_an_exception_without_lineage(tmp_path, monkeypatch):
+    receipt = lineage_receipt(REVISION, ["train"], with_source=False)
+    registered_lineage(monkeypatch, receipt)
+    with pytest.raises(ValueError, match="Published pin failed"):
+        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+
+
+def test_check_publication_never_clears_a_restricted_pin(tmp_path, monkeypatch):
+    receipt = source_receipt(b"---\nlicense: cc-by-nc-4.0\n---\n").model_copy(
+        update={
+            "resolved_source": LicenseSourcePin(
+                dataset_id="fixture/upstream-parent",
+                revision="d" * 40,
+                url=f"https://huggingface.co/datasets/fixture/upstream-parent/tree/{'d' * 40}",
+                declaration=license_evidence("https://example.test/declaration", b"declared", "wrapper_source"),
+            )
+        }
+    )
+    decision = LicenseDecision(
+        kind="exception",
+        approved=True,
+        who="Fixture user ruling",
+        when="2026-11-15T00:00:00+00:00",
+        source_id=receipt.source_id,
+        dataset_id=receipt.dataset_id,
+        revision=receipt.revision,
+        scope=["train"],
+        rationale="Fixture lineage exception",
+        evidence_urls=["https://huggingface.co/datasets/fixture/upstream-parent/tree/" + "d" * 40],
+        issue_url="https://github.com/marin-community/marin/issues/11497",
+    )
+    receipt = receipt.model_copy(update={"decisions": [decision]})
+    registered_lineage(monkeypatch, receipt)
+    with pytest.raises(ValueError, match="Published pin failed"):
+        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")

@@ -126,7 +126,7 @@ def verify_raw_archive(plan: ReleasePlan, archive: RawSourceArchive) -> DatasetR
         downloaded = hf_hub_download(archive.repo, name, repo_type="dataset", revision=archive.revision)
         if file_sha256(StoragePath(downloaded)) != digest:
             raise ValueError(f"Original raw source archive readback differs: {name}")
-    check_publication(plan.source_id, archive.repo, archive.revision)
+    check_publication(plan.source_id, archive.repo, archive.revision, plan.lexical_use.value)
     return DatasetRelease(repo=archive.repo, revision=archive.revision, url=archive.url)
 
 
@@ -293,7 +293,7 @@ def publish_plan(
             raise ValueError(f"Completed release readback differs: {plan.source_id}")
         if not HfApi().repo_info(result["repo"], repo_type="dataset", revision=result["revision"]).private:
             raise ValueError(f"Completed release is not private: {plan.source_id}")
-        check_publication(plan.source_id, result["repo"], result["revision"])
+        check_publication(plan.source_id, result["repo"], result["revision"], plan.lexical_use.value)
         return result
     metadata = json.loads((StoragePath(plan.input_artifact) / ".artifact.json").read_text())["result"]
     for name, expected in (
@@ -376,7 +376,9 @@ def publish_plan(
                 data_restriction=plan.data_restriction,
                 evidence_files=(manifest, *publication.notice_files),
             )
-            original_license = check_publication(plan.source_id, original_repo, original_revision)
+            original_license = check_publication(
+                plan.source_id, original_repo, original_revision, plan.lexical_use.value
+            )
             (output / "converted-original-pin.json").write_text(
                 json.dumps({"repo": original_repo, "revision": original_revision, "license_check": original_license})
                 + "\n",
@@ -401,7 +403,7 @@ def publish_plan(
             data_restriction=plan.data_restriction,
             evidence_files=(manifest, duplicate_manifest, combined_manifest, *publication.notice_files),
         )
-        final_license = check_publication(plan.source_id, repo, revision)
+        final_license = check_publication(plan.source_id, repo, revision, plan.lexical_use.value)
         downloaded = Path(hf_hub_download(repo, "tasks.parquet", repo_type="dataset", revision=revision))
         if verify_retained(downloaded, hashes) != content_sha256:
             raise ValueError(f"Readback content digest differs: {plan.source_id}")
