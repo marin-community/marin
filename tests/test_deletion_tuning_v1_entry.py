@@ -255,6 +255,7 @@ def test_deletion_trainer_initial_state_scopes_optimizer_to_logits(mesh):
     )
     trainer_cls = type("DeletionTrainerPatched", (DeletionTrainer,), {"deletion_settings": settings})
     trainer_config = TrainerConfig(
+        id="dt-v1-entry-test",
         train_batch_size=2,
         num_train_steps=2,
         seed=0,
