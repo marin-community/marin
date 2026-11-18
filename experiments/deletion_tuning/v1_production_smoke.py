@@ -30,6 +30,7 @@ from pathlib import Path
 
 import click
 import draccus
+from fray.types import GpuConfig, ResourceConfig
 from iris.rpc.proto_display import priority_band_value
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -223,8 +224,6 @@ def _pod_train_config(spec: SFTSpec, output_path: str):
 
 
 def _gpu_resources():
-    from fray.types import GpuConfig, ResourceConfig
-
     return ResourceConfig(
         device=GpuConfig(variant="H100", count=8),
         cpu=64,
