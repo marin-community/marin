@@ -67,6 +67,7 @@ CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 CONTROL_CWD = "/"
 COUNT_PREFIX = "SHELLBOX_COUNT="
 PROVIDER_DIAGNOSTIC_CHAR_LIMIT = 4096
+MAX_COMMAND_POLL_DELAY = 5
 RUN_COMMAND = (
     'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; trap \': > "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
 )
@@ -87,7 +88,7 @@ def _control_command(script: str) -> str:
     return shlex.join(("/bin/sh", "-c", _control_script(script)))
 
 
-def _transient_session_error(error: Exception) -> bool:
+def _is_transient_session_error(error: Exception) -> bool:
     if isinstance(
         error, (TimeoutError, ConnectionError, DaytonaConnectionError, DaytonaTimeoutError, DaytonaRateLimitError)
     ):
@@ -97,6 +98,24 @@ def _transient_session_error(error: Exception) -> bool:
         and error.status_code is not None
         and (error.status_code in (408, 429) or 500 <= error.status_code < 600)
     )
+
+
+def _retry_after(error: Exception) -> int:
+    return max(
+        (
+            int(value)
+            for name, value in (getattr(error, "headers", None) or {}).items()
+            if name.lower().startswith("retry-after") and str(value).isdecimal()
+        ),
+        default=0,
+    )
+
+
+@dataclass(frozen=True)
+class _CompletedCommand:
+    exit_code: int
+    session_id: str
+    command_id: str
 
 
 async def _create_sandbox(
@@ -114,15 +133,7 @@ async def _create_sandbox(
                 await sandbox.wait_for_sandbox_start(timeout=timeout)
                 return sandbox
         except DaytonaRateLimitError as error:
-            retry_after = max(
-                (
-                    int(value)
-                    for name, value in (error.headers or {}).items()
-                    if name.lower().startswith("retry-after") and str(value).isdecimal()
-                ),
-                default=0,
-            )
-            delay = max(retry_after, backoff.next_interval())
+            delay = max(_retry_after(error), backoff.next_interval())
             logger.warning("Retrying throttled Daytona creation: delay=%.3f", delay)
             await sleep(delay)
 
@@ -344,7 +355,7 @@ class DaytonaMachine:
                 except DaytonaNotFoundError:
                     return
                 except Exception as error:
-                    if attempt or not _transient_session_error(error):
+                    if attempt or not _is_transient_session_error(error):
                         raise
                     logger.warning("Retrying Daytona command session deletion: error=%s", type(error).__name__)
                     await sleep(0.2)
@@ -356,14 +367,14 @@ class DaytonaMachine:
             raise
 
     @asynccontextmanager
-    async def _poll_command(self, path: str) -> AsyncIterator[tuple[int, str, str]]:
+    async def _poll_command(self, path: str) -> AsyncIterator[_CompletedCommand]:
         """Keep the session available until output and diagnostics have been read."""
         process = self.sandbox.process
         name = f"shellbox-run-{uuid.uuid4().hex}"
         creation = asyncio.create_task(process.create_session(name, request_timeout=INTERRUPT_TIMEOUT))
         primary_error = None
-        polling = ExponentialBackoff(initial=0.2, maximum=5, factor=1.5)
-        retry = ExponentialBackoff(initial=0.5, maximum=5, factor=2)
+        polling = ExponentialBackoff(initial=0.2, maximum=MAX_COMMAND_POLL_DELAY, factor=1.5)
+        retry = ExponentialBackoff(initial=0.5, maximum=MAX_COMMAND_POLL_DELAY, factor=2)
         requests = failures = consecutive_failures = 0
         started = time.monotonic()
         try:
@@ -378,28 +389,20 @@ class DaytonaMachine:
                 try:
                     status = await process.get_session_command(name, response.cmd_id, request_timeout=INTERRUPT_TIMEOUT)
                 except Exception as error:
-                    if not _transient_session_error(error):
+                    if not _is_transient_session_error(error):
                         raise
                     failures += 1
                     consecutive_failures += 1
                     if consecutive_failures >= 5:
                         raise RuntimeError("Daytona command status unavailable") from error
-                    retry_after = max(
-                        (
-                            int(value)
-                            for key, value in getattr(error, "headers", {}).items()
-                            if key.lower().startswith("retry-after") and str(value).isdecimal()
-                        ),
-                        default=0,
-                    )
-                    delay = max(retry_after, retry.next_interval())
+                    delay = max(_retry_after(error), retry.next_interval())
                     logger.warning("Retrying Daytona command status: error=%s delay=%.3f", type(error).__name__, delay)
                     await sleep(delay)
                     continue
                 consecutive_failures = 0
                 retry.reset()
                 if status.exit_code is not None:
-                    yield status.exit_code, name, response.cmd_id
+                    yield _CompletedCommand(status.exit_code, name, response.cmd_id)
                     return
                 await sleep(polling.next_interval())
         except BaseException as error:
@@ -496,10 +499,8 @@ class DaytonaMachine:
                 await self.sandbox.fs.upload_file_stream(script.encode(), script_path)
                 started = True
                 if self.command_polling:
-                    exit_code, session_id, command_id = await sessions.enter_async_context(
-                        self._poll_command(script_path)
-                    )
-                    command_session = (session_id, command_id)
+                    command_session = await sessions.enter_async_context(self._poll_command(script_path))
+                    exit_code = command_session.exit_code
                 else:
                     response = await self.sandbox.process.exec(
                         _control_command(shlex.join(("/bin/sh", script_path))),
@@ -519,7 +520,9 @@ class DaytonaMachine:
                     if command_session is not None:
                         try:
                             logs = await self.sandbox.process.get_session_command_logs(
-                                *command_session, request_timeout=INTERRUPT_TIMEOUT
+                                command_session.session_id,
+                                command_session.command_id,
+                                request_timeout=INTERRUPT_TIMEOUT,
                             )
                             diagnostic = logs.output or (logs.stdout or "") + (logs.stderr or "")
                         except Exception as diagnostic_error:

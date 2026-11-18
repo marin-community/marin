@@ -178,13 +178,29 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
 
 def command_script(command: str) -> str:
     argv = shlex.split(command)
-    if len(argv) == 2 and argv[0] == "/bin/sh" and argv[1].endswith("/command.sh"):
-        return Path(argv[1]).read_text()
-    script = argv[2].partition("export PATH; ")[2]
-    argv = shlex.split(script)
+    script = command
+    if len(argv) == 3 and argv[:2] == ["/bin/sh", "-c"]:
+        script = argv[2].partition("export PATH; ")[2]
+        argv = shlex.split(script)
     if len(argv) == 2 and argv[0] == "/bin/sh" and argv[1].endswith("/command.sh"):
         return Path(argv[1]).read_text()
     return script
+
+
+async def assert_child_stopped(machine: DaytonaMachine, child: int) -> None:
+    stopped = await machine.run(
+        Command(
+            (
+                "sh",
+                "-c",
+                'if [ -f "/proc/$1/stat" ]; then read -r pid comm state rest < "/proc/$1/stat"; '
+                'test "$state" = Z; fi',
+                "child-state",
+                str(child),
+            )
+        )
+    )
+    assert stopped.exit_code == 0
 
 
 class LocalFiles:
@@ -198,6 +214,8 @@ class LocalFiles:
 
 
 class LocalProcess:
+    command_id = "command"
+
     def __init__(self):
         self.processes = []
         self.sessions = {}
@@ -222,17 +240,17 @@ class LocalProcess:
     async def execute_session_command(self, name, request, timeout=None):
         assert request.run_async and request.suppress_input_echo
         self.sessions[name] = asyncio.create_task(self.exec(request.command, cwd="/"))
-        return SimpleNamespace(cmd_id="command")
+        return SimpleNamespace(cmd_id=self.command_id)
 
     async def get_session_command(self, name, command_id, request_timeout=None):
-        assert command_id == "command"
+        assert command_id == self.command_id
         task = self.sessions[name]
         return SimpleNamespace(exit_code=task.result().exit_code if task.done() else None)
 
     async def get_session_command_logs(self, name, command_id, request_timeout=None):
-        assert command_id == "command"
+        assert command_id == self.command_id
         response = self.sessions[name].result()
-        return SimpleNamespace(output=response.result, stdout=response.result, stderr="")
+        return SimpleNamespace(output=response.result, stdout=None, stderr=None)
 
     async def delete_session(self, name, request_timeout=None):
         task = self.sessions.pop(name, None)
@@ -568,7 +586,7 @@ def test_daytona_output_capture_preserves_provider_startup_failure(
             response = asyncio.get_running_loop().create_future()
             response.set_result(SimpleNamespace(exit_code=126, result=diagnostic))
             self.sessions[name] = response
-            return SimpleNamespace(cmd_id="command")
+            return SimpleNamespace(cmd_id=self.command_id)
 
     async def scenario():
         client = LocalDaytona()
@@ -657,19 +675,7 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
                 assert caught.value.args == ("agent deadline",)
                 if not command_polling:
                     assert caught.value is client.sandbox.process.cancellations[-1]
-            stopped = await machine.run(
-                Command(
-                    (
-                        "sh",
-                        "-c",
-                        'if [ -f "/proc/$1/stat" ]; then read -r pid comm state rest < "/proc/$1/stat"; '
-                        'test "$state" = Z; fi',
-                        "child-state",
-                        str(child),
-                    )
-                )
-            )
-            assert stopped.exit_code == 0
+            await assert_child_stopped(machine, child)
             graded = await machine.run(Command(("sh", "-c", 'test "$(cat answer)" = 12 && printf 1.0')))
             assert (graded.exit_code, graded.stdout) == (0, b"1.0")
             assert not client.deleted and not client.closed
@@ -862,19 +868,7 @@ def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_
                 assert not client.deleted
                 process.fail = False
                 child = int((tmp_path / "child.pid").read_text())
-                stopped = await machine.run(
-                    Command(
-                        (
-                            "sh",
-                            "-c",
-                            'if [ -f "/proc/$1/stat" ]; then read -r pid comm state rest < "/proc/$1/stat"; '
-                            'test "$state" = Z; fi',
-                            "child-state",
-                            str(child),
-                        )
-                    )
-                )
-                assert stopped.exit_code == 0
+                await assert_child_stopped(machine, child)
                 result = await machine.run(Command(("printf", "following")))
                 assert (result.exit_code, result.stdout) == (0, b"following")
         finally:
@@ -895,6 +889,7 @@ def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_
         TimeoutError(),
         ConnectionError(),
         DaytonaRateLimitError("throttled", status_code=429, headers={"Retry-After": "2"}),
+        DaytonaRateLimitError("throttled", status_code=429),
         DaytonaError("unavailable", status_code=503),
     ],
 )
