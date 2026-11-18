@@ -31,6 +31,7 @@ from marinskyrl.inference_placement import validate_expert_block_transport
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
 from skyrl_train.inference_engines import placement as inference_placement
+from skyrl_train.inference_engines.ray_wrapped_inference_engine import should_verify_inference_workers
 
 
 @pytest.mark.parametrize(
@@ -218,6 +219,22 @@ def test_colocated_expert_block_rejects_unverified_launch_entrypoint(tmp_path: P
 
     with pytest.raises(ValueError, match="requires the standard training entrypoint"):
         validate_launch_config(config)
+
+
+@pytest.mark.parametrize(
+    ("engine_sleep", "require_verified_placements", "expected"),
+    [(False, False, True), (True, False, False), (True, True, True)],
+)
+def test_worker_verification_handles_generation_and_sleeping_training(
+    engine_sleep: bool, require_verified_placements: bool, expected: bool
+) -> None:
+    assert should_verify_inference_workers(
+        tensor_parallel_size=1,
+        data_parallel_size=16,
+        use_mp_backend=False,
+        inference_engine_enable_sleep=engine_sleep,
+        require_verified_placements=require_verified_placements,
+    ) is expected
 
 
 def test_shared_bundle_reports_reject_duplicate_or_misrouted_receivers(monkeypatch) -> None:
