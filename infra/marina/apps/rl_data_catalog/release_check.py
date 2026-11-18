@@ -200,6 +200,7 @@ class CatalogReader:
             params = dict(parse_qsl(url.query))
             if self.candidate_api is not None and url.path in {
                 "api/sources",
+                "api/source-statuses",
                 "api/source",
                 "api/assessment",
                 "api/evidence",
