@@ -226,7 +226,8 @@ def test_models_from_different_cohorts_compare_behind_the_mixed_settings_warning
     journey.visit("/?cohort=all")
     journey.sees("All cohorts may mix evaluation settings")
     for model in ("snowball", "qwen3-8b"):
-        journey.page.locator("tr").filter(has_text=model).first.locator("input[type=checkbox]").check()
+        # Exact text: a substring match on "qwen3-8b" also selects the "native-qwen3-8b" row.
+        journey.page.get_by_text(model, exact=True).first.locator("xpath=ancestor::tr").get_by_role("checkbox").check()
 
     journey.page.get_by_role("button", name=re.compile(r"Compare \d+ models")).click()
     journey.page.wait_for_url(re.compile(r"/compare\?.*cohort=all"))

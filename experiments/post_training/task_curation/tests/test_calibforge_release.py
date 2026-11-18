@@ -20,6 +20,9 @@ def test_packaging_preserves_private_verifier_and_checks_source_identity(tmp_pat
     dockerfile = b"FROM ubuntu:24.04\nWORKDIR /app\nCOPY public.txt /app/input.txt\n"
     (context / "Dockerfile").write_bytes(dockerfile)
     (context / "public.txt").write_bytes(b"public input\n")
+    # The release check compares source modes with the archive's 644 entries; do not depend on the umask.
+    for path in context.iterdir():
+        path.chmod(0o644)
     instructions = [
         {"command": command, "args": args, "flags": [], "heredocs": []}
         for command, args in (

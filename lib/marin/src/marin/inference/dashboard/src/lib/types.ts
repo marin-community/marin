@@ -23,6 +23,8 @@ export interface ServingInfo {
   chat_template_protocol: ChatTemplateProtocol
   /** The server holds a Parallel API key and serves the web_search tool. */
   web_search: boolean
+  /** The server saves model-feedback reports to Marin storage at /feedback. */
+  feedback: boolean
 }
 
 export type ServerStatus = 'connecting' | 'ok' | 'loading' | 'bad'

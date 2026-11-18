@@ -10,6 +10,15 @@ It supports Pi, Mini-SWE-Agent, Codex, OpenCode, Terminus-2 and Terminus-Kira,
 selected by name in container mode. Job and trial configs must select an agent
 explicitly.
 
+Tasks declare agent process variables in `[agent.env]`, including `HOME` for
+non-root agents. Run-level `agent.env` values override duplicate task values;
+environment and verifier settings remain separate. Per-step `agent.env` is
+unsupported and fails validation. Pi stages endpoint variables and its
+context-budget extension in private temporary directories owned by the task user,
+outside collected logs. The uploaded files are owned by the task user and have
+mode `0600`. Normal exits remove those directories; interrupted runs can leave
+temporary files inside the sandbox.
+
 It evaluates prebuilt Harbor tasks from local paths, Hugging Face repositories,
 or the Harbor registry. The `harbor` distribution provides both the `harbor` and
 `harbor_config` Python modules.

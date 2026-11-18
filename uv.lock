@@ -5811,7 +5811,6 @@ dependencies = [
     { name = "google-cloud-compute" },
     { name = "httpx" },
     { name = "httpx2" },
-    { name = "marin-core" },
     { name = "marin-evalrecords" },
     { name = "marin-finelog" },
     { name = "marin-finestore" },
@@ -5832,9 +5831,11 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "marin-core" },
     { name = "marin-iris", extra = ["controller"] },
 ]
 test = [
+    { name = "marin-core" },
     { name = "marin-iris", extra = ["controller"] },
 ]
 
@@ -5851,7 +5852,6 @@ requires-dist = [
     { name = "google-cloud-compute", specifier = ">=1.19" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "httpx2", specifier = ">=2.5" },
-    { name = "marin-core", editable = "lib/marin" },
     { name = "marin-evalrecords", editable = "lib/evalrecords" },
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-finestore", editable = "lib/finestore" },
@@ -5871,8 +5871,14 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "marin-iris", extras = ["controller"], editable = "lib/iris" }]
-test = [{ name = "marin-iris", extras = ["controller"], editable = "lib/iris" }]
+dev = [
+    { name = "marin-core", editable = "lib/marin" },
+    { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
+]
+test = [
+    { name = "marin-core", editable = "lib/marin" },
+    { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
+]
 
 [[package]]
 name = "marin-rigging"
