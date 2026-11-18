@@ -9,7 +9,7 @@
       "upstream_dataset": "validated-tasks",
       "upstream_url": "https://huggingface.co/datasets/FWeindel/validated-tasks/tree/317659ac88c8b706d318020c5fc3813a931fb6ec/facet_v2",
       "notes": "Original native task and verifier contents; pending current-pin controls and admission.",
-      "stage": "Intake queued",
+      "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
       "reasons": []
@@ -23,7 +23,7 @@
       "upstream_dataset": "validated-tasks",
       "upstream_url": "https://huggingface.co/datasets/FWeindel/validated-tasks/tree/317659ac88c8b706d318020c5fc3813a931fb6ec/facet_v3",
       "notes": "Original native task and verifier contents; pending current-pin controls and admission.",
-      "stage": "Intake queued",
+      "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
       "reasons": []
@@ -128,6 +128,7 @@
     }
   ],
   "stages": {
+    "di-zhang-fdu:aime_1983_2024": "Lexical remediation queued",
     "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2": "Lexical remediation queued",
     "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2": "Lexical remediation queued",
     "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2": "Lexical remediation queued",
@@ -135,6 +136,31 @@
     "TaskTrove:laion__wizardlm-orca-v4": "Lexical remediation queued"
   },
   "remediation_queue": [
+    {
+      "id": "di-zhang-fdu:aime_1983_2024",
+      "name": "aime_1983_2024",
+      "display_name": "aime_1983_2024",
+      "status": "Pending",
+      "origin": "di-zhang-fdu",
+      "upstream_dataset": "aime_1983_2024",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination measurement and private-release admission receipt are missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
     {
       "id": "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
       "name": "tasktrove-codereview",
