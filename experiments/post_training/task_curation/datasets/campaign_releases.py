@@ -197,9 +197,9 @@ def sources() -> list[RlDataSource]:
             config=PrebuiltCohort(
                 intended_use=IntendedUse.TRAIN,
                 name="forge-main-20261117",
-                version="2026.11.17.1",
+                version="2026.11.18.1",
                 repo="open-athena/forge-main-taskcompendium-20261117",
-                revision="b1b068746e202bbb4153734211bd39c117ba36b0",
+                revision="5d18615fc801a13ba95d527eab1d9faebaea77f1",
                 expected_rows=4000,
             ),
             info=SourceInfo(
