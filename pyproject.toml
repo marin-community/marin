@@ -55,6 +55,8 @@ dependencies = [
 [project.scripts]
 # Friendly entry point for the grug fast_track scaling ladder: `uv run fast-track ...`.
 fast-track = "experiments.grug.fast_track.launch:main"
+# Data Belay, which tests a Hugging Face dataset on the fast_track dense model: `uv run data-belay ...`.
+data-belay = "experiments.data_belay.__main__:cli"
 
 [project.optional-dependencies]
 # Keep this CUDA stack separate from marin-levanter[gpu] while JaxPP requires
@@ -96,7 +98,7 @@ constraint-dependencies = [
     "multidict>=6.9.1",
     "oauthlib>=4.0.1",
     "opentelemetry-api>=1.45.1",
-    "soupsieve>=2.9.0",
+    "soupsieve>=4.0.0",
     "urllib3>=2.8.0",
     "werkzeug>=3.1.9",
     # CVE-2026-111497: reject vulnerable transitive Brotli releases.
@@ -269,6 +271,7 @@ members = [
     "lib/dupekit",
     "lib/ducky",
     "lib/skyrlrecipe",
+    "lib/evalrecords",
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
@@ -303,6 +306,7 @@ marin-deploy = { workspace = true }
 marin-dupekit = { workspace = true }
 marin-ducky = { workspace = true }
 marin-skyrlrecipe = { workspace = true }
+marin-evalrecords = { workspace = true }
 marin-marina = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
@@ -450,6 +454,7 @@ project-includes = [
     "lib/iris/scripts/**/*.py",
     "lib/ducky/src/**/*.py",
     "lib/skyrlrecipe/src/**/*.py",
+    "lib/evalrecords/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "lib/verifyit/src/**/*.py",
@@ -477,6 +482,7 @@ search-path = [
     "lib/iris/src",
     "lib/ducky/src",
     "lib/skyrlrecipe/src",
+    "lib/evalrecords/src",
     "infra/deploy/src",
     "infra/marina/src",
     "infra/marina/apps",

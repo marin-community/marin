@@ -27,13 +27,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from huggingface_hub import hf_hub_download, snapshot_download
-from iris.cli.connect import open_iris_client
-from iris.rpc import job_pb2
-from marin.evaluation.harbor.runner import canonical_served_name
-from marin.evaluation.hardware import default_platform
-from marin.evaluation.model_config import ModelConfig, load_model_config
-from marin.evaluation.records import (
+from evalrecords.records import (
     CW_RECORDS_PREFIX,
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     BenchmarkMetadataRef,
@@ -44,6 +38,12 @@ from marin.evaluation.records import (
     ModelConfigRef,
     TaskCoverage,
 )
+from huggingface_hub import hf_hub_download, snapshot_download
+from iris.cli.connect import open_iris_client
+from iris.rpc import job_pb2
+from marin.evaluation.harbor.runner import canonical_served_name
+from marin.evaluation.hardware import default_platform
+from marin.evaluation.model_config import ModelConfig, load_model_config
 from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,

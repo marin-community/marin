@@ -3,11 +3,13 @@
 
 """Artifact bindings for compiled likelihood and generation protocols."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import Literal
 
-from marin.evaluation.records import PromptFormat
+from evalrecords.records import PromptFormat
+from taskcompendium.evaluation.corpus import ItemBuilder
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     LikelihoodMetric,
@@ -35,15 +37,58 @@ from taskcompendium.importers.evaluation_harness import (
 from taskcompendium.importers.fewshot import ChoiceTemplate, GenerationTemplate, convert_generation, read_generation_file
 from taskcompendium.importers.fewshot import read_choice_file as read_fewshot_choices
 from taskcompendium.pipeline.inputs import SourceFormat
-from taskcompendium.pipeline.models import IntendedUse
+from taskcompendium.pipeline.models import Converter, IntendedUse
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, chat_source, prepare_evaluation
 from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, RecipeSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 EXPLICIT_TEMPLATE_VERSION = "2026.11.05.3"
+
+
+def evaluation_source(
+    *,
+    name: str,
+    source: RecipeSource,
+    convert: Converter,
+    version: str,
+    protocol: EvaluationProtocol,
+    item_builder: ItemBuilder,
+    grader: Environment | None,
+    inputs: Mapping[str, RecipeSource] | None = None,
+) -> RlDataSource[EvaluationCorpusRecipe]:
+    """Bind a row converter, its grader environment and a protocol to one published corpus.
+
+    ``name`` keys the curation source as ``eval-<name>``. ``version`` is the converter revision:
+    corpus identity names the converter and item builder without hashing their code, so bump it
+    whenever prompt or conversion code changes. Include ``scorer_revision`` for packaged scorers.
+    """
+    return RlDataSource(
+        info=SourceInfo(
+            id="Eval:" + name,
+            title=protocol.benchmark,
+            origin="eval",
+            family=protocol.operation.value,
+            tags=("eval", "benchmark", "benchmark:" + protocol.benchmark),
+            count=protocol.expected_population,
+        ),
+        config=EvaluationCorpusRecipe(
+            CurationRecipe(
+                name="eval-" + name,
+                source=source,
+                inputs=inputs or {},
+                convert=convert,
+                version=version,
+                intended_use=IntendedUse.EVAL,
+                grader=grader,
+            ),
+            protocol,
+            item_builder,
+        ),
+        pipeline=prepare_evaluation,
+    )
 
 
 def multiple_choice_evaluation(

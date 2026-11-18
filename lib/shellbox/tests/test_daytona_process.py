@@ -144,6 +144,7 @@ async def output(session):
     return bytes(result)
 
 
+@pytest.mark.requires_linux_process_api
 def test_daytona_process_preserves_binary_pipes_defaults_and_bounded_stderr(session_machine, tmp_path, monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "host-only-canary")
     directory = tmp_path / "command-directory"
@@ -186,6 +187,7 @@ sys.exit(7)
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_linux_process_api
 def test_daytona_http_capability_uses_one_persistent_provider_session(session_machine, unused_tcp_port):
     async def scenario():
         machine, api = session_machine
@@ -228,6 +230,7 @@ def test_daytona_http_capability_uses_one_persistent_provider_session(session_ma
 
 
 @pytest.mark.parametrize("stage", ["create", "execute"])
+@pytest.mark.requires_linux_process_api
 def test_daytona_process_cancelled_acquisition_reclaims_accepted_session(session_machine, stage):
     async def scenario():
         machine, api = session_machine
@@ -256,6 +259,7 @@ def test_daytona_process_cancelled_acquisition_reclaims_accepted_session(session
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_linux_process_api
 def test_daytona_process_cancelled_close_still_terminates_real_child(session_machine):
     async def scenario():
         machine, api = session_machine
@@ -277,6 +281,7 @@ def test_daytona_process_cancelled_close_still_terminates_real_child(session_mac
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_linux_process_api
 def test_daytona_machine_close_reclaims_active_process_and_releases_reader(session_machine):
     async def scenario():
         machine, api = session_machine
@@ -294,6 +299,7 @@ def test_daytona_machine_close_reclaims_active_process_and_releases_reader(sessi
 
 
 @pytest.mark.parametrize("wire", ["D!\n", "D" + "A" * 200000, ""])
+@pytest.mark.requires_linux_process_api
 def test_daytona_process_rejects_corrupt_or_truncated_provider_stream_and_stops_child(session_machine, wire):
     async def scenario():
         machine, api = session_machine

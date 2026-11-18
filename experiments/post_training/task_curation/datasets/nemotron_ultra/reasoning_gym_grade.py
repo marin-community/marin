@@ -13,8 +13,8 @@ import re
 import sys
 from pathlib import Path
 
-import reasoning_gym
 from verifyit.modes.extract import extract_markdown_answer
+from verifyit.modes.grade_reasoning_gym import score_reasoning_gym_answer
 
 sys.path.insert(0, "/tests")
 
@@ -39,8 +39,11 @@ def candidate(reply: str) -> str:
 def main() -> None:
     contract = json.loads(Path("/tests/config.json").read_text())["contract"]
     entry = {"question": contract["question"], "answer": contract.get("answer"), "metadata": contract["metadata"]}
-    scorer = reasoning_gym.get_score_answer_fn(contract["metadata"]["source_dataset"])
-    print(float(scorer(candidate(Path("/app/answer.txt").read_text()), entry)))
+    print(
+        score_reasoning_gym_answer(
+            contract["metadata"]["source_dataset"], entry, candidate(Path("/app/answer.txt").read_text())
+        )
+    )
 
 
 if __name__ == "__main__":

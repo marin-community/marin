@@ -153,6 +153,8 @@ checkpointer:
 
 This policy will save permanent checkpoints every 1,000 steps until 10,000 steps, then every 5,000 steps until 40,000 steps, then every 10,000 steps.
 The default step-based checkpoint policy is to save a checkpoint every 10,000 steps.
+The final training hook reuses a permanent save already requested for that step after waiting
+for it to complete. A temporary save at the final step is still followed by a permanent save.
 
 #### Checkpoint Format
 

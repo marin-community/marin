@@ -6,10 +6,10 @@
 import time
 from dataclasses import dataclass
 
+from evalrecords.records import InferenceMetrics, SpeculativeDecodingMetrics
 from prometheus_client.core import Metric as PrometheusMetric
 from rigging.telemetry.prometheus import PrometheusScraper
 
-from marin.evaluation.records import InferenceMetrics, SpeculativeDecodingMetrics
 from marin.inference.iris import RemoteInferenceSession
 
 _PROMPT_TOKENS = "vllm:prompt_tokens_total"

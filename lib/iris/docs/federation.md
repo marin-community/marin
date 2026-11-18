@@ -224,6 +224,20 @@ Peer calls default to a 60-second deadline unless the operation sets its own.
 A status-sync RPC that times out retries from the same cursor on the next peer cycle.
 Heartbeat runs separately and can remain healthy while sync stalls.
 
+The per-peer heartbeat and sync loops never exit on an error. Each failure is logged,
+counted, and retried on the next pass. Two counters, both tagged with `peer` and
+`error_type`, show a peer that keeps failing:
+
+| Counter | Extra tag | Counts |
+|---|---|---|
+| `iris_federation_loop_step_failures` | `loop`: `heartbeat` or `sync` | A whole pass that raised. |
+| `iris_federation_delivery_failures` | `delivery`: `handoff` or `cancel` | One handoff or routed cancel that will be retried. |
+
+A rising `sync` or `handoff` count while `list-peers` still reports the peer reachable means
+work is promoted to the peer but not delivered. Each sync pass delivers a bounded batch of
+pending handoffs and tries the ones that have failed least often first, so handoffs that fail
+every time cannot block newer ones.
+
 There is no `iris peers` command. Reachability, advertised shapes, and free capacity come
 from the `ListPeers` RPC; handoff state lives in the parent's `federated_jobs` table.
 

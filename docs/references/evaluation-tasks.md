@@ -133,6 +133,9 @@ clients and machine factories to
 Concurrency defaults to 64 attempts across generation and grading. The explicit
 run `max_tokens` is further bounded by the protocol and available context. A null
 run seed preserves source trial seeds; an explicit seed uses base-plus-trial.
+The `experiments.evaluation` launcher sets run seed 0 when none is given and the
+model is served where per-request seeds are accepted. TPU vLLM rejects a seed
+on sampled requests, so those runs stay unseeded unless a seed is given.
 Omitted source sampling options stay omitted: for example, `top_p: null` lets the
 served generation configuration apply. Record those serving defaults with the
 model identity.
@@ -254,8 +257,10 @@ executors receive their resolved roots. Catalog publication remains in the curat
 workflow. Native generation menus publish
 raw and chat variants separately; no runtime task registry is loaded.
 
-Evaldash imports raw FineStore stores, selects one latest finished retry per logical
-trial, and applies these reductions. Its sample browser uses the same trial selection.
+`score_curated_record` in `evalrecords.rollout_results` selects one latest
+finished retry per logical trial and applies these reductions. Evaldash uses it to
+import raw FineStore stores; `experiments.evaluation.cli scores` prints the same
+result for a run. Its sample browser uses the same trial selection.
 The PostgreSQL reconciler checks both the producer record and the raw store version.
 Curation identities and the summary revision participate in dashboard protocol
 comparison when both records carry identities. The canonical curation graph records
