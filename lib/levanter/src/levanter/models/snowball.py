@@ -748,27 +748,6 @@ class SnowballBlock(eqx.Module):
         short_mask: AttentionMask,
         long_mask: AttentionMask,
         use_long: Bool[Array, ""],
-    ) -> Float[Array, "B S D"]:
-        return self.forward(x, short_mask, long_mask, use_long, return_routes=False)[0]
-
-    def forward(
-        self,
-        x: Float[Array, "B S D"],
-        short_mask: AttentionMask,
-        long_mask: AttentionMask,
-        use_long: Bool[Array, ""],
-        return_routes: bool,
-    ) -> tuple[Float[Array, "B S D"], Array | None]:
-        """The block output and, with ``return_routes``, the MoE's selected expert ids [B, S, K] (an observer)."""
-        result = self._forward(x, short_mask, long_mask, use_long, return_routes)
-        return result.output, result.routes
-
-    def _forward(
-        self,
-        x: Float[Array, "B S D"],
-        short_mask: AttentionMask,
-        long_mask: AttentionMask,
-        use_long: Bool[Array, ""],
         return_routes: bool,
         token_valid: Array | None = None,
         count_drops: bool = False,
@@ -897,7 +876,7 @@ class SnowballTransformer(eqx.Module):
 
         def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag):
             layer, use_long = layer_and_flag
-            result = layer._forward(carry, short_mask, long_mask, use_long, return_routes, token_valid, count_drops)
+            result = layer(carry, short_mask, long_mask, use_long, return_routes, token_valid, count_drops)
             return result.output, (result.routes, result.counts)
 
         # Bound routed-expert activation memory during the backward pass as well as forward.
