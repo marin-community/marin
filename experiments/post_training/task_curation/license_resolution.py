@@ -4,6 +4,7 @@
 """Resolve primary license evidence without downloading task payloads."""
 
 import base64
+import fnmatch
 import hashlib
 import json
 import re
@@ -18,6 +19,7 @@ import requests
 import yaml
 from finestore.rl.licenses import (
     LICENSE_RESOLVER_VERSION,
+    OPENMDW_LICENSE_PATTERN,
     LicenseCheckRule,
     LicenseEvidence,
     LicenseReceipt,
@@ -432,6 +434,15 @@ def _declared_license_source(target: LicenseTarget, content: bytes, url: str) ->
     )
 
 
+def _carries_openmdw_grant(receipt: LicenseReceipt) -> bool:
+    """Whether the receipt's own evidence declares the OpenMDW grant at this pin."""
+    return any(
+        fnmatch.fnmatchcase(identifier, OPENMDW_LICENSE_PATTERN)
+        for item in receipt.evidence
+        for identifier in item.license_ids
+    )
+
+
 def resolve_license(target: LicenseTarget) -> LicenseReceipt:
     """Normalize our recorded wrapper pins, then check the first dataset without following its lineage."""
     current = replace(target, source_id=target.dataset_id)
@@ -451,6 +462,10 @@ def resolve_license(target: LicenseTarget) -> LicenseReceipt:
             break
         # Explicit restrictions on our own publication still apply to its users.
         if check_license(primary).rule_id in {LicenseCheckRule.RESTRICTED, LicenseCheckRule.THIRD_PARTY}:
+            break
+        if _carries_openmdw_grant(primary):
+            # A first-party publication carrying the OpenMDW grant is licensed from its
+            # own card; the declared source records provenance, not terms.
             break
         source = _declared_license_source(current, content, card.url if card else current.url)
         chain.append(source)

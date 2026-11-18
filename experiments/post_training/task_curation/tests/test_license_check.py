@@ -207,6 +207,31 @@ def test_our_wrapper_checks_its_one_declared_source_and_preserves_both_pins(pinn
     assert row["evidence_url"].startswith(f"https://huggingface.co/datasets/{parent}/resolve/{parent_pin}/")
 
 
+def test_first_party_openmdw_publication_passes_from_its_own_card(pinned_dataset_metadata):
+    repositories, fetched = pinned_dataset_metadata
+    wrapper, wrapper_pin = "open-athena/atlas-closure-retained", "a" * 40
+    parent, parent_pin = "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data", "2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6"
+    parent_url = f"https://huggingface.co/datasets/{parent}/tree/{parent_pin}"
+    card = (
+        "---\npretty_name: Atlas TaskCompendium retention release\n"
+        "license: openmdw-1.1\n"
+        f"license_source:\n  dataset_id: {parent}\n  revision: {parent_pin}\n  url: {parent_url}\n---\n"
+    )
+    repositories[wrapper, wrapper_pin] = {"README.md": card.encode(), "LICENSE": openmdw_license_text()}
+    # The declared parent would escalate on its own card; it must never be consulted.
+    repositories[parent, parent_pin] = {"README.md": b"---\nlicense: other\nlicense_name: mixed-upstream-terms\n---\n"}
+    row = license_check.check_target(
+        LicenseTarget("OpenAthena:fixture", wrapper, wrapper_pin, f"https://huggingface.co/datasets/{wrapper}"), None
+    )
+    assert (row["verdict"], row["rule_id"]) == ("PASS", "P1")
+    receipt = license_check.LicenseReceipt.model_validate(row["receipt"])
+    assert (receipt.dataset_id, receipt.revision) == (wrapper, wrapper_pin)
+    assert receipt.resolved_source is None
+    assert {repository for repository, _, _ in fetched} == {wrapper}
+    require_license(receipt, "OpenAthena:fixture", wrapper, wrapper_pin, "train")
+    require_license(receipt, "OpenAthena:fixture", wrapper, wrapper_pin, "eval")
+
+
 def test_own_wrappers_normalize_to_first_dataset_without_following_its_lineage(pinned_dataset_metadata):
     repositories, fetched = pinned_dataset_metadata
     wrapper, parent, grandparent = "open-athena/outer-retained", "open-athena/inner-retained", "fixture/original"
