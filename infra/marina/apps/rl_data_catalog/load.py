@@ -69,11 +69,16 @@ from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 MAX_BATCH_BYTES = 1_000_000
 # The per-task staging tables carry many small rows; their inserts maintain four
 # indexes (including the GIN defects index) on the retained item volume, so their
-# statements stay under the SQL gateway's per-statement timeout only with smaller
-# batches. Catalog rows with inline evidence exceed this budget and keep the default.
+# statements stay under the SQL gateway's per-statement timeout only with small
+# batches — bounded both by bytes and by row count. Catalog rows with inline
+# evidence exceed the byte budgets and keep the default.
 TABLE_BATCH_BYTES = {
     "items": 50_000,
     "packets": 50_000,
+}
+TABLE_BATCH_ROWS = {
+    "items": 5,
+    "packets": 5,
 }
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
@@ -113,13 +118,13 @@ TABLE_COLUMNS = {
 }
 
 
-def batches(rows: Iterable[dict[str, Any]], budget: int = MAX_BATCH_BYTES) -> Iterable[str]:
+def batches(rows: Iterable[dict[str, Any]], budget: int = MAX_BATCH_BYTES, max_rows: int | None = None) -> Iterable[str]:
     """Bound SQL request bodies by encoded bytes, including packet escaping.
 
-    The per-task tables take a smaller budget: their statements hit the SQL gateway's
-    per-statement timeout on the retained item volume, while a few catalog rows
-    (declarations with inline evidence) legitimately exceed that smaller budget and
-    keep the default.
+    The per-task tables take a smaller budget and a row-count cap: their statements hit
+    the SQL gateway's per-statement timeout on the retained item volume, while a few
+    catalog rows (declarations with inline evidence) legitimately exceed that smaller
+    budget and keep the default.
     """
     batch: list[str] = []
     size = 2
@@ -129,7 +134,7 @@ def batches(rows: Iterable[dict[str, Any]], budget: int = MAX_BATCH_BYTES) -> It
         length = len(json.dumps(encoded).encode()) + 1
         if length + 2 > budget:
             raise ValueError("One catalog row exceeds the SQL batch budget")
-        if size + length > budget:
+        if size + length > budget or (max_rows is not None and len(batch) >= max_rows):
             yield "[" + ",".join(batch) + "]"
             batch, size = [], 2
         batch.append(encoded)
@@ -141,6 +146,11 @@ def batches(rows: Iterable[dict[str, Any]], budget: int = MAX_BATCH_BYTES) -> It
 def table_batch_bytes(table: str) -> int:
     """The SQL batch budget for one staging table."""
     return TABLE_BATCH_BYTES.get(table, MAX_BATCH_BYTES)
+
+
+def table_batch_rows(table: str) -> int | None:
+    """The row-count cap for one staging table, when its statements need one."""
+    return TABLE_BATCH_ROWS.get(table)
 
 
 def ensure_tables(query: AppletQuery, names: tuple[str, ...]) -> None:
@@ -158,8 +168,9 @@ def insert_rows(query: AppletQuery, table: str, columns: str, load_id: str, rows
     """Insert byte-bounded batches and return the stored row count."""
     names = ", ".join(column.strip().split()[0] for column in columns.split(","))
     budget = table_batch_bytes(table)
+    max_rows = table_batch_rows(table)
     count = 0
-    for body in batches(rows, budget):
+    for body in batches(rows, budget, max_rows):
         result = query(
             f"INSERT INTO {table} (load_id, {names}) SELECT :load_id, {names} "
             f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({columns})",
