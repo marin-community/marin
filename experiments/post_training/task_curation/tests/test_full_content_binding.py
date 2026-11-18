@@ -15,6 +15,7 @@ from finestore.rl.curation import (
     OversightEvidence,
     OversightLevel,
     QualityResultFinalization,
+    SamplePanelCurrency,
     SourceDeclaration,
     SourceQualityResult,
 )
@@ -415,14 +416,21 @@ def test_final_binding_verifies_records_and_preserves_exact_retained_runtime(tmp
 
 
 def retained_view(source):
-    """The same source re-pinned to a zero-drop retained release with its own census."""
+    """The same source re-pinned to a zero-drop retained release with its own census.
+
+    The retained census carries its own artifact-level digest: the retained release
+    re-serializes the same tasks, so the digest differs from the original pin's while
+    the task count is unchanged (the ContentIdentityReceipt case).
+    """
     release = SourceReference(
         "open-athena/numbers-retained",
         "b" * 40,
         "https://huggingface.co/datasets/open-athena/numbers-retained/tree/" + "b" * 40,
     )
     config = replace(source.config, name="numbers-retained", version="2026.11.13.1", dataset=release)
-    actor = actor_census_input(release.name, release.revision, config.version, 201)
+    actor = actor_census_input(release.name, release.revision, config.version, 201).model_copy(
+        update={"task_specs_sha256": "e" * 64}
+    )
     return replace(
         source,
         config=config,
@@ -448,6 +456,7 @@ def retained_lineage(source):
 
 
 def test_lineage_validated_original_panel_is_bound_and_recorded(content_source):
+    """A panel byte-different from the current pin binds through the zero-drop lineage label."""
     original, retained = content_source, retained_view(content_source)
     lineage = retained_lineage(original)
     receipt = sample_receipt(original)
@@ -456,6 +465,41 @@ def test_lineage_validated_original_panel_is_bound_and_recorded(content_source):
     assert lineage.retained_content_sha256[:12] in bound.info.independent_qc.method
     assert bound.info.quality_result == receipt.review.result
     assert bound.info.independent_qc.evidence_url == receipt.review.path
+
+
+def test_byte_identical_retained_panel_binds_current_pin_over_the_lineage_label(content_source):
+    """A retained panel whose digest equals the retained pin's census binds CURRENT_PIN.
+
+    The lineage label is the fallback for panels whose bytes differ from the served
+    population; when the digests match, the reviewed bytes ARE the served bytes and
+    the stronger direct evidence wins (coordinator carry-forward rule).
+    """
+    original, retained = content_source, retained_view(content_source)
+    lineage = retained_lineage(original)
+    actor = retained.info.actor_census_input
+    receipt = sample_receipt(original).model_copy(
+        update={
+            "review": (
+                sample_receipt(original).review.model_copy(
+                    update={
+                        "panel": (
+                            sample_receipt(original).review.panel.model_copy(
+                                update={
+                                    "dataset_id": actor.dataset_id,
+                                    "dataset_revision": actor.dataset_revision,
+                                    "task_specs_sha256": actor.task_specs_sha256,
+                                }
+                            )
+                        )
+                    }
+                )
+            )
+        }
+    )
+    bound = bind_sample_result(retained, receipt, retained_lineage=lineage)
+    assert bound.info.independent_qc.panel_currency is SamplePanelCurrency.CURRENT_PIN
+    assert "the reviewed bytes are the served population's" in bound.info.independent_qc.method
+    assert bound.info.quality_result == receipt.review.result
 
 
 def test_lineage_derives_full_from_an_archived_whole_source_result(content_source):
@@ -467,6 +511,8 @@ def test_lineage_derives_full_from_an_archived_whole_source_result(content_sourc
 
 
 def test_lineage_mismatch_still_raises(content_source):
+    """A lineage whose original pin differs AND whose panel bytes differ from the served
+    population cannot bind: neither the lineage label nor the byte-identity path applies."""
     original, retained = content_source, retained_view(content_source)
     moved = retained_lineage(original).model_copy(update={"original_dataset_revision": "c" * 40})
     with pytest.raises(ValueError, match="belongs to another current population"):
