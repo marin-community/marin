@@ -92,17 +92,22 @@ def collect_receipt_history(documents_by_revision: dict[str, dict[str, dict]]) -
     """Group a registry's receipt documents per source, newest first.
 
     ``documents_by_revision`` maps revision → path → parsed receipt document,
-    newest revision first. A source's prior evidence is every distinct document
-    whose panel pin differs from its newest revision's panel pin.
+    newest revision first. Blank shard placeholders carry nothing. A source's
+    prior evidence is every distinct document whose panel pin differs from its
+    newest revision's panel pin.
     """
     revisions = list(documents_by_revision)
     newest = documents_by_revision[revisions[0]]
     current_pin = {
-        document["source_id"]: document["review"]["panel"]["dataset_revision"] for document in newest.values()
+        document["source_id"]: document["review"]["panel"]["dataset_revision"]
+        for document in newest.values()
+        if document
     }
     history: dict[str, dict[str, ReceiptReference]] = {}
     for revision in revisions:
         for path, document in documents_by_revision[revision].items():
+            if not document:
+                continue
             source_id = document["source_id"]
             if document["review"]["panel"]["dataset_revision"] == current_pin.get(source_id):
                 continue
@@ -140,6 +145,7 @@ def survey_queue() -> RecoveryQueue:
             sha256=document_sha256(document),
         )
         for path, document in newest.items()
+        if document
     }
     targets = [
         RecoveryTarget(
