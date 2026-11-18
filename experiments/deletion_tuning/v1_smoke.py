@@ -50,7 +50,6 @@ from experiments.deletion_tuning.levanter_train import run_deletion_train_lm
 from experiments.deletion_tuning.v1_sft import (
     V1_ALPHA_END,
     V1_ALPHA_START,
-    V1_ETA,
     V1_LAMBDA,
     V1_LOGIT_LR,
     v1_optimizer,
@@ -65,6 +64,11 @@ SMOKE_PREFIX = "s3://marin-us-east-02a/tmp/ttl=7d/benfeuer/snowball-deletion-tun
 SNOWBALL_EOS_TOKEN_IDS = (128001, 128009)
 SMOKE_STEPS = 3
 SEQ_LEN = 64
+# Scale override: the toy gate subsample (stride 64 over a few hundred weights)
+# cannot satisfy floor(eta * n) >= 1 at the production eta=1/2048, so the smoke
+# quantile uses 1/256. The threshold rule itself is unchanged; at production
+# scale the strided subsample is ~341M samples and eta=1/2048 applies.
+SMOKE_ETA = 1 / 256
 
 
 def _tiny_corpus(corpus_uri: str) -> None:
@@ -80,7 +84,7 @@ def _tiny_config(tokenizer: str) -> SnowballConfig:
     return SnowballConfig(
         deletion_tuning=DeletionTuningConfig(
             scope=DeletionTuningScope.ROUTED_GATE,
-            eta=V1_ETA,
+            eta=SMOKE_ETA,
             lam=V1_LAMBDA,
             alpha_start=V1_ALPHA_START,
             alpha_end=V1_ALPHA_END,
