@@ -558,11 +558,23 @@ fn published_snapshot_rebuild_preserves_segment_artifacts_and_column_bounds() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].artifacts, artifacts);
     assert_eq!(records[0].column_bounds, column_bounds);
+    let (source_json, stored_bounds): (String, Option<String>) = catalog
+        .inner
+        .lock()
+        .unwrap()
+        .conn
+        .query_row(
+            "SELECT source_json, column_bounds FROM object_segments WHERE namespace = 'a'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
     assert_eq!(
-        records[0].source.object_id.as_deref(),
-        Some("_finelog/tables/a/objects/abc.parquet"),
-        "the bounds stored beside the source leave its identity intact"
+        source_json,
+        serde_json::to_string(&records[0].source).unwrap(),
+        "the bounds live in their own column, not in source_json"
     );
+    assert!(stored_bounds.is_some());
 }
 
 #[test]

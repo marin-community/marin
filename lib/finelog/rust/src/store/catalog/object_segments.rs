@@ -114,18 +114,22 @@ fn insert_object_segments_in(
                 "one object commit cannot span namespaces".to_string(),
             ));
         }
-        let source_json = column_bounds::source_json(source, column_bounds)?;
+        let source_json = serde_json::to_string(source).map_err(|error| {
+            StatsError::Internal(format!("serialize object segment source: {error}"))
+        })?;
         upsert_segment_in(transaction, row)?;
         let (sql, source_id, source_rows) = match mode {
             SegmentInsert::Upsert => (
                 "INSERT INTO object_segments
                     (namespace, path, table_spec_version, source_json, artifacts_json,
-                     migration_backfill, migration_source_id, migration_source_rows)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     migration_backfill, migration_source_id, migration_source_rows,
+                     column_bounds)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(namespace, path) DO UPDATE SET
                     table_spec_version = excluded.table_spec_version,
                     source_json = excluded.source_json,
                     artifacts_json = excluded.artifacts_json,
+                    column_bounds = excluded.column_bounds,
                     migration_backfill = excluded.migration_backfill,
                     migration_source_id = NULL,
                     migration_source_rows = NULL",
@@ -138,8 +142,9 @@ fn insert_object_segments_in(
             } => (
                 "INSERT INTO object_segments
                     (namespace, path, table_spec_version, source_json, artifacts_json,
-                     migration_backfill, migration_source_id, migration_source_rows)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     migration_backfill, migration_source_id, migration_source_rows,
+                     column_bounds)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 source_id.clone(),
                 *source_rows,
             ),
@@ -156,6 +161,7 @@ fn insert_object_segments_in(
                     migration_backfill,
                     source_id,
                     source_rows,
+                    column_bounds::to_column(column_bounds)?,
                 ],
             )
             .map_err(sqlite_err)?;
@@ -299,13 +305,16 @@ impl Catalog {
             {
                 continue;
             }
-            let source_json = column_bounds::source_json(&segment.source, &segment.column_bounds)?;
+            let source_json = serde_json::to_string(&segment.source).map_err(|error| {
+                StatsError::Internal(format!("serialize published object source: {error}"))
+            })?;
             transaction
                 .execute(
                     "INSERT OR REPLACE INTO object_segments
                         (namespace, path, table_spec_version, source_json, artifacts_json,
-                         migration_backfill, migration_source_id, migration_source_rows)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                         migration_backfill, migration_source_id, migration_source_rows,
+                         column_bounds)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     rusqlite::params![
                         namespace,
                         segment.row.path,
@@ -315,6 +324,7 @@ impl Catalog {
                         segment.migration_backfill,
                         segment.migration_source_id,
                         segment.migration_source_rows,
+                        column_bounds::to_column(&segment.column_bounds)?,
                     ],
                 )
                 .map_err(sqlite_err)?;
@@ -447,15 +457,15 @@ impl Catalog {
                     "object segment {path:?} is no longer live in {namespace:?}"
                 ))
             };
-            let source_json: Option<String> = transaction
+            let stored: Option<Option<String>> = transaction
                 .query_row(
-                    "SELECT source_json FROM object_segments WHERE namespace = ?1 AND path = ?2",
+                    "SELECT column_bounds FROM object_segments WHERE namespace = ?1 AND path = ?2",
                     rusqlite::params![namespace, path],
                     |row| row.get(0),
                 )
                 .optional()
                 .map_err(sqlite_err)?;
-            let Some(source_json) = source_json else {
+            let Some(stored) = stored else {
                 return Err(no_longer_live());
             };
             if let Some((minimum, maximum)) = &segment.key {
@@ -474,19 +484,12 @@ impl Catalog {
             if segment.columns.is_empty() {
                 continue;
             }
-            let source: ObjectRef = serde_json::from_str(&source_json).map_err(|error| {
-                StatsError::Internal(format!("decode object segment source: {error}"))
-            })?;
-            let mut bounds = column_bounds::from_source_json(&source_json)?;
+            let mut bounds = column_bounds::from_column(stored.as_deref())?;
             bounds.extend(segment.columns.clone());
             transaction
                 .execute(
-                    "UPDATE object_segments SET source_json = ?1 WHERE namespace = ?2 AND path = ?3",
-                    rusqlite::params![
-                        column_bounds::source_json(&source, &bounds)?,
-                        namespace,
-                        path
-                    ],
+                    "UPDATE object_segments SET column_bounds = ?1 WHERE namespace = ?2 AND path = ?3",
+                    rusqlite::params![column_bounds::to_column(&bounds)?, namespace, path],
                 )
                 .map_err(sqlite_err)?;
         }
@@ -505,24 +508,13 @@ impl Catalog {
     ) -> Result<TableRevision, StatsError> {
         let mut inner = self.inner.lock().unwrap();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        let source_json: String = transaction
-            .query_row(
-                "SELECT source_json FROM object_segments WHERE namespace = ?1 AND path = ?2",
-                rusqlite::params![namespace, path],
-                |row| row.get(0),
-            )
-            .map_err(sqlite_err)?;
-        let source: ObjectRef = serde_json::from_str(&source_json).unwrap();
-        transaction
+        let changed = transaction
             .execute(
-                "UPDATE object_segments SET source_json = ?1 WHERE namespace = ?2 AND path = ?3",
-                rusqlite::params![
-                    column_bounds::source_json(&source, &ColumnBounds::new())?,
-                    namespace,
-                    path
-                ],
+                "UPDATE object_segments SET column_bounds = NULL WHERE namespace = ?1 AND path = ?2",
+                rusqlite::params![namespace, path],
             )
             .map_err(sqlite_err)?;
+        assert_eq!(changed, 1, "no object segment {path:?} in {namespace:?}");
         let revision = advance_generation_in(&transaction, namespace)?;
         transaction.commit().map_err(sqlite_err)?;
         Ok(revision)
@@ -695,7 +687,8 @@ impl Catalog {
             .conn
             .prepare(
                 "SELECT path, table_spec_version, source_json, migration_backfill,
-                        migration_source_id, migration_source_rows, artifacts_json
+                        migration_source_id, migration_source_rows, artifacts_json,
+                        column_bounds
                  FROM object_segments WHERE namespace = ?1 ORDER BY path",
             )
             .map_err(sqlite_err)?;
@@ -712,7 +705,11 @@ impl Catalog {
                 table_spec_version: row.get::<_, i64>(1).map_err(sqlite_err)? as u64,
                 source,
                 artifacts: parse_artifacts(artifacts_json.as_deref())?,
-                column_bounds: column_bounds::from_source_json(&source_json)?,
+                column_bounds: column_bounds::from_column(
+                    row.get::<_, Option<String>>(7)
+                        .map_err(sqlite_err)?
+                        .as_deref(),
+                )?,
                 migration_backfill: row.get(3).map_err(sqlite_err)?,
                 migration_source_id: row.get(4).map_err(sqlite_err)?,
                 migration_source_rows: row.get(5).map_err(sqlite_err)?,

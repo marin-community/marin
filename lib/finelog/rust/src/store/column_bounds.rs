@@ -6,10 +6,11 @@
 //! Flush, merge and spec migration record them; maintenance backfills them
 //! from Parquet footers for segments written before the column was flagged.
 //!
-//! An object segment's bounds are stored beside the `ObjectRef` keys in its
-//! `object_segments.source_json`, and in its checkpoint `CatalogSegment`. An
-//! older binary ignores both, so they need no catalog migration; a checkpoint
-//! it writes drops them, and the backfill restores them after the next upgrade.
+//! An object segment's bounds are stored in its `object_segments.column_bounds`
+//! (catalog migration 0007; NULL when none are recorded) and in its checkpoint
+//! `CatalogSegment`. An older binary that knows 0007 leaves the column alone and
+//! drops the checkpoint field; the backfill restores what it drops after the
+//! next upgrade.
 
 use std::collections::BTreeMap;
 
@@ -18,7 +19,7 @@ use parquet::file::metadata::ParquetMetaData;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
-use crate::proto::finelog::stats::{CatalogColumnBounds, ObjectRef};
+use crate::proto::finelog::stats::CatalogColumnBounds;
 use crate::store::segment::metadata_int64_bounds;
 
 /// One flagged column's recorded range over a segment.
@@ -67,10 +68,8 @@ impl ColumnRange {
 /// Column name to the segment's recorded range for that column.
 pub type ColumnBounds = BTreeMap<String, ColumnRange>;
 
-/// The `source_json` key that carries the bounds beside the `ObjectRef` fields.
-const SOURCE_JSON_KEY: &str = "columnBounds";
-
-/// One `source_json` entry; an unknown range has neither `min` nor `max`.
+/// One `object_segments.column_bounds` entry; an unknown range has neither
+/// `min` nor `max`.
 #[derive(Serialize, Deserialize)]
 struct StoredColumnBounds {
     column: String,
@@ -78,12 +77,6 @@ struct StoredColumnBounds {
     min: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     max: Option<i64>,
-}
-
-#[derive(Deserialize)]
-struct StoredSource {
-    #[serde(default, rename = "columnBounds")]
-    column_bounds: Vec<StoredColumnBounds>,
 }
 
 /// The inclusive range of the non-null values in `arrays`; `None` when every
@@ -154,20 +147,12 @@ pub fn missing_columns(bounds: &ColumnBounds, columns: &[String]) -> Vec<String>
         .collect()
 }
 
-/// Encode `source` for `object_segments.source_json`, with `bounds` under an
-/// extra key that `ObjectRef` decoding ignores. Without bounds this is the plain
-/// `ObjectRef` encoding, byte for byte.
-pub fn source_json(source: &ObjectRef, bounds: &ColumnBounds) -> Result<String, StatsError> {
-    let encode_error = |error: serde_json::Error| {
-        StatsError::Internal(format!("serialize object segment source: {error}"))
-    };
+/// Encode `bounds` for `object_segments.column_bounds`; `None` (NULL) when the
+/// segment records none.
+pub fn to_column(bounds: &ColumnBounds) -> Result<Option<String>, StatsError> {
     if bounds.is_empty() {
-        return serde_json::to_string(source).map_err(encode_error);
+        return Ok(None);
     }
-    let mut value = serde_json::to_value(source).map_err(encode_error)?;
-    let object = value.as_object_mut().ok_or_else(|| {
-        StatsError::Internal("object segment source is not a JSON object".to_string())
-    })?;
     let stored: Vec<_> = bounds
         .iter()
         .map(|(column, range)| {
@@ -179,21 +164,21 @@ pub fn source_json(source: &ObjectRef, bounds: &ColumnBounds) -> Result<String, 
             }
         })
         .collect();
-    object.insert(
-        SOURCE_JSON_KEY.to_string(),
-        serde_json::to_value(stored).map_err(encode_error)?,
-    );
-    serde_json::to_string(&value).map_err(encode_error)
+    serde_json::to_string(&stored)
+        .map(Some)
+        .map_err(|error| StatsError::Internal(format!("serialize column bounds: {error}")))
 }
 
-/// The bounds stored in a `source_json`; empty for one written without them.
-/// An entry with only one end is dropped, so its column is backfilled again.
-pub fn from_source_json(json: &str) -> Result<ColumnBounds, StatsError> {
-    let stored: StoredSource = serde_json::from_str(json).map_err(|error| {
+/// The bounds stored in `object_segments.column_bounds`; empty for NULL. An
+/// entry with only one end is dropped, so its column is backfilled again.
+pub fn from_column(stored: Option<&str>) -> Result<ColumnBounds, StatsError> {
+    let Some(json) = stored else {
+        return Ok(ColumnBounds::new());
+    };
+    let entries: Vec<StoredColumnBounds> = serde_json::from_str(json).map_err(|error| {
         StatsError::Internal(format!("decode object segment column bounds: {error}"))
     })?;
-    Ok(stored
-        .column_bounds
+    Ok(entries
         .into_iter()
         .filter_map(|entry| Some((entry.column, ColumnRange::from_ends(entry.min, entry.max)?)))
         .collect())
@@ -299,38 +284,17 @@ mod tests {
     }
 
     #[test]
-    fn source_json_keeps_the_object_ref_decodable_with_and_without_bounds() {
-        let source = ObjectRef {
-            object_id: Some("objects/a.parquet".to_string()),
-            byte_size: Some(42),
-            ..Default::default()
-        };
-        let bounds = ColumnBounds::from([("epoch_ms".to_string(), ColumnRange::new(10, 20))]);
-        let json = source_json(&source, &bounds).unwrap();
-        let decoded: ObjectRef = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            decoded, source,
-            "an older binary decodes the same ObjectRef"
-        );
-        assert_eq!(from_source_json(&json).unwrap(), bounds);
-
-        let without = serde_json::to_string(&source).unwrap();
-        assert_eq!(source_json(&source, &ColumnBounds::new()).unwrap(), without);
-        assert!(from_source_json(&without).unwrap().is_empty());
-    }
-
-    #[test]
-    fn unknown_round_trips_without_ends_in_source_json_and_checkpoint() {
+    fn unknown_round_trips_without_ends_in_the_column_and_checkpoint() {
         let bounds = ColumnBounds::from([
             ("epoch_ms".to_string(), ColumnRange::new(10, 20)),
             ("empty".to_string(), ColumnRange::Unknown),
         ]);
-        let json = source_json(&ObjectRef::default(), &bounds).unwrap();
+        let json = to_column(&bounds).unwrap().unwrap();
         assert!(
             json.contains(r#"{"column":"empty"}"#),
             "unknown has no ends: {json}"
         );
-        assert_eq!(from_source_json(&json).unwrap(), bounds);
+        assert_eq!(from_column(Some(&json)).unwrap(), bounds);
 
         let checkpoint = to_proto(&bounds);
         let empty = checkpoint
@@ -349,9 +313,10 @@ mod tests {
             ColumnRange::Range { min: 7, max: 7 }
         );
 
-        let inverted = r#"{"columnBounds":[{"column":"epoch_ms","min":9223372036854775807,"max":-9223372036854775808}]}"#;
+        let inverted =
+            r#"[{"column":"epoch_ms","min":9223372036854775807,"max":-9223372036854775808}]"#;
         let unknown = ColumnBounds::from([("epoch_ms".to_string(), ColumnRange::Unknown)]);
-        assert_eq!(from_source_json(inverted).unwrap(), unknown);
+        assert_eq!(from_column(Some(inverted)).unwrap(), unknown);
         let entry = CatalogColumnBounds {
             column: Some("epoch_ms".to_string()),
             min: Some(i64::MAX),
@@ -369,7 +334,7 @@ mod tests {
             ..Default::default()
         };
         assert!(from_proto(&[entry]).is_empty());
-        let json = r#"{"columnBounds":[{"column":"epoch_ms","max":5}]}"#;
-        assert!(from_source_json(json).unwrap().is_empty());
+        let json = r#"[{"column":"epoch_ms","max":5}]"#;
+        assert!(from_column(Some(json)).unwrap().is_empty());
     }
 }
