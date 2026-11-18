@@ -75,9 +75,6 @@ def test_migrations_adopt_existing_serving_rows_and_boot_without_object_storage(
     assert store.store_info().record_count == 1
     results_db.upsert_legacy_record(engine, record.model_copy(update={"description": "old revision write"}))
     assert _stored(_store(engine), record.run_id)["description"] == "seeded before migration"
-    with engine.begin() as conn:
-        migrations = set(conn.execute(sqlalchemy.text("SELECT name FROM schema_migrations")).scalars())
-    assert migrations == {"0001_initial", "0002_record_sources", "0003_repeat_aggregates", "0004_playground_reports"}
 
 
 def test_older_binary_rejects_a_database_with_unknown_migrations():

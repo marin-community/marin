@@ -109,7 +109,6 @@ def _read_report(url: str) -> FeedbackRecord | None:
     try:
         return FeedbackRecord.model_validate_json(body)
     except ValidationError:
-        # One malformed object must not block the others; it is retried, and logged, each pass.
         logger.warning("skipping unparseable playground report at %s", url, exc_info=True)
         return None
 
