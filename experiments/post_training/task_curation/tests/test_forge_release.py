@@ -20,6 +20,7 @@ from taskcompendium.models import (
 
 from experiments.post_training.task_curation import forge_release
 from experiments.post_training.task_curation.forge_release import Choice
+from experiments.post_training.task_curation.lowered_envelope import LOWERED_TASK_SPEC_COLUMN
 
 PASS = {"status": "graded", "reward": 1.0, "passed": None}
 FAIL = {"status": "graded", "reward": 0.0, "passed": None}
@@ -116,6 +117,21 @@ def test_release_writes_selected_rows_and_selection_evidence(tmp_path):
     assert {row["path"] for row in rows} == {"d01.a/01", "d02.b/01"}
     lines = (tmp_path / forge_release.SELECTION_FILENAME).read_text().splitlines()
     assert {json.loads(line)["choice"] for line in lines} == {"selected", "below_coverage_tier"}
+
+
+def test_release_ids_and_provenance_come_from_the_forge_task_id(tmp_path):
+    records = [_record("d01.a/02", 4), _record("d01.a/03", 3)]
+    # Authors wrote their own spec ids; two tasks in one capability can claim the same one.
+    for record in records:
+        record["rollout_spec"]["task"]["id"] = "d01.a/3"
+    forge_release.write_release(records, 2, tmp_path, "memory://records")
+    rows = pq.read_table(tmp_path / forge_release.LOWERED_FILENAME).to_pylist()
+    tasks = {row["path"]: json.loads(row[LOWERED_TASK_SPEC_COLUMN])["task"] for row in rows}
+    assert {path: (task["id"], task["source"]["row"]) for path, task in tasks.items()} == {
+        "d01.a/02": ("d01.a/02", "d01.a/02"),
+        "d01.a/03": ("d01.a/03", "d01.a/03"),
+    }
+    assert {task["source"]["dataset"] for task in tasks.values()} == {forge_release.SOURCE_DATASET}
 
 
 def test_a_locally_sandboxed_machine_is_restored_to_the_image_its_author_named():

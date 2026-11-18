@@ -41,7 +41,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.models import CommandSemantics, TaskSpec
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import CommandSemantics, Source, TaskSpec
 
 from experiments.post_training.task_curation.lowered_envelope import LOWERED_TASK_SPEC_COLUMN, LoweredSpec, MachineShape
 
@@ -60,6 +61,10 @@ SELECTION_RULE = (
     "break on the SHA-256 of the task id."
 )
 CONTROLS_CREDIT_CAP = 20
+# Every row's provenance names the forge export; the authored spec's own id and source are the author's
+# free text (zero-stripped slots, ids that collide across a capability) and are replaced.
+SOURCE_DATASET = "forge-task-records"
+IMPORTER_VERSION = "2026.11.18.1"
 # Copies of ``taskforge.sandbox.images.GRADER_BASE_IMAGE`` and the serialized ``taskforge.spec.draft.LOCAL_CPYTHON``:
 # taskforge is not a dependency of this package. A drift fails closed, since ``restored_task`` refuses any restored
 # machine that differs from its authored spec.
@@ -220,6 +225,10 @@ def restored_task(record: Mapping) -> dict:
     if spec is None:
         raise ValueError(f"{record['id']}: no confirmation rollout spec was recorded")
     task = dict(spec["task"])
+    task["id"] = record["id"]
+    task["source"] = Source(
+        dataset=SOURCE_DATASET, revision=canonical_sha256(record), row=record["id"], importer_revision=IMPORTER_VERSION
+    ).model_dump(mode="json")
     authored = record["workpiece"]["submission"]["task"]
     task["environment_requirements"] = restored_machine(task["environment_requirements"])
     if task["grader"].get("environment") is not None:
@@ -277,6 +286,8 @@ def write_release(records: Sequence[Mapping], target: int, output: Path, records
         for record in sorted(records, key=lambda r: r["id"])
         if record["id"] in chosen
     ]
+    if len({json.loads(row[LOWERED_TASK_SPEC_COLUMN])["task"]["id"] for row in lowered}) != len(lowered):
+        raise ValueError("Selected tasks must have distinct task IDs")
     output.mkdir(parents=True, exist_ok=True)
     schema = pa.schema([("path", pa.string()), (LOWERED_TASK_SPEC_COLUMN, pa.string())])
     pq.write_table(pa.Table.from_pylist(lowered, schema=schema), output / LOWERED_FILENAME)

@@ -122,4 +122,10 @@ this repository.
 ## Contents
 
 `tasks.parquet` holds one row per selected task: `path` (the forge task id, `<skill>/<slot>`) and
-`lowered_task_spec` (the TaskCompendium task with its task and verifier machine shapes).
+`lowered_task_spec` (the TaskCompendium task with its task and verifier machine shapes). Each task's `id`
+and `source.row` equal its `path`; `source.dataset` is `forge-task-records`, and `source.revision` is the
+SHA-256 of the task's exported forge record.
+
+Revision history: the first revision (`b1b06874…`) kept the ids and `source` fields each author wrote,
+which dropped the zero padding from slots and gave two pairs of distinct tasks the same id. This
+revision replaces only `id` and `source`; instructions, files, graders and machines are unchanged.
