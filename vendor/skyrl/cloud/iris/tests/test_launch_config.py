@@ -31,6 +31,9 @@ from marinskyrl.inference_placement import validate_expert_block_transport
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
 from skyrl_train.inference_engines import placement as inference_placement
+from skyrl_train.inference_engines.ray_wrapped_inference_engine import (
+    _build_inference_engine_runtime_env,
+)
 
 
 @pytest.mark.parametrize(
@@ -743,3 +746,26 @@ def test_literal_source_ids_survive_launch_composition(tmp_path: Path) -> None:
     path.write_text(yaml.safe_dump(raw))
     compiled = load_launch_config(path)
     assert OmegaConf.to_container(compiled.skyrl.trainer.rollout_buffer.source_routes) == routes
+
+
+def test_resolved_nccl_buffers_override_inherited_small_buffer(tmp_path, monkeypatch):
+    # A stale driver environment must not restore the NVLSTree corruption setting.
+    monkeypatch.setenv("NCCL_BUFFSIZE", "262144")
+    raw = raw_launch_config()
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path).skyrl
+
+    for role in ("policy", "ref"):
+        buffer_bytes = config.trainer[role].nccl_buffer_size_bytes
+        runtime_env = _build_inference_engine_runtime_env(nccl_buffer_size_bytes=buffer_bytes)
+        assert runtime_env["env_vars"]["NCCL_BUFFSIZE"] == "4194304"
+
+    # Keep explicit per-role tuning representable for diagnostic controls.
+    raw["skyrl"]["trainer"].setdefault("policy", {})["nccl_buffer_size_bytes"] = 8388608
+    path.write_text(yaml.safe_dump(raw))
+    resolved = load_launch_config(path).skyrl
+    runtime_env = _build_inference_engine_runtime_env(
+        nccl_buffer_size_bytes=resolved.trainer.policy.nccl_buffer_size_bytes
+    )
+    assert runtime_env["env_vars"]["NCCL_BUFFSIZE"] == "8388608"
