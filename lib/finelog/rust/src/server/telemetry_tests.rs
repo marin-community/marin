@@ -17,6 +17,7 @@ use tokio::sync::{oneshot, Semaphore};
 
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::{make_ctx, run_query_over};
+use crate::read_executor::ReadExecutor;
 use crate::server::auth::AuthPolicy;
 use crate::server::ingest_health::{IngestHealth, HEALTH_OK};
 use crate::server::test_support::{disk_store, serve, PUB_A};
@@ -111,17 +112,12 @@ async fn list_relay_status_accepts_connect_json_for_independent_consumers() {
 }
 
 async fn serve_with_config(store: Arc<Store>, config: ServerConfig) -> SocketAddr {
-    let app = build_app_with_config(store, config);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
+    let app = build_app_with_config(
+        store,
+        config,
+        Arc::new(ReadExecutor::for_process().unwrap()),
+    );
+    let (addr, _) = crate::server::test_support::serve_app(app).await;
     addr
 }
 
