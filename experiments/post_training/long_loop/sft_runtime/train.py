@@ -1534,20 +1534,30 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 first_rebind = config.first_step_host_rebind is not None and current_step == initial_step
                 if (config.first_checkpoint_restore_step is not None and current_step == 0) or first_rebind:
                     with timing.span("first_step_compile", step=current_step):
+                        if jax.process_index() == 0:
+                            logger.info("C_PHASE first_step_compile start step=%d", current_step)
                         compiled_first_step = train_step.lower(state, batch).compile()
+                        if jax.process_index() == 0:
+                            logger.info("C_PHASE first_step_compile end step=%d", current_step)
                     if not first_rebind:
                         del compiled_first_step
                 if first_rebind and config.first_step_host_rebind is not None:
                     with timing.span("first_step_host_rebind", step=current_step):
+                        if jax.process_index() == 0:
+                            logger.info("C_PHASE first_step_host_rebind start step=%d", current_step)
                         state = rebind_first_state(
                             state,
                             batch,
                             cgroup_path=Path(config.first_step_host_rebind.cgroup_path),
                             observe=lambda phase, sample: logger.info("Host rebind %s: %s", phase, sample),
                         )
+                        if jax.process_index() == 0:
+                            logger.info("C_PHASE first_step_host_rebind end step=%d", current_step)
                     # Match the v7a2 diagnostic's AOT reference lifetime.
                     del compiled_first_step
                 with timing.span("train_step", step=current_step):
+                    if config.carried_restore_step is not None and jax.process_index() == 0:
+                        logger.info("C_PHASE train_step start step=%d", current_step + 1)
                     state, metrics, inline_watch_stats = train_step(state, batch)
                     if inline_watch_stats is not None and watch_due:
                         watch_stats = inline_watch_stats
@@ -1555,6 +1565,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step = current_step - 1
 
                     jax.block_until_ready(metrics["train/loss"])
+                    if config.carried_restore_step is not None and jax.process_index() == 0:
+                        logger.info(
+                            "C_PHASE train_step end step=%d seconds=%.3f", current_step, time.perf_counter() - step_start
+                        )
                     if config.first_step_expected_loss is not None and current_step == 1 and jax.process_index() == 0:
                         actual_loss = float(metrics["train/loss"])
                         delta = actual_loss - config.first_step_expected_loss

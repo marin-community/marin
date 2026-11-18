@@ -5,6 +5,7 @@
 import dataclasses
 import logging
 import math
+import time
 
 import equinox as eqx
 import jax
@@ -230,8 +231,11 @@ def _restore_one_leaf_at_a_time(target, checkpoint, *, mesh):
     if len(paths) != len(leaves):
         raise ValueError("checkpoint template path/leaf mismatch")
     restored = []
-    for path, target_leaf in zip(paths, leaves, strict=True):
+    for index, (path, target_leaf) in enumerate(zip(paths, leaves, strict=True), start=1):
         key = path.replace(".", "/")
+        started = time.monotonic()
+        if jax.process_index() == 0:
+            logger.info("C_RESTORE_LEAF start index=%d/%d path=%s", index, len(leaves), key)
         parent, _, name = key.rpartition("/")
         dtype = jnp.float32 if target_leaf.dtype == jnp.bfloat16 else target_leaf.dtype
         exemplar = jax.ShapeDtypeStruct(target_leaf.shape, dtype, sharding=getattr(target_leaf, "sharding", None))
@@ -245,12 +249,25 @@ def _restore_one_leaf_at_a_time(target, checkpoint, *, mesh):
             converted = value.astype(jnp.bfloat16)
             converted.block_until_ready()
             if _is_moment_path(key):
+                audit_started = time.monotonic()
+                if jax.process_index() == 0:
+                    logger.info("C_MOMENT_AUDIT start index=%d/%d path=%s", index, len(leaves), key)
                 _audit_moment_cast(key, value, converted)
+                if jax.process_index() == 0:
+                    logger.info(
+                        "C_MOMENT_AUDIT end index=%d/%d seconds=%.3f",
+                        index,
+                        len(leaves),
+                        time.monotonic() - audit_started,
+                    )
             value.delete()
             del value
             restored.append(converted)
         else:
             if _is_moment_path(key):
+                audit_started = time.monotonic()
+                if jax.process_index() == 0:
+                    logger.info("C_MOMENT_AUDIT start index=%d/%d path=%s", index, len(leaves), key)
                 if not isinstance(value.sharding, jax.sharding.NamedSharding):
                     raise ValueError(f"moment source requires NamedSharding: {key}")
                 replicated = jax.sharding.NamedSharding(value.sharding.mesh, jax.sharding.PartitionSpec())
@@ -263,7 +280,16 @@ def _restore_one_leaf_at_a_time(target, checkpoint, *, mesh):
                     jax.process_index(),
                     value.dtype,
                 )
+                if jax.process_index() == 0:
+                    logger.info(
+                        "C_MOMENT_AUDIT end index=%d/%d seconds=%.3f",
+                        index,
+                        len(leaves),
+                        time.monotonic() - audit_started,
+                    )
             restored.append(value)
+        if jax.process_index() == 0:
+            logger.info("C_RESTORE_LEAF end index=%d/%d seconds=%.3f", index, len(leaves), time.monotonic() - started)
     return eqx.combine(jax.tree.unflatten(treedef, restored), nonserializable)
 
 
@@ -287,7 +313,12 @@ def restore_1005_carried_state(state, checkpoint: str, *, mesh, expected_step: i
     moment_paths = {key for key in optimizer_paths if _is_moment_path(key)}
     if len(moment_paths) != _EXPECTED_MOMENT_LEAVES or optimizer_paths - moment_paths != _OPTIMIZER_NON_MOMENT_PATHS:
         raise ValueError("checkpoint optimizer moment path coverage mismatch")
+    manifest_started = time.monotonic()
+    if jax.process_index() == 0:
+        logger.info("C_RESTORE_MANIFEST start")
     arrays = read_manifest(checkpoint).arrays
+    if jax.process_index() == 0:
+        logger.info("C_RESTORE_MANIFEST end arrays=%d seconds=%.3f", len(arrays), time.monotonic() - manifest_started)
     actual = {a.path: (tuple(a.shape), str(a.dtype)) for a in arrays}
     if len(actual) != len(arrays):
         raise ValueError("duplicate checkpoint array paths")
