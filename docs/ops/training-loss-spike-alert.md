@@ -43,7 +43,7 @@ WITH samples AS (
   FROM "levanter.metrics"
   WHERE name = 'train_loss'
     AND run_id = '<hero-run-id>'
-    AND COALESCE(NULLIF(cluster, ''), 'unknown') = '<cluster>'
+    AND COALESCE(NULLIF(cluster, ''), 'marin') = '<cluster>'
     AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '60 minutes') * 1000 AS BIGINT)
     AND timestamp_ms < CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT)
 )

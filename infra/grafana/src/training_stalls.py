@@ -42,7 +42,7 @@ def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
     enrolled_since = sql_timestamp(now - _PHASE_LOOKBACK)
     end = sql_epoch_ms(now)
     projection = (
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
+        "SELECT COALESCE(NULLIF(cluster,''),'marin') AS origin_cluster, "
         "run_id, job_id AS telemetry_job, execution_uid, name, value, step, "
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "
         f"FROM {LEVANTER_METRICS_TABLE} "

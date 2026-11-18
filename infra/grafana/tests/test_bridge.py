@@ -467,6 +467,29 @@ def test_hero_alerts_enroll_marin_retries_and_exclude_other_users():
     }
 
 
+def test_a_hub_run_spanning_the_hub_naming_its_cluster_stays_one_marin_run():
+    # Hub rows written before the hub named its cluster have an empty cluster;
+    # later rows carry "marin". Both must land on the same run, so the run's
+    # running age does not restart when the name is set.
+    now = datetime(2026, 8, 20, 23, 30, tzinfo=UTC)
+    database = duckdb.connect()
+    database.execute(
+        'CREATE TABLE "iris.task_state"(cluster VARCHAR, root_job_id VARCHAR, ts TIMESTAMP, running BIGINT)'
+    )
+    database.executemany(
+        'INSERT INTO "iris.task_state" VALUES (?, ?, ?, ?)',
+        [
+            ("", "/marin/hero-span-coord", now - timedelta(minutes=10), 64),
+            ("marin", "/marin/hero-span-coord", now - timedelta(seconds=30), 64),
+        ],
+    )
+
+    task_states = database.execute(task_state_query(now)).fetch_arrow_table()
+    assert [(run.cluster, run.root_job, run.running_since) for run in active_hero_runs(task_states, now)] == [
+        ("marin", "/marin/hero-span-coord", now - timedelta(minutes=10))
+    ]
+
+
 def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     database = duckdb.connect()
