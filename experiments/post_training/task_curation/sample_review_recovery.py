@@ -22,9 +22,11 @@ are not re-derived here.
 """
 
 import argparse
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 from finestore.rl.curation import ContentEvidenceReference
 from huggingface_hub import HfApi, hf_hub_download
@@ -57,11 +59,17 @@ RECEIPT_PARTS_DIRECTORY = "experiments/post_training/task_curation/datasets/samp
 DEFAULT_NORMALIZATION_FIELDS = ("execution_requirements",)
 
 ReceiptReference = RegistryReference
-"""One registry revision's exact receipt document, reusing the registry's pinned model."""
+"""One registry revision's exact PART file reference, reusing the registry's
+pinned model; the source's receipt document is an entry of that part."""
 
 
 class RecoveryTarget(BaseModel):
-    """One source's current receipt and its superseded prior receipts."""
+    """One source's current receipt and its superseded prior receipts.
+
+    Receipt references pin the registry PART file that holds the source's
+    receipt document; ``read_receipt_reference`` extracts the source's entry
+    after verifying the part's bytes.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -81,22 +89,27 @@ def document_sha256(document: dict) -> str:
 
 
 def read_receipt_reference(reference: ReceiptReference, source_id: str) -> SampleQCReceipt:
-    """Download and verify one receipt document, then validate it."""
-    document = read_registry_document(reference)
+    """Verify one receipt part's bytes and extract the source's receipt."""
+    part = read_registry_document(reference)
+    document = part.get(source_id)
+    if document is None:
+        raise ValueError(f"Receipt part holds no entry for this source: {reference.path}")
     if document.get("source_id") != source_id:
         raise ValueError(f"Receipt belongs to another source: {document.get('source_id')}")
     return SampleQCReceipt.model_validate(document)
 
 
 def collect_receipt_history(
-    documents_by_revision: dict[str, dict[str, tuple[str, dict]]],
+    documents_by_revision: dict[str, dict[str, tuple[ReceiptReference, dict]]],
 ) -> dict[str, list[ReceiptReference]]:
     """Group a registry's receipt documents per source, newest first.
 
-    ``documents_by_revision`` maps revision → source ID → (part path, parsed
-    receipt document), newest revision first. Blank shard placeholders carry
-    nothing. A source's prior evidence is every distinct document whose panel
-    pin differs from its newest revision's panel pin.
+    ``documents_by_revision`` maps revision → source ID → (part reference,
+    parsed receipt document), newest revision first, where each part reference
+    pins the part file's exact bytes. Blank shard placeholders carry nothing.
+    A source's prior evidence is every distinct document, deduplicated by its
+    canonical digest, whose panel pin differs from its newest revision's panel
+    pin.
     """
     revisions = list(documents_by_revision)
     newest = documents_by_revision[revisions[0]]
@@ -107,14 +120,14 @@ def collect_receipt_history(
     }
     history: dict[str, dict[str, ReceiptReference]] = {}
     for revision in revisions:
-        for source_id, (path, document) in documents_by_revision[revision].items():
+        for source_id, (reference, document) in documents_by_revision[revision].items():
             if not document.get("review"):
                 continue
             if document["review"]["panel"]["dataset_revision"] == current_pin.get(source_id):
                 continue
             sha256 = document_sha256(document)
             entry = history.setdefault(source_id, {})
-            entry.setdefault(sha256, ReceiptReference(repo=REGISTRY_REPO, revision=revision, path=path, sha256=sha256))
+            entry.setdefault(sha256, reference)
     return {source_id: list(references.values()) for source_id, references in sorted(history.items()) if references}
 
 
@@ -122,7 +135,7 @@ def survey_queue() -> RecoveryQueue:
     """Walk the registry's receipt history and build the recovery queue."""
     api = HfApi()
     revisions = [commit.commit_id for commit in api.list_repo_commits(REGISTRY_REPO, repo_type="dataset")]
-    documents_by_revision: dict[str, dict[str, tuple[str, dict]]] = {}
+    documents_by_revision: dict[str, dict[str, tuple[ReceiptReference, dict]]] = {}
     for revision in revisions:
         parts = [
             name
@@ -131,24 +144,22 @@ def survey_queue() -> RecoveryQueue:
         ]
         if not parts:
             continue
-        documents: dict[str, tuple[str, dict]] = {}
+        documents: dict[str, tuple[ReceiptReference, dict]] = {}
         for name in parts:
             downloaded = hf_hub_download(REGISTRY_REPO, repo_type="dataset", revision=revision, filename=name)
-            for source_id, document in json.loads(StoragePath(downloaded).read_text()).items():
-                documents[source_id] = (name, document)
+            part_bytes = Path(downloaded).read_bytes()
+            reference = ReceiptReference(
+                repo=REGISTRY_REPO,
+                revision=revision,
+                path=name,
+                sha256=hashlib.sha256(part_bytes).hexdigest(),
+            )
+            for source_id, document in json.loads(part_bytes).items():
+                documents[source_id] = (reference, document)
         documents_by_revision[revision] = documents
     prior = collect_receipt_history(documents_by_revision)
     newest = documents_by_revision[revisions[0]]
-    current = {
-        source_id: ReceiptReference(
-            repo=REGISTRY_REPO,
-            revision=revisions[0],
-            path=path,
-            sha256=document_sha256(document),
-        )
-        for source_id, (path, document) in newest.items()
-        if document.get("review")
-    }
+    current = {source_id: reference for source_id, (reference, document) in newest.items() if document.get("review")}
     targets = [
         RecoveryTarget(
             source_id=source_id,

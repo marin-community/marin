@@ -3,17 +3,19 @@
 
 """The recovery runner groups superseded receipts and recovers them typed."""
 
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 from finestore.rl.curation import OversightLevel
 
 from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt
 from experiments.post_training.task_curation.sample_review_recovery import (
+    REGISTRY_REPO,
     ReceiptReference,
     RecoveryTarget,
     collect_receipt_history,
-    document_sha256,
     recover_target,
 )
 from experiments.post_training.task_curation.tests.test_review_carry_forward import (
@@ -43,39 +45,43 @@ def receipt_document(receipt: SampleQCReceipt) -> dict:
 
 def test_collect_receipt_history_keeps_distinct_superseded_pins():
     newest, second, oldest = "f" * 40, "e" * 40, "d" * 40
+
+    def part_reference(revision: str, path: str) -> ReceiptReference:
+        sha256 = hashlib.sha256(revision.encode()).hexdigest()
+        return ReceiptReference(repo=REGISTRY_REPO, revision=revision, path=path, sha256=sha256)
+
     current = {"source_id": SOURCE_ID, "review": {"panel": {"dataset_revision": CURRENT_REVISION}}}
     stale_a = {"source_id": SOURCE_ID, "review": {"panel": {"dataset_revision": EARLIER_REVISION}}}
     stale_b = {"source_id": SOURCE_ID, "review": {"panel": {"dataset_revision": "c" * 40}}}
     documents = {
-        newest: {SOURCE_ID: ("part-000.json", current)},
-        second: {SOURCE_ID: ("part-000.json", stale_a)},
-        oldest: {SOURCE_ID: ("part-002.json", stale_b)},
+        newest: {SOURCE_ID: (part_reference(newest, "part-000.json"), current)},
+        second: {SOURCE_ID: (part_reference(second, "part-000.json"), stale_a)},
+        oldest: {SOURCE_ID: (part_reference(oldest, "part-002.json"), stale_b)},
     }
     history = collect_receipt_history(documents)
     assert sorted(history) == [SOURCE_ID]
     references = history[SOURCE_ID]
     assert len(references) == 2
     assert {reference.revision for reference in references} == {second, oldest}
-    assert {reference.sha256 for reference in references} == {document_sha256(stale_a), document_sha256(stale_b)}
 
 
-def _write(path, document) -> str:
-    # Match canonical_sha256's exact serialization so the reference pins these bytes.
-    path.write_text(json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
+def _write_part(path, document) -> str:
+    part = {SOURCE_ID: document}
+    path.write_text(json.dumps(part, sort_keys=True))
     return str(path)
 
 
 def _target(tmp_path, monkeypatch, stale_receipt, current_receipt):
-    stale_document = receipt_document(stale_receipt)
-    current_document = receipt_document(current_receipt)
-    stale_document_path = _write(tmp_path / "stale-receipt.json", stale_document)
-    current_document_path = _write(tmp_path / "current-receipt.json", current_document)
+    stale_part_path = _write_part(tmp_path / "stale-part.json", receipt_document(stale_receipt))
+    current_part_path = _write_part(tmp_path / "current-part.json", receipt_document(current_receipt))
+    stale_part_sha = hashlib.sha256(Path(stale_part_path).read_bytes()).hexdigest()
+    current_part_sha = hashlib.sha256(Path(current_part_path).read_bytes()).hexdigest()
 
     def fake_download(repo_id, repo_type, revision, filename):
         assert repo_id == "fixture/registry" and repo_type == "dataset"
         if filename == "part-000.json":
-            return stale_document_path
-        return current_document_path
+            return stale_part_path
+        return current_part_path
 
     monkeypatch.setattr("experiments.post_training.task_curation.registry.hf_hub_download", fake_download)
     return RecoveryTarget(
@@ -83,13 +89,11 @@ def _target(tmp_path, monkeypatch, stale_receipt, current_receipt):
         current=ReceiptReference(
             repo="fixture/registry",
             revision="b" * 40,
-            path="current-receipt.json",
-            sha256=document_sha256(current_document),
+            path="current-part.json",
+            sha256=current_part_sha,
         ),
         prior=(
-            ReceiptReference(
-                repo="fixture/registry", revision="a" * 40, path="part-000.json", sha256=document_sha256(stale_document)
-            ),
+            ReceiptReference(repo="fixture/registry", revision="a" * 40, path="part-000.json", sha256=stale_part_sha),
         ),
         current_population=current_receipt.review.panel.input_artifact,
     )
@@ -171,5 +175,5 @@ def test_recover_target_refuses_a_receipt_from_another_source(tmp_path, monkeypa
     )
     target = _target(tmp_path, monkeypatch, stale_receipt, current_receipt)
     alien = target.model_copy(update={"source_id": "OpenAthena:another-source"})
-    with pytest.raises(ValueError, match="another source"):
+    with pytest.raises(ValueError, match="no entry for this source"):
         recover_target(alien, tmp_path.as_posix(), (FIELD,))
