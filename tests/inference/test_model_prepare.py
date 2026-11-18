@@ -18,7 +18,7 @@ from click.testing import CliRunner
 from fray.types import ANY_REGION, CpuConfig, JobStatus, ResourceConfig, create_environment
 from iris.resources.state import JobState
 from levanter.model_cache import DEFAULT_COMPLETE_MARKER
-from marin.evaluation.runner import _inference_session, _prepare_all, _RolePreparationError
+from marin.evaluation.runner import _inference_session, _prepare_all, _RoleStartupError
 from marin.inference.config import (
     IrisConfig,
     RemoteInferenceConfig,
@@ -224,7 +224,7 @@ def test_prepare_timeout_fails_its_role_without_a_retry(serving):
     serving.timeout_prepare = True
     config = _config(REVISION)
     config = replace(config, iris=replace(config.iris, max_retries_failure=1))
-    with pytest.raises(_RolePreparationError) as caught:
+    with pytest.raises(_RoleStartupError) as caught:
         _prepare_all({"judge": config})
     assert caught.value.role == "judge"
     assert caught.value.error.phase is InferenceStartupPhase.PREPARATION

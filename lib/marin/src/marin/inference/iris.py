@@ -737,13 +737,15 @@ def _wait_for_serving[T](jobs: tuple[JobHandle, ...], timeout_seconds: float, re
 
 @dataclass(frozen=True)
 class PreparedInference:
-    """A remote inference config whose Hugging Face weights are pinned and cached at the serving placement."""
+    """A remote inference config after ``prepare_inference``: its Hugging Face revisions are pinned."""
 
     config: RemoteInferenceConfig
 
 
 def prepare_inference(config: RemoteInferenceConfig) -> PreparedInference:
-    """Mirror uncached Hugging Face weights from CPU jobs; submit no accelerator job.
+    """Pin Hugging Face revisions and mirror uncached weights from CPU jobs; submit no accelerator job.
+
+    The CPU mirror runs only where its cache matches the serving placement (see ``prepare_hf_models``).
 
     Prepare every model a caller will serve before serving any of them, so accelerators are not
     reserved while another model downloads.

@@ -628,28 +628,58 @@ def run_evaluation_steps(
         **runtime_env,
         **env_vars_from_keys(tuple(batch.secret_env)),
     }
-    inference = inference_config_for_model(
-        batch.model,
-        batch.accelerator,
-        env_vars=runtime_env,
-        capability_origin=batch.capability_origin,
-        api_model=batch.api_model,
-        priority=batch.priority_band,
-        instances=batch.instances,
-        request_timeout_seconds=max(
-            (
-                float(
-                    evaluation.identity.eval_ref.evalchemy.extra_model_args.get(
-                        "timeout", EVALUATION_REQUEST_TIMEOUT_SECONDS
-                    )
+    try:
+        prepared = _prepare_all(_inference_configs(batch, runtime_env))
+        with ExitStack() as stack:
+            session, judge = _open_sessions(stack, prepared)
+            run(
+                partial(
+                    run_evaluation_step,
+                    batch=batch,
+                    session=session,
+                    judge=judge,
+                    orchestrator_job_id=orchestrator_job_id,
+                    evaluation_env=evaluation_env,
                 )
-                for evaluation in batch.evaluations
-                if evaluation.identity.eval_ref.evalchemy is not None
+            )
+    except _RoleStartupError as failure:
+        run(
+            partial(
+                _record_startup_failure,
+                batch=batch,
+                orchestrator_job_id=orchestrator_job_id,
+                exc=failure.error,
+                role=failure.role,
+                existing_jobs=failure.existing_jobs,
+            )
+        )
+
+
+def _inference_configs(batch: EvaluationBatch, runtime_env: Mapping[str, str]) -> dict[str, RemoteInferenceConfig]:
+    """The candidate's inference config and, with a hosted judge, the judge's, keyed by job role."""
+    configs = {
+        _INFERENCE_ROLE: inference_config_for_model(
+            batch.model,
+            batch.accelerator,
+            env_vars=runtime_env,
+            capability_origin=batch.capability_origin,
+            api_model=batch.api_model,
+            priority=batch.priority_band,
+            instances=batch.instances,
+            request_timeout_seconds=max(
+                (
+                    float(
+                        evaluation.identity.eval_ref.evalchemy.extra_model_args.get(
+                            "timeout", EVALUATION_REQUEST_TIMEOUT_SECONDS
+                        )
+                    )
+                    for evaluation in batch.evaluations
+                    if evaluation.identity.eval_ref.evalchemy is not None
+                ),
+                default=EVALUATION_REQUEST_TIMEOUT_SECONDS,
             ),
-            default=EVALUATION_REQUEST_TIMEOUT_SECONDS,
-        ),
-    )
-    configs = {_INFERENCE_ROLE: inference}
+        )
+    }
     if batch.judge is not None:
         configs[_JUDGE_ROLE] = inference_config_for_model(
             batch.judge.model,
@@ -659,75 +689,24 @@ def run_evaluation_steps(
             api_model=batch.judge.api_model,
             priority=batch.priority_band,
         )
-    try:
-        prepared = _prepare_all(configs)
-    except _RolePreparationError as failure:
-        run(
-            partial(
-                _record_startup_failure,
-                batch=batch,
-                orchestrator_job_id=orchestrator_job_id,
-                exc=failure.error,
-                role=failure.role,
-            )
-        )
-        return
-    with ExitStack() as stack:
-        try:
-            session = _inference_session(stack, prepared[_INFERENCE_ROLE])
-        except RemoteInferenceStartupError as exc:
-            run(
-                partial(
-                    _record_startup_failure,
-                    batch=batch,
-                    orchestrator_job_id=orchestrator_job_id,
-                    exc=exc,
-                    role=_INFERENCE_ROLE,
-                )
-            )
-            return
-        judge = None
-        if _JUDGE_ROLE in prepared:
-            try:
-                judge = _inference_session(stack, prepared[_JUDGE_ROLE])
-            except RemoteInferenceStartupError as exc:
-                run(
-                    partial(
-                        _record_startup_failure,
-                        batch=batch,
-                        orchestrator_job_id=orchestrator_job_id,
-                        exc=exc,
-                        role=_JUDGE_ROLE,
-                        existing_jobs=_session_job_ids(session, _INFERENCE_ROLE),
-                    )
-                )
-                return
-        run(
-            partial(
-                run_evaluation_step,
-                batch=batch,
-                session=session,
-                judge=judge,
-                orchestrator_job_id=orchestrator_job_id,
-                evaluation_env=evaluation_env,
-            )
-        )
+    return configs
 
 
-class _RolePreparationError(Exception):
-    """One role's preparation failed; no serving job has been submitted for any role."""
+class _RoleStartupError(Exception):
+    """One role's inference failed to prepare or start; ``existing_jobs`` are the jobs of roles already serving."""
 
-    def __init__(self, role: str, error: RemoteInferenceStartupError):
+    def __init__(self, role: str, error: RemoteInferenceStartupError, existing_jobs: Mapping[str, str] | None = None):
         super().__init__(role, error)
         self.role = role
         self.error = error
+        self.existing_jobs = dict(existing_jobs or {})
 
 
 def _prepare_all(configs: Mapping[str, RemoteInferenceConfig]) -> dict[str, PreparedInference]:
     """Prepare every role's weights in parallel and wait for all of them before any serving job is submitted.
 
     Raises:
-        _RolePreparationError: for the first role, in ``configs`` order, whose preparation failed.
+        _RoleStartupError: for the first role, in ``configs`` order, whose preparation failed.
     """
     with ThreadPoolExecutor(max_workers=len(configs)) as pool:
         futures = {
@@ -739,8 +718,28 @@ def _prepare_all(configs: Mapping[str, RemoteInferenceConfig]) -> dict[str, Prep
         try:
             prepared[role] = future.result()
         except RemoteInferenceStartupError as exc:
-            raise _RolePreparationError(role, exc) from exc
+            raise _RoleStartupError(role, exc) from exc
     return prepared
+
+
+def _open_sessions(
+    stack: ExitStack, prepared: Mapping[str, PreparedInference]
+) -> tuple[RemoteInferenceSession, RemoteInferenceSession | None]:
+    """Serve the prepared candidate, then the prepared judge if there is one.
+
+    Raises:
+        _RoleStartupError: for the role whose serving failed to start.
+    """
+    try:
+        session = _inference_session(stack, prepared[_INFERENCE_ROLE])
+    except RemoteInferenceStartupError as exc:
+        raise _RoleStartupError(_INFERENCE_ROLE, exc) from exc
+    if _JUDGE_ROLE not in prepared:
+        return session, None
+    try:
+        return session, _inference_session(stack, prepared[_JUDGE_ROLE])
+    except RemoteInferenceStartupError as exc:
+        raise _RoleStartupError(_JUDGE_ROLE, exc, _session_job_ids(session, _INFERENCE_ROLE)) from exc
 
 
 def _inference_session(stack: ExitStack, prepared: PreparedInference) -> RemoteInferenceSession:
