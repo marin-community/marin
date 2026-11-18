@@ -6,16 +6,21 @@
 Exp4 keeps the six nonagentic .55 source shares, cuts the agentic route from
 50% to 35%, and assigns the freed 15% to the Nemotron instruction-following
 source (``MarinSkyRL:nemotron_if``). Its entry pins the upstream dataset revision.
-The six carry-over shares come from the Exp3 definition.
+The six carry-over shares derive from the adopted releases' pinned per-source row
+counts under the .55 route quotas.
 
-On the .55 batch of 64 groups, the 35% agentic target is 22.4 groups. The
-trainer's largest-remainder apportionment (vendored ``weighted_quotas``) assigns
-22 agentic and 42 nonagentic groups in every window, or 34.375% agentic. Five
-other sources have larger fractional remainders than the agentic source and
+This curriculum's entries are keyed by per-source ``teacher_route`` labels,
+because the policy is per-source: uniform draws within a route pool cannot
+realize it. On the .55 batch of 64 groups, the 35% agentic target is 22.4 groups.
+The trainer's largest-remainder apportionment (vendored ``weighted_quotas``)
+assigns 22 agentic and 42 nonagentic groups in every window, or 34.375% agentic.
+Five other sources have larger fractional remainders than the agentic source and
 receive the remaining seats. Uniform draws from a fixed nonagentic route pool
 with nemotron_if's 54,953 rows would give it about 35% of that pool. Its target
-is 15% of all groups. The declared domain-weighted sampler requires per-source
-``teacher_route`` labels in the input pool: no pool in this stack carries them
+is 15% of all groups.
+
+Sampling contract: the domain-weighted sampler requires per-source
+``teacher_route`` labels in the input pool. No pool in this stack carries them
 yet (the recorded .55 parquets carry ``data_source`` provenance and route through
 ``source_routes``), and the ``nemotron_if`` entry pins the upstream dataset
 revision rather than a curated pool, so a launch needs the stamped-pool and
@@ -32,15 +37,13 @@ from types import MappingProxyType
 from marin.rl.curriculum import RlCurriculum
 
 from experiments.post_training.task_curation.curriculum import weighted_curriculum
-from experiments.post_training.task_curation.datasets.long_loop_rl import AGENTIC_TRAIN_SOURCE
-from experiments.post_training.task_curation.exp3_curriculum import (
+from experiments.post_training.task_curation.datasets.long_loop_rl import (
     AGENTIC_RELEASE,
+    AGENTIC_TRAIN_SOURCE,
     NONAGENTIC_RELEASE,
-    SEED,
+    RELEASE_SOURCE_ROUTES,
 )
-from experiments.post_training.task_curation.exp3_curriculum import (
-    weights as exp3_weights,
-)
+from experiments.post_training.task_curation.exp3_curriculum import SEED
 from experiments.post_training.task_curation.sources import runnable_sources
 
 CURRICULUM_NAME = "long-loop/exp4-rl"
@@ -49,10 +52,32 @@ NEMOTRON_IF_LABEL = "nemotron_if"
 
 AGENTIC_SHARE = 0.35
 NEMOTRON_IF_SHARE = 0.15
+NONAGENTIC_ROUTE = "nonagentic"
+
+SOURCE_ROUTES = MappingProxyType({**RELEASE_SOURCE_ROUTES, NEMOTRON_IF_LABEL: NONAGENTIC_ROUTE})
+
+_TRAIN_SOURCE_COUNTS = {}
+for _release in (AGENTIC_RELEASE, NONAGENTIC_RELEASE):
+    _config = _release.config
+    if _config is None:
+        raise ValueError(f"adopted release {_release.name} has no configuration")
+    for _member in _config.members:
+        if _member.source_counts:
+            _TRAIN_SOURCE_COUNTS.update(_member.source_counts)
+
+_NONAGENTIC_ROWS = sum(
+    count for label, count in _TRAIN_SOURCE_COUNTS.items() if RELEASE_SOURCE_ROUTES[label] == NONAGENTIC_ROUTE
+)
 
 CARRY_OVER_SHARES = MappingProxyType(
-    {label: share for label, share in exp3_weights().items() if label != AGENTIC_TRAIN_SOURCE}
+    {
+        label: 0.5 * count / _NONAGENTIC_ROWS
+        for label, count in _TRAIN_SOURCE_COUNTS.items()
+        if RELEASE_SOURCE_ROUTES[label] == NONAGENTIC_ROUTE
+    }
 )
+"""The six nonagentic sources keep their exact .55 consumed shares: the .55 route's
+batch share (32 of 64 groups) times each source's row share of the route pool."""
 
 TARGET_SHARES = MappingProxyType(
     {
