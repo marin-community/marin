@@ -24,6 +24,7 @@ from levanter.models.snowball_deletion import (
     down_norms,
     init_gate_logits_jax,
 )
+import levanter.callbacks
 from levanter.trainer import Trainer
 
 logger = logging.getLogger(__name__)
