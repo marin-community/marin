@@ -735,26 +735,22 @@ def _wait_for_serving[T](jobs: tuple[JobHandle, ...], timeout_seconds: float, re
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)
 
 
-@contextlib.contextmanager
-def remote_inference(
-    config: RemoteInferenceConfig,
-) -> Iterator[RemoteInferenceSession]:
-    """Start inference on Iris and optionally expose its link URL."""
+@dataclass(frozen=True)
+class PreparedInference:
+    """A remote inference config whose Hugging Face weights are pinned and cached at the serving placement."""
 
-    if get_job_info() is None:
-        raise RuntimeError("remote_inference must run inside an Iris job")
-    config = _prepared_inference_config(config)
-    resolved_broker = _broker_config(config.instances, config.broker)
-    if resolved_broker is None:
-        with _start_direct_inference(config) as session:
-            yield session
-        return
-    with _start_brokered_inference(config, resolved_broker) as session:
-        yield session
+    config: RemoteInferenceConfig
 
 
-def _prepared_inference_config(config: RemoteInferenceConfig) -> RemoteInferenceConfig:
-    """Mirror uncached Hugging Face weights from CPU jobs before any accelerator job starts."""
+def prepare_inference(config: RemoteInferenceConfig) -> PreparedInference:
+    """Mirror uncached Hugging Face weights from CPU jobs; submit no accelerator job.
+
+    Prepare every model a caller will serve before serving any of them, so accelerators are not
+    reserved while another model downloads.
+
+    Raises:
+        RemoteInferenceStartupError: with phase PREPARATION when a revision, submission or prepare job fails.
+    """
     environment = create_environment(
         setup_scripts=[default_setup_script(packages=["marin-core"])],
         env_vars=dict(config.iris.worker_environment.env_vars),
@@ -767,7 +763,29 @@ def _prepared_inference_config(config: RemoteInferenceConfig) -> RemoteInference
         )
     except ModelPreparationError as exc:
         raise RemoteInferenceStartupError(str(exc), jobs=exc.jobs, phase=InferenceStartupPhase.PREPARATION) from exc
-    return replace(config, model=model, engine=engine)
+    return PreparedInference(replace(config, model=model, engine=engine))
+
+
+@contextlib.contextmanager
+def serve_inference(prepared: PreparedInference) -> Iterator[RemoteInferenceSession]:
+    """Start accelerator inference on Iris for a prepared config and optionally expose its link URL."""
+    if get_job_info() is None:
+        raise RuntimeError("serve_inference must run inside an Iris job")
+    config = prepared.config
+    resolved_broker = _broker_config(config.instances, config.broker)
+    if resolved_broker is None:
+        with _start_direct_inference(config) as session:
+            yield session
+        return
+    with _start_brokered_inference(config, resolved_broker) as session:
+        yield session
+
+
+@contextlib.contextmanager
+def remote_inference(config: RemoteInferenceConfig) -> Iterator[RemoteInferenceSession]:
+    """Prepare and serve one model. Callers serving several models prepare them all first instead."""
+    with serve_inference(prepare_inference(config)) as session:
+        yield session
 
 
 @contextlib.contextmanager
