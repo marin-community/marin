@@ -16,12 +16,12 @@ import hashlib
 import json
 from collections import Counter
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 
 import pyarrow.parquet as pq
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
@@ -33,6 +33,9 @@ from experiments.post_training.task_curation.source import (
     SourceReference,
     TaskFormat,
 )
+
+AGENTIC_RELEASE_NAME = "long-loop-rl-agentic-train"
+NONAGENTIC_RELEASE_NAME = "long-loop-rl-nonagentic-train"
 
 AGENTIC_RELEASE_URL = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release"
 NONAGENTIC_RELEASE_URL = "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1"
@@ -52,7 +55,9 @@ OPEN_SCIENCE_ROWS = 20_790
 REASONING_GYM_ROWS = 20_800
 SNOWBALL_SMARTIE_ROWS = 11_634
 TASKTROVE_ROWS = 24_033
-NONAGENTIC_TRAIN_ROWS = EURUS_ROWS + NEMOTRON_BLENDS_ROWS + OPEN_SCIENCE_ROWS + REASONING_GYM_ROWS + SNOWBALL_SMARTIE_ROWS + TASKTROVE_ROWS
+NONAGENTIC_TRAIN_ROWS = (
+    EURUS_ROWS + NEMOTRON_BLENDS_ROWS + OPEN_SCIENCE_ROWS + REASONING_GYM_ROWS + SNOWBALL_SMARTIE_ROWS + TASKTROVE_ROWS
+)
 
 REASONING_GYM_SOURCE = (
     "https://files.pythonhosted.org/packages/42/21/"
@@ -96,16 +101,22 @@ def _release(source: RlDataSource[AdoptedRelease]) -> AdoptedRelease:
 
 
 def stream_sha256(fs, path: str) -> str:
-    """Hash one pinned object in region without buffering it."""
-    digest = hashlib.sha256()
+    """Stream one pinned object's digest without buffering it; the execution region follows the caller's filesystem."""
     with fs.open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(8 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
-def verify_release(config: AdoptedRelease) -> dict:
-    """Verify the pinned release in region and return its admitted composition.
+@dataclass(frozen=True)
+class VerifiedFile:
+    """One verified member's digest, row count, and per-source provenance."""
+
+    sha256: str
+    rows: int | None = None
+    source_counts: Mapping[str, int] | None = None
+
+
+def verify_release(config: AdoptedRelease) -> dict[str, VerifiedFile]:
+    """Verify the pinned release against its pins and return the admitted composition.
 
     Every member's SHA-256 must match its pin. A member that records rows must
     carry that row count, and one that records provenance must carry exactly the
@@ -114,25 +125,25 @@ def verify_release(config: AdoptedRelease) -> dict:
     never stored.
     """
     fs, base = filesystem_for(config.url)
-    composition: dict[str, dict] = {}
+    composition: dict[str, VerifiedFile] = {}
     for member in config.members:
-        path = f"{base.rstrip('/')}/{member.name}"
+        path = prefix_join(base, member.name)
         observed_sha = stream_sha256(fs, path)
         if observed_sha != member.sha256:
             raise ValueError(f"{path}: sha256 {observed_sha} does not match the pinned {member.sha256}")
-        entry: dict = {"sha256": observed_sha}
+        verified = VerifiedFile(sha256=observed_sha)
         if member.rows is not None:
             with fs.open(path, "rb") as handle:
                 rows = pq.ParquetFile(handle).metadata.num_rows
             if rows != member.rows:
                 raise ValueError(f"{path}: {rows} rows, expected {member.rows}")
-            entry["rows"] = rows
+            verified = replace(verified, rows=rows)
         if member.source_counts is not None:
             counts = provenance_counts(fs, path)
             if counts != dict(member.source_counts):
                 raise ValueError(f"{path}: provenance counts {dict(counts)} differ from the recorded manifest")
-            entry["source_counts"] = dict(counts)
-        composition[member.name] = entry
+            verified = replace(verified, source_counts=dict(counts))
+        composition[member.name] = verified
     return composition
 
 
@@ -163,7 +174,7 @@ def adopt_release(source: RlDataSource[AdoptedRelease], options: PipelineOptions
             "status": "completed",
             "release": config.url,
             "manifest_sha256": config.manifest_sha256,
-            "composition": composition,
+            "composition": {name: asdict(verified) for name, verified in composition.items()},
         }
         receipt = destination / "manifest.json"
         receipt.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -212,7 +223,7 @@ def agentic_release() -> RlDataSource[AdoptedRelease]:
             ),
         ),
         config=AdoptedRelease(
-            name="long-loop-rl-agentic-train",
+            name=AGENTIC_RELEASE_NAME,
             version="1",
             url=AGENTIC_RELEASE_URL,
             manifest_sha256=AGENTIC_MANIFEST_SHA256,
@@ -257,7 +268,7 @@ def nonagentic_release() -> RlDataSource[AdoptedRelease]:
             ),
         ),
         config=AdoptedRelease(
-            name="long-loop-rl-nonagentic-train",
+            name=NONAGENTIC_RELEASE_NAME,
             version="1",
             url=NONAGENTIC_RELEASE_URL,
             manifest_sha256=NONAGENTIC_MANIFEST_SHA256,

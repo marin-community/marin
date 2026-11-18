@@ -17,27 +17,23 @@ source's weight is its route's batch share times its row share inside the route
 pool, so composing every training window with these weights reproduces the run's
 per-window composition exactly at the route level and in expectation within each
 route. The seed is the run's trainer seed. Resolving the curriculum against the
-catalog reproduces what .55 consumed, source by source.
+catalog reproduces what .55 consumed, source by source; the per-source task
+counts come from the adopted releases' pinned provenance, so the curriculum and
+the release verification cannot drift apart.
 """
 
 import csv
-import math
-from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
-from marin.rl.curriculum import CurriculumEntry, RlCurriculum, SamplingMode, SourcePin
+from marin.rl.curriculum import RlCurriculum, SamplingMode
 
-from experiments.post_training.task_curation.curriculum import recipe_identity
+from experiments.post_training.task_curation.curriculum import curriculum_entry
 from experiments.post_training.task_curation.datasets.long_loop_rl import (
-    AGENTIC_TRAIN_ROWS,
-    EURUS_ROWS,
-    NEMOTRON_BLENDS_ROWS,
-    NONAGENTIC_TRAIN_ROWS,
-    OPEN_SCIENCE_ROWS,
+    AGENTIC_RELEASE_NAME,
+    AGENTIC_TRAIN_SOURCE,
+    NONAGENTIC_RELEASE_NAME,
     REASONING_GYM_SOURCE,
-    REASONING_GYM_ROWS,
-    SNOWBALL_SMARTIE_ROWS,
-    TASKTROVE_ROWS,
     agentic_release,
     nonagentic_release,
 )
@@ -50,47 +46,58 @@ WANDB_RUN = "marin-community/marin-long-loop/f7m70xhc"
 
 SEED = 20261020
 BATCH_GROUPS = 64
-ROUTE_QUOTAS = {"agentic": 32, "nonagentic": 32}
+ROUTE_QUOTAS = MappingProxyType({"agentic": 32, "nonagentic": 32})
 
-SOURCE_ROUTES: dict[str, str] = {
-    "long-loop-smartie-swesmith": "agentic",
-    "PRIME-RL/Eurus-2-RL-Data": "nonagentic",
-    "nvidia/Nemotron-RL-Ultra-Training-Blends": "nonagentic",
-    "nvidia/OpenScience": "nonagentic",
-    REASONING_GYM_SOURCE: "nonagentic",
-    "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": "nonagentic",
-    "open-thoughts/TaskTrove": "nonagentic",
-}
+AGENTIC_RELEASE = agentic_release()
+NONAGENTIC_RELEASE = nonagentic_release()
 
-SOURCE_RELEASES: dict[str, str] = {
-    "long-loop-smartie-swesmith": "long-loop-rl-agentic-train",
-    "PRIME-RL/Eurus-2-RL-Data": "long-loop-rl-nonagentic-train",
-    "nvidia/Nemotron-RL-Ultra-Training-Blends": "long-loop-rl-nonagentic-train",
-    "nvidia/OpenScience": "long-loop-rl-nonagentic-train",
-    REASONING_GYM_SOURCE: "long-loop-rl-nonagentic-train",
-    "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": "long-loop-rl-nonagentic-train",
-    "open-thoughts/TaskTrove": "long-loop-rl-nonagentic-train",
-}
+SOURCE_ROUTES = MappingProxyType(
+    {
+        AGENTIC_TRAIN_SOURCE: "agentic",
+        "PRIME-RL/Eurus-2-RL-Data": "nonagentic",
+        "nvidia/Nemotron-RL-Ultra-Training-Blends": "nonagentic",
+        "nvidia/OpenScience": "nonagentic",
+        REASONING_GYM_SOURCE: "nonagentic",
+        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": "nonagentic",
+        "open-thoughts/TaskTrove": "nonagentic",
+    }
+)
 
-SOURCE_ROWS: dict[str, int] = {
-    "long-loop-smartie-swesmith": AGENTIC_TRAIN_ROWS,
-    "PRIME-RL/Eurus-2-RL-Data": EURUS_ROWS,
-    "nvidia/Nemotron-RL-Ultra-Training-Blends": NEMOTRON_BLENDS_ROWS,
-    "nvidia/OpenScience": OPEN_SCIENCE_ROWS,
-    REASONING_GYM_SOURCE: REASONING_GYM_ROWS,
-    "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": SNOWBALL_SMARTIE_ROWS,
-    "open-thoughts/TaskTrove": TASKTROVE_ROWS,
-}
-assert sum(SOURCE_ROWS.values()) == AGENTIC_TRAIN_ROWS + NONAGENTIC_TRAIN_ROWS
+SOURCE_RELEASES = MappingProxyType(
+    {
+        AGENTIC_TRAIN_SOURCE: AGENTIC_RELEASE_NAME,
+        "PRIME-RL/Eurus-2-RL-Data": NONAGENTIC_RELEASE_NAME,
+        "nvidia/Nemotron-RL-Ultra-Training-Blends": NONAGENTIC_RELEASE_NAME,
+        "nvidia/OpenScience": NONAGENTIC_RELEASE_NAME,
+        REASONING_GYM_SOURCE: NONAGENTIC_RELEASE_NAME,
+        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": NONAGENTIC_RELEASE_NAME,
+        "open-thoughts/TaskTrove": NONAGENTIC_RELEASE_NAME,
+    }
+)
+
+
+def _source_counts() -> dict[str, int]:
+    """The per-source task counts, read from the adopted releases' pinned provenance."""
+    counts: dict[str, int] = {}
+    for release in (AGENTIC_RELEASE, NONAGENTIC_RELEASE):
+        config = release.config
+        if config is None:
+            raise ValueError(f"adopted release {release.name} has no configuration")
+        for member in config.members:
+            if member.source_counts:
+                counts.update(member.source_counts)
+    return counts
+
+
+SOURCE_ROWS = MappingProxyType(_source_counts())
 
 
 def release_catalog() -> dict[str, RlDataSource]:
     """The two adopted releases, keyed by catalog name."""
-    sources = (agentic_release(), nonagentic_release())
-    return {source.name: source for source in sources}
+    return {AGENTIC_RELEASE_NAME: AGENTIC_RELEASE, NONAGENTIC_RELEASE_NAME: NONAGENTIC_RELEASE}
 
 
-def weights(rows: Mapping[str, int] = SOURCE_ROWS) -> dict[str, float]:
+def weights() -> dict[str, float]:
     """Per-source expected group share under the run's consumed route quotas.
 
     Each route's batch share is its consumed quota over the 64-group batch; within
@@ -98,79 +105,30 @@ def weights(rows: Mapping[str, int] = SOURCE_ROWS) -> dict[str, float]:
     that route's groups is its row share of the route pool.
     """
     route_rows = {
-        route: sum(count for label, count in rows.items() if SOURCE_ROUTES[label] == route) for route in ROUTE_QUOTAS
+        route: sum(SOURCE_ROWS[label] for label in SOURCE_ROWS if SOURCE_ROUTES[label] == route)
+        for route in ROUTE_QUOTAS
     }
     return {
-        label: (ROUTE_QUOTAS[SOURCE_ROUTES[label]] / BATCH_GROUPS) * (rows[label] / route_rows[SOURCE_ROUTES[label]])
-        for label in rows
+        label: (
+            (ROUTE_QUOTAS[SOURCE_ROUTES[label]] / BATCH_GROUPS) * (SOURCE_ROWS[label] / route_rows[SOURCE_ROUTES[label]])
+        )
+        for label in SOURCE_ROWS
     }
 
 
 def exp3_rl_curriculum() -> RlCurriculum:
     """The .55 run's task mix as a versioned weighted curriculum over the seven sources."""
     catalog = release_catalog()
-    entries = []
-    for label, weight in weights().items():
-        release = catalog[SOURCE_RELEASES[label]]
-        dataset = release.dataset
-        if dataset is None or release.pipeline is None:
-            raise ValueError(f"release {release.name} is not runnable")
-        entries.append(
-            CurriculumEntry(
-                label=label,
-                source=release.name,
-                version=release.version,
-                pin=SourcePin(dataset.name, dataset.revision, dataset.url),
-                recipe=recipe_identity(release.pipeline),
-                weight=weight,
-            )
-        )
     return RlCurriculum(
         name=CURRICULUM_NAME,
         version=CURRICULUM_VERSION,
         mode=SamplingMode.WEIGHTED,
-        entries=tuple(entries),
+        entries=tuple(
+            curriculum_entry(label, catalog[SOURCE_RELEASES[label]], weight) for label, weight in weights().items()
+        ),
         stages=(),
         seed=SEED,
     )
-
-
-def percentile(values: list[float], percent: float) -> float:
-    """The linear-interpolation percentile of a small sample."""
-    ordered = sorted(values)
-    if not ordered:
-        raise ValueError("percentile of an empty sample")
-    position = percent / 100 * (len(ordered) - 1)
-    lower = math.floor(position)
-    upper = math.ceil(position)
-    if lower == upper:
-        return ordered[lower]
-    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
-
-
-def distribution_summary(shares: Mapping[str, float]) -> dict:
-    """The across-source distribution summary the report quotes."""
-    values = list(shares.values())
-    descending = sorted(values, reverse=True)
-    cumulative = []
-    total = 0.0
-    for share in descending:
-        total += share
-        cumulative.append(total)
-    sources_for = {
-        f"{int(threshold * 100)}%": next(index + 1 for index, running in enumerate(cumulative) if running >= threshold)
-        for threshold in (0.5, 0.9)
-    }
-    return {
-        "sources": len(values),
-        "p10": percentile(values, 10),
-        "p25": percentile(values, 25),
-        "p50": percentile(values, 50),
-        "p75": percentile(values, 75),
-        "p90": percentile(values, 90),
-        "max": max(values),
-        **sources_for,
-    }
 
 
 CSV_COLUMNS = (
@@ -181,18 +139,53 @@ CSV_COLUMNS = (
     "release_url",
     "task_count",
     "curriculum_share",
+    "sampled_groups",
+    "sampled_share",
+    "reward_initial",
+    "reward_initial_update",
+    "reward_peak",
+    "reward_peak_update",
 )
+
+# The run report. Sampled groups are the exact per-source group counts the 20
+# updates trained on, counted from the durable training-order dumps under the
+# run's export path (one uid per rollout row; 8 rollouts per group). Rewards are
+# each domain's mean raw (unshaped) reward per update from the W&B history
+# (f7m70xhc), the first update that sampled the domain and its maximum.
+RUN_SAMPLED_GROUPS = MappingProxyType(
+    {
+        AGENTIC_TRAIN_SOURCE: 640,
+        "open-thoughts/TaskTrove": 170,
+        REASONING_GYM_SOURCE: 139,
+        "nvidia/OpenScience": 133,
+        "nvidia/Nemotron-RL-Ultra-Training-Blends": 76,
+        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": 63,
+        "PRIME-RL/Eurus-2-RL-Data": 59,
+    }
+)
+RUN_UPDATES = 20
+RUN_REWARDS = MappingProxyType(
+    {
+        AGENTIC_TRAIN_SOURCE: ((0.244140625, 1), (0.479296875, 20)),
+        "open-thoughts/TaskTrove": ((0.58203125, 1), (0.9285714285714286, 13)),
+        REASONING_GYM_SOURCE: ((0.29407934030009325, 1), (0.868154761904762, 7)),
+        "nvidia/OpenScience": ((0.8333333333333334, 1), (0.975, 19)),
+        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": ((0.0, 1), (0.5833333333333334, 12)),
+        "nvidia/Nemotron-RL-Ultra-Training-Blends": ((0.40625, 1), (0.8035714285714286, 3)),
+        "PRIME-RL/Eurus-2-RL-Data": ((0.4375, 2), (1.0, 20)),
+    }
+)
+assert sum(RUN_SAMPLED_GROUPS.values()) == BATCH_GROUPS * RUN_UPDATES
 
 
 def write_composition_csv(path: Path) -> Path:
-    """Write the per-source composition table next to the curriculum definition."""
-    catalog = release_catalog()
+    """Write the per-source composition and run-report table to ``path``."""
     curriculum = exp3_rl_curriculum()
     with path.open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(CSV_COLUMNS)
         for entry in curriculum.entries:
-            release = catalog[entry.source]
+            (initial, initial_update), (peak, peak_update) = RUN_REWARDS[entry.label]
             writer.writerow(
                 [
                     entry.label,
@@ -202,6 +195,12 @@ def write_composition_csv(path: Path) -> Path:
                     entry.pin.url,
                     SOURCE_ROWS[entry.label],
                     f"{entry.weight:.6f}",
+                    RUN_SAMPLED_GROUPS[entry.label],
+                    f"{RUN_SAMPLED_GROUPS[entry.label] / (BATCH_GROUPS * RUN_UPDATES):.6f}",
+                    initial,
+                    initial_update,
+                    peak,
+                    peak_update,
                 ]
             )
     return path
