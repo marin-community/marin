@@ -10,6 +10,8 @@ import torch
 class MetricReduction(Protocol):
     """Reduce diagnostic tensors at one local or distributed ownership scope."""
 
+    local: bool
+
     def mean(self, values: torch.Tensor) -> float: ...
     def sum(self, values: torch.Tensor) -> torch.Tensor: ...
     def combine(self, values: torch.Tensor, operation: Literal["sum", "max"]) -> torch.Tensor: ...
@@ -17,6 +19,8 @@ class MetricReduction(Protocol):
 
 class LocalReduction:
     """Preserve local tensor arithmetic for driver diagnostics."""
+
+    local = True
 
     def mean(self, values: torch.Tensor) -> float:
         return values.mean().item()
@@ -30,6 +34,8 @@ class LocalReduction:
 
 class WorldReduction:
     """Count one contribution per ordinary DP slice in world-wide diagnostics."""
+
+    local = False
 
     def __init__(self, all_reduce: Callable, contributes: bool, collective_device: torch.device | None = None):
         self.all_reduce = all_reduce
@@ -53,12 +59,10 @@ class WorldReduction:
 
     def gather_to_rank_zero(self, values: torch.Tensor) -> torch.Tensor | None:
         """Gather variable-length vectors from DP owners to world rank zero."""
-        if not self.contributes:
-            values = values[:0]
+        values = values if self.contributes else values[:0]
         if not torch.distributed.is_initialized():
             return values
-        world_size = torch.distributed.get_world_size()
-        rank = torch.distributed.get_rank()
+        world_size, rank = torch.distributed.get_world_size(), torch.distributed.get_rank()
         size = values.new_zeros(world_size, dtype=torch.int64)
         size[rank] = values.numel()
         sizes = self.combine(size, "sum").tolist()
