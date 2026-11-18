@@ -352,7 +352,7 @@ class DaytonaMachine:
             try:
                 await self.close()
             except BaseException as close_error:
-                error.add_note(f"Daytona machine cleanup failed ({type(close_error).__name__})")
+                error.add_note(f"Daytona machine cleanup failed: {close_error!r}")
             raise
 
     @asynccontextmanager
@@ -425,7 +425,7 @@ class DaytonaMachine:
                 try:
                     await finish_owned(cleanup)
                 except BaseException as error:
-                    primary_error.add_note(f"Daytona command session cleanup failed ({type(error).__name__})")
+                    primary_error.add_note(f"Daytona command session cleanup failed: {error!r}")
 
     async def run(self, command: Command) -> Result:
         async with AsyncExitStack() as sessions:

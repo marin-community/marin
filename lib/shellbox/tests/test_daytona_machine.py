@@ -857,6 +857,7 @@ def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_
             assert not process.sessions
             if cleanup_fails:
                 assert client.deleted and client.closed
+                assert any("Provider session deletion failed" in note for note in caught.value.__notes__)
             else:
                 assert not client.deleted
                 process.fail = False
