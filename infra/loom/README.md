@@ -354,11 +354,19 @@ which keeps the Marin high-level board and the goals document below its
 - the `marin` IAM stack applied first, for the `loom-vm` token-creator grant on
   itself that mints a documents-scoped token.
 
-The `belay` watch runs the `belay` profile every 10 minutes
-([prompt](watches/belay.md)): it re-queues the events of a session that ended
-without reporting, checks the Belay app's queue, and runs a runbook session that
-works through the queued events only when events wait. Turning dispatch off in the
-Belay app's admin page pauses it without a Loom deploy.
+The `belay-dispatch` script watch runs every minute with no agent
+([program](https://github.com/marin-community/marin/blob/marin_belay_v1_recipe/experiments/belay/dispatch_watch.py),
+in a checkout of `marin_belay_v1_recipe` at `/home/app/marin_belay_dispatch` that
+it updates each round): it reports Belay runs that ended to the Belay app, then
+launches a `belay` session as soon as the app has queued events. The `belay`
+agent watch runs every 30 minutes ([prompt](watches/belay.md)) as the full sync
+and backstop: it re-queues the events of a session that ended without reporting,
+reports W&B progress, storage, registry results and #9514 intake, and runs a
+runbook session that works through the queued events only when events wait.
+Turning dispatch off in the Belay app's admin page pauses both without a Loom
+deploy. Create the dispatch checkout once before enabling the script watch:
+`git clone --branch marin_belay_v1_recipe --single-branch --depth 20
+https://github.com/marin-community/marin /home/app/marin_belay_dispatch`.
 
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
 before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)

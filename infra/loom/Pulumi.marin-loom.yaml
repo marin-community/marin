@@ -544,11 +544,20 @@ config:
       repo: marin-community/marin
       promptFile: watches/goals.md
       slackChannels: []
-    # Marin Belay's trigger: a cheap check every 10 minutes; a session runs only when the Belay app has queued
-    # events, works through them and exits. Sessions claim work only while dispatch is on in the app.
+    # Marin Belay's dispatcher: every minute, with no agent, report ended Belay runs from Iris and launch a `belay`
+    # session (the agent watch below: its profile, repo and prompt) as soon as the Belay app has queued events.
+    # The program lives in a checkout of marin_belay_v1_recipe on the server, which each round updates.
+    belay-dispatch:
+      enabled: true
+      every: 1m
+      runTimeoutSeconds: 240
+      program: /home/app/marin_belay_dispatch/experiments/belay/dispatch_watch.py
+      capabilities: [launch]
+    # Marin Belay's full sync and backstop: W&B progress, storage, registry and #9514 intake, then a session if
+    # events wait. Sessions claim work only while dispatch is on in the app.
     belay:
       enabled: true
-      every: 10m
+      every: 30m
       runTimeoutSeconds: 14400
       profile: belay
       repo: marin-community/marin
