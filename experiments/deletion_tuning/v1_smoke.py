@@ -3,6 +3,10 @@
 
 """The V1 smoke: the Deletion Tuning main end to end on CPU at toy scale.
 
+Entry point: ``python -m experiments.deletion_tuning.v1_smoke`` (a separate
+module from the ``v1_sft`` dry-run so the two entries share constants without
+a circular import).
+
 Runs the production V1 pod entrypoint (``run_deletion_train_lm``) over a tiny
 Snowball config, a tiny local corpus, and the vendored offline tokenizer
 fixture. Everything about the entry is real except the scale and the data: the
@@ -195,3 +199,12 @@ def run_smoke(output_root: Path | None = None) -> dict:
             output_root.mkdir(parents=True, exist_ok=True)
             (output_root / "v1-smoke-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         return summary
+
+
+@click.command(help=__doc__)
+def main() -> None:
+    run_smoke()
+
+
+if __name__ == "__main__":
+    main()

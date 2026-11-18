@@ -34,8 +34,8 @@ of record's Decision Log:
 Dry-run (default): resolve the full production spec locally without
 submitting -- verify the release pins, build the recipe and spec through the
 Exp3 gates, build the launch step, fingerprint it, and construct the dispatch
-request against a local output directory. Smoke (``--smoke``): run the DT main
-end to end on CPU at toy scale through the same pod entrypoint.
+request against a local output directory. The toy-scale CPU smoke is a
+separate entry module: ``python -m experiments.deletion_tuning.v1_smoke``.
 """
 
 import copy
@@ -56,7 +56,6 @@ from marin.execution.lazy import StepContext
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.deletion_tuning.levanter_train import DeletionHFModel, run_deletion_train_lm
-from experiments.deletion_tuning.v1_smoke import run_smoke
 from experiments.post_training.long_loop.exp3_production import (
     GEOMETRY,
     DataRelease,
@@ -299,11 +298,7 @@ def _deletion_summary(train_config: dict) -> dict:
 
 @click.command(help=__doc__)
 @click.option("--output", type=click.Path(path_type=Path), default=None, help="Write the resolution summary JSON here.")
-@click.option("--smoke", is_flag=True, help="Run the DT main end to end on CPU at toy scale (no submission).")
-def main(output: Path | None, smoke: bool) -> None:
-    if smoke:
-        run_smoke()
-        return
+def main(output: Path | None) -> None:
     summary = dry_run(output)
     click.echo(json.dumps(summary, indent=2, sort_keys=True))
 
