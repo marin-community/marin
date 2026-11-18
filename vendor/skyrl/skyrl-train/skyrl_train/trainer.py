@@ -673,12 +673,16 @@ class RayPPOTrainer:
             await self.context.close()
             await self._drain_checkpoint_upload()
         finally:
-            watchdog = self._start_exit_watchdog()
-            try:
-                await self._teardown()
-                self._shutdown_complete = True
-            finally:
-                watchdog.cancel()
+            self._exit_watchdog = self._start_exit_watchdog()
+            await self._teardown()
+            self._shutdown_complete = True
+
+    def finish_shutdown(self) -> None:
+        """Disarm the process guard after the caller has joined the event-loop executor."""
+        watchdog = getattr(self, "_exit_watchdog", None)
+        if watchdog is not None:
+            watchdog.cancel()
+            self._exit_watchdog = None
 
     @staticmethod
     def _start_exit_watchdog(timeout: int = 300) -> threading.Timer:
