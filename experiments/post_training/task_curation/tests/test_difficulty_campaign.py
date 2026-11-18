@@ -164,7 +164,6 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
     monkeypatch.setattr(difficulty_campaign, "solver_endpoint", endpoint)
     monkeypatch.setattr(difficulty_campaign, "probe_endpoint", probe)
     monkeypatch.setattr(difficulty_campaign, "require_secret", secret)
-    monkeypatch.setattr(difficulty_campaign, "resolve_glm_base_url", lambda job: "https://judge.fixture/v1")
     monkeypatch.setattr(difficulty_campaign, "run_trial_worker", launch)
     output = tmp_path / "output"
     monkeypatch.setattr(
@@ -296,7 +295,7 @@ def test_hosted_relay_liveness_fails_fast_and_reports_the_relay_job(monkeypatch)
         raise httpx.ConnectError("connection refused")
 
     monkeypatch.setattr(httpx.Client, "post", dead_post)
-    monkeypatch.setattr(difficulty_campaign, "resolve_glm_base_url", lambda job: "https://relay.fixture/v1")
+    monkeypatch.setattr(difficulty_campaign, "TOGETHER_BASE_URL", "https://relay.fixture/v1")
     monkeypatch.setattr(difficulty_campaign, "require_secret", lambda name: "fixture-key")
     try:
         with difficulty_campaign.solver_endpoint(Solver.HOSTED, sampling_settings(Solver.HOSTED, []), 0):

@@ -33,11 +33,7 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from transformers import AutoTokenizer
 
-from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
-
-TOGETHER_BASE_URL = "https://api.together.xyz/v1"
-TOGETHER_API_KEY_ENV = "TOGETHER_API_KEY"
-TOGETHER_MODEL = "zai-org/GLM-5.3"
+from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL
 from experiments.post_training.task_curation.difficulty_config import CandidateRun, JudgeRun
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_preparation import PreparedSource, prepare_source
@@ -56,6 +52,10 @@ from experiments.post_training.task_curation.difficulty_serving_probe import (
     probe_judge_endpoint,
 )
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, LocalJudgeEndpoint
+
+TOGETHER_BASE_URL = "https://api.together.xyz/v1"
+TOGETHER_API_KEY_ENV = "TOGETHER_API_KEY"
+TOGETHER_MODEL = "zai-org/GLM-5.3"
 
 
 def hosted_relay_liveness(base_url: str, api_key: str) -> None:
