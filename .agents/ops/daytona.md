@@ -407,26 +407,6 @@ The caller must declare physical capacity including quarantined sandboxes.
 Unresolved IDs and unknown create requests retain slots. When that capacity is
 full, unstarted rows remain explicitly deferred for a later cleared pass.
 
-A configured `QuarantineReserveConfig` adds a shared pool through
-`QuarantineReservePool` and `RootQuarantineReserve`. Record the typed pool size,
-allocation receipt URI and SHA, logical root keys, and one-extra-slot-per-root
-limit in campaign receipts. Initialize the CAS object once before dispatch.
-The B campaign's granted reserve is six slots shared by its twelve roots.
-
-Reserve claims use the maintained conditional-object backend (local file lock,
-GCS generation or S3 ETag). A claim belongs to a logical root and its exact
-producer attempt. It never expires or transfers to a replacement producer by
-age. Missing state fails closed; it must not recreate apparently free capacity.
-
-A root with one unresolved sandbox can claim one reserve slot to continue other
-rows. At two retained sandboxes, or when the shared pool is full, it processes
-ownership evidence and waits without creating a third sandbox. Capacity-induced
-pass boundaries reconcile exact owned IDs so a full pool cannot deadlock all
-roots before their final pass. Each resolved row is requeued once. If that retry
-also fails technically, its evidence remains unscored; clearing cleanup cannot
-turn it into a completed oracle outcome. Release a reserve claim only when
-absence proofs cover all quarantines tracked by that claim.
-
 ## Making a dataset Daytona-safe
 
 A dataset is Daytona-safe when it runs on the RL org as configured: its tasks
