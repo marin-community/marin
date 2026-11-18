@@ -655,7 +655,9 @@ def tracked_instruction_hashes(uris: tuple[str, ...]) -> dict[str, str]:
                     raise ValueError(f"Tracked population input has no id+instruction columns: {uri}")
                 for batch in handle.iter_batches(batch_size=256, columns=["task_id", "instruction_hash"]):
                     for task_id, instruction_hash in zip(
-                        batch.column("task_id").to_pylist(), batch.column("instruction_hash").to_pylist()
+                        batch.column("task_id").to_pylist(),
+                        batch.column("instruction_hash").to_pylist(),
+                        strict=True,
                     ):
                         hashes.setdefault(task_id, instruction_hash)
     if not hashes:
@@ -681,7 +683,9 @@ def tracked_runtimes(spec_uris: tuple[str, ...]) -> dict[str, dict[str, Any]]:
                     raise ValueError(f"Tracked specs input has no task_spec+runtime columns: {uri}")
                 for batch in handle.iter_batches(batch_size=32, columns=["task_spec", "runtime"]):
                     for encoded, runtime in zip(
-                        batch.column("task_spec").to_pylist(), batch.column("runtime").to_pylist()
+                        batch.column("task_spec").to_pylist(),
+                        batch.column("runtime").to_pylist(),
+                        strict=True,
                     ):
                         if runtime is None:
                             continue
