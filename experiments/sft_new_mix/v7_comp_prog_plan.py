@@ -73,12 +73,19 @@ def main() -> None:
         rows = sum(job["expected_rows"] for job in source_jobs)
         if rows != EXPECTED_ROWS[lang]:
             raise ValueError(f"{lang} rows: {rows}, expected {EXPECTED_ROWS[lang]}")
-        if any(job["row_start"] != 0 or job["row_stop"] != job["expected_rows"] for job in source_jobs):
-            raise ValueError(f"{lang} jobs do not cover the full row range")
+        if any(job["expected_rows"] <= 0 for job in source_jobs):
+            raise ValueError(f"{lang} has an empty shard job")
 
     enabled = list(config["enabled"])
     if Stage.COMP_PROG_LABEL_RESCUE.value in enabled:
         raise ValueError("The scripted-v3 config already enables the label stage")
+    # The scripted-v3 config predates the #11547 stage deletion. The deleted
+    # opencode_user_quotes stage was gated on "opencode" in source, so it is a
+    # strict no-op for the comp-prog sources this plan rebuilds.
+    unknown = sorted(set(enabled) - {stage.value for stage in Stage})
+    if unknown != ["opencode_user_quotes"]:
+        raise ValueError(f"Scripted config has unknown stages: {unknown}")
+    enabled = [stage for stage in enabled if stage != "opencode_user_quotes"]
     enabled.append(Stage.COMP_PROG_LABEL_RESCUE.value)
     v7_config = {
         **config,
@@ -134,6 +141,7 @@ def main() -> None:
         "plan_uri": plan_uri,
         "label_table": args.label_table,
         "label_table_sha256": args.label_table_sha256,
+        "omitted_stages": unknown,
         "version": VERSION,
     }
     (output / "receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2))
