@@ -50,6 +50,7 @@ from marin.inference.iris_vllm import (
     notify_iris_vllm_stopped,
     wait_for_iris_vllm_shutdown,
 )
+from marin.inference.model_feedback import model_feedback_prefix
 from marin.inference.vllm_backend import VllmBackend
 from marin.inference.vllm_server import VllmEnvironment
 from marin.inference.web_search import parallel_web_search_from_secret
@@ -391,6 +392,7 @@ def _serve_dashboard(config: HeroDashboardConfig, environment: VllmEnvironment, 
         info=serving_info,
         request_timeout_seconds=REQUEST_TIMEOUT_SECONDS,
         web_search=web_search,
+        feedback_prefix=model_feedback_prefix(),
     )
     metadata = {
         "kind": "marin-serve",
