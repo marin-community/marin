@@ -160,6 +160,6 @@ def convert_econevals(row: RawRow, _context: ConversionContext, *, benchmark: st
 
 
 def econevals_item(task: TaskSpec) -> EvaluationItem:
-    """Judge final answers only, grouped by the DWA or occupation EconEvals reports."""
-    item = chat_item(task, response_selection="final_or_complete_reasoning")
+    """Judge final answers only, never reasoning, grouped by the DWA or occupation EconEvals reports."""
+    item = chat_item(task, response_selection="final_only")
     return item.model_copy(update={"groups": {"category": source_evidence(task)["category"]}})
