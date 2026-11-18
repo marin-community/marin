@@ -21,6 +21,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import levanter.callbacks
+import levanter.main.train_lm as train_lm_module
 import numpy as np
 from levanter.models.snowball import SnowballLMHeadModel
 from levanter.models.snowball_deletion import (
