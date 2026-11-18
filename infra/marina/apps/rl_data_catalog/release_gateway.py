@@ -15,6 +15,34 @@ from sqlalchemy.engine import Engine
 from .server.app import create_api
 
 
+def bounded_read_query(query: AppletQuery, sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
+    """Page only oversized read results, retaining the original query's bounds and ordering."""
+    try:
+        return query(sql, parameters)
+    except MarinaRequestError as error:
+        if error.status_code != 413:
+            raise
+    if not sql.lstrip().upper().startswith(("SELECT", "WITH")):
+        raise ValueError("Only read-only candidate queries may be paged")
+    rows = []
+    limit = 64
+    while True:
+        try:
+            result = query(
+                "SELECT * FROM (" + sql.strip().removesuffix(";") + ") AS atlas_gate_rows "
+                "LIMIT :__atlas_gate_limit OFFSET :__atlas_gate_offset",
+                {**parameters, "__atlas_gate_limit": limit, "__atlas_gate_offset": len(rows)},
+            )
+        except MarinaRequestError as error:
+            if error.status_code != 413 or limit == 1:
+                raise
+            limit = max(1, limit // 2)
+            continue
+        rows.extend(result["rows"])
+        if len(result["rows"]) < limit:
+            return {**result, "rows": rows, "row_count": len(rows)}
+
+
 @dataclass
 class GatewayRows:
     rows: list[Any]
@@ -71,7 +99,7 @@ class GatewayConnection:
         sql = str(statement)
         if not sql.lstrip().upper().startswith(("SELECT", "WITH")):
             raise ValueError("Candidate browser projection cannot mutate the catalog")
-        return GatewayResult(self.query(sql, parameters or {})["rows"])
+        return GatewayResult(bounded_read_query(self.query, sql, parameters or {})["rows"])
 
 
 @dataclass

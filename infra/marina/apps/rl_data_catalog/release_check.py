@@ -50,7 +50,7 @@ from .release_evidence import (
     stored_duplicate_groups,
     verify_preservation,
 )
-from .release_gateway import CandidateApi
+from .release_gateway import CandidateApi, bounded_read_query
 from .release_receipts import (
     BrowserScope,
     CommandResult,
@@ -184,7 +184,7 @@ class CatalogReader:
     """Cache immutable-revision API responses during one pointer-checked browser sweep."""
 
     def __init__(self, root: str, session: requests.Session, query: SqlQuery | None = None) -> None:
-        self.query = query
+        self.query = functools.partial(bounded_read_query, query) if query is not None else None
         self.root = root
         self.session = session
         self.provider = marina_token_provider()
@@ -199,6 +199,7 @@ class CatalogReader:
         if key not in self.cache:
             params = dict(parse_qsl(url.query))
             if self.candidate_api is not None and url.path in {
+                "api/sources",
                 "api/source",
                 "api/assessment",
                 "api/evidence",
