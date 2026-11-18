@@ -950,20 +950,24 @@ def run_oracle_campaign(
         dict(environment_kwargs or {}),
         concurrency,
     )
-    trials_dir = calibration_dir / "jobs"
+    # Harbor writes trial outputs under calibration/<contract>/attempt-XX/jobs/oracle/...;
+    # the trial walk expects the calibration destination root itself.
     receipt = filter_cohort(
         cohort_dir,
         task_map,
-        trials_dir,
+        calibration_dir,
         Path(receipt_uri),
         negative_control_policy=policy,
     )
+    tasks = receipt.model_dump(mode="json").get("tasks", {})
+    admitted = sum(1 for entry in tasks.values() if entry.get("exclusion_reason") is None)
     return {
         "tracked_source_id": tracked_source_id,
         "cohort": manifest["counts"],
         "conversion_identity": manifest["conversion_identity"],
         "harbor_tasks": len(json.loads(task_map.read_text())),
-        "receipt": receipt.model_dump(mode="json")["admitted_count"] if hasattr(receipt, "admitted_count") else None,
+        "receipt_tasks": len(tasks),
+        "admitted": admitted,
     }
 
 

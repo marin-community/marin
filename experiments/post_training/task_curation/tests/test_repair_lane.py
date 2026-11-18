@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
 import pytest
+from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.licenses import LicenseDecision, LicenseDecisionKind, LicenseReceipt
 from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
@@ -53,6 +54,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     unpack_task_binary,
 )
 from experiments.post_training.task_curation.full_qc import ReviewerVersion, local_reviewer
+from experiments.post_training.task_curation.oracle_filter import NegativeControlPolicy
 from experiments.post_training.task_curation.pipeline import Controls, CurationRecipe, HfSource, IntendedUse
 from experiments.post_training.task_curation.repair_lane import matched_pairs
 from experiments.post_training.task_curation.repair_match import (
@@ -1128,3 +1130,80 @@ class TestCampaignDispatch:
         monkeypatch.setattr(lane, "convert_cohort", lambda **kwargs: {"counts": {"converted": 1}})
         monkeypatch.setattr(sys, "argv", self._argv(tmp_path, campaign=False))
         lane.main()
+
+
+def test_oracle_campaign_collects_trials_from_the_calibration_root(tmp_path, monkeypatch):
+    """Collect must walk the calibration destination (Harbor trial outputs live under
+    calibration/<contract>/attempt-XX/jobs/oracle/...), not a nonexistent jobs subdir."""
+    calls = {}
+
+    def fake_convert_cohort(**kwargs):
+        (tmp_path / "cohort" / "conversion-abc" / "converted-pending").mkdir(parents=True)
+        return {"conversion_identity": "abc", "counts": {"converted": 3}}
+
+    def fake_prepare(cohort, output, *, source_revision, controls):
+        output.mkdir(parents=True)
+        (output / "task-map.json").write_text("{}")
+
+    class FakeInfo:
+        id = "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
+
+    class FakeConfig:
+        controls = Controls()
+
+    class FakeSource:
+        info = FakeInfo()
+        config = FakeConfig()
+
+    def fake_calibrate_cohort(cohort, task_map, destination, environment, environment_kwargs, concurrency):
+        calls["calibration_root"] = destination
+
+    def fake_filter_cohort(cohort, task_map, jobs, output, **kwargs):
+        calls["trial_root"] = jobs
+        calls["policy"] = kwargs.get("negative_control_policy")
+
+        class FakeReceipt:
+            def model_dump(self, mode):
+                return {
+                    "tasks": {
+                        "t1": {"exclusion_reason": None},
+                        "t2": {"exclusion_reason": "negative_control_failed"},
+                        "t3": {"exclusion_reason": None},
+                    }
+                }
+
+        return FakeReceipt()
+
+    monkeypatch.setattr(lane, "convert_cohort", fake_convert_cohort)
+    monkeypatch.setattr(lane, "configured_sources", lambda: [FakeSource()])
+    monkeypatch.setattr(lane, "prepare", fake_prepare)
+    monkeypatch.setattr(lane, "calibrate_cohort", fake_calibrate_cohort)
+    monkeypatch.setattr(lane, "filter_cohort", fake_filter_cohort)
+    policy = NegativeControlPolicy(
+        version=1,
+        scope="global_workspace",
+        max_identical_budget_repeats=1,
+        answer_graded="not_applicable",
+        source_deadline="non_passing_annotation",
+        source_error="non_passing_annotation",
+        decision=ContentEvidenceReference(uri="s3://ruling", sha256="0" * 64),
+    )
+    summary = lane.run_oracle_campaign(
+        tracked_source_id="TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+        report={"folders": {}},
+        folders=("nl2bash_v2",),
+        repo="FWeindel/validated-tasks",
+        candidate_revision="eafe9b38",
+        tracked_uris=("s3://tracked",),
+        tracked_spec_uris=("s3://specs",),
+        work_root=tmp_path,
+        receipt_uri=str(tmp_path / "receipt.json"),
+        source_revision="7fd50fb713",
+        policy=policy,
+    )
+    assert calls["trial_root"] == tmp_path / "calibration"
+    assert calls["calibration_root"] == tmp_path / "calibration"
+    assert calls["policy"] == policy
+    assert summary["harbor_tasks"] == 0
+    assert summary["receipt_tasks"] == 3
+    assert summary["admitted"] == 2
