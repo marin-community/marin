@@ -1,12 +1,11 @@
 import json
 import logging
 from types import SimpleNamespace
-from unittest.mock import patch
 
 from harbor.cli.main import app
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.job.config import JobConfig
-from harbor.models.task.config import MCPServerConfig
+from harbor.models.task.config import MCPServerConfig, TaskConfig
 from harbor.models.trial.config import AgentConfig
 from harbor.trial.single_step import SingleStepTrial
 from typer.testing import CliRunner
@@ -99,7 +98,9 @@ def test_trial_start_mcp_config_populates_agent(tmp_path, monkeypatch):
     assert captured[0].agent.mcp_servers[0].transport == "streamable-http"
 
 
-def test_trial_init_agent_merges_mcp_servers_by_name(tmp_path):
+def test_trial_agent_merges_task_and_runtime_settings(tmp_path):
+    task_env = {"HOME": "/home/task-agent", "SETTING": "task"}
+    runtime_env = {"SETTING": "run", "RUN_ONLY": "run-only"}
     task_server = MCPServerConfig(
         name="api", transport="streamable-http", url="https://task/mcp"
     )
@@ -112,15 +113,16 @@ def test_trial_init_agent_merges_mcp_servers_by_name(tmp_path):
     trial = object.__new__(SingleStepTrial)
     trial.config = SimpleNamespace(
         agent=AgentConfig(
-            name="codex", mcp_servers=[runtime_server, runtime_override_server]
+            name="codex", env=runtime_env, mcp_servers=[runtime_server, runtime_override_server]
         )
     )
     trial.task = SimpleNamespace(
-        config=SimpleNamespace(
-            environment=SimpleNamespace(
-                mcp_servers=[task_server],
-                skills_dir=None,
-            )
+        config=TaskConfig.model_validate(
+            {
+                "agent": {"env": task_env},
+                "environment": {"env": {"HOME": "/environment-home"}, "mcp_servers": [task_server]},
+                "verifier": {"env": {"HOME": "/verifier-home"}},
+            }
         )
     )
     trial.paths = SimpleNamespace(agent_dir=tmp_path / "agent")
@@ -129,12 +131,11 @@ def test_trial_init_agent_merges_mcp_servers_by_name(tmp_path):
     trial.host_capabilities = HostCapabilities()
     trial._effective_skills_dir = None
 
-    with patch(
-        "harbor.trial.trial.AgentFactory.create_agent_from_config",
-        return_value=object(),
-    ) as create_agent:
-        trial._init_agent()
+    trial._init_agent()
 
-    mcp_servers = create_agent.call_args.kwargs["mcp_servers"]
-    assert len(mcp_servers) == 1
-    assert mcp_servers[0].url == "https://runtime-new/mcp"
+    assert trial.agent.extra_env == {"HOME": "/home/task-agent", "SETTING": "run", "RUN_ONLY": "run-only"}
+    assert trial.agent.mcp_servers == [runtime_override_server]
+    assert trial.task.config.environment.env == {"HOME": "/environment-home"}
+    assert trial.task.config.verifier.env == {"HOME": "/verifier-home"}
+    assert trial.task.config.agent.env == task_env
+    assert trial.config.agent.env == runtime_env

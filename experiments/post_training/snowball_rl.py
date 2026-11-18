@@ -52,33 +52,23 @@ from experiments.post_training.task_curation.selection import (
 
 SEED = 20261020
 
-
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
-
 
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 
-
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
-
 
 DEFAULT_SELECTION_VERSION = "2026.11.17.1"
 
-
 DEFAULT_EVAL_LITE_NAME = "eval-lite"
-
 
 DEFAULT_EVAL_LITE_VERSION = "2026.11.17.1"
 
-
 EVAL_REPLY_TOKENS = 8192
-
 
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 
-
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
-
 
 _DEFAULT_MODEL = ArtifactHfModel(
     ArtifactStep.adopt(
@@ -88,7 +78,6 @@ _DEFAULT_MODEL = ArtifactHfModel(
     MODEL_REVISION,
     relative_path="",
 )
-
 
 _DEFAULT_PATCH = RecipePatch(
     context_budget=ContextBudget(request_window_tokens=24576, max_new_tokens_per_turn=8192, max_turns=1),
@@ -173,13 +162,11 @@ _DEFAULT_PATCH = RecipePatch(
     },
 )
 
-
 _MODE_KEYS = (
     "trainer.rollout_buffer.max_staleness_steps",
     "trainer.rollout_buffer.batch_policy",
     "trainer.algorithm.off_policy_correction",
 )
-
 
 _HELD_OUT_SAMPLING = EvaluationSampling(
     n_samples_per_prompt=1,
@@ -188,18 +175,15 @@ _HELD_OUT_SAMPLING = EvaluationSampling(
     ),
 )
 
-
 _THROUGHPUT_SAMPLING = EvaluationSampling(
     n_samples_per_prompt=4,
     sampling_params=EvalSamplingParams(temperature=1.0, top_p=1.0, logprobs=None, ignore_eos=True),
 )
 
-
 _SCREENING_SAMPLING = EvaluationSampling(
     n_samples_per_prompt=4,
     sampling_params=EvalSamplingParams(temperature=1.0, top_p=1.0, logprobs=None, ignore_eos=False),
 )
-
 
 EVALUATIONS = MappingProxyType(
     {
@@ -234,7 +218,6 @@ EVALUATIONS = MappingProxyType(
     }
 )
 
-
 _P40_PLAN = SkyRLRolePlan(
     colocate_all=False,
     policy_num_nodes=4,
@@ -249,7 +232,6 @@ _P40_PLAN = SkyRLRolePlan(
     micro_train_batch_size_per_gpu=1,
     n_samples_per_prompt=4,
 )
-
 
 P40 = Layout(
     name="p40",
@@ -271,7 +253,6 @@ P40 = Layout(
     job_timeout_seconds=72 * 3600,
 )
 
-
 E8 = replace(
     P40,
     name="e8",
@@ -288,17 +269,13 @@ E8 = replace(
     ),
 )
 
-
 _GENERATION_DOCUMENT = {}
-
 
 for _key, _value in _P40_PLAN.config_values().items():
     if _key.startswith("trainer."):
         set_path(_GENERATION_DOCUMENT, _key, _value)
 
-
 _GENERATION_NATIVE_DEFAULTS = RecipePatch.from_document(_GENERATION_DOCUMENT)
-
 
 _ASYNC_P40 = Recipe(
     layout=P40,
@@ -313,9 +290,7 @@ _ASYNC_P40 = Recipe(
     ),
 )
 
-
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH.merge(_GENERATION_NATIVE_DEFAULTS))
-
 
 _GAPS = (
     "aaii-coverage",
@@ -323,12 +298,9 @@ _GAPS = (
     "no-image-sandbox",
 )
 
-
 _TASK_SET = EVALUATIONS["eval_lite_100"]
 
-
 _BATCH_KEYS = frozenset(BATCH_SETTINGS)
-
 
 _OWNED_KEYS = (
     frozenset(
@@ -348,7 +320,6 @@ _OWNED_KEYS = (
     | frozenset(_MODE_KEYS)
 )
 
-
 _GATED_KEYS = frozenset(
     {
         "trainer.max_steps",
@@ -360,11 +331,9 @@ _GATED_KEYS = frozenset(
     }
 )
 
-
 _SPEED_KEYS = frozenset(
     {"generator.sampling_params.logprobs", "trainer.training_metrics", "generator.apply_overlong_filtering"}
 )
-
 
 _LEARNING_MEDIUM = Preset(
     tasks=_DEFAULT_TASKS,
@@ -392,7 +361,7 @@ _LEARNING_MEDIUM = Preset(
     guards=(Metric("eval_lite/family_mean", True),),
     objectives=(
         Metric("eval_lite/family_mean", True),
-        Metric("eval_lite/family_mean/gain_per_h100_hour", True, WindowStatistic.GAIN_PER_H100_HOUR),
+        Metric("eval_lite/family_mean/gain_per_h100_hour", True, WindowStatistic.GAIN_PER_GPU_HOUR),
     ),
     gaps=_GAPS,
     budget="asynchronous runtime unmeasured",
@@ -602,7 +571,6 @@ _PRESETS = (
     ),
 )
 
-
 SNOWBALL = ModelPresets(
     presets=_PRESETS,
     namespace="snowball-rl",
@@ -617,7 +585,6 @@ SNOWBALL = ModelPresets(
         )
     },
 )
-
 
 if __name__ == "__main__":
     raise SystemExit(rl.main(SNOWBALL))

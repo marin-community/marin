@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, replace
 from datetime import datetime
-from functools import partial
 from pathlib import Path, PurePosixPath
 
 import click
@@ -32,7 +31,6 @@ from marin.rl.skyrl import (
     SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
-    run_skyrl,
     skyrl_step,
 )
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
@@ -388,7 +386,7 @@ def run_spec(
     workload = preset.recipe.layout.workload
     preset = preset.with_updates(config.trainer.max_steps)
     model = preset.model if init is None else init
-    initial_model_uri = model.step.path()
+    initial_model_uri = model.step.path(artifact_prefix(preset.recipe.layout.cluster))
     validation_data = ()
     evaluation_data = []
     profiles = {}
@@ -458,7 +456,7 @@ def run_step(
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
     if preset.harbor is not None:
         required_env += (preset.harbor.daytona_api_key_env, "DAYTONA_TARGET")
-    step = skyrl_step(
+    return skyrl_step(
         spec,
         IrisSkyRLExecution(
             cluster=layout.cluster,
@@ -478,7 +476,6 @@ def run_step(
         ),
         export_hf=preset.export_hf,
     )
-    return replace(step, run=partial(run_skyrl, forward_env=forward_env))
 
 
 def evaluation_source(

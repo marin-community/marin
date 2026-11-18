@@ -27,7 +27,7 @@ import multiprocessing as mp
 
 from skyrl_train.config.placement_geometry import num_rollout_gpus
 from skyrl_train.config.utils import normalize_logging_backends
-from skyrl_train.evaluation_profiles import resolve_evaluation_profiles
+from skyrl_train.evaluation_profiles import EvaluationProfile, resolve_evaluation_profiles
 from skyrl_train.inference_engines.chat_template import get_custom_chat_template
 from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
@@ -127,6 +127,7 @@ def create_ray_wrapped_inference_engines_from_config(
     *,
     entrypoint: str = STANDARD_TRAINING_ENTRYPOINT,
     operation: EntrypointOperation = EntrypointOperation.TRAIN,
+    evaluation_profiles: Mapping[str, EvaluationProfile] | None = None,
 ):
     from skyrl_train.inference_engines.configuration import (
         InferenceEngineRoleConfig,
@@ -182,7 +183,7 @@ def create_ray_wrapped_inference_engines_from_config(
     requested_logprobs = [cfg.generator.sampling_params.logprobs, cfg.generator.eval_sampling_params.logprobs]
     requested_logprobs.extend(
         profile.sampling_params.logprobs if profile.sampling_params is not None else None
-        for profile in resolve_evaluation_profiles(cfg).values()
+        for profile in (resolve_evaluation_profiles(cfg) if evaluation_profiles is None else evaluation_profiles).values()
     )
     requested_logprobs = [
         value + 1
@@ -295,6 +296,7 @@ class BasePPOExp:
         from skyrl_train.tokenizer import validate_checkpoint_vocabulary  # noqa: PLC0415
 
         self.cfg = cfg
+        self.evaluation_profiles = resolve_evaluation_profiles(cfg)
         self.sessions = {} if sessions is None else dict(sessions)
         self._configure_log_level()
         self.tokenizer = self.get_tokenizer()
@@ -337,6 +339,7 @@ class BasePPOExp:
                 self.colocate_pg,
                 entrypoint=entrypoint,
                 operation=operation,
+                evaluation_profiles=self.evaluation_profiles,
             )
         else:
             inference_engines = create_remote_inference_engines_from_config(self.cfg)
@@ -426,7 +429,7 @@ class BasePPOExp:
         data_files = self.cfg.data.val_data if data_files is None else data_files
         probe = self.cfg.trainer.mismatch_probe
         needs_probe_prompts = probe.enabled and probe.reuse_probe is None
-        needs_named_evaluation = bool(resolve_evaluation_profiles(self.cfg))
+        needs_named_evaluation = bool(self.evaluation_profiles)
         if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts or needs_named_evaluation) and data_files:
             return self._build_eval_dataset(data_files)
         return None
@@ -439,7 +442,7 @@ class BasePPOExp:
     def get_named_eval_datasets(self):
         """Build the datasets selected by named evaluation profiles."""
         datasets = {}
-        for name, profile in resolve_evaluation_profiles(self.cfg).items():
+        for name, profile in self.evaluation_profiles.items():
             if profile.data_files is not None:
                 dataset = self.get_eval_dataset(profile.data_files)
                 if dataset is None:
@@ -590,6 +593,7 @@ class BasePPOExp:
         """
         from skyrl_train.rollouts.context import TrainingContext  # noqa: PLC0415
         from skyrl_train.trainer import RayPPOTrainer  # noqa: PLC0415
+        from skyrl_train.callbacks.builtin import create_default_callbacks  # noqa: PLC0415
 
         return RayPPOTrainer(
             context=TrainingContext.from_config(cfg, train_dataset, trajectory_runner),
@@ -599,6 +603,7 @@ class BasePPOExp:
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             named_eval_datasets=self.get_named_eval_datasets(),
+            callbacks=create_default_callbacks(cfg, evaluation_profiles=self.evaluation_profiles),
             inference_engine_client=inference_engine_client,
             trajectory_runner=trajectory_runner,
             eval_trajectory_runner=(

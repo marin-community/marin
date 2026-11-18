@@ -127,4 +127,17 @@ class RunSummary(BaseModel):
     def valid_outcome(self):
         if self.elapsed_seconds is not None and self.completed_at is None:
             raise ValueError("Terminal attempts require a completion timestamp")
+        gate = self.gate_result
+        if gate is not None and len(gate.attempt_ids) == gate.replicates and self.attempt_id in gate.attempt_ids:
+            replicate = gate.attempt_ids.index(self.attempt_id)
+            self.failed_facts = list(
+                dict.fromkeys(
+                    [
+                        *self.failed_facts,
+                        *(fact.name for fact in gate.invariants if not fact.holds and fact.replicate == replicate),
+                    ]
+                )
+            )
+        if self.failed_facts:
+            self.status = "failed"
         return self

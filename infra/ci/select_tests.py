@@ -214,11 +214,11 @@ DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "rl-progress": (
         "infra/marina/",
+        "lib/finestore/src/finestore/rl/",
         "lib/marin/src/marin/rl/",
         "lib/marin/src/marin/execution/",
         "experiments/post_training/rl",
-        "experiments/post_training/snowball_",
-        "experiments/post_training/publish_rl_progress.py",
+        "experiments/post_training/snowball_rl.py",
         "experiments/post_training/skyrl_test_support.py",
         "infra/ci/",
         ".github/workflows/unified-unit.yaml",

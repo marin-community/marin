@@ -9,3 +9,4 @@ from infra.marina.tests.rl_progress_fixtures import rl_progress_client as rl_pro
 selection = pytest.fixture(fixtures.selection)
 source_provenance = pytest.fixture(fixtures.source_provenance)
 recorded_runs = pytest.fixture(fixtures.recorded_runs)
+preset_table = pytest.fixture(fixtures.preset_table)

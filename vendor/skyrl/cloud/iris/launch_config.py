@@ -11,6 +11,7 @@ from typing import Any, Mapping
 from omegaconf import MISSING, DictConfig, OmegaConf, open_dict
 
 from skyrl_train.evaluation_profiles import (
+    record_evaluation_profiles,
     resolve_evaluation_profiles,
     validate_evaluation_data,
     validate_evaluation_schedule,
@@ -292,6 +293,7 @@ def load_launch_config(path: Path) -> DictConfig:
     normalize_logging_backends(config.skyrl)
     validate_launch_config(config)
     profiles = resolve_evaluation_profiles(config.skyrl)
+    record_evaluation_profiles(config.skyrl, profiles)
     if config.run.mode == RunMode.TRAIN:
         if config.runtime.entrypoint != RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
             validate_training_settings(config.skyrl)

@@ -50,7 +50,7 @@ import os
 import re
 from dataclasses import dataclass
 from collections.abc import Mapping
-from typing import Callable, Dict, List, Literal, Optional, Tuple, TypeVar, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, TypeVar, Union
 
 import equinox as eqx
 import jax
@@ -581,6 +581,7 @@ def save_merged_hf_checkpoint_callback(
     converter: HFCheckpointConverter,
     upload_to_hf: Optional[Union[str, RepoRef]] = None,
     generation_config: Optional[GenerationConfigDict] = None,
+    generation_config_defaults: Mapping[str, Any] | None = None,
     chat_template: Optional[str] = None,
     model_getter: Optional[Callable[[StepInfo], PyTree]] = None,
     field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
@@ -626,6 +627,7 @@ def save_merged_hf_checkpoint_callback(
             path,
             upload_to_hf=upload_to_hf,
             generation_config=generation_config,
+            generation_config_defaults=generation_config_defaults,
             chat_template=chat_template,
             field_dtype_overrides=field_dtype_overrides,
             **my_upload_kwargs,
@@ -642,6 +644,7 @@ def save_merged_hf_model(
     path: str,
     upload_to_hf: Optional[Union[str, RepoRef]] = None,
     generation_config: Optional[GenerationConfigDict] = None,
+    generation_config_defaults: Mapping[str, Any] | None = None,
     chat_template: Optional[str] = None,
     field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
     **upload_kwargs,
@@ -658,6 +661,7 @@ def save_merged_hf_model(
         path,
         upload_to_hf=upload_to_hf,  # type: ignore
         generation_config=generation_config,
+        generation_config_defaults=generation_config_defaults,
         chat_template=chat_template,
         field_dtype_overrides=field_dtype_overrides,
         **upload_kwargs,

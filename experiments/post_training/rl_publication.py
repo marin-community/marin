@@ -6,18 +6,20 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import urlencode
 
 import click
+from finestore.rl.rl_progress import ComparisonRole, GateResult, RunSummary
 from finestore.rl.run_records import AttemptRecord, attempt_lineage
 from marin.execution.artifact import read_record
 from marin.rl import skyrl_records
-from marin.rl.rl_progress import ComparisonRole, GateResult, RunSummary
 from marin.rl.skyrl_records import attempt_tracking, read_stored_skyrl_attempts, recorded_launch
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.post_training import publish_rl_progress
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_recipe as recipe
@@ -25,10 +27,35 @@ from experiments.post_training.rl_command import grafana_url
 from experiments.post_training.rl_scoring import (
     GateInputs,
     InvalidComparison,
-    load_run,
+    evaluation_status,
     read_gate_inputs,
     training_invariants,
 )
+
+APPLET_ID = tomllib.loads(
+    (Path(__file__).resolve().parents[2] / "infra/marina/apps/rl_progress/applet.toml").read_text()
+)["applet_id"]
+
+
+def publish_result(summary: RunSummary, service_url: str | None = None) -> str:
+    """Upsert one native attempt and return its verified dashboard URL."""
+    from marina import client  # noqa: PLC0415
+
+    service_url = service_url or client.DEFAULT_MARINA_URL
+    details = client.marina_request(service_url, "GET", f"/api/marina/applets/{APPLET_ID}")
+    origin = client.applet_origin(service_url, details["authenticated_url"])
+    served = RunSummary.model_validate_json(
+        json.dumps(
+            client.marina_request(
+                origin, "POST", f"/a/{APPLET_ID}/api/runs", json_body=summary.model_dump(mode="json", exclude_unset=True)
+            ),
+            allow_nan=False,
+        ),
+        strict=True,
+    )
+    if (served.run_id, served.attempt_id) != (summary.run_id, summary.attempt_id):
+        raise RuntimeError(f"Published attempt {summary.run_id}/{summary.attempt_id} has a different returned identity")
+    return details["authenticated_url"] + "#" + urlencode({"run": summary.run_id, "attempt": summary.attempt_id})
 
 
 @dataclass
@@ -61,17 +88,12 @@ def build_record(
     preset: presets.Preset,
     *,
     table: presets.ModelPresets,
-    attempt_id: str,
-    attempts: tuple[str | None, dict[str, AttemptRecord]],
+    receipt: AttemptRecord,
     report: gate.GateReport | None = None,
     gate_name: str | None = None,
     issue: int | None = None,
 ) -> RunSummary:
     """Build a terminal progress record from stored native outputs without live lookups."""
-    _, receipts = attempts
-    receipt = receipts.get(attempt_id)
-    if receipt is None:
-        raise FileNotFoundError(f"No stored native receipt at {run_output} for {attempt_id}")
     launch, result = recorded_launch(receipt), receipt.native.result
     if result.state not in {"succeeded", "failed"}:
         raise ValueError("A progress record requires a terminal native attempt")
@@ -98,27 +120,11 @@ def build_record(
     metrics = skyrl_records.read_skyrl_metrics(run_output, attempt_id=attempt_id)
     invariants = training_invariants(preset, metrics) if receipt.metrics_started_at is not None else ()
     failed = [fact.name for fact in invariants if not fact.holds]
-    evaluations = []
-    historical_legacy = receipt.evaluation_storage_version is None and attempt_id != attempts[0]
-    if historical_legacy:
-        evidence.append("Legacy evaluation dumps cannot be attributed to this historical attempt.")
-    if preset.evaluations and result.state == "succeeded" and not historical_legacy:
-        try:
-            data = load_run(run_output, preset, inputs, receipt=receipt)
-            evaluations = list(data.evaluations)
-            if evaluations or receipt.evaluation_storage_version == 1 or preset.checkpoint_every:
-                failed.extend(
-                    fact.name
-                    for fact in data.invariants
-                    if not fact.holds
-                    and any(fact.name.startswith(evaluation.name + "/") for evaluation in preset.evaluations)
-                )
-            else:
-                evidence.append("Legacy evaluation rows are unavailable for this attempt.")
-        except (InvalidComparison, FileNotFoundError) as error:
-            evidence.append(f"Evaluation evidence unavailable: {error}")
-            if receipt.evaluation_storage_version == 1 or preset.checkpoint_every:
-                failed.append("evaluation_records_available")
+    status = evaluation_status(run_output, preset, receipt, launch)
+    evaluations = list(status.evaluations)
+    failed.extend(fact.name for fact in status.evaluation_invariants if not fact.holds)
+    if status.evaluation_error is not None:
+        evidence.append(f"Evaluation evidence unavailable: {status.evaluation_error}")
     if result.state != "succeeded":
         failed.insert(0, "native_attempt")
     optimizer_steps = (
@@ -146,13 +152,6 @@ def build_record(
         )
     if not provenance:
         evidence.append("Recorded source provenance is unavailable.")
-    if report is not None and len(report.run.attempt_ids) == report.run.replicates:
-        replicate = report.run.attempt_ids.index(attempt_id)
-        failed = list(
-            dict.fromkeys(
-                [*failed, *(fact.name for fact in report.invariants if not fact.holds and fact.replicate == replicate)]
-            )
-        )
     return RunSummary(
         run_id=receipt.run_id,
         attempt_id=attempt_id,
@@ -257,13 +256,12 @@ def publish_runs(
                     path,
                     preset,
                     table=table,
-                    attempt_id=selected_id,
-                    attempts=(current_id, attempts),
+                    receipt=receipt,
                     report=current_report,
                     gate_name=read_record(gate_path).name if current_report is not None else None,
                     issue=issue if selected_id == current_id else None,
                 )
-                url = publish_rl_progress.publish_result(record, service_url)
+                url = publish_result(record, service_url)
                 result.served_records.append(destination)
                 if selected_id == current_id:
                     result.urls[path] = url
@@ -302,7 +300,7 @@ def publish_controls(
     return result
 
 
-def control_command(table: presets.ModelPresets) -> click.Command:
+def command(table: presets.ModelPresets) -> click.Command:
     """Build stored-attempt and pinned-control publication commands for a model table."""
 
     @click.command()

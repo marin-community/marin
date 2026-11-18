@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from marin.rl.rl_progress import RunSummary
+from finestore.rl.rl_progress import RunSummary
 from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -47,18 +47,51 @@ def create_api(services):
             raise HTTPException(422, detail=str(error)) from error
         try:
             with engine.begin() as connection:
-                return connection.execute(
+                incoming = summary.model_dump(mode="json")
+                stored = connection.execute(
                     text(
                         """INSERT INTO rl_runs (run_id, attempt_id, record)
                         VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
-                        ON CONFLICT (run_id, attempt_id) DO UPDATE SET record = jsonb_set(
-                            EXCLUDED.record, '{issue}',
-                            COALESCE(NULLIF(EXCLUDED.record -> 'issue', 'null'::jsonb),
-                                     rl_runs.record -> 'issue', 'null'::jsonb))
+                        ON CONFLICT (run_id, attempt_id) DO UPDATE SET record = EXCLUDED.record || jsonb_build_object(
+                            'issue', COALESCE(NULLIF(EXCLUDED.record -> 'issue', 'null'::jsonb),
+                                              rl_runs.record -> 'issue', 'null'::jsonb),
+                            'gate', COALESCE(NULLIF(EXCLUDED.record -> 'gate', 'null'::jsonb),
+                                             rl_runs.record -> 'gate', 'null'::jsonb),
+                            'gate_result', COALESCE(NULLIF(EXCLUDED.record -> 'gate_result', 'null'::jsonb),
+                                                    rl_runs.record -> 'gate_result', 'null'::jsonb))
                         RETURNING record"""
                     ),
-                    {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": encoded},
+                    {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": summary.model_dump_json()},
                 ).scalar_one()
+                repaired = dict(stored)
+                for field in ("issue", "gate", "gate_result"):
+                    if incoming[field] is None:
+                        try:
+                            json.dumps(repaired[field], allow_nan=False)
+                        except ValueError:
+                            repaired[field] = None
+                try:
+                    summary = RunSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
+                except ValidationError as error:
+                    invalid = {item["loc"][0] for item in error.errors() if item["loc"]}
+                    for field in ("issue", "gate", "gate_result"):
+                        if field in invalid and incoming[field] is None:
+                            repaired[field] = None
+                    summary = RunSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
+                normalized = summary.model_dump(mode="json")
+                if normalized != stored:
+                    connection.execute(
+                        text(
+                            "UPDATE rl_runs SET record = CAST(:record AS jsonb) "
+                            "WHERE run_id = :run_id AND attempt_id = :attempt_id"
+                        ),
+                        {
+                            "run_id": summary.run_id,
+                            "attempt_id": summary.attempt_id,
+                            "record": summary.model_dump_json(),
+                        },
+                    )
+                return normalized
         except ProgrammingError as error:
             details = error.orig.args[0]
             if not isinstance(details, dict) or details.get("C") not in {"22P02", "22P05"}:

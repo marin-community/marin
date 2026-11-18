@@ -24,6 +24,7 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import write_tasks
 from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.entrypoints.terminal_bench import TerminalBenchExp
+from skyrl_train.evaluation_profiles import resolve_evaluation_profiles
 from skyrl_train.rollouts.task_projections import StepTaskProjection, WholeTaskProjection
 from skyrl_train.rollouts.training_record import TrainingRollout, TrainingStep, TrainingTransition
 from skyrl_train.trajectory_runners.trajectory_processing import (
@@ -102,6 +103,8 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
     ]
     experiment = experiment_type.__new__(experiment_type)
     experiment.cfg = config
+    original_config = OmegaConf.to_container(config, resolve=True)
+    experiment.evaluation_profiles = resolve_evaluation_profiles(config)
     experiment.tokenizer = AutoTokenizer.from_pretrained(build_tiny_policy(tmp_path / "model"))
 
     primary_dataset = experiment.get_eval_dataset()
@@ -132,6 +135,7 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
         ("named", "named", "declared-source", "general", "algebra", "hard"),
     ]
     assert all(item.data_source != "declared-source" for item in identities)
+    assert OmegaConf.to_container(config, resolve=True) == original_config
     config.data.val_data = [str(primary), str(named)]
     with pytest.raises(ValueError, match="conflicting selection identities"):
         experiment.get_eval_dataset()
@@ -171,6 +175,14 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
         with pytest.raises(ValueError, match="row strata differ from selection manifest"):
             experiment.get_eval_dataset([str(primary)])
         pq.write_table(original, primary)
+        membership_path = primary.parent / "validation.parquet"
+        membership = pq.read_table(membership_path)
+        changed_task = json.loads(membership["task_spec"][0].as_py())
+        changed_task["id"] = "edited"
+        pq.write_table(pa.table({"task_spec": [json.dumps(changed_task)]}), membership_path)
+        with pytest.raises(ValueError, match="manifest population differs"):
+            experiment.get_eval_dataset([str(primary)])
+        pq.write_table(membership, membership_path)
     config.data.val_data = [str(primary)]
     (primary.parent / "summary.json").write_text('{"selection_strata": null}')
     with pytest.raises(ValueError, match="SelectionDefinition"):

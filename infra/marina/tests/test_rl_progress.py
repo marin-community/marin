@@ -23,7 +23,10 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         return response.json()
 
     record = progress_record()
-    assert publish(record) == record
+    sparse = {key: value for key, value in record.items() if value is not None}
+    sparse.pop("evaluations")
+    sparse.pop("failed_facts")
+    assert publish(sparse) == record
     failed = record | {
         "attempt_id": "native-second",
         "started_at": "2026-11-03T00:00:00+00:00",
@@ -38,10 +41,11 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert publish(changed) == changed
     for omit_issue in (False, True):
         missing_issue = copy.deepcopy(changed)
-        if omit_issue:
-            missing_issue.pop("issue")
-        else:
-            missing_issue["issue"] = None
+        for field in ("issue", "gate", "gate_result"):
+            if omit_issue:
+                missing_issue.pop(field)
+            else:
+                missing_issue[field] = None
         assert publish(missing_issue) == changed
     unknown = record | {
         "run_id": "test/unknown",
@@ -84,6 +88,22 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
             "parameters": {"run_id": "test/huge-extra", "attempt_id": "bad", "record": huge_extra},
         },
     )
+    huge_gate = copy.deepcopy(record)
+    huge_gate.update(run_id="test/huge-gate", attempt_id="bad")
+    huge_gate["gate_result"]["invariants"][0]["value"] = "large-number"
+    request(
+        "http://localhost",
+        "POST",
+        query_path,
+        json_body={
+            "sql": insert_sql,
+            "parameters": {
+                "run_id": "test/huge-gate",
+                "attempt_id": "bad",
+                "record": json.dumps(huge_gate).replace('"large-number"', "1" + "0" * 400 + ".5"),
+            },
+        },
+    )
     payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
     rows = {row["attempt_id"]: row for row in payload["runs"]}
     assert rows["native-first"] == changed
@@ -93,7 +113,21 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]
     assert "evaluation: extra_forbidden" in skipped["test/legacy"]
-    assert set(skipped) == {"test/bad-shape", "test/bad-result", "test/huge-extra", "test/wrong-sql-key", "test/legacy"}
+    assert set(skipped) == {
+        "test/bad-shape",
+        "test/bad-result",
+        "test/huge-extra",
+        "test/huge-gate",
+        "test/wrong-sql-key",
+        "test/legacy",
+    }
+
+    for run_id in ("test/bad-result", "test/huge-gate"):
+        repaired = record | {"run_id": run_id, "attempt_id": "bad", "gate_result": None}
+        assert publish(repaired | {"issue": None, "gate": None}) == repaired
+        recovered = client.get(api_path).json()
+        assert repaired in recovered["runs"]
+        assert run_id not in {row["run_id"] for row in recovered["skipped_records"]}
 
     before = client.get(api_path).json()
     for invalid in (

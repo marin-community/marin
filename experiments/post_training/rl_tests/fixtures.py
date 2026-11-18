@@ -5,15 +5,21 @@ import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import marin.rl.skyrl as adapter
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.reader import ReadView
 from finestore.rl.run_records import (
+    EVALUATIONS_TABLE,
     METRIC_METADATA_KEYS,
+    METRICS_TABLE,
     AttemptRecord,
+    EvaluationAnswerRow,
+    EvaluationTaskRow,
     LaunchReceipt,
     MetricRow,
     read_attempt,
@@ -21,8 +27,9 @@ from finestore.rl.run_records import (
     register_run_tables,
     run_records_root,
     update_attempt,
+    write_evaluations,
 )
-from finestore.rl.strata import MembershipState, SelectionDefinition, SelectionTaskRow
+from finestore.rl.strata import MembershipState, SelectionDefinition, SelectionTaskRow, TaskStrata, read_selection_strata
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from iris.cluster.client.job_info import set_job_info
@@ -67,6 +74,7 @@ def write_receipt(root: Path, receipt: dict) -> None:
             "started_at": receipt["result"]["started_at"],
             "vllm_version": "fixture-vllm",
             "metrics_started_at": receipt["result"]["started_at"],
+            "evaluation_storage_version": 1,
         }
         if read_attempt(export_root, attempt_id) is None
         else {}
@@ -90,15 +98,75 @@ def metric_rows(metrics: dict[int, dict]) -> Iterator[dict]:
     )
 
 
-def write_metrics(root: Path, metrics: dict[int, dict]) -> None:
+def _rewrite_records(root: Path, *, metrics: list[dict] | None = None, evaluations: list[dict] | None = None) -> None:
     export_root = str(root / "exports")
     records = read_attempts(export_root)
+    view = ReadView(run_records_root(export_root))
+    metrics = list(view.iter_rows(METRICS_TABLE, columns=list(MetricRow.model_fields))) if metrics is None else metrics
+    evaluations = (
+        list(view.iter_rows(EVALUATIONS_TABLE, columns=list(EvaluationTaskRow.model_fields)))
+        if evaluations is None
+        else evaluations
+    )
     shutil.rmtree(run_records_root(export_root), ignore_errors=True)
     with DataStore.open(run_records_root(export_root)) as store:
         tables = register_run_tables(store)
         for record in records.values():
             update_attempt(store, record)
-        tables.metrics.extend(metric_rows(metrics))
+        tables.metrics.extend(metrics)
+        tables.evaluations.extend(evaluations)
+
+
+def write_metrics(root: Path, metrics: dict[int, dict]) -> None:
+    _rewrite_records(root, metrics=list(metric_rows(metrics)))
+
+
+def replace_evaluations(root: Path, rows: list[EvaluationTaskRow]) -> None:
+    _rewrite_records(root, evaluations=[row.model_dump() for row in rows])
+
+
+def copy_evaluations(root: Path, old_attempt: str, new_attempt: str) -> None:
+    export_root = str(root / "exports")
+    rows = list(
+        ReadView(run_records_root(export_root)).iter_rows(
+            EVALUATIONS_TABLE, columns=list(EvaluationTaskRow.model_fields), where=[("attempt_id", "==", old_attempt)]
+        )
+    )
+    with DataStore.open(run_records_root(export_root)) as store:
+        register_run_tables(store).evaluations.extend(dict(row, attempt_id=new_attempt) for row in rows)
+
+
+@contextmanager
+def edit_receipt(root: Path) -> Iterator[dict]:
+    receipt = json.loads((root / "terminal.json").read_text())
+    yield receipt
+    write_receipt(root, receipt)
+
+
+def controls(write, name, **kwargs):
+    pin = gate.control_pin(snowball_model.SNOWBALL.by_name[name], table=snowball_model.SNOWBALL)
+    return [
+        write(
+            name,
+            gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL),
+            speed=100 + index,
+            score=0.49 + index * 0.01,
+            **kwargs,
+        )
+        for index in range(pin.runs)
+    ]
+
+
+def preset_table(monkeypatch):
+    def select(preset):
+        table = replace(
+            snowball_model.SNOWBALL,
+            presets=tuple(preset if row.name == preset.name else row for row in snowball_model.SNOWBALL.presets),
+        )
+        monkeypatch.setattr(snowball_model, "SNOWBALL", table)
+        return table
+
+    return select
 
 
 def append_metrics(root: Path, metrics: dict[int, dict]) -> None:
@@ -107,7 +175,6 @@ def append_metrics(root: Path, metrics: dict[int, dict]) -> None:
 
 
 def selection(tmp_path, monkeypatch):
-    monkeypatch.setattr(snowball_model, "SNOWBALL", with_current_control_revisions(snowball_model.SNOWBALL))
     monkeypatch.setattr(command, "configure_coreweave_s3", lambda: None)
     monkeypatch.setattr(recipe, "SELECTION_ROOT", str(tmp_path))
     monkeypatch.setattr(recipe, "artifact_prefix", lambda cluster: str(tmp_path))
@@ -146,6 +213,7 @@ def answer(task, score, *, tokens=1, error=None, low=0, high=1, status="verified
 
 
 def recorded_runs(selection, tmp_path, monkeypatch, request):
+    monkeypatch.setattr(snowball_model, "SNOWBALL", with_current_control_revisions(snowball_model.SNOWBALL))
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
@@ -271,6 +339,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             dirty=False,
             command_line=["unrelated-command", "--preset", "train-long"],
         )
+        write_receipt(root, native)
         write_json(root / GATE_INPUTS_FILENAME, inputs.model_dump(mode="json"))
         write_json(
             root / RECORD_FILENAME,
@@ -368,9 +437,52 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 ]
                 export = root / "exports" / evaluation.name if index else root / "exports"
                 session = "eval_only" if step == -1 else f"global_step_{step}_evals"
-                path = export / "dumped_evals" / session / "task_set.jsonl"
+                by_task = {}
+                for ordinal, row in enumerate(rows):
+                    row.update(attempt_id=attempt, step=step, is_last_step=True)
+                    by_task.setdefault(row["task_id"], []).append((ordinal, row))
+                path = export / "dumped_evals" / attempt / session / "task_set.jsonl"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+                panel = read_selection_strata(str(directory))
+                task_rows = []
+                for item in ids:
+                    answers = [
+                        EvaluationAnswerRow(
+                            ordinal=ordinal,
+                            native_uid=str(ordinal),
+                            optimization_reward=row.get("score", 0.0),
+                            verifier_score=(row["verification"]["score"] - row["verification"]["score_min"])
+                            / (row["verification"]["score_max"] - row["verification"]["score_min"]),
+                            raw_verifier_score=row["verification"]["score"],
+                            score_min=row["verification"]["score_min"],
+                            score_max=row["verification"]["score_max"],
+                            verification_status=row["verification"]["status"],
+                            passed=row["verification"]["score"] == row["verification"]["score_max"],
+                            outcome=Outcome.GRADED,
+                            error_type=row.get("exception_type"),
+                            error_treatment=row.get("error_treatment"),
+                        )
+                        for ordinal, row in by_task[item]
+                    ]
+                    task_rows.append(
+                        EvaluationTaskRow(
+                            attempt_id=attempt,
+                            step=step,
+                            evaluation=f"eval/{evaluation.name}/" if index else "eval/",
+                            panel_name=panel.definition.name if panel is not None else None,
+                            panel_version=panel.definition.version if panel is not None else None,
+                            task_id=item,
+                            data_source="fixture",
+                            strata=panel.identity(item).strata if panel is not None else TaskStrata(),
+                            agentic=panel.identity(item).agentic if panel is not None else None,
+                            score=sum(answer.verifier_score or 0.0 for answer in answers) / len(answers),
+                            outcome=Outcome.GRADED,
+                            error_type=None,
+                            answers=answers,
+                        )
+                    )
+                write_evaluations(str(root / "exports"), task_rows)
                 values = stored_metrics.setdefault(max(step, 0), {"step": max(step, 0)})
                 prefix = f"eval/{evaluation.name}/all/outcome/" if index else "eval/all/outcome/"
                 values.update(
@@ -383,7 +495,6 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             values.update(metrics or {})
             values["attempt_id"] = attempt
         write_metrics(root, {step: values for step, values in stored_metrics.items() if step not in missing_steps})
-        write_receipt(root, native)
         return root
 
     return write

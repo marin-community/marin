@@ -44,7 +44,7 @@ def native_json(*uv_options: str):
             "import skyrl_train as SourceTrain\n"
             f"assert all(SourcePath(module.__file__).resolve().is_relative_to({source!r}) "
             "for module in (SourceLaunch, SourceTrain))\n"
-            "print('SNOWBALL_NATIVE_SOURCE_ORIGINS_PASS')\n" + script
+            "print('RL_NATIVE_SOURCE_ORIGINS_PASS')\n" + script
         )
         result = subprocess.run(
             skyrl_cpu_command(*uv_options, "python", "-c", program, *paths),
@@ -67,7 +67,8 @@ def assert_revisioned_native_configs(
         binding: (Path(recipe.selection_artifact(binding).path()) / recipe.SUMMARY_FILENAME).read_text()
         for binding in bindings
     }
-    monkeypatch.setattr(recipe, "SELECTION_ROOT", "memory://snowball-calibration")
+    namespace = table.namespace.removesuffix("-rl")
+    monkeypatch.setattr(recipe, "SELECTION_ROOT", f"memory://{namespace}-calibration")
     for binding, summary in summaries.items():
         (StoragePath(recipe.selection_artifact(binding).path()) / recipe.SUMMARY_FILENAME).write_text(summary)
     paths = []
@@ -75,14 +76,13 @@ def assert_revisioned_native_configs(
         preset = table.by_name[name]
         step = recipe.run_step(preset, recipe.run_spec(preset, name="fixture-default-" + name))
         path = tmp_path / f"{name}.yaml"
-        path.write_text(materialized_config(step, "/snowball-pin-prefix").launch_config_yaml)
+        path.write_text(materialized_config(step, f"/{namespace}-pin-prefix").launch_config_yaml)
         paths.append(str(path))
     configs = gate.compose_configs(paths)
     actual = {
         name: fingerprint_hash(json.dumps(gate.comparison_config(config), sort_keys=True))
         for name, config in zip(revisions, configs, strict=True)
     }
-    print(json.dumps(actual, sort_keys=True, indent=2))
     assert actual == {name: values.get(table.by_name[name].revision) for name, values in revisions.items()}
     for preset, config in zip((table.by_name[name] for name in revisions), configs, strict=True):
         plan = preset.recipe.layout.workload.plan

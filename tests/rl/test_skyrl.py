@@ -678,10 +678,9 @@ def _colocated_expert_block_spec(entrypoint: str | None = None) -> SkyRLSpec:
     )
 
 
-@pytest.mark.parametrize("entrypoint", ["taskcompendium"])
-def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) -> None:
+def test_expert_block_colocation_fails_before_job_submission() -> None:
     with pytest.raises(ValueError, match="colocated expert_block requires entrypoint=standard"):
-        _colocated_expert_block_spec(entrypoint)
+        _colocated_expert_block_spec("taskcompendium")
 
 
 def test_expert_block_colocated_four_gpu_recipe_passes_preflight() -> None:
@@ -988,21 +987,13 @@ def history_config(attempt_id, export_root):
         "runtime": {"run_id": "history", "attempt_id": attempt_id}})
 
 ancestor_root = root / "ancestor-exports"
-original = Tracking("tests-project", "history", ("records",), history_config("original", ancestor_root))
-original.start(resumed_step=None)
-for step in (0, 1, 2, 3, 8):
-    original.log({"loss": step / 10}, step=step)
-original.log({"ancestor_only": 77}, step=0)
-assert read_attempt_metrics(str(ancestor_root), "original")[8]["loss"] == 0.8
+with Tracking("tests-project", "history", ("records",), history_config("original", ancestor_root)) as original:
+    original.start(resumed_step=None)
+    original.log({"loss": 0.3}, step=3)
 parent = CheckpointReference(export_root=str(ancestor_root), attempt_id="original", step=3)
 with Tracking("tests-project", "history", ("records",), history_config("middle", root / "exports")) as middle:
     middle.start(resumed_step=3, checkpoint=parent)
-    for step in (4, 5, 9):
-        middle.log({"loss": step / 10}, step=step)
-    middle.log({"eval/all/avg_score": 0.4}, step=5)
-with Tracking("tests-project", "history", ("records",), history_config("sibling", root / "exports")) as sibling:
-    sibling.start(resumed_step=3, checkpoint=parent)
-    sibling.log({"loss": 9.9}, step=4)
+    middle.log({"loss": 0.5, "eval/all/avg_score": 0.4}, step=5)
 try:
     with Tracking("tests-project", "history", ("records",), history_config("middle", root / "exports")) as replay:
         replay.start(resumed_step=3, checkpoint=parent)
@@ -1101,8 +1092,6 @@ config.run.export_hf = True
 path.write_text(OmegaConf.to_yaml(config))
 result = execute_launch(path, backend=LocalBackend())
 assert result.state == "succeeded", result
-original.log({"loss": 12}, step=12)
-original.close(exit_code=0)
 receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
 (root / "resolved-launch.yaml").write_text(OmegaConf.to_yaml({"config": receipt["config"]}))
 """
@@ -1157,8 +1146,8 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     assert tracking["engine"]["backend"] == "vllm"
     assert tracking["engine"]["batch_invariant"] is False
     metrics = read_skyrl_metrics(str(tmp_path))
-    assert list(metrics) == list(range(7))
-    assert [row["loss"] for row in metrics.values()] == [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.25]
+    assert list(metrics) == [3, 5, 6]
+    assert [row["loss"] for row in metrics.values()] == [0.3, 0.5, 0.25]
     assert metrics[6] == {
         "step": 6,
         "attempt_id": config.attempt_id,

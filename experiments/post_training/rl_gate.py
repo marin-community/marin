@@ -18,11 +18,11 @@ from functools import lru_cache
 from pathlib import Path
 
 import click
+from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant, Label, Verdict
 from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
 from marin.experiment.namespacing import user_owned_name
-from marin.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant, Label, Verdict
 from marin.rl.skyrl import (
     ArtifactHfModel,
     ResolvedModelLocator,
@@ -71,10 +71,9 @@ def validate_requirements(
     if requirements and (control or not gated):
         raise click.BadParameter("--require needs a gated candidate preset, without --control")
     keys = [parse_requirement(text).key for text in requirements]
-    pin = control_pin(preset, table=table) if not control and gated else None
     if not requirements:
         return
-    assert pin is not None
+    pin = control_pin(preset, table=table)
     reference = with_objectives(load_run(control_path(preset, pin, 0, table=table), preset), preset)
     missing = [key for key in keys if key not in reference.values]
     if missing:
@@ -511,6 +510,20 @@ def _current_configs(
         return tuple(compose_configs(paths))
 
 
+def _native_json(program: str, *arguments: str):
+    try:
+        result = subprocess.run(
+            skyrl_cpu_command("python", "-c", program, *arguments), capture_output=True, text=True, timeout=120
+        )
+        result.check_returncode()
+        return json.loads(result.stdout.splitlines()[-1])
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as error:
+        cause = f"timed out after {error.timeout:g} s" if isinstance(error, subprocess.TimeoutExpired) else str(error)
+        if isinstance(error, subprocess.CalledProcessError) and error.stderr and error.stderr.strip():
+            cause = error.stderr.strip().splitlines()[-1]
+        raise InvalidComparison(f"native configuration cannot be composed: {cause}") from error
+
+
 def compose_configs(paths: Sequence[str]) -> list[dict]:
     """Load launch files with the native SkyRL composer in its CPU environment."""
     native_root = str(recipe.REPO_ROOT / "vendor/skyrl")
@@ -522,17 +535,7 @@ def compose_configs(paths: Sequence[str]) -> list[dict]:
         "print(json.dumps([OmegaConf.to_container(launch_config.load_launch_config(path), resolve=True) "
         "for path in sys.argv[1:]]))\n"
     )
-    try:
-        result = subprocess.run(
-            skyrl_cpu_command("python", "-c", program, *paths), capture_output=True, text=True, timeout=120
-        )
-        result.check_returncode()
-        return json.loads(result.stdout.splitlines()[-1])
-    except (subprocess.SubprocessError, ValueError, IndexError) as error:
-        cause = f"timed out after {error.timeout:g} s" if isinstance(error, subprocess.TimeoutExpired) else str(error)
-        if isinstance(error, subprocess.CalledProcessError) and error.stderr:
-            cause = error.stderr.strip().splitlines()[-1]
-        raise InvalidComparison(f"current preset recipe cannot be composed: {cause}") from error
+    return _native_json(program, *paths)
 
 
 def _changed_config_keys(left: dict[str, object], right: dict[str, object]) -> set[str]:
@@ -576,15 +579,7 @@ def _schema_defaults(native_project: str, source_identity: str | None, groups: t
         "defaults['skyrl'] = OmegaConf.to_container(config, resolve=True, enum_to_str=True)\n"
         "print(json.dumps(defaults))\n"
     )
-    result = subprocess.run(
-        skyrl_cpu_command("python", "-c", program, json.dumps(dict(groups))),
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    if result.returncode:
-        raise InvalidComparison(f"native schema defaults could not be composed: {result.stderr.strip()}")
-    return json.loads(result.stdout.splitlines()[-1])
+    return _native_json(program, json.dumps(dict(groups)))
 
 
 def _check_control_config(
@@ -628,6 +623,7 @@ def _write_gate(
     invariants, comparisons = [], []
     verdict, label, reason = Verdict.INVALID, None, None
     try:
+        _check_pin_revision(preset, control_pin)
         receipts = [read_stored_skyrl_attempt(path) for path in run_paths]
         metadata = metadata.model_copy(
             update={"attempt_ids": tuple(receipt.attempt_id for receipt in receipts if receipt)}
@@ -710,16 +706,31 @@ def control_name(preset: str, commit: str, replicate: int, *, table: ModelPreset
     return f"checkpoints/{table.namespace}/control/{preset}-{commit}-r{replicate}"
 
 
-def control_pin(preset: presets.Preset, *, table: ModelPresets) -> ControlPin:
+def _pin_error(preset: presets.Preset, pin: ControlPin | None) -> InvalidComparison:
+    name, replicas = (pin.preset, pin.runs) if pin else (preset.controls, 4)
+    return InvalidComparison(
+        f"no control pin for {preset.name} at {preset.revision}; "
+        f"recorded control revision={pin.revision if pin else None}; "
+        f"collect current controls with --preset {name} "
+        f"--version {preset.revision} --control --replicates {replicas} --run"
+    )
+
+
+def _declared_pin(preset: presets.Preset, table: ModelPresets) -> ControlPin:
     pin = table.controls.get(preset.controls)
-    if pin is None or pin.revision != preset.revision:
-        name, replicas = (pin.preset, pin.runs) if pin else (preset.controls, 4)
-        raise InvalidComparison(
-            f"no control pin for {preset.name} at {preset.revision}; "
-            f"recorded control revision={pin.revision if pin else None}; "
-            f"collect current controls with --preset {name} "
-            f"--version {preset.revision} --control --replicates {replicas} --run"
-        )
+    if pin is None:
+        raise _pin_error(preset, pin)
+    return pin
+
+
+def _check_pin_revision(preset: presets.Preset, pin: ControlPin) -> None:
+    if pin.revision != preset.revision:
+        raise _pin_error(preset, pin)
+
+
+def control_pin(preset: presets.Preset, *, table: ModelPresets) -> ControlPin:
+    pin = _declared_pin(preset, table)
+    _check_pin_revision(preset, pin)
     return pin
 
 
@@ -738,8 +749,8 @@ def _gate_artifact(
     *,
     table: ModelPresets,
     run_paths: tuple[str, ...],
+    pin: ControlPin,
 ) -> ArtifactStep[GateReport]:
-    pin = control_pin(preset, table=table)
     defaults = recipe.run_step(preset, recipe.run_spec(preset, name="current-defaults"))
     name += "-defaults-" + fingerprint_hash(
         canonical_json((defaults.fingerprint(), defaults.runtime_args, Provenance.capture(recipe.REPO_ROOT).tree_hash))
@@ -807,11 +818,11 @@ def _gate_with_evidence(step: ArtifactStep[GateReport]) -> ArtifactStep[GateRepo
 def gate_step(
     preset: presets.Preset, runs: tuple[ArtifactStep[SkyRLRun], ...], *, table: ModelPresets, inputs: GateInputs
 ) -> ArtifactStep[GateReport]:
-    pin = control_pin(preset, table=table)
+    pin = _declared_pin(preset, table)
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pin.commit}"
     paths = tuple(candidate.path(recipe.artifact_prefix(preset.recipe.layout.cluster)) for candidate in runs)
     identities = tuple(f"{candidate.name}@{candidate.version}" for candidate in runs)
-    return replace(_gate_artifact(name, preset, identities, inputs, run_paths=paths, table=table), deps=runs)
+    return replace(_gate_artifact(name, preset, identities, inputs, run_paths=paths, table=table, pin=pin), deps=runs)
 
 
 def command(table: ModelPresets) -> click.Command:
@@ -882,6 +893,7 @@ def command(table: ModelPresets) -> click.Command:
             index,
             run_paths=(source,),
             table=table,
+            pin=pin,
         )
         report = run(step)[0]
         payload = {

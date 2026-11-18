@@ -36,7 +36,7 @@ from skyrl_train.inference_engines.chat_template import assistant_prefix_token_i
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
 from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
-from finestore.rl.strata import SelectionFormat, TaskEvaluationIdentity, TaskStrata, read_selection_strata
+from finestore.rl.strata import TaskEvaluationIdentity, TaskStrata, read_selection_strata
 
 TASKCOMPENDIUM_ENVIRONMENT = "taskcompendium"
 TASK_ROLLOUT_COLUMN = "task_rollout_spec"
@@ -285,7 +285,7 @@ class SourceTaskDataset(TaskDataset):
                 task = json.loads(row[column])
                 task_id = task["id"] if column == TASK_SPEC_COLUMN else task["task"]["id"]
                 identity = panel.identity(task_id) if panel is not None else None
-                if panel is not None and panel.format == SelectionFormat.VERSIONED and TASK_SPEC_COLUMN in row:
+                if panel is not None and TASK_SPEC_COLUMN in row:
                     carried = {key: row[key] for key in TaskStrata.model_fields if key in row}
                     if carried and TaskStrata.model_validate(carried) != identity.strata:
                         raise ValueError(f"training row strata differ from selection manifest: {task_id}")
