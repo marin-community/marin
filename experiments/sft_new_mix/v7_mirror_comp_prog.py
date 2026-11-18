@@ -55,16 +55,16 @@ def mirror_shard(shard_dir: str, source_root: str, target_root: str) -> dict:
     for source_uri in entries:
         target_uri = str(StoragePath(target_root) / relative / str(StoragePath(source_uri).relative_to(shard)))
         objects.append(copy_object(source_uri, target_uri))
-    written = [object for object in objects if (StoragePath(object["path"])).isfile()]
+    written = [entry for entry in objects if (StoragePath(entry["path"])).isfile()]
     if len(written) != len(entries):
         raise ValueError(f"Mirror object count mismatch for {shard_dir}: {len(written)} of {len(entries)}")
-    total = sum(object["bytes"] for object in objects)
+    total = sum(entry["bytes"] for entry in objects)
     return {
         "shard": shard_dir,
         "mirror": str(StoragePath(target_root) / relative),
         "objects": len(objects),
         "bytes": total,
-        "sha256s": {object["path"]: object["sha256"] for object in objects},
+        "sha256s": {entry["path"]: entry["sha256"] for entry in objects},
     }
 
 
