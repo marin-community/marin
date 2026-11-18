@@ -465,6 +465,7 @@ class GrugRunConfig:
     first_step_host_rebind: HostRebindConfig | None = None
     # Optional carried-optimizer replay: preserve every restored leaf except the local loop step.
     carried_restore_step: int | None = None
+    first_step_expected_loss: float | None = None
     native_timing_root: str | None = None
     flops_baseline: FlopsBaseline | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
@@ -1554,6 +1555,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step = current_step - 1
 
                     jax.block_until_ready(metrics["train/loss"])
+                    if config.first_step_expected_loss is not None and current_step == 1 and jax.process_index() == 0:
+                        actual_loss = float(metrics["train/loss"])
+                        delta = actual_loss - config.first_step_expected_loss
+                        logger.info(
+                            "FIRST_STEP_LOSS_ORACLE expected=%.10f actual=%.10f delta=%+.10f within_1e-6=%s; log only",
+                            config.first_step_expected_loss,
+                            actual_loss,
+                            delta,
+                            abs(delta) <= 1e-6,
+                        )
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
 
                 if not jnp.isfinite(metrics["train/loss"]):
