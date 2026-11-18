@@ -36,7 +36,7 @@ class TmuxBatchProtocolError(RuntimeError):
 
 
 class TmuxBatchTimeoutError(RuntimeError):
-    """A batched tmux call outlived its requested waits plus the timeout margin."""
+    """A batched tmux call timed out before returning."""
 
 
 class ModelInitiatedTmuxFailure(NonZeroAgentExitCodeError):
@@ -797,7 +797,6 @@ class TmuxSession:
                 command=script, timeout_sec=timeout_sec, user=self._user
             )
         except TimeoutError as error:
-            # Model commands run inside tmux, so only an unresponsive sandbox holds this exec open.
             raise TmuxBatchTimeoutError(
                 f"{self.environment.session_id}: batched tmux call exceeded "
                 f"{timeout_sec}s"
