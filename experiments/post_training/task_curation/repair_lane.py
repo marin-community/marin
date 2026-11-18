@@ -40,7 +40,11 @@ from experiments.post_training.task_curation.full_qc import LONG_REQUEST_TIMEOUT
 from experiments.post_training.task_curation.images.build import EnvironmentArtifact, identity_digest
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
-from experiments.post_training.task_curation.pipeline import environment_requirements, planned_lock_url
+from experiments.post_training.task_curation.pipeline import (
+    environment_requirements,
+    planned_lock_url,
+    source_recipe,
+)
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.repair_candidates import (
     CANDIDATE_REPO,
@@ -631,6 +635,9 @@ def convert_cohort(
     if recipe is None:
         raise ValueError(f"No configured source recipe for {tracked_source_id}")
     context = cohort_conversion_context(recipe)
+    # The production conversion path: the recipe lowered to a SourceRecipe, whose SourceFiles
+    # carries the dataset identity, decode and converter that row_source and the row bind need.
+    recipe_source = source_recipe(recipe, {}, context.grader_environment)
     winners = accepted_winners(report)
     paths = set(winner_paths(winners))
     rows = {}
@@ -658,10 +665,12 @@ def convert_cohort(
             continue
         path = winner_paths([winner])[0]
         locator = f"{candidate_revision}:{path}"
-        source = row_source(recipe, locator)
-        decoded = recipe.source.decode(rows[path], context) if recipe.source.decode is not None else rows[path]
-        row = RawRow(row_task_id(recipe, source), source, decoded)
-        converted = recipe.convert(row, context)
+        source = row_source(recipe_source, locator)
+        decoded = (
+            recipe_source.source.decode(rows[path], context) if recipe_source.source.decode is not None else rows[path]
+        )
+        row = RawRow(row_task_id(recipe_source, source), source, decoded)
+        converted = recipe_source.convert(row, context)
         task = converted.task if isinstance(converted, NormalizedTask) else converted
         entry = {
             "candidate_task_id": candidate_id,

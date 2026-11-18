@@ -25,7 +25,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
+from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import Confidence, Defect, Quality, ReferenceStatus, ReviewStatus
 from taskcompendium.pipeline.repair import (
     CandidateDropAdvisory,
@@ -45,7 +45,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     unpack_task_binary,
 )
 from experiments.post_training.task_curation.full_qc import ReviewerVersion, local_reviewer
-from experiments.post_training.task_curation.pipeline import CurationRecipe, IntendedUse
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, IntendedUse
 from experiments.post_training.task_curation.repair_lane import matched_pairs
 from experiments.post_training.task_curation.repair_match import (
     CONFLICT_THRESHOLD,
@@ -477,10 +477,10 @@ class TestCohortConversion:
 
         return CurationRecipe(
             name="tasktrove-fixture",
-            source=SourceFiles(
-                dataset="fixture",
+            source=HfSource(
+                repo="fixture/validated-tasks",
                 revision="r1",
-                patterns=("x/tasks.parquet",),
+                files=("x/tasks.parquet",),
                 format=SourceFormat.PARQUET,
                 decode=unpack_task_binary,
             ),
