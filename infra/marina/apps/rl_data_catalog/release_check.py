@@ -288,6 +288,30 @@ def browser_api_response(reader: CatalogReader, path: str, sources: list[dict[st
         raise
 
 
+def inventory_timestamp_projection(inventory: dict[str, Any]) -> dict[str, Any]:
+    """Compare timestamp instants across SQL-gateway strings and native API datetimes."""
+
+    def timestamp(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return value
+        if parsed.tzinfo is None:
+            return value
+        return parsed.astimezone(UTC).isoformat(timespec="microseconds")
+
+    return {
+        **inventory,
+        **{key: timestamp(inventory[key]) for key in ("created_at", "synced_at") if key in inventory},
+        "sources": [
+            {**source, **({"updated_at": timestamp(source["updated_at"])} if "updated_at" in source else {})}
+            for source in inventory["sources"]
+        ],
+    }
+
+
 def browser_checks(
     reader: CatalogReader,
     root: str,
@@ -355,7 +379,7 @@ def browser_checks(
                         )
                         if local:
                             data = projected
-                        elif data != projected:
+                        elif inventory_timestamp_projection(data) != inventory_timestamp_projection(projected):
                             raise ValueError("Hosted source API differs from the input-bound baseline projection")
                     route.fulfill(json=data)
                 elif not local:
