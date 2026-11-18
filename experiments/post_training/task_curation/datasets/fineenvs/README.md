@@ -13,9 +13,11 @@ the OCI layout. Base file contents and metadata are preserved, except that
 adding inputs can update their parent directories' modification times. Original
 image layers and runtime configuration are preserved.
 
-The approved FineEnvs plan uses at most ten grouped images to fit the available
-Daytona snapshot budget. Grouping
-exposes other tasks' public input sets outside the workdir to the root user.
+Daytona counts each combination of image and resource allocation as a separate
+snapshot identity. The approved FineEnvs plan uses nine images built from grouped
+input sets and ten snapshot identities; one image serves both native profiles
+listed below. Keep each task's original allocation unchanged when grouping inputs.
+Grouping exposes other tasks' public input sets outside the workdir to the root user.
 The image provenance records this deviation. Conversion must bind only the
 task's own set at `/setup_files/inputs` before running the unchanged staging
 script. Original prompts, graders and resource allocations remain unchanged,
