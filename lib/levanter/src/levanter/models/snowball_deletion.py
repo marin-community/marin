@@ -17,7 +17,7 @@ gradients, and checkpointing to the gate logits when given this module's
 filter.
 """
 
-import dataclasses
+import functools
 import math
 from dataclasses import dataclass
 from enum import StrEnum
@@ -137,7 +137,7 @@ def wanda_input_sums_local(
 ) -> dict[str, jax.Array]:
     """Shard-local Wanda calibration statistics, stacked over layers by the caller."""
     sums, counts, channel_sums, channel_counts = shard_map(
-        dataclasses.partial(_local_wanda_sums, num_experts=num_experts),
+        functools.partial(_local_wanda_sums, num_experts=num_experts),
         mesh=mesh,
         in_specs=(P(batch_axes, None), P(batch_axes, None), P(batch_axes)),
         out_specs=(P(batch_axes, None, None), P(batch_axes, None), P(batch_axes, None), P(batch_axes)),
