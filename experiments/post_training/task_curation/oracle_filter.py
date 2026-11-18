@@ -876,8 +876,13 @@ def calibrated_task(
     source_runtime: dict | None = None,
     host_admission: LocalHostAdmission | None = None,
     initial_verifier_execution_requirements: ExecutionRequirements | None = None,
+    *,
+    trial_cleanup_grace_sec: float | None = None,
 ) -> dict:
-    """Run the production Trial path once per shape, creating a fresh task package each time."""
+    """Run the production Trial path once per shape, creating a fresh task package each time.
+
+    An explicit cleanup grace changes harness teardown only; omitted values use Harbor's default.
+    """
     original = Path(mapping["task_path"])
     if host_admission is not None and environment != "local":
         raise ValueError("Physical-host admission applies only to LOCAL trials")
@@ -965,6 +970,7 @@ def calibrated_task(
             "trials_dir": str(attempt / "jobs"),
             "trial_name": "oracle",
             "trial_attempt_timeout_sec": CALIBRATION_ATTEMPT_TIMEOUT,
+            **({"trial_cleanup_grace_sec": trial_cleanup_grace_sec} if trial_cleanup_grace_sec is not None else {}),
         }
         config_path = attempt / "trial.json"
         config_path.write_text(json.dumps(config))
@@ -1093,6 +1099,8 @@ def calibrate_cohort(
     initial_requirements: dict[str, ExecutionRequirements] | None = None,
     host_admission: LocalHostAdmission | None = None,
     initial_verifier_execution_requirements: dict[str, ExecutionRequirements | None] | None = None,
+    *,
+    trial_cleanup_grace_sec: float | None = None,
 ) -> None:
     """Fold calibration into full-population oracle filtering; collect the same trials afterward."""
     mappings = json.loads(task_map.read_text())
@@ -1127,6 +1135,7 @@ def calibrate_cohort(
                         if initial_verifier_execution_requirements
                         else None
                     ),
+                    trial_cleanup_grace_sec=trial_cleanup_grace_sec,
                 )
                 pending[future] = task.id
             if not pending:

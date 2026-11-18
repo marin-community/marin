@@ -532,19 +532,20 @@ def test_missing_production_proof_filters_and_archives_the_exact_original_row(tm
 
 
 @pytest.mark.parametrize(
-    ("declared", "native_declared", "canonical", "task_spec_package"),
+    ("declared", "native_declared", "canonical", "task_spec_package", "cleanup_grace"),
     [
-        (True, True, False, False),
-        (True, True, True, False),
-        (False, False, False, False),
-        (False, False, True, False),
-        (False, True, False, False),
-        (False, True, True, False),
-        (False, False, True, True),
+        (True, True, False, False, None),
+        (True, True, True, False, None),
+        (False, False, False, False, None),
+        (False, False, True, False, None),
+        (False, True, False, False, None),
+        (False, True, True, False, None),
+        (False, False, True, True, None),
+        (True, True, True, False, 120.0),
     ],
 )
 def test_population_calibration_doubles_missing_limits_but_preserves_swe_declarations(
-    tmp_path, monkeypatch, declared, native_declared, canonical, task_spec_package
+    tmp_path, monkeypatch, declared, native_declared, canonical, task_spec_package, cleanup_grace
 ):
     row = prebuilt_task("task")
     envelope = json.loads(row["lowered_task_spec"])
@@ -597,6 +598,7 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
         if "harbor" not in args:
             return production_run(args, **kwargs)
         config = json.loads(Path(args[args.index("--config") + 1]).read_text())
+        assert config.get("trial_cleanup_grace_sec") == cleanup_grace
         package = Path(config["task"]["path"])
         shape = native_requirements(package)
         assert json.loads((package.parent / "prepared.json").read_text()) == shape.model_dump()
@@ -655,7 +657,9 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
         assert shapes == []
 
     run = tmp_path / "calibrated"
-    calibrate_cohort(cohort, mapping, run, "local", {}, 1, prepare_attempt=prepare_attempt)
+    calibrate_cohort(
+        cohort, mapping, run, "local", {}, 1, prepare_attempt=prepare_attempt, trial_cleanup_grace_sec=cleanup_grace
+    )
     output = tmp_path / "filtered/tasks.parquet"
     receipt = filter_cohort(cohort, run / "task-map.json", run, output)
     entry = receipt.tasks[task.id]
