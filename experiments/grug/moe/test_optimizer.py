@@ -1,13 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import jax
 import jax.numpy as jnp
 import numpy as np
-import optax
 import pytest
+from levanter.optim.grugmuon import _grug_scale_with_muon
 
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig, scale_with_grug_muonh
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig as HeroMuonHConfig
+from experiments.grug.moe_hero_ep.train import clip_by_total_norm
 
 
 def test_grug_moe_adamh_mask_routes_expert_mlp_weights_to_expert_group():
@@ -71,21 +73,51 @@ def test_muonh_groups_match_hero_for_stacked_and_unstacked_models(stacked):
     assert actual["output_proj"] == "adamh"
 
 
-def test_muonh_four_dimensional_expert_requires_hero_optimizer():
-    params = {"expert_mlp": {"w_gate": jnp.arange(1, 49, dtype=jnp.float32).reshape(2, 2, 3, 4)}}
-    config = GrugMoeMuonHConfig(learning_rate=0.02, warmup=0, max_grad_norm=None)
-    optimizer = config.build(100)
-    with pytest.raises(ValueError, match=r"expert_mlp\.w_gate.*hero-EP"):
-        optimizer.init(params)
+@pytest.mark.parametrize("clip", [None, 0.1])
+def test_muonh_update_matches_hero_with_optional_global_clip(clip):
+    params = {
+        "matrix": jnp.arange(1, 13, dtype=jnp.float32).reshape(3, 4),
+        "stacked_matrix": jnp.arange(1, 25, dtype=jnp.float32).reshape(2, 3, 4),
+        "mlp": {"expert_mlp": {"w_gate": jnp.arange(1, 49, dtype=jnp.float32).reshape(2, 2, 3, 4)}},
+        "rms_attn": {"weight": jnp.ones((2, 4))},
+    }
+    grads = jax.tree.map(lambda x: jnp.sin(x) * 0.2, params)
+    settings = dict(learning_rate=0.02, warmup=0, max_grad_norm=None, use_syrk=False, expert_normalization="all_experts")
+    actual = GrugMoeMuonHConfig(**settings, global_grad_norm=clip).build(100)
+    reference = HeroMuonHConfig(**settings).build(100)
+    reference_grads = grads
+    if clip is not None:
+        reference_grads = clip_by_total_norm(grads, clip).grads
+    actual_updates, _ = actual.update(grads, actual.init(params), params)
+    expected_updates, _ = reference.update(reference_grads, reference.init(params), params)
+    for actual_leaf, expected_leaf in zip(
+        jax.tree.leaves(actual_updates), jax.tree.leaves(expected_updates), strict=True
+    ):
+        np.testing.assert_array_equal(actual_leaf, expected_leaf)
 
 
-def test_muonh_unstacked_expert_update_matches_existing_backend():
-    params = {"expert_mlp": {"w_gate": jnp.arange(1, 25, dtype=jnp.float32).reshape(2, 3, 4)}}
-    grads = {"expert_mlp": {"w_gate": jnp.linspace(-0.5, 0.7, 24).reshape(2, 3, 4)}}
-    config = GrugMoeMuonHConfig(learning_rate=0.02, warmup=0, max_grad_norm=None)
+def test_muonh_rejects_simultaneous_global_and_group_clipping():
+    with pytest.raises(ValueError, match="global_grad_norm"):
+        GrugMoeMuonHConfig(global_grad_norm=1.0, max_grad_norm=1.0)
+
+
+@pytest.mark.parametrize("shape", [(3, 4), (2, 3, 4)])
+def test_muonh_unstacked_update_matches_existing_backend(shape):
+    size = int(np.prod(shape))
+    param = jnp.arange(1, size + 1, dtype=jnp.float32).reshape(shape)
+    grad = jnp.linspace(-0.5, 0.7, size).reshape(shape)
+    params = {"mlp": {"expert_mlp": {"w_gate": param}}}
+    grads = {"mlp": {"expert_mlp": {"w_gate": grad}}}
+    config = GrugMoeMuonHConfig(learning_rate=0.02, warmup=0, max_grad_norm=None, use_syrk=False)
     optimizer = config.build(100)
     update, _ = optimizer.update(grads, optimizer.init(params), params)
-    backend = scale_with_grug_muonh(learning_rate=config.lr_scheduler(100)(0))
-    expected, _ = backend.update(grads, backend.init(params), params)
-    np.testing.assert_allclose(update["expert_mlp"]["w_gate"], expected["expert_mlp"]["w_gate"], rtol=1e-6, atol=1e-7)
-    assert optax.global_norm(update) > 0
+    backend = _grug_scale_with_muon(use_kimi_scaling=False)
+    direction, _ = backend.update(grad, backend.init(param), param)
+    lr = config.lr_scheduler(100)(0)
+    axes = tuple(range(1, param.ndim)) if param.ndim > 2 else None
+    param_norm = jnp.sqrt(jnp.sum(param**2, axis=axes, keepdims=True))
+    direction_norm = jnp.sqrt(jnp.sum(direction**2, axis=axes, keepdims=True))
+    new_param = param - lr * direction * param_norm / jnp.maximum(direction_norm, 1e-10)
+    new_norm = jnp.sqrt(jnp.sum(new_param**2, axis=axes, keepdims=True))
+    expected = new_param / jnp.maximum(new_norm, 1e-10) * param_norm - param
+    np.testing.assert_array_equal(update["mlp"]["expert_mlp"]["w_gate"], expected)
