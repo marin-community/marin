@@ -210,7 +210,7 @@ def test_alpha_ramp_matches_core():
 
 
 def test_wanda_capture_shard_local_stats(mesh):
-    """The shard-local Wanda capture runs under shard_map and counts valid tokens."""
+    """The shard-local Wanda capture runs under shard_map and counts valid tokens.
 
     Operand shapes mirror the model's call: flattened tokens, per-token expert
     selections, and a 1-D validity mask, all sharded over the batch axes.
