@@ -848,6 +848,7 @@ def create_app(
                 raise _BadRequest("bucket_ms must be an integer") from err
             try:
                 overview = vllm_overview_query(
+                    target.name,
                     identity_field,
                     identity,
                     round(start.timestamp() * 1000),
@@ -857,7 +858,7 @@ def create_app(
                 aligned_start, aligned_end = _aligned_dataset_window(overview.start_ms, overview.end_ms)
                 if (aligned_start, aligned_end) != (overview.start_ms, overview.end_ms):
                     overview = vllm_overview_query(
-                        identity_field, identity, aligned_start, aligned_end, requested_bucket_ms
+                        target.name, identity_field, identity, aligned_start, aligned_end, requested_bucket_ms
                     )
             except ValueError as err:
                 raise _BadRequest(str(err)) from err

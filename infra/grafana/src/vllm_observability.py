@@ -64,6 +64,7 @@ class VllmOverviewQuery:
 
     sql: str
     samples_sql: str
+    own_cluster: str
     identity_field: VllmIdentityField
     identity: str
     start_ms: int
@@ -132,13 +133,21 @@ def sql_values(values: tuple[str, ...]) -> str:
 
 
 def _vllm_samples_query(
-    identity_field: VllmIdentityField, identity: str, scan_start_ms: int, end_ms: int, names: tuple[str, ...]
+    own_cluster: str,
+    identity_field: VllmIdentityField,
+    identity: str,
+    scan_start_ms: int,
+    end_ms: int,
+    names: tuple[str, ...],
 ) -> str:
+    # A row its writer left without a cluster came from the queried server itself.
+    # Naming it after that server keeps a series whole once the server stamps its name.
+    origin_cluster = f"COALESCE(NULLIF(cluster, ''), {sql_string(own_cluster)})"
     identity_literal = sql_string(identity)
     metric_names = sql_values(names)
     return f"""
 WITH base AS (
-    SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+    SELECT {origin_cluster} AS origin_cluster,
            service, name, kind, value, resource_attributes_json, attributes_json, timestamp_ms, seq
     FROM "telemetry_v1.vllm"
     WHERE service = 'vllm'
@@ -146,7 +155,7 @@ WITH base AS (
       AND name IN ({metric_names})
       AND timestamp_ms >= {scan_start_ms} AND timestamp_ms < {end_ms}
     UNION ALL
-    SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+    SELECT {origin_cluster} AS origin_cluster,
            service, name, kind, value, resource_attributes_json, attributes_json, timestamp_ms, seq
     FROM "telemetry_v1.marinskyrl"
     WHERE service = 'marinskyrl'
@@ -189,13 +198,17 @@ def _histogram_source_mapping() -> tuple[tuple[str, str], ...]:
 
 
 def vllm_overview_query(
+    own_cluster: str,
     identity_field: VllmIdentityField,
     identity: str,
     start_ms: int,
     end_ms: int,
     requested_bucket_ms: int,
 ) -> VllmOverviewQuery:
-    """Render the fixed vLLM overview query after validating its safety bounds."""
+    """Render the fixed vLLM overview query after validating its safety bounds.
+
+    ``own_cluster`` names the queried Finelog server; rows without a cluster are its own.
+    """
     validate_value("identity", identity, max_length=VLLM_MAX_IDENTITY_LENGTH)
     bucket_ms = bounded_bucket_ms(
         start_ms,
@@ -218,7 +231,7 @@ def vllm_overview_query(
     histogram_component = _case_for(_histogram_component_mapping(), "name")
     histogram_source_family = _case_for(_histogram_source_mapping(), "name")
 
-    samples_sql = _vllm_samples_query(identity_field, identity, scan_start_ms, end_ms, _METRIC_NAMES)
+    samples_sql = _vllm_samples_query(own_cluster, identity_field, identity, scan_start_ms, end_ms, _METRIC_NAMES)
     # Retain the whole leading coherence interval and one predecessor per
     # series. Older points can affect neither an in-window delta nor freshness.
     coherence_start_ms = start_ms - start_ms % VLLM_HISTOGRAM_COHERENCE_MS
@@ -1128,6 +1141,7 @@ LIMIT {VLLM_MAX_RESULT_ROWS + 1}
     return VllmOverviewQuery(
         sql=sql,
         samples_sql=samples_sql,
+        own_cluster=own_cluster,
         identity_field=identity_field,
         identity=identity,
         start_ms=start_ms,
@@ -1176,6 +1190,7 @@ def vllm_overview_table(
 def vllm_run_summary_samples_query(overview: VllmOverviewQuery) -> str:
     """Keep the detail scan bounds and caps while selecting fewer metric names."""
     return _vllm_samples_query(
+        overview.own_cluster,
         overview.identity_field,
         overview.identity,
         max(0, overview.start_ms - VLLM_SNAPSHOT_LOOKBACK_MS),
