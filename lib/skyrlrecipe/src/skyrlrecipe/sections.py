@@ -219,8 +219,8 @@ class Policy(Section):
     use_torch_compile: bool = field(False)
     record_memory: bool = field(False)
     nccl_buffer_size_bytes: PositiveInt | None = field(4194304)
-    """Use NCCL's standard 4-MiB SIMPLE buffer explicitly. Smaller buffers can corrupt NVLSTree reductions
-    in NCCL 2.30.7; null delegates buffer sizing to the process environment and NCCL config."""
+    """Pin the standard 4-MiB SIMPLE buffer before process-group initialization. Smaller buffers can corrupt NVLSTree
+    reductions in NCCL 2.30.7 (https://github.com/marin-community/marin/issues/11649)."""
     megatron_config: PolicyMegatronConfig = Field(default_factory=PolicyMegatronConfig)
 
 
@@ -279,8 +279,8 @@ class RefMegatronConfig(Section):
 
 class Ref(Section):
     nccl_buffer_size_bytes: PositiveInt | None = field(4194304)
-    """Use the standard 4-MiB SIMPLE buffer even when reference workers share a GPU. NCCL 2.30.7 can corrupt
-    NVLSTree reductions with smaller buffers; null delegates sizing to the process environment and NCCL config."""
+    """Keep the standard buffer even when reference workers share a GPU. Null delegates sizing to the process
+    environment and NCCL config."""
     model: RefModel = Field(default_factory=RefModel)
     sequence_parallel_size: int = field(1)
     megatron_config: RefMegatronConfig = Field(default_factory=RefMegatronConfig)

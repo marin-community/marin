@@ -1892,7 +1892,6 @@ class RayPPOTrainer:
         if (
             use_ref_model
             and cfg.trainer.strategy == "megatron"
-            and (cfg.trainer.placement.colocate_all or cfg.trainer.placement.colocate_policy_ref)
             and cfg.trainer.ref.nccl_buffer_size_bytes is not None
         ):
             ref_actor_env_vars = {NCCL_BUFFER_SIZE_ENV_VAR: str(cfg.trainer.ref.nccl_buffer_size_bytes)}

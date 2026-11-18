@@ -145,12 +145,12 @@ trainer:
     use_torch_compile: false
     record_memory: false
     # Pin the standard 4-MiB SIMPLE buffer before process-group initialization.
-    # Smaller buffers can corrupt NVLSTree reductions in NCCL 2.30.7 (#11649).
-    nccl_buffer_size_bytes: 4194304
+    # Smaller buffers can corrupt NVLSTree reductions in NCCL 2.30.7 (https://github.com/marin-community/marin/issues/11649).
+    nccl_buffer_size_bytes: &nccl_standard_buffer_bytes 4194304
   ref:
     # Keep the standard buffer even when reference workers share a GPU.
     # Null delegates sizing to the process environment and NCCL config.
-    nccl_buffer_size_bytes: 4194304
+    nccl_buffer_size_bytes: *nccl_standard_buffer_bytes
     model:
       path: ${trainer.policy.model.path}
       revision: ${trainer.policy.model.revision}
