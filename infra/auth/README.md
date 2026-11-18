@@ -718,19 +718,20 @@ for normal restricted agents to read CoreWeave objects. The local scripted ACP
 proof below consumes the injected credential without making a model call.
 
 For an authorized workload that can run a command, `infra.auth.client` obtains
-and rotates a private OIDC token file for the native SDK provider:
+and rotates a private Marin grant file used to authenticate SDK credential requests:
 
 ```bash
 uv run --package marin-auth python -m infra.auth.client \
   --auth-url "$AUTH_URL" --binding diagnostics --ca-bundle "$AUTH_CA_FILE" \
-  --token-file "$PRIVATE_RUNTIME_DIR/cw.jwt" -- your-command
+  --token-file "$PRIVATE_RUNTIME_DIR/cw.authorization" -- your-command
 ```
 
 The parent process reads `MARIN_GRANT_TOKEN`; the child receives the native
 container-provider file configuration. Use a new private token-file path. The
-fixed provider identity must fit entirely inside the grant, and its OIDC token
-must expire before the grant. Issuance therefore stops before grant completion
-when the remaining lifetime is shorter than the fixed OpenBao role TTL.
+fixed provider identity must fit entirely inside the grant. The broker keeps its
+OpenBao OIDC token private and returns native S3 keys whose expiry fits the
+grant’s current lease. Rigging supports private broker certificates through
+`--ca-bundle`; other SDK clients need a publicly trusted broker certificate.
 
 ## Reproduce the local proof and verify staging
 
