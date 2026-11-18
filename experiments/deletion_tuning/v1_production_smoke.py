@@ -40,6 +40,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.rl.deletion_tuning import read_mask_artifact
+from marin.training.training import TrainLmOnPodConfig
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.deletion_tuning.levanter_train import DeletionHFModel, run_deletion_train_lm
@@ -164,8 +165,6 @@ def run_production_smoke(output_root: Path | None = None) -> dict:
     spec = _smoke_spec(release)
     with tempfile.TemporaryDirectory(prefix="v1-production-smoke-") as tmp:
         output_path = Path(tmp) / "run"
-        from marin.training.training import TrainLmOnPodConfig
-
         pod_config = TrainLmOnPodConfig(
             output_path=str(output_path),
             resources=_gpu_resources(),
