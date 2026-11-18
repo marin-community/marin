@@ -17,6 +17,7 @@ from experiments.post_training.nccl_transport_probe import (
     gate_verdict,
     mapped_nccl_libraries,
     parse_nccl_census,
+    publish_gate_report,
     resolve_gloo_socket_ifname,
     worker_traceback,
 )
@@ -152,8 +153,16 @@ def test_worker_traceback_extracts_block_from_nccl_spam():
 
 
 def test_worker_traceback_absent_returns_empty():
-
     assert worker_traceback(["only NCCL INFO", "more INFO"]) == []
+
+
+def test_publish_gate_report_writes_task_specific_file(tmp_path):
+    """The full report is published under the prefix as one attempt/task file."""
+    prefix = str(tmp_path / "evidence")
+    uri = publish_gate_report(prefix, "42", 1, '{"verdict": "pass"}')
+    published = tmp_path / "evidence" / "attempt-42" / "gate-results-task1.json"
+    assert uri == str(published)
+    assert published.read_text() == '{"verdict": "pass"}'
 
 
 def test_all_to_all_single_succeeds_with_non_power_of_two_ranks(tmp_path):

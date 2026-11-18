@@ -62,6 +62,7 @@ from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import EndpointAccess
+from rigging.filesystem.factory import open_url
 from rigging.network import interface_for_ipv4
 
 logger = logging.getLogger("nccl_transport_probe")
@@ -534,6 +535,19 @@ def run_gate(args: argparse.Namespace) -> None:
     # Persist alongside stdout: the pod-local copy is the durable evidence for
     # an offline postmortem when the task exits nonzero.
     (RESULT_DIR / f"gate-results-task{task_index}.json").write_text(report_json)
+    if args.gate_report_prefix:
+        # The pod-local copy is deleted with the terminal pod; publish to the
+        # regional evidence prefix before the nonzero exit. A publish failure
+        # is reported loudly but never changes the verdict.
+        try:
+            report_uri = publish_gate_report(args.gate_report_prefix, job_info.attempt_id, task_index, report_json)
+            logger.info("gate: published report to %s", report_uri)
+        except Exception as publish_error:
+            print(
+                f"gate: report publish under {args.gate_report_prefix} failed: "
+                f"{type(publish_error).__name__}: {publish_error}",
+                file=sys.stderr,
+            )
     if verdict != "pass":
         for result in results:
             for rank in result["ranks"]:
@@ -542,6 +556,19 @@ def run_gate(args: argparse.Namespace) -> None:
                 for line in rank["error_tail"]:
                     print(line, file=sys.stderr)
         raise SystemExit(f"gate: interconnect check failed ({verdict}); refusing to start the trainer")
+
+
+def publish_gate_report(report_prefix: str, attempt_id: str, task_index: int, report_json: str) -> str:
+    """Publish the full gate report to the regional evidence prefix.
+
+    The pod-local copy is deleted with the terminal GPU pod, so the report is
+    written to the launch-provided prefix (``rendezvous_dir``/interconnect-gate)
+    before the task exits. Returns the published URI.
+    """
+    uri = f"{report_prefix.rstrip('/')}/attempt-{attempt_id}/gate-results-task{task_index}.json"
+    with open_url(uri, "wb") as report_file:
+        report_file.write(report_json.encode())
+    return uri
 
 
 def collect_ib_port_inventory() -> list[dict[str, str]]:
@@ -622,15 +649,17 @@ def run_pynccl_init_check(device) -> dict:
     try:
         import torch.distributed as dist  # noqa: PLC0415 - torch is an optional dependency
 
-        # Optional vLLM import: the probe runs in environments without it.
+        # Optional vLLM imports: the probe runs in environments without it.
+        from vllm import envs as vllm_envs  # noqa: PLC0415
         from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator  # noqa: PLC0415
 
         control_group = dist.new_group(backend="gloo")
         communicator = PyNcclCommunicator(group=control_group, device=device)
         if not communicator.available or communicator.disabled:
-            if os.environ.get("VLLM_DISABLE_PYNCCL"):
-                # The engine skips the PyNccl stage under this flag too, so
-                # there is no engine-side init for the gate to assert.
+            # The engine skips the PyNccl stage when its own parsed flag says
+            # so (vllm.envs, not string truthiness — "0" is not a disable);
+            # a recipe that disables it in the engine has nothing to assert.
+            if vllm_envs.VLLM_DISABLE_PYNCCL:
                 info["pynccl_init"] = "skipped"
                 return info
             info["pynccl_init"] = "failed"
@@ -640,6 +669,7 @@ def run_pynccl_init_check(device) -> dict:
             )
             return info
         info["pynccl_init"] = "pass"
+        info["vllm_disable_pynccl"] = vllm_envs.VLLM_DISABLE_PYNCCL
         info["nccl_library_version"] = communicator.nccl.ncclGetVersion()
         info["nccl_library_raw_version"] = communicator.nccl_version
         try:
@@ -759,6 +789,10 @@ def main() -> None:
         choices=("first-pair", "all-gpus"),
         default="first-pair",
         help="Gate mode: first-pair checks tasks 0+1 one GPU each; all-gpus joins every task with all local GPUs",
+    )
+    parser.add_argument(
+        "--gate-report-prefix",
+        help="Gate mode: regional evidence prefix (rendezvous_dir/interconnect-gate) for the full report JSON",
     )
     parser.add_argument(
         "--env",
