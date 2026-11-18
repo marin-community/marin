@@ -167,6 +167,19 @@ CONTROL_RUN = "belay-<X####>-control"
 
 
 @dataclass(frozen=True)
+class NodeCaps:
+    """The app's soft caps on nodes held by Belay runs, in two pools so speedruns never wait behind ladders."""
+
+    speedrun: int
+    """For runs on the speedrun Track."""
+    other: int
+    """For runs on every other Track (ladder rungs, vanilla, moe, studies)."""
+
+    def of(self, track: Track) -> int:
+        return self.speedrun if track is Track.SPEEDRUN else self.other
+
+
+@dataclass(frozen=True)
 class Baseline:
     """Everything about one Track's runs: where its code lives, the exact launch, the hardware and the rule."""
 

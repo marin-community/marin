@@ -111,7 +111,8 @@ A human then decides what happens. Never work around a refusal.
    - **If it refuses because of the priority grant** (a grant below the Track's band), or Iris refuses the band
      (`priority X not allowed for user Y`): run the escalate command it prints and stop. Never relaunch at a lower
      band yourself; a maintainer grants the band in Iris user budgets or re-queues without the grant.
-   - **If it prints `held:`:** the launch would pass the node cap (set on the admin page) or the idea's node grant.
+   - **If it prints `held:`:** the launch would pass its pool's node cap (speedrun, or every other Track; both set on
+     the admin page) or the idea's node grant.
      A ladder is checked as a whole, so its rungs launch together or not at all. Stop working on this idea; it stays
      approved, and a later session reruns this step. Running it again resumes where it stopped.
 
@@ -469,7 +470,7 @@ metric and rule. Nothing else spells out a launch.
 | Weekly base | Must contain `base_branch`. Production: `marin_belay_v1_recipe`. Demo: `marin_belay_v1_loomdemo` |
 | Registry branch | Demo: `marin_belay_v1_registry_demo`. The demo never touches `marin_belay_v1_registry` |
 | Runs | Seed 0; cluster, priority and nodes per Track (`B tracks`). An approver may grant an idea a higher Iris priority (`batch` < `interactive` < `production`); its runs then launch at that band in every stage and study run, and the band used is on each trial (`priority`) and in the spec's `launched:` commands. Analysis CPU jobs stay at `batch` |
-| Budget | A soft cap on nodes across all Belay runs, set on the admin page (default 8); a maintainer may grant one idea more nodes at approval. Sessions read both from the page and never change them |
+| Budget | Two soft caps on nodes held by Belay runs, set on the admin page (default 8 each): one for speedrun runs, one for every other Track's, so speedruns never wait behind ladders. A maintainer may grant one idea more nodes at approval. Sessions read these from the page and never change them |
 | Posts | The idea's thread on the Belay page's agent log. Nothing is posted on #9514: `sync` adds 👀 to a #9514 suggestion once a maintainer approves or declines it (only when an approver turns GitHub posting on); its result is on the public Status page |
 
 ## 10. Known limits

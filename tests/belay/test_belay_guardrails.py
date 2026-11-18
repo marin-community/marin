@@ -22,7 +22,7 @@ import yaml
 from rigging.auth import IapCredentialsUnavailable
 
 from experiments.belay import __main__ as belay_main
-from experiments.belay import page
+from experiments.belay import page, submit
 from experiments.belay.__main__ import (
     carried_ideas,
     idea_step,
@@ -59,7 +59,7 @@ from experiments.belay.code_change import (
     refuse_flag_off_change,
     refuse_outside_allowed,
 )
-from experiments.belay.config import CONFIG, PROJECTION_BASIS, TRACKS, WEEKLY_BRANCH, Track
+from experiments.belay.config import CONFIG, PROJECTION_BASIS, TRACKS, WEEKLY_BRANCH, NodeCaps, Track
 from experiments.belay.page import (
     Idea,
     PageState,
@@ -119,6 +119,7 @@ from experiments.grug.fast_track import belay_s7, belay_tracks
 
 MONDAY = datetime.date(2026, 11, 2)
 NODE_CAP = 8
+CAPS = NodeCaps(speedrun=NODE_CAP, other=NODE_CAP)
 SPEC = """experiment: X0001
 track: competitive-d512
 runs:
@@ -318,23 +319,23 @@ def test_launch_refused_from_a_dirty_or_unpushed_tree(repo: Path) -> None:
 def test_launch_refused_for_a_reused_run_name() -> None:
     jobs = [IrisJob("/u/belay-X0001-seed0-coord", "succeeded", "2026-11-01T00:00")]
     with pytest.raises(SystemExit, match="already ran"):
-        check_launch(parse_spec(SPEC), jobs, NODE_CAP)
+        check_launch(parse_spec(SPEC), jobs, CAPS)
 
 
 def test_launch_held_at_the_node_cap() -> None:
     jobs = [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(NODE_CAP - 1)]
     with pytest.raises(SystemExit, match="held"):
-        check_launch(parse_spec(SPEC), jobs, NODE_CAP)
-    check_launch(parse_spec(SPEC), jobs[:-1], NODE_CAP)  # two runs fit once one more node is free
+        check_launch(parse_spec(SPEC), jobs, CAPS)
+    check_launch(parse_spec(SPEC), jobs[:-1], CAPS)  # two runs fit once one more node is free
 
 
 def test_a_node_grant_lets_an_idea_past_the_cap_up_to_its_grant() -> None:
     full = [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(NODE_CAP)]
     with pytest.raises(SystemExit, match="soft cap"):
-        check_launch(parse_spec(SPEC), full, NODE_CAP)
-    check_launch(parse_spec(SPEC), full, NODE_CAP, grant=2)  # its two runs fit its grant
+        check_launch(parse_spec(SPEC), full, CAPS)
+    check_launch(parse_spec(SPEC), full, CAPS, grant=2)  # its two runs fit its grant
     with pytest.raises(SystemExit, match="node grant 1"):
-        check_launch(parse_spec(SPEC), full, NODE_CAP, grant=1)
+        check_launch(parse_spec(SPEC), full, CAPS, grant=1)
 
 
 def test_a_shared_control_is_not_launched_again_and_takes_no_node() -> None:
@@ -348,7 +349,7 @@ def test_a_shared_control_is_not_launched_again_and_takes_no_node() -> None:
     # The owner's control is running and the cap has room for exactly one more node: the variant alone fits.
     jobs = [IrisJob("/u/belay-X0001-control-coord", "running", "")]
     jobs += [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(NODE_CAP - 2)]
-    check_launch(spec, jobs, NODE_CAP)
+    check_launch(spec, jobs, CAPS)
 
 
 def test_score_na_marks_an_entry_with_no_potential_score() -> None:
@@ -754,7 +755,7 @@ def test_run_names_never_repeat_an_earlier_run() -> None:
     suffix = run_suffix("X0001", used)
     assert suffix == "-c"
     spec = parse_spec(new_spec_text("X0001", Track.SPEEDRUN, "v", [("--opt-set", "muonh_decay_power=0.5")], suffix))
-    check_launch(spec, used, NODE_CAP)  # no reused name
+    check_launch(spec, used, CAPS)  # no reused name
 
 
 @pytest.mark.parametrize("track", [t for t in Track if TRACKS[t].code == WEEKLY_BRANCH and TRACKS[t].launch])
@@ -999,16 +1000,16 @@ def test_a_ladder_is_held_whole_when_its_rungs_would_pass_the_node_cap() -> None
     rungs = list(LADDER_RUNGS)
     needed = sum(TRACKS[t].nodes for t in rungs)
     busy = [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(NODE_CAP - needed + 1)]
-    with pytest.raises(SystemExit, match="held: soft cap"):
-        check_ladder_launch(rungs, busy, NODE_CAP, None, "X0037")
-    check_ladder_launch(rungs, busy[:-1], NODE_CAP, None, "X0037")  # exactly fits
-    check_ladder_launch(rungs[1:], busy, NODE_CAP, None, "X0037")  # d512 already launched: only the rest must fit
+    with pytest.raises(SystemExit, match="held: non-speedrun soft cap"):
+        check_ladder_launch(rungs, busy, CAPS, None, "X0037")
+    check_ladder_launch(rungs, busy[:-1], CAPS, None, "X0037")  # exactly fits
+    check_ladder_launch(rungs[1:], busy, CAPS, None, "X0037")  # d512 already launched: only the rest must fit
 
 
 def test_a_node_grant_counts_every_rung_of_the_idea() -> None:
     running = [IrisJob(f"/u/belay-X0037d{n}-seed0-coord", "running", "") for n in (512, 768)]
     with pytest.raises(SystemExit, match="node grant 2 for X0037d1024"):
-        check_ladder_launch([Track.COMPETITIVE_D1024], running, 99, 2, "X0037d1024")
+        check_ladder_launch([Track.COMPETITIVE_D1024], running, NodeCaps(99, 99), 2, "X0037d1024")
 
 
 def test_the_admin_page_lists_the_newest_suggestions_by_people_newest_first() -> None:
@@ -1139,3 +1140,17 @@ def test_an_entrys_idea_is_the_one_still_in_play() -> None:
     assert page(speedrun, newer).idea_for("X0226") is newer  # none in play: the newest
     with pytest.raises(SystemExit, match="2 ideas in play"):
         page(ladder, dataclasses.replace(ladder, id=13)).idea_for("X0226")
+
+
+def test_speedruns_and_other_tracks_are_capped_in_separate_pools(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(submit, "RUNS_DIR", tmp_path)
+    speedrun = SPEC.replace("competitive-d512", "speedrun")
+    (tmp_path / "X0900.yaml").write_text(speedrun.replace("X0001", "X0900"))
+    ladder_full = [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(NODE_CAP)]  # no spec: other
+    check_launch(parse_spec(speedrun), ladder_full, CAPS)  # a full non-speedrun pool does not hold a speedrun
+    with pytest.raises(SystemExit, match="held: non-speedrun soft cap"):
+        check_launch(parse_spec(SPEC), ladder_full, CAPS)
+    speedruns_full = [IrisJob(f"/u/belay-X0900-r{i}-coord", "running", "") for i in range(NODE_CAP - 1)]
+    with pytest.raises(SystemExit, match="held: speedrun soft cap"):
+        check_launch(parse_spec(speedrun), speedruns_full, CAPS)
+    check_launch(parse_spec(SPEC), speedruns_full, CAPS)  # and full speedruns do not hold a ladder rung

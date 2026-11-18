@@ -25,7 +25,7 @@ import requests
 from marina.client import bearer_token
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, IapCredentialsUnavailable, IapServiceAccountTokenProvider
 
-from experiments.belay.config import CONFIG
+from experiments.belay.config import CONFIG, NodeCaps
 
 # The local preview's service token is a credential, so it comes from the environment (the local dispatcher sets
 # it for each session). Marina callers never use it.
@@ -115,7 +115,7 @@ class PageState:
     ideas: list[Idea]
     runs: list[PageRun]
     github_posting: bool
-    node_cap: int
+    node_caps: NodeCaps
     """The global soft cap on nodes held by Belay runs, set by a maintainer on the admin page."""
     expectations: list[Expectation]
     """Every launched run's expected finish, and its state once the watcher has seen it."""
@@ -250,7 +250,7 @@ def page_state() -> PageState:
         ideas=[Idea(**_fields(Idea, i)) for i in state["ideas"]],
         runs=[PageRun(**_fields(PageRun, r)) for r in state["runs"]],
         github_posting=state["settings"]["github_posting"],
-        node_cap=state["settings"]["node_cap"],
+        node_caps=NodeCaps(state["settings"]["speedrun_node_cap"], state["settings"]["node_cap"]),
         expectations=[Expectation(**_fields(Expectation, e)) for e in state["expectations"]],
         sessions=state["sessions"],
     )

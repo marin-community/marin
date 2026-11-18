@@ -707,7 +707,7 @@ def new_idea(
         return
     if ladder:  # all rungs or none: a rung launched alone would leave the idea planned with the rest never started
         waiting = [t for t in tracks if not spec_launched(repo, experiment_id(registry_id, t, ladder))]
-        check_ladder_launch(waiting, iris_jobs(), state.node_cap, idea.node_grant, registry_id)
+        check_ladder_launch(waiting, iris_jobs(), state.node_caps, idea.node_grant, registry_id)
     for track in tracks:
         plan_and_launch(
             Plan(repo, branch, idea, registry_id, track, experiment_id(registry_id, track, ladder), defaults_text),
@@ -741,7 +741,7 @@ def launch_sweep(
     if waiting:
         control = 0 if TRACKS[track].baseline_run or len(waiting) < len(members) else 1
         nodes = TRACKS[track].nodes * (len(waiting) + control)
-        refuse_over_cap(nodes, iris_jobs(), state.node_cap, idea.node_grant, registry_id)
+        refuse_over_cap(nodes, iris_jobs(), state.node_caps, idea.node_grant, registry_id, track)
     note = f"{defaults}; sweeps {sweep.name} over {', '.join(sweep.values)} against one shared control"
     for m in members:
         plan_and_launch(
@@ -808,8 +808,8 @@ def plan_and_launch(
         print(f"{experiment} already launched; nothing more to start")
         return
     commit = require_clean_pushed_head(repo, branch)
-    check_launch(spec, iris_jobs(), state.node_cap, idea.node_grant)
-    cap = f"node grant {idea.node_grant}" if idea.node_grant else f"node cap {state.node_cap}"
+    check_launch(spec, iris_jobs(), state.node_caps, idea.node_grant)
+    cap = f"node grant {idea.node_grant}" if idea.node_grant else f"node cap {state.node_caps.of(spec.track)}"
     launches = len(own_runs(list(spec.runs.values())))
     print(f"checks passed: {branch} at {commit[:10]}, track {spec.track}, {launches} run(s) fit the {cap}")
     entry = load_entry(registry_id) if not dry_run or idea.registry_id else {"name": name or registry_id}
@@ -944,7 +944,7 @@ def launch_stage(
     spec's ``launched`` and commit that. Returns the commands."""
     require_clean_pushed_head(repo, branch)
     stage = ExperimentSpec(spec.experiment, spec.track, {r.name: r for r in runs})
-    check_launch(stage, iris_jobs(), state.node_cap, node_grant(state, spec.experiment))
+    check_launch(stage, iris_jobs(), state.node_caps, node_grant(state, spec.experiment))
     band = granted_band(state, spec.experiment, spec.track)
     minutes = TRACKS[spec.track].expected_minutes
     commands = {}
@@ -1234,7 +1234,7 @@ def launch_study_runs(repo: Path, study: Study, runs: list[str], idea: Idea, sta
     names = [run_name(study.experiment, key) for key in runs]
     refuse_reused_names(names, jobs)
     nodes = sum(TRACKS[study.runs[key].track].nodes for key in runs)
-    refuse_over_cap(nodes, jobs, state.node_cap, idea.node_grant, study.experiment)
+    refuse_over_cap(nodes, jobs, state.node_caps, idea.node_grant, study.experiment, Track.CUSTOM)
     for key in runs:
         run = study.runs[key]
         refuse_run(study.experiment, run)
@@ -1657,7 +1657,7 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
     commit = "dry-run" if dry_run else require_clean_pushed_head(repo, branch)
     started = [r for r in new_spec.runs.values() if r.name in runs]
     started_spec = ExperimentSpec(new_spec.experiment, new_spec.track, {r.name: r for r in started})
-    check_launch(started_spec, jobs, nxt.state.node_cap, node_grant(nxt.state, registry_id))
+    check_launch(started_spec, jobs, nxt.state.node_caps, node_grant(nxt.state, registry_id))
     number = len([t for t in nxt.entry.get("trials") or [] if t.get("comment_url") == nxt.url]) + 1
     if stage is Stage.PROBE:
         pending = "Pending: a timing probe measures the variant's s/step."

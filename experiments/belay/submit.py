@@ -24,7 +24,7 @@ from pathlib import Path
 import yaml
 from iris.cluster.client.job_info import resolve_job_user
 
-from experiments.belay.config import CONFIG, PRIORITY_BANDS, TRACKS, Track
+from experiments.belay.config import CONFIG, PRIORITY_BANDS, TRACKS, NodeCaps, Track
 from experiments.grug.fast_track.launch import _parse_as
 from experiments.grug.fast_track.model import GrugModelConfig
 from experiments.grug.fast_track.optimizer import GrugMoeMuonHConfig
@@ -427,15 +427,19 @@ def job_started(job_id: str) -> bool:
     return tasks_started(out)
 
 
-def nodes_in_use(jobs: list[IrisJob], runs_dir: Path = RUNS_DIR) -> int:
-    """Nodes held by active Belay runs: each coordinator job counts its Track's nodes (1 without a spec here)."""
+def nodes_in_use(jobs: list[IrisJob], runs_dir: Path = RUNS_DIR, pool: Track | None = None) -> int:
+    """Nodes held by active Belay runs: each coordinator job counts its Track's nodes (1, outside the speedrun pool,
+    without a spec here). With ``pool``, only runs in that Track's cap pool (speedrun, or every other Track)."""
     total = 0
     for job in jobs:
         if job.job_id.count("/") != 2 or job.state not in ACTIVE_JOB_STATES:
             continue
         experiment = job.job_id.rsplit("/", 1)[1].removeprefix(RUN_PREFIX).split("-")[0]
         path = spec_path(experiment, runs_dir)
-        total += TRACKS[parse_spec(path.read_text()).track].nodes if path.exists() else 1
+        track = parse_spec(path.read_text()).track if path.exists() else None
+        if pool is not None and (track is Track.SPEEDRUN) != (pool is Track.SPEEDRUN):
+            continue
+        total += TRACKS[track].nodes if track is not None else 1
     return total
 
 
@@ -455,16 +459,21 @@ def idea_jobs(jobs: list[IrisJob], registry_id: str) -> list[IrisJob]:
     return out
 
 
-def refuse_over_cap(needed: int, jobs: list[IrisJob], cap: int, grant: int | None, experiment: str) -> None:
-    """Hold a launch past the node cap: the global ``cap`` over every Belay run, or for an idea with a maintainer's
-    ``grant``, the grant over that idea's own runs (every rung of a ladder)."""
+def refuse_over_cap(
+    needed: int, jobs: list[IrisJob], caps: NodeCaps, grant: int | None, experiment: str, track: Track
+) -> None:
+    """Hold a launch past the node cap: the cap of ``track``'s pool (speedrun, or every other Track) over the Belay
+    runs in that pool, or for an idea with a maintainer's ``grant``, the grant over that idea's own runs (every rung
+    of a ladder)."""
     if grant is not None:
         own = nodes_in_use(idea_jobs(jobs, registry_of(experiment)))
         if own + needed <= grant:
             return
         limit, in_use = f"node grant {grant} for {experiment}", own
     else:
-        limit, in_use = f"soft cap {cap} nodes", nodes_in_use(jobs)
+        cap = caps.of(track)
+        pool = "speedrun" if track is Track.SPEEDRUN else "non-speedrun"
+        limit, in_use = f"{pool} soft cap {cap} nodes", nodes_in_use(jobs, RUNS_DIR, pool=track)
         if in_use + needed <= cap:
             return
     raise SystemExit(
@@ -473,10 +482,13 @@ def refuse_over_cap(needed: int, jobs: list[IrisJob], cap: int, grant: int | Non
     )
 
 
-def check_ladder_launch(tracks: list[Track], jobs: list[IrisJob], cap: int, grant: int | None, registry_id: str) -> None:
+def check_ladder_launch(
+    tracks: list[Track], jobs: list[IrisJob], caps: NodeCaps, grant: int | None, registry_id: str
+) -> None:
     """Hold a ladder before any rung launches when its rungs not yet launched (``tracks``) would together pass the
     node cap or the idea's grant: a ladder's rungs launch together, so the idea stays approved until all of them fit."""
-    refuse_over_cap(sum(TRACKS[t].nodes for t in tracks), jobs, cap, grant, registry_id)
+    if tracks:
+        refuse_over_cap(sum(TRACKS[t].nodes for t in tracks), jobs, caps, grant, registry_id, tracks[0])
 
 
 def track_command(
@@ -554,15 +566,15 @@ def with_launched(text: str, launched: dict[str, list[str]]) -> str:
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=120)
 
 
-def check_launch(spec: ExperimentSpec, jobs: list[IrisJob], cap: int, grant: int | None = None) -> None:
-    """Refuse a spec whose Track has no launch recipe or that reuses a run name; hold one that would pass the node
-    cap (``cap``, from the app) or the idea's node ``grant``."""
+def check_launch(spec: ExperimentSpec, jobs: list[IrisJob], caps: NodeCaps, grant: int | None = None) -> None:
+    """Refuse a spec whose Track has no launch recipe or that reuses a run name; hold one that would pass its pool's
+    node cap (``caps``, from the app) or the idea's node ``grant``."""
     baseline = TRACKS[spec.track]
     if baseline.launch is None:
         raise SystemExit(f"refusing: track {spec.track} has no launch recipe; a maintainer runs it")
     own = own_runs(list(spec.runs.values()))
     refuse_reused_names([run_name(spec.experiment, r.name) for r in own], jobs)
-    refuse_over_cap(baseline.nodes * len(own), jobs, cap, grant, spec.experiment)
+    refuse_over_cap(baseline.nodes * len(own), jobs, caps, grant, spec.experiment, spec.track)
 
 
 def settings_of(flags: tuple[str, ...]) -> dict[str, str]:
