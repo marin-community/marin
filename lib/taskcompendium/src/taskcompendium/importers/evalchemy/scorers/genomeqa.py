@@ -21,7 +21,7 @@ _LETTER = re.compile(r"(?<!\w)([A-Z])(?!\w)")
 
 def grade_genomeqa(expected: str, options: str, cell_weight: float, response: str, stop_reason: str) -> Reward:
     selected = response
-    failure = "truncation" if stop_reason == "length" else "refusal" if stop_reason == "content_filter" else None
+    failure = "refusal" if stop_reason == "content_filter" else None
     # An unterminated explicit thinking block contains no usable final answer.
     if any(
         selected.rfind(start) > selected.rfind(end)
@@ -47,6 +47,8 @@ def grade_genomeqa(expected: str, options: str, cell_weight: float, response: st
                 failure = "invalid_option"
             else:
                 answer = candidate
+    if not answer and stop_reason == "length":
+        failure = "truncation"
     correct = float(failure is None and answer == expected)
     return scored(
         correct,
@@ -54,7 +56,7 @@ def grade_genomeqa(expected: str, options: str, cell_weight: float, response: st
             "accuracy": correct,
             MACRO_METRIC: correct,
             "unanswered": float(not answer),
-            "truncation": float(failure == "truncation"),
+            "truncation": float(stop_reason == "length"),
             "refusal": float(failure == "refusal"),
             "parse_failure": float(failure in {"missing_answer", "conflicting_answers", "invalid_option"}),
         },

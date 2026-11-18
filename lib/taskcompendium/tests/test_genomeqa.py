@@ -36,7 +36,7 @@ def completion(content, *, reasoning=None, finish="stop", refusal=None):
         (completion("### Analysis\nA is plausible.\n### Answer\nAnswer: B"), "AB", "B", None),
         (completion("Answer: B", reasoning="Answer: A"), "ABCD", "B", None),
         (completion(None, reasoning="### Answer\nAnswer: B"), "ABCD", "", "missing_answer"),
-        (completion("### Answer\nAnswer: B", finish="length"), "ABCD", "", "truncation"),
+        (completion(None, reasoning="Answer: B", finish="length"), "ABCD", "", "truncation"),
         (completion("", finish="stop"), "ABCD", "", "missing_answer"),
         (completion(None, refusal="No answer"), "ABCD", "", "missing_answer"),
         ("<think>Answer: A</think>\n### Answer\n**B**", "AB", "B", None),
@@ -122,9 +122,10 @@ def test_source_conversion_preserves_question_and_private_grading_inputs(tmp_pat
     assert source.genomeqa_item(task).groups == {"subtask": "6_motif", "format": "binary", "cell": "6_motif/binary"}
 
 
-def test_stop_reason_reaches_source_grader():
-    verdict = score("genomeqa", {"expected": "B", "options": "AB", "cell_weight": 1}, "Answer: B", stop_reason="length")
-    assert verdict.reward == 0
+def test_final_answer_at_length_limit_is_graded_and_flagged(monkeypatch):
+    monkeypatch.setenv("TASKCOMPENDIUM_STOP_REASON", "length")
+    verdict = score("genomeqa", {"expected": "B", "options": "AB", "cell_weight": 1}, "Answer: B")
+    assert verdict.reward == 1
     assert verdict.detail["metrics"]["truncation"] == 1
 
 

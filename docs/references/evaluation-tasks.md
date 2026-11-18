@@ -315,7 +315,8 @@ fit. A result with any excluded or missing row is not a full GenomeQA result.
 
 The grader uses final content only, removes completed thinking blocks, and reads
 the last `### Answer` section or explicit `Answer:` declarations. Missing,
-conflicting, invalid, and length-limited answers receive zero. The `content_filter`
+conflicting, and invalid answers receive zero. At the output limit, the grader
+scores the available final answer and records a truncation. The `content_filter`
 stop reason is classified as refusal. The shared `final_only` selector returns
 the final content without falling back to reasoning; the original message remains
 in the raw attempt archive.
