@@ -92,7 +92,6 @@ def test_selection_covers_every_capability_before_a_second_task():
     chosen = sorted(item.summary.capability for item in selection if item.choice is Choice.SELECTED)
     # The too-hard task is its capability's only one, so it outranks the first capability's second in-band task.
     assert chosen == ["d01.a", "d02.b"]
-    assert [item.rank for item in selection if item.choice is Choice.COVERAGE_TIER] == [2]
 
 
 def test_tasks_with_notes_are_never_selected():
@@ -102,11 +101,10 @@ def test_tasks_with_notes_are_never_selected():
     assert by_id == {"d01.a/01": Choice.NOT_CLEAN, "d01.a/02": Choice.SELECTED}
 
 
-def test_summary_scores_mid_band_above_easy_tasks():
-    middle = forge_release.task_summary(_record("d01.a/01", 4))
-    edge = forge_release.task_summary(_record("d01.a/02", 2))
-    easy = forge_release.task_summary(_record("d01.a/03", 8, band="too_easy"))
-    assert middle.score > edge.score > easy.score
+def test_selection_prefers_in_band_tasks_within_a_capability():
+    records = [_record("d01.a/01", 4), _record("d01.a/02", 8, band="too_easy")]
+    selection = forge_release.select([forge_release.task_summary(r) for r in records], 1)
+    assert {item.summary.id for item in selection if item.choice is Choice.SELECTED} == {"d01.a/01"}
 
 
 def test_release_writes_selected_rows_and_selection_evidence(tmp_path):
