@@ -1,10 +1,11 @@
-# SFT and RL data mixes
+# SFT data mixes
 
-A training mix is [`mixture()`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/experiment/data.py)
+An SFT mix is [`mixture()`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/experiment/data.py)
 over versioned artifact handles. Every component carries a `name@version` identity
 and a fingerprint, so the exact mix of a run is recoverable from its
 `.artifact.json` record. This page defines the three layers of a mix (source,
-variant, mix) and the recovery procedure.
+variant, mix) and the recovery procedure. RL task sets are versioned through the
+Atlas registry ([RL Data Atlas](rl-data-atlas.md)) and are out of scope here.
 
 ## Source
 
@@ -18,9 +19,10 @@ chat), `rendered` (Marin chat template), and `normalized` (deduplicated text).
 is the registry row for text and pretraining sources; its `normalize_steps` chain
 ends at the normalized output that downstream steps tokenize.
 
-RL rollout pools draw from the same versioned chains;
+Rollout-transcript corpora in
 [`experiments/rollout_data/`](https://github.com/marin-community/marin/tree/main/experiments/rollout_data)
-builds rollout artifact steps from the datakit download steps.
+are ordinary tokenized sources: pre-recorded transcripts used like SFT or
+midtraining text. They follow the same rules.
 
 ## Filtered or repaired variant
 
