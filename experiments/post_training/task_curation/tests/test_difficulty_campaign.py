@@ -23,10 +23,6 @@ from taskcompendium.models import TaskSpec
 from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation import difficulty_campaign
-from experiments.post_training.task_curation.difficulty_campaign import (
-    RELAY_PROBE_ATTEMPTS,
-    probe_with_relay_retries,
-)
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_sampling import sampling_settings
@@ -295,30 +291,15 @@ def test_every_judge_tier_carries_an_immutable_checkpoint_pin():
         assert len(definition.model_revision) >= 40, f"{tier.value} pins a shortened revision"
 
 
-def test_relay_probe_retries_drain_timeouts(monkeypatch):
-    """The shared relay queues probes behind hosted traffic; timeouts retry (hosted-v13c)."""
-    attempts = []
+def test_hosted_relay_liveness_fails_fast_and_reports_the_relay_job(monkeypatch):
+    def dead_post(self, url, **kwargs):
+        raise httpx.ConnectError("connection refused")
 
-    def flaky_probe(solver, endpoint, api_model, api_key, settings):
-        attempts.append(len(attempts) + 1)
-        if len(attempts) < RELAY_PROBE_ATTEMPTS:
-            raise httpx.ReadTimeout("relay busy")
-        return {"tools_thinking_probe": {"completion": {"system_fingerprint": "pin"}}}
-
-    monkeypatch.setattr(difficulty_campaign, "probe_endpoint", flaky_probe)
-    probe = probe_with_relay_retries(Solver.HOSTED, "https://relay", "model", "key", object())
-    assert len(attempts) == RELAY_PROBE_ATTEMPTS
-    assert probe["tools_thinking_probe"]["completion"]["system_fingerprint"] == "pin"
-
-
-def test_relay_probe_raises_after_the_final_timeout(monkeypatch):
-    attempts = []
-
-    def always_timeout(solver, endpoint, api_model, api_key, settings):
-        attempts.append(len(attempts) + 1)
-        raise httpx.ReadTimeout("relay busy")
-
-    monkeypatch.setattr(difficulty_campaign, "probe_endpoint", always_timeout)
-    with pytest.raises(httpx.ReadTimeout):
-        probe_with_relay_retries(Solver.HOSTED, "https://relay", "model", "key", object())
-    assert len(attempts) == RELAY_PROBE_ATTEMPTS
+    monkeypatch.setattr(httpx.Client, "post", dead_post)
+    monkeypatch.setattr(difficulty_campaign, "resolve_glm_base_url", lambda job: "https://relay.fixture/v1")
+    monkeypatch.setattr(difficulty_campaign, "require_secret", lambda name: "fixture-key")
+    try:
+        with difficulty_campaign.solver_endpoint(Solver.HOSTED, sampling_settings(Solver.HOSTED, []), 0):
+            raise AssertionError("The dead relay must fail the endpoint context")
+    except RuntimeError as error:
+        assert "liveness" in str(error) and "glm53-relay" in str(error)

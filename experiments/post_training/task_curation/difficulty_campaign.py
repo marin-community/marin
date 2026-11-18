@@ -53,6 +53,29 @@ from experiments.post_training.task_curation.difficulty_serving_probe import (
 )
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, LocalJudgeEndpoint
 
+
+def hosted_relay_liveness(base_url: str, api_key: str) -> None:
+    """Fail in seconds when the hosted relay is dead, instead of a 30-minute probe timeout.
+
+    A relay job can sit in the running state with its serving pod deleted; the campaign's
+    serving probe would then hang for its full 1800-second window. One short chat
+    completion with a 60-second timeout separates a live relay from a dead one.
+    """
+    try:
+        with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=60) as client:
+            response = client.post(
+                base_url.rstrip("/") + "/chat/completions",
+                json={"model": GLM_MODEL, "messages": [{"role": "user", "content": "liveness"}], "max_tokens": 1},
+            )
+            response.raise_for_status()
+    except Exception as error:
+        raise RuntimeError(
+            f"The hosted relay at {base_url} ({GLM_RELAY_JOB}) did not answer a liveness completion "
+            f"within 60s: {type(error).__name__}: {str(error)[:160]}. The relay job may be in the running "
+            "state with its serving pod deleted - check `iris job describe` diagnostics before resubmitting."
+        ) from error
+
+
 LOGGER = logging.getLogger(__name__)
 # The scheduler preempts lower bands; a production campaign evicts interactive
 # peers such as the Snowball ablation roots. Every launch declares its band.
@@ -149,7 +172,9 @@ def worker_limits(root: Path) -> dict:
 @contextmanager
 def solver_endpoint(solver: Solver, settings: SamplingSettings, priority: int):
     if solver == Solver.HOSTED:
-        yield resolve_glm_base_url(GLM_RELAY_JOB), GLM_MODEL, require_secret(GLM_BULK_TOKEN_ENV), []
+        base_url = resolve_glm_base_url(GLM_RELAY_JOB)
+        hosted_relay_liveness(base_url, require_secret(GLM_BULK_TOKEN_ENV))
+        yield base_url, GLM_MODEL, require_secret(GLM_BULK_TOKEN_ENV), []
         return
     definition = serving_model(solver, settings.context_tokens)
     hardware = AcceleratorChoice(
