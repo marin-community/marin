@@ -94,7 +94,9 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     )
     monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(inputs))
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
-    monkeypatch.setenv("TOGETHER_API_KEY", "test-counterpart-key")
+    monkeypatch.setenv("TOGETHER_API_KEY", "unused-ambient-key")
+    counterpart_key = tmp_path / "counterpart-key"
+    counterpart_key.write_text("test-counterpart-key")
     token_content = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
     monkeypatch.setattr(
         "experiments.evaluation.micro210.AutoTokenizer.from_pretrained",
@@ -114,6 +116,7 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
             deps=step.deps,
         )
     )
+    config = replace(config, counterpart_api_key=(f"file:{counterpart_key}",))
     submitted = []
 
     @contextmanager

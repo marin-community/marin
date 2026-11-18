@@ -5,7 +5,6 @@
 
 import hashlib
 import json
-import os
 from dataclasses import asdict, dataclass, replace
 
 import click
@@ -35,6 +34,7 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import SecretSpec, resolve_secret_spec
 from transformers import AutoTokenizer
 
 from experiments.evaluation.micro210_policy import (
@@ -56,6 +56,7 @@ class Micro210Run:
     skyrl: SkyRLRunConfig
     evaluation: Micro210Evaluation
     canonical_launch_sha256: str
+    counterpart_api_key: SecretSpec
 
 
 def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
@@ -78,7 +79,7 @@ def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
 
 
 def run_micro210(config: Micro210Run) -> SkyRLRun:
-    counterpart_api_key = os.environ["TOGETHER_API_KEY"]
+    counterpart_api_key = resolve_secret_spec(config.counterpart_api_key).value
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
     validate_inputs(config.evaluation, PREPARED_INPUTS)
@@ -160,6 +161,7 @@ def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides)
             replace(run, launch_config_yaml=rendered),
             replace(binding, output_uri=context.output_path),
             hashlib.sha256(rendered.encode()).hexdigest(),
+            ("env:TOGETHER_API_KEY",),
         )
 
     return replace(step, run=run_micro210, build_config=build)
