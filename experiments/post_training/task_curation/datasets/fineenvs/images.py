@@ -102,7 +102,9 @@ def build_group(config: ImageConfig) -> GroupedInputImage:
         raise ValueError("FineEnvs qualification omits an exact native profile")
     for row in qualifications:
         result = pinned_json(row["result"]["uri"], row["result"]["sha256"])
-        if set(result["cells"]) != {
+        if result["profile"] != row["profile"] or result["image"] != BASE_IMAGE:
+            raise ValueError("FineEnvs qualification measured another native profile or base image")
+        if set(result["resolved_cells"]) != {
             "provider_profile",
             "memory",
             "storage",
@@ -110,7 +112,7 @@ def build_group(config: ImageConfig) -> GroupedInputImage:
             "network_allow",
             "metadata",
             "setup",
-        } or set(result["cells"].values()) != {"SUPPORTED"}:
+        } or set(result["resolved_cells"].values()) != {"SUPPORTED"}:
             raise ValueError("FineEnvs image build requires every native-profile cell to be supported")
     plan = pinned_json(config.plan_uri, config.plan_sha256)
     packages = pinned_json(config.packages_uri, config.packages_sha256)
