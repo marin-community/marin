@@ -175,7 +175,9 @@ async def test_driver_resume_rejects_a_different_model_or_selection(tmp_path, pu
 
 
 @pytest.mark.asyncio
-async def test_driver_resumes_partial_archive_after_request_concurrency_changes(tmp_path, published_corpora, run_config):
+async def test_driver_resumes_partial_archive_after_request_concurrency_and_task_evidence_change(
+    tmp_path, published_corpora, run_config
+):
     calls = 0
     recovered = False
 
@@ -197,7 +199,11 @@ async def test_driver_resumes_partial_archive_after_request_concurrency_changes(
     completed = successful[0]
     recovered = True
     await run_evaluation(
-        published_corpora, output, run_config.model_copy(update={"concurrency": 3}), model, machine_factories={}
+        published_corpora,
+        output,
+        run_config.model_copy(update={"concurrency": 3, "task_evidence": TaskEvidence.REFERENCE}),
+        model,
+        machine_factories={},
     )
     samples = list(ReadView(output).iter_rows(ARCHIVE_SAMPLES_TABLE))
     assert sum(row["grading"]["score"] == 1 for row in samples) == 8

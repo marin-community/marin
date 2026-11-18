@@ -17,6 +17,7 @@ from evalrecords.records import (
     PromptFormat,
     ResolvedEvaluationSelection,
     TaskEvidence,
+    scoring_settings,
 )
 from huggingface_hub import HfApi
 from marin.evaluation.model_config import ModelConfig
@@ -156,7 +157,7 @@ def record_ref_for(
         + canonical_sha256(
             {
                 "selection": selection.model_dump(mode="json"),
-                "settings": settings.model_dump(mode="json", exclude={"concurrency"}),
+                "settings": scoring_settings(settings.model_dump(mode="json")),
             }
         ),
         curated=CuratedRef(
