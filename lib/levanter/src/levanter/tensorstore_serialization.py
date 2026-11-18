@@ -1505,9 +1505,7 @@ def _serialize_arrays(
         context = _tensorstore_write_context(config, file_io_locking)
         jobs = _checkpoint_writes(arrays, tspecs, plans)
         # Each process chooses from its own share; both lock-file paths reach one metadata barrier.
-        use_waves = (
-            file_io_locking == "lockfile" and sum(job.num_bytes for job in jobs) > config.max_staged_host_bytes
-        )
+        use_waves = file_io_locking == "lockfile" and sum(job.num_bytes for job in jobs) > config.max_staged_host_bytes
         if use_waves:
             gate, commit_futures = _write_in_manifest_waves(
                 jobs, tspecs, config, checkpoint_dir, context, commit_order
