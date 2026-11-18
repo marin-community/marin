@@ -315,9 +315,10 @@ def recovered_source(
         if attempt.status == "scored" or (attempt.status == "blocked" and attempt.reason != MATH_VERIFIER_DEADLINE):
             terminal.add(attempt.task_id)
         if attempt.status == "blocked" and attempt.reason == MATH_VERIFIER_DEADLINE:
-            # Bare math_verifier_deadline blocks come from the pre-#11511 streak rule:
-            # comparison deadlines follow the reply, so those attempts are re-read as
-            # retryable infrastructure evidence instead of staying terminal.
+            # A bare deadline reason on a blocked attempt predates the phase tag:
+            # the comparison deadline that fired follows the reply, not the task, so
+            # the attempt is re-read as retryable infrastructure evidence instead of
+            # staying terminal.
             attempt = attempt.model_copy(update={"status": AttemptStatus.INFRASTRUCTURE})
         if attempt.status in {"infrastructure", "blocked"}:
             # Only reference-parse deadlines are a task property; they alone continue
