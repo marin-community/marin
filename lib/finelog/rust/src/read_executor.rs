@@ -1,35 +1,39 @@
 // Copyright The Marin Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Isolate read and maintenance workers, reserving CPUs on multicore Linux hosts.
+//! Isolate public reads, reserving CPUs on multicore Linux hosts.
 
 use std::future::Future;
 use std::io;
-use std::sync::OnceLock;
 
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::{JoinError, JoinSet};
 
 const READ_NICE: i32 = if cfg!(target_os = "linux") { 5 } else { 0 };
-// Maintenance readers can await nested blocking cache reads. CPU affinity,
-// rather than a tiny blocking pool, limits their CPU use without deadlocking I/O.
-const MAX_BLOCKING_THREADS: usize = 32;
 
-pub(crate) struct ReadExecutor {
-    runtime: Runtime,
+/// CPU-bounded workers owned by one public RPC server.
+pub struct ReadExecutor {
+    runtime: Option<Runtime>,
     cpus: Vec<usize>,
 }
 
 impl ReadExecutor {
-    fn new() -> io::Result<Self> {
+    /// Reserve half the process CPU budget from public read execution.
+    pub fn for_process() -> io::Result<Self> {
         let (available, parallelism) = process_capacity()?;
         let parallelism = parallelism.min(available.len());
         let count = (parallelism / 2).max(1);
         let cpus = available[available.len() - count..].to_vec();
+        Self::on_cpus(cpus)
+    }
+
+    fn on_cpus(cpus: Vec<usize>) -> io::Result<Self> {
+        let count = cpus.len();
         let worker_cpus = cpus.clone();
         let runtime = Builder::new_multi_thread()
             .worker_threads(count)
-            .max_blocking_threads(MAX_BLOCKING_THREADS)
+            // Keep Tokio's blocking capacity for nested cache I/O; affinity
+            // bounds CPU use on both async and blocking workers.
             .thread_name("finelog-read")
             .on_thread_start(move || {
                 restrict_read_thread(&worker_cpus).expect("configure read worker CPU affinity");
@@ -42,27 +46,40 @@ impl ReadExecutor {
             nice = READ_NICE,
             "read executor configured"
         );
-        Ok(Self { runtime, cpus })
+        Ok(Self {
+            runtime: Some(runtime),
+            cpus,
+        })
     }
 
+    /// CPU IDs selected for this executor's workers.
     pub fn cpus(&self) -> &[usize] {
         &self.cpus
     }
 
     /// Dropping the caller aborts its task instead of detaching an expired read.
-    pub async fn run<T: Send + 'static>(
+    pub(crate) async fn run<T: Send + 'static>(
         &self,
         work: impl Future<Output = T> + Send + 'static,
     ) -> Result<T, JoinError> {
         let mut tasks = JoinSet::new();
-        tasks.spawn_on(work, self.runtime.handle());
+        tasks.spawn_on(
+            work,
+            self.runtime.as_ref().expect("live read executor").handle(),
+        );
         tasks.join_next().await.expect("one read task was spawned")
     }
 }
 
-pub(crate) fn read_executor() -> &'static ReadExecutor {
-    static EXECUTOR: OnceLock<ReadExecutor> = OnceLock::new();
-    EXECUTOR.get_or_init(|| ReadExecutor::new().expect("create read executor"))
+impl Drop for ReadExecutor {
+    fn drop(&mut self) {
+        // Routers can release their last owner on a Tokio worker, where
+        // Runtime's blocking Drop is illegal.
+        self.runtime
+            .take()
+            .expect("live read executor")
+            .shutdown_background();
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -130,7 +147,7 @@ mod tests {
     #[tokio::test]
     async fn async_and_blocking_reads_leave_ingestion_cpus_available() {
         let ingress_cpus = cpu_affinity(0).unwrap();
-        let executor = read_executor();
+        let executor = ReadExecutor::for_process().unwrap();
         let (async_cpus, blocking_cpus) = executor
             .run(async {
                 let async_cpus = cpu_affinity(0).unwrap();
@@ -165,28 +182,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn writes_become_durable_while_all_read_workers_are_occupied() {
+    async fn blocked_query_dispatch_does_not_block_durable_writes() {
         let store = crate::server::test_support::disk_store("read_cpu_ingestion");
-        let (address, _) = crate::server::test_support::serve(
+        let cpu = *process_capacity().unwrap().0.last().unwrap();
+        let executor = Arc::new(ReadExecutor::on_cpus(vec![cpu]).unwrap());
+        let arrived = Arc::new(tokio::sync::Notify::new());
+        let observed = Arc::clone(&arrived);
+        let app = crate::server::build_app_with_config(
             Arc::clone(&store),
-            crate::server::AuthPolicy::allow_localhost(),
+            crate::server::ServerConfig::default(),
+            Arc::clone(&executor),
         )
-        .await;
-        let executor = read_executor();
-        let mut releases = Vec::new();
-        let mut reads = Vec::new();
-        for _ in executor.cpus() {
-            let (started, started_rx) = tokio::sync::oneshot::channel();
-            let (release, release_rx) = std::sync::mpsc::channel::<()>();
-            releases.push(release);
-            reads.push(tokio::spawn(executor.run(async move {
-                started.send(()).unwrap();
-                // Hold every async read worker to reproduce CPU-bound reads
-                // that cannot yield to a durability flush on a shared pool.
-                let _ = release_rx.recv();
-            })));
-            started_rx.await.unwrap();
-        }
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                let observed = Arc::clone(&observed);
+                async move {
+                    if request.uri().path().ends_with("/Query") {
+                        observed.notify_one();
+                    }
+                    next.run(request).await
+                }
+            },
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap()
+        });
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel::<()>();
+        let worker = Arc::clone(&executor);
+        let blocked = tokio::spawn(async move {
+            worker
+                .run(async move {
+                    started.send(()).unwrap();
+                    let _ = release_rx.recv();
+                })
+                .await
+                .unwrap()
+        });
+        started_rx.await.unwrap();
+        let mut query = tokio::spawn(async move {
+            crate::server::test_support::stats_client(address)
+                .query(crate::proto::finelog::stats::QueryRequest::default().with_sql("SELECT 1"))
+                .await
+        });
+        arrived.notified().await;
+        // The request has reached the server. It must remain queued for the
+        // occupied executor rather than execute on the ingestion runtime.
+        let queued = tokio::time::timeout(std::time::Duration::from_millis(200), &mut query).await;
         let client = crate::server::test_support::client(address);
         let write = tokio::time::timeout(
             std::time::Duration::from_secs(5),
@@ -200,14 +249,15 @@ mod tests {
             ),
         )
         .await;
-        drop(releases);
-        for read in reads {
-            read.await.unwrap().unwrap();
-        }
+        drop(release);
+        blocked.await.unwrap();
+        assert!(queued.is_err(), "Query bypassed the occupied read executor");
         write
             .expect("writes must not wait for a read worker")
             .unwrap();
         assert_eq!(store.namespace_persisted_seq("log").unwrap(), 1);
+        assert_eq!(query.await.unwrap().unwrap().view().row_count, Some(1));
+        server.abort();
         store.shutdown(std::time::Duration::from_secs(5)).await;
     }
 
@@ -215,11 +265,16 @@ mod tests {
     async fn cancelling_a_read_drops_its_work() {
         let (started, started_rx) = tokio::sync::oneshot::channel();
         let (dropped, dropped_rx) = tokio::sync::oneshot::channel::<()>();
-        let task = tokio::spawn(read_executor().run(async move {
-            let _dropped = dropped;
-            started.send(()).unwrap();
-            std::future::pending::<()>().await;
-        }));
+        let executor = ReadExecutor::for_process().unwrap();
+        let task = tokio::spawn(async move {
+            executor
+                .run(async move {
+                    let _dropped = dropped;
+                    started.send(()).unwrap();
+                    std::future::pending::<()>().await;
+                })
+                .await
+        });
         started_rx.await.unwrap();
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());

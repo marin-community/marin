@@ -64,19 +64,11 @@ column to every row; producers do not declare it, but SQL queries can select it.
 
 ## Diagnosing query latency
 
-Public Query and FetchLogs RPCs share an admission budget equal to half the
-available CPU count, rounded down with a minimum of one. Their per-method caps
-still apply. Reads run on a separate Tokio executor whose async and blocking
-workers use only that CPU set on Linux and run at lower scheduling priority.
-Background maintenance uses the same executor; scheduled durability flushes and
-ingestion retain the ordinary executor and blocking pool. Remote object-store
-HTTP requests and pooled connection drivers also stay on the ingestion executor,
-even when a read opens the connection. Ingestion can use all
-CPUs, including those excluded from reads. A single-CPU Linux deployment has separate
-workers and lower read priority but cannot reserve a separate CPU.
-`GET /api/server` exposes the selected CPU IDs as `readCpus`; startup logs report
-the read-worker count and priority. On other platforms, worker counts are
-bounded without CPU affinity or per-thread priority changes.
+Public Query and FetchLogs RPCs share one CPU-sized admission budget and a
+server-owned executor, restricted to half the CPUs at lower priority on Linux;
+`GET /api/server` reports its `readCpus` (single-CPU and non-Linux hosts cannot
+reserve separate CPUs). Ingestion, cloud HTTP I/O, scheduled flushes, and bounded
+maintenance retain the ordinary runtime, so queries cannot occupy their workers.
 
 Start with the server's stage timings when unrelated log and SQL requests slow
 down together. For the GCE hub:

@@ -19,6 +19,7 @@ use hyper_util::rt::TokioExecutor;
 
 use crate::proto::finelog::logging::LogServiceClient;
 use crate::proto::finelog::stats::StatsServiceClient;
+use crate::read_executor::ReadExecutor;
 use crate::server::auth::AuthPolicy;
 use crate::server::forwarding::forward_client_config;
 use crate::server::{build_app_with_config, ServerConfig};
@@ -142,21 +143,24 @@ pub fn stats_client(addr: SocketAddr) -> StatsServiceClient<TestTransport> {
 pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<RequestStats>) {
     let requests = Arc::new(RequestStats::default());
     let counted = Arc::clone(&requests);
-    let app = build_app_with_config(store, ServerConfig::default().with_auth(policy)).layer(
-        axum::middleware::from_fn(
-            move |req: axum::extract::Request, next: axum::middleware::Next| {
-                let counted = Arc::clone(&counted);
-                async move {
-                    let observed = counted.begin(&req);
-                    let response = next.run(req).await;
-                    if observed {
-                        counted.finish();
-                    }
-                    response
+    let app = build_app_with_config(
+        store,
+        ServerConfig::default().with_auth(policy),
+        Arc::new(ReadExecutor::for_process().unwrap()),
+    )
+    .layer(axum::middleware::from_fn(
+        move |req: axum::extract::Request, next: axum::middleware::Next| {
+            let counted = Arc::clone(&counted);
+            async move {
+                let observed = counted.begin(&req);
+                let response = next.run(req).await;
+                if observed {
+                    counted.finish();
                 }
-            },
-        ),
-    );
+                response
+            }
+        },
+    ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -185,35 +189,38 @@ pub async fn serve_with_outage(
     let outage = Arc::clone(&down);
     let requests = Arc::new(RequestStats::default());
     let counted = Arc::clone(&requests);
-    let app = build_app_with_config(store, ServerConfig::default().with_auth(policy)).layer(
-        axum::middleware::from_fn(
-            move |req: axum::extract::Request, next: axum::middleware::Next| {
-                let counted = Arc::clone(&counted);
-                let down = Arc::clone(&down);
-                async move {
-                    let observed = counted.begin(&req);
-                    let response = if down.load(Ordering::SeqCst) {
-                        let error = connectrpc::ConnectError::new(
-                            connectrpc::ErrorCode::Unavailable,
-                            "hub outage",
-                        );
-                        (
-                            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                            [(axum::http::header::CONTENT_TYPE, "application/json")],
-                            error.to_json(),
-                        )
-                            .into_response()
-                    } else {
-                        next.run(req).await
-                    };
-                    if observed {
-                        counted.finish();
-                    }
-                    response
+    let app = build_app_with_config(
+        store,
+        ServerConfig::default().with_auth(policy),
+        Arc::new(ReadExecutor::for_process().unwrap()),
+    )
+    .layer(axum::middleware::from_fn(
+        move |req: axum::extract::Request, next: axum::middleware::Next| {
+            let counted = Arc::clone(&counted);
+            let down = Arc::clone(&down);
+            async move {
+                let observed = counted.begin(&req);
+                let response = if down.load(Ordering::SeqCst) {
+                    let error = connectrpc::ConnectError::new(
+                        connectrpc::ErrorCode::Unavailable,
+                        "hub outage",
+                    );
+                    (
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        error.to_json(),
+                    )
+                        .into_response()
+                } else {
+                    next.run(req).await
+                };
+                if observed {
+                    counted.finish();
                 }
-            },
-        ),
-    );
+                response
+            }
+        },
+    ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {

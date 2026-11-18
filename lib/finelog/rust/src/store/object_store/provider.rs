@@ -52,19 +52,12 @@ impl Provider {
         }
         if let Some(rest) = value.strip_prefix(S3_SCHEME) {
             let (bucket, prefix) = split_bucket_and_prefix(rest);
-            let backend = object_store::aws::AmazonS3Builder::from_env()
-                .with_bucket_name(bucket)
-                .with_http_connector(ingestion_connector()?)
-                .build()
-                .map_err(|error| {
-                    StatsError::Internal(format!("build s3 store {bucket:?}: {error}"))
-                })?;
-            return Ok(Some(Self {
-                backend: Arc::new(backend),
-                prefix: prefix.to_string(),
-                local_root: None,
-                base_url: Some(format!("{S3_SCHEME}{bucket}")),
-            }));
+            return Self::from_s3(
+                object_store::aws::AmazonS3Builder::from_env(),
+                bucket,
+                prefix,
+            )
+            .map(Some);
         }
 
         std::fs::create_dir_all(value)
@@ -81,6 +74,24 @@ impl Provider {
             local_root: Some(local_root),
             base_url: None,
         }))
+    }
+
+    fn from_s3(
+        builder: object_store::aws::AmazonS3Builder,
+        bucket: &str,
+        prefix: &str,
+    ) -> Result<Self, StatsError> {
+        let backend = builder
+            .with_bucket_name(bucket)
+            .with_http_connector(ingestion_connector()?)
+            .build()
+            .map_err(|error| StatsError::Internal(format!("build s3 store {bucket:?}: {error}")))?;
+        Ok(Self {
+            backend: Arc::new(backend),
+            prefix: prefix.to_string(),
+            local_root: None,
+            base_url: Some(format!("{S3_SCHEME}{bucket}")),
+        })
     }
 
     pub(super) fn backend(&self) -> &Arc<dyn BackendObjectStore> {
@@ -310,17 +321,17 @@ mod tests {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let endpoint = format!("http://{}", listener.local_addr().unwrap());
             let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-            let backend = Arc::new(
+            let provider = Provider::from_s3(
                 object_store::aws::AmazonS3Builder::new()
-                    .with_bucket_name("bucket")
                     .with_region("test")
                     .with_endpoint(endpoint)
                     .with_allow_http(true)
-                    .with_skip_signature(true)
-                    .with_http_connector(ingestion_connector().unwrap())
-                    .build()
-                    .unwrap(),
-            );
+                    .with_skip_signature(true),
+                "bucket",
+                "",
+            )
+            .unwrap();
+            let backend = Arc::clone(provider.backend());
             let reader = Arc::clone(&backend);
             reads
                 .spawn(async move {

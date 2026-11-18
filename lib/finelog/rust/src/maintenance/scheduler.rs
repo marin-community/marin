@@ -24,7 +24,6 @@ use crate::maintenance::{
     MaintenanceLimits, LAYOUT_MIGRATION_RETRY_INTERVAL, MAX_POLL_INTERVAL, MIN_FLUSH_INTERVAL,
     MIN_POLL_INTERVAL,
 };
-use crate::read_executor::read_executor;
 use crate::store::store::ServeMode;
 use crate::store::table::{MaintenanceClass, TableManager, TableRuntime, TableWork, WorkOutcome};
 
@@ -270,20 +269,7 @@ impl MaintenanceScheduler {
                         WorkOutcome::Complete
                     }
                     ScheduledWork::Maintenance(queue) => {
-                        let maintenance_tables = Arc::clone(&tables);
-                        let maintenance_runtime = Arc::clone(&runtime);
-                        match read_executor()
-                            .run(async move {
-                                run_maintenance_cycle(&maintenance_tables, &limits, &maintenance_runtime, queue).await
-                            })
-                            .await
-                        {
-                            Ok(outcome) => outcome,
-                            Err(error) => {
-                                tracing::warn!(namespace = %runtime.name(), %error, "maintenance task failed");
-                                WorkOutcome::Complete
-                            }
-                        }
+                        run_maintenance_cycle(&tables, &limits, &runtime, queue).await
                     }
                 };
                 if let Some(entry) = cadence.lock().unwrap().get_mut(&table) {
