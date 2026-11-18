@@ -11,6 +11,8 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.curation import SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import EVIDENCE_PATH
 from taskcompendium.grader import grader_config
@@ -24,18 +26,15 @@ from taskcompendium.models import (
     VerifyitGrader,
 )
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, IntendedUse
-from taskcompendium.pipeline.sources import SourceFormat
-from taskcompendium.pipeline.sources import SourceShard, staged_raw_file_rows
+from taskcompendium.pipeline.sources import SourceFormat, SourceShard, staged_raw_file_rows
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
 
 from experiments.post_training.task_curation.datasets.skyrl import code, ifeval, math, mcq, preference
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
-from experiments.post_training.task_curation.source import SourceInfo
-from finestore.rl.curation import SourceOrigin
-from finestore.rl.status_taxonomy import DataRestriction
 from experiments.post_training.task_curation.pipeline import CurationRecipe, source_files
+from experiments.post_training.task_curation.source import SourceInfo
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
