@@ -406,7 +406,7 @@ KDA_BETA_LR_MULT = 2.0
 """MuonH LR multiple of the ``kda_beta`` group (the KDA write-strength projection)."""
 _ADAM_LEAVES = re.compile(
     r"(?:^|\.)(value_embed|ve_lambda|ve_gate|head_ve_lambda|head_ve_gate|head_ve_gain|qk_mult"
-    r"|pointer_w|pointer_b|pointer_open)$"
+    r"|pointer_w|pointer_b|pointer_open|ngram_cache_w|ngram_cache_b|ngram_cache_open)$"
 )
 # ``full_bandwidth_passes``' zero-initialised W_fuse: plain Muon at the MuonH LR (a hyperball step keeps a zero matrix at
 # zero), in its own group present only when the model has it.
@@ -630,7 +630,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if "attn_res_query" in path_lower:
                 return "attn_res_query"
             # Inkling rel-pos weights; value embeddings and their mixing weights; small per-layer gates; the pointer
-            # mixture's weights (zero-initialised).
+            # and n-gram cache mixtures' weights (zero-initialised).
             if ".rel_pos." in path_lower or _ADAM_LEAVES.search(path_lower):
                 return "adam"
             if _TOKEN_EMBED.search(path_lower) and self.embed_lr_mult is not None:

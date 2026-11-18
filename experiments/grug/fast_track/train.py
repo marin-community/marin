@@ -884,6 +884,9 @@ def _loss_and_grads(
     """With ``lm_head_grad_probe_site`` the metrics also hold ``_lm_head_grad_metrics``: the per-token norms come
     back as the gradients of zeros probes (``model.lm_head_grad_probe``) differentiated next to the params."""
 
+    # Integer work on the token ids: computed once here, outside value_and_grad and any remat region.
+    ngram_counts = params.ngram_cache_counts(batch.tokens, batch.attn_mask)
+
     def loss_fn(model, probes):
         compute_params = _cast_to_compute(mp, model)
         skip = _layer_skip_mask(layer_skip, batch.tokens, batch.attn_mask)
@@ -899,6 +902,7 @@ def _loss_and_grads(
             extra_mlp_active=extra_mlp_active,
             head_grad_probe=probes.get(GradProbeSite.POST_NORM),
             pre_norm_grad_probe=probes.get(GradProbeSite.PRE_NORM),
+            ngram_counts=ngram_counts,
         )
         if skip is not None:
             metrics = {**metrics, "train/aux/layer_skip_frac": jnp.mean(1.0 - skip.keep.astype(jnp.float32))}

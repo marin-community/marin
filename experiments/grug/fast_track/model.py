@@ -53,6 +53,12 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 from experiments.grug.fast_track.cplm import CopyHead, bound_case_tables, plus_nll
 from experiments.grug.fast_track.key_offset import partial_key_offset
+from experiments.grug.fast_track.ngram_cache import (
+    NgramCacheHead,
+    NgramCounts,
+    document_ngram_counts,
+    ngram_cache_mixture_nll,
+)
 from experiments.grug.fast_track.pointer import PointerHead, pointer_candidates, pointer_mixture_nll
 from experiments.grug.fast_track.qb_balancing import qb_beta_hist, qb_beta_hist_pooled
 from experiments.grug.fast_track.router_metrics import (
@@ -494,6 +500,13 @@ class GrugModelConfig:
     KDA state and routing; the QB bias is fitted once per batch from every pass's routing margins. Training loss:
     pass 1's CE plus the mean CE of the later passes; evaluation scores the last pass. 0: off (one pass); else >= 2.
     Excludes ``cplm_plus`` and ``pointer_mixture``."""
+    ngram_cache_mixture: bool = False
+    """Document n-gram count cache on the output (``ngram_cache.py``): each position mixes the vocabulary softmax
+    with the next-token distributions of its earlier unigram and bigram context matches in its document, gated by
+    ``h . w_n`` and the match counts, trained and evaluated on the mixture loss. The counts are computed from the
+    token ids before the train step's ``value_and_grad``. Its zero-initialised ``w`` ``[D, 2]``, ``b`` ``[2]`` and
+    ``o`` are on Adam without decay. Excludes ``cplm_plus``, ``lm_head_bilinear``, ``pointer_mixture`` and
+    ``full_bandwidth_passes``."""
 
     def __post_init__(self) -> None:
         if self.full_bandwidth_passes and (self.full_bandwidth_passes < 2 or self.cplm_plus or self.pointer_mixture):
@@ -510,6 +523,12 @@ class GrugModelConfig:
             raise ValueError("lm_head_bilinear widens the vocabulary head that cplm_plus reads at hidden_dim")
         if self.pointer_mixture and (self.cplm_plus or self.lm_head_bilinear):
             raise ValueError("pointer_mixture reads the hidden_dim lm_head input; no cplm_plus or lm_head_bilinear")
+        if self.ngram_cache_mixture and (
+            self.cplm_plus or self.lm_head_bilinear or self.pointer_mixture or self.full_bandwidth_passes
+        ):
+            raise ValueError(
+                "ngram_cache_mixture excludes cplm_plus, lm_head_bilinear, pointer_mixture and full_bandwidth_passes"
+            )
         if self.cplm_plus and self.logit_soft_cap is not None:
             raise ValueError("cplm_plus mixes uncapped vocabulary logits; set logit_soft_cap=None")
         if self.lm_head_grad_dump_every and not self.lm_head_grad_probe:
@@ -1959,6 +1978,7 @@ class Transformer(eqx.Module):
     skip_router_bias: Float[Array, ""] | None
     copy_head: CopyHead | None  # cfg.cplm_plus
     pointer_head: PointerHead | None  # cfg.pointer_mixture
+    ngram_cache_head: NgramCacheHead | None  # cfg.ngram_cache_mixture
     # cfg.spelling_byte_embeds: one 256-row table per byte position, the leading-space row and the case rows.
     token_embed_bytes: Float[Array, "P 256 D"] | None
     token_embed_space: Float[Array, " D"] | None
@@ -2044,6 +2064,7 @@ class Transformer(eqx.Module):
             skip_router_bias=jnp.zeros((), jnp.float32) if cfg.skip_router_layers else None,
             copy_head=CopyHead.init(cfg.hidden_dim, key=key) if cfg.cplm_plus else None,
             pointer_head=PointerHead.init(cfg.hidden_dim) if cfg.pointer_mixture else None,
+            ngram_cache_head=NgramCacheHead.init(cfg.hidden_dim) if cfg.ngram_cache_mixture else None,
             token_embed_bytes=(
                 reshard(jnp.zeros((BYTE_POSITIONS, 256, cfg.hidden_dim), jnp.float32), P(None, None, None))
                 if cfg.spelling_byte_embeds
@@ -2498,12 +2519,14 @@ class Transformer(eqx.Module):
         extra_mlp_active: jax.Array | bool = True,
         head_grad_probe: Float[Array, "B S"] | None = None,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
+        ngram_counts: NgramCounts | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``train_terms`` adds the training-only objectives (the entropy head's loss); evals leave it off so they
         score the plain next-token loss. ``head_grad_probe`` (zeros ``[B, S]``) passes the lm_head cross-entropy's
         input through ``lm_head_grad_probe``: its gradient is each token's input-gradient norm, and
         ``lm_head_grad_clip`` clips that gradient per token. ``pre_norm_grad_probe`` does the same at the stream
-        entering ``final_norm`` (``Transformer.__call__``)."""
+        entering ``final_norm`` (``Transformer.__call__``). ``ngram_counts`` are ``ngram_cache_counts``, computed
+        here when not given."""
         hidden, router_metrics = self(
             token_ids,
             mask=mask,
@@ -2534,6 +2557,12 @@ class Transformer(eqx.Module):
         elif self.pointer_head is not None:
             cross_entropy_loss, copy_metrics = self._pointer_mixture_loss(
                 head_in, token_ids, labels, loss_weight, mask, reduction, logsumexp_weight, loss_dtype
+            )
+        elif self.ngram_cache_head is not None:
+            counts = ngram_counts if ngram_counts is not None else self.ngram_cache_counts(token_ids, mask)
+            assert counts is not None
+            cross_entropy_loss, copy_metrics = self._ngram_cache_mixture_loss(
+                head_in, labels, counts, loss_weight, reduction, logsumexp_weight, loss_dtype
             )
         else:
             cross_entropy_loss = self._vocab_cross_entropy(
@@ -2708,6 +2737,49 @@ class Transformer(eqx.Module):
         nll, gate, label_mass = pointer_mixture_nll(head, slot_logits, candidates, labels, ce)
         loss, metrics = _reduce_mixture_loss(
             nll, loss_weight, reduction, "pointer", {"head_nll": ce, "gate": gate, "label_mass": label_mass}
+        )
+        return loss.astype(loss_dtype), metrics
+
+    def ngram_cache_counts(
+        self, token_ids: Int[Array, "B S"], mask: AttentionMask | jax.Array | None
+    ) -> NgramCounts | None:
+        """``ngram_cache_mixture``'s per-position document n-gram counts; None without the head. Integer work on the
+        token ids, so the train step computes it once before ``value_and_grad``."""
+        if self.ngram_cache_head is None:
+            return None
+        segment_ids = _sconv_segment_ids(mask) if mask is not None else None
+        segments = jnp.zeros_like(token_ids) if segment_ids is None else jnp.broadcast_to(segment_ids, token_ids.shape)
+        return document_ngram_counts(token_ids, segments, self.config.vocab_size, _BATCH_AXES)
+
+    def _ngram_cache_mixture_loss(
+        self,
+        head_in: Float[Array, "B S D"],
+        labels: Int[Array, "B S"],
+        counts: NgramCounts,
+        loss_weight: Float[Array, "B S"],
+        reduction: str,
+        logsumexp_weight: float | None,
+        loss_dtype: jnp.dtype,
+    ) -> tuple[jax.Array, dict[str, jax.Array]]:
+        """``ngram_cache_mixture``: the count-cache mixture NLL on the fused kernel's per-token loss (with the z-loss
+        when ``logsumexp_weight`` is set); reduced like ``fused_linear_softmax_cross_entropy_loss``."""
+        head = self.ngram_cache_head
+        assert head is not None
+        ce = fused_linear_softmax_cross_entropy_loss(
+            head_in,
+            self.output_proj,
+            labels,
+            reduction="none",
+            logsumexp_weight=logsumexp_weight,
+            dtype=jnp.float32,
+            implementation="xla_fast_bwd",
+            block_sizes=_CE_BLOCK_SIZES,
+            logit_soft_cap=self.config.logit_soft_cap,
+        )
+        order_logits = _proj(head_in, reshard(head.ngram_cache_w.astype(head_in.dtype), P(None, None)))
+        nll, gate, label_mass = ngram_cache_mixture_nll(head, order_logits, counts, ce)
+        loss, metrics = _reduce_mixture_loss(
+            nll, loss_weight, reduction, "ngram_cache", {"head_nll": ce, "gate": gate, "label_mass": label_mass}
         )
         return loss.astype(loss_dtype), metrics
 
