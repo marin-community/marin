@@ -10,11 +10,19 @@ data initializes the gate logits before state construction, the state init
 scopes optimizer state and checkpointing to the gate logits via
 ``is_trainable``, and the trainer ramps alpha per optimizer step while
 evaluating with the hard mask.
+
+``run_deletion_train_lm`` is the pod dispatch: marin's standard SFT preparation
+runs unchanged and the Deletion seam installs over ``train_lm`` for the
+duration. ``DeletionHFModel`` is the SFT-launcher model source that sends a
+spec's pod config to that entrypoint.
 """
 
 import dataclasses
 import itertools
 import logging
+from collections.abc import Callable
+from contextlib import contextmanager
+from functools import partial
 
 import equinox as eqx
 import jax
@@ -26,11 +34,15 @@ import numpy as np
 from levanter.models.snowball import SnowballLMHeadModel
 from levanter.models.snowball_deletion import (
     WANDA_SAMPLE_STRIDE,
+    deletion_trainable_filter,
     down_norms,
     init_gate_logits_jax,
     wanda_delete_threshold,
 )
 from levanter.trainer import Trainer
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+
+from experiments.sft.launcher import HFModel, _levanter_train_job
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +199,18 @@ class DeletionTrainer(Trainer):
 
     deletion_settings: DeletionTrainSettings | None = None
 
+    def initial_state(self, training_key, model=None, model_init=None, *, is_trainable=True):
+        """Scope optimizer state, gradients, and checkpointing to the gate logits.
+
+        ``train_lm`` passes the adapter's trainable filter, which trains
+        everything by default; a Deletion run trains only the gate logits, so
+        the filter comes from the initialized model whenever one is provided
+        (the weight-source init path).
+        """
+        if model is not None:
+            is_trainable = deletion_trainable_filter(model)
+        return super().initial_state(training_key, model=model, model_init=model_init, is_trainable=is_trainable)
+
     def _train_step(self, state, batch, batch_kwargs, _no_hooks=False):
         result = super()._train_step(state, batch, batch_kwargs, _no_hooks)
         settings = self.deletion_settings
@@ -245,13 +269,14 @@ def _initialize_deletion(model, *, config, trainer, settings: DeletionTrainSetti
     return apply_deletion_init(model, settings, routed_norms, shared_norms, threshold=threshold, num_layers=num_layers)
 
 
-def main(config):
-    """Run Levanter's ``train_lm.main`` with Deletion Tuning applied.
+def deletion_settings_from_config(config) -> DeletionTrainSettings:
+    """Derive the runtime deletion settings from the model config and trainer step count.
 
-    The settings ride ``config.model.deletion_tuning``; ``total_steps`` is the
-    trainer's step count.
+    Read before ``train_lm.main`` runs: the HF config reload replaces the model
+    config, and the reload keeps ``deletion_tuning`` but this decodes the
+    launcher-requested settings verbatim.
     """
-    settings = DeletionTrainSettings(
+    return DeletionTrainSettings(
         total_steps=config.trainer.num_train_steps,
         alpha_start=config.model.deletion_tuning.alpha_start,
         alpha_end=config.model.deletion_tuning.alpha_end,
@@ -261,14 +286,17 @@ def main(config):
         calibration_sequences=config.model.deletion_tuning.calibration_sequences,
         seed=config.model.deletion_tuning.seed,
     )
-    """Run Levanter's ``train_lm.main`` with the Deletion-Tuning deltas applied.
+
+
+@contextmanager
+def _deletion_train_lm_seam(settings: DeletionTrainSettings, num_layers: int):
+    """Install the DT trainer and DT model loader over ``levanter.main.train_lm``.
 
     The standard main constructs ``Trainer`` and loads the model through two
-    module globals; this launcher swaps them for the Deletion variants and
-    restores them afterwards, so the whole standard init/eval/checkpoint flow
-    is reused verbatim.
+    module globals; this swaps them for the Deletion variants and restores them
+    afterwards, so the whole standard init/eval/checkpoint flow is reused
+    verbatim.
     """
-    num_layers = config.model.num_layers
     original_loader = train_lm_module._load_lm_model_from_configured_source
     original_trainer_cls = train_lm_module.Trainer
 
@@ -283,7 +311,55 @@ def main(config):
     train_lm_module._load_lm_model_from_configured_source = deletion_loader
     train_lm_module.Trainer = trainer_cls
     try:
-        train_lm_module.main(config)
+        yield
     finally:
         train_lm_module._load_lm_model_from_configured_source = original_loader
         train_lm_module.Trainer = original_trainer_cls
+
+
+def main(config):
+    """Run Levanter's ``train_lm.main`` with Deletion Tuning applied.
+
+    The settings ride ``config.model.deletion_tuning``; ``total_steps`` is the
+    trainer's step count.
+    """
+    settings = deletion_settings_from_config(config)
+    num_layers = config.model.num_layers
+    with _deletion_train_lm_seam(settings, num_layers):
+        train_lm_module.main(config)
+
+
+def run_deletion_train_lm(config: TrainLmOnPodConfig) -> None:
+    """The pod entrypoint for a Deletion Tuning SFT run.
+
+    marin's standard ``run_levanter_train_lm`` preparation (run ID, tracker,
+    path checks, execution deadline) runs unchanged; the Deletion trainer and
+    model loader install over ``levanter.main.train_lm`` for the duration, so
+    the pod executes the DT main through the standard flow. The settings come
+    from ``config.train_config.model.deletion_tuning`` before any mutation.
+    """
+    train_config = config.train_config
+    settings = deletion_settings_from_config(train_config)
+    num_layers = train_config.model.num_layers
+    with _deletion_train_lm_seam(settings, num_layers):
+        run_levanter_train_lm(config)
+
+
+@dataclasses.dataclass(frozen=True)
+class DeletionHFModel(HFModel):
+    """An HF-init model source whose pod dispatch targets the Deletion Tuning main.
+
+    Everything else matches :class:`HFModel` verbatim — same ``initialize_from_hf``
+    + ``use_hf_model_config`` semantics and the same pod config — so a Deletion
+    run differs from the equivalent standard SFT run only in which main executes.
+    """
+
+    @property
+    def run(self) -> Callable[..., None]:
+        return partial(
+            _levanter_train_job,
+            task_timeout_seconds=self.task_timeout_seconds,
+            processes_per_task=self.processes_per_task,
+            priority=self.priority,
+            run_fn=run_deletion_train_lm,
+        )
