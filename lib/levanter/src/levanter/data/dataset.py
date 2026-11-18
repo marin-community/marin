@@ -71,6 +71,10 @@ class AsyncDataset(DatasetBase[T_co]):
         """
         return (await self.get_batch([index]))[0]
 
+    def first_readable_index(self) -> int:
+        """Return the lowest index this dataset serves. A reader that only needs an example starts here."""
+        return 0
+
     @abc.abstractmethod
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
         raise NotImplementedError
@@ -251,6 +255,9 @@ class MappedAsyncDataset(AsyncDataset[U], Generic[T, U]):
 
     async def getitem_async(self, index: int) -> U:
         return self._call_fn(index, await self.dataset.getitem_async(index))
+
+    def first_readable_index(self) -> int:
+        return self.dataset.first_readable_index()
 
     def _call_fn(self, index, item):
         if "key" in self._extra_kwargs:

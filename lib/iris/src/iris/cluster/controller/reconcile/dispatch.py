@@ -80,12 +80,14 @@ def build_run_request(
         ports_json=row.ports_json,
         constraints_json=row.constraints_json,
         task_image=row.task_image,
+        termination_grace_ms=row.termination_grace_ms,
         task_id=row.task_id.to_wire(),
         attempt_id=attempt_id,
         # Priority selects the Kueue WorkloadPriorityClass on the direct path.
         priority=row.priority_band,
         container_profile=row.container_profile,
         egress_policy=row.egress_policy,
+        egress_allow_json=row.egress_allow_json,
     )
     # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
     if row.timeout_ms is not None and row.timeout_ms > 0:
@@ -93,6 +95,7 @@ def build_run_request(
     # Coscheduling drives Kueue gang admission on the direct path.
     if row.has_coscheduling:
         run_req.coscheduling.group_by = row.coscheduling_group_by
+        run_req.coscheduling.group_sizes.extend(row.coscheduling_group_sizes)
     # Stamp the attempt's uid so the K8s backend can label the pod with it and
     # tell this attempt's own pod apart from a stale pod a previous job left at
     # the same (task_hash, attempt_id) name. Visible in this tx for both paths:

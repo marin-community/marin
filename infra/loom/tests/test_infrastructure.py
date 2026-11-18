@@ -12,6 +12,7 @@ from pathlib import Path
 import pulumi
 import pytest
 import yaml
+from pulumi.output import Unknown
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
@@ -55,6 +56,17 @@ class RecordingMocks(Mocks):
             outputs["email"] = f"{args.args['accountId']}@example.iam.gserviceaccount.com"
             outputs["uniqueId"] = "99887766554433221100"
         return outputs, []
+
+
+class SkippedPreviewBuildMocks(RecordingMocks):
+    """docker-build reports the bare tag as its ref when a preview skips the build."""
+
+    def new_resource(self, args: MockResourceArgs):
+        resource_id, outputs = super().new_resource(args)
+        if args.typ == "docker-build:index:Image":
+            outputs["ref"] = outputs["tags"][0]
+            del outputs["digest"]
+        return resource_id, outputs
 
 
 def deployment_config() -> DeploymentConfig:
@@ -307,6 +319,7 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
                 "ops",
                 {
                     "agent": "codex",
+                    "docArtifact": "doc",
                     "githubRepositories": ["marin-community/marin", "marin-community/vllm"],
                     "mcpAccess": {"mode": "all", "groups": []},
                     "env": {"OPS_TOKEN": {"secretRef": "projects/example/secrets/ops-token/versions/7"}},
@@ -314,6 +327,7 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
             ),
         )
     )
+    assert profiles[0]["profile"]["doc_artifact"] == "doc"
     assert profiles[0]["profile"]["github_repositories"] == [
         "marin-community/marin",
         "marin-community/vllm",
@@ -521,6 +535,19 @@ def test_release_rollout_pins_metadata_to_the_built_image_digest():
         assert "loom_id" in triggers
         serialized_metadata = json.loads(next(trigger for trigger in triggers if trigger != "loom_id"))
         assert serialized_metadata == metadata
+
+    return infrastructure.activation.id.apply(check)
+
+
+@pulumi.runtime.test
+def test_preview_without_a_built_image_leaves_the_vm_image_unknown():
+    # Regression: with the Loom commit unchanged, preview raised on the bare tag.
+    mocks = SkippedPreviewBuildMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=True)
+    infrastructure = create_infrastructure(deployment_config())
+
+    def check(_: object) -> None:
+        assert isinstance(by_name(mocks, "loom").inputs["metadata"]["loom-image"], Unknown)
 
     return infrastructure.activation.id.apply(check)
 

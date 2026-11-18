@@ -572,13 +572,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let cached = Arc::new(
-            CachedObjectStore::new(
-                Arc::new(provider.clone()),
-                data_dir.clone(),
-                Arc::new(RwLock::new(())),
-                None,
-            )
-            .unwrap(),
+            CachedObjectStore::new(Arc::new(provider.clone()), data_dir.clone(), None).unwrap(),
         ) as Arc<dyn ObjectStore>;
         let faults = FaultInjectingObjectStore::new(cached);
         let state_store = Arc::new(ObjectTableStateStore::new(
@@ -697,13 +691,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let object_store = Arc::new(
-            CachedObjectStore::new(
-                Arc::new(provider.clone()),
-                data_dir.clone(),
-                Arc::new(RwLock::new(())),
-                None,
-            )
-            .unwrap(),
+            CachedObjectStore::new(Arc::new(provider.clone()), data_dir.clone(), None).unwrap(),
         ) as Arc<dyn ObjectStore>;
         // The controller parks inside the HEAD swap its publication performs.
         let publication = FaultGate::new();

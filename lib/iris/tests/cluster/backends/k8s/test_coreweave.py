@@ -17,10 +17,13 @@ from pathlib import Path
 import pytest
 from iris.cluster.config import (
     AuthConfig,
+    CiliumConfig,
     ControllerVmConfig,
     CoreweaveControllerConfig,
     CoreweavePlatformConfig,
     CoreweaveSliceConfig,
+    EgressAllowlistConfig,
+    EgressEndpointsConfig,
     EndpointSpec,
     IrisClusterConfig,
     KubernetesProviderConfig,
@@ -35,6 +38,7 @@ from iris.cluster.config import (
     resolve_principal_references,
 )
 from iris.cluster.controller.auth import create_controller_auth
+from iris.cluster.egress import BASE_EGRESS_ALLOWLIST
 from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.controller import (
     _CONTROLLER_CPU_REQUEST,
@@ -72,6 +76,7 @@ from iris.cluster.platforms.types import (
     Labels,
 )
 from iris.cluster.types import AcceleratorType
+from iris.cluster.worker.egress_dns import DomainAllowlist
 from rigging.timing import Duration
 
 
@@ -234,6 +239,14 @@ def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConf
     k8s.apply_json(cluster_role_binding_manifest(role_name, namespace, service_account))
     k8s.apply_json(task_secret_role_manifest(namespace))
     k8s.apply_json(task_secret_binding_manifest(namespace, service_account))
+    k8s.apply_json(
+        {
+            "apiVersion": "node.k8s.io/v1",
+            "kind": "RuntimeClass",
+            "metadata": {"name": cluster_config.kubernetes_provider.sandbox_runtime_class},
+            "handler": "runsc",
+        }
+    )
 
     for name, sg in cluster_config.scale_groups.items():
         cw = sg.slice_template.coreweave if sg.slice_template is not None else None
@@ -756,6 +769,7 @@ def test_verify_prerequisites_raises_when_nothing_provisioned():
     assert "ClusterRole/iris-controller-iris" in message
     assert "ClusterRoleBinding/iris-controller-iris" in message
     assert "NodePool/iris-cpu-erapids" in message
+    assert "RuntimeClass/gvisor" in message
     assert "ClusterQueue/iris-cq" in message
     assert "pulumi up" in message
     provider.shutdown()
@@ -822,6 +836,18 @@ def test_verify_prerequisites_reports_missing_cluster_queue_flavor():
     provider.shutdown()
 
 
+def test_verify_prerequisites_reports_missing_configured_runtime_class():
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.kubernetes_provider.sandbox_runtime_class = "iris-gvisor-cpu"
+    _seed_prerequisites(k8s, cluster_config)
+    k8s.delete(K8sResource.RUNTIME_CLASSES, "iris-gvisor-cpu")
+
+    with pytest.raises(PrerequisitesNotProvisionedError, match="RuntimeClass/iris-gvisor-cpu"):
+        provider.verify_prerequisites(cluster_config)
+    provider.shutdown()
+
+
 def test_verify_prerequisites_reports_only_the_missing_pieces():
     """The error names exactly what's absent, not everything."""
     provider, k8s = _make_provider()
@@ -836,6 +862,51 @@ def test_verify_prerequisites_reports_only_the_missing_pieces():
     assert "NodePool/iris-cpu-erapids" in message
     assert "Namespace/iris" not in message
     assert "ClusterRole/iris-controller-iris" not in message
+    provider.shutdown()
+
+
+_CILIUM_POLICIES = {"apiGroups": ["cilium.io"], "resources": ["ciliumnetworkpolicies"]}
+
+
+@pytest.mark.parametrize(
+    ("cilium_rules", "granted"),
+    [
+        pytest.param([{**_CILIUM_POLICIES, "verbs": ["create", "patch"]}], True, id="create-and-patch"),
+        pytest.param(
+            [{**_CILIUM_POLICIES, "verbs": ["create"]}, {**_CILIUM_POLICIES, "verbs": ["patch"]}],
+            True,
+            id="split-across-rules",
+        ),
+        pytest.param([{"apiGroups": ["*"], "resources": ["*"], "verbs": ["*"]}], True, id="wildcard"),
+        pytest.param([{**_CILIUM_POLICIES, "verbs": ["create"]}], False, id="no-patch"),
+        pytest.param(
+            [{"apiGroups": ["networking.k8s.io"], "resources": ["ciliumnetworkpolicies"], "verbs": ["create", "patch"]}],
+            False,
+            id="other-api-group",
+        ),
+        pytest.param(
+            [{**_CILIUM_POLICIES, "verbs": ["create", "patch"], "resourceNames": ["iris-egress-allowlist"]}],
+            False,
+            id="named-policies-only",
+        ),
+        pytest.param([], False, id="absent"),
+    ],
+)
+def test_verify_prerequisites_requires_cilium_policy_writes_on_cilium_clusters(cilium_rules, granted):
+    """The controller writes per-attempt policies by server-side apply, which needs create and patch."""
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.kubernetes_provider.cilium = CiliumConfig()
+    _seed_prerequisites(k8s, cluster_config)
+    role = cluster_role_manifest(provider.rbac_cluster_role_name())
+    role["rules"] = [rule for rule in role["rules"] if "cilium.io" not in rule["apiGroups"]] + cilium_rules
+    k8s.apply_json(role)
+
+    if granted:
+        provider.verify_prerequisites(cluster_config)
+    else:
+        with pytest.raises(PrerequisitesNotProvisionedError, match="ciliumnetworkpolicies"):
+            provider.verify_prerequisites(cluster_config)
     provider.shutdown()
 
 
@@ -1168,6 +1239,50 @@ def test_start_controller_creates_one_network_policy_per_egress_policy(service_c
         _DNS_RULE,
         {"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": blocked}}]},
     ]
+
+
+@pytest.mark.parametrize("cilium", [False, True])
+def test_start_controller_creates_the_allowlist_policy_only_on_cilium_clusters(cilium):
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.defaults.egress_allowlist = EgressAllowlistConfig(allow=["cwlota.com", "*.cwlota.com"])
+    if cilium:
+        lota = EgressEndpointsConfig(namespace="cw-object-storage", labels={"app.kubernetes.io/name": "lota"})
+        cluster_config.kubernetes_provider.cilium = CiliumConfig(egress_endpoints=[lota])
+    _seed_prerequisites(k8s, cluster_config)
+
+    provider.start_controller(cluster_config)
+
+    policy = k8s.get_json(K8sResource.CILIUM_NETWORK_POLICIES, "iris-egress-allowlist")
+    if not cilium:
+        # A cluster without Cilium has no CiliumNetworkPolicy resource to create.
+        assert policy is None
+        return
+    spec = policy["spec"]
+    sections = spec["egress"]
+    fqdns = {next(iter(name.values())) for section in sections for name in section.get("toFQDNs", [])}
+    lookups = DomainAllowlist(
+        [
+            next(iter(name.values()))
+            for section in sections
+            for port in section.get("toPorts", [])
+            for name in port.get("rules", {}).get("dns", [])
+        ],
+        (),
+    )
+    endpoints = [selector for section in sections for selector in section.get("toEndpoints", [])]
+
+    assert spec["endpointSelector"] == {"matchLabels": {"iris.egress": "allowlist"}}
+    assert fqdns == {*BASE_EGRESS_ALLOWLIST, "cwlota.com", "*.cwlota.com"}
+    assert all(lookups.allows(domain.replace("*", "bucket")) for domain in fqdns)
+    assert not lookups.allows("attacker.example")
+    # In-cluster names resolve, including the search-list candidates glibc tries before an absolute name.
+    assert lookups.allows("iris-controller-svc.iris.svc.cluster.local")
+    assert lookups.allows("us.aws.cdn.hf.co.iris.svc.cluster.local")
+    assert {} in endpoints  # every pod in the Iris namespace
+    assert {
+        "matchLabels": {"k8s:io.kubernetes.pod.namespace": "cw-object-storage", "k8s:app.kubernetes.io/name": "lota"}
+    } in endpoints
 
 
 @pytest.mark.parametrize("change", ["health_config", "literal_endpoint", "injected_credential"])

@@ -378,14 +378,14 @@ class GroupAdmissionPolicy:
                 value = _aligned_sequence(trajectory_batch, key, len(response_ids))
                 if value is not None:
                     group_batch[key] = [value[index] for index in indices]
-            batch_group = _BatchGroup(group_batch)
-            facts = _inspect_group(batch_group)
+            decision = self.evaluate(_BatchGroup(group_batch))
+            is_last_step = group_batch.get("is_last_step")
             admissions.append(
                 BatchGroupAdmission(
                     uid=uid,
                     row_indices=tuple(indices),
-                    decision=self.evaluate(batch_group),
-                    physical_count=facts.physical_count,
+                    decision=decision,
+                    physical_count=len(indices) if is_last_step is None else sum(bool(last) for last in is_last_step),
                 )
             )
         return tuple(admissions)

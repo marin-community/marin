@@ -13,8 +13,11 @@ jobs:
   datakit-nemotron-ferry:
     runs-on: ubuntu-latest
     timeout-minutes: 350  # GH-hosted runners cap at 6h; nemotron high (~28% of medium) targets 6h compute
+    outputs:
+      resource_exhausted: ${{ steps.wait.outputs.resource_exhausted }}
     concurrency:
-      group: datakit-nemotron-ferry
+      # A run on a branch must not cancel the scheduled run on main.
+      group: datakit-nemotron-ferry-${{ github.ref }}
       cancel-in-progress: true
     env:
       SMOKE_RUN_ID: datakit-nemotron-ferry-${{ github.run_id }}-${{ github.run_attempt }}
@@ -83,7 +86,7 @@ jobs:
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
-            -e FERRY_TEST_MAX_FILES "1000" \
+            -e FERRY_TEST_MAX_FILES "1600" \
             -- python -m experiments.ferries.datakit_nemotron_ferry)
           if [ -z "$JOB_ID" ]; then
             echo "iris job run produced no job id" >&2
@@ -126,6 +129,12 @@ jobs:
           name: datakit-tier3-perf-report
           path: perf-report.json
           retention-days: 90
+
+      - name: Note a skipped day
+        if: steps.wait.outputs.resource_exhausted == 'true'
+        run: |
+          echo "::notice title=Datakit Nemotron Ferry skipped::Iris cancelled the ferry because it could not get capacity."
+          echo "Skipped: Iris cancelled the ferry because it could not get capacity." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Capture failure diagnostics
         if: failure() || cancelled()
@@ -183,3 +192,17 @@ jobs:
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Datakit Nemotron Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  # A day skipped for lack of capacity finishes green, so it gets its own, non-failure message.
+  notify-skipped:
+    needs: datakit-nemotron-ferry
+    if: always() && needs.datakit-nemotron-ferry.outputs.resource_exhausted == 'true' && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Notify Slack
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: ":white_circle: *Datakit Nemotron Ferry skipped*: no capacity, so it did not run. This is not a failure.\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

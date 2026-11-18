@@ -39,6 +39,7 @@ from harbor.context_management import (
     trim_latest_turn,
 )
 from harbor.environments.base import BaseEnvironment
+from harbor.host_capabilities import OPENAI_API_URL
 from harbor.llms.base import (
     BaseLLM,
     ContextBudgetExceededError,
@@ -71,7 +72,7 @@ from harbor.models.trajectories import (
     ToolCall,
     Trajectory,
 )
-from harbor.utils.artifact_writer import get_artifact_writer
+from harbor.utils.artifact_writer import ArtifactPersistenceError, get_artifact_writer
 from harbor.utils.trajectory_utils import format_trajectory_json
 from harbor_config.stop_reason import AgentStopReason
 from tenacity import (
@@ -121,6 +122,18 @@ OPENAI_CHAT_TOKENS_PER_MESSAGE = 3
 )
 async def _server_token_count(url: str, payload: dict[str, Any]) -> int:
     response = await shared_async_tokenize_client().post(url, json=payload)
+    response.raise_for_status()
+    return int(response.json()["count"])
+
+
+@retry(
+    retry=retry_if_exception(is_retryable_tokenize_error),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, max=4),
+    reraise=True,
+)
+def _sync_server_token_count(url: str, payload: dict[str, Any]) -> int:
+    response = _get_shared_tokenize_client().post(url, json=payload)
     response.raise_for_status()
     return int(response.json()["count"])
 
@@ -354,6 +367,9 @@ class Terminus2(BaseAgent):
 
         match backend_value:
             case LLMBackend.OPENAI.value:
+                constructor_kwargs["api_key"] = self._model_authentication.get(
+                    api_base or OPENAI_API_URL, "EMPTY"
+                )
                 return OpenAILLM(
                     model_name=model_name,
                     api_base=api_base,
@@ -684,6 +700,11 @@ class Terminus2(BaseAgent):
         )
         await self._session.start()
 
+    async def cleanup(self, environment: BaseEnvironment) -> None:
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
+
     def _get_parser(self) -> TerminusResponseParser:
         """Return the appropriate parser instance for this format."""
         if self._parser_name == "json":
@@ -878,15 +899,22 @@ class Terminus2(BaseAgent):
         if prep is not None:
             url, payload = prep
             try:
-                # Reuse the process-wide pooled client (see
-                # _get_shared_tokenize_client) so we don't rebuild an SSL
-                # context per turn on the coordinator loop.
-                client = _get_shared_tokenize_client()
-                resp = client.post(url, json=payload)
-                if resp.status_code == 200:
-                    return int(resp.json()["count"])
-            except Exception:
-                pass
+                return _sync_server_token_count(url, payload)
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code == 404:
+                    try:
+                        return self._token_counter_fallback(chat, extra_messages)
+                    except Exception as fallback_error:
+                        raise ContextManagementInfrastructureError(
+                            f"Could not count prompt tokens through /tokenize; local fallback failed: {fallback_error}"
+                        ) from error
+                raise ContextManagementInfrastructureError(
+                    "Could not count prompt tokens through /tokenize"
+                ) from error
+            except Exception as error:
+                raise ContextManagementInfrastructureError(
+                    "Could not count prompt tokens through /tokenize"
+                ) from error
 
         return self._token_counter_fallback(chat, extra_messages)
 
@@ -2569,7 +2597,7 @@ so ask everything you need to know."""
         self._context = context
 
         if self._session is None:
-            raise RuntimeError("Session is not set")
+            await self.setup(environment)
 
         # Get the terminal state for the initial prompt
         terminal_state = self._limit_output_length(
@@ -2613,6 +2641,7 @@ so ask everything you need to know."""
                 original_instruction=instruction,
             )
         except asyncio.CancelledError:
+            await self._session.interrupt()
             raise
         finally:
             # Always capture metrics and rollout details even if the agent times out or errors
@@ -2645,10 +2674,7 @@ so ask everything you need to know."""
             if self._store_all_messages:
                 context.metadata["all_messages"] = self._chat.messages
 
-            # Attempt a final trajectory dump on every exit path (success,
-            # timeout/cancellation, error). Optional admission never delays the
-            # result; a saturated diagnostic lane records and logs the drop.
-            self._persist_final_trajectory()
+            await self._persist_final_trajectory()
 
     # ===== Trajectory-related helper functions =====
 
@@ -2994,7 +3020,7 @@ so ask everything you need to know."""
             description=f"terminus-2 {trajectory_path.name}",
         )
 
-    def _persist_final_trajectory(self) -> None:
+    async def _persist_final_trajectory(self) -> None:
         """Persist the final in-memory trajectory segment on every run() exit.
 
         Uses the completed boundary-dump count as the continuation index: when
@@ -3002,7 +3028,34 @@ so ask everything you need to know."""
         full conversation lands in the canonical ``trajectory.json``; after a
         completed split it lands in the next ``trajectory.cont-N.json``.
         """
-        self._persist_trajectory(self._continuation_segments_persisted)
+        built = self._build_trajectory(self._continuation_segments_persisted)
+        if built is None:
+            return
+        trajectory, trajectory_path = built
+        writer = get_artifact_writer()
+        try:
+            # Required writes can overtake optional snapshots on the same path.
+            # Drain those first so a stale snapshot cannot overwrite the final one.
+            await writer.flush_async(prefix=str(trajectory_path))
+            if self._linear_history and self._continuation_segments_persisted > 0:
+                canonical_path = self.logs_dir / "trajectory.json"
+                failed = await writer.flush_async(prefix=str(canonical_path))
+                if failed or not await asyncio.to_thread(canonical_path.exists):
+                    raise ArtifactPersistenceError(
+                        "The initial trajectory segment was not persisted"
+                    )
+            final_write = await writer.submit_required(
+                trajectory_path,
+                lambda: format_trajectory_json(trajectory.to_json_dict()),
+                description=f"terminus-2 final {trajectory_path.name}",
+            )
+            await writer.await_write(final_write)
+        except ArtifactPersistenceError:
+            raise
+        except Exception as exc:
+            raise ArtifactPersistenceError(
+                f"Could not persist final trajectory {trajectory_path}"
+            ) from exc
 
     def _maybe_persist_trajectory_per_turn(self) -> None:
         """Per-episode dump hook: no-op unless cadence is PER_TURN.

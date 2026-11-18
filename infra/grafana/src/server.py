@@ -34,6 +34,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/marin/alerts/training_optimizer watched hero runs + optimizer-fault value(0|1)
     GET /finelog/marin/alerts/training_health    watched hero runs + degraded-signal value(0|1)
     GET /finelog/marin/alerts/zephyr_stalls      active pipelines + stalled-progress value(0|1)
+    GET /finelog/marin/alerts/b200_utilization   GB200 clusters + state + idle value(0|1)
     GET /iris/{cluster}/job_counts               root-job counts by state (in-flight + 24h terminal)
     GET /iris/{cluster}/jobs?cluster=             recent jobs visible through one federation peer
     GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
@@ -94,6 +95,11 @@ from http import HTTPStatus
 import pyarrow as pa
 import uvicorn
 from accelerator_observability import accelerator_overview_dataset
+from b200_utilization_alert import (
+    MAX_TELEMETRY_NODES,
+    b200_utilization_alert_rows,
+    node_gpu_activity_query,
+)
 from cache import TtlCache
 from config import (
     BRIDGE_PORT,
@@ -142,7 +148,7 @@ from hero_runs import (
 )
 from iris_source import IrisSource
 from jobs_observability import jobs_overview_dataset
-from k8s_source import K8sFleet, K8sSource
+from k8s_source import Gb200Capacity, K8sFleet, K8sSource
 from loom_alerts import (
     LoomAlertClient,
     LoomAlertDeliveryError,
@@ -213,6 +219,7 @@ _K8S_TERMINATION_CANDIDATES_CACHE_KEY = "termination_candidates"
 _K8S_ARCH_MISMATCH_CACHE_KEY = "arch_mismatch"
 _K8S_EVENTS_CACHE_KEY = "events"
 _K8S_FINELOG_CACHE_KEY = "finelog"
+_K8S_NODES_CACHE_KEY = "nodes"
 _DATASET_SOURCE_CACHE_BYTES = 128 * 1024 * 1024
 _DATASET_CONCURRENCY = 2
 _DATASET_WINDOW_BUCKET_MS = 15_000
@@ -1210,6 +1217,20 @@ def create_app(
             lambda now: zephyr_stall_alert_rows(pa.table({}), now),
         )
 
+    def finelog_alerts_b200_utilization(_: Request) -> JSONResponse:
+        def capacity() -> Gb200Capacity:
+            return k8s_fleet.gb200_capacity(k8s_cache.get_or_compute(_K8S_NODES_CACHE_KEY, k8s_fleet.nodes))
+
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            telemetry = finelog_sources[target.name].query(node_gpu_activity_query(now), max_rows=MAX_TELEMETRY_NODES)
+            return b200_utilization_alert_rows(capacity(), telemetry)
+
+        return finelog_alert_endpoint(
+            "b200_utilization",
+            project,
+            lambda _: b200_utilization_alert_rows(capacity(), pa.table({})),
+        )
+
     def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
         try:
             source = _iris_for(request.path_params["cluster"], iris_sources)
@@ -1353,7 +1374,7 @@ def create_app(
         return k8s_endpoint("health", k8s_fleet.health)
 
     def k8s_nodes(request: Request) -> JSONResponse:
-        return filtered_k8s_endpoint("nodes", k8s_fleet.nodes, request, ("cluster", "node"))
+        return filtered_k8s_endpoint(_K8S_NODES_CACHE_KEY, k8s_fleet.nodes, request, ("cluster", "node"))
 
     def k8s_node_pools(request: Request) -> JSONResponse:
         return filtered_k8s_endpoint("node_pools", k8s_fleet.node_pools, request, ("cluster", "node_pool"))
@@ -1458,6 +1479,7 @@ def create_app(
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_optimizer", finelog_alerts_training_optimizer),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_health", finelog_alerts_training_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/zephyr_stalls", finelog_alerts_zephyr_stalls),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/b200_utilization", finelog_alerts_b200_utilization),
             Route("/iris/{cluster}/job_counts", iris_job_counts),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),

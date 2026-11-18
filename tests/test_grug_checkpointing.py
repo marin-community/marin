@@ -12,7 +12,11 @@ import pytest
 from jax.tree_util import register_dataclass
 from levanter.checkpoint import Checkpointer, CheckpointInterval, latest_checkpoint_path
 
-from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import (
+    init_weights_only_from_checkpoint,
+    restore_grug_state_and_source,
+    restore_grug_state_from_checkpoint,
+)
 
 
 @register_dataclass
@@ -187,6 +191,31 @@ def test_restore_falls_back_to_older_checkpoint_when_latest_fails(tmp_path: Path
         str(checkpoint_root / "step-90"),
     ]
     assert loaded == {"loaded_from": str(checkpoint_root / "step-90")}
+
+
+def test_restore_names_the_checkpoint_it_loaded_after_falling_back(tmp_path: Path):
+    checkpoint_root = tmp_path / "checkpoints"
+    _write_checkpoint_metadata(checkpoint_root / "step-100", step=100, timestamp="2026-03-17T10:00:00")
+    _write_checkpoint_metadata(checkpoint_root / "step-90", step=90, timestamp="2026-03-17T09:00:00")
+
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
+        if path.endswith("step-100") or not Path(path).exists():
+            raise FileNotFoundError(path)
+        return {"loaded_from": path}
+
+    def restore(search_paths):
+        return restore_grug_state_and_source(
+            {"state": "init"},
+            checkpoint_search_paths=search_paths,
+            load_checkpoint_setting=None,
+            mesh=None,
+            allow_partial=False,
+            _load_fn=fake_load,
+        )
+
+    step_90 = str(checkpoint_root / "step-90")
+    assert restore([str(checkpoint_root)]) == ({"loaded_from": step_90}, step_90)
+    assert restore([str(tmp_path / "empty")]) == ({"state": "init"}, None)
 
 
 def test_restore_raises_when_required_and_no_checkpoint_loads(tmp_path: Path):

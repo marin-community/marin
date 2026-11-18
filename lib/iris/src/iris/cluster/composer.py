@@ -45,6 +45,7 @@ from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
+from iris.cluster.runtime.sandbox import SANDBOX_IMAGE_WORKDIR_CAPABILITY
 from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name
 
@@ -118,6 +119,7 @@ def make_task_backend(
                 default_image=config.defaults.worker.default_task_image,
                 logship_image=config.controller.image,
                 service_account=kp.service_account or "",
+                sandbox_runtime_class=kp.sandbox_runtime_class,
                 host_network=kp.host_network,
                 cache_dir=kp.cache_dir or DEFAULT_TASK_CACHE_DIR,
                 controller_address=kp.controller_address or None,
@@ -128,6 +130,10 @@ def make_task_backend(
                 local_queue=local_queue,
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
                 priority_class_names=pod_priority_classes,
+                # Kubernetes enforces ALLOWLIST only through Cilium.
+                egress_allowlist=(
+                    config.defaults.egress_allowlist.model_copy(deep=True) if kp.cilium is not None else None
+                ),
             ),
             node_health=kp.node_health,
             task_event_table=task_event_table,
@@ -138,6 +144,7 @@ def make_task_backend(
             descriptor=descriptor,
             stub_factory=RpcWorkerStubFactory(),
             autoscaler=autoscaler,
+            egress_allowlist_default=config.defaults.egress_allowlist.default,
         )
     raise ValueError(
         "IrisClusterConfig.provider must be set. Add either:\n"
@@ -176,6 +183,7 @@ def build_base_worker_config(
     worker_config.platform = config.platform.model_copy(deep=True)
     worker_config.storage_prefix = storage_prefix
     worker_config.task_outputs = config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None
+    worker_config.egress_allow = list(config.defaults.egress_allowlist.allow)
     if auth_token:
         worker_config.auth_token = auth_token
     return worker_config
@@ -211,6 +219,9 @@ def make_backend(
         advertised_attributes={key: frozenset(values) for key, values in backend_attribute_sets(config).items()},
         scale_groups=frozenset(config.scale_groups),
         capabilities=capabilities,
+        task_capabilities=(
+            frozenset({SANDBOX_IMAGE_WORKDIR_CAPABILITY}) if which == "kubernetes_provider" else frozenset()
+        ),
     )
     if which == "kubernetes_provider":
         provider = make_task_backend(

@@ -91,6 +91,8 @@ class OpenAIModel(OpenRouterModel):
 
     def __init__(self, *, api_base: str | None = None, **kwargs: Any):
         super().__init__(**kwargs)
+        # mini.yaml supplies drop_params as a LiteLLM transport option.
+        self.config.model_kwargs.pop("drop_params", None)
         self.api_base = api_base
         if (
             not self.api_base
@@ -114,8 +116,11 @@ class OpenAIModel(OpenRouterModel):
             model = self.config.model_name
             if model.startswith(("hosted_vllm/", "openai/")):
                 model = model.split("/", 1)[1]
+            # Mini-SWE's default YAML includes this LiteLLM-only option.
             return client.chat.completions.create(
-                model=model, messages=messages, **kwargs
+                model=model,
+                messages=messages,
+                **{key: value for key, value in kwargs.items() if key != "drop_params"},
             ).model_dump()
 
     def _query(self, messages: list[dict[str, str]], **kwargs: Any) -> dict[str, Any]:
@@ -125,7 +130,7 @@ class OpenAIModel(OpenRouterModel):
 
 
 class ContextLimitedModel(OpenAIModel):
-    """Preserve native actions and stop cleanly when the context is exhausted."""
+    """Preserve native actions and stop cleanly at context or engine limits."""
 
     def __init__(
         self,
@@ -164,15 +169,21 @@ class ContextLimitedModel(OpenAIModel):
                     context_window=self.context_window,
                     max_output_tokens=self.max_output_tokens,
                 )
-        except ContextBudgetExceeded as error:
+            return super()._query(messages, **{**kwargs, "max_tokens": max_tokens})
+        except (ContextBudgetExceeded, openai.BadRequestError) as error:
+            exit_status = "ContextLimit"
+            if isinstance(error, openai.BadRequestError):
+                if error.type == "generation_stopped":
+                    exit_status = "LimitsExceeded"
+                elif "context_length_exceeded" not in (error.type, error.code):
+                    raise
             raise LimitsExceeded(
                 {
                     "role": "exit",
                     "content": str(error),
-                    "extra": {"exit_status": "ContextLimit", "submission": ""},
+                    "extra": {"exit_status": exit_status, "submission": ""},
                 }
             ) from error
-        return super()._query(messages, **{**kwargs, "max_tokens": max_tokens})
 
 
 class K2HorizonContextLimitedModel(ContextLimitedModel):

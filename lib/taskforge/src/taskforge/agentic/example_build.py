@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""An example build program that the agent gets in its workspace. The agent runs programs like it in its shell.
+"""An example build program that the agent gets in its workspace. The agent runs programs like it in its shell,
+and ``submit`` runs the program again with other task ids.
 
 Run as ``python3 example_build.py <task id> <output path>``, the program draws a stock-ledger problem from the task
-id, computes the answer, and writes a TaskSpec: the ledger is a file in the solver's ShellSim workspace, and a
+id, computes the answer, and writes a TaskSpec: the ledger is a file in the solver's workspace, and a
 verifyit grader holds the answer, which the solver never sees.
 """
 
@@ -27,6 +28,9 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import NumericSpec
+
+SEMANTICS = CommandSemantics.SHELL_SIMULATOR
+"""The command semantics of the solver's machine. The copy in the agent's workspace has those of the solver backend."""
 
 WORKDIR = "/workspace"
 ITEMS = ("bolts", "nuts", "washers", "hinges", "brackets")
@@ -52,8 +56,8 @@ def task_spec(task_id: str) -> TaskSpec:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(
             capabilities=("shell", "filesystem", "python"),
-            command_semantics=CommandSemantics.SHELL_SIMULATOR,
-            # A package spec with pypi_packages, even none, gives the solver's ShellSim shell python3.
+            command_semantics=SEMANTICS,
+            # A package spec with pypi_packages, even none, gives the solver's shell python3.
             package_spec=PackageSpec(pypi_packages=()),
             working_directory=WORKDIR,
         ),

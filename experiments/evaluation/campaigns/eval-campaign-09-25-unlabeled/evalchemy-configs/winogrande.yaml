@@ -1,5 +1,0 @@
-tasks: [winogrande]
-task_options:
-  winogrande:
-    num_fewshot: 5
-    task_alias: winogrande_5shot

@@ -3,7 +3,7 @@
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import httpx
@@ -22,6 +22,7 @@ from taskcompendium.models import (
 from rolloutengine.chat import ChatModel
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.assistant_prefix import AssistantPrefixHarness
+from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
 from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.models import (
     Continuation,
@@ -148,7 +149,10 @@ async def test_a_managed_agent_runs_host_tools_against_a_chat_endpoint_with_no_m
     tool_call = {"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": '{"key": "a"}'}}
     server = ChatServer(
         [
-            completion({"content": None, "tool_calls": [tool_call]}, finish_reason="tool_calls"),
+            completion(
+                {"content": None, "tool_calls": [tool_call], "reasoning": "Look up a before answering."},
+                finish_reason="tool_calls",
+            ),
             completion({"content": "The value of a is 12."}),
         ]
     )
@@ -183,7 +187,7 @@ async def test_a_response_without_usage_is_a_model_failure():
         await engine.run_task(spec, server.model())
 
     assert caught.value.rollout.failure == RolloutFailure(
-        "ValueError", {"operation": "model", "error": "The chat endpoint reported no token usage"}
+        "ModelResponseError", {"operation": "model", "error": "The chat endpoint reported no token usage"}
     )
 
 
@@ -233,3 +237,47 @@ async def test_assistant_prefix_rejects_reasoning_parsed_by_a_chat_endpoint(chan
     finally:
         await model.client.close()
     assert caught.value.rollout.failure.exception_type == "ValueError"
+
+
+async def test_an_uncapped_chat_request_omits_both_output_limit_fields():
+    server = ChatServer([completion({"content": "12"})])
+    model = replace(server.model(), max_tokens=None)
+    async with model.client:
+        result = await model(ModelRequest(messages=({"role": "user", "content": "Return 12"},), options={}))
+    assert result.message["content"] == "12"
+    assert "max_tokens" not in server.requests[0] and "max_completion_tokens" not in server.requests[0]
+
+
+@pytest.mark.parametrize(("context_window", "stop_reason"), [(17, "length"), (18, "tool_calls"), (None, "tool_calls")])
+async def test_a_tool_call_that_fills_the_context_window_is_a_length_stop(context_window, stop_reason):
+    tool_call = {"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+    server = ChatServer([completion({"content": None, "tool_calls": [tool_call]}, finish_reason="tool_calls")])
+    model = replace(server.model(), context_window=context_window)
+    async with model.client:
+        turn = await model(ModelRequest(messages=({"role": "user", "content": "What is a?"},), options={}))
+    assert turn.stop_reason == stop_reason
+
+
+async def test_exact_chat_preserves_source_conversation_without_appending_submission_instructions():
+    server = ChatServer([completion({"content": "12"})])
+    task = arithmetic_task(
+        context=ConversationInput(
+            events=(
+                TextMessage(role="system", content="Preserve this system instruction."),
+                TextMessage(role="user", content="  What is six plus six?\nAnswer:"),
+            )
+        )
+    )
+    model = server.model()
+    try:
+        result = await RolloutEngine({}, {EXACT_CHAT_HARNESS: ExactChatHarness()}).run_task(
+            rollout_spec(task, harness=EXACT_CHAT_HARNESS, trace=TraceMode.MESSAGES), model
+        )
+    finally:
+        await model.client.close()
+    assert server.requests[0]["messages"] == [
+        {"role": "system", "content": "Preserve this system instruction."},
+        {"role": "user", "content": "  What is six plus six?\nAnswer:"},
+    ]
+    assert result.grade.status is Outcome.GRADED
+    assert result.grade.reward == 1

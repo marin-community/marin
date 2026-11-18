@@ -12,6 +12,8 @@ from typing import Any
 
 from marinskyrl.runtime_options import WeightSyncTransport
 
+COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
+
 
 def validate_expert_block_transport(config: Mapping[str, Any]) -> None:
     """Reject ``expert_block`` unless the config meets its requirements.
@@ -27,25 +29,51 @@ def validate_expert_block_transport(config: Mapping[str, Any]) -> None:
     if transport != WeightSyncTransport.EXPERT_BLOCK:
         return
     trainer = config["trainer"]
+    megatron = trainer["policy"]["megatron_config"] if trainer["strategy"] == "megatron" else None
     problems = []
     if trainer["strategy"] != "megatron":
         problems.append("the policy must train with the megatron strategy")
     else:
-        megatron = trainer["policy"]["megatron_config"]
+        assert megatron is not None
         if megatron["tensor_model_parallel_size"] != 1:
             problems.append("the policy must use tensor_model_parallel_size 1")
         if megatron["expert_tensor_parallel_size"] not in (None, 1):
             problems.append("the policy must use expert_tensor_parallel_size 1")
+        # Expert-block groups do not use the broadcast communicator's channel override.
+        if megatron.get("nccl_max_channels") not in (None, 1):
+            problems.append("expert_block must keep nccl_max_channels at null or 1; use broadcast for more channels")
         # Trainer and engine EP sizes may differ. Whether each divides the expert count is
         # checked when the ranks report.
         if megatron["expert_model_parallel_size"] < 1 or generator["inference_engine_expert_parallel_size"] < 1:
             problems.append("expert-parallel sizes must be positive")
     if generator["weight_sync_backend"] != "nccl":
         problems.append("generator.weight_sync_backend must be nccl")
-    # The transport matches trainer ranks to the checked worker placements, which the engine
-    # factory records for local TP=1 vLLM engines, including DP=1.
-    if generator["backend"] != "vllm" or not generator["run_engines_locally"] or trainer["placement"]["colocate_all"]:
-        problems.append("the engines must be local, non-colocated vLLM engines")
+    if generator["backend"] != "vllm" or not generator["run_engines_locally"]:
+        problems.append("the engines must be local vLLM engines")
+    if trainer["placement"]["colocate_all"]:
+        placement = trainer["placement"]
+        if (
+            megatron is None
+            or placement["policy_num_nodes"] != 1
+            or placement["policy_num_gpus_per_node"] != COLOCATED_EXPERT_BLOCK_GPU_COUNT
+            or megatron["pipeline_model_parallel_size"] != 1
+            or megatron["expert_model_parallel_size"] != COLOCATED_EXPERT_BLOCK_GPU_COUNT
+            or generator["num_inference_engines"] != 1
+            or generator["inference_engine_tensor_parallel_size"] != 1
+            or generator["inference_engine_pipeline_parallel_size"] != 1
+            or generator["inference_engine_data_parallel_size"] != COLOCATED_EXPERT_BLOCK_GPU_COUNT
+            or generator["inference_engine_expert_parallel_size"] != COLOCATED_EXPERT_BLOCK_GPU_COUNT
+        ):
+            problems.append("colocation requires one four-GPU node, policy TP=PP=ETP=1 EP=4, and one vLLM TP=PP=1 DP=EP=4 engine")
+        if trainer["policy"]["model"]["lora"]["rank"]:
+            problems.append("colocated expert_block does not support LoRA")
+        if generator["enforce_eager"]:
+            problems.append("colocated expert_block requires CUDA graphs")
+        kernel_config = generator.get("engine_init_kwargs", {}).get("kernel_config") or {}
+        if kernel_config.get("moe_backend") != "triton":
+            problems.append("colocated expert_block requires the TRITON MoE backend")
+        if not generator["expert_block_sync"]["verify"]:
+            problems.append("colocated expert_block requires expert_block_sync.verify=true")
     tp_pp_size = (
         generator["inference_engine_tensor_parallel_size"] * generator["inference_engine_pipeline_parallel_size"]
     )

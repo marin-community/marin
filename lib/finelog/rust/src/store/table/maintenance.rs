@@ -12,12 +12,13 @@
 //! the local cache, and the lowest-priority layout and index work runs last.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::errors::StatsError;
 use crate::indices::SegmentIndexConfig;
 use crate::maintenance::{
-    OBJECT_GC_INTERVAL, OBJECT_ORPHAN_GRACE, OBJECT_ORPHAN_SWEEP_INTERVAL, REWRITE_LAYOUT_BUDGET,
+    OBJECT_COMPACTION_BUDGET, OBJECT_GC_BACKLOG_INTERVAL, OBJECT_GC_INTERVAL, OBJECT_ORPHAN_GRACE,
+    OBJECT_ORPHAN_SWEEP_INTERVAL, REWRITE_LAYOUT_BUDGET,
 };
 use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for};
 use crate::store::catalog::SpecLifecycle;
@@ -30,6 +31,9 @@ use crate::store::table::index_artifacts::{self, IndexBackfill, INDEX_BUNDLES_PE
 use crate::store::table::key_bounds;
 use crate::store::table::runtime::TableRuntime;
 use crate::store::table::spec_migration::{self, SpecMigration};
+
+/// Report an object-backed cycle's per-step breakdown when it ran this long.
+const SLOW_CYCLE_STEPS_REPORT: Duration = Duration::from_secs(5);
 
 /// Physical maintenance appropriate to the process hosting a table.
 ///
@@ -66,7 +70,9 @@ pub enum TableWork {
     /// a table whose policy disables them.
     IndexArtifacts,
     /// Collect superseded state documents and unreferenced objects.
-    ObjectCollection,
+    /// `backlogged` selects the longer interval of a table that still owes
+    /// compaction.
+    ObjectCollection { backlogged: bool },
     /// Upload legacy segments to the archive and delete its orphans.
     LegacyArchive,
     /// Trim the local cache to the table's retention policy.
@@ -182,8 +188,8 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
             .await;
             Ok(WorkOutcome::Complete)
         }
-        TableWork::ObjectCollection => {
-            collect_objects(runtime).await?;
+        TableWork::ObjectCollection { backlogged } => {
+            collect_objects(runtime, backlogged).await?;
             Ok(WorkOutcome::Complete)
         }
         TableWork::LegacyArchive => {
@@ -246,6 +252,7 @@ async fn cycle(
     force_compact_l0: bool,
 ) -> Result<WorkOutcome, StatsError> {
     let _cycle_guard = runtime.maint_lock.lock().await;
+    let started = Instant::now();
     run_one(runtime, TableWork::Flush).await?;
     if run_one(runtime, TableWork::SpecMigration)
         .await?
@@ -267,7 +274,7 @@ async fn cycle(
         if runtime.policy().object_backed() {
             run_one(runtime, TableWork::Compaction { force_compact_l0 }).await?;
             runtime.controller.gc_objects().await?;
-            run_one(runtime, TableWork::ObjectCollection).await?;
+            run_one(runtime, TableWork::ObjectCollection { backlogged: false }).await?;
         }
         return Ok(WorkOutcome::Continue(MaintenanceClass::SpecMigration));
     }
@@ -275,24 +282,35 @@ async fn cycle(
         runtime.controller.publish_owed().await?;
         if runtime.maintenance_profile().is_relay() {
             runtime.controller.gc_objects().await?;
-            run_one(runtime, TableWork::ObjectCollection).await?;
+            run_one(runtime, TableWork::ObjectCollection { backlogged: false }).await?;
             return Ok(WorkOutcome::Complete);
         }
-        // Report pending while compaction keeps finding runs: an L0 backlog
-        // then drains at the fast re-poll cadence through the dedicated slot
-        // instead of one run per shared-queue visit, mirroring how a legacy
-        // table drains its whole backlog in one cycle.
+        let mut steps = CycleSteps::new(started);
+        steps.mark("flush_and_publish");
         let bounds_pending = run_one(runtime, TableWork::KeyBounds)
             .await?
             .has_more_work();
-        let compacted = run_one(runtime, TableWork::Compaction { force_compact_l0 })
-            .await?
-            .has_more_work();
+        steps.mark("key_bounds");
+        // The prompt re-poll that pending work earns still queues behind every
+        // other table for a shared slot, so drain runs within this visit too.
+        let (compaction, runs) = drain_object_compaction(runtime, force_compact_l0).await?;
+        steps.mark("compaction");
         runtime.controller.gc_objects().await?;
-        run_one(runtime, TableWork::ObjectCollection).await?;
-        run_one(runtime, TableWork::IndexArtifacts).await?;
+        steps.mark("state_gc");
+        // Collection and index backfill do not shrink a compaction backlog, yet
+        // they hold the shared slot for minutes on a large table. While runs
+        // remain, hand the slot back: collection waits out its backlog interval
+        // and index backfill waits for the backlog to clear.
+        let backlogged = compaction.has_more_work();
+        run_one(runtime, TableWork::ObjectCollection { backlogged }).await?;
+        steps.mark("object_collection");
+        if !backlogged {
+            run_one(runtime, TableWork::IndexArtifacts).await?;
+        }
+        steps.mark("index_artifacts");
+        steps.report(runtime.name(), runs);
         return Ok(WorkOutcome::from_pending(
-            bounds_pending || compacted,
+            bounds_pending || compaction.has_more_work(),
             MaintenanceClass::QueryServing,
         ));
     }
@@ -309,7 +327,7 @@ async fn cycle(
         .has_more_work();
     run_one(runtime, TableWork::Compaction { force_compact_l0 }).await?;
     run_one(runtime, TableWork::LegacyArchive).await?;
-    run_one(runtime, TableWork::ObjectCollection).await?;
+    run_one(runtime, TableWork::ObjectCollection { backlogged: false }).await?;
     // Relocate archived segments after local outputs are durable.
     run_one(runtime, TableWork::ArchivePlacement).await?;
     run_one(runtime, TableWork::Eviction).await?;
@@ -340,7 +358,6 @@ async fn compact(
                 catalog: &runtime.catalog,
                 controller: &runtime.controller,
                 segments: &runtime.segments,
-                query_visibility: &runtime.query_visibility,
                 config: &runtime.compaction_config,
                 target_object_bytes: runtime.policy().target_object_bytes,
             },
@@ -390,6 +407,63 @@ async fn compact(
     .map_err(|error| StatsError::Internal(format!("maintenance compact task panicked: {error}")))?
 }
 
+/// Compact an object-backed table's runs until none remain or
+/// [`OBJECT_COMPACTION_BUDGET`] elapses. Returns the last attempt's outcome and
+/// how many attempts ran.
+async fn drain_object_compaction(
+    runtime: &Arc<TableRuntime>,
+    force_compact_l0: bool,
+) -> Result<(WorkOutcome, usize), StatsError> {
+    let started = Instant::now();
+    let mut attempts = 0;
+    loop {
+        let outcome = compact(runtime, force_compact_l0).await?;
+        attempts += 1;
+        if !outcome.has_more_work() || started.elapsed() >= OBJECT_COMPACTION_BUDGET {
+            return Ok((outcome, attempts));
+        }
+    }
+}
+
+/// Per-step wall time of one object-backed maintenance cycle, reported when the
+/// cycle is slow so a long turn shows which step held its shared slot.
+struct CycleSteps {
+    started: Instant,
+    last: Instant,
+    durations_ms: Vec<(&'static str, u64)>,
+}
+
+impl CycleSteps {
+    fn new(started: Instant) -> Self {
+        Self {
+            started,
+            last: started,
+            durations_ms: Vec::new(),
+        }
+    }
+
+    fn mark(&mut self, step: &'static str) {
+        let now = Instant::now();
+        self.durations_ms
+            .push((step, now.duration_since(self.last).as_millis() as u64));
+        self.last = now;
+    }
+
+    fn report(&self, table: &str, compaction_attempts: usize) {
+        let total = self.started.elapsed();
+        if total < SLOW_CYCLE_STEPS_REPORT {
+            return;
+        }
+        tracing::info!(
+            namespace = %table,
+            total_ms = total.as_millis() as u64,
+            compaction_attempts,
+            steps_ms = ?self.durations_ms,
+            "slow maintenance cycle step breakdown"
+        );
+    }
+}
+
 /// Make the legacy archive match the catalog.
 pub async fn sync_archive(runtime: &Arc<TableRuntime>) -> Result<(), StatsError> {
     let Some(remote) = runtime.controller.legacy_store() else {
@@ -410,15 +484,28 @@ pub async fn sync_archive(runtime: &Arc<TableRuntime>) -> Result<(), StatsError>
 }
 
 /// Collect superseded state documents and the objects no retained state names.
-async fn collect_objects(runtime: &Arc<TableRuntime>) -> Result<(), StatsError> {
+///
+/// A `backlogged` table collects on the longer interval. One that has not
+/// collected since this process started begins that interval now instead of
+/// collecting at once, so a restart during a backlog does not put every table's
+/// first visit through a full collection.
+async fn collect_objects(runtime: &Arc<TableRuntime>, backlogged: bool) -> Result<(), StatsError> {
     if !runtime.controller.is_object_backed() {
         return Ok(());
     }
+    let interval = if backlogged {
+        OBJECT_GC_BACKLOG_INTERVAL
+    } else {
+        OBJECT_GC_INTERVAL
+    };
     let due = {
-        let mut last = runtime.last_object_gc.lock().unwrap();
-        let due = last.is_none_or(|instant| instant.elapsed() >= OBJECT_GC_INTERVAL);
-        if due {
-            *last = Some(Instant::now());
+        let mut interval_start = runtime.object_gc_interval_start.lock().unwrap();
+        let due = match *interval_start {
+            Some(instant) => instant.elapsed() >= interval,
+            None => !backlogged,
+        };
+        if due || interval_start.is_none() {
+            *interval_start = Some(Instant::now());
         }
         due
     };
@@ -490,6 +577,7 @@ pub(crate) fn index_backfill<'a>(
 ) -> IndexBackfill<'a> {
     IndexBackfill {
         table: runtime.name(),
+        table_dir: table_dir(runtime),
         catalog: &runtime.catalog,
         controller: &runtime.controller,
         segments: &runtime.segments,

@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 
+from skyrl_train.config.reasoning_span_penalty import ReasoningSpanPenaltyConfig, ReasoningSpanPenaltyTarget
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.trajectory_runners.types import (
     REWARD_SHAPING_COMPONENT_NAMES,
@@ -82,6 +83,7 @@ class TrajectoryRewardShapingConfig:
     non_termination: NonTerminationPenaltyConfig = NonTerminationPenaltyConfig()
     overlong: OverlongPenaltyConfig = OverlongPenaltyConfig()
     successful_length: SuccessfulLengthPenaltyConfig = SuccessfulLengthPenaltyConfig()
+    reasoning_span: ReasoningSpanPenaltyConfig = ReasoningSpanPenaltyConfig()
 
 
 @dataclass(frozen=True)
@@ -180,6 +182,7 @@ def parse_trajectory_reward_shaping_config(config: Mapping[str, Any] | None) -> 
             ),
             max_penalty=float(successful_length.get("max_penalty", defaults.successful_length.max_penalty)),
         ),
+        reasoning_span=ReasoningSpanPenaltyConfig.from_section(_section(config, "reasoning_span")),
     )
     _validate_config(parsed)
     return parsed
@@ -214,6 +217,7 @@ def _validate_config(config: TrajectoryRewardShapingConfig) -> None:
         "non_termination.penalty": config.non_termination.penalty,
         "successful_length.penalty_per_token": config.successful_length.penalty_per_token,
         "successful_length.max_penalty": config.successful_length.max_penalty,
+        "reasoning_span.penalty": config.reasoning_span.penalty,
     }
     for name, value in magnitudes.items():
         if value < 0:
@@ -338,7 +342,13 @@ def _metric_key(value: str | None) -> str:
 
 
 def _empty_components() -> RewardShapingComponents:
-    return {"passthrough": 0.0, "non_termination": 0.0, "overlong": 0.0, "successful_length": 0.0}
+    return {
+        "passthrough": 0.0,
+        "non_termination": 0.0,
+        "overlong": 0.0,
+        "successful_length": 0.0,
+        "reasoning_span": 0.0,
+    }
 
 
 def aggregate_reward_shaping_components(
@@ -357,8 +367,7 @@ def _soft_overlong_penalty(response_length: int, config: OverlongPenaltyConfig) 
     return -penalty_fraction * config.penalty_scale
 
 
-def _trajectory_groups(output: TrajectoryBatch, batch_size: int) -> list[list[int]]:
-    is_last_step = output.get("is_last_step")
+def shaping_groups(is_last_step: Sequence[bool] | None, batch_size: int) -> list[list[int]]:
     if is_last_step is None:
         return [[index] for index in range(batch_size)]
     if len(is_last_step) != batch_size:
@@ -376,6 +385,17 @@ def _trajectory_groups(output: TrajectoryBatch, batch_size: int) -> list[list[in
     return groups
 
 
+def _reasoning_span_evidence(
+    output: TrajectoryBatch, batch_size: int
+) -> tuple[list[int], list[list[int]], list[float]]:
+    violations = output.get("reasoning_span_violations") or [0] * batch_size
+    violation_tokens = output.get("reasoning_span_violation_tokens") or [[] for _ in range(batch_size)]
+    token_penalties = output.get("reasoning_span_token_penalties") or [0.0] * batch_size
+    if not (len(violations) == len(violation_tokens) == len(token_penalties) == batch_size):
+        raise ValueError("reasoning span evidence must have one entry per generated row")
+    return violations, violation_tokens, token_penalties
+
+
 def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
     """Recompute shaping metrics after concatenation, filtering, or replacement."""
     components = output.get("reward_shaping_components")
@@ -388,6 +408,7 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
     outcomes = output.get("unshaped_rewards")
     spans = output.get("reward_shaping_loop_spans")
     loop_advantages = output.get("loop_advantages")
+    violations, violation_tokens, token_penalties = _reasoning_span_evidence(output, batch_size)
     if (
         outcomes is None
         or spans is None
@@ -397,15 +418,19 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
         or len(loop_advantages) != batch_size
     ):
         raise ValueError("shaped outputs must retain outcomes, loop spans, and loop advantages for every generated row")
+    # Exclude marker penalties from loop credit metrics.
+    loop_advantages = [list(row) for row in loop_advantages]
+    for index, penalty in enumerate(token_penalties):
+        for position in violation_tokens[index] if penalty else ():
+            loop_advantages[index][position] -= penalty / len(violation_tokens[index])
 
     stop_reasons = output.get("stop_reasons")
     if stop_reasons is None:
         stop_reasons = [None] * batch_size
-    groups = _trajectory_groups(output, batch_size)
+    groups = shaping_groups(output.get("is_last_step"), batch_size)
     response_lengths = [sum(bool(value) for value in loss_mask) for loss_mask in output["loss_masks"]]
     trajectory_components = [aggregate_reward_shaping_components(components, group) for group in groups]
     shaped_totals = [NormalizedReward.from_output(output["rewards"][group[-1]]).total for group in groups]
-    penalties = [sum(values.values()) for values in trajectory_components]
     trajectory_lengths = [sum(response_lengths[index] for index in group) for group in groups]
     trajectory_stops = [stop_reasons[group[-1]] for group in groups]
     trajectory_outcomes = [float(outcomes[group[-1]]) for group in groups]
@@ -417,11 +442,50 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
         value for sample_advantages in loop_advantages for value in sample_advantages if value < 0
     ]
     loop_incidence = [any(spans[index] for index in group) for group in groups]
+    refreshed_metrics = reward_shaping_metrics(
+        trajectory_components=trajectory_components,
+        shaped_totals=shaped_totals,
+        trajectory_lengths=trajectory_lengths,
+        trajectory_stops=trajectory_stops,
+        trajectory_outcomes=trajectory_outcomes,
+        trajectory_loop_advantages=trajectory_loop_advantages,
+        trajectory_loop_token_counts=trajectory_loop_token_counts,
+        charged_loop_advantages=charged_loop_advantages,
+        loop_incidence=loop_incidence,
+        reasoning_span_token_penalties=[sum(token_penalties[index] for index in group) for group in groups],
+        reasoning_span_incidence=[any(violations[index] for index in group) for group in groups],
+    )
+    metrics = output.get("rollout_metrics") or {}
+    stop_reason_prefix = f"{SHAPING_METRIC_PREFIX}/stop_reason/"
+    for key in [key for key in metrics if key in refreshed_metrics or key.startswith(stop_reason_prefix)]:
+        del metrics[key]
+    metrics.update(refreshed_metrics)
+    output["rollout_metrics"] = metrics
+
+
+def reward_shaping_metrics(
+    *,
+    trajectory_components: Sequence[RewardShapingComponents],
+    shaped_totals: Sequence[float],
+    trajectory_lengths: Sequence[float],
+    trajectory_stops: Sequence[str | None],
+    trajectory_outcomes: Sequence[float],
+    trajectory_loop_advantages: Sequence[float],
+    trajectory_loop_token_counts: Sequence[float],
+    charged_loop_advantages: Sequence[float],
+    loop_incidence: Sequence[bool],
+    reasoning_span_token_penalties: Sequence[float],
+    reasoning_span_incidence: Sequence[bool],
+) -> dict[str, float]:
+    """Aggregate trajectory-level shaping scalars and charged token values."""
+    penalties = [sum(values.values()) for values in trajectory_components]
+    reasoning_span_penalties = [
+        values.get("reasoning_span", 0.0) + penalty
+        for values, penalty in zip(trajectory_components, reasoning_span_token_penalties)
+    ]
     correct_loop_incidence = [
         incidence for incidence, outcome in zip(loop_incidence, trajectory_outcomes) if outcome > 0
     ]
-
-    metrics = output.get("rollout_metrics") or {}
     refreshed_metrics = {
         f"{SHAPING_METRIC_PREFIX}/outcome_reward_mean": float(np.mean(trajectory_outcomes)),
         f"{SHAPING_METRIC_PREFIX}/optimization_reward_before_mean": float(
@@ -441,6 +505,7 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
         f"{SHAPING_METRIC_PREFIX}/overlong_penalty_mean": float(
             np.mean([values["overlong"] for values in trajectory_components])
         ),
+        f"{SHAPING_METRIC_PREFIX}/reasoning_span_penalty_mean": float(np.mean(reasoning_span_penalties)),
         f"{SHAPING_METRIC_PREFIX}/loop_incidence": float(np.mean(loop_incidence)),
         f"{SHAPING_METRIC_PREFIX}/loop_incidence_correct": float(
             np.mean(correct_loop_incidence) if correct_loop_incidence else 0.0
@@ -462,17 +527,35 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
         f"{SHAPING_METRIC_PREFIX}/overlong_incidence": float(
             np.mean([values["overlong"] < 0 for values in trajectory_components])
         ),
+        f"{SHAPING_METRIC_PREFIX}/reasoning_span_incidence": float(np.mean(reasoning_span_incidence)),
         f"{SHAPING_METRIC_PREFIX}/response_tokens_mean": float(np.mean(trajectory_lengths)),
         f"{SHAPING_METRIC_PREFIX}/response_tokens_max": float(max(trajectory_lengths, default=0)),
     }
-    stop_reason_prefix = f"{SHAPING_METRIC_PREFIX}/stop_reason/"
-    for key in [key for key in metrics if key in refreshed_metrics or key.startswith(stop_reason_prefix)]:
-        del metrics[key]
-    metrics.update(refreshed_metrics)
     for stop_reason in trajectory_stops:
         key = f"{SHAPING_METRIC_PREFIX}/stop_reason/{_metric_key(stop_reason)}"
-        metrics[key] = metrics.get(key, 0.0) + 1.0
-    output["rollout_metrics"] = metrics
+        refreshed_metrics[key] = refreshed_metrics.get(key, 0.0) + 1.0
+    return refreshed_metrics
+
+
+def _charge_reasoning_spans(
+    group: Sequence[int],
+    violations: Sequence[int],
+    violation_tokens: Sequence[Sequence[int]],
+    loop_advantages: list[list[float]],
+    token_penalties: list[float],
+    config: ReasoningSpanPenaltyConfig,
+) -> float:
+    """Charge a trajectory's malformed reasoning spans to their marker tokens, or return the reward penalty."""
+    count = sum(violations[index] for index in group)
+    located = [(index, position) for index in group for position in violation_tokens[index]]
+    if not count or not config.penalty:
+        return 0.0
+    if config.target == ReasoningSpanPenaltyTarget.MARKER and len(located) == count:
+        for index, position in located:
+            loop_advantages[index][position] -= config.penalty
+            token_penalties[index] -= config.penalty
+        return 0.0
+    return -config.penalty
 
 
 def shape_trajectory_rewards(output: TrajectoryBatch, raw_config: Mapping[str, Any] | None) -> None:
@@ -482,8 +565,9 @@ def shape_trajectory_rewards(output: TrajectoryBatch, raw_config: Mapping[str, A
     shaping. Pass-through, non-termination, DAPO soft-overlong, and successful-length
     penalties remain additive to the optimization reward. Loop detection
     instead emits ``loop_advantages``; the trainer adds that channel after
-    advantage normalization. Neither path alters pass-rate or verifier-accuracy
-    metrics that consume the raw channel.
+    advantage normalization. A malformed reasoning span is charged to the
+    reward or to its marker token in ``loop_advantages``. Neither path
+    alters pass-rate or verifier-accuracy metrics that consume the raw channel.
     """
     config = parse_trajectory_reward_shaping_config(raw_config)
     if not config.enabled:
@@ -525,11 +609,14 @@ def shape_trajectory_rewards(output: TrajectoryBatch, raw_config: Mapping[str, A
     if len(excluded) != batch_size:
         raise ValueError("exclude_from_baseline must have one entry per trajectory")
 
+    reasoning_violations, violation_tokens, _ = _reasoning_span_evidence(output, batch_size)
+
+    token_penalties = [0.0] * batch_size
     components = [_empty_components() for _ in range(batch_size)]
     shaped_rewards = [reward.to_output() for reward in normalized_rewards]
     response_lengths = [sum(bool(value) for value in loss_mask) for loss_mask in loss_masks]
     accepted_stops = set(config.non_termination.accepted_stop_reasons)
-    groups = _trajectory_groups(output, batch_size)
+    groups = shaping_groups(output.get("is_last_step"), batch_size)
     all_loop_spans, loop_advantages = _build_loop_credit(
         response_ids,
         loss_masks,
@@ -561,6 +648,9 @@ def shape_trajectory_rewards(output: TrajectoryBatch, raw_config: Mapping[str, A
                     config.successful_length.max_penalty,
                     charged_tokens * config.successful_length.penalty_per_token,
                 )
+            final_components["reasoning_span"] = _charge_reasoning_spans(
+                group, reasoning_violations, violation_tokens, loop_advantages, token_penalties, config.reasoning_span
+            )
 
         penalty = sum(sum(components[index].values()) for index in group)
         shaped_rewards[final_index] = normalized_rewards[final_index].with_penalty(loss_masks[final_index], penalty)
@@ -569,5 +659,8 @@ def shape_trajectory_rewards(output: TrajectoryBatch, raw_config: Mapping[str, A
     output["reward_shaping_components"] = components
     output["reward_shaping_loop_spans"] = all_loop_spans
     output["loop_advantages"] = loop_advantages
+    output["reasoning_span_violations"] = list(reasoning_violations)
+    output["reasoning_span_violation_tokens"] = [list(tokens) for tokens in violation_tokens]
+    output["reasoning_span_token_penalties"] = token_penalties
     output["reward_shaping_versions"] = [config.schema_version] * batch_size
     refresh_trajectory_reward_shaping_metrics(output)

@@ -1,5 +1,0 @@
-tasks: [piqa]
-task_options:
-  piqa:
-    num_fewshot: 0
-    task_alias: piqa_0shot

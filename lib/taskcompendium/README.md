@@ -26,6 +26,29 @@ flowchart LR
     G --> R[Typed grade result]
 ```
 
+## Evaluation corpora
+
+`taskcompendium.evaluation.spec` defines `EvaluationProtocol` (schema version 3),
+`EvaluationItem`, operation kinds, and consumer summary semantics.
+`taskcompendium.evaluation.corpus` verifies and reads published corpora;
+`taskcompendium.evaluation.selection` selects cohorts using projected task tags
+and labels, ordered groups, and tokenizer-dependent context budgets. Dataset
+declarations supply source-specific groups and budget parameters.
+`taskcompendium.pipeline.evaluation` publishes the full pinned population with
+conversion provenance and shard hashes. These metadata schemas are independent
+of the TaskSpec schema below.
+
+Evaluation adapters live under `taskcompendium.importers` and
+`taskcompendium.convert`. Reusable Evalchemy benchmark modules and source graders
+live in `taskcompendium.importers.evalchemy`. Experiment-owned `EvaluationCorpusRecipe` declarations
+bind them to acquisition and environment recipes. Verifyit supplies shared
+scoring and judge transport; Shellbox isolates executable graders.
+
+`marin.rollouts.evaluation` executes generation and likelihood operations and
+writes raw FineStore attempts. Evaldash summary computation and raw-archive
+ingestion remain separate work. See [evaluation tasks](../../docs/references/evaluation-tasks.md)
+for publication, execution, and retry/resume contracts.
+
 ## What is a task spec?
 
 `TaskSpec` defines one source task, including its grader and expected values. An importer or author creates it before choosing an execution runtime.
@@ -42,10 +65,12 @@ flowchart LR
 | `answer_type` | The semantic result: `text`, `number`, `json`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `answer_format` | How the final answer is requested from the model and extracted. See [Answer formats](#answer-formats). |
 | `grader` | How an attempt is graded. See [What is a grader?](#what-is-a-grader) |
+| `reasoning_markup` | `grade` (default) scores an attempt as usual. `reject` grades an attempt whose model reply has a malformed reasoning span (unclosed, repeated, or a stray closer) as a reward-0 `submission_failure`. Applied by the SkyRL rollout worker before grading results are grouped. |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
-| `schema_version` | Version of the serialized spec: `0.28`. Readers reject other versions. |
+| `schema_version` | Version of the serialized spec: `0.30`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
+| `labels` | String-valued annotations for queries and cohort selection. Tags and labels are also projected into normalized Parquet. |
 
 A task has one final result. TaskSpec does not define ordered task stages or stage-reward aggregation.
 
@@ -207,7 +232,7 @@ The runtime presents the source turns and function definitions and retains the f
 | `script` | `ScriptGrader` | A command run after the attempt in a fresh machine built from a pinned image. |
 | `none` | `NoGrader` | The task cannot be graded here. `reason` says why; `contract` optionally keeps the source's grading terms. |
 
-A `VerifyitGrader` without an `environment` grades the extracted answer in process. Its mode must be one of `verifyit.candidate.IN_PROCESS_MODES`: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`, `structured_exact`, or `predicted_action`. A `VerifyitGrader` with an `environment` runs the verifyit command in a fresh machine built from that environment, with verifier resources under `/tests` and the verifyit specification at `/tests/verifier.toml`. Modes that execute code, such as `pytest` and `stdio`, grade only there. `grade_task` and RolloutEngine grade a `judge` grader on the host, through its judge service (`grade_remote_judge_answer`). Construction validates `parameters` with verifyit.
+A `VerifyitGrader` without an `environment` grades the extracted answer in process. Its mode must be one of `verifyit.candidate.IN_PROCESS_MODES`: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`, `structured_exact`, `structure_closure`, `reasoning_markup`, or `predicted_action`. `reasoning_markup` grades the final assistant message's text, including the text before its function calls, and scores one when its reasoning markup is well formed; the attempt's stop reason excuses a span left open by a length stop. A `VerifyitGrader` with an `environment` runs the verifyit command in a fresh machine built from that environment, with verifier resources under `/tests` and the verifyit specification at `/tests/verifier.toml`. Modes that execute code, such as `pytest` and `stdio`, grade only there. `grade_task` and RolloutEngine grade a `judge` grader on the host, through its judge service (`grade_remote_judge_answer`). Construction validates `parameters` with verifyit.
 
 A `ScriptGrader` declares:
 
@@ -220,9 +245,21 @@ A `ScriptGrader` declares:
 | `answer_path` | Where the extracted answer is written (default `/app/answer.txt`): text as text, JSON as JSON, and a final action as the final assistant message's JSON. |
 | `conversation_path` | Where the conversation is written as OpenAI-style chat messages in JSON (default `/tests/conversation.json`). |
 | `reward` | `StdoutReward` (default), `ExitCodeReward`, or `FileReward`. |
+| `empty_output` | `ZERO` rejects an empty extracted answer; `GRADE` passes it to the script. |
+| `judge` | Optional `JudgeSpec` declaring the model service required by the script. |
 | `timeout` | Deadline in seconds for each grading command (default 600). |
 
 `StdoutReward` requires exit code 0 and one finite number on standard output; anything else is `infra_error`. `ExitCodeReward` scores 1.0 for exit code 0 and 0.0 otherwise. `FileReward.files` lists candidate reward files in priority order; the first that exists supplies the score. Each `RewardFile` holds a number, or a JSON object whose `key` (default `reward`) holds the score and whose optional `detail` object becomes the grade detail. `FileReward.pass_above` sets `GradeResult.passed`; `ExitCodeReward` sets it from the exit code. A missing, empty, or invalid reward file is `infra_error`. A timed-out command is `infra_error` for every reward source.
+
+`RewardFileFormat.VERDICT_JSON` reads Verifyit's structured `reward`, `status`
+and `detail` fields. It preserves unscored infrastructure failures and invalid
+tasks, including their diagnostic details. The command must exit successfully.
+This format retains named metrics and reduction inputs in `detail`.
+
+A scripted judge receives its declared specification at `/tests/judge.toml`.
+The caller supplies `JudgeConnection` separately; the runtime puts credentials
+only in the verifier machine's environment. Task serialization and staged
+archives exclude those credentials. The machine must permit network access.
 
 TaskSpec validation ties the grader to the answer:
 
@@ -393,6 +430,5 @@ cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-Schema `0.28` adds `FinalAction.normal_submission` for private unsolvability labels while
-preserving the normal answer presentation. Reconvert
+Schema `0.30` adds queryable task labels. Reconvert
 older TaskSpecs before using the updated readers; no compatibility shim is supplied.

@@ -10,6 +10,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--harbor-local-cgroup-parent",
+        help="Delegated cgroup v2 subtree for real local Harbor tests",
+    )
+
+
 @pytest.fixture(scope="session")
 def event_loop_policy():
     """Use ProactorEventLoop on Windows to support asyncio subprocess.

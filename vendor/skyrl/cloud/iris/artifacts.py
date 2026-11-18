@@ -129,12 +129,6 @@ def copy_file_inventory(
     return tuple(entry for _, entry in inventory)
 
 
-def copy_tree(source_uri: str, destination: Path) -> tuple[FileEntry, ...]:
-    """Copy an object-store tree to an empty local directory and verify file sizes."""
-    filesystem, inventory = _source_inventory(source_uri)
-    return copy_file_inventory(filesystem, inventory, destination)
-
-
 @contextmanager
 def atomic_directory_update(target: Path, *, staging_prefix: str) -> Iterator[Path]:
     """Build and atomically install a replacement directory, restoring failures."""

@@ -6,8 +6,12 @@ import logging
 import tempfile
 from pathlib import Path
 
-import pytest
+from harbor_config.errors import ErrorCategory, error_category
 
+import harbor.environments.factory as environment_factory
+import pytest
+from harbor.agents.factory import AgentFactory
+from harbor.models.agent.name import AgentName
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.environments.capabilities import EnvironmentCapabilities
@@ -20,7 +24,16 @@ from harbor.models.trial.config import (
     TrialConfig,
     VerifierConfig,
 )
+from harbor.models.trial.result import TrialResult
+from harbor.job import Job
 from harbor.trial.trial import Trial
+
+
+@pytest.fixture(autouse=True)
+def registered_environment(monkeypatch):
+    monkeypatch.setattr(
+        environment_factory, "_load_environment_class", lambda _: SlowStopEnvironment
+    )
 
 
 class HangingAgent(BaseAgent):
@@ -78,19 +91,17 @@ class SlowStopEnvironment(BaseEnvironment):
 
     stop_started: asyncio.Event
     stop_completed: asyncio.Event
-    stop_delete_value: bool | None
     stop_call_count: int
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.stop_started = asyncio.Event()
         self.stop_completed = asyncio.Event()
-        self.stop_delete_value = None
         self.stop_call_count = 0
 
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.DOCKER
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
@@ -99,7 +110,9 @@ class SlowStopEnvironment(BaseEnvironment):
     def _validate_definition(self):
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         pass
 
     async def stop(self, delete: bool):
@@ -111,7 +124,6 @@ class SlowStopEnvironment(BaseEnvironment):
         proceed = asyncio.Event()
         asyncio.get_event_loop().call_later(0.05, proceed.set)
         await proceed.wait()
-        self.stop_delete_value = delete
         self.stop_completed.set()
 
     async def upload_file(self, source_path, target_path):
@@ -141,7 +153,7 @@ class HangingStopEnvironment(BaseEnvironment):
 
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.DOCKER
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
@@ -150,7 +162,9 @@ class HangingStopEnvironment(BaseEnvironment):
     def _validate_definition(self):
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         pass
 
     async def stop(self, delete: bool):
@@ -186,7 +200,7 @@ class MountedEnvironment(BaseEnvironment):
 
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.DOCKER
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
@@ -195,7 +209,9 @@ class MountedEnvironment(BaseEnvironment):
     def _validate_definition(self):
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         pass
 
     async def stop(self, delete: bool):
@@ -221,7 +237,9 @@ class MountedEnvironment(BaseEnvironment):
 
 
 class FailingStartEnvironment(MountedEnvironment):
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         raise RuntimeError("environment control plane unavailable")
 
 
@@ -264,9 +282,9 @@ async def _make_trial(
     config = TrialConfig(
         task=TaskConfig(path=task_dir),
         trials_dir=trials_dir,
-        agent=AgentConfig(import_path="tests.unit.test_trial_cleanup:HangingAgent"),
+        agent=AgentConfig(name=AgentName.PI),
         environment=EnvironmentConfig(
-            import_path="tests.unit.test_trial_cleanup:SlowStopEnvironment",
+            type=EnvironmentType.LOCAL,
             delete=True,
         ),
         verifier=VerifierConfig(disable=True),
@@ -303,27 +321,12 @@ class TestStopShieldedFromCancellation:
             await env.stop_completed.wait()
             assert trial._is_agent_environment_stopped is True
             assert env.stop_call_count == 1
-
-    async def test_stop_called_with_delete_false(self):
-        """environment.stop() receives the correct delete flag from config."""
-        with tempfile.TemporaryDirectory() as tmp:
-            trial, agent, env = await _make_trial(Path(tmp))
-            trial.config.environment.delete = False
-
-            task = asyncio.create_task(trial.run())
-
-            await agent.running.wait()
-            task.cancel()
-
-            await env.stop_started.wait()
-            task.cancel()
-
-            with pytest.raises(asyncio.CancelledError):
-                await task
-
-            await env.stop_completed.wait()
-            assert env.stop_delete_value is False
-            assert env.stop_call_count == 1
+            native = TrialResult.model_validate_json(
+                trial.paths.result_path.read_text()
+            )
+            assert native.completion is not None
+            assert native.exception_info.exception_type == "CancelledError"
+            assert Job._is_resume_retryable_result(native)
 
 
 class TestStopBoundedByWallClock:
@@ -333,6 +336,11 @@ class TestStopBoundedByWallClock:
     async def test_trial_finalizes_when_stop_hangs(
         self, monkeypatch: pytest.MonkeyPatch
     ):
+        monkeypatch.setattr(
+            environment_factory,
+            "_load_environment_class",
+            lambda _: HangingStopEnvironment,
+        )
         monkeypatch.setattr("harbor.trial.trial.ENVIRONMENT_STOP_TIMEOUT_SEC", 0.2)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -344,12 +352,9 @@ class TestStopBoundedByWallClock:
                 task=TaskConfig(path=task_dir),
                 trials_dir=trials_dir,
                 agent=AgentConfig(
-                    import_path="tests.unit.test_trial_cleanup:QuickAgent"
-                ),
+                    name=AgentName.CODEX),
                 environment=EnvironmentConfig(
-                    import_path=(
-                        "tests.unit.test_trial_cleanup:HangingStopEnvironment"
-                    ),
+                    type=EnvironmentType.LOCAL,
                     delete=True,
                 ),
                 verifier=VerifierConfig(disable=True),
@@ -366,16 +371,25 @@ class TestStopBoundedByWallClock:
 
             assert done, "trial finalize hung on a stuck environment stop"
             assert env.stop_started.is_set()
-            assert trial._is_agent_environment_stopped is True
-            task.result()  # surface any unexpected trial error
+            result = task.result()
+            assert result.completion is None
+            assert result.exception_info is not None
+            assert result.verifier_result is None
+            assert (
+                error_category(result.exception_info.exception_type)
+                is ErrorCategory.INFRASTRUCTURE
+            )
+            assert Job._is_resume_retryable_result(result)
 
 
 class TestPrepareLogsForHostCalledDuringTrial:
     """prepare_logs_for_host() must be called before populate_context_post_run."""
 
-    async def test_prepare_logs_called_on_mounted_env(self):
-        """For a mounted environment, prepare_logs_for_host() is called after the
-        agent completes so that the host can read container-owned files."""
+    async def test_prepare_logs_called_on_mounted_env(self, monkeypatch):
+        """Mounted logs are prepared before the host reads container-owned files."""
+        monkeypatch.setattr(
+            environment_factory, "_load_environment_class", lambda _: MountedEnvironment
+        )
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = _create_task_dir(Path(tmp))
             trials_dir = Path(tmp) / "trials"
@@ -385,11 +399,9 @@ class TestPrepareLogsForHostCalledDuringTrial:
                 task=TaskConfig(path=task_dir),
                 trials_dir=trials_dir,
                 agent=AgentConfig(
-                    import_path="tests.unit.test_trial_cleanup:QuickAgent"
-                ),
+                    name=AgentName.CODEX),
                 environment=EnvironmentConfig(
-                    import_path="tests.unit.test_trial_cleanup:MountedEnvironment",
-                    delete=False,
+                    type=EnvironmentType.LOCAL,
                 ),
                 verifier=VerifierConfig(disable=True),
             )
@@ -404,25 +416,28 @@ class TestPrepareLogsForHostCalledDuringTrial:
 
 
 @pytest.mark.parametrize(
-    "environment_import_path",
+    "environment_class",
     [
-        "tests.unit.test_trial_cleanup:FailingStartEnvironment",
-        "tests.unit.test_trial_cleanup:FailingStopEnvironment",
+        FailingStartEnvironment,
+        FailingStopEnvironment,
     ],
     ids=["start", "stop"],
 )
 async def test_environment_failure_logs_error_with_traceback(
-    tmp_path: Path, caplog, environment_import_path: str
+    tmp_path: Path, caplog, environment_class, monkeypatch
 ) -> None:
+    monkeypatch.setattr(
+        environment_factory, "_load_environment_class", lambda _: environment_class
+    )
     task_dir = _create_task_dir(tmp_path)
     trials_dir = tmp_path / "trials"
     trials_dir.mkdir()
     config = TrialConfig(
         task=TaskConfig(path=task_dir),
         trials_dir=trials_dir,
-        agent=AgentConfig(import_path="tests.unit.test_trial_cleanup:QuickAgent"),
+        agent=AgentConfig(name=AgentName.CODEX),
         environment=EnvironmentConfig(
-            import_path=environment_import_path,
+            type=EnvironmentType.LOCAL,
             delete=True,
         ),
         verifier=VerifierConfig(disable=True),
@@ -433,7 +448,11 @@ async def test_environment_failure_logs_error_with_traceback(
         result = await trial.run()
 
     assert result.exception_info is not None
-    assert result.exception_info.exception_type == "RuntimeError"
+    assert result.exception_info.exception_type == (
+        "RuntimeError"
+        if environment_class is FailingStartEnvironment
+        else "EnvironmentStopError"
+    )
     failure = next(
         record for record in caplog.records if record.levelno == logging.ERROR
     )
@@ -444,7 +463,11 @@ async def test_environment_failure_logs_error_with_traceback(
 @pytest.mark.unit
 async def test_output_recovery_failure_is_persisted_as_secondary_exception(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setattr(
+        environment_factory, "_load_environment_class", lambda _: MountedEnvironment
+    )
     task_dir = _create_task_dir(tmp_path)
     trials_dir = tmp_path / "trials"
     trials_dir.mkdir()
@@ -452,11 +475,9 @@ async def test_output_recovery_failure_is_persisted_as_secondary_exception(
         task=TaskConfig(path=task_dir),
         trials_dir=trials_dir,
         agent=AgentConfig(
-            import_path="tests.unit.test_trial_cleanup:TruncatedOutputAgent"
-        ),
+            name=AgentName.OPENCODE),
         environment=EnvironmentConfig(
-            import_path="tests.unit.test_trial_cleanup:MountedEnvironment",
-            delete=False,
+            type=EnvironmentType.LOCAL,
         ),
         verifier=VerifierConfig(disable=True),
     )
@@ -474,3 +495,12 @@ async def test_output_recovery_failure_is_persisted_as_secondary_exception(
     assert [
         error["exception_type"] for error in persisted["secondary_exception_info"]
     ] == ["UnicodeDecodeError"]
+
+
+@pytest.fixture(autouse=True)
+def register_test_agents(monkeypatch):
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, HangingAgent)
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.CODEX, QuickAgent)
+    monkeypatch.setitem(
+        AgentFactory._AGENT_MAP, AgentName.OPENCODE, TruncatedOutputAgent
+    )

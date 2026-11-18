@@ -5,11 +5,14 @@
 split_gcs_path, rebase_file_path)."""
 
 import dataclasses
+import os
 import pickle
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from fsspec.implementations.memory import MemoryFileSystem
+from rigging.filesystem import factory
 from rigging.filesystem.storage_path import (
     StoragePath,
     prefix_join,
@@ -350,6 +353,42 @@ def test_storage_path_rm_rmtree_rename_local(tmp_path):
     src.rename(dst)
     assert not src.exists()
     assert dst.read_text() == "moved"
+
+
+def test_refresh_lifetime_preserves_local_bytes_and_does_not_recreate_missing_files(tmp_path):
+    path = StoragePath(str(tmp_path / "object"))
+    path.write_bytes(b"retained payload")
+    aged = datetime.now(UTC) - timedelta(days=20)
+    os.utime(str(path), (aged.timestamp(), aged.timestamp()))
+    before = datetime.now(UTC)
+
+    path.refresh_lifetime(before=None)
+    assert path.mtime() < before
+    cutoff = before - timedelta(days=15)
+    path.refresh_lifetime(before=cutoff)
+    assert path.mtime() >= cutoff
+    assert path.read_bytes() == b"retained payload"
+
+    path.rm()
+    with pytest.raises(FileNotFoundError):
+        path.refresh_lifetime(before=before)
+    assert not path.exists()
+
+
+def test_refresh_lifetime_uses_gcs_creation_time_even_after_a_metadata_update(tmp_path, monkeypatch):
+    fs = MemoryFileSystem()
+    key = f"/{tmp_path.name}/object"
+    fs.pipe_file(key, b"retained payload")
+    fs.store[key].created = datetime.now(UTC) - timedelta(days=20)
+    before = datetime.now(UTC)
+    monkeypatch.setattr(fs, "modified", lambda _path: before)
+    monkeypatch.setattr(factory, "url_to_fs", lambda _url: (fs, key))
+
+    cutoff = before - timedelta(days=15)
+    StoragePath(f"gs:/{key}").refresh_lifetime(before=cutoff)
+
+    assert fs.created(key) >= cutoff
+    assert fs.cat_file(key) == b"retained payload"
 
 
 def test_storage_path_upload_download_local(tmp_path):

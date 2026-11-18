@@ -61,6 +61,13 @@ _SM100_COMPUTE_CAPABILITY = 10.0
 # back to a single chunk when the local expert count is not divisible.
 _EXPERT_CHUNKS = 2
 
+
+def capacity_block_experts(local_experts: int) -> int:
+    """Experts that share one receiver capacity: a contiguous run of global expert ids within one shard."""
+    chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
+    return local_experts // chunks
+
+
 # Selects the device-initiated ragged all-to-all kernel. The second entry is scoped to that op, so
 # every other collective keeps NCCL's host-launched kernels.
 RAGGED_REQUIRED_XLA_FLAGS = (
@@ -754,8 +761,8 @@ def _moe_mlp_ep_ragged_a2a_local(
     # collectives), so unchunked they pin [capacity, H] + [TK, H] per block window and the
     # hero step no longer fits next to NCCL's pools. Capacity splits evenly across chunks,
     # which also makes drop clipping per-chunk.
-    chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
-    chunk_experts = local_experts // chunks
+    chunk_experts = capacity_block_experts(local_experts)
+    chunks = local_experts // chunk_experts
     chunk_capacity = max(chunk_experts, int(math.ceil(physical_capacity / chunks)))
 
     with jax.named_scope("dispatch"):

@@ -6,6 +6,7 @@
 from pathlib import Path
 
 from rigging.server_auth import VerifiedIdentity, identity_scope
+from rigging.timing import Duration
 
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
@@ -52,7 +53,8 @@ class InProcessPeerConnection:
     ) -> controller_pb2.Controller.FederationSyncResponse:
         self._require_reachable()
         with identity_scope(_PEER_IDENTITY):
-            return self._controller.federation_sync(request)
+            response = self._controller.federation_sync(request)
+        return controller_pb2.Controller.FederationSyncResponse.FromString(response.SerializeToString())
 
     def terminate_job(self, job_id: JobName) -> None:
         self._require_reachable()
@@ -113,8 +115,10 @@ class FederationJourney:
         self.parent.close()
         self.peer.close()
 
-    def submit(self, name: str, *, tasks: int = 1) -> JobRef:
-        return self.parent.submit(name, tasks=tasks, required_attributes={CLUSTER_CONSTRAINT_KEY: PEER_ID})
+    def submit(self, name: str, *, tasks: int = 1, termination_grace: Duration | None = None) -> JobRef:
+        return self.parent.submit(
+            name, tasks=tasks, termination_grace=termination_grace, required_attributes={CLUSTER_CONSTRAINT_KEY: PEER_ID}
+        )
 
     def submit_child_on_peer(self, parent: JobRef, name: str, *, tasks: int = 1, preemption_retries: int = 0) -> JobRef:
         """Submit one descendant from the execution cluster."""

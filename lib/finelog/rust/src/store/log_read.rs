@@ -93,7 +93,7 @@ pub fn regex_literal_prefix(pattern: &str) -> &str {
 /// Escape a string literal for embedding in single-quoted SQL: double any
 /// embedded single quote (`'` -> `''`). The literal carries verbatim through the
 /// query engine — no regex/LIKE reinterpretation.
-fn sql_literal(s: &str) -> String {
+pub(crate) fn sql_literal(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 

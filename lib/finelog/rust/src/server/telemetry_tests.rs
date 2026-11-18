@@ -17,6 +17,7 @@ use tokio::sync::{oneshot, Semaphore};
 
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::{make_ctx, run_query_over};
+use crate::read_executor::ReadExecutor;
 use crate::server::auth::AuthPolicy;
 use crate::server::ingest_health::{IngestHealth, HEALTH_OK};
 use crate::server::test_support::{disk_store, serve, PUB_A};
@@ -111,17 +112,12 @@ async fn list_relay_status_accepts_connect_json_for_independent_consumers() {
 }
 
 async fn serve_with_config(store: Arc<Store>, config: ServerConfig) -> SocketAddr {
-    let app = build_app_with_config(store, config);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
+    let app = build_app_with_config(
+        store,
+        config,
+        Arc::new(ReadExecutor::for_process().unwrap()),
+    );
+    let (addr, _) = crate::server::test_support::serve_app(app).await;
     addr
 }
 
@@ -1487,12 +1483,10 @@ async fn a_stale_client_policy_registers_a_spec_on_a_managed_namespace() {
     // a legacy table's stored policy can predate the current rules. A migration
     // client can only echo the stored policy it observes, so the spec validates
     // against the managed policy rather than the client's copy.
-    use crate::proto::finelog::stats::{
-        OwnedRegisterTableRequestView, RegisterTableRequest, StatsService, TableSpec,
-    };
+    use crate::proto::finelog::stats::{RegisterTableRequest, StatsService, TableSpec};
     use crate::server::stats_service::StatsServiceImpl;
     use crate::store::schema::schema_to_proto_owned;
-    use buffa::MessageField;
+    use buffa::{view::HasMessageView, Message, MessageField};
 
     let store = disk_store("managed-policy-stale-spec");
     let namespace = "telemetry_v1.iris";
@@ -1520,11 +1514,13 @@ async fn a_stale_client_policy_registers_a_spec_on_a_managed_namespace() {
         }),
         ..RegisterTableRequest::default()
     };
+    let body = Bytes::from(request.encode_to_vec());
+    let view = RegisterTableRequest::decode_view(&body).unwrap();
     let service = StatsServiceImpl::new(Arc::clone(&store));
     let response = service
         .register_table(
             local_ctx(),
-            OwnedRegisterTableRequestView::from_owned(&request).unwrap(),
+            connectrpc::ServiceRequest::from_parts(&view, &body),
         )
         .await
         .unwrap()
@@ -1545,12 +1541,11 @@ async fn an_explicit_local_cache_conflicting_with_the_managed_policy_is_rejected
     // explicitly declares a conflicting cache policy is still refused even
     // when it matches the request's storage_policy.
     use crate::proto::finelog::stats::{
-        OperatingPolicy, OwnedRegisterTableRequestView, RegisterTableRequest, StatsService,
-        TableSpec,
+        OperatingPolicy, RegisterTableRequest, StatsService, TableSpec,
     };
     use crate::server::stats_service::StatsServiceImpl;
     use crate::store::schema::schema_to_proto_owned;
-    use buffa::MessageField;
+    use buffa::{view::HasMessageView, Message, MessageField};
 
     let store = disk_store("managed-policy-conflicting-spec");
     let namespace = "telemetry_v1.iris";
@@ -1582,11 +1577,13 @@ async fn an_explicit_local_cache_conflicting_with_the_managed_policy_is_rejected
         }),
         ..RegisterTableRequest::default()
     };
+    let body = Bytes::from(request.encode_to_vec());
+    let view = RegisterTableRequest::decode_view(&body).unwrap();
     let service = StatsServiceImpl::new(Arc::clone(&store));
     let Err(error) = service
         .register_table(
             local_ctx(),
-            OwnedRegisterTableRequestView::from_owned(&request).unwrap(),
+            connectrpc::ServiceRequest::from_parts(&view, &body),
         )
         .await
     else {

@@ -5,15 +5,95 @@ use std::time::Duration;
 
 use crate::support::{
     assert_metadata_only_bootstrap, cached_data_objects, live_levels, live_objects,
-    localized_data_objects, register_v1, run_sql, seq_column, wait_for_cache_fill, write_row,
-    Cluster, Invariants, TABLE,
+    localized_data_objects, register_v1, retargeted_spec, run_sql, seq_column, wait_for_cache_fill,
+    write_row, Cluster, Invariants, TABLE,
 };
 use finelog::test_support::ObjectOp;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn migration_reads_cold_inputs_without_caching_them() {
+    let cluster = Cluster::new("migration_scan_sources");
+    let (store, faults) = cluster.open();
+    register_v1(&store).await;
+    for (worker, bytes) in [("w-1", 10), ("w-2", 20), ("w-3", 30)] {
+        write_row(&store, worker, bytes).await;
+    }
+    let state = cluster.states().load(TABLE).await.unwrap().unwrap();
+    let inputs = live_objects(&state.catalog);
+    for id in &inputs {
+        std::fs::remove_file(cluster.data_dir.join(id)).unwrap();
+    }
+    faults.clear_calls();
+    store
+        .register_versioned_table(TABLE, retargeted_spec(2))
+        .unwrap();
+    for _ in 0..4 {
+        store.maintain_namespace(TABLE, false).await.unwrap();
+        if store.spec_lifecycle(TABLE).unwrap().active_version() == 2 {
+            break;
+        }
+    }
+    assert_eq!(store.spec_lifecycle(TABLE).unwrap().active_version(), 2);
+    assert!(localized_data_objects(&faults).is_empty());
+    assert!(cached_data_objects(&cluster.data_dir).is_disjoint(&inputs));
+    let after = Invariants::new(&cluster.remote_dir).check(&store).await;
+    assert_eq!(after.seqs, vec![1, 2, 3]);
+    store.shutdown(Duration::from_secs(1)).await;
+    cluster.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn compaction_reads_cold_and_mixed_inputs_without_caching_them() {
+    for keep_cached in [false, true] {
+        let cluster = Cluster::new("compaction_scan_sources");
+        let (store, _) = cluster.open();
+        register_v1(&store).await;
+        for (worker, mem_bytes) in [("w-1", 10), ("w-2", 20), ("w-3", 30)] {
+            write_row(&store, worker, mem_bytes).await;
+        }
+        let before = cluster.states().load(TABLE).await.unwrap().unwrap();
+        let inputs = live_objects(&before.catalog);
+        let cached = keep_cached.then(|| inputs.first().unwrap().clone());
+        let mut cached_remote = None;
+        for id in &inputs {
+            if cached.as_ref() == Some(id) {
+                // A usable cache entry must avoid even opening its remote copy.
+                let path = cluster.remote_dir.join(id);
+                cached_remote = Some((path.clone(), std::fs::read(&path).unwrap()));
+                std::fs::write(path, b"invalid remote parquet").unwrap();
+            } else {
+                std::fs::remove_file(cluster.data_dir.join(id)).unwrap();
+            }
+        }
+
+        store.maintain_namespace(TABLE, true).await.unwrap();
+        if let Some((path, bytes)) = cached_remote {
+            std::fs::write(path, bytes).unwrap();
+        }
+        let cache = cached_data_objects(&cluster.data_dir);
+        for id in &inputs {
+            assert_eq!(
+                cache.contains(id),
+                cached.as_ref() == Some(id),
+                "compaction must not populate the cache with its input objects"
+            );
+        }
+        let after = Invariants::new(&cluster.remote_dir).check(&store).await;
+        assert_eq!(after.seqs, vec![1, 2, 3]);
+        let outputs = live_objects(&after.state);
+        assert_eq!(outputs.len(), 1);
+        assert!(outputs.is_disjoint(&inputs));
+        assert_eq!(live_levels(&after.state), vec![1]);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        cluster.cleanup();
+    }
+}
+
 /// A store that restarts with no local cache and no local catalog bootstraps
 /// from the object directory alone. Recovery downloads no data, the first reads
-/// scan the object directory directly while the cache fills in the background
-/// with only the live objects, and the table compacts cleanly afterwards.
+/// scan the object directory directly. Repeated queries warm only live objects,
+/// and the table compacts cleanly afterwards.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_cold_restart_scans_remotely_and_warms_only_the_live_objects() {
     let cluster = Cluster::new("scenario_cold_restart");
@@ -58,9 +138,7 @@ async fn a_cold_restart_scans_remotely_and_warms_only_the_live_objects() {
         "a claimed HEAD makes a cold projection's first publication list-free"
     );
 
-    // A full scan, before any maintenance cycle. The cold cache never blocks
-    // the read: the scan runs against the object directory itself and the
-    // cache fills behind it.
+    // A one-off full scan reads remotely and does not populate the cache.
     faults.clear_calls();
     assert!(cached_data_objects(&cluster.data_dir).is_empty());
     let scanned = seq_column(&run_sql(&restarted, &format!("SELECT seq FROM \"{TABLE}\"")).await);
@@ -69,6 +147,11 @@ async fn a_cold_restart_scans_remotely_and_warms_only_the_live_objects() {
         localized_data_objects(&faults).is_empty(),
         "a cold scan must not block on object downloads"
     );
+    assert!(cached_data_objects(&cluster.data_dir).is_empty());
+
+    // A second independent request demonstrates reuse and admits the fill.
+    let repeated = seq_column(&run_sql(&restarted, &format!("SELECT seq FROM \"{TABLE}\"")).await);
+    assert_eq!(repeated, scanned);
     let warmed = wait_for_cache_fill(&cluster.data_dir, &live).await;
     assert_eq!(
         warmed, live,

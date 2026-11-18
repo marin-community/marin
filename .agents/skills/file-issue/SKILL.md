@@ -81,12 +81,19 @@ Done when:
 Extract the symptom or desired outcome, impact, location, reproduction, known
 cause, and severity. Ask when the issue or its kind is ambiguous.
 
+Resolve the target repository from the user's request or the delegating
+workflow. Default to `marin-community/marin` only when neither specifies a
+repository. Set `issue_repository` to that `owner/repo` value and use the same
+target for duplicate search, creation, and label lookup. For example,
+`research-engineering` coordinating issues target
+`marin-community/marin-logbooks`.
+
 ### 2. Check duplicates
 
 Search for existing issues first:
 
 ```bash
-gh issue list --repo marin-community/marin --state open --search "<keyword>"
+gh issue list --repo "$issue_repository" --state open --search "<keyword>"
 ```
 
 If a match exists, tell the user and offer to comment on it instead.
@@ -114,9 +121,10 @@ completion criterion.
 
 ### 5. Apply the approval boundary
 
-If the user explicitly asked to file an issue, skip the preview — file it and
-share the link. If the agent surfaced the issue (not explicitly requested),
-show the drafted title and body and wait for approval or edits.
+If the user explicitly asked to file an issue, or a selected workflow delegates
+creation within the authorized task, skip the preview, file it, and share the
+link. If the agent surfaced an issue outside that scope, show the drafted title
+and body and wait for approval or edits.
 
 ### 6. File the issue
 
@@ -134,7 +142,7 @@ cat > "$body_file" <<'EOF'
 <body>
 EOF
 
-issue_url="$(gh issue create --repo marin-community/marin \
+issue_url="$(gh issue create --repo "$issue_repository" \
   --title "<title>" \
   --label "agent-generated" \
   --body-file "$body_file")"

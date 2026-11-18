@@ -8,14 +8,12 @@ import io
 import sqlite3
 import struct
 import tarfile
-import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
 import sqlalchemy
-from marina.db import UrlDatabase, engine_for
 
 from echo import migrate, repository_files, schema
 from echo.migrations import m0001_init, m0002_chunk_identity
@@ -169,17 +167,10 @@ def test_activity_corpus_reader_accepts_marinmirror_schema(activity_engine, tmp_
 
 
 @pytest.fixture
-def activity_engine(database_url):
-    name = f"echo_sync_{uuid.uuid4().hex[:8]}"
-    engine = engine_for(UrlDatabase(database_url), name)
-    try:
-        with engine.begin() as conn:
-            migrate.apply_migrations(conn)
-        yield engine
-    finally:
-        with engine.begin() as conn:
-            conn.execute(sqlalchemy.text(f'DROP SCHEMA "{name}" CASCADE'))
-        engine.dispose()
+def activity_engine(schema_engine):
+    with schema_engine.begin() as conn:
+        migrate.apply_migrations(conn)
+    return schema_engine
 
 
 def write_activity_corpus(path: Path, rows: list[dict]) -> None:
@@ -264,29 +255,22 @@ def test_activity_sync_updates_metadata_and_deferred_vectors_without_changing_id
         assert conn.execute(sqlalchemy.select(schema.chunks.c.id)).scalar_one() > original_id
 
 
-def test_activity_identity_migration_deduplicates_existing_rows_and_preserves_id_allocation(database_url, tmp_path):
-    name = f"echo_legacy_{uuid.uuid4().hex[:8]}"
-    engine = engine_for(UrlDatabase(database_url), name)
+def test_activity_identity_migration_deduplicates_existing_rows_and_preserves_id_allocation(schema_engine, tmp_path):
     corpus = tmp_path / "corpus.db"
-    try:
-        with engine.begin() as conn:
-            m0001_init.upgrade(conn)
-            # The old sync could retain two identical comments at different corpus
-            # rowids. Keep the earlier public id and never reuse either old id.
-            for row_id in (41, 42):
-                row = activity_chunk(row_id, "same")
-                conn.execute(schema.chunks.insert().values(**{**row, "date": datetime(2026, 10, 19, tzinfo=UTC)}))
-            m0002_chunk_identity.upgrade(conn)
-        write_activity_corpus(corpus, [activity_chunk(1, "same"), activity_chunk(2, "new")])
-        with engine.begin() as conn:
-            assert activity_sync.upsert_chunks(conn, corpus) == (2, 0)
-            rows = dict(conn.execute(sqlalchemy.select(schema.chunks.c.ref, schema.chunks.c.id)).all())
-            assert rows["same"] == 41
-            assert rows["new"] > 42
-    finally:
-        with engine.begin() as conn:
-            conn.execute(sqlalchemy.text(f'DROP SCHEMA "{name}" CASCADE'))
-        engine.dispose()
+    with schema_engine.begin() as conn:
+        m0001_init.upgrade(conn)
+        # The old sync could retain two identical comments at different corpus
+        # rowids. Keep the earlier public id and never reuse either old id.
+        for row_id in (41, 42):
+            row = activity_chunk(row_id, "same")
+            conn.execute(schema.chunks.insert().values(**{**row, "date": datetime(2026, 10, 19, tzinfo=UTC)}))
+        m0002_chunk_identity.upgrade(conn)
+    write_activity_corpus(corpus, [activity_chunk(1, "same"), activity_chunk(2, "new")])
+    with schema_engine.begin() as conn:
+        assert activity_sync.upsert_chunks(conn, corpus) == (2, 0)
+        rows = dict(conn.execute(sqlalchemy.select(schema.chunks.c.ref, schema.chunks.c.id)).all())
+        assert rows["same"] == 41
+        assert rows["new"] > 42
 
 
 def test_github_blob_accepts_api_line_wrapped_base64(monkeypatch):

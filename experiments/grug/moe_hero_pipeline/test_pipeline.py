@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+from collections.abc import Sequence
 
 import equinox as eqx
 import jax
@@ -15,7 +16,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import load_checkpoint
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
-from levanter.testing.cpu_devices import run_on_cpu_devices
+from levanter.testing.devices import use_test_devices
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator, Transformer
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
@@ -31,7 +32,16 @@ from experiments.grug.moe_hero_pipeline.pipeline import (
 )
 
 
-def _tiny_hero(qb_estimator: QbEstimator, context_axis_size: int = 1) -> tuple[Mesh, Transformer]:
+def _tiny_hero(
+    qb_estimator: QbEstimator,
+    context_axis_size: int = 1,
+    *,
+    devices: Sequence[jax.Device],
+    num_layers: int = 5,
+    log_scaling_n_floor: int | None = None,
+    log_scaling_alpha: float | None = None,
+    log_scaling_power: float | None = None,
+) -> tuple[Mesh, Transformer]:
     config = GrugModelConfig(
         vocab_size=16,
         hidden_dim=8,
@@ -41,7 +51,7 @@ def _tiny_hero(qb_estimator: QbEstimator, context_axis_size: int = 1) -> tuple[M
         num_shared_experts=2,
         num_experts=4,
         num_experts_per_token=1,
-        num_layers=5,
+        num_layers=num_layers,
         num_heads=2,
         num_kv_heads=2,
         local_kv_heads=2,
@@ -59,10 +69,13 @@ def _tiny_hero(qb_estimator: QbEstimator, context_axis_size: int = 1) -> tuple[M
         attention_implementation="reference",
         moe_implementation="scatter",
         initializer_std=0.2,
+        log_scaling_n_floor=log_scaling_n_floor,
+        log_scaling_alpha=log_scaling_alpha,
+        log_scaling_power=log_scaling_power,
     )
     mesh = Mesh(
-        np.asarray(jax.devices()[:context_axis_size]).reshape(1, 1, context_axis_size, 1, 1),
-        ("replica_dcn", "data", "context", "expert", "model"),
+        np.asarray(devices[:context_axis_size]).reshape(1, 1, 1, context_axis_size, 1),
+        ("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
     with jax.set_mesh(mesh):
@@ -91,7 +104,7 @@ def _packed_batch() -> GrugLmExample:
 
 @pytest.mark.parametrize("qb_bias_mode", [QbBiasMode.ADAPTIVE, QbBiasMode.FROZEN])
 def test_pipeline_update_trains_weights_with_adaptive_or_frozen_router_bias(qb_bias_mode):
-    mesh, model = _tiny_hero(QbEstimator.HIST)
+    mesh, model = _tiny_hero(QbEstimator.HIST, devices=jax.local_devices())
     optimizer = optax.sgd(0.1, momentum=0.5)
     policy = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
     with jax.set_mesh(mesh):
@@ -126,7 +139,7 @@ def test_pipeline_update_trains_weights_with_adaptive_or_frozen_router_bias(qb_b
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 def test_pipeline_embedding_recompute_preserves_values_and_gradients(dtype):
-    mesh, model = _tiny_hero(QbEstimator.HIST)
+    mesh, model = _tiny_hero(QbEstimator.HIST, devices=jax.local_devices())
     tokens = _packed_batch().tokens
     with jax.set_mesh(mesh):
         stage = split_transformer(model, 2, layer_counts=(2, 3))[0]
@@ -151,7 +164,7 @@ def test_pipeline_embedding_recompute_preserves_values_and_gradients(dtype):
 
 @pytest.mark.parametrize("qb_estimator", [QbEstimator.TOPK, QbEstimator.HIST])
 def test_hero_pipeline_preserves_hidden_states_and_router_statistics(qb_estimator):
-    mesh, model = _tiny_hero(qb_estimator)
+    mesh, model = _tiny_hero(qb_estimator, devices=jax.local_devices())
     batch = _packed_batch()
     # Compile the scan and whole stages: executing shard_map primitives
     # separately exceeds the CPU compilation budget.
@@ -172,11 +185,37 @@ def test_hero_pipeline_preserves_hidden_states_and_router_statistics(qb_estimato
         np.testing.assert_allclose(actual, expected_metrics[name], rtol=1e-5, atol=1e-5)
 
 
+def test_hero_pipeline_applies_log_scaling():
+    mesh, off = _tiny_hero(QbEstimator.TOPK, devices=jax.local_devices())
+    _, model = _tiny_hero(
+        QbEstimator.TOPK,
+        devices=jax.local_devices(),
+        log_scaling_n_floor=2,
+        log_scaling_alpha=0.1,
+        log_scaling_power=1.0,
+    )
+    batch = _packed_batch()
+    with jax.set_mesh(mesh):
+        expected_hidden, _ = eqx.filter_jit(Transformer.__call__)(model, batch.tokens, batch.attn_mask)
+        off_hidden, _ = eqx.filter_jit(Transformer.__call__)(off, batch.tokens, batch.attn_mask)
+        stages = split_transformer(model, 2, layer_counts=(2, 3))
+        hidden = stages[0].embed(batch.tokens)
+        run_blocks = eqx.filter_jit(GrugMoePipelineStage.run_blocks)
+        for stage in stages:
+            hidden, _ = run_blocks(stage, hidden, batch.attn_mask)
+        hidden = stages[-1].finish(hidden)
+
+    np.testing.assert_allclose(hidden, expected_hidden, rtol=1e-5, atol=1e-5)
+    assert np.max(np.abs(np.asarray(expected_hidden) - np.asarray(off_hidden))) > 1e-4
+
+
 # Compiling both gradient paths can exceed the default minute on shared CI CPUs.
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("remat_mode", ["recompute_all", "offload_carry"])
 def test_hero_pipeline_loss_and_gradients_match_unsplit_model(remat_mode):
-    mesh, model = _tiny_hero(QbEstimator.HIST)
+    # Two layers cover local and global attention across a stage boundary
+    # without compiling the two gradient paths for five layers per mode.
+    mesh, model = _tiny_hero(QbEstimator.HIST, num_layers=2, devices=jax.local_devices())
     batch = _packed_batch()
 
     def ordinary_loss(params):
@@ -184,7 +223,7 @@ def test_hero_pipeline_loss_and_gradients_match_unsplit_model(remat_mode):
 
     def pipeline_loss(params):
         params = dataclasses.replace(params, config=dataclasses.replace(params.config, remat_mode=remat_mode))
-        stages = split_transformer(params, 2, layer_counts=(2, 3))
+        stages = split_transformer(params, 2, layer_counts=(1, 1))
         hidden = stages[0].embed(batch.tokens)
         for stage in stages:
             hidden, _ = stage.run_blocks(hidden, batch.attn_mask)
@@ -213,46 +252,36 @@ def test_hero_pipeline_loss_and_gradients_match_unsplit_model(remat_mode):
 
 
 @pytest.mark.timeout(300)
-def test_context_pipeline_loss_and_gradients_match_unsharded_model(monkeypatch):
-    monkeypatch.setenv("JAX_NUM_CPU_DEVICES", "2")
-    run_on_cpu_devices(
-        """
-import dataclasses
-import runpy
-import equinox as eqx
-import jax
-import numpy as np
-from jax.sharding import NamedSharding, PartitionSpec as P
-from experiments.grug.moe_hero_ep.model import QbEstimator
-from experiments.grug.moe_hero_pipeline.pipeline import split_transformer
+@pytest.mark.multidevice
+def test_context_pipeline_loss_and_gradients_match_unsharded_model():
+    with use_test_devices(2) as devices:
+        results = []
+        for context_size in (1, 2):
+            mesh, model = _tiny_hero(QbEstimator.HIST, context_size, devices=devices)
+            model = dataclasses.replace(model, config=dataclasses.replace(model.config, remat_mode="offload_carry"))
+            batch = _packed_batch()
+            spec = NamedSharding(mesh, P(None, "context"))
+            with jax.set_mesh(mesh):
+                tokens = jax.device_put(batch.tokens, spec)
+                weights = jax.device_put(batch.loss_weight, spec)
+                mask = batch.attn_mask
 
-helpers = runpy.run_path("experiments/grug/moe_hero_pipeline/test_pipeline.py")
-results = []
-for context_size in (1, 2):
-    mesh, model = helpers["_tiny_hero"](QbEstimator.HIST, context_size)
-    model = dataclasses.replace(model, config=dataclasses.replace(model.config, remat_mode="offload_carry"))
-    batch = helpers["_packed_batch"]()
-    spec = NamedSharding(mesh, P(None, "context"))
-    with jax.set_mesh(mesh):
-        tokens = jax.device_put(batch.tokens, spec)
-        weights = jax.device_put(batch.loss_weight, spec)
-        mask = batch.attn_mask
-        def loss(params):
-            if context_size == 1:
-                return params.next_token_loss(tokens, weights, mask=mask, logsumexp_weight=0.01)
-            stages = split_transformer(params, 2, layer_counts=(2, 3))
-            hidden = stages[0].embed(tokens)
-            for stage in stages:
-                hidden, _ = stage.run_blocks(hidden, mask)
-            assert jax.typeof(hidden).sharding.spec[1] == "context"
-            return stages[-1].cross_entropy_loss(stages[-1].finish(hidden), tokens, weights, logsumexp_weight=0.01)
-        result = eqx.filter_jit(jax.value_and_grad(loss))(model)
-        results.append([np.asarray(x) for x in jax.tree.leaves(result)])
-for actual, expected in zip(results[1], results[0], strict=True):
-    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
-""",
-        device_count=2,
-    )
+                def loss(params, *, context_size=context_size, tokens=tokens, weights=weights, mask=mask):
+                    if context_size == 1:
+                        return params.next_token_loss(tokens, weights, mask=mask, logsumexp_weight=0.01)
+                    stages = split_transformer(params, 2, layer_counts=(2, 3))
+                    hidden = stages[0].embed(tokens)
+                    for stage in stages:
+                        hidden, _ = stage.run_blocks(hidden, mask)
+                    assert jax.typeof(hidden).sharding.spec[1] == "context"
+                    return stages[-1].cross_entropy_loss(
+                        stages[-1].finish(hidden), tokens, weights, logsumexp_weight=0.01
+                    )
+
+                result = eqx.filter_jit(jax.value_and_grad(loss))(model)
+                results.append([np.asarray(x) for x in jax.tree.leaves(result)])
+        for actual, expected in zip(results[1], results[0], strict=True):
+            np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
 
 
 def test_parked_host_copy_survives_device_alias_deletion_and_restores_bits():
@@ -297,7 +326,7 @@ def _pipeline_state(model, optimizer, layer_counts):
 
 @pytest.mark.parametrize("optimizer_name", ["adamw", "muonh"])
 def test_hero_checkpoint_restores_complete_state_with_different_stage_split(tmp_path, optimizer_name):
-    mesh, model = _tiny_hero(QbEstimator.HIST)
+    mesh, model = _tiny_hero(QbEstimator.HIST, devices=jax.local_devices())
     optimizer = (
         optax.adamw(1e-4)
         if optimizer_name == "adamw"
@@ -378,7 +407,7 @@ def _serial_training_step(state, batch, optimizer):
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("restored_layer_counts", [(2, 3), (1, 1, 1, 1, 1)])
 def test_checkpoint_next_two_training_steps_match_uninterrupted_run(tmp_path, restored_layer_counts):
-    mesh, model = _tiny_hero(QbEstimator.HIST)
+    mesh, model = _tiny_hero(QbEstimator.HIST, devices=jax.local_devices())
     # Changing learning rates expose a reset schedule counter as well as Adam's
     # bias-correction counter. Every restart uses the full four-step schedule.
     optimizer = optax.adamw(optax.linear_schedule(1e-3, 1e-4, transition_steps=4))

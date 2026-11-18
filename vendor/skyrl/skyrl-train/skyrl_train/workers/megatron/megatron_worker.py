@@ -17,7 +17,9 @@ from megatron.bridge import AutoBridge
 from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
+from megatron.core.transformer.enums import AttnBackend
 from omegaconf import OmegaConf
+from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
 from skyrl_train.distributed.dispatch import MeshRank
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH
 from skyrl_train.distributed.megatron.megatron_strategy import MegatronStrategy
@@ -31,7 +33,7 @@ from skyrl_train.distributed.megatron.optimizer import (
     get_megatron_optimizer,
     get_megatron_optimizer_param_scheduler,
 )
-from skyrl_train.distributed.megatron.remote_model import install_remote_hf_state
+from skyrl_train.distributed.megatron.remote_model import install_remote_hf_state, make_prefetch_hook
 from skyrl_train.distributed.utils import init_worker_process_group_with_device
 from skyrl_train.mismatch_probe.modes import TRAINER_MODES
 from skyrl_train.models.grug_moe import GRUG_MOE_MODEL_TYPE, validate_grug_training_strategy
@@ -135,9 +137,15 @@ class MegatronWorker:
         override_config_kwargs.update(model_config_kwargs.get("model_config", {}))
         update_model_config(hf_config, override_config_kwargs=override_config_kwargs)
 
-        # if flash_attn is enabled, we use flash attention backend, otherwise fall back to fused attention backend
+        # In this pinned stack, cuDNN BF16 train/eval forwards gave Grug
+        # different log-probs at fixed weights. PPO needs those scores to agree.
+        # Revisit after cuDNN passes test_grug_megatron_train_forward_matches_eval_forward
+        # in the selected profile. This observation does not establish a cuDNN defect.
+        flash_attn = flash_attn or (bf16 and getattr(hf_config, "model_type", None) == GRUG_MOE_MODEL_TYPE)
         transformer_config_kwargs = OmegaConf.to_container(transformer_config_kwargs, resolve=True)
-        transformer_config_kwargs["attention_backend"] = "flash" if flash_attn else "fused"
+        transformer_config_kwargs["attention_backend"] = (
+            AttnBackend.flash if flash_attn else AttnBackend.auto
+        )
 
         if not self.cfg.trainer.gradient_checkpointing:
             for key in ("recompute_granularity", "recompute_method", "recompute_num_layers"):
@@ -156,11 +164,14 @@ class MegatronWorker:
             expert_model_parallel_size=megatron_config.expert_model_parallel_size,
             expert_tensor_parallel_size=megatron_config.expert_tensor_parallel_size,
             bf16=bf16,
-            attention_backend="flash" if flash_attn else "fused",
         )
+        if self.remote_hf_state is not None:
+            provider.register_pre_wrap_hook(make_prefetch_hook(bridge, self.remote_hf_state.store), prepend=True)
 
         for k, v in transformer_config_kwargs.items():
             setattr(provider, k, v)
+        if hf_config.model_type == GRUG_MOE_MODEL_TYPE:
+            provider.grug_batch_invariant_experts = self.cfg.trainer.algorithm.batch_invariant
         provider.finalize()
 
         self.provider = provider
@@ -186,9 +197,13 @@ class MegatronWorker:
         if ddp_config is not None:
             for k, v in ddp_config.items():
                 setattr(default_ddp_config, k, v)
-        model = self.provider.provide_distributed_model(
-            ddp_config=default_ddp_config, wrap_with_ddp=wrap_with_ddp, bf16=bf16
-        )
+        try:
+            model = self.provider.provide_distributed_model(
+                ddp_config=default_ddp_config, wrap_with_ddp=wrap_with_ddp, bf16=bf16
+            )
+        finally:
+            if self.remote_hf_state is not None:
+                self.remote_hf_state.store.close()
         install_dpo_batch_major_output_projection(model, self.provider, self.cfg.trainer.algorithm.policy_loss_type)
         return model
 
@@ -374,6 +389,27 @@ class MegatronWorker:
 class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        config = self.cfg.trainer.policy.megatron_config
+        channels = config.nccl_max_channels
+        if channels is not None:
+            if (
+                not self.cfg.trainer.algorithm.batch_invariant
+                or config.tensor_model_parallel_size != 1
+                or config.expert_tensor_parallel_size not in (None, 1)
+            ):
+                raise ValueError("nccl_max_channels requires a batch-invariant TP1/ETP1 policy")
+            if not isinstance(channels, int) or isinstance(channels, bool) or channels < 1:
+                raise ValueError("nccl_max_channels must be a positive integer")
+            publication_channels = BATCH_INVARIANT_NCCL_ENV["NCCL_MAX_NCHANNELS"]
+            if os.environ.get("NCCL_MAX_CTAS") is not None:
+                raise ValueError(
+                    "Unset NCCL_MAX_CTAS when using nccl_max_channels so training and weight transfers can use separate limits"
+                )
+            # Training can use more channels. Keep weight publication at vLLM's
+            # limit so sender and receiver use the same broadcast layout.
+            os.environ["NCCL_MAX_NCHANNELS"] = str(channels)
+            self._weight_sync_pg_options = torch.distributed.ProcessGroupNCCL.Options()
+            self._weight_sync_pg_options.config.max_ctas = int(publication_channels)
         self.model: MegatronModelWrapper = None
         self.actor_module: list[nn.Module] = None
         self.scheduler: OptimizerParamScheduler = None
@@ -396,7 +432,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             self.actor_module, self.optimizer, non_blocking, backload_optimizer, backload_model
         )
 
-    def init_worker_process_group(self):
+    def init_worker_process_group(self, master_addr: str, master_port: int):
         """
         Override DistributedTorchRayActor.init_worker_process_group to use megatron distributed setup to create the mesh.
         """
@@ -405,7 +441,9 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         # The guess deadlocks the first collective (weight-init barrier) on unmasked-CVD clusters
         # where every actor sees all GPUs (cw-rno2a); see init_worker_process_group_with_device.
         init_worker_process_group_with_device(
-            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds)
+            master_addr=master_addr,
+            master_port=master_port,
+            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
         )
 
         # Explicitly wrap torch.distributed.broadcast in torch.no_grad() to avoid a warning in Megatron training where the
@@ -475,10 +513,12 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         torch.distributed.barrier()
 
         if self.remote_hf_state is not None:
+            stats = self.remote_hf_state.store.read_stats
             logger.info(
-                "Loaded Megatron policy weights directly from {} (rank range bytes read: {})",
+                "Loaded Megatron policy weights directly from {} (rank range bytes read: {}; {})",
                 self.cfg.trainer.policy.model.source_uri,
-                self.remote_hf_state.store.bytes_read,
+                stats.bytes_read,
+                stats,
             )
 
         if self._rank == 0:
@@ -917,14 +957,16 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
     def backload_to_gpu(self, non_blocking=True, **kwargs):
         self.strategy.backload_to_gpu(self.actor_module, None, non_blocking)
 
-    def init_worker_process_group(self):
+    def init_worker_process_group(self, master_addr: str, master_port: int):
         """
         Override DistributedTorchRayActor.init_worker_process_group to use megatron distributed setup to create the mesh.
         """
         # Device-pinned NCCL PG init via the shared helper (see init_worker_process_group_with_device) —
         # avoids the ProcessGroupNCCL device-guess collective deadlock on unmasked-CVD clusters (cw-rno2a).
         init_worker_process_group_with_device(
-            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds)
+            master_addr=master_addr,
+            master_port=master_port,
+            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
         )
 
         self.strategy = MegatronStrategy(

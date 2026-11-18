@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -11,7 +12,7 @@ except Exception:  # optional dependency if not using YAML configs
 
 from typer import Option, Typer
 
-from harbor.cli.utils import run_async
+from harbor.cli.utils import cli_guest_environment, cli_host_capabilities, run_async
 from harbor.models.job.config import JobConfig
 from harbor.models.trial.config import TaskConfig
 
@@ -88,6 +89,8 @@ def run_sweeps(
     """
     from harbor.job import Job
 
+    host_environment = dict(os.environ)
+
     # Load base config
     if config_path.suffix == ".yaml":
         if yaml is None:
@@ -121,13 +124,25 @@ def run_sweeps(
             print(f"[sweeps] Failed to read hints file: {e}")
             hints_map = {}
 
+    host_capabilities = cli_host_capabilities(
+        host_environment,
+        environment_kwargs=base_config.environment.kwargs,
+        agents=base_config.agents,
+        verifier_environment=base_config.verifier.env,
+    )
+    guest_environment = cli_guest_environment(base_config.environment.kwargs)
+
     # Single event loop for the whole sweep. Previously each sweep iteration
     # called `run_async` and created a fresh event loop — any singletons
     # (supabase client, httpx pool) bound to the first loop were stranded
     # when it closed, causing intermittent "Event loop is closed" failures
     # in later iterations as soon as anything touched Supabase.
     async def _run_sweep_iteration(cfg: JobConfig) -> Path:
-        j = await Job.create(cfg)
+        j = await Job.create(
+            cfg,
+            host_capabilities=host_capabilities,
+            guest_environment=guest_environment,
+        )
         await j.run()
         return j.job_dir
 
