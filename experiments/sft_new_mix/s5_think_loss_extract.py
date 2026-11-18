@@ -55,7 +55,8 @@ def main() -> None:
             raise ValueError(f"No scripted jobs for {source}")
         source_hash = hashlib.sha256(source.encode()).hexdigest()
         shards_root = StoragePath(args.scripted_prefix) / "components" / source_hash / "shards"
-        shard_dirs = sorted(str(entry) for entry in shards_root.ls() if (StoragePath(str(entry)) / "receipt.json").isfile())
+        entries = sorted(str(entry) for entry in shards_root.ls())
+        shard_dirs = [entry for entry in entries if (StoragePath(entry) / "receipt.json").isfile()]
         if not shard_dirs:
             raise ValueError(f"No scripted shards for {source}")
         drops = []
