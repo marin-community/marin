@@ -1234,10 +1234,11 @@ def test_oracle_campaign_collects_trials_from_the_calibration_root(tmp_path, mon
     monkeypatch.setattr(lane, "prepare", fake_prepare)
     monkeypatch.setattr(lane, "calibrate_cohort", fake_calibrate_cohort)
     monkeypatch.setattr(lane, "filter_cohort", fake_filter_cohort)
+    monkeypatch.setattr(lane, "install_local_sandbox_tooling", lambda: None)
     monkeypatch.setattr(
         lane,
-        "worker_limits",
-        lambda root: {"cgroup_parent": str(root / "cgroup"), "disk_root": str(root / "sandbox-disks")},
+        "campaign_worker_limits",
+        lambda root, **kwargs: {"cgroup_parent": str(root / "cgroup"), "disk_root": str(root / "sandbox-disks")},
     )
     policy = NegativeControlPolicy(
         version=1,
@@ -1361,10 +1362,11 @@ def test_oracle_campaign_publishes_collect_artifacts_to_the_receipt_uri(tmp_path
         return FakeReceipt()
 
     monkeypatch.setattr(lane, "filter_cohort", fake_filter_cohort)
+    monkeypatch.setattr(lane, "install_local_sandbox_tooling", lambda: None)
     monkeypatch.setattr(
         lane,
-        "worker_limits",
-        lambda root: {"cgroup_parent": str(root / "cgroup"), "disk_root": str(root / "sandbox-disks")},
+        "campaign_worker_limits",
+        lambda root, **kwargs: {"cgroup_parent": str(root / "cgroup"), "disk_root": str(root / "sandbox-disks")},
     )
     monkeypatch.setattr(lane, "StoragePath", RecordingStoragePath)
     policy = NegativeControlPolicy(
@@ -1398,3 +1400,74 @@ def test_oracle_campaign_publishes_collect_artifacts_to_the_receipt_uri(tmp_path
     ]
     for name in ("oracle-filter.json", "admitted-tasks.parquet", "oracle-filter-summary.json", "excluded-tasks.parquet"):
         assert (tmp_path / name).exists()
+
+
+class TestCampaignWorkerLimits:
+    """The LOCAL route's delegated cgroup resolves under both worker layouts."""
+
+    @staticmethod
+    def _cgroup_tree(root, membership_path, *, processes=""):
+        """A minimal writable cgroup v2 tree: controllers, processes, kill support."""
+        root.mkdir(parents=True)
+        (root / "cgroup.controllers").write_text("cpuset cpu io memory pids\n")
+        (root / "cgroup.procs").write_text(processes)
+        (root / "cgroup.subtree_control").write_text("")
+        (root / "cgroup.kill").write_text("")
+        (root / "cgroup.type").write_text("domain\n")
+        (root / "cpu.max").write_text("max 100000\n")
+        (root / "memory.max").write_text("max\n")
+        membership_file = root.parent / "self.cgroup"
+        membership_file.write_text(f"0::/{membership_path}\n")
+        return membership_file
+
+    def test_resolves_the_containers_own_scope_in_a_private_namespace(self, tmp_path):
+        cgroup_root = tmp_path / "sys" / "fs" / "cgroup"
+        membership = self._cgroup_tree(cgroup_root, "")
+        worker_root = tmp_path / "worker"
+        worker_root.mkdir()
+        kwargs = lane.campaign_worker_limits(worker_root, cgroup_root=cgroup_root, membership_file=membership)
+        assert kwargs["cgroup_parent"] == str(cgroup_root)
+        assert kwargs["disk_root"] == str(worker_root / "sandbox-disks")
+        assert (cgroup_root / "atlas-repair-campaign-driver").is_dir()
+        assert (cgroup_root / "cgroup.subtree_control").read_text().strip() == "+cpu +memory"
+        assert json.loads((worker_root / "worker-cgroup.json").read_text())["parent"] == str(cgroup_root)
+
+    def test_resolves_the_tracked_containerd_scope_layout(self, tmp_path):
+        cgroup_root = tmp_path / "sys" / "fs" / "cgroup"
+        scope = cgroup_root / "kubepods.slice" / "cri-containerd-abc123.scope"
+        membership = self._cgroup_tree(scope, "kubepods.slice/cri-containerd-abc123.scope")
+        worker_root = tmp_path / "worker"
+        worker_root.mkdir()
+        kwargs = lane.campaign_worker_limits(worker_root, cgroup_root=cgroup_root, membership_file=membership)
+        assert kwargs["cgroup_parent"] == str(scope)
+        assert (scope / "cgroup.subtree_control").read_text().strip() == "+cpu +memory"
+
+    def test_moves_processes_into_the_driver_and_refuses_when_the_move_fails(self, tmp_path):
+        """The kernel moves written pids; a parent that still lists processes must abort."""
+        cgroup_root = tmp_path / "sys" / "fs" / "cgroup"
+        membership = self._cgroup_tree(cgroup_root, "", processes="4321\n")
+        worker_root = tmp_path / "worker"
+        worker_root.mkdir()
+        with pytest.raises(RuntimeError, match="retains internal processes"):
+            lane.campaign_worker_limits(worker_root, cgroup_root=cgroup_root, membership_file=membership)
+        driver = cgroup_root / "atlas-repair-campaign-driver"
+        assert (driver / "cgroup.procs").read_text().strip() == "4321"
+        assert (cgroup_root / "cgroup.subtree_control").read_text().strip() == ""
+
+    def test_refuses_delegation_outside_the_container_scope(self, tmp_path):
+        cgroup_root = tmp_path / "sys" / "fs" / "cgroup"
+        unit = cgroup_root / "user.slice" / "user-1000.service"
+        membership = self._cgroup_tree(unit, "user.slice/user-1000.service")
+        worker_root = tmp_path / "worker"
+        worker_root.mkdir()
+        with pytest.raises(RuntimeError, match="Refuse cgroup delegation"):
+            lane.campaign_worker_limits(worker_root, cgroup_root=cgroup_root, membership_file=membership)
+
+    def test_refuses_a_worker_without_a_cpu_memory_domain(self, tmp_path):
+        cgroup_root = tmp_path / "sys" / "fs" / "cgroup"
+        membership = self._cgroup_tree(cgroup_root, "")
+        (cgroup_root / "cgroup.controllers").write_text("cpuset pids\n")
+        worker_root = tmp_path / "worker"
+        worker_root.mkdir()
+        with pytest.raises(RuntimeError, match="no CPU/memory cgroup v2 domain"):
+            lane.campaign_worker_limits(worker_root, cgroup_root=cgroup_root, membership_file=membership)

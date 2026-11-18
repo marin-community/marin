@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import tarfile
 import tempfile
 import time
@@ -40,7 +41,6 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, RawRow, ReviewStatus
 from taskcompendium.pipeline.repair import ComparativeOutcome, RepairMatchClass
 
-from experiments.post_training.task_curation.difficulty_campaign import worker_limits
 from experiments.post_training.task_curation.full_qc import LONG_REQUEST_TIMEOUT, ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
@@ -79,6 +79,7 @@ The shared inference default is four hours, which expires when the GPU queue is 
 wait in its own process only; a proper configuration knob belongs in marin.inference.
 """
 
+CGROUP_ROOT = Path("/sys/fs/cgroup")
 FINGERPRINT_INDEX = Path("experiments/post_training/task_curation/source_fingerprint_index.json")
 POPULATION_LOCATORS = Path("experiments/post_training/task_curation/source_population_locators.json")
 
@@ -926,6 +927,78 @@ def convert_cohort(
     return manifest
 
 
+def install_local_sandbox_tooling() -> None:
+    """Ensure the LOCAL route's sandbox tooling (bubblewrap, umoci, skopeo) is present."""
+    if all(shutil.which(tool) for tool in ("bwrap", "umoci", "skopeo")):
+        return
+    os.environ["DEBIAN_FRONTEND"] = "noninteractive"
+    os.environ["PATH"] = "/usr/sbin:/sbin:" + os.environ["PATH"]
+    subprocess.run(["apt-get", "update"], check=True)
+    subprocess.run(
+        [
+            "apt-get",
+            "install",
+            "-y",
+            "--no-install-recommends",
+            "bubblewrap",
+            "e2fsprogs",
+            "util-linux",
+            "umoci",
+            "skopeo",
+        ],
+        check=True,
+    )
+
+
+def campaign_worker_limits(root: Path, *, cgroup_root: Path | None = None, membership_file: Path | None = None) -> dict:
+    """Delegate CPU and memory for the campaign's LOCAL machines on a qualified Iris CPU worker.
+
+    The tracked oracle campaigns ran ``--environment local`` with the worker's own containerd
+    scope as the delegated parent. Current Iris workers run a private cgroup namespace where
+    the container's cgroup IS the hierarchy root, so the delegated parent resolves from the
+    worker's membership: a ``cri-containerd-*.scope`` path when the host hierarchy is visible,
+    or the cgroup root itself under a private namespace. Either way the parent must first be
+    emptied of internal processes and have its CPU and memory subtree controllers enabled
+    before machines can carry limits.
+    """
+    cgroup = cgroup_root or CGROUP_ROOT
+    membership = next(
+        line
+        for line in (membership_file or Path("/proc/self/cgroup")).read_text().splitlines()
+        if line.startswith("0::")
+    )
+    parent = (cgroup / membership.removeprefix("0::").lstrip("/")).resolve()
+    if parent != cgroup and not (parent.name.startswith("cri-containerd-") and parent.name.endswith(".scope")):
+        raise RuntimeError("Refuse cgroup delegation outside this disposable container's own scope")
+    fields = ("cgroup.type", "cgroup.controllers", "cgroup.subtree_control", "cpu.max", "memory.max")
+    before = {name: (parent / name).read_text().strip() for name in fields}
+    if before["cgroup.type"] != "domain" or not {"cpu", "memory"} <= set(before["cgroup.controllers"].split()):
+        raise RuntimeError("Worker has no CPU/memory cgroup v2 domain")
+    driver = parent / "atlas-repair-campaign-driver"
+    driver.mkdir()
+    for _ in range(5):
+        pids = (parent / "cgroup.procs").read_text().split()
+        if not pids:
+            break
+        for pid in pids:
+            (driver / "cgroup.procs").write_text(pid)
+    if (parent / "cgroup.procs").read_text().strip():
+        raise RuntimeError("Container scope retains internal processes")
+    (parent / "cgroup.subtree_control").write_text("+cpu +memory")
+    (root / "worker-cgroup.json").write_text(
+        json.dumps(
+            {
+                "parent": str(parent),
+                "driver": str(driver),
+                "before": before,
+                "after": {name: (parent / name).read_text().strip() for name in fields},
+            }
+        )
+        + "\n"
+    )
+    return {"cgroup_parent": str(parent), "disk_root": str(root / "sandbox-disks")}
+
+
 def export_coreweave_s3_credentials() -> None:
     """Materialize the named CoreWeave credentials under the ``AWS_*`` names for the trial subprocess.
 
@@ -997,10 +1070,11 @@ def run_oracle_campaign(
         # preparation (bubblewrap/umoci/skopeo tooling and the cgroup delegation ritual);
         # a packages_lock-only grader environment requires this host-capable backend.
         worker_root = work_root / "worker"
+        install_local_sandbox_tooling()
         environment_kwargs = {
             "image_cache": str(worker_root / "image-cache"),
             "ttl": 172800,
-            **worker_limits(worker_root),
+            **campaign_worker_limits(worker_root),
             **environment_kwargs,
         }
     export_coreweave_s3_credentials()
