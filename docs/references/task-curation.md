@@ -159,6 +159,14 @@ until its current-pin admission receipt exists.
   SAMPLE panel drawn on the current pin (`SamplePanelCurrency.CURRENT_PIN`)
   before its status is current; an archived-lineage panel cannot qualify a new
   admission (`require_sample_pin_currency`).
+  count matches: a new revision can change content. A census receipt that its own
+  evidence contradicts is refused at bind time
+  (`census_binding.check_receipt_evidence`), and
+  `census_binding --audit-receipt-evidence` audits every staged receipt. A
+  content-changed source needs fresh deduplication, lexical measurement and a
+  SAMPLE panel drawn on the current pin (`SamplePanelCurrency.CURRENT_PIN`)
+  before its status is current; an archived-lineage panel cannot qualify a new
+  admission (`require_sample_pin_currency`).
 - *Content identity.* Re-measuring a pin can re-serialize the same TaskSpec
   bytes into a different artifact layout, changing the artifact-level
   `task_specs_sha256` without changing any task. `content_identity.py` records
@@ -173,6 +181,22 @@ until its current-pin admission receipt exists.
   same receipt. Any differing task refuses; without a receipt the digests must
   match exactly. The receipt never re-binds a measurement: the underlying
   census, lexical or panel evidence still describes the same pin it measured.
+- *Declaration currency.* The canonical RL source layer is the `RlDataSource`
+  declarations cataloged by `all_sources()`; the registry holds receipts ABOUT
+  sources and is never the source of truth for which sources exist or at which
+  pin. Whenever an Atlas flow publishes a new source version (a re-pin, a
+  retained or remediated release, a variant) or adds a source, the same landing
+  must update that source's declaration so `all_sources()` reflects the new
+  state. `declaration_audit.py` enforces the pairing: the audit assembles the
+  canonical layer (the assembled sources, the pending-intake declarations at
+  their intake pins, the archived bindings' recorded original pins, and the
+  retirement ledger) and fails while any census, lexical, grading-census, dedup
+  or retained-release receipt names a source or pin that layer does not carry.
+  A retained release whose source then went through oracle filtration is the
+  filtration input, and a remediated release staged for a pending source's
+  intake adoption is reported, not failed. The audit runs as an atlas-push gate
+  for every task-curation landing and as `python -m
+  experiments.post_training.task_curation.declaration_audit`.
 
 **Non-agentic tasks.** A TaskSpec with no actor role, agent harness or agent
 workspace is non-agentic: the model answers and the task's grader checks the
