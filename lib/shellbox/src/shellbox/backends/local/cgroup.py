@@ -16,6 +16,8 @@ from shellbox.process_session import await_cleanup, own_cleanup
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 CPU_PERIOD = 100000
 CLOSE_TIMEOUT = 10
+UNIT_SUFFIXES = (".service", ".scope")
+WORKER_LEAF_NAME = "worker"
 logger = logging.getLogger(__name__)
 
 
@@ -72,57 +74,71 @@ def probe_cgroup_limits(parent: Path, *, cpus: int = 1, memory_mb: int = 1024) -
         cgroup.remove_if_empty()
 
 
-def _fallback_parents(current: Path) -> list[Path]:
-    """Return an empty parent unit or pod slice dedicated to this worker.
+def _delegation_target(current: Path) -> tuple[Path, Path | None]:
+    """Return the delegation parent and the leaf group to move this worker into.
 
-    Shared host slices are excluded because enabling controllers there changes
-    accounting for unrelated workloads.
+    The parent never lies above the worker's own unit, so sandbox groups stay
+    inside the worker's container scope. An empty enclosing unit (the systemd
+    ``DelegateSubgroup`` layout) or an existing worker leaf needs no move.
+    Otherwise the unit directly contains the worker — for example a container
+    scope — and its processes must move into a child leaf before the unit can
+    enable domain controllers for children (cgroup v2's no-internal-process
+    rule).
     """
-    unit_suffixes = (".service", ".scope")
-    parent = current.parent
-    if parent == current or not parent.is_relative_to(CGROUP_ROOT):
-        return []
-    if (parent / "cgroup.procs").read_text().strip():
-        return []
-    if parent.name.endswith(unit_suffixes):
-        return [parent]
-    if parent.name.startswith("kubepods") and "-pod" in parent.name:
-        return [parent]
-    return []
+    unit = current.parent
+    if unit != current and unit.is_relative_to(CGROUP_ROOT):
+        if current.name == WORKER_LEAF_NAME or (
+            unit.name.endswith(UNIT_SUFFIXES) and not (unit / "cgroup.procs").read_text().strip()
+        ):
+            return unit, None
+    return current, current / WORKER_LEAF_NAME
+
+
+def _move_worker_processes(current: Path, leaf: Path) -> None:
+    """Move every process listed in ``current`` into the child ``leaf`` group.
+
+    Processes that disappear or refuse to migrate only warn: discovery still
+    returns the parent for containment, and the limits probe reports whether
+    the kernel can enforce limits afterwards.
+    """
+    try:
+        leaf.mkdir(exist_ok=True)
+        for pid in (current / "cgroup.procs").read_text().split():
+            try:
+                (leaf / "cgroup.procs").write_text(pid)
+            except OSError as error:
+                logger.warning("Cannot move process %s into %s: %s", pid, leaf, error)
+    except OSError as error:
+        logger.warning("Cannot create the worker leaf group %s: %s", leaf, error)
 
 
 def delegated_cgroup_parent() -> Path | None:
-    """Find a writable delegation, preferring one that can enforce resource limits.
+    """Find a writable delegation inside the worker's own scope to enforce limits in.
 
-    Candidates are the worker's cgroup and any dedicated empty parent unit or
-    pod slice. If none can apply CPU and memory limits, retain the first
-    writable delegation for process containment.
+    The parent is the worker's enclosing unit: the empty unit above a
+    ``DelegateSubgroup`` subgroup, or the worker's own scope after its
+    processes move into a child leaf group. Sandbox groups become siblings of
+    that leaf, always inside the worker's container scope — never a pod slice
+    or other parent above it. If the parent cannot apply CPU and memory
+    limits, it is still returned for process containment and unavailable
+    limits warn at use.
     """
     if not (CGROUP_ROOT / "cgroup.controllers").is_file():
         return None
     current = _current_cgroup()
     if not current.is_relative_to(CGROUP_ROOT):
         return None
-    candidates = [current]
-    for parent in _fallback_parents(current):
-        if parent not in candidates:
-            candidates.insert(0, parent)
-    contained = []
-    for parent in candidates:
-        try:
-            check_cgroup_parent(parent)
-        except UnsupportedMachineSpec:
-            continue
-        contained.append(parent)
-        if probe_cgroup_limits(parent):
-            return parent
-    if contained:
-        logger.warning(
-            "No cgroup delegation candidate could enforce cpu/memory limits; using %s for containment only",
-            contained[0],
-        )
-        return contained[0]
-    return None
+    parent, leaf = _delegation_target(current)
+    try:
+        check_cgroup_parent(parent)
+    except UnsupportedMachineSpec:
+        return None
+    if leaf is not None:
+        _move_worker_processes(current, leaf)
+    if probe_cgroup_limits(parent):
+        return parent
+    logger.warning("Cgroup delegation %s cannot enforce cpu/memory limits; using it for containment only", parent)
+    return parent
 
 
 def _apply_resource_limits(parent: Path, path: Path, *, cpus: int | None, memory_mb: int | None) -> None:
