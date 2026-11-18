@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
+from typing import Protocol
 
 from daytona import AsyncDaytona, DaytonaError, DaytonaNotFoundError
 from pydantic import BaseModel, ConfigDict
@@ -88,6 +89,11 @@ class OwnershipResolution(BaseModel):
     sandboxes: tuple[SandboxResolution, ...]
 
     @property
+    def retained_slots(self) -> int:
+        absent = {row.sandbox_id for row in self.sandboxes if row.absent}
+        return len(set(self.evidence.sandbox_ids) - absent) + len(self.evidence.unbound_requests)
+
+    @property
     def resolved(self) -> bool:
         return (
             not self.evidence.unbound_requests
@@ -154,6 +160,13 @@ class QuarantineBatchResult:
     completed: tuple[TrialOwnershipRecord, ...]
     quarantined: tuple[TrialOwnershipRecord, ...]
     deferred_rows: tuple[str, ...]
+    unscored_rows: tuple[TrialOwnershipRecord, ...] = ()
+
+
+class QuarantineCapacity(Protocol):
+    def try_acquire(self, quarantines: tuple[TrialOwnershipRecord, ...]) -> bool: ...
+    def track(self, record: TrialOwnershipRecord) -> None: ...
+    def reconciled(self, record: TrialOwnershipRecord, resolution: OwnershipResolution) -> None: ...
 
 
 def run_quarantined_trials(
@@ -164,6 +177,9 @@ def run_quarantined_trials(
     persist_resolution: Callable[[TrialOwnershipRecord, OwnershipResolution], None],
     *,
     physical_slots: int,
+    reserve: QuarantineCapacity | None = None,
+    wait_for_capacity: Callable[[], None] | None = None,
+    initial_quarantines: tuple[TrialOwnershipRecord, ...] = (),
 ) -> QuarantineBatchResult:
     """Continue independent rows within a physical slot bound, then reconcile and retry once.
 
@@ -173,37 +189,90 @@ def run_quarantined_trials(
     """
     if physical_slots < 1:
         raise ValueError("A root needs an explicit physical sandbox allocation")
+    if reserve is not None and (physical_slots != 1 or wait_for_capacity is None):
+        raise ValueError("A shared reserve requires one base slot and an explicit capacity wait")
     completed = []
-    quarantined = []
+    pending = {(row.row_id, row.attempt): row for row in initial_quarantines}
+    if len(pending) != len(initial_quarantines):
+        raise ValueError("Duplicate inherited quarantine attempt")
+    resolutions: dict[tuple[str, int], OwnershipResolution] = {}
     deferred = []
-    for row_id in row_ids:
-        occupied = sum(max(1, row.ownership.retained_slots) for row in quarantined)
-        if occupied >= physical_slots:
-            deferred.append(row_id)
-            continue
-        record = execute(row_id, 0)
-        if record.row_id != row_id or record.attempt != 0:
+    unscored = []
+
+    def run(row_id: str, attempt: int) -> None:
+        record = execute(row_id, attempt)
+        if record.row_id != row_id or record.attempt != attempt:
             raise ValueError("Trial returned another assignment or attempt")
         persist(record)
         if record.status is TrialOwnershipStatus.COMPLETED:
             completed.append(record)
         else:
-            quarantined.append(record)
-    unresolved = []
-    for record in quarantined:
-        resolution = reconcile(record)
-        if resolution.evidence != record.ownership:
-            raise ValueError("Reconciliation changed frozen ownership evidence")
-        persist_resolution(record, resolution)
-        if not resolution.resolved:
-            unresolved.append(record)
-            continue
-        retried = execute(record.row_id, 1)
-        if retried.row_id != record.row_id or retried.attempt != 1:
-            raise ValueError("Retry returned another assignment or attempt")
-        persist(retried)
-        if retried.status is TrialOwnershipStatus.COMPLETED:
-            completed.append(retried)
-        else:
-            unresolved.append(retried)
-    return QuarantineBatchResult(tuple(completed), tuple(unresolved), tuple(deferred))
+            pending[(record.row_id, record.attempt)] = record
+            if reserve is not None:
+                reserve.track(record)
+
+    def occupied_slots() -> int:
+        return sum(
+            max(1, resolutions[key].retained_slots if key in resolutions else row.ownership.retained_slots)
+            for key, row in pending.items()
+        )
+
+    def reconcile_pass() -> None:
+        for key, record in tuple(pending.items()):
+            resolution = reconcile(record)
+            if resolution.evidence != record.ownership:
+                raise ValueError("Reconciliation changed frozen ownership evidence")
+            persist_resolution(record, resolution)
+            resolutions[key] = resolution
+            if reserve is not None:
+                reserve.reconciled(record, resolution)
+            if not resolution.resolved:
+                continue
+            del pending[key]
+            if record.attempt == 0:
+                run(record.row_id, 1)
+            else:
+                # A cleared second technical attempt is not a source score or a third trial.
+                unscored.append(record)
+
+    if pending:
+        reconcile_pass()
+    inherited_ids = {row.row_id for row in initial_quarantines}
+    for row_id in row_ids:
+        if row_id in inherited_ids:
+            raise ValueError("Inherited quarantined row cannot also be a new trial")
+        admitted = True
+        while True:
+            occupied = occupied_slots()
+            if occupied < physical_slots:
+                break
+            if reserve is None:
+                deferred.append(row_id)
+                admitted = False
+                break
+            if occupied < physical_slots + 1 and reserve.try_acquire(tuple(pending.values())):
+                break
+            # Reconcile at this capacity-induced pass boundary to avoid every root
+            # waiting for a reserve held by another root with a second quarantine.
+            before_reconcile = occupied
+            reconcile_pass()
+            occupied = occupied_slots()
+            if occupied < physical_slots:
+                break
+            if (
+                occupied < before_reconcile
+                and occupied < physical_slots + 1
+                and reserve.try_acquire(tuple(pending.values()))
+            ):
+                break
+            assert wait_for_capacity is not None
+            wait_for_capacity()
+        if admitted:
+            run(row_id, 0)
+    reconcile_pass()
+    if reserve is not None:
+        while pending:
+            assert wait_for_capacity is not None
+            wait_for_capacity()
+            reconcile_pass()
+    return QuarantineBatchResult(tuple(completed), tuple(pending.values()), tuple(deferred), tuple(unscored))
