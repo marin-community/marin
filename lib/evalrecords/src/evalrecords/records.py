@@ -447,7 +447,7 @@ NON_SCORING_SETTINGS = frozenset({"concurrency", "task_evidence"})
 
 
 def scoring_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
-    """Keep the settings that govern saved observations, which define a run's identity."""
+    """Keep settings that affect scores and define a run's identity."""
     return {key: value for key, value in settings.items() if key not in NON_SCORING_SETTINGS}
 
 
