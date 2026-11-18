@@ -5,7 +5,8 @@
 
 The prompt is the authors' ``config/prompt/zero-shot.yaml`` filled as in ``infer/data_loader.py``
 (SuperGPQA/SuperGPQA, ODC-By, at e31e8bf3e7089aef808be5ddecafd4538dee6e41). It always lists A to J as
-allowed letters, including for questions with fewer than ten options.
+allowed letters, including for questions with fewer than ten options. The grader reads only the final
+answer, as the runner does for API reasoning models.
 """
 
 from collections.abc import Sequence
@@ -50,6 +51,6 @@ def convert_supergpqa(row: RawRow, context: ConversionContext) -> TaskSpec:
 
 def supergpqa_item(task: TaskSpec) -> EvaluationItem:
     evidence = source_evidence(task)
-    return chat_item(task).model_copy(
+    return chat_item(task, response_selection="final_only").model_copy(
         update={"groups": {"discipline": evidence["discipline"], "difficulty": evidence["difficulty"]}}
     )

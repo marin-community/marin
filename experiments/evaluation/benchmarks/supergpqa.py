@@ -33,7 +33,7 @@ from experiments.post_training.task_curation.pipeline import HfSource
 SUPERGPQA_REVISION = "4430d4458112c7d4497fdcf94d7cc223313d6acf"
 SUPERGPQA_FILE = "SuperGPQA-all.jsonl"
 SUPERGPQA_POPULATION = 26529
-VERSION = "2026.11.17"
+VERSION = "2026.11.18"
 
 
 def benchmarks() -> list[EvaluationBenchmark]:
