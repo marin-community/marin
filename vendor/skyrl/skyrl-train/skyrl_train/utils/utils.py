@@ -483,23 +483,31 @@ def worker_batch_refusal(cfg: DictConfig) -> str | None:
     for reason, unsupported in restrictions:
         if unsupported:
             return reason
+    if cfg.trainer.dump_data_batch:
+        return "dense batch dumping"
+    if cfg.trainer.train_batch_size * optimization_samples_per_prompt(cfg) % _policy_dp_size(cfg):
+        return "rows requiring DP padding"
     megatron = cfg.trainer.policy.megatron_config
-    expert_tensor_parallel = megatron.get("expert_tensor_parallel_size") or megatron.tensor_model_parallel_size
-    moe_etp = False
-    if expert_tensor_parallel > 1:
+    etp = megatron.get("expert_tensor_parallel_size") or megatron.tensor_model_parallel_size
+    auto = cfg.trainer.batch_builder == BatchBuilder.AUTO
+    replay = auto and moe_router_replay_requested(cfg)
+    if etp > 1 or replay:
         # Model registration imports utils while initializing the model package.
         from skyrl_train.models import register_local_models
 
         register_local_models()
         model = cfg.trainer.policy.model
-        metadata = AutoConfig.from_pretrained(model.path, trust_remote_code=True, revision=model.get("revision"))
-        moe_etp = model_expert_count(metadata) is not None
-    if moe_etp:
-        return "ETP greater than one"
-    if cfg.trainer.dump_data_batch:
-        return "dense batch dumping"
-    if cfg.trainer.train_batch_size * optimization_samples_per_prompt(cfg) % _policy_dp_size(cfg):
-        return "rows requiring DP padding"
+        try:
+            metadata = AutoConfig.from_pretrained(model.path, trust_remote_code=True, revision=model.get("revision"))
+        except Exception:
+            if not auto:
+                raise
+            return "model configuration unreadable"
+        experts = model_expert_count(metadata)
+        if replay and experts is None:
+            return "router replay without the model expert count"
+        if etp > 1 and experts is not None:
+            return "ETP greater than one"
     return None
 
 

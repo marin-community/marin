@@ -376,6 +376,25 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
             {"trainer.train_batch_size": 3, "trainer.policy_mini_batch_size": 3, "generator.n_samples_per_prompt": 3},
             "rows requiring DP padding",
         ),
+        (
+            {
+                "trainer.algorithm.policy_loss_type": "sft",
+                "trainer.algorithm.advantage_estimator": "uniform",
+                "trainer.train_batch_size": 3,
+                "trainer.policy_mini_batch_size": 3,
+                "generator.n_samples_per_prompt": 3,
+            },
+            "rows requiring DP padding",
+        ),
+        (
+            {
+                "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
+                "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
+                "model_type": "unreadable",
+            },
+            "model configuration unreadable",
+        ),
+        ({"trainer.policy.megatron_config.moe_router_replay": True, "model_experts": 4}, None),
         ({"trainer.dump_data_batch": True}, "dense batch dumping"),
     ],
 )
@@ -393,12 +412,11 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
     cfg.trainer.train_batch_size = cfg.trainer.policy_mini_batch_size = 2
     cfg.trainer.micro_train_batch_size_per_gpu = cfg.trainer.micro_forward_batch_size_per_gpu = 1
     cfg.generator.n_samples_per_prompt = 2
-    metadata = (
-        {"model_type": overrides.get("model_type", "qwen2_moe"), "num_experts": overrides["model_experts"]}
-        if "model_experts" in overrides
-        else {"model_type": "qwen2"}
-    )
-    (tmp_path / "config.json").write_text(json.dumps(metadata))
+    metadata = {"model_type": overrides.get("model_type", "qwen2_moe" if "model_experts" in overrides else "qwen2")}
+    if "model_experts" in overrides:
+        metadata["num_experts"] = overrides["model_experts"]
+    if metadata["model_type"] != "unreadable":
+        (tmp_path / "config.json").write_text(json.dumps(metadata))
     cfg.trainer.policy.model.path = str(tmp_path)
     batch = {
         "prompt_token_ids": [[1]] * 4,
@@ -419,9 +437,19 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
 
     row_case = "rows" in overrides or any(key.startswith("batch.") for key in overrides)
     config_reason = None if row_case else message
+    if "batch.rollout_routed_experts" in overrides:
+        config_reason = "router replay without the model expert count"
     assert resolve_batch_builder(cfg) == ("driver" if config_reason else "worker", config_reason)
     if config_reason is not None:
+        if config_reason in {"dense batch dumping", "router replay without the model expert count"}:
+            auto_cfg = deepcopy(cfg)
+            validate_cfg(auto_cfg)
+            assert auto_cfg.trainer.batch_builder == "driver"
         cfg.trainer.batch_builder = "worker"
+    if metadata["model_type"] == "unreadable":
+        with pytest.raises(ValueError, match="Unrecognized model"):
+            validate_cfg(cfg)
+        return
 
     def check():
         validate_cfg(cfg)

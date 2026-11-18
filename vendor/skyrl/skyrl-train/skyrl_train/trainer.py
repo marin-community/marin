@@ -263,6 +263,8 @@ class RayPPOTrainer:
     ):
         self.cfg = cfg
         self.batch_builder = BatchBuilder(cfg.trainer.batch_builder)
+        if self.batch_builder is BatchBuilder.AUTO:
+            raise ValueError("resolve trainer.batch_builder=auto with validate_cfg before constructing the trainer")
         self.distillation_plan = compile_distillation_plan_from_config(cfg)
         self.context = context
         self._training_metrics_enabled: bool = cfg.trainer.training_metrics
