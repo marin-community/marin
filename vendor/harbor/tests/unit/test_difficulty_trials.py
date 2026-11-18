@@ -918,6 +918,25 @@ def test_same_root_resume_replaces_an_interrupted_aggregate_and_keeps_its_tokens
     ]
 
 
+def test_worker_host_capabilities_resolves_the_daytona_connection_from_the_environment():
+    """The trial worker inherits DAYTONA_* from the campaign; the capabilities builder
+    must receive that environment so Daytona attempts do not fail at client creation."""
+    from experiments.post_training.task_curation.difficulty_trials import worker_host_capabilities
+
+    capabilities = worker_host_capabilities(
+        {},
+        environment={"DAYTONA_API_KEY": "fixture-key", "DAYTONA_API_URL": "https://fixture.invalid", "DAYTONA_TARGET": "us"},
+    )
+    assert capabilities.daytona is not None
+    factory = capabilities.daytona.client_factory()  # an incomplete connection raises here
+    assert callable(factory)
+
+    incomplete = worker_host_capabilities({}, environment={})
+    assert (incomplete.daytona.api_key, incomplete.daytona.target) == (None, None)
+    with pytest.raises(ValueError, match="explicit api_key"):
+        incomplete.daytona.client_factory()
+
+
 def test_previous_campaign_reconstructs_an_empty_seal_for_an_attempt_with_no_completed_source(tmp_path):
     """A root killed before any source aggregate still binds as its own parent."""
     from experiments.post_training.task_curation.difficulty_recovery import previous_campaign

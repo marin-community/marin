@@ -10,8 +10,10 @@ import io
 import json
 import logging
 import math
+import os
 import tarfile
 import time
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
@@ -35,7 +37,7 @@ from finestore.rl.difficulty import (
 )
 from finestore.store import DataStore
 from harbor.environments.docker_translate import MissingPreparedImageError
-from harbor.host_capabilities import host_capabilities_from_environment
+from harbor.host_capabilities import HostCapabilities, host_capabilities_from_environment
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfig, TrialConfig
 from harbor.trial.trial import Trial
 from harbor.utils.artifact_writer import get_artifact_writer
@@ -207,13 +209,25 @@ def has_math_verifier_deadline(trial: Trial) -> bool:
     )
 
 
+def worker_host_capabilities(
+    authentication: dict[str, str], environment: Mapping[str, str] | None = None
+) -> HostCapabilities:
+    """Resolve host authority from the trial worker's own environment.
+
+    The worker inherits DAYTONA_API_KEY/DAYTONA_API_URL/DAYTONA_TARGET from the
+    campaign; passing an empty snapshot here would silently drop the Daytona
+    connection and fail every Daytona attempt at client creation.
+    """
+    return host_capabilities_from_environment(
+        os.environ if environment is None else environment,
+        model_authentication=authentication,
+    )
+
+
 async def execute_trial(configuration: TrialConfig, authentication: dict[str, str]):
     trial = await Trial.create(
         configuration,
-        host_capabilities=host_capabilities_from_environment(
-            {},
-            model_authentication=authentication,
-        ),
+        host_capabilities=worker_host_capabilities(authentication),
     )
     return trial, await trial.run()
 
