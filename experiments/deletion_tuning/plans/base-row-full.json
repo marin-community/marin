@@ -401,12 +401,7 @@
   "revision": "c5454eb03678d8710e54a4e0fc681b9f3b4a3dba"
  },
  "model": {
-  "evidence": [
-   {
-    "sha256": "686e0afc9f7eef01fb8adfd74cf8ebe5e34a921c6a19f4b6eb03a71e5332370c",
-    "uri": "s3://marin-us-east-02a/marin/users/benfeuer/snowball-deletion-tuning/inputs/base-hf/2026.11.18.1/model-binding-inputs.json"
-   }
-  ],
+  "evidence": [],
   "hf_uri": "s3://marin-us-east-02a/marin/users/benfeuer/snowball-deletion-tuning/inputs/base-hf/2026.11.18.1",
   "key": "snowball-deletion-tuning-base",
   "provenance": {
@@ -645,5 +640,5 @@
  "phase": "full",
  "policy_replicas": 16,
  "temporary_prefix": "s3://marin-us-east-02a",
- "version": "2026.11.18.1"
+ "version": "2026.11.18.3"
 }

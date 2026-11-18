@@ -17,7 +17,6 @@ Usage (after the staging job writes `model-binding-inputs.json`):
 """
 
 import argparse
-import hashlib
 import json
 
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -25,7 +24,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 TEMPLATE_PATH = "experiments/deletion_tuning/plans/template-micro210-r1-sft746.json"
 MODEL_KEY = "snowball-deletion-tuning-base"
-VERSION = "2026.11.18.2"
+VERSION = "2026.11.18.3"
 OUTPUT_PREFIX = (
     "s3://marin-us-east-02a/tmp/ttl=30d/benfeuer/snowball-deletion-tuning/micro210-base-20261118/parent-base-full"
 )
@@ -45,12 +44,11 @@ def build(binding: dict, binding61: dict) -> dict:
         "key": MODEL_KEY,
         "hf_uri": binding["hf_uri"],
         "tokenizer_revision": r1_model["tokenizer_revision"],
-        "evidence": [
-            {
-                "uri": binding["hf_uri"] + "/model-binding-inputs.json",
-                "sha256": binding["self_sha256"],
-            }
-        ],
+        # No evidence pins: the staged binding's integrity is carried by the
+        # sidecar and shard pins plus the verified-copy manifest; hashing the
+        # binding-inputs file against a canonicalized re-dump would mismatch
+        # its on-disk bytes.
+        "evidence": [],
         "sidecars": [
             {"uri": binding["hf_uri"] + "/" + name, "sha256": binding["sidecar_sha256"][name]} for name in sidecar_names
         ],
@@ -115,7 +113,6 @@ def main() -> None:
     configure_coreweave_s3()
     binding = json.loads(StoragePath(args.binding).read_bytes())
     binding61 = json.loads(StoragePath(BINDING61_URI).read_bytes())
-    binding["self_sha256"] = hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()
     plan = build(binding, binding61)
     with open(args.output, "w") as handle:
         json.dump(plan, handle, indent=1, sort_keys=True)
