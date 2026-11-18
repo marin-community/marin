@@ -201,7 +201,7 @@ class DeletionTrainer(Trainer):
                 return self.loss_fn(hard, *batch, **batch_kwargs, key=None)
 
             self.add_hook(
-                callbacks.compute_validation_loss(
+                levanter.callbacks.compute_validation_loss(
                     eval_loss, eval_loader, max_batches=self.config.max_eval_batches, name=name
                 ),
                 every=self.config.steps_per_eval,
