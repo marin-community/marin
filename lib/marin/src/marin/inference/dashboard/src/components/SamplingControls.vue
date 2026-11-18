@@ -14,8 +14,7 @@ const customInstructions = defineModel<string>('customInstructions', { default: 
 
 <template>
   <div class="flex flex-wrap items-start gap-x-5 gap-y-3 border-b border-surface-border bg-surface-raised px-4 py-3">
-    <!-- The toolbar shows max tokens at sm and up; this copy covers narrower screens. -->
-    <label class="flex flex-col gap-1 text-xs text-text-muted sm:hidden">
+    <label class="flex flex-col gap-1 text-xs text-text-muted">
       Max tokens
       <input
         v-model.number="params.maxTokens"
