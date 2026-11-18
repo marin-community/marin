@@ -599,8 +599,9 @@ HARDMATH_ODE_ROW = {
         "Find analytical expressions that approximate the solution of $y(x)$ in the small and large $x$ regimes.\n\n"
     ),
     "ground_truths": (
-        "$\\boxed{[y = x^{3} \\cdot \\left(\\frac{41}{3} + \\frac{1}{3 \\left(\\sin{\\left(x \\right)} + 2\\right)}\\right) + 3 x + 2, "
-        "y = - \\sqrt[3]{30}(0.27 - x)^{\\frac{1}{3}}+4.01]}$"
+        "$\\boxed{[y = x^{3} \\cdot \\left(\\frac{41}{3} + \\frac{1}{3 \\left(\\sin{\\left(x \\right)}"
+        " + 2\\right)}\\right)"
+        " + 3 x + 2, y = - \\sqrt[3]{30}(0.27 - x)^{\\frac{1}{3}}+4.01]}$"
     ),
 }
 HARDMATH_NONDIM_ROW = {
@@ -620,10 +621,12 @@ HARDMATH_SCALAR_ROW = {
 def test_convert_hardmath_rhs_strips_left_hand_sides_from_real_rows():
     ode = convert_row(RECIPES["hardmath_rhs"], HARDMATH_ODE_ROW)
     assert not isinstance(ode, ImportRejection)
-    assert (
-        ode.grader.parameters["expected"]
-        == "[x^{3} \\cdot \\left(\\frac{41}{3} + \\frac{1}{3 \\left(\\sin{\\left(x \\right)} + 2\\right)}\\right) + 3 x + 2, - \\sqrt[3]{30}(0.27 - x)^{\\frac{1}{3}}+4.01]"
+    expected_ode = (
+        "[x^{3} \\cdot \\left(\\frac{41}{3} + \\frac{1}{3 \\left(\\sin{\\left(x \\right)} + 2\\right)}\\right) "
+        "+ 3 x + 2, "
+        "- \\sqrt[3]{30}(0.27 - x)^{\\frac{1}{3}}+4.01]"
     )
+    assert ode.grader.parameters["expected"] == expected_ode
 
     nondim = convert_row(RECIPES["hardmath_rhs"], HARDMATH_NONDIM_ROW)
     assert not isinstance(nondim, ImportRejection)
