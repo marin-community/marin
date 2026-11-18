@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-license-receipts",
-  "revision": "e028b71bab4482f7338d1fbaa112717f573f7389",
+  "revision": "0f8cc61b5b4ef5b3b7c581329c3af05c68d11a35",
   "references": [
     {
       "repo": "open-athena/marin-license-receipts",
@@ -115,18 +115,6 @@
       "revision": "252f1f673da9ab16a1ee212cdf0dc3f97b93a061",
       "path": "part-019.json",
       "sha256": "339c25f756dc3d5d3bd366a2ef75090cb093831092d16e6c21b83ce53a506453"
-    },
-    {
-      "repo": "open-athena/marin-license-receipts",
-      "revision": "252f1f673da9ab16a1ee212cdf0dc3f97b93a061",
-      "path": "part-020.json",
-      "sha256": "c4acf3ae89968655273646be92c59a599251c79d32498939950c12244ad5b113"
-    },
-    {
-      "repo": "open-athena/marin-license-receipts",
-      "revision": "252f1f673da9ab16a1ee212cdf0dc3f97b93a061",
-      "path": "part-022.json",
-      "sha256": "2e8b6a352624b4029c84cdde8e72014d333ef9a7c2e106dbf68099d2d17d7f77"
     },
     {
       "repo": "open-athena/marin-license-receipts",
@@ -277,6 +265,18 @@
       "revision": "e028b71bab4482f7338d1fbaa112717f573f7389",
       "path": "part-021.json",
       "sha256": "cbd078d16e15c5b10da2f9da5c358d3038835e51b38d542ab164795192d1af30"
+    },
+    {
+      "repo": "open-athena/marin-license-receipts",
+      "revision": "ccf8d748cb4933e61b423ddc84cd9971d7d73e87",
+      "path": "part-020.json",
+      "sha256": "5929378ebbf4d1481b466f5ca6c310f96b592a5048e256ec548a7bcf848ae009"
+    },
+    {
+      "repo": "open-athena/marin-license-receipts",
+      "revision": "0f8cc61b5b4ef5b3b7c581329c3af05c68d11a35",
+      "path": "part-022.json",
+      "sha256": "a5284b55717e7f5b0a83d1c94455c96932c3c1ed514317f7bdc25af544dd3254"
     }
   ]
 }
