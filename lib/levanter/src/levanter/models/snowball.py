@@ -730,12 +730,14 @@ class SnowballMoEMLP(eqx.Module):
         mesh = get_abstract_mesh()
         wanda: dict[str, Array] | None = None
         if self.capture_input_sums:
+            context = _context_axis()
+            batch_axes = (*_BATCH_AXES, context) if context is not None else _BATCH_AXES
             wanda = wanda_input_sums_local(
                 x_flat,
                 selected_experts.astype(jnp.int32),
                 valid_flat if valid_flat is not None else jnp.ones((x_flat.shape[0],), dtype=jnp.bool_),
                 mesh,
-                batch_axes=_token_axes(mesh),
+                batch_axes=batch_axes,
                 num_experts=self.cfg.num_experts,
             )
         expert_mlp = self.expert_mlp

@@ -28,6 +28,7 @@ from levanter.models.snowball_deletion import (
     deletion_trainable_filter,
     wanda_delete_threshold,
 )
+from marin.rl.deletion_tuning import alpha_ramp as core_alpha_ramp
 
 
 @pytest.fixture(scope="module")
