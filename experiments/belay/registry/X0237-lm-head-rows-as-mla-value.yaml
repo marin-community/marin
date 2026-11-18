@@ -4,7 +4,7 @@ name: lm_head rows as MLA value embeddings
 category: Embeddings and inputs
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: done
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6957482861
@@ -33,6 +33,19 @@ trials:
   steps: 3030
   baseline: belay-X0237-control 3.0474 (same commit, seed 0)
   step_time_change: +1%
+- id: t002
+  variant: lm_head rows as gated value embeds in MLA
+  rung: competitive-d512
+  protocol: equal_steps
+  batch: X0237
+  date: '2026-11-18'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0237
+  wandb: []
+  settings:
+    lm_head_value_embeds: 'true'
+  commit: 72007601d4
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 potential:
   score: 7
   rationale: −0.0104 at equal time (step time within 1%); ladder and MFU not run → 7
