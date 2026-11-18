@@ -119,3 +119,4 @@ def test_task_shell_runs_the_interconnect_gate():
     command = build_config_task_command(args)
     shell = command[-1]
     assert "nccl_transport_probe.py --mode gate --gate-coverage all-gpus --pynccl-init" in shell
+    assert "--gate-report-prefix s3://runs/rendezvous/interconnect-gate" in shell
