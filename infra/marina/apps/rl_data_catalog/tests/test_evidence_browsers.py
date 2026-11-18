@@ -229,6 +229,10 @@ def test_release_rejects_missing_review_rows_and_unstaged_attempts() -> None:
         )
 
     assert browse_invariants(fetch, [source])["qc_rows"] == 100
+    panel["missing_chunks"] = 1
+    with pytest.raises(ValueError, match="Original reviewer batch coverage"):
+        browse_invariants(fetch, [source])
+    panel["missing_chunks"] = 0
     panel["raw_count"] = 99
     with pytest.raises(ValueError, match="QC review coverage"):
         browse_invariants(fetch, [source])

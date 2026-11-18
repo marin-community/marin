@@ -892,6 +892,26 @@ def create_api(services: AppletServices) -> FastAPI:
                 ).scalar_one_or_none()
             if shared is None:
                 raise HTTPException(503, "Original reviewer batch evidence is unavailable")
+            if "payload_chunks" in shared:
+                payload = []
+                with engine.connect() as connection:
+                    for index in range(shared["payload_chunks"]):
+                        part = connection.execute(
+                            text(
+                                "SELECT payload FROM atlas_review_batch_chunks WHERE load_id=:load "
+                                "AND pipeline_key=:key AND batch_key=:batch AND chunk_index=:chunk"
+                            ),
+                            {
+                                "load": row["review_load"],
+                                "key": row["review_key"],
+                                "batch": row["review_batch"],
+                                "chunk": index,
+                            },
+                        ).scalar_one_or_none()
+                        if part is None:
+                            raise HTTPException(503, "Original reviewer batch chunk is unavailable")
+                        payload.append(part)
+                shared = {**shared, "payload": "".join(payload)}
             raw_review = {
                 **raw_review,
                 **task_request_evidence(unpack_content(shared)).get(task_id, {"input": [], "output": []}),

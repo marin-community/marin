@@ -3710,7 +3710,7 @@ def test_archived_lineage_panel_grandfathered_with_marker(catalog_database, cata
     assert projected["sample_pin_stale"] is True
 
 
-@pytest.mark.parametrize("shared_batch", [False, True])
+@pytest.mark.parametrize("shared_batch", [False, True, "chunked"])
 def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
     catalog_database, catalog_query, tmp_path, shared_batch
 ):
@@ -3773,6 +3773,11 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
             }
         ]
     }
+    if shared_batch == "chunked":
+        # Incompressible text crosses the real gateway request budget after compression.
+        batch["attempts"][0]["requests"]["requests"][0]["body"]["messages"][0]["content"] = "".join(
+            hashlib.sha256(str(index).encode()).hexdigest() for index in range(40_000)
+        )
     messages = task_request_evidence(batch)
     raw = [
         {
@@ -3847,6 +3852,15 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
         ambiguity = next(row for row in legend["defects"] if row["id"] == "ambiguity")
         assert ambiguity["count"] == 1
         assert ambiguity["sources"] == [{"id": "Marin:math", "name": before["declaration"]["display_name"], "count": 1}]
+        if shared_batch == "chunked":
+            catalog_query(
+                "DELETE FROM atlas_review_batch_chunks WHERE load_id=:load AND pipeline_key=:key AND chunk_index=0",
+                {"load": load_id, "key": key},
+            )
+            missing = client.get("/evidence", params={"source_id": "Marin:math", "task_id": items[0]["task_id"]})
+            assert missing.status_code == 503
+            incomplete = client.get("/qc/inventory").json()
+            assert next(row for row in incomplete["panels"] if row["source_id"] == "Marin:math")["missing_chunks"] == 1
         if shared_batch:
             catalog_query(
                 "UPDATE atlas_sources SET declaration=jsonb_set(declaration,'{data_restriction}',"

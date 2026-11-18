@@ -20,8 +20,10 @@ def browse_invariants(fetch: Callable[[str], Any], sources: list[dict]) -> dict[
             panel = panels.get(source["id"])
             if not panel or not panel["pipeline_key"] or panel["task_count"] != panel["raw_count"]:
                 raise ValueError(f"QC review coverage is missing or incomplete: {source['id']}")
-            if panel.get("missing_batches", 0) or (
-                "linked_tasks" in panel["receipt"] and panel["linked_count"] != panel["receipt"]["linked_tasks"]
+            if (
+                panel.get("missing_batches", 0)
+                or panel.get("missing_chunks", 0)
+                or ("linked_tasks" in panel["receipt"] and panel["linked_count"] != panel["receipt"]["linked_tasks"])
             ):
                 raise ValueError(f"Original reviewer batch coverage is incomplete: {source['id']}")
             qc_sources += 1

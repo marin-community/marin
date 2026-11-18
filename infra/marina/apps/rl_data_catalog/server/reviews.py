@@ -41,7 +41,14 @@ def register_review_routes(api: FastAPI, engine: Engine) -> None:
                         LEFT JOIN atlas_review_batches batches ON batches.load_id=links.load_id
                             AND batches.pipeline_key=links.pipeline_key AND batches.batch_key=links.batch_key
                         WHERE links.load_id=s.load_id AND links.pipeline_key=r.pipeline_key
-                            AND batches.batch_key IS NULL) AS missing_batches
+                            AND batches.batch_key IS NULL) AS missing_batches,
+                    (SELECT COUNT(*) FROM atlas_review_batches batches
+                        WHERE batches.load_id=s.load_id AND batches.pipeline_key=r.pipeline_key
+                            AND batches.record ? 'payload_chunks'
+                            AND (SELECT COUNT(*) FROM atlas_review_batch_chunks chunks
+                                WHERE chunks.load_id=batches.load_id AND chunks.pipeline_key=batches.pipeline_key
+                                    AND chunks.batch_key=batches.batch_key)
+                                <> CAST(batches.record->>'payload_chunks' AS INTEGER)) AS missing_chunks
                 FROM atlas_sources s JOIN atlas_current selected USING(load_id)
                 LEFT JOIN atlas_review_current r ON r.load_id=s.load_id AND r.source_id=s.id
                 LEFT JOIN atlas_assessments a ON a.load_id=r.load_id AND a.pipeline_key=r.pipeline_key

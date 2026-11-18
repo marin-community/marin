@@ -21,7 +21,13 @@ from taskcompendium.pipeline.models import ReviewRecord
 from experiments.post_training.task_curation.full_qc_artifacts import FullQCReview
 from experiments.post_training.task_curation.review_quality import quality_result
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleQCReview
-from infra.marina.apps.rl_data_catalog.load import TABLE_COLUMNS, batches, ensure_tables, full_review_items
+from infra.marina.apps.rl_data_catalog.load import (
+    MAX_BATCH_BYTES,
+    TABLE_COLUMNS,
+    batches,
+    ensure_tables,
+    full_review_items,
+)
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference, manifest_bytes
 from infra.marina.apps.rl_data_catalog.server.cohort_summaries import materialize_cohort_summaries
 from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
@@ -334,13 +340,35 @@ def load_content_reviews(staged: dict, load_id: str, source_id: str, query: Appl
         raise ValueError("Original-batch links contain duplicate or unknown reviewed task IDs")
     if any(row["pipeline_key"] != key for row in [*batch_rows, *links]):
         raise ValueError("Original reviewer batches belong to another immutable panel")
+    chunk_rows = []
+    stored_batches = []
+    for row in batch_rows:
+        record = dict(row["record"])
+        encoded = json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        if len(json.dumps(encoded).encode()) + 3 > MAX_BATCH_BYTES:
+            payload = record.pop("payload")
+            chunks = [payload[start : start + 400_000] for start in range(0, len(payload), 400_000)]
+            record["payload_chunks"] = len(chunks)
+            chunk_rows.extend(
+                {"pipeline_key": key, "batch_key": row["batch_key"], "chunk_index": index, "payload": part}
+                for index, part in enumerate(chunks)
+            )
+        stored_batches.append({**row, "record": record})
     ensure_tables(
-        query, ("atlas_review_batches", "atlas_review_batch_tasks", "atlas_review_current", "atlas_raw_reviews")
+        query,
+        (
+            "atlas_review_batches",
+            "atlas_review_batch_chunks",
+            "atlas_review_batch_tasks",
+            "atlas_review_current",
+            "atlas_raw_reviews",
+        ),
     )
     key = staged["assessment"]["pipeline_key"]
     counts = {}
     for table, rows, columns in [
-        ("atlas_review_batches", batch_rows, "pipeline_key TEXT,batch_key TEXT,record JSONB"),
+        ("atlas_review_batches", stored_batches, "pipeline_key TEXT,batch_key TEXT,record JSONB"),
+        ("atlas_review_batch_chunks", chunk_rows, "pipeline_key TEXT,batch_key TEXT,chunk_index INTEGER,payload TEXT"),
         ("atlas_review_batch_tasks", links, "pipeline_key TEXT,task_id TEXT,batch_key TEXT"),
         ("atlas_assessments", [staged["assessment"]], TABLE_COLUMNS["assessments"]),
         ("atlas_populations", staged["populations"], TABLE_COLUMNS["populations"]),
@@ -364,6 +392,7 @@ def load_content_reviews(staged: dict, load_id: str, source_id: str, query: Appl
                 "atlas_items": "task_id",
                 "atlas_raw_reviews": "task_id",
                 "atlas_review_batches": "batch_key",
+                "atlas_review_batch_chunks": "batch_key",
                 "atlas_review_batch_tasks": "task_id",
             }.get(table)
             identity_filter = ""
@@ -373,16 +402,23 @@ def load_content_reviews(staged: dict, load_id: str, source_id: str, query: Appl
                     f" AND {identity_column} IN (SELECT value FROM jsonb_array_elements_text(CAST(:ids AS JSONB)))"
                 )
                 parameters["ids"] = json.dumps([row[identity_column] for row in json.loads(body)])
+            if table == "atlas_review_batch_chunks":
+                # One batch can span several requests; select only this request's exact compound keys.
+                identity_filter += (
+                    " AND (batch_key,chunk_index) IN (SELECT batch_key,chunk_index "
+                    "FROM jsonb_to_recordset(CAST(:chunk_keys AS JSONB)) "
+                    "AS expected(batch_key TEXT,chunk_index INTEGER))"
+                )
+                parameters["chunk_keys"] = json.dumps(
+                    [{name: row[name] for name in ("batch_key", "chunk_index")} for row in json.loads(body)]
+                )
             actual = query(
-                f"SELECT {names} FROM {table} WHERE load_id=:load AND pipeline_key=:key "
-                + identity_filter
-                + " AND to_jsonb("
-                + table
-                + ")-'load_id' IN "
-                "(SELECT value FROM jsonb_array_elements(CAST(:rows AS JSONB)))",
-                parameters,
+                f"SELECT {names} FROM {table} WHERE load_id=:load AND pipeline_key=:key " + identity_filter,
+                {name: value for name, value in parameters.items() if name != "rows"},
             )["rows"]
-            if len(actual) != len(json.loads(body)):
+            actual_json = sorted(json.dumps(row, sort_keys=True, ensure_ascii=False) for row in actual)
+            expected_json = sorted(json.dumps(row, sort_keys=True, ensure_ascii=False) for row in json.loads(body))
+            if actual_json != expected_json:
                 raise ValueError(f"Stored {table} differs from its sealed panel")
         counts[table] = count
     materialize_cohort_summaries(lambda sql, params: query(sql, params)["rows"], load_id, pipeline_key=key)
