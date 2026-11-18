@@ -78,7 +78,11 @@ def _remove_container(name: str) -> None:
 
 @contextmanager
 def docker_database() -> Iterator[str]:
-    """Own a local Postgres container and volume until exit, failure or SIGTERM."""
+    """Remove the owned Postgres container and volume on context exit.
+
+    Main-thread callers also handle SIGTERM; worker threads keep the process's
+    existing signal handling.
+    """
     port = free_port()
     name = f"marina-postgres-{uuid.uuid4().hex[:8]}"
     with _cleanup_on_termination():
