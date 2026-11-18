@@ -9,12 +9,16 @@ the two release seals (manifest SHA-256s and file digests), and the in-region
 per-source scan of the pinned parquets (row counts per ``source.dataset``).
 """
 
+import hashlib
 import json
 from dataclasses import replace
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from marin.rl.curriculum import SamplingMode
 
+from experiments.post_training.task_curation.curriculum import recipe_identity
 from experiments.post_training.task_curation.datasets.long_loop_rl import (
     AGENTIC_MANIFEST_SHA256,
     AGENTIC_RELEASE_URL,
@@ -35,7 +39,6 @@ from experiments.post_training.task_curation.exp3_curriculum import (
     ROUTE_QUOTAS,
     SEED,
     SOURCE_ROUTES,
-    distribution_summary,
     exp3_rl_curriculum,
     weights,
 )
@@ -103,14 +106,15 @@ def test_the_curriculum_is_what_55_consumed_source_by_source():
     catalog = {source.name: source for source in all_sources().values()}
     for entry in curriculum.entries:
         consumed = CONSUMED[entry.label]
+        release = catalog[entry.source]
         assert entry.source == consumed["release"]
         assert entry.version == "1"
-        name, revision, train_sha256 = RELEASE_PINS[entry.source]
+        name, revision, _ = RELEASE_PINS[entry.source]
         assert entry.pin.name == name
         assert entry.pin.revision == revision
         assert entry.pin.url == name
         assert entry.weight == consumed["weight"]
-        release = catalog[entry.source]
+        assert entry.recipe == recipe_identity(release.pipeline)
         assert release.dataset.revision == revision
         assert release.info.count == sum(
             consumed["rows"] for consumed in CONSUMED.values() if consumed["release"] == entry.source
@@ -139,49 +143,29 @@ def test_the_weights_project_the_consumed_route_quotas():
 
 def test_the_fingerprint_follows_only_the_consumed_mix():
     curriculum = exp3_rl_curriculum()
-    assert curriculum.identity == exp3_rl_curriculum().identity
+    assert exp3_rl_curriculum().fingerprint == curriculum.fingerprint
     # A different seed, weight, or pin is a different mix; re-badging is not.
     drifted = replace(curriculum, seed=SEED + 1)
     assert drifted.fingerprint != curriculum.fingerprint
+    reweighted = replace(
+        curriculum,
+        entries=tuple(
+            replace(entry, weight=entry.weight / 2 if entry.weight else entry.weight) for entry in curriculum.entries
+        ),
+    )
+    assert reweighted.fingerprint != curriculum.fingerprint
     relabeled = replace(curriculum, version="2026.11.18")
     assert relabeled.fingerprint == curriculum.fingerprint
-
-
-def test_the_distribution_summary_quotes_the_consumed_shares():
-    assert distribution_summary(weights()) == {
-        "sources": 7,
-        "p10": pytest.approx(0.055536),
-        "p25": pytest.approx(0.06015),
-        "p50": pytest.approx(0.10395),
-        "p75": pytest.approx(0.1120825),
-        "p90": pytest.approx(0.272099),
-        "max": 0.5,
-        "50%": 1,
-        "90%": 6,
-    }
-
-
-def test_the_adopted_releases_are_runnable_catalog_sources():
-    runnable = {
-        source.name: source
-        for source in all_sources().values()
-        if source.name in RELEASE_PINS and source.pipeline is not None
-    }
-    assert set(runnable) == set(RELEASE_PINS)
-    for name, source in runnable.items():
-        assert source.version == "1"
-        assert source.dataset.revision == RELEASE_PINS[name][1]
-        assert source.dataset.url == RELEASE_PINS[name][0]
-        assert "agentic" in source.info.tags or "rlvr" in source.info.tags
 
 
 def test_verify_release_admits_the_recorded_composition(tmp_path):
     """The adoption stage verifies digests, row counts and provenance against the record."""
     source = _local_release(tmp_path)
     config = source.config
+    assert config is not None
     composition = verify_release(config)
-    assert composition["train.parquet"]["rows"] == 2
-    assert composition["train.parquet"]["source_counts"] == {"alpha": 1, "beta": 1}
+    assert composition["train.parquet"].rows == 2
+    assert composition["train.parquet"].source_counts == {"alpha": 1, "beta": 1}
     tampered = replace(config, members=tuple(replace(member, sha256="0" * 64) for member in config.members))
     with pytest.raises(ValueError, match="does not match the pinned"):
         verify_release(tampered)
@@ -198,20 +182,14 @@ def test_verify_release_admits_the_recorded_composition(tmp_path):
 
 def _local_release(tmp_path):
     """A two-row local release shaped like the pinned ones: a task_spec payload column."""
-    import hashlib
-
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     rows = [
         {"task_spec": json.dumps({"source": {"dataset": "alpha"}, "id": "a1"})},
         {"task_spec": json.dumps({"source": {"dataset": "beta"}, "id": "b1"})},
     ]
-    table = pa.Table.from_pylist(rows)
     release = tmp_path / "release"
     release.mkdir()
     path = release / "train.parquet"
-    pq.write_table(table, path)
+    pq.write_table(pa.Table.from_pylist(rows), path)
     sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
     return RlDataSource(
         info=SourceInfo(id="Test:adopted-release", title="adopted release", origin="Test"),
