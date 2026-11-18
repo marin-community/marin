@@ -15,7 +15,11 @@ other sources have larger fractional remainders than the agentic source and
 receive the remaining seats. Uniform draws from a fixed nonagentic route pool
 with nemotron_if's 54,953 rows would give it about 35% of that pool. Its target
 is 15% of all groups. The declared domain-weighted sampler requires per-source
-``teacher_route`` labels in the input pool.
+``teacher_route`` labels in the input pool: no pool in this stack carries them
+yet (the recorded .55 parquets carry ``data_source`` provenance and route through
+``source_routes``), and the ``nemotron_if`` entry pins the upstream dataset
+revision rather than a curated pool, so a launch needs the stamped-pool and
+curated-``nemotron_if``-pool artifacts before it can sample this curriculum.
 
 Seed policy: unchanged from .55. The trainer seed 20261020 seeds the sampler, as
 in the .55 run whose ``data.sampling.seed`` fell back to the trainer seed; this
