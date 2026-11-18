@@ -666,14 +666,77 @@ class TestCohortConversion:
             )
 
 
-def _fixture_binary(instruction: str) -> bytes:
+def _fixture_binary(instruction: str, *, solve_sh: str | None = None) -> bytes:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
         for name, data in (("instruction.md", instruction.encode()), ("task.toml", b"")):
             member = tarfile.TarInfo(name)
             member.size = len(data)
             archive.addfile(member, io.BytesIO(data))
+        if solve_sh is not None:
+            member = tarfile.TarInfo("solution/solve.sh")
+            member.size = len(solve_sh.encode())
+            archive.addfile(member, io.BytesIO(solve_sh.encode()))
     return buffer.getvalue()
+
+
+class TestDropWrapperSolveSh:
+    """Ruling case (a): the FWeindel wrapper solve.sh is dropped after verification."""
+
+    WRAPPER = "#!/bin/bash\nset -euo pipefail\ncp /solution/solution.py /app/solution.py\n"
+
+    def test_dropped_when_pure_wrapper(self):
+        rewritten = lane.strip_wrapper_solve_sh(_fixture_binary("keep me", solve_sh=self.WRAPPER))
+        assert rewritten is not None
+        with tarfile.open(fileobj=io.BytesIO(rewritten), mode="r:*") as archive:
+            names = {member.name.removeprefix("./") for member in archive if member.isfile()}
+        assert "solution/solve.sh" not in names
+        assert "instruction.md" in names
+
+    def test_none_when_absent(self):
+        assert lane.strip_wrapper_solve_sh(_fixture_binary("keep me")) is None
+
+    def test_fails_loudly_when_not_the_pure_wrapper(self):
+        rogue = "#!/bin/bash\nset -euo pipefail\ncp /solution/solution.py /app/solution.py\nrm -rf /workspace\n"
+        with pytest.raises(ValueError, match="not the verified pure wrapper"):
+            lane.strip_wrapper_solve_sh(_fixture_binary("keep me", solve_sh=rogue))
+
+    def test_cohort_records_the_normalization_and_converts(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            lane,
+            "configured_sources",
+            lambda: [
+                type(
+                    "S",
+                    (),
+                    {
+                        "info": type("I", (), {"id": TRACKED_SOURCE})(),
+                        "config": TestCohortConversion._recipe(monkeypatch, tmp_path),
+                    },
+                )()
+            ],
+        )
+        monkeypatch.setattr(
+            lane,
+            "load_folder_rows",
+            lambda repo, folders, revision=None: [
+                {"path": "task_0", "task_binary": _fixture_binary("keep me", solve_sh=self.WRAPPER)}
+            ],
+        )
+        monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: TestCohortConversion._runtime_join())
+        output_root = str(tmp_path / "cohort")
+        manifest = lane.convert_cohort(
+            tracked_source_id=TRACKED_SOURCE,
+            report=TestCohortConversion._single_winner_report(),
+            folders=("fixture_v1",),
+            repo="fixture/validated-tasks",
+            candidate_revision="eafe9b38",
+            tracked_spec_uris=(),
+            output_root=output_root,
+            drop_wrapper_solve_sh=True,
+        )
+        assert manifest["normalization"] == {"dropped_wrapper_solve_sh": 1}
+        assert manifest["counts"] == {"converted": 1}
 
 
 class TestRepairDecision:

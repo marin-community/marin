@@ -10,9 +10,12 @@ oracle/NoP gates run, and publication is a separate ruled step.
 """
 
 import argparse
+import io
 import json
 import logging
 import shutil
+import sys
+import tarfile
 import tempfile
 import time
 from collections import Counter
@@ -592,6 +595,53 @@ COHORT_SPEC_SCHEMA = pa.schema(
 )
 
 
+WRAPPER_SOLVE_SH = """#!/bin/bash
+set -euo pipefail
+cp /solution/solution.py /app/solution.py
+"""
+"""The pure wrapper the FWeindel repackager adds under solution/solve.sh.
+
+Ruling (repackager-license-follows-upstream, coordinator 2026-11-18): the winners' solve.sh
+is verified to be exactly this wrapper — the tracked upstream archives carry no solve.sh —
+so the cohort stage drops it and the tracked converter's oracle layout applies unchanged.
+"""
+
+
+def _pure_wrapper(content: str) -> bool:
+    stripped = "\n".join(line for line in content.splitlines() if line.strip() and not line.strip().startswith("#"))
+    if "solution.py" not in stripped or not ("cp " in stripped or "exec " in stripped or "python" in stripped):
+        return False
+    return not any(token in stripped for token in ("rm ", "curl", "wget", "git ", "pip ", "sudo"))
+
+
+def strip_wrapper_solve_sh(task_binary: bytes) -> bytes | None:
+    """Rewrite a candidate task archive without solution/solve.sh, verifying it is the pure wrapper.
+
+    Returns ``None`` when the archive carries no ``solution/solve.sh``. Raises when the
+    solve.sh does anything beyond the verified wrapper, so a variant change fails loudly
+    instead of silently reclassifying the winner's oracle.
+    """
+    with tarfile.open(fileobj=io.BytesIO(task_binary), mode="r:*") as archive:
+        members = list(archive)
+        solve = next((m for m in members if m.name.removeprefix("./") == "solution/solve.sh"), None)
+        if solve is None:
+            return None
+        content = archive.extractfile(solve).read().decode(errors="replace")
+        if not _pure_wrapper(content):
+            raise ValueError(
+                "The winner's solution/solve.sh is not the verified pure wrapper; the normalization "
+                "ruling does not cover it: " + content[:200]
+            )
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as rebuilt:
+            for member in members:
+                if member is solve:
+                    continue
+                data = archive.extractfile(member).read() if member.isfile() else None
+                rebuilt.addfile(member, io.BytesIO(data) if data is not None else None)
+        return buffer.getvalue()
+
+
 def tracked_runtimes(uris: tuple[str, ...]) -> dict[str, dict[str, Any]]:
     """Each tracked TaskSpec's original runtime binding, keyed by its normalized instruction hash.
 
@@ -660,12 +710,16 @@ def convert_cohort(
     tracked_spec_uris: tuple[str, ...],
     output_root: str,
     shard_size: int = 256,
+    drop_wrapper_solve_sh: bool = False,
 ) -> dict[str, Any]:
     """Convert the report's ACCEPTED winners through the tracked source's own converter.
 
     Crash-safe: converted winners are recorded in ``task-map.jsonl`` as they finish and are
     skipped on rerun; specs land in resumable parquet shards; the manifest summarizes. A
     rejected winner keeps its original tracked task and is recorded with its rejection.
+    ``drop_wrapper_solve_sh`` normalizes FWeindel winners whose archives add the verified pure
+    wrapper ``solution/solve.sh`` the tracked layout lacks — ``strip_wrapper_solve_sh`` drops
+    it with a typed normalization count, and any non-wrapper variant fails loudly.
     """
     recipes = {source.info.id: source.config for source in configured_sources()}
     recipe = recipes.get(tracked_source_id)
@@ -685,6 +739,13 @@ def convert_cohort(
     missing = paths - set(rows)
     if missing:
         raise ValueError(f"Winners missing from the candidate folders: {sorted(missing)[:3]}")
+    normalized: Counter = Counter()
+    if drop_wrapper_solve_sh:
+        for path in paths:
+            rewritten = strip_wrapper_solve_sh(rows[path]["task_binary"])
+            if rewritten is not None:
+                rows[path]["task_binary"] = rewritten
+                normalized["dropped_wrapper_solve_sh"] += 1
 
     root = StoragePath(output_root)
     done: dict[str, dict[str, Any]] = {}
@@ -772,6 +833,8 @@ def convert_cohort(
         "recipe": {"name": recipe.name, "version": recipe.version},
         "grader_environment": context.grader_environment.model_dump(mode="json"),
     }
+    if normalized:
+        manifest["normalization"] = dict(normalized)
     manifest_path = root / "manifest.json"
     if not manifest_path.exists():
         manifest_path.write_bytes((json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())
@@ -827,6 +890,7 @@ def write_report(report: DryRunReport, output_uri: str) -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    _argv = sys.argv[1:]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tracked-source-id", required=True)
     parser.add_argument(
@@ -839,9 +903,9 @@ def main() -> None:
         action="append",
         help="Full-TaskSpec parquet URIs for the tracked conversion, content-joined for review",
     )
-    parser.add_argument("--candidate-source-id", required=True)
-    parser.add_argument("--candidate-revision", required=True)
-    parser.add_argument("--folder", action="append", required=True)
+    parser.add_argument("--candidate-source-id", required="--cohort-report" not in " ".join(_argv))
+    parser.add_argument("--candidate-revision", required="--cohort-report" not in " ".join(_argv))
+    parser.add_argument("--folder", action="append", required="--cohort-report" not in " ".join(_argv))
     parser.add_argument("--repo", default=CANDIDATE_REPO)
     parser.add_argument(
         "--reviewer-version", type=ReviewerVersion, choices=list(ReviewerVersion), default=ReviewerVersion.V3
@@ -855,6 +919,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--cohort-output-root", help="Output root for the winner cohort (specs shards, task map, manifest)"
+    )
+    parser.add_argument(
+        "--drop-wrapper-solve-sh",
+        action="store_true",
+        help="Normalize FWeindel winners by dropping the verified pure-wrapper solution/solve.sh",
     )
     parser.add_argument(
         "--prepare-output-root",
@@ -878,6 +947,7 @@ def main() -> None:
             candidate_revision=args.candidate_revision,
             tracked_spec_uris=tuple(args.tracked_specs or ()),
             output_root=args.cohort_output_root,
+            drop_wrapper_solve_sh=args.drop_wrapper_solve_sh,
         )
         logger.info("RESULT %s", json.dumps(manifest, sort_keys=True))
         return
