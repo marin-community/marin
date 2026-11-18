@@ -1211,6 +1211,7 @@ def run_oracle_campaign(
         # authfile is the GitHub packages credential wrapped for skopeo.
         token = require_secret(actor_registry_secret or "GHCR_PUSH_TOKEN")
         registry_authfile = work_root / "registry-auth.json"
+        registry_authfile.parent.mkdir(parents=True, exist_ok=True)
         encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode()
         registry_authfile.write_text(json.dumps({"auths": {"ghcr.io": {"auth": encoded}}}))
         registry_authfile.chmod(0o600)

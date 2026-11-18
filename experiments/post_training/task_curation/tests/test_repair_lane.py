@@ -1280,6 +1280,80 @@ def test_oracle_campaign_collects_trials_from_the_calibration_root(tmp_path, mon
     assert summary["admitted"] == 2
 
 
+def test_oracle_campaign_with_actor_image_creates_its_work_root_for_the_registry_authfile(tmp_path, monkeypatch):
+    """The actor-image campaign writes its registry authfile before any stage creates the work root."""
+    calls = {}
+    missing_root = tmp_path / "missing-root"
+    actor_image = "ghcr.io/marin-community/atlas-repair-actor@sha256:" + "b" * 64
+
+    def fake_convert_cohort(**kwargs):
+        (missing_root / "cohort" / "conversion-abc" / "converted-pending").mkdir(parents=True)
+        return {"conversion_identity": "abc", "counts": {"converted": 3, "prepared_actor_image": 3}}
+
+    def fake_prepare(cohort, output, *, source_revision, controls):
+        output.mkdir(parents=True)
+        (output / "task-map.json").write_text("{}")
+
+    class FakeInfo:
+        id = "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
+
+    class FakeConfig:
+        controls = Controls()
+
+    class FakeSource:
+        info = FakeInfo()
+        config = FakeConfig()
+
+    def fake_calibrate_cohort(cohort, task_map, destination, environment, environment_kwargs, concurrency):
+        calls["calibration_kwargs"] = environment_kwargs
+
+    def fake_filter_cohort(cohort, task_map, jobs, output, **kwargs):
+        (output.parent / "oracle-filter.json").write_text("{}")
+        output.write_bytes(b"parquet")
+        (output.parent / "oracle-filter-summary.json").write_text("{}")
+        (output.parent / "excluded-tasks.parquet").write_bytes(b"parquet")
+
+        class FakeReceipt:
+            def model_dump(self, mode):
+                return {"tasks": {"t1": {"exclusion_reason": None}}}
+
+        return FakeReceipt()
+
+    monkeypatch.setattr(lane, "convert_cohort", fake_convert_cohort)
+    monkeypatch.setattr(lane, "configured_sources", lambda: [FakeSource()])
+    monkeypatch.setattr(lane, "prepare", fake_prepare)
+    monkeypatch.setattr(lane, "calibrate_cohort", fake_calibrate_cohort)
+    monkeypatch.setattr(lane, "filter_cohort", fake_filter_cohort)
+    monkeypatch.setattr(lane, "install_local_sandbox_tooling", lambda: None)
+    monkeypatch.setattr(
+        lane,
+        "campaign_worker_limits",
+        lambda root, **kwargs: {"cgroup_parent": str(root / "cgroup"), "disk_root": str(root / "sandbox-disks")},
+    )
+    monkeypatch.setattr(lane, "require_secret", lambda name: "gh-token")
+    lane.run_oracle_campaign(
+        tracked_source_id="TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+        report={"folders": {}},
+        folders=("nl2bash_v2",),
+        repo="FWeindel/validated-tasks",
+        candidate_revision="eafe9b38",
+        tracked_uris=("s3://tracked",),
+        tracked_spec_uris=("s3://specs",),
+        work_root=missing_root,
+        receipt_uri=str(missing_root / "receipt.json"),
+        source_revision="7fd50fb713",
+        policy=None,
+        environment="local",
+        actor_image=actor_image,
+    )
+    authfile = missing_root / "registry-auth.json"
+    assert authfile.is_file()
+    assert authfile.stat().st_mode & 0o777 == 0o600
+    encoded = base64.b64encode(b"x-access-token:gh-token").decode()
+    assert json.loads(authfile.read_text()) == {"auths": {"ghcr.io": {"auth": encoded}}}
+    assert calls["calibration_kwargs"]["registry_authfile"] == str(authfile)
+
+
 class TestSubprocessCredentials:
     """The harbor trial subprocess reads s3 credentials from the AWS_* environment."""
 
