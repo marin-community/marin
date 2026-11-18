@@ -789,10 +789,9 @@ def convert_cohort(
         with (root / "task-map.jsonl").open("a", auto_mkdir=True) as stream:
             stream.write(json.dumps(entry) + "\n")
         if not isinstance(task, ImportRejection):
-            instruction = next(content_rows([task.model_dump(mode="json")])).instruction_hash
             if runtime_join is None:
                 runtime_join = tracked_runtimes(tracked_spec_uris)
-            runtime = runtime_join.get(instruction)
+            runtime = runtime_join.get(winner["tracked_task_id"])
             if runtime is None:
                 raise ValueError(
                     f"No tracked runtime binding for the winner's tracked task: {winner['tracked_task_id']}"

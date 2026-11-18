@@ -519,13 +519,8 @@ class TestCohortConversion:
 
     @staticmethod
     def _runtime_join():
-        """A runtime join covering the two fixture tasks that convert successfully."""
-        join = {}
-        for path, instruction in (("task_0", "keep me"), ("task_1", "keep me too")):
-            task = spec(f"converted-{path}", instruction)
-            row = next(content_rows([task.model_dump(mode="json")]))
-            join[row.instruction_hash] = {"shape": {"agent_timeout_sec": 300}}
-        return join
+        """A runtime join keyed by the tracked task IDs of the two fixture winners."""
+        return {"tracked-0": {"shape": {"agent_timeout_sec": 300}}, "tracked-1": {"shape": {"agent_timeout_sec": 300}}}
 
     def test_converts_accepted_winners_and_skips_the_rest(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
