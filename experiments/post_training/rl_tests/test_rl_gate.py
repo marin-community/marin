@@ -262,7 +262,6 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
                     callback["additional_evaluations"]["eval_lite"]["data_files"] = [
                         str(Path(source["local_path"]) / source["relative_path"])
                     ]
-    if preset == "speed-short":
         evaluations = read_evaluations(
             str(root / "exports"), attempt_id="recorded-attempt", evaluation="eval/eval_lite/"
         )
@@ -785,10 +784,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         edit_metrics(candidate, lambda row: row.update({"policy/mismatch/staleness0/selected_tokens": 0}))
     report = rescore(preset.name, "--candidate", name)
     if case == "protocol-temperature":
-        assert report["verdict"] == "invalid" and (
-            "evaluation protocol" in report["reason"]
-            or "skyrl.generator.eval_sampling_params.temperature" in report["reason"]
-        ), report
+        assert report["verdict"] == "invalid" and "evaluation protocol" in report["reason"], report
     elif fault:
         assert report["verdict"] == "invalid" and fault in report["reason"], report
         if case == "malformed-seed":
