@@ -1341,11 +1341,20 @@ def probe_log_regex(
     line counts as progress; the regex match is the human-readable progress value.
     """
     if log_line is None:
+        # No recent log line says nothing about liveness: the Iris lifecycle still decides
+        # whether the job is running, gated or terminal.
+        detail = f"finelog: no lines for {probe.job} in the last {probe.log_window_minutes}m"
+        state = EntryState.RUNNING
+        preemptions = None
+        if lifecycle is not None:
+            state, iris_detail, preemptions = lifecycle[0], lifecycle[1], lifecycle[2] or None
+            detail = f"{detail}; {iris_detail}"
         return Observation(
-            state=EntryState.RUNNING,
+            state=state,
             progress="(no log lines)",
             signature=None,
-            detail=f"finelog: no lines for {probe.job} in the last {probe.log_window_minutes}m",
+            detail=detail,
+            preemptions=preemptions,
         )
     job_id = log_line.job_key
     data = log_line.data

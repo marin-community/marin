@@ -540,6 +540,32 @@ def test_snapshot_runner_resolves_logs_and_lifecycle() -> None:
     assert obs.signature.endswith("|200")
 
 
+@pytest.mark.parametrize(
+    ("iris_state", "expected"),
+    [("failed", jw.EntryState.FAILED), ("succeeded", jw.EntryState.SUCCEEDED), ("running", jw.EntryState.RUNNING)],
+)
+def test_silent_job_takes_its_state_from_iris(iris_state: str, expected: jw.EntryState) -> None:
+    """A job with no recent log lines still reports the Iris lifecycle state, so a silent terminal job alerts."""
+    snapshot = jw.FleetSnapshot()
+    snapshot.iris[("cw-us-east-02a", "/benfeuer/quiet")] = jw.IrisJobView("/benfeuer/quiet", iris_state, 0, {})
+    entry = jw.RegistryEntry(
+        id="quiet",
+        owner="o",
+        description="",
+        probe=jw.LogRegexProbe(cluster="cw-us-east-02a", job="/benfeuer/quiet", pattern=""),
+        iris=None,
+        stall_threshold=timedelta(minutes=60),
+        gated_threshold=timedelta(minutes=30),
+        cooldown=timedelta(minutes=120),
+        preempt_alert_count=2,
+        expected_terminal=None,
+    )
+    obs = jw.snapshot_probe_runner(snapshot)(entry, datetime.now(UTC))
+    assert obs.state == expected
+    assert obs.progress == "(no log lines)"
+    assert f"state={iris_state}" in obs.detail
+
+
 def test_snapshot_runner_missing_job_is_probe_error() -> None:
     snapshot = jw.FleetSnapshot()
     entry = jw.RegistryEntry(
