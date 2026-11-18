@@ -24,10 +24,13 @@ validation. Bloom creation requires both mandatory manifests. Source downloads
 and required lm-eval task loads are retried with backoff.
 
 Test split is preferred; tasks without a test split fall back to
-validation, then training. Tasks that fail to load (e.g. removed from
-lm-eval since our pinned commit, gated HF datasets) are logged and skipped,
-except :data:`REQUIRED_LMH_TASKS`: if one of them fails, preparation stops
-before it seals the lm-eval manifest.
+validation, then training. Every lm-eval task is required: if one fails to
+load, loads a number of leaf tasks other than its pinned count
+(:data:`LMH_LEAF_TASK_COUNTS`), or has a leaf task without records,
+preparation stops before it seals the lm-eval manifest. The exceptions are the
+tasks in :data:`BEST_EFFORT_LMH_TASKS`, each with the reason that it does not
+load; a failure of one of them is logged and skipped. A new eval must load, or
+be added to that table on purpose.
 
 Submit on a CPU Iris cluster. The ``lm_eval`` extra supplies the optional
 lm-eval-harness package:
@@ -53,7 +56,7 @@ import json
 import logging
 import os
 import zipfile
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping
 from enum import StrEnum
 from typing import Any
 
@@ -104,7 +107,7 @@ from experiments.evals.task_configs import (
 logger = logging.getLogger(__name__)
 
 AA_INDEX_VERSION = "4.1.1"
-EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v5"
+EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v6"
 EVALS_RELATIVE = f"datakit/decontam/evals/{EVAL_CORPUS_VERSION}"
 LMH_EVALS_RELATIVE = f"{EVALS_RELATIVE}/lmh"
 AA_MANIFEST_RELATIVE = "aa/_manifest.json"
@@ -124,7 +127,7 @@ def _output_root() -> str:
 
 
 def _lmh_output_root() -> str:
-    """Versioned best-effort lm-eval artifact root."""
+    """Versioned lm-eval artifact root."""
     return f"{marin_prefix()}/{LMH_EVALS_RELATIVE}"
 
 
@@ -778,9 +781,177 @@ DECON_EXCLUDED_EVAL_TASKS: frozenset[str] = frozenset(
 )
 
 
-# lm-eval tasks that must load. Preparation does not seal the lm-eval manifest,
-# and the Bloom is not built, unless every leaf task of each one is present.
-REQUIRED_LMH_TASKS: tuple[str, ...] = ("gsm8k", "humaneval", "leaderboard_mmlu_pro", "mmlu", "mmlu_pro")
+_HUB_ID_REASON = "un-namespaced Hub dataset ID no longer resolves (marin#11503)"
+_SCRIPT_REASON = "the dataset needs a loading script, which datasets 4 does not run (marin#11503)"
+_LANGDETECT_REASON = "the task imports langdetect, which the lm_eval extra does not install (marin#11503)"
+_UNREGISTERED_REASON = "the pinned lm-eval does not register this task name (marin#11503)"
+
+# lm-eval tasks that are allowed to fail, each with the reason that it does not
+# load. Every other task from ``_lmh_task_names`` is required. To add an eval
+# that cannot load yet, add it here with a reason or an issue.
+BEST_EFFORT_LMH_TASKS: dict[str, str] = {
+    **dict.fromkeys(
+        (
+            "anli_r1",
+            "anli_r2",
+            "anli_r3",
+            "boolq",
+            "copa",
+            "medmcqa",
+            "nq_open",
+            "openbookqa",
+            "qa4mre_2011",
+            "qa4mre_2012",
+            "qa4mre_2013",
+            "sciq",
+            "squadv2",
+            "swag",
+            "triviaqa",
+            "truthfulqa_gen",
+            "truthfulqa_mc1",
+            "truthfulqa_mc2",
+            "webqs",
+            "winogrande",
+        ),
+        _HUB_ID_REASON,
+    ),
+    **dict.fromkeys(
+        (
+            "arithmetic_1dc",
+            "arithmetic_2da",
+            "arithmetic_2dm",
+            "arithmetic_2ds",
+            "arithmetic_3da",
+            "arithmetic_3ds",
+            "arithmetic_4da",
+            "arithmetic_4ds",
+            "arithmetic_5da",
+            "arithmetic_5ds",
+            "cmmlu",
+            "crows_pairs_english_age",
+            "crows_pairs_english_autre",
+            "crows_pairs_english_disability",
+            "crows_pairs_english_gender",
+            "crows_pairs_english_nationality",
+            "crows_pairs_english_physical_appearance",
+            "crows_pairs_english_race_color",
+            "crows_pairs_english_religion",
+            "crows_pairs_english_sexual_orientation",
+            "crows_pairs_english_socioeconomic",
+            "ethics_cm",
+            "ethics_deontology",
+            "ethics_justice",
+            "ethics_utilitarianism",
+            "ethics_virtue",
+            "logieval",
+            "logiqa",
+            "logiqa2",
+            "mathqa",
+            "mc_taco",
+            "moral_stories",
+            "mutual",
+            "mutual_plus",
+            "prost",
+            "pubmedqa",
+            "qasper_bool",
+            "qasper_freeform",
+            "social_iqa",
+            "wsc273",
+        ),
+        _SCRIPT_REASON,
+    ),
+    **dict.fromkeys(
+        (
+            "ifeval",
+            "leaderboard_ifeval",
+        ),
+        _LANGDETECT_REASON,
+    ),
+    **dict.fromkeys(
+        (
+            "include_base_44_albanian_few_shot_og",
+            "include_base_44_arabic_few_shot_og",
+            "include_base_44_armenian_few_shot_og",
+            "include_base_44_azerbaijani_few_shot_og",
+            "include_base_44_basque_few_shot_og",
+            "include_base_44_belarusian_few_shot_og",
+            "include_base_44_bengali_few_shot_og",
+            "include_base_44_bulgarian_few_shot_og",
+            "include_base_44_chinese_few_shot_og",
+            "include_base_44_croatian_few_shot_og",
+            "include_base_44_dutch_few_shot_og",
+            "include_base_44_finnish_few_shot_og",
+            "include_base_44_french_few_shot_og",
+            "include_base_44_georgian_few_shot_og",
+            "include_base_44_german_few_shot_og",
+            "include_base_44_greek_few_shot_og",
+            "include_base_44_hebrew_few_shot_og",
+            "include_base_44_hindi_few_shot_og",
+            "include_base_44_hungarian_few_shot_og",
+            "include_base_44_indonesian_few_shot_og",
+            "include_base_44_italian_few_shot_og",
+            "include_base_44_japanese_few_shot_og",
+            "include_base_44_kazakh_few_shot_og",
+            "include_base_44_korean_few_shot_og",
+            "include_base_44_lithuanian_few_shot_og",
+            "include_base_44_malay_few_shot_og",
+            "include_base_44_nepali_few_shot_og",
+            "include_base_44_north macedonian_few_shot_og",
+            "include_base_44_persian_few_shot_og",
+            "include_base_44_portuguese_few_shot_og",
+            "include_base_44_russian_few_shot_og",
+            "include_base_44_serbian_few_shot_og",
+            "include_base_44_spanish_few_shot_og",
+            "include_base_44_tagalog_few_shot_og",
+            "include_base_44_tamil_few_shot_og",
+            "include_base_44_telugu_few_shot_og",
+            "include_base_44_turkish_few_shot_og",
+            "include_base_44_ukrainian_few_shot_og",
+            "include_base_44_uzbek_few_shot_og",
+            "include_base_44_vietnamese_few_shot_og",
+            "mmmlu_ar_xy",
+            "mmmlu_bn_bd",
+            "mmmlu_de_de",
+            "mmmlu_es_la",
+            "mmmlu_fr_fr",
+            "mmmlu_hi_in",
+            "mmmlu_id_id",
+            "mmmlu_it_it",
+            "mmmlu_ja_jp",
+            "mmmlu_ko_kr",
+            "mmmlu_pt_br",
+            "mmmlu_sw_ke",
+            "mmmlu_yo_ng",
+            "mmmlu_zh_cn",
+        ),
+        _UNREGISTERED_REASON,
+    ),
+}
+
+# Number of leaf tasks that each lm-eval group task expands to. A task that is
+# not listed must load as exactly one leaf task.
+LMH_LEAF_TASK_COUNTS: dict[str, int] = {
+    "agieval": 21,
+    "bbh_cot_fewshot": 27,
+    "bbh_cot_zeroshot": 27,
+    "bbh_fewshot": 27,
+    "bbh_zeroshot": 27,
+    "blimp_nl": 84,
+    "cabbq": 10,
+    "haerae": 5,
+    "kmmlu": 45,
+    "leaderboard_bbh": 24,
+    "leaderboard_gpqa": 3,
+    "leaderboard_math_hard": 7,
+    "leaderboard_musr": 3,
+    "lm_syneval": 72,
+    "med_concepts_qa": 15,
+    "minerva_math": 7,
+    "mmlu": 57,
+    "mmlu_pro": 14,
+    "turblimp_core": 16,
+    "zhoblimp": 118,
+}
 
 
 def _lmh_task_names() -> list[str]:
@@ -813,21 +984,47 @@ def _lmh_task_names() -> list[str]:
     return sorted(names - DECON_EXCLUDED_EVAL_TASKS)
 
 
-def _missing_required_lmh_tasks(task_leaves: dict[str, list[str]], records: dict[str, int]) -> list[str]:
-    """Return required tasks that did not load or have a leaf task without records.
+def _required_lmh_tasks(names: Iterable[str]) -> dict[str, int]:
+    """Map each required task in ``names`` to its pinned number of leaf tasks."""
+    names = set(names)
+    unknown = sorted(BEST_EFFORT_LMH_TASKS.keys() - names) + sorted(LMH_LEAF_TASK_COUNTS.keys() - names)
+    if unknown:
+        raise ValueError(f"BEST_EFFORT_LMH_TASKS or LMH_LEAF_TASK_COUNTS lists tasks that are not configured: {unknown}")
+    return {name: LMH_LEAF_TASK_COUNTS.get(name, 1) for name in sorted(names - BEST_EFFORT_LMH_TASKS.keys())}
 
-    ``records`` maps each leaf task that has an artifact to its record count.
+
+def required_lmh_tasks() -> dict[str, int]:
+    """Map each required lm-eval task to its pinned number of leaf tasks."""
+    return _required_lmh_tasks(_lmh_task_names())
+
+
+def _required_lmh_task_failures(
+    required: Mapping[str, int], task_leaves: Mapping[str, list[str]], records: Mapping[str, int]
+) -> list[str]:
+    """Return one message for each required task that is not complete.
+
+    ``task_leaves`` maps each task that loaded to its leaf tasks. ``records``
+    maps each leaf task that has an artifact to its record count.
     """
-    return [
-        task
-        for task in REQUIRED_LMH_TASKS
-        if not task_leaves.get(task) or not all(records.get(leaf) for leaf in task_leaves[task])
-    ]
+    failures: list[str] = []
+    for task, expected_leaves in required.items():
+        leaves = task_leaves.get(task)
+        if not leaves:
+            failures.append(f"{task}: did not load")
+            continue
+        if len(leaves) != expected_leaves:
+            failures.append(
+                f"{task}: loaded {len(leaves)} leaf tasks, expected {expected_leaves} (LMH_LEAF_TASK_COUNTS)"
+            )
+        empty = sorted(leaf for leaf in leaves if not records.get(leaf))
+        if empty:
+            failures.append(f"{task}: no records for leaf tasks {empty}")
+    return failures
 
 
-def _load_task_dict(get_task_dict: Callable[[list[str]], dict], name: str) -> dict:
+def _load_task_dict(get_task_dict: Callable[[list[str]], dict], name: str, required: Container[str]) -> dict:
     """Load one lm-eval task, retrying required tasks on any error."""
-    if name not in REQUIRED_LMH_TASKS:
+    if name not in required:
         return get_task_dict([name])
     return retry_with_backoff(
         lambda: get_task_dict([name]),
@@ -863,7 +1060,8 @@ def _prepare_lmh() -> dict[str, Any]:
                 f"lmh manifest extraction version is {existing_manifest.get('extraction_version')!r}, "
                 f"expected {_LMH_EXTRACTION_VERSION!r}"
             )
-        if set(existing_manifest.get("required_tasks", {})) != set(REQUIRED_LMH_TASKS):
+        sealed_required = existing_manifest.get("required_tasks", {})
+        if {task: len(leaves) for task, leaves in sealed_required.items()} != required_lmh_tasks():
             raise ValueError(
                 "lmh manifest required tasks changed within EVAL_CORPUS_VERSION; "
                 "change EVAL_CORPUS_VERSION before preparation"
@@ -873,7 +1071,8 @@ def _prepare_lmh() -> dict[str, Any]:
 
     patch_hf_dataset_loading()
     names = _lmh_task_names()
-    logger.info("lmh: %d unique task names from task_configs.py", len(names))
+    required = _required_lmh_tasks(names)
+    logger.info("lmh: %d unique task names from task_configs.py, %d required", len(names), len(required))
 
     from lm_eval.tasks import get_task_dict  # noqa: PLC0415  # optional dep: lm_eval
 
@@ -891,7 +1090,7 @@ def _prepare_lmh() -> dict[str, Any]:
             continue
 
         try:
-            task_dict = _load_task_dict(get_task_dict, name)
+            task_dict = _load_task_dict(get_task_dict, name, required)
         except Exception as exc:
             logger.warning("lmh/%s: load failed: %s", name, exc)
             failed.append((name, f"load: {exc}"))
@@ -959,11 +1158,13 @@ def _prepare_lmh() -> dict[str, Any]:
             records = pq.ParquetFile(source).metadata.num_rows
         artifacts.append({"task": task_name, "artifact": artifact, "records": records})
 
-    missing_required = _missing_required_lmh_tasks(task_leaves, {entry["task"]: entry["records"] for entry in artifacts})
-    if missing_required:
+    required_failures = _required_lmh_task_failures(
+        required, task_leaves, {entry["task"]: entry["records"] for entry in artifacts}
+    )
+    if required_failures:
         raise ValueError(
-            f"required lm-eval tasks did not load or have no records: {missing_required}; "
-            "the FAIL lines above give reasons"
+            f"required lm-eval tasks are not complete: {required_failures}; the FAIL lines above give reasons. "
+            "Make each task load, or add it to BEST_EFFORT_LMH_TASKS with a reason"
         )
 
     manifest = {
@@ -974,7 +1175,8 @@ def _prepare_lmh() -> dict[str, Any]:
         "artifact_root": LMH_EVALS_RELATIVE,
         "extraction_version": _LMH_EXTRACTION_VERSION,
         "configured_tasks": names,
-        "required_tasks": {task: task_leaves[task] for task in REQUIRED_LMH_TASKS},
+        "required_tasks": {task: task_leaves[task] for task in required},
+        "best_effort_tasks": BEST_EFFORT_LMH_TASKS,
         "included_leaf_tasks": included_leaf_tasks,
         "artifacts": artifacts,
         "failed": [{"task": name, "reason": reason} for name, reason in failed],

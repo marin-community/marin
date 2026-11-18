@@ -12,12 +12,12 @@ StepRunner-walkable graph. Two modes (``--mode``), same DAG:
 
 Decontamination has four stages that you can run separately:
 
-- ``decon-bloom`` builds the shared Bloom filter and hash index from eval v5.
+- ``decon-bloom`` builds the shared Bloom filter and hash index from eval v6.
 - ``decon-drop`` builds source and global corpus DF filters.
 - ``decon-mark`` marks each selected source from completed Bloom and drop-set stages.
 - ``decon-report`` reads completed marks and writes the validation report.
 
-Run preparation first. This reuses the canonical eval v5 Bloom when it is built::
+Run preparation first. This reuses the canonical eval v6 Bloom when it is built::
 
     python -m experiments.datakit.reference_pipeline \
         --mode full --target decon-drop --sources all \
@@ -194,9 +194,9 @@ from experiments.datakit.decontam.prepare_eval_corpus import (
     EVAL_CORPUS_VERSION,
     EVALS_RELATIVE,
     LMH_MANIFEST_RELATIVE,
-    REQUIRED_LMH_TASKS,
     UNCHEATABLE_BENCHMARK_NAMES,
     UNCHEATABLE_MANIFEST_RELATIVE,
+    required_lmh_tasks,
 )
 from experiments.datakit.embeddings.luxical.pipeline import (
     EMBED_DOC_SAMPLE_CHARS,
@@ -832,7 +832,7 @@ def decontamination_steps(
             ),
         ),
         best_effort_eval_suite=BestEffortEvalSuite(
-            f"{eval_root}/{LMH_MANIFEST_RELATIVE}", EVAL_CORPUS_VERSION, REQUIRED_LMH_TASKS
+            f"{eval_root}/{LMH_MANIFEST_RELATIVE}", EVAL_CORPUS_VERSION, required_lmh_tasks()
         ),
         worker_resources=worker_resources,
         max_workers=scale.pool.n_workers,

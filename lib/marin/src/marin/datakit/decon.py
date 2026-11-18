@@ -47,7 +47,7 @@ import re
 import tempfile
 from collections import Counter, deque
 from collections.abc import Callable, Container, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import chain, islice
 from typing import Any, NamedTuple
 
@@ -201,14 +201,15 @@ class BestEffortEvalSuite:
     Args:
         manifest_path: Manifest that lists the suite's artifacts.
         corpus_version: Version that the manifest must report.
-        required_tasks: Tasks that must have loaded. The manifest's
-            ``required_tasks`` must list the leaf tasks of each one, and every
-            leaf must have records.
+        required_tasks: Tasks that must have loaded, each with its exact
+            number of leaf tasks. The manifest's ``required_tasks`` must list
+            that many leaf tasks for each one, and every leaf must have
+            records.
     """
 
     manifest_path: str
     corpus_version: str
-    required_tasks: tuple[str, ...] = ()
+    required_tasks: Mapping[str, int] = field(default_factory=dict)
 
 
 class EvalBloom(BaseModel):
@@ -1214,7 +1215,7 @@ def _validate_required_eval_manifest(
 def _validate_best_effort_eval_manifest(
     manifest_path: str,
     expected_corpus_version: str,
-    required_tasks: tuple[str, ...],
+    required_tasks: Mapping[str, int],
 ) -> list[str]:
     """Validate a best-effort manifest and return its exact artifact paths."""
     manifest_storage = StoragePath(manifest_path)
@@ -1273,10 +1274,12 @@ def _validate_best_effort_eval_manifest(
 
     if sorted(artifact_records) != sorted(included_tasks) or len(artifacts) != len(included_tasks):
         raise ValueError("best-effort eval artifact tasks do not match included_leaf_tasks")
-    for task in required_tasks:
+    for task, expected_leaves in required_tasks.items():
         leaves = manifest_required_tasks.get(task)
         if not leaves:
             raise ValueError(f"best-effort eval manifest does not list required task {task!r}")
+        if len(leaves) != expected_leaves:
+            raise ValueError(f"required task {task!r} has {len(leaves)} leaf tasks, expected {expected_leaves}")
         empty_leaves = sorted(leaf for leaf in leaves if not artifact_records.get(leaf))
         if empty_leaves:
             raise ValueError(f"required task {task!r} has no records for leaf tasks {empty_leaves}")
@@ -1407,7 +1410,8 @@ def build_eval_bloom_step(
         additional_required_eval_manifests: Additional mandatory reference suites.
         best_effort_eval_suite: Optional best-effort suite. Only the exact
             artifacts below its immutable, versioned manifest directory enter
-            the Bloom. Its version and required task names enter the step hash.
+            the Bloom. Its version, required task names and their leaf-task
+            counts enter the step hash.
         worker_resources: Resource request for each eval-file shard.
         max_workers: Maximum Zephyr workers for the Bloom build.
         zephyr_context: Optional shared Zephyr worker context.
@@ -1451,7 +1455,7 @@ def build_eval_bloom_step(
         "required_eval_suites": tuple(sorted(tuple(sorted(suite.names)) for suite in required_eval_suites)),
         "best_effort_eval_corpus_version": best_effort_eval_suite.corpus_version if best_effort_eval_suite else None,
         "best_effort_required_tasks": (
-            tuple(sorted(best_effort_eval_suite.required_tasks)) if best_effort_eval_suite else ()
+            tuple(sorted(best_effort_eval_suite.required_tasks.items())) if best_effort_eval_suite else ()
         ),
     }
 

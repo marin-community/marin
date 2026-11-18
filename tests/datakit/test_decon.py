@@ -1220,16 +1220,22 @@ def test_build_eval_bloom_uses_only_manifested_best_effort_artifacts(tmp_path: P
 
 
 @pytest.mark.parametrize(
-    ("required_tasks", "records"),
+    ("required_tasks", "records", "expected_leaves"),
     [
-        (None, [{"id": "a-1", "text": "alpha beta gamma"}]),
-        ({"required": ["required_a", "required_b"]}, [{"id": "a-1", "text": "alpha beta gamma"}]),
-        ({"required": ["required_a"]}, []),
+        (None, [{"id": "a-1", "text": "alpha beta gamma"}], 1),
+        ({"required": ["required_a", "required_b"]}, [{"id": "a-1", "text": "alpha beta gamma"}], 2),
+        ({"required": ["required_a"]}, [], 1),
+        ({"required": ["required_a"]}, [{"id": "a-1", "text": "alpha beta gamma"}], 2),
     ],
-    ids=["manifest-without-required-tasks", "required-leaf-not-included", "required-leaf-without-records"],
+    ids=[
+        "manifest-without-required-tasks",
+        "required-leaf-not-included",
+        "required-leaf-without-records",
+        "fewer-leaves-than-expected",
+    ],
 )
 def test_build_eval_bloom_requires_best_effort_required_tasks(
-    tmp_path: Path, required_tasks: dict | None, records: list[dict]
+    tmp_path: Path, required_tasks: dict | None, records: list[dict], expected_leaves: int
 ):
     best_effort_root = tmp_path / "evals" / "lmh"
     _write_input_parquet(best_effort_root / "required_a" / "eval.parquet", records)
@@ -1251,7 +1257,9 @@ def test_build_eval_bloom_requires_best_effort_required_tasks(
         build_eval_bloom(
             eval_data_sources=str(best_effort_root),
             output_path=str(tmp_path / "bloom"),
-            best_effort_eval_suite=BestEffortEvalSuite(str(best_effort_manifest), "test-corpus-v1", ("required",)),
+            best_effort_eval_suite=BestEffortEvalSuite(
+                str(best_effort_manifest), "test-corpus-v1", {"required": expected_leaves}
+            ),
         )
 
     assert not Path(bloom_paths(str(tmp_path / "bloom"))[0]).exists()
