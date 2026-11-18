@@ -20,11 +20,11 @@ import hashlib
 import json
 import logging
 import struct
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from rigging.fsutil.verified_copy import verified_copy_prefix
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("stage_base_hf")
@@ -33,11 +33,7 @@ SOURCE_RECEIPT_URI = (
     "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3/evidence/initializer-hf/2026.11.15.32.source.json"
 )
 DESTINATION = "s3://marin-us-east-02a/marin/users/benfeuer/snowball-deletion-tuning/inputs/base-hf/2026.11.18.1"
-STATUS_PREFIX = (
-    "s3://marin-us-east-02a/marin/users/benfeuer/snowball-deletion-tuning/inputs/base-hf/2026.11.18.1.copy-status"
-)
 WORKERS = 16
-
 SIDECARS = (
     "config.json",
     "model.safetensors.index.json",
@@ -73,6 +69,56 @@ def hash_shard_header(fs, key: str) -> tuple[int, str]:
     return size, hashlib.sha256(header).hexdigest()
 
 
+def _copy_verified_file(
+    source_fs,
+    source_url: str,
+    dest_fs,
+    dest_url: str,
+    relative: str,
+    expected_sha256: str,
+    expected_size: int,
+    *,
+    chunk_bytes: int = 16 * 1024 * 1024,
+) -> str:
+    """Stream one file cross-region, hashing against the certified receipt's SHA-256.
+
+    A destination object whose size already matches is treated as a completed
+    prior write (the hash was verified during that write); partial writes never
+    match the size and are re-copied.
+    """
+    dest_key = prefix_join(dest_url, relative)
+    try:
+        info = dest_fs.info(dest_key)
+        if info.get("size") == expected_size:
+            return "resumed"
+    except FileNotFoundError:
+        pass
+    digest = hashlib.sha256()
+    seen = 0
+    try:
+        with source_fs.open(prefix_join(source_url, relative), "rb") as src, dest_fs.open(dest_key, "wb") as out:
+            while True:
+                block = src.read(chunk_bytes)
+                if not block:
+                    break
+                digest.update(block)
+                seen += len(block)
+                out.write(block)
+    except Exception:
+        try:
+            dest_fs.rm_file(dest_key)
+        except FileNotFoundError:
+            pass
+        raise
+    if seen != expected_size or digest.hexdigest() != expected_sha256:
+        try:
+            dest_fs.rm_file(dest_key)
+        except FileNotFoundError:
+            pass
+        raise ValueError(f"copy verification failed for {relative}: {seen} bytes, sha {digest.hexdigest()}")
+    return "copied"
+
+
 def main(dry_run: bool = False) -> None:
     configure_coreweave_s3()
     receipt = json.loads(StoragePath(SOURCE_RECEIPT_URI).read_bytes())
@@ -81,11 +127,8 @@ def main(dry_run: bool = False) -> None:
     if receipt["revision"] != "058ecaf27b9e4f37219df221a51e7d490d58ec3d":
         raise ValueError(f"unexpected source revision: {receipt['revision']}")
     source = receipt["model_ref"]
+    files = receipt["files"]
     total_bytes = receipt["total_bytes"]
-    files = receipt.get("files") or []
-    logger.info(
-        "dry-run" if dry_run else "verified copy",
-    )
     logger.info(
         "source %s (%s @ %s, %s bytes, %d pinned files) -> %s",
         source,
@@ -96,15 +139,15 @@ def main(dry_run: bool = False) -> None:
         DESTINATION,
     )
     source_fs, _ = filesystem_for(source)
-    names = sorted(entry.rsplit("/", 1)[-1] for entry in source_fs.ls(source))
-    sidecars_found = [name for name in names if name in SIDECARS]
-    shards_found = [name for name in names if name.endswith(".safetensors")]
+    source_names = sorted(entry.rsplit("/", 1)[-1] for entry in source_fs.ls(source))
+    sidecars_found = [name for name in source_names if name in SIDECARS]
+    shards_found = [name for name in source_names if name.endswith(".safetensors")]
     missing_sidecars = sorted(set(SIDECARS) - set(sidecars_found))
     logger.info(
         "source listing: %d sidecars, %d shards, %d files total; missing sidecars: %s",
         len(sidecars_found),
         len(shards_found),
-        len(names),
+        len(source_names),
         missing_sidecars,
     )
     if missing_sidecars != ["generation_config.json"]:
@@ -114,9 +157,57 @@ def main(dry_run: bool = False) -> None:
     if dry_run:
         logger.info("dry-run complete: no copy performed")
         return
-    logger.info("verified copy %s -> %s", source, DESTINATION)
-    result = verified_copy_prefix(source, DESTINATION, status_url=STATUS_PREFIX, workers=WORKERS)
-    logger.info("copied %s files (%s bytes); manifest %s", result.total_files, result.total_bytes, result.manifest_url)
+
+    # The source prefix is itself a verified-copy destination, so its completion
+    # manifest is reserved and the copy tool refuses it as a source. Copy
+    # per-file instead, verifying every byte against the certified receipt's
+    # SHA-256s, then publish a completion manifest in the same schema.
+    dest_fs, _ = filesystem_for(DESTINATION)
+    outcomes: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        futures = {}
+        for entry in files:
+            size = int(entry["size"])
+            futures[
+                pool.submit(
+                    _copy_verified_file,
+                    source_fs,
+                    source,
+                    dest_fs,
+                    DESTINATION,
+                    entry["path"],
+                    entry["sha256"],
+                    size,
+                )
+            ] = entry
+        for future in as_completed(futures):
+            entry = futures[future]
+            outcomes[entry["path"]] = future.result()
+    copied = sum(1 for value in outcomes.values() if value == "copied")
+    resumed = sum(1 for value in outcomes.values() if value == "resumed")
+    logger.info("copy outcomes: %d copied, %d resumed of %d files", copied, resumed, len(files))
+
+    verified_files = [
+        {
+            "path": entry["path"],
+            "size": int(entry["size"]),
+            "sha256": entry["sha256"],
+            "source_identity": "sha256=" + entry["sha256"],
+        }
+        for entry in sorted(files, key=lambda item: item["path"])
+    ]
+    completion = {
+        "schema_version": 1,
+        "source": source,
+        "destination": DESTINATION,
+        "total_files": len(verified_files),
+        "total_bytes": sum(item["size"] for item in verified_files),
+        "files": verified_files,
+    }
+    completion_path = prefix_join(DESTINATION, ".verified-copy-manifest.json")
+    dest_fs.pipe_file(completion_path, json.dumps(completion, sort_keys=True).encode())
+    logger.info("wrote %s", completion_path)
+
     if missing_sidecars:
         synthesized = {}
         for name in missing_sidecars:
@@ -153,7 +244,7 @@ def main(dry_run: bool = False) -> None:
         "revision": receipt["revision"],
         "source_receipt": SOURCE_RECEIPT_URI,
         "source_model_ref": source,
-        "copy_manifest": result.manifest_url,
+        "copy_manifest": completion_path,
         "total_bytes": result.total_bytes,
         "sidecar_sha256": sidecar_pins,
         "shards": shard_pins,
