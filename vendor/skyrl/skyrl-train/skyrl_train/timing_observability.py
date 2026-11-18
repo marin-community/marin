@@ -19,6 +19,7 @@ TIMING_PARENTS: dict[str, str | None] = {
     "assemble_generation_group_mini_batch": "step",
     "postprocess_trajectory_batch": "step",
     "convert_to_training_input": "step",
+    "load_worker_batch": "step",
     "run_training": "step",
     "fwd_logprobs_values_reward": "run_training",
     "apply_reward_kl_penalty": "run_training",

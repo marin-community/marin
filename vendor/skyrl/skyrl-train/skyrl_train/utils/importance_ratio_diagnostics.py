@@ -4,17 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, fields
+from functools import partial
 import math
-from typing import cast
 
 import torch
 from loguru import logger
 
 from skyrl_train.tensor_math import LOG_PROB_DELTA_CLIP
-from skyrl_train.metric_reduction import LocalReduction, MetricReduction, WorldReduction
+from skyrl_train.metric_reduction import MetricReduction, LocalReduction
 
 # Absolute-position bucket width; the async RL dashboard reads pos_first256 and pos_last256 by name.
 POSITION_WINDOW = 256
+
 
 LOG_RATIO_TAIL_CAPACITY = 8192
 
@@ -43,53 +44,14 @@ LOG_RATIO_BASE_METRIC_KEYS = (
 )
 
 
-def linear_quantiles(values: torch.Tensor, probabilities: tuple[float, ...]) -> list[float]:
-    """Linear-interpolated quantiles of a finite 1-D tensor; torch.quantile refuses more than 2**24 values."""
-    count = values.numel()
-    positions = torch.tensor(probabilities, dtype=torch.float64) * (count - 1)
-    lowest = int(positions.min().floor())
-    threshold = values.kthvalue(lowest + 1).values
-    greater = values[values > threshold].sort().values
-    tail = torch.cat([threshold.expand(count - lowest - greater.numel()), greater]).double()
-    lower = positions.floor()
-    below = tail[(lower - lowest).long()]
-    above = tail[(positions.ceil() - lowest).long()]
-    return (below + (above - below) * (positions - lower)).tolist()
-
-
-_RATIO_QUANTILES = (0.95, 0.99, 0.999)
-
-
-def _distributed_ratio_quantiles(
-    values: torch.Tensor, staleness_zero: torch.Tensor, reduction: WorldReduction
-) -> list[list[float]]:
-    finite = torch.isfinite(values)
-    # The sign marks subset membership, including zero.
-    absolute = values[finite].abs()
-    received = reduction.gather_to_rank_zero(torch.where(staleness_zero[finite], -absolute, absolute))
-    quantiles = values.new_zeros((2, len(_RATIO_QUANTILES)))
-    if received is not None and received.numel():
-        logger.info(f"Batch mismatch quantile gather: {received.nbytes} bytes")
-        absolute = received.abs()
-        quantiles[0] = absolute.new_tensor(linear_quantiles(absolute, _RATIO_QUANTILES))
-        subset = received.signbit()
-        if subset.all():
-            quantiles[1] = quantiles[0]
-        elif subset.any():
-            quantiles[1] = absolute.new_tensor(linear_quantiles(absolute[subset], _RATIO_QUANTILES))
-    # Only world rank zero has a quantile, whether or not it owns a DP slice.
-    return reduction.all_reduce(quantiles, "sum").tolist()
-
-
 def ratio_statistics(
     delta: torch.Tensor,
     *,
     eps_clip_low: float = 0.2,
     eps_clip_high: float = 0.2,
     reduction: MetricReduction = LocalReduction(),
-    quantiles: list[float] | None = None,
 ) -> dict[str, float]:
-    """Summarize per-token trainer-minus-sampler log-ratios over finite tokens."""
+    """Summarize per-token trainer-minus-sampler log-ratios over the finite tokens."""
     delta = delta.detach().double().reshape(-1)
     selected = delta.numel()
     finite = torch.isfinite(delta)
@@ -102,8 +64,7 @@ def ratio_statistics(
     if not count:
         return result
     absolute = delta.abs()
-    if quantiles is None:
-        quantiles = linear_quantiles(absolute, _RATIO_QUANTILES)
+    quantiles = reduction.quantiles(absolute, (0.95, 0.99, 0.999))
     maximum = reduction.combine(delta.amax() if delta.numel() else delta.new_tensor(-math.inf), "max")
     absolute_max = reduction.combine(absolute.amax() if absolute.numel() else absolute.new_tensor(-math.inf), "max")
     weights = (delta - maximum).exp()
@@ -197,24 +158,11 @@ def mismatch_ratio_metrics(
         for key, total in _grouped_moments(values, groups, 4 * len(MISMATCH_STALENESS_BUCKETS)).items()
     }
     position_classes = {f"first{POSITION_WINDOW}": [1, 3], f"last{POSITION_WINDOW}": [2, 3], "middle": [0]}
-    staleness0 = groups < 4
-    quantiles = (None, None)
-    if not reduction.local:
-        quantiles = _distributed_ratio_quantiles(values, staleness0, cast(WorldReduction, reduction))
-    pooled = ratio_statistics(
-        values, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high, reduction=reduction, quantiles=quantiles[0]
-    )
+    statistics = partial(ratio_statistics, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high, reduction=reduction)
+    pooled = statistics(values)
     full_statistics = {
         "pooled": pooled,
-        "staleness0": pooled
-        if reduction.local and bool(staleness0.all())
-        else ratio_statistics(
-            values[staleness0],
-            eps_clip_low=eps_clip_low,
-            eps_clip_high=eps_clip_high,
-            reduction=reduction,
-            quantiles=quantiles[1],
-        ),
+        "staleness0": pooled if not grid["selected"][1:].sum() else statistics(values[groups < 4]),
     }
     bucket_rows = {"pooled": slice(None)}
     bucket_rows.update({name: slice(index, index + 1) for index, (name, _) in enumerate(MISMATCH_STALENESS_BUCKETS)})

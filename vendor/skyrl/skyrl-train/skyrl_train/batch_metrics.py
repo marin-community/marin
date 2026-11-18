@@ -262,16 +262,8 @@ def forward_metrics(
     if rollout_logprobs_enabled:
         valid = batch["loss_mask"] > 0
         differences = (batch["rollout_logprobs"][valid] - batch["action_log_probs"][valid]).exp().abs()
-        mean = reduction.mean(differences)
-        if reduction.local:
-            std = differences.std().item()
-        else:
-            centered = differences.double() - mean
-            count, square_sum = reduction.combine(
-                torch.stack([centered.new_tensor(centered.numel()), centered.square().sum()]), "sum"
-            ).tolist()
-            std = (square_sum / (count - 1)) ** 0.5 if count > 1 else float("nan")
-        metrics.update({"policy/rollout_train_prob_diff_mean": mean, "policy/rollout_train_prob_diff_std": std})
+        metrics["policy/rollout_train_prob_diff_mean"] = reduction.mean(differences)
+        metrics["policy/rollout_train_prob_diff_std"] = reduction.std(differences)
     return metrics
 
 

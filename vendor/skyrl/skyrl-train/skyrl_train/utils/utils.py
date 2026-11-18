@@ -470,7 +470,7 @@ def worker_batch_refusal(cfg: DictConfig) -> str | None:
         algorithm.policy_loss_type == PolicyLossType.SFT and algorithm.advantage_estimator == AdvantageEstimator.UNIFORM
     )
     train_rows = cfg.trainer.train_batch_size * int(cfg.generator.n_samples_per_prompt)
-    restrictions = (
+    restrictions = [
         ("DPO and reference-model objectives", reference_model_required(algorithm)),
         ("the configured loss and estimator", not supported_loss),
         ("colocated placement", cfg.trainer.placement.colocate_all),
@@ -482,7 +482,7 @@ def worker_batch_refusal(cfg: DictConfig) -> str | None:
         ("marker-target reasoning penalties", shaping.enabled and shaping.reasoning_span.charges_tokens),
         ("dense batch dumping", cfg.trainer.dump_data_batch),
         ("rows requiring DP padding", train_rows % _policy_dp_size(cfg)),
-    )
+    ]
     for reason, unsupported in restrictions:
         if unsupported:
             return reason
@@ -511,25 +511,16 @@ def worker_batch_refusal(cfg: DictConfig) -> str | None:
     return None
 
 
-def resolve_batch_builder(cfg: DictConfig) -> tuple[BatchBuilder, str | None]:
-    """Resolve the configured batch builder and report why auto chose the driver."""
-    builder = BatchBuilder(cfg.trainer.batch_builder)
-    if builder is BatchBuilder.DRIVER:
-        return builder, None
-    reason = worker_batch_refusal(cfg)
-    if reason is None:
-        return BatchBuilder.WORKER, None
-    if builder is BatchBuilder.WORKER:
-        raise ValueError(f"trainer.batch_builder=worker does not support {reason}")
-    return BatchBuilder.DRIVER, reason
-
-
 def validate_cfg(cfg: DictConfig):
-    builder, reason = resolve_batch_builder(cfg)
-    if cfg.trainer.batch_builder == BatchBuilder.AUTO:
-        cfg.trainer.batch_builder = builder.value
-        description = f"{builder.value} ({reason})" if reason else builder.value
-        logger.info(f"Resolved trainer.batch_builder=auto to {description}")
+    builder = BatchBuilder(cfg.trainer.batch_builder)
+    if builder is not BatchBuilder.DRIVER:
+        reason = worker_batch_refusal(cfg)
+        if reason and builder is BatchBuilder.WORKER:
+            raise ValueError(f"trainer.batch_builder=worker does not support {reason}")
+        if builder is BatchBuilder.AUTO:
+            cfg.trainer.batch_builder = (BatchBuilder.DRIVER if reason else BatchBuilder.WORKER).value
+            description = f"{cfg.trainer.batch_builder} ({reason})" if reason else cfg.trainer.batch_builder
+            logger.info(f"Resolved trainer.batch_builder=auto to {description}")
     validate_mismatch_probe_config(cfg)
     if cfg.trainer.strategy != "megatron":
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")

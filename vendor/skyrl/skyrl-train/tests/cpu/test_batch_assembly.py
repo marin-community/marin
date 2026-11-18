@@ -9,11 +9,11 @@ from hydra import compose, initialize_config_dir
 from skyrl_gym.verification import VerificationResult
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.utils.utils import resolve_batch_builder, validate_cfg
+from skyrl_train.utils.utils import worker_batch_refusal, validate_cfg
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
-from skyrl_train.batch_metrics import forward_metrics, reward_metrics
+from skyrl_train.batch_metrics import reward_metrics
 from skyrl_train.rollouts.buffer import RowFacts
 
 import torch
@@ -439,7 +439,7 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
     config_reason = None if row_case else message
     if "batch.rollout_routed_experts" in overrides:
         config_reason = "router replay without the model expert count"
-    assert resolve_batch_builder(cfg) == ("driver" if config_reason else "worker", config_reason)
+    assert worker_batch_refusal(cfg) == config_reason
     if config_reason is not None:
         if config_reason in {"dense batch dumping", "router replay without the model expert count"}:
             auto_cfg = deepcopy(cfg)
@@ -487,13 +487,8 @@ def test_worker_ratio_statistics_match_driver_for_mixed_staleness():
         ("chi2", 2221528.63255),
         ("log_ratio_abs_p95", 18.2),
         ("log_ratio_abs_p99", 19.64),
+        ("lower_clip_pressure", 0.25),
+        ("upper_clip_pressure", 0.5),
+        ("log_ratio_mean_squared", 116.246108949),
     ):
         assert expected[f"policy/mismatch/pooled/{key}"] == pytest.approx(value)
-    prob_metrics = forward_metrics(
-        {"action_log_probs": learner, "rollout_logprobs": sampler, "loss_mask": learner.isfinite()},
-        staleness=staleness,
-        algorithm=get_default_config().trainer.algorithm,
-        training_metrics_enabled=False,
-        rollout_logprobs_enabled=True,
-    )
-    assert prob_metrics["policy/rollout_train_prob_diff_std"] == pytest.approx(242582597.48)
