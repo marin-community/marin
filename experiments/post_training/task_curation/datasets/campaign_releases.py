@@ -1191,7 +1191,16 @@ def sources() -> list[RlDataSource]:
                 "Strict trailing boxed compare with no oracle. 155 rows whose typed references the "
                 "production math-verify parser rejects are excluded at admission. Private release; "
                 "conversation-only tasks import canonical task specs. The pinned cohort revision was "
-                "downloaded back and every task hash re-validated."
+                "downloaded back and every task hash re-validated. "
+                "Content-quality finding 2026-11-18 (SAMPLE receipt fb053f6439…, pinned GLM-5.3 v3, "
+                "seed-0 panel at the r23 pin): 91 of 3,941 current-population rows (2.3%) carry "
+                "LaTeX-wrapped expected-answer strings (\\(\\displaystyle …\\)) in grader "
+                "parameters.expected with math_type=scalar, which the scalar comparison path cannot "
+                "parse; the SAMPLE review flags 1 of its 8 issues naming that symptom "
+                "(tasktrove-math_gym-bb15c01fe058e37e…). Grader and scorer stay unchanged (faithful "
+                "environment). A private remediated version normalizing ONLY those expected-answer "
+                "strings remains available as data repair if ruled material; it would need its own "
+                "SAMPLE QA and admission, and this original stays as is."
             ),
         ),
         _tasktrove_qa_release(
