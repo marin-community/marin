@@ -7,14 +7,35 @@ import hashlib
 import os
 
 import pytest
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
 
 from experiments.post_training.nccl_transport_probe import (
     NcclCensus,
+    all_to_all_element_count,
     gate_verdict,
     mapped_nccl_libraries,
     parse_nccl_census,
     resolve_gloo_socket_ifname,
+    worker_traceback,
 )
+
+
+def _gloo_a2a_rank(rank, world_size, buffer_bytes, init_file, done_dir):
+    """One process of the non-power-of-two all_to_all regression."""
+    dist.init_process_group("gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size)
+    elements = all_to_all_element_count(buffer_bytes, world_size)
+    a2a_input = torch.full((elements,), float(rank), dtype=torch.bfloat16)
+    a2a_output = torch.empty_like(a2a_input)
+    dist.all_to_all_single(a2a_output, a2a_input)
+    chunk = elements // world_size
+    for source in range(world_size):
+        segment = a2a_output[source * chunk : (source + 1) * chunk]
+        assert torch.all(segment == float(source)), f"rank {rank} chunk {source} mismatched"
+    dist.barrier()
+    dist.destroy_process_group()
+    (done_dir / f"done-{rank}").write_text("ok")
 
 
 def test_parse_nccl_census_distinguishes_ib_and_socket():
@@ -92,3 +113,64 @@ def test_resolve_gloo_socket_ifname_fails_on_unowned_address(monkeypatch):
     monkeypatch.delenv("GLOO_SOCKET_IFNAME", raising=False)
     with pytest.raises(RuntimeError, match=r"203\.0\.113\.7"):
         resolve_gloo_socket_ifname("203.0.113.7")
+
+
+def test_all_to_all_element_count_rounds_down_to_world_size():
+    """The 192-rank gate run failed because 2**24 elements left a remainder mod 192."""
+    from experiments.post_training.nccl_transport_probe import all_to_all_element_count
+
+    count = all_to_all_element_count(64 * 2**20, 192)
+    assert count % 192 == 0
+    assert count == 33_554_304
+    assert 64 * 2**20 // 2 - count < 192
+
+    for world_size in (1, 3, 7, 64, 193):
+        assert all_to_all_element_count(64 * 2**20, world_size) % world_size == 0
+
+
+def test_all_to_all_element_count_rejects_buffer_too_small_for_world():
+    from experiments.post_training.nccl_transport_probe import all_to_all_element_count
+
+    with pytest.raises(ValueError, match="too few for world_size=192"):
+        all_to_all_element_count(8, 192)
+    with pytest.raises(ValueError, match="world_size must be positive"):
+        all_to_all_element_count(64 * 2**20, 0)
+
+
+def test_worker_traceback_extracts_block_from_nccl_spam():
+    """The failing rank's traceback survives NCCL INFO filling the tail window."""
+
+    lines = [
+        "g62abc:100:100 [0] NCCL INFO Channel 00 : 0[0] -> 1[0] via NET/IB/0/GDRDMA",
+        "Traceback (most recent call last):",
+        '  File "worker.py", line 10, in run',
+        "    dist.all_to_all_single(a2a_output, a2a_input)",
+        '  File "torch/distributed", line 3000, in all_to_all_single',
+        "RuntimeError: numel of input tensor is not divisible by world_size",
+        "g62abc:100:100 [0] NCCL INFO Channel 01 : 1[0] -> 0[0] via NET/IB/0/GDRDMA",
+    ]
+    block = worker_traceback(lines)
+    assert block[0] == "Traceback (most recent call last):"
+    assert block[-1] == "RuntimeError: numel of input tensor is not divisible by world_size"
+    assert all("NCCL INFO" not in line for line in block)
+
+
+def test_worker_traceback_absent_returns_empty():
+
+    assert worker_traceback(["only NCCL INFO", "more INFO"]) == []
+
+
+def test_all_to_all_single_succeeds_with_non_power_of_two_ranks(tmp_path):
+    """Real 3-rank gloo regression: the rounded element count splits equally."""
+    init_file = tmp_path / "rendezvous"
+    done_dir = tmp_path / "done"
+    done_dir.mkdir()
+    world_size = 3
+
+    mp.spawn(
+        _gloo_a2a_rank,
+        args=(world_size, 4096, init_file, done_dir),
+        nprocs=world_size,
+        join=True,
+    )
+    assert sorted(path.name for path in done_dir.iterdir()) == ["done-0", "done-1", "done-2"]
