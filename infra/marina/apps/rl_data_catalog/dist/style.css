@@ -238,6 +238,7 @@ a.secondary:hover { text-decoration: none; }
 
 .result-provisional { border: 1px dashed currentColor; }
 
+.difficulty-comparison[href] { color: inherit; text-decoration: none; }
 .difficulty-comparison { display: grid; gap: 5px; width: 100%; min-width: 180px; max-width: 310px; }
 .difficulty-model { display: grid; grid-template-columns: minmax(0, 1fr) 5ch; align-items: center; gap: 6px; line-height: 1.3; font-size: max(var(--type-min), 12px); white-space: nowrap; }
 .difficulty-model-label { white-space: normal; overflow-wrap: anywhere; }

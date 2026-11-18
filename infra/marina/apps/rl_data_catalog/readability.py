@@ -209,13 +209,16 @@ def readability_layout(
         ("source.html#" + urlencode({"source_id": source["id"]}), "#message", "evidence"),
         ("backends.html#" + urlencode({"source_id": source["id"]}), "#message", "backends"),
         ("assessment.html?" + urlencode({"source": source["id"]}), "#message", "assessment"),
-        ("archive.html", "#message", "archive"),
         ("guide.html", ".guide-body", "guide"),
     ]:
         visit(path, ready)
-        if label in {"assessment", "archive", "evidence", "backends"}:
+        if label in {"assessment", "evidence", "backends"}:
             expect(page.locator("#message")).not_to_be_empty(timeout=60000)
             expect(page.locator("#message")).not_to_contain_text("Loading", timeout=60000)
+        if label == "evidence":
+            expect(page.locator("#sections")).to_have_attribute("aria-busy", "false", timeout=15000)
+            expect(page.locator("#sections")).not_to_contain_text("Loading supplementary", timeout=10000)
+            expect(page.locator("#sections")).not_to_contain_text("Loading overlap", timeout=10000)
         page.locator("details").evaluate_all("es => es.forEach(e => e.open = true)")
         capture(label, focus=True)
         if label == "assessment":
@@ -241,10 +244,6 @@ def readability_layout(
             for count in counts if scope is BrowserScope.FULL else counts[:1]:
                 count.click()
                 capture("guide-leaf-" + str(count.get_attribute("data-leaf")), screenshot=False)
-        if label == "archive" and page.locator("#reviews a").count():
-            page.locator("#reviews a").first.click()
-            expect(page.locator("#selected")).not_to_be_empty()
-            capture("archive-record")
     measured = next(
         (
             row

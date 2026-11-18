@@ -190,14 +190,19 @@ def test_quality_chip_reaches_review_list_and_raw_review(
     page.screenshot(path=str(journey.shots / f"qc-raw-{theme}-{width}.png"))
 
 
+@pytest.mark.parametrize("entry", ["table", "source"])
 @pytest.mark.parametrize("width,theme", [(1440, "light"), (1440, "dark"), (390, "light"), (390, "dark")])
-def test_source_solver_links_reach_attempt_and_rollout(journey: Journey, width: int, theme: str) -> None:
+def test_source_solver_links_reach_attempt_and_rollout(journey: Journey, width: int, theme: str, entry: str) -> None:
     page = journey.page
     page.set_viewport_size({"width": width, "height": 1000})
     page.emulate_media(color_scheme=theme)
     page.goto(f"{journey.origin}/a/{APP_ID}/")
-    page.goto(page.url + "source.html#source_id=Marin%3Aclean")
-    page.get_by_role("link", name="Browse task attempts and rollouts →").first.click(timeout=5000)
+    if entry == "table":
+        page.locator("#show-everything").click()
+        page.locator('tr[data-source-id="Marin:clean"] td.difficulty-cell a').click(timeout=5000)
+    else:
+        page.goto(page.url + "source.html#source_id=Marin%3Aclean")
+        page.get_by_role("link", name="Browse task attempts and rollouts →").first.click(timeout=5000)
     expect(page.get_by_role("heading", name="Difficulty attempts · clean")).to_be_visible()
     page.get_by_role("link", name="0", exact=True).click()
     expect(page.get_by_role("heading", name="Transcript and tool calls")).to_be_visible()
@@ -205,4 +210,4 @@ def test_source_solver_links_reach_attempt_and_rollout(journey: Journey, width: 
     expect(page.locator("#content")).to_contain_text("terminal")
     expect(page.get_by_role("heading", name="Verifier output")).to_be_visible()
     expect(page.get_by_role("link", name="Open in Filer ↗")).to_have_count(2)
-    page.screenshot(path=str(journey.shots / f"rollout-{theme}-{width}.png"))
+    page.screenshot(path=str(journey.shots / f"rollout-{entry}-{theme}-{width}.png"))

@@ -11,7 +11,7 @@ non-blocking receipt. Report its findings to the coordinator; see
 Synced to preview revision 21 (2026-11-16).
 
 Every page renders the same navigation from `dist/common.js`: Status, By source,
-By curriculum, Difficulty, Getting started and Review archive. `source.html`,
+By curriculum, Difficulty and Getting started. `source.html`,
 `assessment.html`, `review.html`, `defects.html` and `backends.html` keep By source active.
 `attempts.html` and `rollout.html` keep Difficulty active. The installed browser
 journey in `journeys/test_status.py` checks every page's labels, destinations and
@@ -25,12 +25,19 @@ and their provenance. Defect chips link to the catalog-wide defect legend and
 counts. Archived panels display their original input pins and never assert a new
 current-pin qualification.
 
-The Difficulty page and source Evidence solver rows link to paged attempts and
+The main table’s Difficulty cells, Difficulty page and source Evidence solver rows link to paged attempts and
 individual rollout viewers. Attempts retain score, solver, trial identity,
 duration and exception metadata. Transcripts include tool calls and verifier
 output; Filer links retain the raw receipt/archive references. Outcomes without
 a recorded attempt artifact remain explicitly unavailable. PRIVATE_ALWAYS sources
 show a marker; the browser does not request their task/review/rollout content.
+
+Source Evidence renders its core API response without waiting for auxiliary ledgers.
+Each supplementary request has an 8-second deadline and its own visible error;
+the core request has a 15-second deadline. The embedded assessment report loads
+only when expanded; QC chips still open the paged review list directly. The
+Review Archive page and navigation entry are removed; archived data and APIs
+remain intact.
 
 Catalog loading stores the counts and grades from the `atlas_cohort_summary`
 SQL view in `atlas_cohort_summaries` before making the new catalog snapshot

@@ -61,7 +61,56 @@ function list(items) {
 }
 function link(text, href) { const anchor = node('a', text); anchor.href = href; return anchor; }
 
-async function render(data, sourceId) {
+// Each supplementary ledger loads independently; a stalled ledger cannot hide the source.
+const SOURCE_DEADLINE_MS = 15000;
+const AUXILIARY_DEADLINE_MS = 8000;
+async function sourceJson(url, timeoutMs = AUXILIARY_DEADLINE_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {signal: controller.signal});
+    if (!response.ok) throw new Error(`Request failed (${response.status}): ${url}`);
+    return await response.json();
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(`Request timed out: ${url}`);
+    throw error;
+  } finally { clearTimeout(timer); }
+}
+function supplement(title, promise, build) {
+  const section = node('section', undefined, 'assessment-card');
+  section.append(node('h2', title), node('p', 'Loading supplementary evidence…', 'muted'));
+  promise.then(value => section.replaceWith(build(value))).catch(error => {
+    section.replaceChildren(node('h2', title), node('p', error.message, 'error'));
+  });
+  return section;
+}
+function candidateCards(pending, sourceId) {
+  const fragment = document.createDocumentFragment();
+  for (const candidate of pending.sources.filter(item => item.source_id === sourceId)) {
+    const release = candidate.release, sample = candidate.sample;
+    const section = card('Filtered private release, pending qualification', [
+      ['Candidate source', candidate.candidate_source_id],
+      ['Candidate pin', pointer(release.url, `${release.repo} @ ${release.revision}`)],
+      ['Oracle-filtered tasks', `${number.format(candidate.filtered_tasks)} of ${number.format(candidate.original_tasks)}`],
+      ['Qualification pending', candidate.qualification_pending.map(name => name.replaceAll('_', ' ')).join(', ')],
+      ['SAMPLE selected', sample.selected],
+      ['SAMPLE reviewed', sample.reviewed],
+      ['SAMPLE unavailable', sample.unavailable],
+      ['SAMPLE uncertain', sample.uncertain],
+      ['SAMPLE issues', sample.issues],
+      ['SAMPLE receipt', pointer(sample.receipt.uri)],
+      ['SAMPLE receipt SHA-256', sample.receipt.sha256],
+      ['Verification receipt', pointer(candidate.verification.uri)],
+      ['Verification SHA-256', candidate.verification.sha256],
+      ['Original Harbor trials claimed', candidate.original_harbor_trials_claimed],
+    ], 'This candidate is not selected or admitted to Atlas. Its SAMPLE receipt describes only the candidate pin. The catalog release, Examples and Quality remain unchanged.');
+    section.classList.add('pending-filtered-release');
+    fragment.append(section);
+  }
+  return fragment;
+}
+
+function render(data, sourceId, auxiliary) {
   const d = data.declaration, curation = data.curation, controls = curation?.verification, assessment = data.assessment;
   const current = currentDataset(d);
   document.title = `${d.display_name} · Evidence · RL Data Atlas`;
@@ -103,28 +152,8 @@ async function render(data, sourceId) {
   ]);
   difficulty.insertBefore(AtlasDifficulty.comparison(data.difficulty), difficulty.children[1] || null);
   sections.push(difficulty);
-  sections.push(card('Filtration ledger', filtrationRows({...d, filtration: data.filtration, contamination_status: data.contamination_status, oracle_inventory: data.oracle_inventory}), 'Examples requires complete current-pin filtration and admission proof. A source filtered to zero is excluded. Pre-filtration retained counts are shown separately.'));
-  for (const candidate of data.pending_filtered_releases.sources.filter(item => item.source_id === d.id)) {
-    const release = candidate.release, sample = candidate.sample;
-    const section = card('Filtered private release, pending qualification', [
-      ['Candidate source', candidate.candidate_source_id],
-      ['Candidate pin', pointer(release.url, `${release.repo} @ ${release.revision}`)],
-      ['Oracle-filtered tasks', `${number.format(candidate.filtered_tasks)} of ${number.format(candidate.original_tasks)}`],
-      ['Qualification pending', candidate.qualification_pending.map(name => name.replaceAll('_', ' ')).join(', ')],
-      ['SAMPLE selected', sample.selected],
-      ['SAMPLE reviewed', sample.reviewed],
-      ['SAMPLE unavailable', sample.unavailable],
-      ['SAMPLE uncertain', sample.uncertain],
-      ['SAMPLE issues', sample.issues],
-      ['SAMPLE receipt', pointer(sample.receipt.uri)],
-      ['SAMPLE receipt SHA-256', sample.receipt.sha256],
-      ['Verification receipt', pointer(candidate.verification.uri)],
-      ['Verification SHA-256', candidate.verification.sha256],
-      ['Original Harbor trials claimed', candidate.original_harbor_trials_claimed],
-    ], 'This candidate is not selected or admitted to Atlas. Its SAMPLE receipt describes only the candidate pin. The catalog release, Examples and Quality remain unchanged.');
-    section.classList.add('pending-filtered-release');
-    sections.push(section);
-  }
+  sections.push(supplement('Filtration ledger', auxiliary.inventory, inventory => card('Filtration ledger', filtrationRows({...d, filtration: data.filtration, contamination_status: data.contamination_status, oracle_inventory: boundOracleInventory(d, inventory)}), 'Examples requires complete current-pin filtration and admission proof. A source filtered to zero is excluded. Pre-filtration retained counts are shown separately.')));
+  sections.push(supplement('Filtered private releases', auxiliary.pending, pending => candidateCards(pending, sourceId)));
   sections.push(card('Backend fit by role', [['Measured tasks', data.backend_capabilities?.task_count], ['Fit and blockers', backendDetails(data)]], 'Supported requires all present task/roles to be supported. Otherwise the backend is Unsupported; N/A is only for absent roles. Affected task counts are per role and may overlap. The Daytona safety label covers the actor only.'));
   sections.push(card('Grader profile', [['Grader', graderChip(d)], ['Per-type task counts', d.grader_type_counts], ['Judge rubrics', d.judge_rubric_counts], ['Judge tasks with reference', d.judge_reference_count], ['Judge tasks without reference', d.judge_no_reference_count], ['Current-input census receipt', d.derived_contract_receipt && pointer(d.derived_contract_receipt.uri)], ['Census binding', d.derived_contract_receipt?.input], ['Scanned TaskSpec bytes', d.derived_contract_receipt?.scanned_task_specs_sha256]], 'Derived from the measured task contracts. Unbound or changed inputs remain Pending.'));
   sections.push(card('Grading environment', [['Required boundary', gradingChips(d)], ['Census', d.grading_environment]], 'SHARED grades in the task environment; SEPARATE uses an independent grading environment. Mismatches remain explicit.'));
@@ -222,12 +251,15 @@ async function render(data, sourceId) {
     ['Lexical drop sets', list(lexical.drop_set_uris.map(uri => pointer(uri)))],
     ['Combined exclusion manifest', lexical.receipt?.release?.drop_manifest_uri && pointer(lexical.receipt.release.drop_manifest_uri)],
   ] : [], 'Measurements describe the recorded input population; the retained release and its exclusions are shown separately.'));
-  const progress = data.content_progress;
-  if (progress && (!data.review_completeness || data.review_completeness.required < progress.retained_count || data.result_provisional)) sections.push(card('Provisional content-review progress', [
-    ['Status', 'Incomplete; strict final assembly pending'], ['Observed at', progress.as_of],
-    ['Valid reviews (lower bound)', progress.valid_reviews_lower_bound], ['Retained contracts', progress.retained_count],
-    ['Evidence', pointer(progress.evidence_uri)],
-  ], 'This observation does not determine FULL or Result. Partial-batch reviews may be additional.'));
+  sections.push(supplement('Content-review progress', auxiliary.progress, payload => {
+    const progress = boundProgress(d, payload);
+    if (progress && (!data.review_completeness || data.review_completeness.required < progress.retained_count || data.result_provisional)) return card('Provisional content-review progress', [
+      ['Status', 'Incomplete; strict final assembly pending'], ['Observed at', progress.as_of],
+      ['Valid reviews (lower bound)', progress.valid_reviews_lower_bound], ['Retained contracts', progress.retained_count],
+      ['Evidence', pointer(progress.evidence_uri)],
+    ], 'This observation does not determine FULL or Result. Partial-batch reviews may be additional.');
+    return document.createDocumentFragment();
+  }));
   const qualityResult = d.quality_result;
   if (data.quality_review_status) sections.push(card('Content review status', [
     ['Status', data.quality_review_status], ['Declared oversight', d.oversight],
@@ -250,52 +282,62 @@ async function render(data, sourceId) {
     ['Issues', qualityResult.issues], ['Repair recommendation', qualityResult.repair_recommendation],
   ] : [], 'GOOD is at most 10% issues; BAD is at least 50% issues. QC does not reject tasks.'));
   const capabilities = data.backend_capabilities;
+  const overlap = node('span', 'Loading overlap labels…', 'muted');
+  auxiliary.labels.then(labels => overlap.replaceWith(overlapEvidence(data, labels.sources) || node('span', 'No duplicate or partial-overlap notes.'))).catch(error => {
+    overlap.textContent = error.message; overlap.className = 'error';
+  });
   sections.push(card('Backend requirements and overlap', [
     ['Measurement basis', capabilities?.basis], ['Measured tasks', capabilities?.basis === 'converted_spec_census' ? capabilities.task_count : null],
     ['Unassessed reason', capabilities?.basis === 'unassessed' ? capabilities.reason : null],
     ['Role assignments', capabilities?.role_backend_assignments], ['Declared requirements', capabilities?.demands],
     ['Duplicate group ID', data.duplicate_group?.group_id],
-    ['Measured cross-source overlap', overlapEvidence(data, data.source_labels)],
+    ['Measured cross-source overlap', overlap],
     ['Full backend matrix', link('Open the backend survey', 'api/backends')],
     ['Overlap reviews', link('Open recorded duplicate opinions', 'api/source-duplicates')],
   ]));
-  sections.push(card('Diagnostics and archived reviews', [
+  sections.push(card('Diagnostics and provenance', [
     ['Diagnostics', data.diagnostics.length ? list(data.diagnostics.map(file => { const span = node('span'); span.append(`${file.name}: `, pointer(file.uri)); return span; })) : null],
-    ['Archived reviews', data.archived_reviews.length ? list(data.archived_reviews.map(review => link(`${new Date(review.updated_at).toLocaleDateString()} · ${review.review_count} reviews`, `archive.html?id=${encodeURIComponent(review.id)}`))) : null],
     ['Catalog', pointer(data.catalog.root)], ['Notes', d.notes],
   ]));
   $('sections').replaceChildren(...sections);
   if (assessment) {
-    const section = card('All stored assessment reviews', [], 'Loading complete review records…');
+    const section = node('details', undefined, 'assessment-card');
+    section.append(node('summary', 'All stored assessment reviews'));
     $('sections').append(section);
-    try {
-      const report = await json(`api/assessment?${new URLSearchParams({source_id: sourceId})}`);
-      const record = node('details');
-      record.append(node('summary', 'Complete assessment report'), node('pre', JSON.stringify(report.report, null, 2)));
-      section.replaceChildren(node('h2', 'All stored assessment reviews'),
-        node('p', `${number.format(report.report.evidence.total)} stored task reviews. The first page is shown below; open QC task reviews for paging and defect filters.`, 'card-intro'),
-        repairRecommendations(report.report), taskReviews(sourceId, report.report.evidence.items), record);
-    } catch (error) { section.append(node('p', error.message, 'error')); }
+    section.addEventListener('toggle', async () => {
+      if (!section.open || section.dataset.requested) return;
+      section.dataset.requested = 'true';
+      const status = node('p', 'Loading complete review records…', 'muted');
+      section.append(status);
+      try {
+        const report = await sourceJson(`api/assessment?${new URLSearchParams({source_id: sourceId})}`, SOURCE_DEADLINE_MS);
+        const record = node('details');
+        record.append(node('summary', 'Complete assessment report'), node('pre', JSON.stringify(report.report, null, 2)));
+        status.replaceWith(node('p', `${number.format(report.report.evidence.total)} stored task reviews. The first page is shown below; open QC task reviews for paging and defect filters.`, 'card-intro'));
+        section.append(repairRecommendations(report.report), taskReviews(sourceId, report.report.evidence.items), record);
+      } catch (error) { status.textContent = error.message; status.className = 'error'; }
+    });
   }
-  for (const summary of data.archived_reviews) {
-    const section = card(`Archived review collection ${summary.id}`, [], 'Loading complete review records…');
-    $('sections').append(section);
-    try {
-      const review = await json(`api/archive/reviews/${encodeURIComponent(summary.id)}`);
-      const records = node('details', undefined, 'archived-collection');
-      records.append(node('summary', 'Complete review collection'), repairRecommendations(review.collection), node('pre', JSON.stringify(review.collection, null, 2)));
-      section.replaceChildren(node('h2', `Archived review collection ${review.id}`), records);
-      const artifacts = list(review.artifacts.map(artifact => link(artifact.path,
-        `api/archive/reviews/${encodeURIComponent(review.id)}/artifacts/${artifact.path.split('/').map(encodeURIComponent).join('/')}`)));
-      section.append(node('h3', 'Saved reports, traces and receipts'), artifacts);
-    } catch (error) { section.append(node('p', error.message, 'error')); }
-  }
-
 }
 const sourceId = new URLSearchParams(location.hash.slice(1)).get('source_id');
 window.addEventListener('hashchange', () => location.reload());
 if (!sourceId) $('message').textContent = 'Open a source from the Atlas to see its evidence.';
-else Promise.all([json(`api/source?${new URLSearchParams({source_id: sourceId})}`), json('measurements/content-progress.json'), json('measurements/oracle-inventory.json'), json('api/source-labels'), json('measurements/pending-filtered-releases.json')])
-  .then(([data, progress, inventory, labels, pending]) => render({...data, source_labels: labels.sources, pending_filtered_releases: pending, content_progress: boundProgress(data.declaration, progress), oracle_inventory: boundOracleInventory(data.declaration, inventory)}, sourceId)).catch(error => {
-  $('title').textContent = 'Source evidence'; $('message').textContent = error.message; $('message').classList.add('error');
-});
+else {
+  $('sections').setAttribute('aria-busy', 'true');
+  sourceJson(`api/source?${new URLSearchParams({source_id: sourceId})}`, SOURCE_DEADLINE_MS)
+    .then(data => {
+      // Restricted sources never request supplementary content or task reviews.
+      const auxiliary = data.data_restriction === 'private_always' || data.declaration.data_restriction === 'private_always' ? {} : {
+        progress: sourceJson('measurements/content-progress.json'),
+        inventory: sourceJson('measurements/oracle-inventory.json'),
+        labels: sourceJson('api/source-labels'),
+        pending: sourceJson('measurements/pending-filtered-releases.json'),
+      };
+      render(data, sourceId, auxiliary);
+      $('sections').setAttribute('aria-busy', 'false');
+    }).catch(error => {
+      $('title').textContent = 'Source evidence';
+      $('message').textContent = error.message; $('message').classList.add('error');
+      $('sections').setAttribute('aria-busy', 'false');
+    });
+}

@@ -14,8 +14,12 @@ window.AtlasDifficulty = (() => {
       ` · ${model.model.model} @ ${model.model.revision} · ${model.protocol_id}` +
       (model.sample.pre_oracle_filter ? ' · Pre-oracle-filter sample; resampling required after filtering.' : '');
   }
-  function comparison(summary) {
-    const chart = document.createElement('div'); chart.className = 'difficulty-comparison';
+  function comparison(summary, sourceId) {
+    const chart = document.createElement(sourceId ? 'a' : 'div'); chart.className = 'difficulty-comparison';
+    if (sourceId) {
+      chart.href = `attempts.html?${new URLSearchParams({source: sourceId})}`;
+      chart.setAttribute('aria-label', `Browse difficulty attempts and rollouts for ${sourceId}`);
+    }
     for (const solver of solvers) {
       const model = selected(summary, solver), measured = model?.status === 'measured';
       const row = document.createElement('div'); row.className = `difficulty-model difficulty-${solver}`;
@@ -26,7 +30,8 @@ window.AtlasDifficulty = (() => {
       fill.style.width = `${measured ? 100 * model.solve_rate : 0}%`; meter.append(fill);
       const score = document.createElement('span'); score.className = 'difficulty-score';
       score.textContent = measured ? `${Math.round(100 * model.solve_rate)}%` : '—';
-      row.title = tooltip(model, titles[solver]); row.setAttribute('aria-label', row.title); row.tabIndex = 0;
+      row.title = tooltip(model, titles[solver]); row.setAttribute('aria-label', row.title);
+      if (!sourceId) row.tabIndex = 0;
       row.append(name, meter, score); chart.append(row);
     }
     return chart;

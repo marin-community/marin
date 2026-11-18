@@ -18,7 +18,6 @@ const ATLAS_VIEWS = [
   {label: 'By curriculum', href: 'curriculum.html', pages: ['curriculum.html']},
   {label: 'Difficulty', href: 'difficulty.html', pages: ['difficulty.html', 'attempts.html', 'rollout.html']},
   {label: 'Getting started', href: 'guide.html', pages: ['guide.html']},
-  {label: 'Review archive', href: 'archive.html', pages: ['archive.html']},
 ];
 
 // Deferred common.js runs before each page's script, with the document parsed.

@@ -290,12 +290,16 @@ def evidence_sweep(page: Page, root: str, sources: list[dict[str, Any]]) -> list
         for row in candidates:
             for view in ("source", "backends"):
                 page.goto(root + view + ".html#" + urlencode({"source_id": row["id"]}))
-                expect(page.locator("#title")).to_have_text(row["display_name"])
+                expect(page.locator("#title")).to_have_text(row["display_name"], timeout=15000)
                 expect(
                     page.locator("#sections .assessment-card")
                     if view == "source"
                     else page.locator("#daytona-evidence .field")
                 ).not_to_have_count(0)
+                if view == "source":
+                    expect(page.locator("#sections")).to_have_attribute("aria-busy", "false", timeout=15000)
+                    expect(page.locator("#sections")).not_to_contain_text("Loading supplementary", timeout=10000)
+                    expect(page.locator("#sections")).not_to_contain_text("Loading overlap", timeout=10000)
                 check_evidence(page)
                 if view == "backends":
                     safety = row["daytona"]

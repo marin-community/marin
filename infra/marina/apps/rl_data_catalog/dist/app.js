@@ -194,7 +194,7 @@ function sourceRow(row, others, canonical) {
     updated.title = row.updated_at ? 'Load time of the selected catalog snapshot (UTC)' : 'Catalog load time unavailable';
     const evidence = node('td'), link = node('a', 'Evidence →', 'evidence-link'); link.href = evidenceLink(row); evidence.append(link);
     const contamination = contaminationCell(row);
-    const difficulty = node('td', undefined, 'difficulty-cell'); difficulty.append(AtlasDifficulty.comparison(row.difficulty));
+    const difficulty = node('td', undefined, 'difficulty-cell'); difficulty.append(AtlasDifficulty.comparison(row.difficulty, row.id));
     const backends = node('td', undefined, 'backends-cell'); backends.append(backendLink(row, state.daytonaLimit));
     const grading = node('td'); grading.append(gradingChips(row));
     const grader = node('td', undefined, 'grader-cell'); grader.append(graderChip(row));

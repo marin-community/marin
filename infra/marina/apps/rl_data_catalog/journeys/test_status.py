@@ -60,14 +60,13 @@ def test_all_pages_share_navigation_labels_order_and_current_view(journey: Journ
         base + "api/difficulty-attempts?" + urlencode({"source_id": source, "measurement_id": measurement})
     ).json()
     attempt = attempts["items"][0]["attempt_id"]
-    labels = ["Status", "By source", "By curriculum", "Difficulty", "Getting started", "Review archive"]
+    labels = ["Status", "By source", "By curriculum", "Difficulty", "Getting started"]
     views = [
         ("", "By source"),
         ("status.html", "Status"),
         ("curriculum.html", "By curriculum"),
         ("difficulty.html", "Difficulty"),
         ("guide.html", "Getting started"),
-        ("archive.html", "Review archive"),
         ("source.html#source_id=Marin%3Aclean", "By source"),
         ("backends.html#source_id=Marin%3Aclean", "By source"),
         ("assessment.html?source=Marin%3Aclean", "By source"),
@@ -87,7 +86,6 @@ def test_all_pages_share_navigation_labels_order_and_current_view(journey: Journ
             "curriculum.html",
             "difficulty.html",
             "guide.html",
-            "archive.html",
         ]
 
 

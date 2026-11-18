@@ -121,6 +121,11 @@ into the checker.
 
 ## Publish and verify
 
+The source Evidence browser gate requires the source title and core evidence
+within 15 seconds. Auxiliary ledgers have independent deadlines and visible
+errors; they must not block the core page. Archive storage and preservation
+checks remain required even though there is no Review Archive UI.
+
 Eyeball the preflight screenshots in all four layouts. Automated geometry cannot
 judge typography, readability or whether a label communicates the intended
 policy. Resolve any unexpected or missing evidence before publication.
@@ -293,7 +298,7 @@ checks the confidence control; the full browser walk runs after publication.
 The installed `test_rendered_contrast_readability_and_reflow` journey and the
 input-bound `browser_checks` both run the representative readability pass. Any
 violation in that pass blocks release. It covers the source table, curriculum, source evidence, backends, assessments,
-archive and guide, plus representative source/evidence states, filters and folded groups, confidence levels and one measured curriculum domain, public instructions from a stored task example in each layout, source breakdowns, archive records, empty/error states, hover,
+and guide, plus representative source/evidence states, filters and folded groups, confidence levels and one measured curriculum domain, public instructions from a stored task example in each layout, source breakdowns, empty/error states, hover,
 active and keyboard focus on representative controls. The full audit retains
 every filter value, keyboard target and grouped pointer style. Layouts are 1440, 390 and 320 CSS px in both themes;
 page and dialog checks also apply 200% text size and WCAG text-spacing overrides.
