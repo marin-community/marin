@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import inspect
+import hashlib
 import json
 import logging
 import os
@@ -524,38 +524,58 @@ def gate_verdict(passed: bool, rank_transports: list[list[str]]) -> str:
     return "pass"
 
 
-def run_pynccl_init_check(device) -> dict:
-    """Initialize vLLM's PyNcclCommunicator to reproduce engine-side comm init.
+def mapped_nccl_libraries() -> list[dict[str, str]]:
+    """Identify the mapped libnccl files in this process with their hashes."""
+    records: list[dict[str, str]] = []
+    maps_path = Path("/proc/self/maps")
+    if not maps_path.exists():
+        return records
+    seen: set[str] = set()
+    for line in maps_path.read_text(errors="replace").splitlines():
+        path = line.rpartition(" ").pop().strip()
+        if "libnccl" not in path or path in seen or not path.startswith("/"):
+            continue
+        seen.add(path)
+        digest = hashlib.sha256()
+        with open(path, "rb") as library_file:
+            for block in iter(lambda: library_file.read(8 * 2**20), b""):
+                digest.update(block)
+        records.append({"path": path, "sha256": digest.hexdigest()})
+    return records
 
-    The Snowball .60 restart failed in vLLM's ``PyNcclCommInitRank``, a stage
-    distinct from torch's ProcessGroupNCCL init that the collectives exercise.
-    This check runs the same init on the job's own allocation and records the
-    loaded NCCL library version, so a gate verdict also covers the engine
-    path. vLLM's constructor signature varies between versions, so the known
-    optional parameters are passed only when present.
+
+def run_pynccl_init_check(device) -> dict:
+    """Initialize vLLM's PyNcclCommunicator exactly as the engine does.
+
+    The pinned vLLM requires a non-NCCL control group: the constructor asserts
+    the group's backend is not NCCL, broadcasts the unique id over that group,
+    and runs ncclCommInitRank plus a warm-up all_reduce itself — the stage
+    whose failure aborted the Snowball .60 restart. The wrapper returns
+    silently unavailable when it cannot load its NCCL library, so pass
+    requires available and not disabled. The mapped libnccl path and hash go
+    next to the version because the .60 warning text does not exist in the
+    pinned NCCL source.
     """
     info: dict[str, object] = {"stage": "pynccl_init"}
     try:
+        import torch.distributed as dist  # noqa: PLC0415 - torch is an optional dependency
+
         # Optional vLLM import: the probe runs in environments without it.
         from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator  # noqa: PLC0415
 
-        parameters = inspect.signature(PyNcclCommunicator.__init__).parameters
-        kwargs: dict[str, object] = {}
-        if "group" in parameters:
-            kwargs["group"] = None
-        if "device" in parameters:
-            kwargs["device"] = device
-        communicator = PyNcclCommunicator(**kwargs)
-        init = getattr(communicator, "init", None)
-        if callable(init):
-            init()
+        control_group = dist.new_group(backend="gloo")
+        communicator = PyNcclCommunicator(group=control_group, device=device)
+        if not communicator.available or communicator.disabled:
+            info["pynccl_init"] = "failed"
+            info["error"] = (
+                "PyNcclCommunicator reported unavailable "
+                f"(available={communicator.available}, disabled={communicator.disabled})"
+            )
+            return info
         info["pynccl_init"] = "pass"
-        version = None
-        library = getattr(communicator, "nccl", None)
-        getter = getattr(library, "nccl_get_version", None) if library is not None else None
-        if callable(getter):
-            version = getter()
-        info["nccl_library_version"] = version
+        info["nccl_library_version"] = communicator.nccl.ncclGetVersion()
+        info["nccl_library_raw_version"] = communicator.nccl_version
+        info["mapped_libraries"] = mapped_nccl_libraries()
     except Exception as error:
         info["pynccl_init"] = "failed"
         info["error"] = f"{type(error).__name__}: {error}"
