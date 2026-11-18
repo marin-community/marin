@@ -207,7 +207,9 @@ data parallelism.
 Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
 data artifacts, a starting native checkpoint, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
-not fork artifact identity.
+not fork artifact identity. A versioned task mix (`RlCurriculum`) also belongs in `SkyRLSpec`; it
+renders the trainer's sampling settings and is named in the run record. See
+[RL curricula](rl-curricula.md).
 
 `IrisSkyRLExecution.container_profile` accepts an `iris.rpc.job_pb2.ContainerProfile` enum for the
 coordinator and trainer jobs. Enum names are serialized at the launch boundary. It defaults to `None`,

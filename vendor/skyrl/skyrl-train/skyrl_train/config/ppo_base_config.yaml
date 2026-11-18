@@ -16,7 +16,8 @@ data:
   # against these terminal-bench task roots at rollout time.
   terminal_bench_data: []
   sampling:
-    kind: null # null = seeded passes (data.shuffle); domain-weighted|naive|thompson|learnability|grade-uniform|grade-adaptive|grade-prior
+    kind: null # null = seeded passes (data.shuffle); domain-weighted|ordered|naive|thompson|learnability|grade-uniform|grade-adaptive|grade-prior
+    stages: [] # ordered kind: the declared stage sequence, each {source: teacher_route label, quota: prompts per stage visit (null = one full pass)}
     domain_weights: {} # exact teacher-route mixture in every train_batch_size prompts drawn when kind=domain-weighted
     decay: 0.95 # per-step multiplicative decay of bin sufficient stats
     epsilon: 0.05 # per-bin probability floor (thompson/learnability/grade-prior)

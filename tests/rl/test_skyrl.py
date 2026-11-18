@@ -21,6 +21,7 @@ from marin.execution.artifact import Artifact, ArtifactRecord, FingerprintMismat
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, materialized_config
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_status import StatusFile
+from marin.rl.curriculum import CurriculumEntry, CurriculumStage, RlCurriculum, SamplingMode, SourcePin
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -28,6 +29,7 @@ from marin.rl.skyrl import (
     MegatronGeometry,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
@@ -994,3 +996,113 @@ def test_skyrl_spec_rejects_unsupported_training_strategy() -> None:
     # Unsupported curriculum strategies must fail before the launcher allocates workers.
     with pytest.raises(ValueError, match=r"trainer\.strategy=megatron"):
         dataclasses.replace(_spec(), config_yaml=_config_yaml(strategy="fsdp2"))
+
+
+def _curriculum(mode: SamplingMode) -> RlCurriculum:
+    entries = (
+        CurriculumEntry(
+            label="gsm8k",
+            source="gsm8k",
+            version="1",
+            pin=SourcePin(name="openai/gsm8k", revision="e53f048", url="https://huggingface.co/datasets/openai/gsm8k"),
+            recipe="experiments.post_training.task_curation.pipeline.process_rows",
+            weight=0.7 if mode is SamplingMode.WEIGHTED else None,
+        ),
+        CurriculumEntry(
+            label="svamp",
+            source="svamp",
+            version="1",
+            pin=SourcePin(name="ChilleD/SVAMP", revision="5e0bf1e", url="https://huggingface.co/datasets/ChilleD/SVAMP"),
+            recipe="experiments.post_training.task_curation.pipeline.process_rows",
+            weight=0.3 if mode is SamplingMode.WEIGHTED else None,
+        ),
+    )
+    stages = () if mode is SamplingMode.WEIGHTED else (CurriculumStage("gsm8k", 4096), CurriculumStage("svamp"))
+    return RlCurriculum(
+        name="users/tester/curricula/math-mix",
+        version="2026.11.18",
+        mode=mode,
+        entries=entries,
+        stages=stages,
+        seed=17,
+        fingerprint="",
+    )
+
+
+def _spec_with_curriculum(mode: SamplingMode) -> SkyRLSpec:
+    return dataclasses.replace(_spec(), curriculum=_curriculum(mode))
+
+
+@pytest.mark.parametrize("mode", [SamplingMode.WEIGHTED, SamplingMode.ORDERED], ids=["weighted", "ordered"])
+def test_skyrl_spec_renders_the_curriculum_into_the_recipe_and_launch_document(mode) -> None:
+    spec = _spec_with_curriculum(mode)
+    recipe = yaml.safe_load(spec.config_yaml)
+    assert recipe["data"]["kind"] == "parquet"
+    assert recipe["data"]["sampling"]["seed"] == 17
+
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+    recorded = launch["inputs"]["curriculum"]
+    assert recorded["identity"] == spec.curriculum.identity
+    assert recorded["mode"] == mode.value
+    assert [source["source"] for source in recorded["sources"]] == ["gsm8k", "svamp"]
+    assert recorded["sources"][0]["pin"] == {
+        "name": "openai/gsm8k",
+        "revision": "e53f048",
+        "url": "https://huggingface.co/datasets/openai/gsm8k",
+    }
+    if mode is SamplingMode.WEIGHTED:
+        assert recipe["data"]["sampling"]["kind"] == "domain-weighted"
+        assert recipe["data"]["sampling"]["domain_weights"] == {"gsm8k": 0.7, "svamp": 0.3}
+        assert recorded["sampling"]["domain_weights"] == {"gsm8k": 0.7, "svamp": 0.3}
+        assert recorded["stages"] == []
+    else:
+        assert recipe["data"]["sampling"]["kind"] == "ordered"
+        assert recipe["data"]["sampling"]["stages"] == [
+            {"source": "gsm8k", "quota": 4096},
+            {"source": "svamp", "quota": None},
+        ]
+        assert recorded["stages"] == [{"source": "gsm8k", "quota": 4096}, {"source": "svamp", "quota": None}]
+
+
+def test_skyrl_run_record_names_the_curriculum() -> None:
+    curriculum = _curriculum(SamplingMode.WEIGHTED)
+    result = SkyRLRun(
+        path="runs/terminal.json",
+        hf_model_uri=None,
+        global_step=8,
+        tokenizer_uri="test/tokenizer",
+        tokenizer_revision="rev",
+        checkpoint_root="runs/checkpoints",
+        draft_checkpoint_root=None,
+        terminal_manifest_uri="runs/terminal.json",
+        iris_job_id="/cluster/job",
+        curriculum=curriculum.identity,
+    )
+    assert result.result_payload()["curriculum"] == curriculum.identity
+
+
+def test_skyrl_spec_rejects_a_recipe_that_disagrees_with_its_curriculum() -> None:
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["data"] = {"sampling": {"kind": "naive"}}
+    with pytest.raises(ValueError, match="disagrees with curriculum"):
+        dataclasses.replace(_spec(), config_yaml=yaml.safe_dump(recipe), curriculum=_curriculum(SamplingMode.WEIGHTED))
+
+
+def test_skyrl_spec_accepts_recipe_sampling_defaults_with_a_curriculum() -> None:
+    # A typed-section recipe always emits the sampling base defaults (kind null, empty maps);
+    # those are not policy statements, so a curriculum overrides them without disagreement.
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["data"] = {"kind": "parquet", "sampling": {"kind": None, "domain_weights": {}}}
+    spec = dataclasses.replace(
+        _spec(), config_yaml=yaml.safe_dump(recipe), curriculum=_curriculum(SamplingMode.WEIGHTED)
+    )
+    assert yaml.safe_load(spec.config_yaml)["data"]["sampling"]["kind"] == "domain-weighted"
+
+
+def test_skyrl_spec_rejects_task_kind_with_a_curriculum() -> None:
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["data"] = {"kind": "tasks"}
+    with pytest.raises(ValueError, match=r"requires data\.kind=parquet"):
+        dataclasses.replace(_spec(), config_yaml=yaml.safe_dump(recipe), curriculum=_curriculum(SamplingMode.WEIGHTED))
