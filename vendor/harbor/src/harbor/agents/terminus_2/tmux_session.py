@@ -507,12 +507,23 @@ class TmuxSession:
         result = re.search(self._ENDS_WITH_NEWLINE_PATTERN, key)
         return result is not None
 
+    async def _exec_bounded(self, command: str, timeout_sec: int) -> ExecResult:
+        """Run a tmux command whose sandbox exec must finish within ``timeout_sec``."""
+        try:
+            return await self.environment.exec(
+                command=command, user=self._user, timeout_sec=timeout_sec
+            )
+        except TimeoutError as error:
+            raise TmuxExecTimeoutError(
+                f"{self.environment.session_id}: tmux command did not finish "
+                f"within {timeout_sec} seconds"
+            ) from error
+
     async def is_session_alive(self) -> bool:
         """Check if the tmux session is still alive."""
-        result = await self.environment.exec(
-            command="tmux has-session -t {}".format(self._session_name),
-            user=self._user,
-            timeout_sec=_TMUX_COMMAND_TIMEOUT,
+        result = await self._exec_bounded(
+            "tmux has-session -t {}".format(self._session_name),
+            _TMUX_COMMAND_TIMEOUT,
         )
         return result.return_code == 0
 
@@ -520,10 +531,9 @@ class TmuxSession:
         """Stop the agent terminal when its owner releases the session."""
         if not await self.is_session_alive():
             return
-        result = await self.environment.exec(
-            command=f"tmux kill-session -t {shlex.quote(self._session_name)}",
-            user=self._user,
-            timeout_sec=_TMUX_COMMAND_TIMEOUT,
+        result = await self._exec_bounded(
+            f"tmux kill-session -t {shlex.quote(self._session_name)}",
+            _TMUX_COMMAND_TIMEOUT,
         )
         if result.return_code != 0 or await self.is_session_alive():
             raise TmuxCommandError("Cannot stop the agent tmux session")
@@ -549,9 +559,7 @@ class TmuxSession:
             f'else status=$?; [ "$status" -eq {PROCESS_GROUP_ABSENT_EXIT_CODE} ] || exit "$status"; '
             "break; fi; done; fi; fi"
         )
-        result = await self.environment.exec(
-            command=command, user=self._user, timeout_sec=_FOREGROUND_STOP_TIMEOUT
-        )
+        result = await self._exec_bounded(command, _FOREGROUND_STOP_TIMEOUT)
         if result.return_code != 0:
             raise TmuxCommandError("Cannot stop the agent terminal's foreground job")
 
@@ -796,16 +804,9 @@ class TmuxSession:
         markers = _BatchMarkers.create()
         script = self._build_batch_script(keystroke_batches, markers)
         total_wait = sum(max(0.0, batch.duration_sec) for batch in keystroke_batches)
-        timeout_sec = math.ceil(total_wait + self._batch_exec_timeout_margin_sec)
-        try:
-            result = await self.environment.exec(
-                command=script, timeout_sec=timeout_sec, user=self._user
-            )
-        except TimeoutError as error:
-            raise TmuxExecTimeoutError(
-                f"{self.environment.session_id}: batched tmux call exceeded "
-                f"{timeout_sec}s"
-            ) from error
+        result = await self._exec_bounded(
+            script, math.ceil(total_wait + self._batch_exec_timeout_margin_sec)
+        )
         stdout = result.stdout or ""
         sent_index = None
         while match := re.match(rf"{re.escape(markers.sent)}(\d+)\n", stdout):
@@ -865,10 +866,9 @@ class TmuxSession:
         return output, True
 
     async def capture_pane(self, capture_entire: bool = False) -> str:
-        result = await self.environment.exec(
+        result = await self._exec_bounded(
             self._tmux_capture_pane(capture_entire=capture_entire),
-            user=self._user,
-            timeout_sec=_TMUX_COMMAND_TIMEOUT,
+            _TMUX_COMMAND_TIMEOUT,
         )
         return result.stdout or ""
 
