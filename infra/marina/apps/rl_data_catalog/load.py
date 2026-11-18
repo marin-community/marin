@@ -67,6 +67,14 @@ from infra.marina.apps.rl_data_catalog.server.restrictions import is_private
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
 MAX_BATCH_BYTES = 1_000_000
+# The per-task staging tables carry many small rows; their inserts maintain four
+# indexes (including the GIN defects index) on the retained item volume, so their
+# statements stay under the SQL gateway's per-statement timeout only with smaller
+# batches. Catalog rows with inline evidence exceed this budget and keep the default.
+TABLE_BATCH_BYTES = {
+    "items": 50_000,
+    "packets": 50_000,
+}
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
 REVIEW_COMPLETENESS_VERSION = 6
@@ -105,23 +113,34 @@ TABLE_COLUMNS = {
 }
 
 
-def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
-    """Bound SQL request bodies by encoded bytes, including packet escaping."""
+def batches(rows: Iterable[dict[str, Any]], budget: int = MAX_BATCH_BYTES) -> Iterable[str]:
+    """Bound SQL request bodies by encoded bytes, including packet escaping.
+
+    The per-task tables take a smaller budget: their statements hit the SQL gateway's
+    per-statement timeout on the retained item volume, while a few catalog rows
+    (declarations with inline evidence) legitimately exceed that smaller budget and
+    keep the default.
+    """
     batch: list[str] = []
     size = 2
     for row in rows:
         encoded = json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
         # The SQL API carries the row array as a JSON string, adding another escape layer.
         length = len(json.dumps(encoded).encode()) + 1
-        if length + 2 > MAX_BATCH_BYTES:
+        if length + 2 > budget:
             raise ValueError("One catalog row exceeds the SQL batch budget")
-        if size + length > MAX_BATCH_BYTES:
+        if size + length > budget:
             yield "[" + ",".join(batch) + "]"
             batch, size = [], 2
         batch.append(encoded)
         size += length
     if batch:
         yield "[" + ",".join(batch) + "]"
+
+
+def table_batch_bytes(table: str) -> int:
+    """The SQL batch budget for one staging table."""
+    return TABLE_BATCH_BYTES.get(table, MAX_BATCH_BYTES)
 
 
 def ensure_tables(query: AppletQuery, names: tuple[str, ...]) -> None:
@@ -138,8 +157,9 @@ def ensure_tables(query: AppletQuery, names: tuple[str, ...]) -> None:
 def insert_rows(query: AppletQuery, table: str, columns: str, load_id: str, rows: Iterable[dict[str, Any]]) -> int:
     """Insert byte-bounded batches and return the stored row count."""
     names = ", ".join(column.strip().split()[0] for column in columns.split(","))
+    budget = table_batch_bytes(table)
     count = 0
-    for body in batches(rows):
+    for body in batches(rows, budget):
         result = query(
             f"INSERT INTO {table} (load_id, {names}) SELECT :load_id, {names} "
             f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({columns})",
@@ -421,29 +441,9 @@ def load_catalog(
     verification_pending: dict[str, list[str]] = {}
     sample_pin_stale: dict[str, bool] = {}
     downgraded: dict[str, str] = {}
+    backend_rows = {row.source_id: row for row in backend_map.sources}
     for source in sources:
-        # Available rows must pass full population admission; every other status
-        # publishes as metadata without admission or selectability.
-        if (
-            source.declaration.status == "Available"
-            and filtration(source.declaration.model_dump(mode="json"))["state"] != "excluded"
-        ):
-            require_declaration_admission(source.declaration)
-            if source.id not in previously_available:
-                # ARMED (rulings-enforcement): a NEW Available admission needs
-                # lexical clearance — explicit intended_use plus the train
-                # private-release receipt or the eval benchmark-measured
-                # receipt at the pin — and its SAMPLE panel on the current
-                # final pin. Sources already Available in the previously
-                # selected catalog are grandfathered with visible markers.
-                require_available_lexical_clearance(source.declaration)
-                require_sample_pin_currency(source.declaration)
-            elif (
-                source.declaration.independent_qc is not None
-                and source.declaration.independent_qc.panel_currency is SamplePanelCurrency.ARCHIVED_LINEAGE
-            ):
-                sample_pin_stale[source.id] = True
-        backend_row = next(row for row in backend_map.sources if row.source_id == source.id)
+        backend_row = backend_rows[source.id]
         verdicts = {name: fit.support.value for name, fit in backend_row.backends.items()}
         blocker, pending = backend_admission_review(verdicts, source.declaration.status, backend_map.deployment_classes)
         if blocker:
@@ -467,6 +467,33 @@ def load_catalog(
                 )
             else:
                 raise ValueError(f"Backend admission blocked: {source.id}: {blocker}")
+        # Available rows must pass full population admission; every other status
+        # publishes as metadata without admission or selectability.
+        if (
+            source.declaration.status == "Available"
+            and filtration(source.declaration.model_dump(mode="json"))["state"] != "excluded"
+        ):
+            require_declaration_admission(source.declaration)
+            if source.id not in previously_available:
+                # ARMED (rulings-enforcement): a NEW Available admission needs
+                # lexical clearance — explicit intended_use plus the train
+                # private-release receipt or the eval benchmark-measured
+                # receipt at the pin — and its SAMPLE panel on the current
+                # final pin. Sources already Available in the previously
+                # selected catalog are grandfathered with visible markers.
+                # A source the backend review already downgrades to Pending
+                # skips the SAMPLE gate: it cannot admit either way, and the
+                # downgrade note carries its stale-panel conflict.
+                require_available_lexical_clearance(source.declaration)
+                if source.id in downgraded:
+                    sample_pin_stale[source.id] = True
+                else:
+                    require_sample_pin_currency(source.declaration)
+            elif (
+                source.declaration.independent_qc is not None
+                and source.declaration.independent_qc.panel_currency is SamplePanelCurrency.ARCHIVED_LINEAGE
+            ):
+                sample_pin_stale[source.id] = True
         if pending:
             # An already-admitted source keeps its status with a visible marker.
             # A new source downgrades to Pending only when NO production backend
