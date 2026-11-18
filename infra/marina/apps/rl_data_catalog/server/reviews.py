@@ -34,7 +34,14 @@ def register_review_routes(api: FastAPI, engine: Engine) -> None:
                     CAST(COALESCE((SELECT SUM(p.sample_count) FROM atlas_populations p
                         WHERE p.load_id=s.load_id AND p.pipeline_key=r.pipeline_key),0) AS BIGINT) AS task_count,
                     (SELECT COUNT(*) FROM atlas_raw_reviews raw
-                        WHERE raw.load_id=s.load_id AND raw.pipeline_key=r.pipeline_key) AS raw_count
+                        WHERE raw.load_id=s.load_id AND raw.pipeline_key=r.pipeline_key) AS raw_count,
+                    (SELECT COUNT(*) FROM atlas_review_batch_tasks links
+                        WHERE links.load_id=s.load_id AND links.pipeline_key=r.pipeline_key) AS linked_count,
+                    (SELECT COUNT(*) FROM atlas_review_batch_tasks links
+                        LEFT JOIN atlas_review_batches batches ON batches.load_id=links.load_id
+                            AND batches.pipeline_key=links.pipeline_key AND batches.batch_key=links.batch_key
+                        WHERE links.load_id=s.load_id AND links.pipeline_key=r.pipeline_key
+                            AND batches.batch_key IS NULL) AS missing_batches
                 FROM atlas_sources s JOIN atlas_current selected USING(load_id)
                 LEFT JOIN atlas_review_current r ON r.load_id=s.load_id AND r.source_id=s.id
                 LEFT JOIN atlas_assessments a ON a.load_id=r.load_id AND a.pipeline_key=r.pipeline_key

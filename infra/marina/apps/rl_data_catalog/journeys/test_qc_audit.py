@@ -177,6 +177,12 @@ def test_quality_chip_reaches_review_list_and_raw_review(
     page.get_by_role("button", name="Show everything", exact=True).click()
     row.get_by_role("link", name="SAMPLE: browse task reviews", exact=True).click()
     expect(page.get_by_role("heading", name="Browse reviews", exact=True)).to_be_visible()
+    summary = page.locator("#reviews summary").first
+    chips = summary.locator(".chip").count()
+    summary.locator("span").first.click()
+    expect(summary.locator(".chip")).to_have_count(chips)
+    summary.locator("span").first.click()
+    expect(summary.locator(".chip")).to_have_count(chips)
     page.get_by_role("link", name="Open raw review →").first.click()
     expect(page.get_by_role("heading", name="Reviewer output", exact=True)).to_be_visible()
     expect(page.get_by_role("heading", name="Evidence the reviewer saw", exact=True)).to_be_visible()

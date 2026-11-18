@@ -384,7 +384,10 @@ references come from each measurement's hashed aggregate, including ancestor
 attempt receipts; never derive opaque trial paths from source names. Only named
 transcript and verifier files are staged from trial archives. Trial configuration
 and environment values are not served. Compressed SQL content is size/hash checked
-when read, and runtimes need no new object-store credentials.
+when read, and runtimes need no new object-store credentials. Store each original
+reviewer batch once with per-task links, so whole-source exports and serving rows
+do not duplicate the same batch prompt for every reviewed task. The release gate
+checks those links and refuses missing shared batches.
 
 The blocking journeys exercise Quality chip → list → raw review and solver →
 attempt → rollout, both themes at 1440/390. Readability also visits the raw review,

@@ -49,6 +49,7 @@ from .restrictions import (
     restriction_projection,
     restriction_registry_key,
 )
+from .review_content import task_request_evidence
 from .reviews import register_review_routes
 from .rollouts import register_rollout_routes
 from .schema import SCHEMA_SQL
@@ -823,7 +824,8 @@ def create_api(services: AppletServices) -> FastAPI:
                     i.defects, i.provenance, i.replaced_task_sha256, i.repair_advisories,
                     i.explanation, i.evidence_ids,
                     i.omissions, i.exclusion_reason, p.packet, s.declaration AS source_declaration,
-                    r.record AS raw_review
+                    r.record AS raw_review,b.batch_key AS review_batch,
+                    i.load_id AS review_load,i.pipeline_key AS review_key
                 FROM atlas_sources s JOIN atlas_current c USING (load_id)
                 LEFT JOIN atlas_review_current q ON q.load_id=s.load_id AND q.source_id=s.id
                 JOIN atlas_items i ON i.load_id = s.load_id
@@ -832,6 +834,8 @@ def create_api(services: AppletServices) -> FastAPI:
                     AND p.pipeline_key = i.pipeline_key AND p.task_id = i.task_id
                 LEFT JOIN atlas_raw_reviews r ON r.load_id=i.load_id
                     AND r.pipeline_key=i.pipeline_key AND r.task_id=i.task_id
+                LEFT JOIN atlas_review_batch_tasks b ON b.load_id=i.load_id
+                    AND b.pipeline_key=i.pipeline_key AND b.task_id=i.task_id
                 WHERE c.name = 'latest' AND s.id IN (:source_id, :original_source_id) AND i.task_id = :task_id
             """
                     ),
@@ -872,14 +876,30 @@ def create_api(services: AppletServices) -> FastAPI:
                 **redact_mapping(judgment),
                 "repair_advisories": redact_advisories(judgment["repair_advisories"]),
             }
+        raw_review = (
+            private_content_marker()
+            if private
+            else (unpack_content(row["raw_review"]) if row["raw_review"] is not None else None)
+        )
+        if not private and raw_review is not None and row["review_batch"] is not None:
+            with engine.connect() as connection:
+                shared = connection.execute(
+                    text(
+                        "SELECT record FROM atlas_review_batches WHERE load_id=:load "
+                        "AND pipeline_key=:key AND batch_key=:batch"
+                    ),
+                    {"load": row["review_load"], "key": row["review_key"], "batch": row["review_batch"]},
+                ).scalar_one_or_none()
+            if shared is None:
+                raise HTTPException(503, "Original reviewer batch evidence is unavailable")
+            raw_review = {
+                **raw_review,
+                **task_request_evidence(unpack_content(shared)).get(task_id, {"input": [], "output": []}),
+            }
         return {
             "judgment": judgment,
             "packet": packet,
-            "raw_review": (
-                private_content_marker()
-                if private
-                else (unpack_content(row["raw_review"]) if row["raw_review"] is not None else None)
-            ),
+            "raw_review": raw_review,
             "omissions": row["omissions"],
             "exclusion_reason": row["exclusion_reason"],
         }

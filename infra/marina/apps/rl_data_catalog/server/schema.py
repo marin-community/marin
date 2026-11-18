@@ -4,6 +4,15 @@
 """Postgres storage for one staged curation catalog load."""
 
 SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS atlas_review_batches (
+    load_id TEXT NOT NULL,pipeline_key TEXT NOT NULL,batch_key TEXT NOT NULL,record JSONB NOT NULL,
+    PRIMARY KEY(load_id,pipeline_key,batch_key)
+);
+CREATE TABLE IF NOT EXISTS atlas_review_batch_tasks (
+    load_id TEXT NOT NULL,pipeline_key TEXT NOT NULL,task_id TEXT NOT NULL,batch_key TEXT NOT NULL,
+    PRIMARY KEY(load_id,pipeline_key,task_id),
+    FOREIGN KEY(load_id,pipeline_key,batch_key) REFERENCES atlas_review_batches(load_id,pipeline_key,batch_key)
+);
 CREATE TABLE IF NOT EXISTS atlas_rollout_sets (
     measurement_id TEXT PRIMARY KEY, metadata JSONB NOT NULL
 );

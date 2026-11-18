@@ -26,29 +26,7 @@ from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference,
 from infra.marina.apps.rl_data_catalog.server.cohort_summaries import materialize_cohort_summaries
 from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
 from infra.marina.apps.rl_data_catalog.server.restrictions import declaration_restriction, is_private
-
-
-def task_request_evidence(batch: dict) -> dict[str, dict[str, Any]]:
-    """Index exact requests and raw provider rows once by the reviewed task IDs."""
-    evidence: dict[str, dict[str, Any]] = {}
-    for attempt in batch["attempts"]:
-        targets = attempt["query_task_ids"]
-        requests = attempt["requests"]
-        for request in requests["requests"]:
-            for task in targets[request["custom_id"]]:
-                evidence.setdefault(task, {"input": [], "output": []})["input"].append(
-                    {"attempt": attempt["number"], "request": request}
-                )
-        for observation in requests["observations"]:
-            for line in observation["output"].splitlines():
-                if not line.strip():
-                    continue
-                row = json.loads(line)
-                for task in targets[row["custom_id"]]:
-                    evidence.setdefault(task, {"input": [], "output": []})["output"].append(
-                        {"attempt": attempt["number"], "response": row, "raw": line}
-                    )
-    return evidence
+from infra.marina.apps.rl_data_catalog.server.review_content import task_request_evidence
 
 
 def read_batch(uri: str) -> tuple[dict, dict]:
@@ -271,6 +249,23 @@ def stage_content_reviews(
         if scope == "sample"
         else items
     )
+    raw_messages_missing = sum(not row["record"]["input"] and not row["record"]["output"] for row in raw_records)
+    shared_batches = {}
+    batch_links = []
+    for row in raw_records:
+        uri = (row["record"]["provenance"].get("receipt") or {}).get("uri")
+        if uri is None:
+            continue
+        batch, provenance = batch_rows[uri]
+        batch_key = provenance["receipt"]["sha256"]
+        if batch_key not in shared_batches:
+            shared_batches[batch_key] = {
+                "pipeline_key": key,
+                "batch_key": batch_key,
+                "record": pack_content({"attempts": batch["attempts"]}),
+            }
+        batch_links.append({"pipeline_key": key, "task_id": row["task_id"], "batch_key": batch_key})
+        del row["record"]["input"], row["record"]["output"]
     current = source.get("actor_census_input") or {}
     current_pin = (
         panel["dataset_id"],
@@ -291,15 +286,16 @@ def stage_content_reviews(
         "populations": [row.model_dump(mode="json") for row in populations],
         "items": [row.model_dump(mode="json") for row in items],
         "raw": raw_records,
+        "batches": list(shared_batches.values()),
+        "batch_links": batch_links,
         "receipt": {
             "artifact": reference.model_dump(mode="json"),
             "panel": panel,
             "current_pin": current_pin,
             "mapping": mapping_reference.model_dump(mode="json") if mapping_reference else None,
             "mapping_counts": {key: mapping[key] for key in ("mapped", "not_mapped")} if mapping_reference else None,
-            "raw_messages_missing": sum(
-                not row["record"]["input"] and not row["record"]["output"] for row in raw_records
-            ),
+            "raw_messages_missing": raw_messages_missing,
+            "linked_tasks": len(batch_links),
         },
     }
 
@@ -327,10 +323,25 @@ def load_content_reviews(staged: dict, load_id: str, source_id: str, query: Appl
         raise ValueError("Staged review rows mix immutable pipeline identities")
     if {row["task_id"] for row in staged["items"]} != {row["task_id"] for row in staged["raw"]}:
         raise ValueError("Raw reviewer evidence does not cover exactly the staged task rows")
-    ensure_tables(query, ("atlas_review_current", "atlas_raw_reviews"))
+    batch_rows = staged.get("batches", [])
+    links = staged.get("batch_links", [])
+    batch_keys = {row["batch_key"] for row in batch_rows}
+    if len(batch_keys) != len(batch_rows) or {row["batch_key"] for row in links} != batch_keys:
+        raise ValueError("Shared original-batch identities do not match their task links")
+    if len({row["task_id"] for row in links}) != len(links) or not {row["task_id"] for row in links}.issubset(
+        {row["task_id"] for row in staged["raw"]}
+    ):
+        raise ValueError("Original-batch links contain duplicate or unknown reviewed task IDs")
+    if any(row["pipeline_key"] != key for row in [*batch_rows, *links]):
+        raise ValueError("Original reviewer batches belong to another immutable panel")
+    ensure_tables(
+        query, ("atlas_review_batches", "atlas_review_batch_tasks", "atlas_review_current", "atlas_raw_reviews")
+    )
     key = staged["assessment"]["pipeline_key"]
     counts = {}
     for table, rows, columns in [
+        ("atlas_review_batches", batch_rows, "pipeline_key TEXT,batch_key TEXT,record JSONB"),
+        ("atlas_review_batch_tasks", links, "pipeline_key TEXT,task_id TEXT,batch_key TEXT"),
         ("atlas_assessments", [staged["assessment"]], TABLE_COLUMNS["assessments"]),
         ("atlas_populations", staged["populations"], TABLE_COLUMNS["populations"]),
         ("atlas_items", staged["items"], TABLE_COLUMNS["items"]),
@@ -352,6 +363,8 @@ def load_content_reviews(staged: dict, load_id: str, source_id: str, query: Appl
                 "atlas_populations": "cohort",
                 "atlas_items": "task_id",
                 "atlas_raw_reviews": "task_id",
+                "atlas_review_batches": "batch_key",
+                "atlas_review_batch_tasks": "task_id",
             }.get(table)
             identity_filter = ""
             parameters = {"load": load_id, "key": key, "rows": body}

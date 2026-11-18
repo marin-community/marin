@@ -131,7 +131,9 @@ from infra.marina.apps.rl_data_catalog.release_evidence import (
 from infra.marina.apps.rl_data_catalog.release_gateway import CandidateApi
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import canonical_source_record, create_api, migrate
+from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
 from infra.marina.apps.rl_data_catalog.server.quality import result
+from infra.marina.apps.rl_data_catalog.server.review_content import task_request_evidence
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
@@ -3708,7 +3710,10 @@ def test_archived_lineage_panel_grandfathered_with_marker(catalog_database, cata
     assert projected["sample_pin_stale"] is True
 
 
-def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(catalog_database, catalog_query, tmp_path):
+@pytest.mark.parametrize("shared_batch", [False, True])
+def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
+    catalog_database, catalog_query, tmp_path, shared_batch
+):
     root = str(tmp_path / "sample-browse")
     publish_sample(root, "sample-browse")
     load_catalog(CurationCatalog(root), catalog_query)
@@ -3743,18 +3748,41 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(catalo
         row.pop("load_id", None)
         row["pipeline_key"] = key
     items[0]["defects"] = ["ambiguity"]
+    batch = {
+        "attempts": [
+            {
+                "number": 0,
+                "query_task_ids": {row["task_id"]: [row["task_id"]] for row in items},
+                "requests": {
+                    "requests": [
+                        {
+                            "custom_id": row["task_id"],
+                            "body": {"messages": [{"role": "user", "content": "exact reviewer input"}]},
+                        }
+                        for row in items
+                    ],
+                    "observations": [
+                        {
+                            "output": "\n".join(
+                                json.dumps({"custom_id": row["task_id"], "body": "unabridged reviewer output"})
+                                for row in items
+                            )
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+    messages = task_request_evidence(batch)
     raw = [
         {
             "pipeline_key": key,
             "task_id": row["task_id"],
-            "record": {
-                "input": [{"messages": [{"role": "user", "content": "exact reviewer input"}]}],
-                "output": [{"body": "unabridged reviewer output"}],
-                "provenance": {"sha256": "a" * 64},
-            },
+            "record": {**messages[row["task_id"]], "provenance": {"sha256": "a" * 64}},
         }
         for row in items
     ]
+    expected_raw = json.loads(json.dumps(raw))
     receipt = {
         "artifact": {"uri": "s3://fixture/panel/.artifact.json", "sha256": "b" * 64},
         "panel": {"dataset_id": "original", "dataset_revision": "old-pin"},
@@ -3768,6 +3796,14 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(catalo
         "raw": raw,
         "receipt": receipt,
     }
+    if shared_batch:
+        staged["batches"] = [{"pipeline_key": key, "batch_key": "shared", "record": pack_content(batch)}]
+        staged["batch_links"] = [
+            {"pipeline_key": key, "task_id": row["task_id"], "batch_key": "shared"} for row in items
+        ]
+        staged["receipt"]["linked_tasks"] = len(items)
+        for row in raw:
+            del row["record"]["input"], row["record"]["output"]
     # Another regional panel may have populations inserted while its task rows are still loading.
     catalog_query(
         "INSERT INTO atlas_populations VALUES (:load,'incomplete-sibling','admitted',2,2)",
@@ -3801,14 +3837,36 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(catalo
         finally:
             candidate.close()
         detail = client.get("/evidence", params={"source_id": "Marin:math", "task_id": items[0]["task_id"]}).json()
-        assert detail["raw_review"] == raw[0]["record"]
+        assert detail["raw_review"] == expected_raw[0]["record"]
         inventory = client.get("/qc/inventory").json()
         panel = next(row for row in inventory["panels"] if row["source_id"] == "Marin:math")
         assert panel["task_count"] == panel["raw_count"] == 3
+        assert panel["linked_count"] == (3 if shared_batch else 0)
+        assert panel["missing_batches"] == 0
         legend = client.get("/qc/defects").json()
         ambiguity = next(row for row in legend["defects"] if row["id"] == "ambiguity")
         assert ambiguity["count"] == 1
         assert ambiguity["sources"] == [{"id": "Marin:math", "name": before["declaration"]["display_name"], "count": 1}]
+        if shared_batch:
+            catalog_query(
+                "UPDATE atlas_sources SET declaration=jsonb_set(declaration,'{data_restriction}',"
+                "CAST(:tier AS JSONB)) WHERE load_id=:load AND id='Marin:math'",
+                {"load": load_id, "tier": json.dumps("private_always")},
+            )
+
+            def refuse_private_batch(_connection, _cursor, statement, _parameters, _context, _many):
+                if "SELECT record FROM atlas_review_batches" in statement:
+                    raise AssertionError("Private original reviewer batch was read")
+
+            event.listen(catalog_database, "before_cursor_execute", refuse_private_batch)
+            try:
+                restricted = client.get(
+                    "/evidence", params={"source_id": "Marin:math", "task_id": items[0]["task_id"]}
+                ).json()
+                assert restricted["raw_review"]["private"] is True
+                assert "exact reviewer input" not in json.dumps(restricted)
+            finally:
+                event.remove(catalog_database, "before_cursor_execute", refuse_private_batch)
 
 
 def test_staged_rollout_pages_keep_attempt_identity_and_exact_content(catalog_database, catalog_query):

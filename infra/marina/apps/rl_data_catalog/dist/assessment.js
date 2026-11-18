@@ -130,7 +130,7 @@ function taskCard(sample, reviewer) {
     try {
       const data = await json(`api/evidence?${new URLSearchParams({source_id: source, task_id: sample.task_id})}`);
       const header = node("div", undefined, "evidence-labels");
-      for (const badge of badges) header.append(badge);
+      for (const badge of badges) header.append(badge.cloneNode(true));
       content.replaceChildren(
         node("p", data.judgment.explanation),
         header,

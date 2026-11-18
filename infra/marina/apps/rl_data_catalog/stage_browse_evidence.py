@@ -18,6 +18,7 @@ from rigging.filesystem.storage_path import StoragePath
 from infra.marina.apps.rl_data_catalog import load_reviews, load_rollouts, review_mapping
 from infra.marina.apps.rl_data_catalog.review_mapping import original_batch_mapping
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference, manifest_bytes
+from infra.marina.apps.rl_data_catalog.server import review_content
 from infra.marina.apps.rl_data_catalog.server.restrictions import is_private
 
 
@@ -30,7 +31,12 @@ def main() -> None:
     args = parser.parse_args()
     configure_coreweave_s3()
     manifest = json.loads(manifest_bytes(ManifestReference(uri=args.manifest[0], sha256=args.manifest[1])))
-    modules = {"load_reviews": load_reviews, "load_rollouts": load_rollouts, "review_mapping": review_mapping}
+    modules = {
+        "load_reviews": load_reviews,
+        "load_rollouts": load_rollouts,
+        "review_mapping": review_mapping,
+        "review_content": review_content,
+    }
     for name, expected in manifest["code_hashes"].items():
         if hashlib.sha256(Path(inspect.getfile(modules[name])).read_bytes()).hexdigest() != expected:
             raise ValueError(f"Regional evidence worker loaded another {name} implementation")
