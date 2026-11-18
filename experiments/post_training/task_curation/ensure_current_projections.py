@@ -20,9 +20,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from finestore.rl.curation import ActorCensusInput
+from marin.execution.artifact import read_record
+from marina.client import applet_query
+
 from experiments.post_training.task_curation.datasets.derived_contract_measurements import (
     derived_contract_receipts,
 )
+from experiments.post_training.task_curation.derived_contract_census import (
+    DerivedContractCensusInput,
+    DerivedContractReceipt,
+)
+from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOGGER = logging.getLogger(__name__)
@@ -183,8 +192,6 @@ def served_pin_map(served_pins: list[DeclarationPin]) -> dict[str, DeclarationPi
 
 
 def _load_population(population_path: str):
-    from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
-
     return SourceTextPopulation.raw_load(population_path)
 
 
@@ -198,10 +205,6 @@ def census_input_rows(declarations: list[DeclarationPin], sources: dict[str, Any
     population that disagrees with its binding can never reach a job; the mismatched sources
     are returned for the report instead.
     """
-    from marin.execution.artifact import read_record
-
-    from experiments.post_training.task_curation.derived_contract_census import DerivedContractCensusInput
-
     receipts = derived_contract_receipts()
     rows = []
     unrunnable = []
@@ -264,8 +267,6 @@ def publication_preflight(
 
 
 def atlas_applet_query():
-    from marina.client import applet_query
-
     return applet_query(MARINA_URL, ATLAS_APPLET_ID)
 
 
@@ -281,8 +282,6 @@ def atlas_curriculum_rows() -> dict[str, dict]:
 
 def atlas_contract_receipts() -> dict[str, Any]:
     """The derived-contract receipts the served applet carries (the registry family before the first load)."""
-    from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
-
     try:
         result = atlas_applet_query()("SELECT source_id, receipt FROM atlas_derived_contracts", {})
     except Exception as error:
@@ -316,14 +315,14 @@ def served_declaration_pins() -> list[DeclarationPin]:
 
 
 def _binding_from_served(binding: dict | None):
-    from finestore.rl.curation import ActorCensusInput
-
     return ActorCensusInput.model_validate(binding) if binding else None
 
 
 def assembled_declaration_pins() -> tuple[list[DeclarationPin], dict[str, Any]]:
     """The canonical layer's declaration pins plus the assembled sources for the census plan."""
-    from experiments.post_training.task_curation.sources import all_sources
+    from experiments.post_training.task_curation.sources import (  # noqa: PLC0415 — the assembly pulls the registry families and the S3 credential wiring.
+        all_sources,
+    )
 
     sources = all_sources()
     pins = []
