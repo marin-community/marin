@@ -77,6 +77,7 @@ ALLREDUCE_ITERATIONS = 10
 ALLTOALL_ITERATIONS = 8
 MAX_LOCAL_GPUS = 2
 ERROR_TAIL_LINES = 12
+TRACEBACK_MAX_LINES = 80
 ENDPOINT_BASE_NAME = "nccl-probe"
 
 NCCL_VERSION_RE = re.compile(r"NCCL version ([0-9.]+)")
@@ -262,6 +263,28 @@ def spawn_worker(
     )
 
 
+def worker_traceback(lines: list[str]) -> list[str]:
+    """Return the first Python traceback block in merged worker output.
+
+    NCCL INFO spam fills the tail window for a hung or failed collective, so
+    the failing worker's traceback is pulled out separately: it starts at
+    ``Traceback (most recent call last):`` and ends at the unindented
+    exception line.
+    """
+    start = next(
+        (index for index, line in enumerate(lines) if line.startswith("Traceback (most recent call last):")),
+        None,
+    )
+    if start is None:
+        return []
+    block = [lines[start]]
+    for line in lines[start + 1 :]:
+        block.append(line)
+        if line and not line.startswith((" ", "\t")):
+            break
+    return block[:TRACEBACK_MAX_LINES]
+
+
 def collect_worker(handle: WorkerProcess) -> RankResult:
     """Wait for one spawned worker and parse its logs and result payload."""
     try:
@@ -291,13 +314,16 @@ def collect_worker(handle: WorkerProcess) -> RankResult:
     if pynccl_failed:
         # A failed engine-side communicator init fails the rank closed.
         lines.append(f"pynccl init failed: {payload['pynccl'].get('error')}")
+    traceback_lines = worker_traceback(lines) if returncode != 0 else []
+    tail = lines[-ERROR_TAIL_LINES:]
+    error_tail = [*traceback_lines, "--- last output ---", *tail] if traceback_lines else tail
     return RankResult(
         variant=handle.variant_name,
         rank=handle.rank,
         passed=returncode == 0 and payload is not None and not pynccl_failed,
         returncode=returncode,
         duration=round(duration, 2),
-        error_tail=lines[-ERROR_TAIL_LINES:],
+        error_tail=error_tail,
         worker=payload,
         census=census,
     )
@@ -494,22 +520,25 @@ def run_gate(args: argparse.Namespace) -> None:
         ctx.registry.unregister(endpoint_id)
     verdicts = [gate_verdict(result["pass"], [rank["transports"] for rank in result["ranks"]]) for result in results]
     verdict = next((item for item in verdicts if item != "pass"), "pass")
-    print(
-        json.dumps(
-            {
-                "gate": {
-                    "task_index": task_index,
-                    "verdict": verdict,
-                    "gloo_socket_ifname": gloo_interface,
-                    "results": results,
-                    "ib_ports": collect_ib_port_inventory(),
-                }
-            }
-        )
-    )
+    report = {
+        "gate": {
+            "task_index": task_index,
+            "verdict": verdict,
+            "gloo_socket_ifname": gloo_interface,
+            "results": results,
+            "ib_ports": collect_ib_port_inventory(),
+        }
+    }
+    report_json = json.dumps(report)
+    print(report_json)
+    # Persist alongside stdout: the pod-local copy is the durable evidence for
+    # an offline postmortem when the task exits nonzero.
+    (RESULT_DIR / f"gate-results-task{task_index}.json").write_text(report_json)
     if verdict != "pass":
         for result in results:
             for rank in result["ranks"]:
+                if rank["pass"]:
+                    continue
                 for line in rank["error_tail"]:
                     print(line, file=sys.stderr)
         raise SystemExit(f"gate: interconnect check failed ({verdict}); refusing to start the trainer")
@@ -623,6 +652,26 @@ def run_pynccl_init_check(device) -> dict:
     return info
 
 
+def all_to_all_element_count(buffer_bytes: int, world_size: int) -> int:
+    """Largest bf16 element count within ``buffer_bytes`` divisible by ``world_size``.
+
+    ``dist.all_to_all_single`` with equal splits requires dim0 divisible by
+    world_size; the 3-rack 192-rank gate run failed at this collective because
+    the nominal power-of-two count left a remainder. Round down so the message
+    never exceeds the requested buffer, and refuse a buffer too small for one
+    element per rank.
+    """
+    if world_size <= 0:
+        raise ValueError(f"world_size must be positive, got {world_size}")
+    elements = buffer_bytes // 2
+    count = elements - elements % world_size
+    if count == 0:
+        raise ValueError(
+            f"buffer_bytes={buffer_bytes} holds {elements} bf16 elements, too few for world_size={world_size}"
+        )
+    return count
+
+
 def run_worker_mode(args: argparse.Namespace) -> None:
     """Run one rank's collectives and print its benchmark JSON on stdout."""
     import torch  # noqa: PLC0415
@@ -654,14 +703,16 @@ def run_worker_mode(args: argparse.Namespace) -> None:
     all_reduce_seconds = bench(run_all_reduce, ALLREDUCE_ITERATIONS)
     all_reduce_bandwidth = buffer_bytes / all_reduce_seconds * 2 * (world_size - 1) / world_size / 1e9
 
-    a2a_input = torch.empty(buffer_bytes // 2, dtype=torch.bfloat16, device=device)
+    a2a_elements = all_to_all_element_count(buffer_bytes, world_size)
+    a2a_bytes = a2a_elements * 2
+    a2a_input = torch.empty(a2a_elements, dtype=torch.bfloat16, device=device)
     a2a_output = torch.empty_like(a2a_input)
 
     def run_all_to_all() -> None:
         dist.all_to_all_single(a2a_output, a2a_input)
 
     all_to_all_seconds = bench(run_all_to_all, ALLTOALL_ITERATIONS)
-    all_to_all_bandwidth = buffer_bytes / all_to_all_seconds * (world_size - 1) / world_size / 1e9
+    all_to_all_bandwidth = a2a_bytes / all_to_all_seconds * (world_size - 1) / world_size / 1e9
 
     payload = {
         "variant": args.variant,
@@ -671,6 +722,7 @@ def run_worker_mode(args: argparse.Namespace) -> None:
         "world_size": world_size,
         "allreduce_busbw_gigabytes_per_second": round(all_reduce_bandwidth, 2),
         "alltoall_busbw_gigabytes_per_second": round(all_to_all_bandwidth, 2),
+        "alltoall_bytes": a2a_bytes,
     }
     if os.environ.get("PROBE_PYNCCL_INIT"):
         payload["pynccl"] = run_pynccl_init_check(device)
