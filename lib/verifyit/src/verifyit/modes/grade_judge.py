@@ -3,13 +3,13 @@
 
 """Mode judge: IFEval gate, exact gate, then an LLM judge.
 
-Three rubrics. ``reference`` ports the Nemotron open-QA harness: most correct responses match a
+``reference`` ports the Nemotron open-QA harness: most correct responses match a
 reference verbatim once normalized, so the exact gate answers them for free and only the survivors
 reach the model. ``checklist`` ports the rewardkit checklist graders: each criterion is a yes/no
 question put to the model on its own, and the reward is the fraction answered yes, as rewardkit's
 default mean aggregation scored them. ``labels`` maps a configured final verdict label to its
-explicit task score. All rubrics can sit behind ``constraints``, deterministic
-IFEval checks that must all pass first.
+explicit task score. FrontierScience Research retains rubric points and passes at seven of ten.
+All rubrics can sit behind ``constraints``, deterministic IFEval checks that must all pass first.
 
 The judge is any OpenAI-compatible chat endpoint, configured through ``VERIFYIT_JUDGE_BASE_URL``,
 ``VERIFYIT_JUDGE_API_KEY`` and ``VERIFYIT_JUDGE_MODEL`` (``spec.model`` wins when set). A runner
@@ -29,6 +29,7 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -55,6 +56,7 @@ from verifyit.modes.ifeval import Check
 from verifyit.reasoning_markup import REASONING_DELIMITERS
 from verifyit.spec import (
     RUBRIC_CHECKLIST,
+    RUBRIC_FRONTIERSCIENCE,
     RUBRIC_LABELS,
     RUBRIC_REFERENCE,
     RUBRICS,
@@ -156,7 +158,8 @@ class _LabelCompletion:
     response_model: str | None
     response_id: str | None
     finish_reason: str | None
-    transport_attempts: tuple[dict[str, Any], ...] = ()
+    transport_attempts: tuple[dict[str, Any], ...]
+    request: dict[str, Any]
 
 
 def grade(
@@ -196,7 +199,7 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         raise InvalidTask(f"unknown judge rubric {spec.rubric!r}; known rubrics: {sorted(RUBRICS)}")
     if not isinstance(spec.strip_candidate_reasoning_blocks, bool):
         raise InvalidTask("strip_candidate_reasoning_blocks must be boolean")
-    if spec.rubric == RUBRIC_LABELS and (
+    if spec.rubric in {RUBRIC_LABELS, RUBRIC_FRONTIERSCIENCE} and (
         not isinstance(spec.system_prompt, str)
         or not isinstance(spec.prompt_template, str)
         or not isinstance(spec.question, str)
@@ -211,6 +214,8 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         raise InvalidTask("judge rubric 'checklist' needs non-empty criteria")
     if spec.rubric == RUBRIC_LABELS:
         _validate_label_spec(spec, references)
+    if spec.rubric in {RUBRIC_LABELS, RUBRIC_FRONTIERSCIENCE}:
+        _validate_template(spec, references)
     for budget in (spec.max_completion_tokens, spec.incomplete_retry_tokens):
         if type(budget) is not int or budget < 0:
             raise InvalidTask("judge token budgets must be nonnegative integers")
@@ -265,6 +270,8 @@ def grade_judge_candidate(
     if not isinstance(candidate, str):
         raise InvalidTask("judge candidate must be text")
     candidate = _answer_text(candidate, spec.strip_candidate_reasoning_blocks, strip_outer=False)
+    if spec.rubric == RUBRIC_FRONTIERSCIENCE and not candidate.strip():
+        return scored(0.0, reason="no_output", metrics={"pass_rate": 0.0, "rubric_points": 0.0})
     if policy is EmptyOutputPolicy.ZERO and not candidate.strip():
         return scored(0.0, reason="no_output")
     context = context[:CONTEXT_LIMIT]
@@ -299,8 +306,8 @@ def grade_judge_candidate(
     with client:
         if spec.rubric == RUBRIC_REFERENCE:
             return _judge_reference(spec, validated.references, candidate, client, model)
-        if spec.rubric == RUBRIC_LABELS:
-            return _judge_labels(spec, validated.references[0], candidate, client, model)
+        if spec.rubric in {RUBRIC_LABELS, RUBRIC_FRONTIERSCIENCE}:
+            return _judge_template(spec, validated.references[0], candidate, client, model)
         return _judge_checklist(spec, validated.criteria, context, candidate, client, model)
 
 
@@ -338,6 +345,11 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
             )
         ):
             raise InvalidTask("label metrics require named finite observations")
+
+
+def _validate_template(spec: JudgeSpec, references: tuple[str, ...]) -> None:
+    if len(references) != 1 or len(spec.references) != 1:
+        raise InvalidTask("judge template requires one reference")
     used = set()
     for template in (spec.system_prompt, spec.prompt_template):
         try:
@@ -373,7 +385,7 @@ def _answer_text(
     return text.strip().removesuffix("<|eot_id|>").strip()
 
 
-def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: openai.OpenAI, model: str) -> Reward:
+def _judge_template(spec: JudgeSpec, reference: str, candidate: str, client: openai.OpenAI, model: str) -> Reward:
     fields = {"question": spec.question, "reference": reference, "candidate": candidate}
     messages: list[ChatCompletionMessageParam] = []
     if spec.system_prompt:
@@ -396,7 +408,7 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
             "finish_reason": completion.finish_reason,
             "transport_attempts": completion.transport_attempts,
             "completion": completion.text,
-            "judge_request": {"model": model, "messages": messages, "max_completion_tokens": budget, "temperature": 0.0},
+            "judge_request": completion.request,
         }
         if completion.incomplete:
             if index + 1 < len(budgets):
@@ -404,6 +416,8 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
             raise GradingInfraError("judge completion is incomplete", **detail)
         content = completion.text
         answer = _answer_text(content, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning")
+        if spec.rubric == RUBRIC_FRONTIERSCIENCE:
+            return _research_verdict(answer, detail)
         if spec.label_case == "upper":
             answer = answer.upper()
         if spec.label_scan == "whole":
@@ -424,6 +438,18 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
             detail["metrics"] = label_metrics[final]
         return scored(float(labels[final]), **detail)
     raise RuntimeError("judge exhausted completion budgets")
+
+
+def _research_verdict(answer: str, detail: dict[str, Any]) -> Reward:
+    lines = answer.strip().splitlines()
+    verdicts = [line.strip() for line in lines if line.strip().startswith("VERDICT:")]
+    if len(verdicts) != 1 or verdicts[0] != lines[-1].strip():
+        raise GradingInfraError("judge must end with a single Research verdict", **detail)
+    match = re.fullmatch(r"VERDICT: ([0-9]+(?:\.[0-9]+)?)", verdicts[0])
+    if not match or (points := Decimal(match[1])) > 10:
+        raise GradingInfraError("judge must return Research rubric points between 0 and 10", **detail)
+    passed = float(points >= 7)
+    return scored(passed, **detail, verdict=verdicts[0], metrics={"pass_rate": passed, "rubric_points": float(points)})
 
 
 def _label_completion(
@@ -454,14 +480,15 @@ def _label_completion(
                 response.id,
                 choice.finish_reason,
                 attempts,
+                request,
             )
         choice = _completion_choice(response)
         if choice.finish_reason == "length":
             return _LabelCompletion(
-                choice.message.content or "", True, response.model, response.id, choice.finish_reason, attempts
+                choice.message.content or "", True, response.model, response.id, choice.finish_reason, attempts, request
             )
         return _LabelCompletion(
-            _completed_text(choice), False, response.model, response.id, choice.finish_reason, attempts
+            _completed_text(choice), False, response.model, response.id, choice.finish_reason, attempts, request
         )
     options = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
     request = {
@@ -480,7 +507,9 @@ def _label_completion(
     if not isinstance(payload, dict) or payload.get("error") is not None:
         raise RuntimeError("judge transport returned an error")
     if payload.get("status") == "incomplete" and payload.get("incomplete_details") == {"reason": "max_output_tokens"}:
-        return _LabelCompletion("", True, payload.get("model"), payload.get("id"), payload.get("status"), attempts)
+        return _LabelCompletion(
+            "", True, payload.get("model"), payload.get("id"), payload.get("status"), attempts, request
+        )
     if payload.get("status") != "completed" or payload.get("incomplete_details") is not None:
         raise RuntimeError("judge response is incomplete")
     output = payload.get("output")
@@ -501,7 +530,9 @@ def _label_completion(
     text = block.get("text")
     if block.get("type") != "output_text" or not isinstance(text, str) or not text.strip():
         raise RuntimeError("judge output is empty or contains a refusal")
-    return _LabelCompletion(text, False, payload.get("model"), payload.get("id"), payload.get("status"), attempts)
+    return _LabelCompletion(
+        text, False, payload.get("model"), payload.get("id"), payload.get("status"), attempts, request
+    )
 
 
 def _retry_after(error: openai.APIStatusError) -> float:
@@ -627,7 +658,7 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
     if not model:
         raise InvalidTask(f"no judge model: set {MODEL_ENV} or the spec's model field")
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
-    options: dict[str, Any] = {"max_retries": 0} if spec.rubric == RUBRIC_LABELS else {}
+    options: dict[str, Any] = {"max_retries": 0} if spec.rubric in {RUBRIC_LABELS, RUBRIC_FRONTIERSCIENCE} else {}
     return (
         openai.OpenAI(
             base_url=base_url,

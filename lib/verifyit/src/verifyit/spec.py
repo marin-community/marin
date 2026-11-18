@@ -302,7 +302,8 @@ class GotestSpec:
 RUBRIC_REFERENCE = "reference"
 RUBRIC_CHECKLIST = "checklist"
 RUBRIC_LABELS = "labels"
-RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS})
+RUBRIC_FRONTIERSCIENCE = "frontierscience_research"
+RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS, RUBRIC_FRONTIERSCIENCE})
 
 
 class JudgeCompletionPolicy(StrEnum):

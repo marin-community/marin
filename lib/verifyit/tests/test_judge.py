@@ -1094,3 +1094,49 @@ def test_missing_runtime_keeps_exact_gate_and_blocks_environment_endpoint(fake_j
         with pytest.raises(RuntimeError, match="explicit endpoint selection"):
             grade_judge.grade_judge_candidate(spec, candidate, runtime=None)
     assert fake_judge.prompts == []
+
+
+@pytest.mark.parametrize(
+    ("reply", "points", "passed"),
+    [
+        ("Partial credit\nVERDICT: 6.75", 6.75, 0),
+        ("VERDICT: 7", 7, 1),
+        ("VERDICT: 8.25", 8.25, 1),
+        ("VERDICT: 10", 10, 1),
+        ("VERDICT: 0", 0, 0),
+        ("VERDICT: 10.001", None, None),
+        ("VERDICT: -1", None, None),
+        ("VERDICT: 7/10", None, None),
+        ("VERDICT: 6\nVERDICT: 7", None, None),
+        ("VERDICT: 7\nexplanation", None, None),
+    ],
+)
+def test_research_rubric_preserves_points_and_pass(tmp_path, fake_judge, reply, points, passed):
+    fake_judge.replies = [reply]
+    spec = JudgeSpec(
+        rubric="frontierscience_research",
+        references=("item rubric",),
+        prompt_template="{reference}\n{candidate}",
+        reasoning_effort="high",
+    )
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    result = run(spec_path, _workspace(tmp_path, "solution"))
+    if points is None:
+        assert result.status is Status.INFRA_ERROR
+    else:
+        assert (result.status, result.reward) == (Status.SCORED, passed)
+        assert result.detail["metrics"] == {"pass_rate": passed, "rubric_points": points}
+        assert result.detail["judge_request"] == fake_judge.requests[0]
+
+
+def test_empty_research_final_counts_in_both_metrics(tmp_path, unconfigured_judge):
+    spec = JudgeSpec(
+        rubric="frontierscience_research",
+        references=("item rubric",),
+        prompt_template="{reference}\n{candidate}",
+        empty_output=EmptyOutputPolicy.GRADE,
+    )
+    result = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, " "))
+    assert result.status is Status.SCORED
+    assert result.detail["metrics"] == {"pass_rate": 0.0, "rubric_points": 0.0}
