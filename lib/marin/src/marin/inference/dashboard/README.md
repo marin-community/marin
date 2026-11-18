@@ -125,7 +125,7 @@ out. The dialog then links to the stored JSON in Filer. Reports from CoreWeave
 workers go to `s3://marin-us-east-02a/marin/model-feedback/`, and reports from
 GCP workers go to `gs://marin-eval-metadata/model-feedback/`, one object per
 report under a `YYYY-MM-DD/` folder. The button appears only for
-`marin-serve iris` jobs. Each serving process accepts up to 256 reports of at
+`marin-serve iris` jobs and the Hero dashboard launcher. Each serving process accepts up to 256 reports of at
 most 1 MiB each.
 
 ## Custom Python tools
