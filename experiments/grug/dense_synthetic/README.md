@@ -21,4 +21,4 @@ python experiments/grug/dense_synthetic/train.py \
     --size 32b --layers 16 --attention xla_flash --steps 20 --profile-steps 3 --compilation-cache-dir "$WORK/jax-cache"
 ```
 
-The profile lands under `<log-dir>/<run-id>/profiler/`; summarize it with `lib/marin/tools/profile_summary.py summarize --xplane-file <trace>.xplane.pb`.
+The profile lands under `<log-dir>/<run-id>/profiler/`; summarize it with `lib/marin/tools/profile_summary.py summarize --xplane-file <trace>.xplane.pb`. Add `--profile-hlo` to save HLO protos in the profile, so trace tools can attribute kernels to HLO ops.
