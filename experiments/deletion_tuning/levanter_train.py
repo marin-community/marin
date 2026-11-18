@@ -18,8 +18,8 @@ import logging
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
 import levanter.callbacks
+import numpy as np
 from levanter.models.snowball import SnowballLMHeadModel
 from levanter.models.snowball_deletion import (
     down_norms,
