@@ -3,12 +3,14 @@
 
 """Behavior tests for the repair-candidate lane: matching, comparative review, decisions."""
 
+import base64
 import io
 import json
 import os
 import sys
 import tarfile
 import threading
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
@@ -50,6 +52,7 @@ from taskcompendium.pipeline.repair import (
     repair_decision,
 )
 
+from experiments.post_training.task_curation import environment_fidelity
 from experiments.post_training.task_curation import repair_lane as lane
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
@@ -1555,3 +1558,76 @@ def test_install_local_sandbox_tooling_skips_when_complete(monkeypatch):
     monkeypatch.setattr(lane.subprocess, "run", lambda argv, **kwargs: installed.append(argv) or None)
     lane.install_local_sandbox_tooling()
     assert not installed
+
+
+class TestPreparedActorImage:
+    """The prepared actor image binds at conversion (the tracked campaign's bake-the-env shape)."""
+
+    def test_actor_image_dockerfile_records_base_and_commands(self):
+        base = "ubuntu:24.04@sha256:" + "a" * 64
+        recipe = lane.actor_image_dockerfile(base, ("mkdir -p /workspace", "apt-get update"))
+        lines = recipe.splitlines()
+        assert lines[0] == f"FROM {base}"
+        assert lines[1] == f"LABEL {lane.ACTOR_IMAGE_BASE_LABEL}={base.rsplit('@', 1)[-1]}"
+        assert lines[2:] == ["RUN mkdir -p /workspace", "RUN apt-get update"]
+
+    @staticmethod
+    def _archive_files(dockerfile: str) -> dict:
+        encoded = base64.b64encode(dockerfile.encode()).decode()
+        return {"files": {environment_fidelity.ENVIRONMENT_DOCKERFILE: encoded}}
+
+    def test_cohort_actor_environment_returns_the_shared_lowering(self):
+        dockerfile = "FROM ubuntu:24.04\nRUN mkdir -p /workspace\nRUN apt-get update\n"
+        rows = {f"task_{index}": self._archive_files(dockerfile) for index in range(3)}
+        environment = lane.cohort_actor_environment(rows)
+        assert environment.docker_image == environment_fidelity.PINNED_BASES["ubuntu:24.04"]
+        assert environment.setup_commands == ("(cd / && mkdir -p /workspace)", "(cd / && apt-get update)")
+
+    def test_cohort_actor_environment_refuses_mixed_lowerings(self):
+        rows = {
+            "a": self._archive_files("FROM ubuntu:24.04\nRUN apt-get update\n"),
+            "b": self._archive_files("FROM debian:12-slim\nRUN apt-get update\n"),
+        }
+        with pytest.raises(ValueError, match="distinct actor environments"):
+            lane.cohort_actor_environment(rows)
+
+    def test_conversion_binds_the_prepared_actor_image(self, monkeypatch, tmp_path):
+        base = "ubuntu:24.04@sha256:" + "a" * 64
+        prepared = "ghcr.io/marin-community/atlas-repair-actor@sha256:" + "b" * 64
+        calls = {}
+
+        def convert(row, context):
+            calls.setdefault("bases", []).append(row.data and None)
+            converted = spec(f"converted-{row.data['path']}", "keep me")
+            environment = converted.environment_requirements.model_copy(update={"docker_image": base})
+            return converted.model_copy(update={"environment_requirements": environment})
+
+        recipe = replace(TestCohortConversion._recipe(monkeypatch, tmp_path), convert=convert)
+        monkeypatch.setattr(
+            lane,
+            "configured_sources",
+            lambda: [type("S", (), {"info": type("I", (), {"id": TRACKED_SOURCE})(), "config": recipe})()],
+        )
+        rows = [{"path": "task_0", "task_binary": _fixture_binary("keep me")}]
+        monkeypatch.setattr(lane, "load_folder_rows", lambda repo, folders, revision=None: rows)
+        monkeypatch.setattr(lane, "tracked_instruction_hashes", lambda uris: {"tracked-0": "hash-0"})
+        monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: {"hash-0": {"shape": {}}})
+        monkeypatch.setattr(lane, "tracked_grader_environment", lambda uris: TestCohortConversion.FIXTURE_ENV)
+        output_root = str(tmp_path / "cohort")
+        manifest = lane.convert_cohort(
+            tracked_source_id=TRACKED_SOURCE,
+            report=TestCohortConversion._single_winner_report(),
+            folders=("fixture_v1",),
+            repo="fixture/validated-tasks",
+            candidate_revision="eafe9b38",
+            tracked_uris=(),
+            tracked_spec_uris=(),
+            output_root=output_root,
+            actor_image=prepared,
+        )
+        assert manifest["counts"] == {"converted": 1, "prepared_actor_image": 1}
+        shard = str(StoragePath(manifest["shards_root"]).ls()[0])
+        table = pq.read_table(shard)
+        bound = table.column("task_spec").to_pylist()[0]
+        task = json.loads(bound) if isinstance(bound, str) else bound
+        assert task["environment_requirements"]["docker_image"] == prepared

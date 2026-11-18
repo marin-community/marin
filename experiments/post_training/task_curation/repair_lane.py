@@ -34,6 +34,7 @@ from marin.inference.openai_chat import OpenAIChatClient
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.s3_compat import StoreType, configure_coreweave_s3, s3_credentials
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import require_secret
 from taskcompendium.identity import canonical_sha256, task_identity
 from taskcompendium.models import EnvironmentRequirements, TaskSpec
 from taskcompendium.pipeline.conversion import row_source, row_task_id
@@ -41,6 +42,7 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, RawRow, ReviewStatus
 from taskcompendium.pipeline.repair import ComparativeOutcome, RepairMatchClass
 
+from experiments.post_training.task_curation.environment_fidelity import archive_environment
 from experiments.post_training.task_curation.full_qc import LONG_REQUEST_TIMEOUT, ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
@@ -765,6 +767,7 @@ def convert_cohort(
     output_root: str,
     shard_size: int = 256,
     drop_wrapper_solve_sh: bool = False,
+    actor_image: str | None = None,
 ) -> dict[str, Any]:
     """Convert the report's ACCEPTED winners through the tracked source's own converter.
 
@@ -774,6 +777,12 @@ def convert_cohort(
     ``drop_wrapper_solve_sh`` normalizes FWeindel winners whose archives add the verified pure
     wrapper ``solution/solve.sh`` the tracked layout lacks — ``strip_wrapper_solve_sh`` drops
     it with a typed normalization count, and any non-wrapper variant fails loudly.
+
+    ``actor_image`` binds the cohort's prepared actor image (the tracked campaign's
+    actor-build/actor-push shape) as every converted task's actor ``docker_image`` — the
+    BUILT_IMAGE placement: the task contract's own setup commands stay in the spec and run as
+    no-ops on the prepared image, whose build (base digest plus those commands) is recorded on
+    the image itself.
     """
     recipes = {source.info.id: source.config for source in configured_sources()}
     recipe = recipes.get(tracked_source_id)
@@ -808,6 +817,7 @@ def convert_cohort(
             "drop_wrapper_solve_sh": drop_wrapper_solve_sh,
             "report": report,
             "grader_environment": context.grader_environment.model_dump(mode="json"),
+            "actor_image": actor_image,
         }
     )[:16]
     root = StoragePath(output_root) / f"conversion-{identity}"
@@ -850,6 +860,16 @@ def convert_cohort(
         row = RawRow(row_task_id(recipe_source, source), source, decoded)
         converted = recipe_source.convert(row, context)
         task = converted.task if isinstance(converted, NormalizedTask) else converted
+        image_based = not isinstance(task, ImportRejection) and task.environment_requirements.docker_image is not None
+        if actor_image is not None and image_based:
+            task = task.model_copy(
+                update={
+                    "environment_requirements": task.environment_requirements.model_copy(
+                        update={"docker_image": actor_image}
+                    )
+                }
+            )
+            counts["prepared_actor_image"] += 1
         entry = {
             "candidate_task_id": candidate_id,
             "tracked_task_id": winner["tracked_task_id"],
@@ -1028,6 +1048,96 @@ def export_coreweave_s3_credentials() -> None:
     os.environ.setdefault("AWS_SECRET_ACCESS_KEY", secret)
 
 
+ACTOR_IMAGE_BASE_LABEL = "org.opencontainers.image.base.digest"
+"""The OCI annotation under which the prepared actor image records its base digest."""
+
+ACTOR_IMAGE_KANIKO_PATHS = (Path("/kaniko/executor"), Path("/usr/local/bin/executor"))
+"""Where the kaniko executor lives in the task image; the tracked actor builds used it."""
+
+
+def actor_image_dockerfile(base_ref: str, setup_commands: tuple[str, ...]) -> str:
+    """The prepared actor image's recipe: the pinned base plus the task's own setup commands.
+
+    The base digest rides on the image as the standard OCI base-digest annotation, so the
+    published reference plus the spec's setup commands fully describe the environment and
+    anyone can rebuild it.
+    """
+    base_digest = base_ref.rsplit("@", 1)[-1]
+    lines = [f"FROM {base_ref}", f"LABEL {ACTOR_IMAGE_BASE_LABEL}={base_digest}"]
+    lines.extend(f"RUN {command}" for command in setup_commands)
+    return "\n".join(lines) + "\n"
+
+
+def cohort_actor_environment(rows: Mapping[str, Mapping[str, Any]]) -> EnvironmentRequirements:
+    """The cohort's shared lowered actor environment; mixed environments fail loudly.
+
+    The prepared actor image bakes the task contract's own setup commands with full
+    capabilities — a zero-capability sandbox cannot unpack packages (dpkg chowns require
+    CAP_CHOWN) — so every converted task must lower onto the same environment.
+    """
+    environments: dict[str, EnvironmentRequirements] = {}
+    for row in rows.values():
+        environment = archive_environment(row["files"])
+        fingerprint = canonical_sha256(environment.model_dump(mode="json"))
+        environments.setdefault(fingerprint, environment)
+    if not environments:
+        raise ValueError("The cohort has no winner rows to lower")
+    if len(environments) > 1:
+        raise ValueError(f"The cohort lowers onto {len(environments)} distinct actor environments")
+    return next(iter(environments.values()))
+
+
+def build_and_push_actor_image(
+    environment: EnvironmentRequirements, repository: str, tag: str, authfile: Path | None = None
+) -> str:
+    """Build the shared actor image with full capabilities and push it digest-pinned.
+
+    kaniko bakes the task contract's own setup commands (the Dockerfile from
+    :func:`actor_image_dockerfile`) and skopeo pushes the tar; the returned reference pins
+    the pushed digest. ``authfile`` authenticates the internal registry push.
+    """
+    base_ref = environment.docker_image
+    if base_ref is None:
+        raise ValueError("The actor environment declares no base image to bake")
+    executor = next((path for path in ACTOR_IMAGE_KANIKO_PATHS if path.exists()), None) or shutil.which("kaniko")
+    if executor is None:
+        raise RuntimeError("The kaniko executor is unavailable; the actor image cannot be built")
+    with tempfile.TemporaryDirectory() as scratch:
+        directory = Path(scratch)
+        (directory / "Dockerfile").write_text(actor_image_dockerfile(base_ref, environment.setup_commands))
+        tar = directory / "actor.tar"
+        subprocess.run(
+            [
+                str(executor),
+                f"--dockerfile={directory / 'Dockerfile'}",
+                f"--context=dir://{directory}",
+                f"--destination={repository}:{tag}",
+                "--no-push",
+                f"--tar-path={tar}",
+                "--compressed-caching=false",
+                "--use-new-run",
+                "--force",
+            ],
+            check=True,
+        )
+        push = ["skopeo", "copy", "--retry-times", "3", f"docker-archive:{tar}", f"docker://{repository}:{tag}"]
+        if authfile is not None:
+            push += ["--authfile", str(authfile)]
+        subprocess.run(push, check=True)
+    inspect = subprocess.run(
+        ["skopeo", "inspect", "--format", "{{.Digest}}", f"docker://{repository}:{tag}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    digest = inspect.stdout.strip()
+    if not digest.startswith("sha256:"):
+        raise ValueError(f"The pushed actor image has no digest: {digest!r}")
+    reference = f"{repository}@{digest}"
+    logger.info("Prepared actor image %s (base %s)", reference, base_ref)
+    return reference
+
+
 def run_oracle_campaign(
     *,
     tracked_source_id: str,
@@ -1045,6 +1155,9 @@ def run_oracle_campaign(
     concurrency: int = 16,
     drop_wrapper_solve_sh: bool = False,
     policy: Any,
+    actor_repository: str | None = None,
+    actor_image_tag: str = "v1",
+    actor_registry_secret: str | None = None,
 ) -> dict[str, Any]:
     """The production oracle campaign in one in-process workflow: cohort -> Harbor export ->
     calibration and full-population oracle trials -> collect with the standing policy -> receipt.
@@ -1053,7 +1166,38 @@ def run_oracle_campaign(
     machine-local task paths by design, exactly as the tracked sources' own campaigns ran), so
     the export stays in ``work_root`` for the whole job. Trial results and the receipt go to
     the receipt URI's prefix.
+
+    With ``actor_repository``, the cohort's shared lowered actor environment is baked into a
+    prepared image once (full-capability build, digest-pinned push) and bound as the converted
+    tasks' actor image — the tracked campaign's actor-build/actor-push shape — because a
+    zero-capability sandbox cannot unpack packages.
     """
+    actor_image = None
+    if actor_repository is not None:
+        recipes = {source.info.id: source.config for source in configured_sources()}
+        recipe = recipes.get(tracked_source_id)
+        if recipe is None:
+            raise ValueError(f"No configured source recipe for {tracked_source_id}")
+        context = cohort_conversion_context(recipe, tracked_spec_uris)
+        recipe_source = source_recipe(recipe, {}, context.grader_environment)
+        winners = accepted_winners(report)
+        paths = set(winner_paths(winners))
+        decoded_rows = {}
+        for row in load_folder_rows(repo, folders, revision=candidate_revision):
+            if row.get("path") in paths:
+                decoded_rows[row["path"]] = recipe_source.source.decode(row, context)
+        environment_requirements = cohort_actor_environment(decoded_rows)
+        authfile = None
+        if actor_registry_secret is not None:
+            authfile = work_root / "actor-registry-auth.json"
+            authfile.write_text(require_secret(actor_registry_secret))
+            authfile.chmod(0o600)
+        actor_image = build_and_push_actor_image(
+            environment_requirements,
+            actor_repository,
+            actor_image_tag,
+            authfile=authfile,
+        )
     manifest = convert_cohort(
         tracked_source_id=tracked_source_id,
         report=report,
@@ -1064,6 +1208,7 @@ def run_oracle_campaign(
         tracked_spec_uris=tracked_spec_uris,
         output_root=str(work_root / "cohort"),
         drop_wrapper_solve_sh=drop_wrapper_solve_sh,
+        actor_image=actor_image,
     )
     recipes = {source.info.id: source.config for source in configured_sources()}
     recipe = recipes.get(tracked_source_id)
@@ -1229,6 +1374,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--campaign-environment", default="local")
     parser.add_argument("--campaign-environment-kwargs", default="{}")
+    parser.add_argument(
+        "--actor-image-repository",
+        help="Build and bind the cohort's shared actor image from this internal repository",
+    )
+    parser.add_argument("--actor-image-tag", default="v1")
+    parser.add_argument(
+        "--actor-registry-secret",
+        help="Named credential for the actor image push (written as the registry authfile)",
+    )
     parser.add_argument("--campaign-concurrency", type=int, default=16)
     parser.add_argument(
         "--prepare-output-root",
@@ -1291,6 +1445,9 @@ def main() -> None:
             concurrency=args.campaign_concurrency,
             drop_wrapper_solve_sh=args.drop_wrapper_solve_sh,
             policy=policy,
+            actor_repository=args.actor_image_repository,
+            actor_image_tag=args.actor_image_tag,
+            actor_registry_secret=args.actor_registry_secret,
         )
         logger.info("RESULT %s", json.dumps(summary, sort_keys=True))
         return
