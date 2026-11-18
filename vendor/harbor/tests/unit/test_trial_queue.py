@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -6,7 +7,12 @@ from uuid import uuid4
 import pytest
 from harbor.models.job.config import RetryConfig
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
-from harbor.models.trial.result import AgentInfo, TrialResult
+from harbor.models.trial.result import (
+    AgentInfo,
+    ExceptionInfo,
+    TrialCompletion,
+    TrialResult,
+)
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor.trial.queue import TrialQueue
 
@@ -213,6 +219,44 @@ class TestTrialQueue:
         assert queue._should_retry_exception("TimeoutError")
         assert queue._should_retry_exception("ValueError")
         assert not queue._should_retry_exception("RuntimeError")
+
+    @pytest.mark.unit
+    async def test_unconfirmed_teardown_retries_outside_include_list(
+        self, trial_config, trial_result
+    ):
+        """An attempt the archive cannot finalize is retried even when its
+        exception is not configured as retryable."""
+        queue = TrialQueue(
+            n_concurrent=1,
+            retry_config=RetryConfig(
+                max_retries=3, include_exceptions={"APIConnectionError"}, min_wait_sec=0
+            ),
+        )
+        cancellation = ExceptionInfo(
+            exception_type="PhaseCancellationError",
+            exception_message="Trial phase failed while stopping its commands",
+            exception_traceback="",
+            occurred_at=datetime.now(),
+        )
+        unconfirmed = trial_result.model_copy(
+            update={"exception_info": cancellation, "completion": None}
+        )
+        timed_out = trial_result.model_copy(
+            update={
+                "exception_info": cancellation.model_copy(
+                    update={"exception_type": "AgentTimeoutError"}
+                ),
+                "completion": TrialCompletion(trajectory_present=True),
+            }
+        )
+
+        with patch.object(
+            queue, "_run_admitted_attempt", side_effect=[unconfirmed, timed_out]
+        ) as run_attempt:
+            result = await queue.submit(trial_config)
+
+        assert run_attempt.call_count == 2
+        assert result.exception_info.exception_type == "AgentTimeoutError"
 
     @pytest.mark.unit
     def test_calculate_backoff_delay_sec(self, queue):

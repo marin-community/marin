@@ -13,6 +13,9 @@ retry:
     - LLMRequestTimeoutError
     - SandboxBuildFailedError
     - TrialTimeoutError
+    - DaytonaConnectionError
+    - TmuxBatchProtocolError
+    - TmuxSessionEndedError
   wait_multiplier: 2.0
   min_wait_sec: 1.0
   max_wait_sec: 60.0
