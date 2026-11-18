@@ -199,3 +199,31 @@ def test_streaming_restore_deletes_each_cast_source_before_loading_next(tmp_path
     if prior_cast_source is not None:
         assert prior_cast_source.is_deleted()
     assert seen == len(read_manifest(str(path)).arrays)
+
+
+def test_moment_cast_audit_detects_nonzero_to_zero(cpu_mesh, caplog):
+    source = jnp.asarray([1.25, -0.75, 0.0], dtype=jnp.float32)
+    good = source.astype(jnp.bfloat16)
+    with caplog.at_level("INFO"):
+        carried_restore._audit_moment_cast("opt_state/adam/nu/weight", source, good)
+    assert "nonzero_to_zero=0" in caplog.text
+    assert "scope=global_sharded_tensor" in caplog.text
+    wrong = good.at[1].set(0)
+    with pytest.raises(ValueError, match="nonzero FP32 moment became BF16 zero"):
+        carried_restore._audit_moment_cast("opt_state/adam/nu/weight", source, wrong)
+
+
+def test_global_moment_audit_with_sharded_and_replicated_cpu_arrays(caplog):
+    if len(jax.devices()) < 2:
+        pytest.skip("requires two CPU devices")
+    mesh = jax.sharding.Mesh(np.asarray(jax.devices()[:2]), ("data",), axis_types=(jax.sharding.AxisType.Explicit,))
+    vals = np.array([1.1, 2.2, 0.0, -4.4], dtype=np.float32)
+    for spec in (jax.sharding.PartitionSpec("data"), jax.sharding.PartitionSpec()):
+        source = jax.device_put(vals, jax.sharding.NamedSharding(mesh, spec))
+        converted = source.astype(jnp.bfloat16)
+        stats = jax.device_get(carried_restore._device_moment_stats(source, converted))
+        assert int(np.asarray(stats[2]).sum()) == 3
+        assert int(np.asarray(stats[3]).sum()) == 0
+        with caplog.at_level("INFO"):
+            carried_restore._audit_moment_cast("opt_state/adam/nu/weight", source, converted)
+        assert "elements=4 nonzero=3 nonzero_to_zero=0" in caplog.text
