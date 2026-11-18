@@ -36,11 +36,13 @@ from experiments.post_training.task_curation.full_qc_review import RECORD_SCHEMA
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.review_carry_forward import (
     CarriedReview,
+    build_normalization_receipt,
     contract_identity,
     earlier_panel_evidence,
     merged_review_result,
     plan_review_carry_forward,
     population_identities,
+    sample_recovery_outcome,
 )
 from experiments.post_training.task_curation.review_quality import quality_result
 from experiments.post_training.task_curation.sample_qc_artifacts import SamplePanel, SampleQCReview
@@ -72,6 +74,8 @@ def write_population(
     specs = root / "specs"
     root.mkdir(parents=True, exist_ok=True)
     specs.mkdir(parents=True, exist_ok=True)
+    for stale in specs.glob("part-*.parquet"):
+        stale.unlink()
     items = list(tasks_by_id.items())
     task_specs_sha256 = hashlib.sha256()
     for shard in range((len(items) + 1) // 2):
@@ -218,6 +222,155 @@ def test_contract_identity_matches_task_identity():
     )
     document = spec.model_dump(mode="json")
     assert contract_identity(json.loads(json.dumps(document))) == task_identity(spec)
+
+
+def build_population_pair(tmp_path, *, with_null_field):
+    """An earlier pin without the optional field and a re-pin that serializes it."""
+    earlier_tasks = {task_id: {"id": task_id, "prompt": "x" * index} for index, task_id in enumerate(TASKS)}
+    current_tasks = {
+        task_id: {"id": task_id, "prompt": "x" * index, "execution_requirements": None}
+        for index, task_id in enumerate(TASKS)
+    }
+    if not with_null_field:
+        current_tasks = dict(earlier_tasks)
+    earlier_population = write_population(tmp_path, "earlier", earlier_tasks)
+    current_population = write_population(
+        tmp_path, "current", current_tasks, dataset_id=CURRENT_PIN, dataset_revision=CURRENT_REVISION
+    )
+    return earlier_population, current_population, earlier_tasks
+
+
+def test_normalization_carries_absent_null_repin(tmp_path):
+    earlier_population, current_population, earlier_tasks = build_population_pair(tmp_path, with_null_field=True)
+    reviews = {task_id: good_review(task_id) for task_id in earlier_tasks}
+    receipt = write_receipt(tmp_path, earlier_population, earlier_tasks, reviews)
+    evidence = earlier_panel_evidence(
+        receipt,
+        ContentEvidenceReference(uri=str(tmp_path / "receipt-document.json"), sha256="d" * 64),
+        normalized_fields=frozenset({"execution_requirements"}),
+    )
+    field = "execution_requirements"
+    normalization = build_normalization_receipt(
+        SOURCE_ID, earlier_population.path, current_population.path, field, str(tmp_path / "evidence.parquet")
+    )
+    plan = plan_review_carry_forward(
+        SOURCE_ID,
+        evidence,
+        earlier_population,
+        current_population,
+        population_identities(earlier_population, normalized_fields={field}),
+        population_identities(current_population, normalized_fields={field}),
+        normalization=normalization,
+    )
+    assert plan.population.model_dump() == {"carried": 6, "changed": 0, "new": 0, "dropped": 0}
+    assert len(plan.carried_reviews) == 6
+    assert plan.replaced_members == 0
+    assert plan.needs_review == ()
+
+
+def test_normalization_refuses_explicit_non_null_value(tmp_path):
+    earlier_population, _, _ = build_population_pair(tmp_path, with_null_field=True)
+    current_documents = {"task-000": {"id": "task-000", "prompt": "x", "execution_requirements": {"cpus": 2}}}
+    current_population = write_population(
+        tmp_path, "current", current_documents, dataset_id=CURRENT_PIN, dataset_revision=CURRENT_REVISION
+    )
+    with pytest.raises(ValueError, match="non-null value"):
+        build_normalization_receipt(
+            SOURCE_ID,
+            earlier_population.path,
+            current_population.path,
+            "execution_requirements",
+            str(tmp_path / "e.parquet"),
+        )
+
+
+def test_normalization_refuses_other_differences(tmp_path):
+    earlier_population, _, earlier_tasks = build_population_pair(tmp_path, with_null_field=True)
+    current_tasks = {
+        task_id: {"id": task_id, "prompt": document["prompt"], "execution_requirements": None}
+        for task_id, document in earlier_tasks.items()
+    }
+    current_tasks["task-002"]["prompt"] = "changed"
+    current_population = write_population(
+        tmp_path, "current", current_tasks, dataset_id=CURRENT_PIN, dataset_revision=CURRENT_REVISION
+    )
+    with pytest.raises(ValueError, match="differ beyond"):
+        build_normalization_receipt(
+            SOURCE_ID,
+            earlier_population.path,
+            current_population.path,
+            "execution_requirements",
+            str(tmp_path / "e.parquet"),
+        )
+
+
+def test_plan_refuses_normalization_for_another_pair(tmp_path):
+    earlier_population, current_population, earlier_tasks = build_population_pair(tmp_path, with_null_field=True)
+    reviews = {task_id: good_review(task_id) for task_id in earlier_tasks}
+    receipt = write_receipt(tmp_path, earlier_population, earlier_tasks, reviews)
+    field = "execution_requirements"
+    evidence = earlier_panel_evidence(
+        receipt,
+        ContentEvidenceReference(uri=str(tmp_path / "receipt-document.json"), sha256="d" * 64),
+        normalized_fields=frozenset({field}),
+    )
+    normalization = build_normalization_receipt(
+        SOURCE_ID, earlier_population.path, current_population.path, field, str(tmp_path / "evidence.parquet")
+    )
+    other_current = write_population(
+        tmp_path, "other-current", dict(earlier_tasks), dataset_id=CURRENT_PIN, dataset_revision=CURRENT_REVISION
+    )
+    with pytest.raises(ValueError, match="another population pair"):
+        plan_review_carry_forward(
+            SOURCE_ID,
+            evidence,
+            earlier_population,
+            other_current,
+            population_identities(earlier_population, normalized_fields={field}),
+            population_identities(other_current, normalized_fields={field}),
+            normalization=normalization,
+        )
+
+
+def test_sample_recovery_outcome_rules():
+    carried = tuple(
+        CarriedReview(
+            task_identity_sha256=canonical_sha256({"task": index}),
+            original_task_id=f"prior-{index:03d}",
+            current_task_id=f"prior-{index:03d}",
+            review=good_review(f"prior-{index:03d}"),
+        )
+        for index in range(100)
+    )
+    panel = tuple(good_review(f"task-{index:03d}") for index in range(100))
+    outcome = sample_recovery_outcome(SOURCE_ID, 200, panel, carried, reviewer=REVIEWER)
+    assert outcome.level is OversightLevel.FULL and outcome.full is True
+    assert outcome.coverage_conclusive == 200
+    assert outcome.panel_result.reviewed == 100
+    # The Result comes from the panel alone; the carried rate stays separate.
+    partial_panel = tuple(
+        (
+            *(good_review(f"task-{index:03d}") for index in range(96)),
+            ReviewRecord(task_id="task-096", status=ReviewStatus.UNAVAILABLE, verdict=None, detail="judge down"),
+        )
+    )
+    outcome = sample_recovery_outcome(SOURCE_ID, 200, partial_panel, carried[:4], reviewer=REVIEWER)
+    assert outcome.level is OversightLevel.SAMPLE and outcome.full is False
+    assert outcome.panel_result.reviewed == 96
+    assert outcome.panel_result.unavailable_count == 1
+    assert outcome.carried_reviews == 4
+    assert outcome.coverage_conclusive == 100
+    assert outcome.reviewed_fraction == 0.5
+    # A carried review for a task the panel observed is redundant, not evidence.
+    redundant = CarriedReview(
+        task_identity_sha256="b" * 64,
+        original_task_id="task-000",
+        current_task_id="task-000",
+        review=good_review("task-000"),
+    )
+    outcome = sample_recovery_outcome(SOURCE_ID, 200, partial_panel, (*carried[:4], redundant), reviewer=REVIEWER)
+    assert outcome.carried_reviews == 4
+    assert outcome.coverage_conclusive == 100
 
 
 def test_drop_only_repin_carries_everything(tmp_path):

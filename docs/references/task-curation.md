@@ -189,9 +189,10 @@ until its current-pin admission receipt exists.
   same receipt. Any differing task refuses; without a receipt the digests must
   match exactly. The receipt never re-binds a measurement: the underlying
   census, lexical or panel evidence still describes the same pin it measured.
-- *Review carry-forward.* A re-pin no longer discards a source's QC reviews.
-  `experiments/post_training/task_curation/review_carry_forward.py` is the typed
-  mechanism; it standardizes the FULL campaign's earlier grandfathering. Each
+- *Review carry-forward.* A re-pin keeps a source's QC reviews.
+  `experiments/post_training/task_curation/review_carry_forward.py` is the
+  typed mechanism for it, shared with the FULL campaign's grandfathered
+  receipts. Each
   review is keyed on the task-contract identity
   (`taskcompendium.identity.task_identity`), never on the task ID or the
   population digest. A review from an earlier pin carries forward only when a
@@ -206,9 +207,30 @@ until its current-pin admission receipt exists.
   keep their unchanged members, redraw only the replaced ones with the fixed
   seed, and keep the slots of members whose observation was not conclusive.
   `merged_review_result` derives the oversight level from carried plus fresh
-  reviews: FULL when every retained task has a conclusive review, or when a
-  recorded waiver covers at most 1% of the population. Otherwise the level
-  stays SAMPLE. Run the plan as an in-region CPU job when a population is
+  reviews: FULL when every retained task has an observation and none are
+  unavailable, or when a recorded waiver covers at most 1% of the population.
+  Otherwise the level stays SAMPLE.
+- *Absent-versus-null normalization.* A converter upgrade can start
+  serializing a null-default field explicitly, which changes every task's
+  contract hash without changing its content.
+  `build_normalization_receipt` verifies that one such field is the only
+  difference between two population pins: the field must be a TaskSpec field
+  whose documented default is None, absent on one side and explicitly null on
+  the other, with byte-equal payloads once it is dropped. It writes a typed
+  `ContractNormalization` record with per-task evidence. An explicit non-null
+  value, or any other difference, refuses the record. `task_identity` itself
+  is never changed. Pass the record to `plan_review_carry_forward` with
+  identity maps built through `population_identities(normalized_fields=...)`:
+  the plan re-derives the record's verified digest from those maps, so they
+  cannot drift from the evidence.
+- *Recovered SAMPLE evidence.* `sample_recovery_outcome` joins carried prior
+  reviews onto one source's fixed panel under the augmented rules. The Result
+  stays computed from the fixed panel alone, so carried reviews cannot bias
+  its issue rate; the carried set's own rate is reported beside the coverage.
+  Carried reviews for tasks the panel observed are redundant and do not count.
+  The level promotes to FULL only when the merged observations cover every
+  retained task under the existing completeness and waiver rules.
+  Run the plan as an in-region CPU job when a population is
   large:
 
   ```bash

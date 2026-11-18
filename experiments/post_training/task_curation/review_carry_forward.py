@@ -14,8 +14,8 @@ moves. Its contract:
   merged Result counts low-confidence and unknown-quality observations as
   uncertain, per the shared Result rules.
 - Carried reviews keep the earlier receipt's recorded reviewer identity
-  verbatim. Relabeling them as another reviewer's output is refused (user
-  ruling 2026-11-15, recorded like the FULL campaign's ``GrandfatheredReview``).
+  verbatim. Relabeling them as another reviewer's output is refused, matching
+  the typed ``GrandfatheredReview`` marker's recorded decision evidence.
 - The delta plan reports carried, changed, new and dropped counts and the exact
   task IDs that need review. SAMPLE panels keep their unchanged members and
   redraw only the replaced ones with the fixed seed.
@@ -27,8 +27,10 @@ moves. Its contract:
 import argparse
 import json
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import (
     FULL_WAIVER_MAX_UNREVIEWED_FRACTION,
@@ -43,9 +45,11 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import TASK_IDENTITY_EXCLUDED_FIELDS, canonical_sha256
+from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import ReviewRecord, ReviewStatus
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
+from experiments.post_training.task_curation.content_identity import PopulationDigest
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.review_quality import quality_result
 from experiments.post_training.task_curation.sample_qc_artifacts import SAMPLE_SEED, SAMPLE_SIZE, SamplePanel
@@ -54,15 +58,27 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
 
 logger = logging.getLogger(__name__)
 
+NORMALIZATION_EVIDENCE_SCHEMA = pa.schema(
+    [
+        ("task_id", pa.string()),
+        ("original_sha256", pa.string()),
+        ("reissued_sha256", pa.string()),
+        ("normalized_sha256", pa.string()),
+    ]
+)
 
-def contract_identity(document: dict) -> str:
+
+def contract_identity(document: dict, *, normalized_fields: frozenset[str] = frozenset()) -> str:
     """Hash a stored TaskSpec document exactly like ``task_identity``.
 
     The spec shards store each task's ``model_dump(mode="json")`` document, so
     dropping the same provenance keys and hashing the canonical JSON gives the
-    task's contract identity without re-validating the model.
+    task's contract identity without re-validating the model. A verified
+    ``ContractNormalization`` adds its absent-versus-null field to the dropped
+    keys on both sides of the comparison.
     """
-    payload = {key: value for key, value in document.items() if key not in TASK_IDENTITY_EXCLUDED_FIELDS}
+    excluded = TASK_IDENTITY_EXCLUDED_FIELDS | normalized_fields
+    payload = {key: value for key, value in document.items() if key not in excluded}
     return canonical_sha256(payload)
 
 
@@ -71,28 +87,149 @@ WAIVER_BOUND_SCALE = round(1 / FULL_WAIVER_MAX_UNREVIEWED_FRACTION)
 ``unavailable * 100 > sample_count`` waiver test; 100 for the 1% bound."""
 
 
-def population_identities(population: SourceTextPopulation) -> dict[str, str]:
+def _population_documents(population: SourceTextPopulation) -> Iterator[dict]:
+    """Stream every retained task document in the population's stable shard order."""
+    for path in sorted(StoragePath(prefix_join(population.specs_output_dir, "*.parquet")).glob(), key=str):
+        with path.open("rb") as stream:
+            for batch in pq.ParquetFile(stream).iter_batches(batch_size=512, columns=["task_spec"]):
+                for encoded in batch.column(0).to_pylist():
+                    yield json.loads(encoded)
+
+
+def population_identities(
+    population: SourceTextPopulation, *, normalized_fields: frozenset[str] = frozenset()
+) -> dict[str, str]:
     """Map every retained task ID to its contract identity, streaming the spec shards.
 
     Unlike ``content_identity.population_task_digests`` (which hashes the exact
     stored bytes), this hashes each parsed contract minus its provenance fields,
     so identities match across re-serializations that keep the contract whole.
+    Pass a verified normalization's field to compare absent-versus-null
+    re-serializations as equal.
     """
     identities: dict[str, str] = {}
-    for path in sorted(StoragePath(prefix_join(population.specs_output_dir, "*.parquet")).glob(), key=str):
-        with path.open("rb") as stream:
-            for batch in pq.ParquetFile(stream).iter_batches(batch_size=512, columns=["task_spec"]):
-                for encoded in batch.column(0).to_pylist():
-                    document = json.loads(encoded)
-                    task_id = document["id"]
-                    if task_id in identities:
-                        raise ValueError(f"Duplicate task ID in {population.source_id}: {task_id}")
-                    identities[task_id] = contract_identity(document)
+    for document in _population_documents(population):
+        task_id = document["id"]
+        if task_id in identities:
+            raise ValueError(f"Duplicate task ID in {population.source_id}: {task_id}")
+        identities[task_id] = contract_identity(document, normalized_fields=normalized_fields)
     if len(identities) != population.task_count:
         raise ValueError(
             f"{population.source_id}: read {len(identities)} task identities for {population.task_count} declared tasks"
         )
     return identities
+
+
+class ContractNormalization(BaseModel):
+    """Typed absent-versus-explicit-null equivalence between two contract pins.
+
+    A TaskSpec field whose documented default is null-or-absent may be absent
+    in one serialization and explicitly null in the other. This record names
+    that field, binds the two population digests, and records the verified
+    evidence that every shared task differs in nothing else. The carry-forward
+    identity treats the pair as equal; ``task_identity`` itself is never
+    changed, and an explicit non-null value always refuses the record.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_id: SourceId
+    field: str
+    original: PopulationDigest
+    reissued: PopulationDigest
+    identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    """Digest of the shared tasks' normalized identity map the builder verified."""
+    evidence_url: str
+
+    def binds(self, source_id: str, original: PopulationDigest, reissued: PopulationDigest) -> bool:
+        """Whether this record binds exactly this source's population pair."""
+        if source_id != self.source_id:
+            return False
+        return (original.task_specs_sha256, reissued.task_specs_sha256) == (
+            self.original.task_specs_sha256,
+            self.reissued.task_specs_sha256,
+        )
+
+
+def build_normalization_receipt(
+    source_id: str,
+    original_artifact: str,
+    reissued_artifact: str,
+    field: str,
+    evidence_url: str,
+) -> ContractNormalization:
+    """Verify absent-versus-null is the only contract difference and record it.
+
+    Requires ``field`` to be a TaskSpec field whose documented default is None.
+    Every task shared by the two populations must differ in exactly that field:
+    absent on one side, explicitly null on the other, with byte-equal payloads
+    once the field is dropped. An explicit non-null value, or any other
+    difference, refuses the record. The evidence parquet records each shared
+    task's normalized identity; ``identity_sha256`` digests that map, so a plan
+    can recompute it from its own identity maps and bind them to this record.
+    """
+    spec_field = TaskSpec.model_fields.get(field)
+    if spec_field is None or spec_field.default is not None:
+        raise ValueError(f"Normalization requires a TaskSpec field whose documented default is None: {field}")
+    original = SourceTextPopulation.raw_load(original_artifact)
+    reissued = SourceTextPopulation.raw_load(reissued_artifact)
+    original_documents = {document["id"]: document for document in _population_documents(original)}
+    reissued_documents = {document["id"]: document for document in _population_documents(reissued)}
+    if len(original_documents) != original.task_count or len(reissued_documents) != reissued.task_count:
+        raise ValueError(f"Normalization populations do not match their declared counts: {source_id}")
+    shared = sorted(set(original_documents) & set(reissued_documents))
+    normalized_map: dict[str, str] = {}
+    evidence_rows = []
+    for task_id in shared:
+        earlier_document, current_document = original_documents[task_id], reissued_documents[task_id]
+        earlier_has = field in earlier_document
+        current_has = field in current_document
+        if earlier_has == current_has:
+            raise ValueError(
+                f"Normalization refused for {task_id}: {field} must be absent on one side and present on the other"
+            )
+        present = earlier_document if earlier_has else current_document
+        if present[field] is not None:
+            raise ValueError(f"Normalization refused for {task_id}: {field} is explicitly set to a non-null value")
+        if contract_identity(earlier_document, normalized_fields={field}) != contract_identity(
+            current_document, normalized_fields={field}
+        ):
+            raise ValueError(f"Normalization refused for {task_id}: the contracts differ beyond {field}")
+        normalized_identity = contract_identity(earlier_document, normalized_fields={field})
+        normalized_map[task_id] = normalized_identity
+        evidence_rows.append(
+            {
+                "task_id": task_id,
+                "original_sha256": contract_identity(earlier_document),
+                "reissued_sha256": contract_identity(current_document),
+                "normalized_sha256": normalized_identity,
+            }
+        )
+    if not shared:
+        raise ValueError(f"Normalization refused: the populations share no tasks: {source_id}")
+    table = pa.Table.from_pylist(evidence_rows, schema=NORMALIZATION_EVIDENCE_SCHEMA)
+    with StoragePath(evidence_url).open("wb", auto_mkdir=True) as stream:
+        pq.write_table(table, stream, compression="zstd")
+    logger.info(
+        "Normalization %s: %d shared tasks equal modulo %s across %s and %s",
+        source_id,
+        len(shared),
+        field,
+        original.task_specs_sha256[:12],
+        reissued.task_specs_sha256[:12],
+    )
+    return ContractNormalization(
+        source_id=source_id,
+        field=field,
+        original=PopulationDigest(
+            artifact=original_artifact, task_specs_sha256=original.task_specs_sha256, task_count=original.task_count
+        ),
+        reissued=PopulationDigest(
+            artifact=reissued_artifact, task_specs_sha256=reissued.task_specs_sha256, task_count=reissued.task_count
+        ),
+        identity_sha256=canonical_sha256(normalized_map),
+        evidence_url=evidence_url,
+    )
 
 
 class CarriedReview(BaseModel):
@@ -123,14 +260,18 @@ class EarlierPanelEvidence(BaseModel):
 
 
 def earlier_panel_evidence(
-    receipt: SampleQCReceipt, receipt_reference: ContentEvidenceReference
+    receipt: SampleQCReceipt,
+    receipt_reference: ContentEvidenceReference,
+    *,
+    normalized_fields: frozenset[str] = frozenset(),
 ) -> EarlierPanelEvidence:
     """Extract an earlier receipt's conclusive reviews, keyed by task-contract identity.
 
     Verifies the frozen panel and observation bytes, then keys every REVIEWED
     row by the contract identity computed from the panel's own task bytes.
     Unavailable or invalid rows never carry; their members stay on the panel as
-    tasks that need review.
+    tasks that need review. Pass a verified normalization's field to key the
+    identities modulo its absent-versus-null difference.
     """
     panel = receipt.review.panel
     panel_bytes = StoragePath(panel.panel_path)
@@ -145,7 +286,9 @@ def earlier_panel_evidence(
     for row in rows:
         if row["task_id"] != json.loads(row["task_spec"])["id"]:
             raise ValueError(f"Sample panel IDs differ from their task contracts: {receipt.source_id}")
-        member_identities[row["task_id"]] = contract_identity(json.loads(row["task_spec"]))
+        member_identities[row["task_id"]] = contract_identity(
+            json.loads(row["task_spec"]), normalized_fields=normalized_fields
+        )
     if len(member_identities) != panel.sample_size:
         raise ValueError(f"Sample panel does not cover its selected members exactly once: {receipt.source_id}")
     with records.open("rb") as stream:
@@ -179,7 +322,7 @@ def earlier_panel_evidence(
 
 
 class PopulationDelta(BaseModel):
-    """Retained-population counts across the re-pin, by content identity."""
+    """Retained-population counts across the re-pin, by contract identity."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -227,6 +370,7 @@ def _verify_carry_forward_inputs(
     earlier_identities: dict[str, str],
     current_identities: dict[str, str],
     reviewer: dict | None,
+    normalization: ContractNormalization | None,
 ) -> None:
     """Refuse evidence that does not describe exactly these two populations."""
     if earlier.source_id != source_id or current_population.source_id != source_id:
@@ -257,6 +401,28 @@ def _verify_carry_forward_inputs(
             "Carried reviews keep their original reviewer identity; refusing to relabel "
             f"{canonical_sha256(earlier.reviewer)[:12]} as {canonical_sha256(reviewer)[:12]}: {source_id}"
         )
+    if normalization is not None:
+        if not normalization.binds(
+            source_id,
+            PopulationDigest(
+                artifact=earlier_population.path,
+                task_specs_sha256=earlier_population.task_specs_sha256,
+                task_count=earlier_population.task_count,
+            ),
+            PopulationDigest(
+                artifact=current_population.path,
+                task_specs_sha256=current_population.task_specs_sha256,
+                task_count=current_population.task_count,
+            ),
+        ):
+            raise ValueError(f"Normalization binds another population pair: {source_id}")
+        shared = sorted(set(earlier_identities) & set(current_identities))
+        verified = canonical_sha256({task_id: earlier_identities[task_id] for task_id in shared})
+        if verified != normalization.identity_sha256:
+            raise ValueError(
+                f"Identity maps are not the normalized ones the receipt verified: {source_id}; build them with "
+                f"population_identities(normalized_fields={{{normalization.field!r}}})"
+            )
 
 
 @dataclass(frozen=True)
@@ -340,6 +506,7 @@ def plan_review_carry_forward(
     reviewer: dict | None = None,
     seed: int = SAMPLE_SEED,
     max_panel_size: int = SAMPLE_SIZE,
+    normalization: ContractNormalization | None = None,
 ) -> ReviewCarryForwardPlan:
     """Compute the typed carry-forward delta plan for a re-pinned population.
 
@@ -347,12 +514,21 @@ def plan_review_carry_forward(
     identity for the earlier and current populations; build them with
     ``population_identities``. ``reviewer``, when supplied, must be the earlier
     receipt's recorded reviewer identity: carried reviews are never relabeled.
-    Kept panel members are the unchanged ones; replaced slots are redrawn with
-    the fixed seed, and members without a conclusive review keep their slot but
-    need a fresh review.
+    ``normalization``, when supplied, must be the verified absent-versus-null
+    record for this population pair, and the identity maps must be built with
+    its field excluded. Kept panel members are the unchanged ones; replaced
+    slots are redrawn with the fixed seed, and members without a conclusive
+    review keep their slot but need a fresh review.
     """
     _verify_carry_forward_inputs(
-        source_id, earlier, earlier_population, current_population, earlier_identities, current_identities, reviewer
+        source_id,
+        earlier,
+        earlier_population,
+        current_population,
+        earlier_identities,
+        current_identities,
+        reviewer,
+        normalization,
     )
     classification = _classify_population(earlier, earlier_identities, current_identities)
     replaced, replacements = _replacement_draw(
@@ -424,10 +600,8 @@ def merged_review_result(
     FULL requires complete coverage with no unavailable observations — the
     ``covers_whole_population`` rule — or an explicitly recorded waiver at or
     below the 1% unreviewed bound. Uncertain observations still count as
-    covered. Anything less stays SAMPLE. The finality rule mirrors
-    ``FullContentResultBinding``'s validator, and the tests pin the parity.
-    Carried reviews keep their original reviewer identity; the caller records
-    that marker beside the merged result.
+    covered. Anything less stays SAMPLE. Carried reviews keep their original
+    reviewer identity; the caller records that marker beside the merged result.
     """
     if retained <= 0:
         raise ValueError("Merged oversight requires a nonempty retained population")
@@ -471,6 +645,70 @@ def merged_review_result(
     )
 
 
+class SampleRecovery(BaseModel):
+    """One source's recovered evidence under the augmented SAMPLE oversight rules.
+
+    The Result comes from the fixed random panel alone, so carried reviews
+    cannot bias its issue rate. The carried set's own rate is reported beside
+    the coverage, and the level promotes to FULL only under the merged
+    completeness and waiver rules.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_id: SourceId
+    retained: int = Field(gt=0)
+    panel_conclusive: int = Field(ge=0)
+    carried_reviews: int = Field(ge=0)
+    carried_issue_count: int = Field(ge=0)
+    coverage_conclusive: int = Field(ge=0)
+    reviewed_fraction: float = Field(ge=0, le=1)
+    level: OversightLevel
+    full: bool
+    panel_result: SourceQualityResult
+    reviewer: dict
+    """The carried reviews' original reviewer identity, recorded verbatim."""
+
+
+def sample_recovery_outcome(
+    source_id: str,
+    retained: int,
+    panel_reviews: tuple[ReviewRecord, ...],
+    carried: tuple[CarriedReview, ...],
+    *,
+    reviewer: dict,
+) -> SampleRecovery:
+    """Recover one source's SAMPLE evidence with carried prior reviews joined in.
+
+    The Result stays computed from the fixed panel alone. The carried set's
+    conclusive reviews join the reviewed set for coverage and for the merged
+    FULL determination, never into the panel's issue rate. Carried observations
+    for tasks the panel already observed are ignored in favor of the panel's
+    own fixed-design record.
+    """
+    if retained <= 0:
+        raise ValueError("Recovery requires a nonempty retained population")
+    panel_ids = {record.task_id for record in panel_reviews}
+    carried = tuple(entry for entry in carried if entry.current_task_id not in panel_ids)
+    panel_result = quality_result(panel_reviews)
+    carried_result = quality_result([entry.review for entry in carried])
+    coverage_conclusive = panel_result.reviewed + carried_result.reviewed
+    merged = merged_review_result(retained, carried, panel_reviews)
+    return SampleRecovery(
+        source_id=source_id,
+        retained=retained,
+        panel_conclusive=panel_result.reviewed,
+        carried_reviews=carried_result.reviewed,
+        carried_issue_count=carried_result.issue_count,
+        coverage_conclusive=coverage_conclusive,
+        reviewed_fraction=coverage_conclusive / retained,
+        level=merged.level,
+        full=merged.level is OversightLevel.FULL,
+        panel_result=panel_result,
+        reviewer=reviewer,
+    )
+
+
 def load_earlier_receipt(document_path: str, source_id: str) -> SampleQCReceipt:
     """Load and verify an earlier receipt from its registry or artifact document."""
     reference = StoragePath(document_path)
@@ -491,6 +729,10 @@ def main() -> None:
     parser.add_argument("--earlier-population", required=True, help="Earlier SourceTextPopulation artifact directory")
     parser.add_argument("--current-population", required=True, help="Current SourceTextPopulation artifact directory")
     parser.add_argument("--output", required=True, help="Delta plan report output path")
+    parser.add_argument(
+        "--normalization-field",
+        help="Build and apply the typed absent-versus-null normalization for this TaskSpec field",
+    )
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     configure_coreweave_s3()
@@ -498,12 +740,24 @@ def main() -> None:
     if not args.run:
         return
     reference = ContentEvidenceReference(uri=args.earlier_receipt, sha256=file_sha256(StoragePath(args.earlier_receipt)))
-    earlier = earlier_panel_evidence(receipt, reference)
     earlier_population = SourceTextPopulation.raw_load(args.earlier_population)
     current_population = SourceTextPopulation.raw_load(args.current_population)
-    earlier_identities = population_identities(earlier_population)
+    normalization = None
+    normalized_fields: frozenset[str] = frozenset()
+    if args.normalization_field is not None:
+        evidence_url = str(StoragePath(args.output).parent / "normalization-evidence.parquet")
+        normalization = build_normalization_receipt(
+            args.source_id,
+            args.earlier_population,
+            args.current_population,
+            args.normalization_field,
+            evidence_url,
+        )
+        normalized_fields = frozenset({normalization.field})
+    earlier = earlier_panel_evidence(receipt, reference, normalized_fields=normalized_fields)
+    earlier_identities = population_identities(earlier_population, normalized_fields=normalized_fields)
     logger.info("Earlier population: %d task identities", len(earlier_identities))
-    current_identities = population_identities(current_population)
+    current_identities = population_identities(current_population, normalized_fields=normalized_fields)
     logger.info("Current population: %d task identities", len(current_identities))
     plan = plan_review_carry_forward(
         args.source_id,
@@ -512,6 +766,7 @@ def main() -> None:
         current_population,
         earlier_identities,
         current_identities,
+        normalization=normalization,
     )
     report = {
         "source_id": plan.source_id,
@@ -526,6 +781,7 @@ def main() -> None:
             "task_count": plan.current_task_count,
         },
         "evidence": plan.evidence.model_dump(mode="json"),
+        "normalization": normalization.model_dump(mode="json") if normalization is not None else None,
         "reviewer_sha256": canonical_sha256(plan.reviewer),
         "population": plan.population.model_dump(mode="json"),
         "carried_reviews": len(plan.carried_reviews),
@@ -548,6 +804,7 @@ def main() -> None:
                 "carried_reviews": len(plan.carried_reviews),
                 "replaced_members": plan.replaced_members,
                 "needs_review": len(plan.needs_review),
+                "normalized_field": normalization.field if normalization is not None else None,
                 "output": args.output,
             }
         )
