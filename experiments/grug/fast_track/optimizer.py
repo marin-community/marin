@@ -372,6 +372,58 @@ def scale_with_grug_muonh_radial(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+class MuonCState(NamedTuple):
+    muon: optax.OptState
+    init_radius: optax.Params
+
+
+def scale_with_grug_muonc(
+    momentum: float,
+    nesterov: bool,
+    steps: int,
+    muon_eps: float,
+    learning_rate,
+    coefficient_type: CoefficientType,
+    pre_norm: str,
+    decay_mult: float,
+) -> optax.GradientTransformation:
+    """MuonC: Muon with AdamC-corrected weight decay (arXiv 2506.02285) in place of the MuonH hyperball step.
+
+    Per MuonH sphere, ``W <- W - lr r0 O / |O| - decay_mult lr^2 W`` with no projection back to the sphere, where ``O``
+    is the Newton-Schulz output and ``r0`` the sphere's norm at init. This is AdamC's ``(lr^2 / lr_max) lambda`` decay
+    with ``lambda = decay_mult lr_max``; ``decay_mult = 0.5`` makes ``r0`` the steady-state norm for independent steps.
+    """
+    muon_transform = _grug_scale_with_muon(
+        momentum=momentum,
+        nesterov=nesterov,
+        steps=steps,
+        muon_eps=muon_eps,
+        coefficient_type=coefficient_type,
+        pre_norm=pre_norm,
+    )
+
+    def init_fn(params):
+        return MuonCState(muon=muon_transform.init(params), init_radius=jax.tree.map(_slice_norm, params))
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_with_grug_muonc requires params")
+        directions, muon_state = muon_transform.update(updates, state.muon, params)
+        directions = _match_named_sharding_to_params(directions, params)
+
+        def step(p, o, r0):
+            o = o.astype(jnp.float32)
+            unit = o / jnp.maximum(_slice_norm(o), 1e-10)
+            return (-learning_rate * r0 * unit - decay_mult * jnp.square(learning_rate) * p.astype(jnp.float32)).astype(
+                p.dtype
+            )
+
+        new_updates = jax.tree.map(step, params, directions, state.init_radius)
+        return new_updates, MuonCState(muon_state, state.init_radius)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def _multi_transform_when_used(
     transforms: dict[str, optax.GradientTransformation],
     optional: dict[str, optax.GradientTransformation],
@@ -472,6 +524,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Softcap radial MuonH: each MuonH sphere learns a bounded log-radius ``s``, ``|s| <= muonh_radial_softcap``
     (``scale_with_grug_muonh_radial``), at the group's MuonH LR, in the ``muonh_radial`` and ``kda_beta_radial``
     groups. The ``_RADIUS_FROZEN`` matrices keep plain MuonH. 0: off."""
+    muonc_decay_mult: float = 0.0
+    """MuonC (``scale_with_grug_muonc``) in place of MuonH for the ``muonh`` group: Muon steps of norm ``lr_t r0`` plus
+    AdamC decay ``(lr_t^2 / lr_max) lambda`` with ``lambda = muonc_decay_mult * lr_max``, no sphere projection. The
+    ``kda_beta``, ``adamh`` and Adam groups are unchanged. 0: off."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -513,6 +569,21 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     learning_rate=lr,
                     coefficient_type=self.coefficient_type,
                     pre_norm=self.muon_pre_norm,
+                ),
+                _match_named_update_sharding(),
+            )
+
+        def muonc_at(lr):
+            return optax.chain(
+                scale_with_grug_muonc(
+                    momentum=self.momentum,
+                    nesterov=self.nesterov,
+                    steps=self.backend_steps,
+                    muon_eps=self.muon_epsilon,
+                    learning_rate=lr,
+                    coefficient_type=self.coefficient_type,
+                    pre_norm=self.muon_pre_norm,
+                    decay_mult=self.muonc_decay_mult,
                 ),
                 _match_named_update_sharding(),
             )
@@ -567,7 +638,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
         def optimizer(learning_rate, adam_lr):
             transforms = {
-                "muonh": muonh_at(learning_rate),
+                "muonh": muonc_at(learning_rate) if self.muonc_decay_mult else muonh_at(learning_rate),
                 "adamh": optax.chain(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate)),
                 "adam": adam_at(adam_lr, decay=True),
                 "attn_res_query": adam_at(adam_lr * ATTN_RES_QUERY_LR_SCALE),
@@ -604,6 +675,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError("embed_lr_mult needs a positive multiplier and embed_optimizer adam_group")
         if self.muonh_radial_softcap < 0:
             raise ValueError("muonh_radial_softcap must be non-negative")
+        if self.muonc_decay_mult < 0 or (self.muonc_decay_mult and self.muonh_radial_softcap):
+            raise ValueError("muonc_decay_mult must be non-negative and excludes muonh_radial_softcap")
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
