@@ -43,6 +43,7 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
+from marin.rl.curriculum import RlCurriculum
 from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
     RESOLVED_LAUNCH_FILENAME,
@@ -640,7 +641,13 @@ type SkyRLDataSource = ArtifactDataSource | TaskTroveDataSource
 
 @dataclass(frozen=True)
 class SkyRLSpec:
-    """Backend-neutral, identity-bearing SkyRL experiment definition."""
+    """Backend-neutral, identity-bearing SkyRL experiment definition.
+
+    ``curriculum`` records the task mix the run trains on: the sampling projection renders into the
+    recipe's ``data.sampling`` subtree at construction (disagreement with declared values is an
+    error), the launch document carries the full curriculum, and the run's artifact record names it.
+    Curricula sample labeled prompt pools, so a curriculum requires ``data.kind=parquet``.
+    """
 
     name: str
     version: str
@@ -654,8 +661,11 @@ class SkyRLSpec:
     evaluation_data: tuple[tuple[str, tuple[SkyRLDataSource, ...]], ...] = ()
     starting_checkpoint: ArtifactStep[Artifact] | None = None
     model_name: str | None = None
+    curriculum: RlCurriculum | None = None
 
     def __post_init__(self) -> None:
+        if self.curriculum is not None:
+            object.__setattr__(self, "config_yaml", _apply_curriculum(self.config_yaml, self.curriculum))
         _validate_skyrl_recipe(self.config_yaml, self.topology)
         if not self.evaluation_data:
             return
@@ -855,6 +865,7 @@ class SkyRLRunConfig:
     output: SkyRLOutputPaths
     export_hf: bool
     draft_checkpoint_root: str | None
+    curriculum_identity: str | None = None
 
 
 class SkyRLRun(Artifact):
@@ -870,6 +881,8 @@ class SkyRLRun(Artifact):
     iris_job_id: str
     run_id: str | None = None
     attempt_id: str | None = None
+    curriculum: str | None = None
+    """The sampled curriculum's ``name@version:fingerprint`` identity; ``None`` without a curriculum."""
 
 
 def skyrl_cpu_command(*arguments: str) -> list[str]:
@@ -981,6 +994,7 @@ def run_skyrl(
             iris_job_id=response.iris_job_id,
             run_id=config.run_id,
             attempt_id=config.attempt_id,
+            curriculum=config.curriculum_identity,
         )
     except Exception:
         _record_skyrl_run(config, "failed", response)
@@ -1016,6 +1030,55 @@ def _launch_data_source(source: ResolvedDataSource) -> dict:
     if isinstance(source, ResolvedTaskTroveDataSource):
         value["selection"]["tag_match"] = source.selection.tag_match.value
     return value
+
+
+_CURRICULUM_DATA_KIND = "parquet"
+"""Curricula sample labeled prompt pools, which only the parquet data kind carries."""
+
+
+def _apply_curriculum(config_yaml: str, curriculum: RlCurriculum) -> str:
+    """Render a curriculum's sampling projection into the recipe, rejecting disagreement.
+
+    The projection's ``data.sampling`` values replace any declared ones; a declared base default
+    (``null`` or an empty container) is not a policy statement and never disagrees. A caller that
+    set a real value must match the curriculum. ``data.kind`` is pinned to ``parquet`` because
+    curricula sample labeled prompt pools."""
+    config = _parsed_config(config_yaml)
+    declared_kind = _declared_config_value(config, "data.kind")
+    if declared_kind is not _MISSING_CONFIG_VALUE and declared_kind != _CURRICULUM_DATA_KIND:
+        raise ValueError(
+            f"a curriculum samples labeled prompt pools and requires data.kind={_CURRICULUM_DATA_KIND}, "
+            f"but the recipe declares {declared_kind!r}"
+        )
+    for key, value in curriculum.sampling_config().items():
+        declared = _declared_config_value(config, f"data.sampling.{key}")
+        if declared not in (_MISSING_CONFIG_VALUE, None, [], {}) and declared != value:
+            raise ValueError(f"recipe data.sampling.{key}={declared!r} disagrees with curriculum {curriculum.identity}")
+        _set_config_value(config, f"data.sampling.{key}", value)
+    _set_config_value(config, "data.kind", _CURRICULUM_DATA_KIND)
+    return yaml.safe_dump(config, sort_keys=False)
+
+
+def _launch_curriculum(curriculum: RlCurriculum) -> dict:
+    """The launch document's curriculum section: identity, projection, and per-source provenance."""
+    return {
+        "identity": curriculum.identity,
+        "mode": curriculum.mode.value,
+        "seed": curriculum.seed,
+        "sampling": curriculum.sampling_config(),
+        "sources": [
+            {
+                "label": entry.label,
+                "source": entry.source,
+                "version": entry.version,
+                "pin": {"name": entry.pin.name, "revision": entry.pin.revision, "url": entry.pin.url},
+                "recipe": entry.recipe,
+                "weight": entry.weight,
+            }
+            for entry in curriculum.entries
+        ],
+        "stages": [{"source": stage.label, "quota": stage.quota} for stage in curriculum.stages],
+    }
 
 
 def _launch_config_yaml(
@@ -1122,6 +1185,11 @@ def _launch_config_yaml(
             ),
             "train_data": [_launch_data_source(source) for source in train_data],
             "validation_data": [_launch_data_source(source) for source in validation_data],
+            **(
+                {"curriculum": _launch_curriculum(cast(RlCurriculum, spec.curriculum))}
+                if spec.curriculum is not None
+                else {}
+            ),
         },
         "skyrl": recipe,
     }
@@ -1233,6 +1301,7 @@ def skyrl_step(
             output=output,
             export_hf=export_hf,
             draft_checkpoint_root=draft_checkpoint_root,
+            curriculum_identity=spec.curriculum.identity if spec.curriculum is not None else None,
         )
 
     step = ArtifactStep(
