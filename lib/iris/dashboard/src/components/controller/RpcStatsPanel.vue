@@ -52,6 +52,8 @@ const RECENT_STATS_FILTER = () => `timestamp_ms >= ${Date.now() - 5 * 60 * 1000}
 // So this filter shows only the cluster whose dashboard is open (no cross-cluster
 // mixing). The finelog reports its own name, if any, at /api/server.
 const SERVER_INFO_PATH = '/proxy/system.log-server/api/server'
+// A hung read would otherwise hold back every stats refresh, which waits on it.
+const SERVER_INFO_TIMEOUT_MS = 5_000
 const ownCluster = ref('')
 const ownClusterError = ref('')
 
@@ -72,7 +74,7 @@ function originCluster(): string {
 }
 
 async function loadOwnCluster(): Promise<void> {
-  const resp = await fetch(SERVER_INFO_PATH)
+  const resp = await fetch(SERVER_INFO_PATH, { signal: AbortSignal.timeout(SERVER_INFO_TIMEOUT_MS) })
   if (!resp.ok) throw new Error(`GET ${SERVER_INFO_PATH}: HTTP ${resp.status}`)
   const info = (await resp.json()) as { store?: { cluster?: string } }
   ownCluster.value = info.store?.cluster ?? ''
