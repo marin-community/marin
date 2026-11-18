@@ -128,6 +128,20 @@ def test_combined_selection_preserves_task_and_runtime_bytes_and_archives_origin
     assert verify_retained(retained, result["hashes"])
 
 
+def test_retained_population_writes_the_retained_schema(tmp_path, frozen_population):
+    """The retained census pins the retained tasks.parquet schema: every row carries its
+    path and a task_sha256 verified byte-exact against the published task_spec payload."""
+    plan, specs, _ = frozen_population
+    retained, original = tmp_path / "retained.parquet", tmp_path / "original.parquet"
+    filter_population(plan, str(specs), retained, original)
+    expected_columns = ["id", "path", "task_spec", "task_sha256", "runtime"]
+    assert pq.read_table(retained).column_names == expected_columns
+    assert pq.read_table(original).column_names == expected_columns
+    for row in pq.read_table(retained).to_pylist():
+        assert row["path"] == row["id"]
+        assert hashlib.sha256(row["task_spec"].encode()).hexdigest() == row["task_sha256"]
+
+
 @pytest.mark.parametrize("change", ["task", "runtime", "missing", "duplicate"])
 def test_readback_rejects_changed_or_incomplete_retained_population(tmp_path, frozen_population, change):
     plan, specs, _ = frozen_population
