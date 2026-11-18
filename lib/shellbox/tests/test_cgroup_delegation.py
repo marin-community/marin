@@ -1,9 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Delegation target selection and limit readback tests at the cgroup filesystem boundary."""
+"""Delegation target selection and limit readback tests against a fake cgroup v2 filesystem."""
 
-from pathlib import Path
+import errno
+import logging
+import shutil
+from pathlib import Path, PosixPath
 
 import pytest
 from shellbox.backends.local import cgroup as cgroup_module
@@ -14,120 +17,220 @@ from shellbox.backends.local.cgroup import (
     delegated_cgroup_parent,
 )
 
+ALL_CONTROLLERS = "cpuset cpu io memory pids"
+LIMIT_FILES = {
+    "cpu.max": "cpu",
+    "memory.max": "memory",
+    "memory.swap.max": "memory",
+    "memory.oom.group": "memory",
+}
 
-def _make_cgroup(root: Path, relative: str, *, procs: str) -> Path:
-    path = root / relative
-    path.mkdir(parents=True, exist_ok=True)
-    (path / "cgroup.procs").write_text(procs)
-    (path / "cgroup.kill").write_text("")
+
+class KernelCgroupPath(PosixPath):
+    """A temp-directory cgroup v2 hierarchy with the kernel rules discovery depends on.
+
+    - A child group's ``cgroup.controllers`` is its parent's ``cgroup.subtree_control``.
+    - Writing a pid to ``cgroup.procs`` migrates it: it leaves every other group.
+    - No-internal-process rule: a non-root group that holds processes cannot enable
+      controllers for its children (EBUSY), and a controller missing from
+      ``cgroup.controllers`` cannot be enabled (ENOENT).
+    - Limit files exist only while the parent enables their controller.
+    - ``cgroup.kill`` removes every process in the subtree; ``rmdir`` refuses a
+      populated group.
+    """
+
+    fs_root: Path
+
+    def _is_root(self) -> bool:
+        return self == self.fs_root
+
+    def _groups(self) -> list[Path]:
+        return [self.fs_root, *[path for path in self.fs_root.rglob("*") if path.is_dir()]]
+
+    def _procs(self) -> set[str]:
+        return set(PosixPath.read_text(self / "cgroup.procs").split())
+
+    def _set_procs(self, pids: set[str]) -> None:
+        PosixPath.write_text(self / "cgroup.procs", " ".join(sorted(pids)) + ("\n" if pids else ""))
+
+    def _subtree(self) -> set[str]:
+        return set(PosixPath.read_text(self / "cgroup.subtree_control").split())
+
+    def mkdir(self, mode: int = 0o777, parents: bool = False, exist_ok: bool = False) -> None:
+        existed = self.is_dir()
+        PosixPath.mkdir(self, mode, parents=parents, exist_ok=exist_ok)
+        if existed:
+            return
+        for group in [*reversed(list(self.parents)), self]:
+            if not group.is_relative_to(self.fs_root) or (group / "cgroup.procs").exists():
+                continue
+            controllers = (
+                ALL_CONTROLLERS
+                if group == self.fs_root
+                else PosixPath.read_text(group.parent / "cgroup.subtree_control")
+            )
+            for name, text in (
+                ("cgroup.controllers", controllers.strip() + "\n"),
+                ("cgroup.subtree_control", ""),
+                ("cgroup.procs", ""),
+                ("cgroup.kill", ""),
+                ("cgroup.events", "populated 0\n"),
+            ):
+                PosixPath.write_text(group / name, text)
+
+    def rmdir(self) -> None:
+        if self._procs() or any(path.is_dir() for path in self.iterdir()):
+            raise OSError(errno.EBUSY, "Device or resource busy", str(self))
+        shutil.rmtree(self)
+
+    def read_text(self, encoding=None, errors=None, newline=None) -> str:
+        if self.name == "cgroup.events":
+            group = type(self)(self.parent)
+            populated = any(group_path._procs() for group_path in [group, *group.rglob("*")] if group_path.is_dir())
+            return f"populated {int(populated)}\n"
+        return PosixPath.read_text(self, encoding, errors)
+
+    def write_text(self, data, encoding=None, errors=None, newline=None) -> int:
+        group = type(self)(self.parent)
+        if self.name == "cgroup.procs":
+            if not group._is_root() and group._subtree():
+                raise OSError(errno.EBUSY, "Device or resource busy", str(self))
+            pids = set(data.split())
+            for other in group._groups():
+                type(self)(other)._set_procs(type(self)(other)._procs() - pids)
+            group._set_procs(group._procs() | pids)
+            return len(data)
+        if self.name == "cgroup.subtree_control":
+            enabled = group._subtree()
+            available = set(PosixPath.read_text(group / "cgroup.controllers").split())
+            for token in data.split():
+                controller = token.lstrip("+-")
+                if controller not in available:
+                    raise OSError(errno.ENOENT, "No such file or directory", str(self))
+                if token.startswith("+") and not group._is_root() and group._procs():
+                    raise OSError(errno.EBUSY, "Device or resource busy", str(self))
+                enabled = enabled | {controller} if token.startswith("+") else enabled - {controller}
+            return PosixPath.write_text(self, " ".join(sorted(enabled)) + "\n")
+        if self.name == "cgroup.kill":
+            for member in [group, *group.rglob("*")]:
+                if member.is_dir():
+                    type(self)(member)._set_procs(set())
+            return len(data)
+        if self.name in LIMIT_FILES and LIMIT_FILES[self.name] not in type(self)(group.parent)._subtree():
+            raise OSError(errno.ENOENT, "No such file or directory", str(self))
+        return PosixPath.write_text(self, data, encoding, errors)
+
+
+def _cgroup_fs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path_type = type("TestCgroupPath", (KernelCgroupPath,), {})
+    root = path_type(tmp_path / "cgroup")
+    path_type.fs_root = root
+    root.mkdir()
+    monkeypatch.setattr(cgroup_module, "CGROUP_ROOT", root)
+    return root
+
+
+def _group(root: Path, relative: str, *, controllers: str = ALL_CONTROLLERS, procs: str = "") -> Path:
+    """Create ``relative`` with every ancestor delegating ``controllers`` to its children."""
+    path = root
+    for part in relative.split("/"):
+        (path / "cgroup.subtree_control").write_text(" ".join(f"+{name}" for name in controllers.split()))
+        path = path / part
+        path.mkdir(exist_ok=True)
+    if procs:
+        (path / "cgroup.procs").write_text(procs)
     return path
 
 
-@pytest.fixture(autouse=True)
-def kernel_procs_migration(monkeypatch: pytest.MonkeyPatch):
-    """Give plain ``cgroup.procs`` files the kernel's migration semantics.
-
-    The kernel moves each written pid into the destination group, whose file
-    then lists all of its members. Plain files would only keep the last write,
-    so writes accumulate the listed pids instead.
-    """
-    write_text = Path.write_text
-
-    def write(path: Path, data: str, *args, **kwargs):
-        if path.name == "cgroup.procs":
-            members = set(path.read_text().split()) if path.exists() else set()
-            members.update(data.split())
-            return write_text(path, " ".join(sorted(members)) + "\n", *args, **kwargs)
-        return write_text(path, data, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "write_text", write)
-
-
-@pytest.fixture
-def pod_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
-    """A fake pod hierarchy: pod slice wrapping the worker's container scope."""
-    root = tmp_path / "cgroup"
-    root.mkdir()
-    (root / "cgroup.controllers").write_text("cpuset cpu io memory pids\n")
-    scope = _make_cgroup(
-        root,
-        "kubepods.slice/kubepods-burstable.slice/kubepods-burstable-podA.slice/cri-containerd.scope",
-        procs="1234 5678\n",
-    )
-    slice_level = _make_cgroup(root, "kubepods.slice/kubepods-burstable.slice/kubepods-burstable-podA.slice", procs="")
-    monkeypatch.setattr(cgroup_module, "CGROUP_ROOT", root)
-    monkeypatch.setattr(cgroup_module, "_current_cgroup", lambda: scope)
-    return scope, slice_level
-
-
-@pytest.fixture
-def worker_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
-    """A fake host hierarchy: shared slice holding the worker's unit."""
-    root = tmp_path / "cgroup"
-    root.mkdir()
-    (root / "cgroup.controllers").write_text("cpuset cpu io memory pids\n")
-    slice_level = _make_cgroup(root, "system.slice", procs="")
-    unit = _make_cgroup(slice_level, "marin-worker.service", procs="")
-    monkeypatch.setattr(cgroup_module, "CGROUP_ROOT", root)
-    return slice_level, unit
+POD_SLICE = "kubepods.slice/kubepods-burstable.slice/kubepods-burstable-podA.slice"
 
 
 def _child_groups(path: Path) -> list[str]:
-    return [entry.name for entry in path.iterdir() if entry.is_dir()]
+    return sorted(entry.name for entry in path.iterdir() if entry.is_dir())
 
 
-def test_container_scope_delegates_from_a_leaf_inside_itself(pod_tree):
-    """The worker sits directly in the container scope, so discovery moves it into a child leaf.
+def test_container_scope_moves_the_worker_into_a_leaf_and_can_enforce_limits(tmp_path, monkeypatch):
+    """The worker sits directly in its container scope, so discovery empties the scope into a leaf.
 
-    The delegation parent stays the scope: sandbox groups become siblings of
-    the worker leaf, and the pod slice above the container is never touched.
+    Only an empty scope can enable domain controllers for children, so the
+    limits probe succeeds and the scope ends up delegating cpu and memory. The
+    pod slice above the container gains no groups, and the probe leaves none
+    behind.
     """
-    scope, slice_level = pod_tree
+    root = _cgroup_fs(tmp_path, monkeypatch)
+    scope = _group(root, f"{POD_SLICE}/cri-containerd.scope", procs="1234 5678")
+    monkeypatch.setattr(cgroup_module, "_current_cgroup", lambda: scope)
+
     assert delegated_cgroup_parent() == scope
+    assert (scope / "cgroup.procs").read_text().split() == []
     assert (scope / "worker" / "cgroup.procs").read_text().split() == ["1234", "5678"]
-    assert not list(scope.glob("shellbox-*"))
-    assert _child_groups(slice_level) == ["cri-containerd.scope"]
+    assert {"cpu", "memory"} <= set((scope / "cgroup.subtree_control").read_text().split())
+    assert _child_groups(scope) == ["worker"]
+    assert _child_groups(scope.parent) == ["cri-containerd.scope"]
 
 
-def test_a_moved_worker_reuses_its_leaf_without_nesting(pod_tree, monkeypatch):
+def test_scope_without_a_memory_controller_still_contains_the_worker(tmp_path, monkeypatch, caplog):
+    """When the runtime withholds memory from the scope, discovery keeps the scope for containment only."""
+    root = _cgroup_fs(tmp_path, monkeypatch)
+    scope = _group(root, f"{POD_SLICE}/cri-containerd.scope", controllers="cpu pids", procs="1234")
+    monkeypatch.setattr(cgroup_module, "_current_cgroup", lambda: scope)
+
+    with caplog.at_level(logging.WARNING, logger=cgroup_module.__name__):
+        assert delegated_cgroup_parent() == scope
+    assert "containment only" in caplog.text
+    assert (scope / "worker" / "cgroup.procs").read_text().split() == ["1234"]
+    assert "memory" not in (scope / "cgroup.subtree_control").read_text().split()
+    assert _child_groups(scope) == ["worker"]
+    assert _child_groups(scope.parent) == ["cri-containerd.scope"]
+
+
+def test_a_moved_worker_reuses_its_leaf_without_nesting(tmp_path, monkeypatch):
     """Discovery from inside the worker leaf delegates from the scope, not from a nested leaf."""
-    scope, _ = pod_tree
-    leaf = _make_cgroup(scope, "worker", procs="1234\n")
-    (scope / "cgroup.procs").write_text("9999\n")
+    root = _cgroup_fs(tmp_path, monkeypatch)
+    scope = _group(root, f"{POD_SLICE}/cri-containerd.scope")
+    leaf = _group(root, f"{POD_SLICE}/cri-containerd.scope/worker", procs="1234")
     monkeypatch.setattr(cgroup_module, "_current_cgroup", lambda: leaf)
+
     assert delegated_cgroup_parent() == scope
     assert (leaf / "cgroup.procs").read_text().split() == ["1234"]
-    assert not (leaf / "worker").exists()
+    assert _child_groups(scope) == ["worker"]
+    assert _child_groups(leaf) == []
 
 
-def test_an_empty_enclosing_unit_reuses_the_worker_subgroup(worker_tree, monkeypatch):
-    """The systemd DelegateSubgroup layout already provides the leaf subgroup."""
-    _slice_level, unit = worker_tree
-    delegate = _make_cgroup(unit, "shellbox-delegate", procs="1234\n")
+def test_an_empty_enclosing_unit_delegates_without_moving_the_worker(tmp_path, monkeypatch):
+    """The systemd DelegateSubgroup layout already provides the worker's leaf subgroup."""
+    root = _cgroup_fs(tmp_path, monkeypatch)
+    unit = _group(root, "system.slice/marin-worker.service")
+    delegate = _group(root, "system.slice/marin-worker.service/shellbox-delegate", procs="1234")
     monkeypatch.setattr(cgroup_module, "_current_cgroup", lambda: delegate)
+
     assert delegated_cgroup_parent() == unit
-    assert not (unit / "worker").exists()
     assert (delegate / "cgroup.procs").read_text().split() == ["1234"]
+    assert _child_groups(unit) == ["shellbox-delegate"]
 
 
-def test_a_worker_directly_in_its_unit_moves_into_a_leaf_there(worker_tree, monkeypatch):
-    """A plain delegated worker unit delegates from itself, not from the shared slice."""
-    slice_level, unit = worker_tree
-    (unit / "cgroup.procs").write_text("1234 5678\n")
+def test_a_worker_directly_in_its_unit_moves_into_a_leaf_there(tmp_path, monkeypatch):
+    """A plain delegated worker unit delegates from itself, never from the shared slice above it."""
+    root = _cgroup_fs(tmp_path, monkeypatch)
+    unit = _group(root, "system.slice/marin-worker.service", procs="1234 5678")
     monkeypatch.setattr(cgroup_module, "_current_cgroup", lambda: unit)
+
     assert delegated_cgroup_parent() == unit
+    assert (unit / "cgroup.procs").read_text().split() == []
     assert (unit / "worker" / "cgroup.procs").read_text().split() == ["1234", "5678"]
-    assert _child_groups(slice_level) == ["marin-worker.service"]
-    assert not list(unit.glob("shellbox-*"))
+    assert _child_groups(unit.parent) == ["marin-worker.service"]
 
 
-def test_delegation_refuses_an_unwritable_hierarchy(worker_tree, monkeypatch):
-    """Without a writable delegated unit there is no containment parent at all."""
-    _slice_level, unit = worker_tree
+def test_delegation_refuses_an_unwritable_hierarchy(tmp_path, monkeypatch):
+    """Without a writable delegated unit there is no containment parent, and nothing moves."""
+    root = _cgroup_fs(tmp_path, monkeypatch)
+    unit = _group(root, "system.slice/marin-worker.service", procs="1234")
     (unit / "cgroup.kill").chmod(0o444)
     monkeypatch.setattr(cgroup_module, "_current_cgroup", lambda: unit)
+
     assert delegated_cgroup_parent() is None
-    assert not (unit / "worker").exists()
+    assert (unit / "cgroup.procs").read_text().split() == ["1234"]
+    assert _child_groups(unit) == []
 
 
 def test_cgroup_limits_applied_reads_back_written_files(tmp_path: Path):
@@ -156,7 +259,7 @@ def test_cgroup_limits_applied_reads_back_written_files(tmp_path: Path):
 
 @pytest.mark.manual
 def test_delegated_parent_enforces_and_cleans_up_delegation_probes():
-    """Discovery enforces limits and leaves no throwaway cgroups on a delegated worker."""
+    """Discovery stays inside the worker's unit and leaves no throwaway cgroups on a delegated worker."""
     parent = delegated_cgroup_parent()
     if parent is None:
         pytest.skip("Run inside a worker with a delegated cgroup v2 hierarchy")
