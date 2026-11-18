@@ -282,13 +282,18 @@ def task(args) -> None:
             finally:
                 if endpoint_id is not None:
                     ctx.registry.unregister(endpoint_id)
+    run_ray_control(args.output_prefix, info, derived_ifname, MODULE, driver_timeout=360)
+
+
+def run_ray_control(output_prefix: str, info, derived_ifname: str, driver_module: str, driver_timeout: int) -> None:
+    """Run a bounded diagnostic driver on the native Ray task bootstrap."""
     for port_name in RayPort:
         os.environ[f"IRIS_PORT_{port_name.value.upper()}"] = "0"
     resolve_ray_ports()
-    rendezvous = f"{args.output_prefix}/rendezvous"
+    rendezvous = f"{output_prefix}/rendezvous"
     node_args = SimpleNamespace(
         rendezvous_dir=rendezvous,
-        ray_log_dir=f"{args.output_prefix}/ray-logs",
+        ray_log_dir=f"{output_prefix}/ray-logs",
         ray_spill_backend=RaySpillBackend.LOCAL,
         ray_spill_dir="/tmp/comparator-ray-spill",
         ray_labels={},
@@ -310,15 +315,25 @@ def task(args) -> None:
         address = f"{info.advertise_host}:{ray_port}"
         write_rendezvous(rendezvous, info.advertise_host, ray_port, epoch)
         wait_for_nodes(
-            address, 2, 150, rewrite_cb=lambda: write_rendezvous(rendezvous, info.advertise_host, ray_port, epoch)
+            address,
+            info.num_tasks,
+            150,
+            rewrite_cb=lambda: write_rendezvous(rendezvous, info.advertise_host, ray_port, epoch),
         )
         env = training_driver_env(derived_ifname)
         env["RAY_ADDRESS"] = address
         subprocess.run(
-            [sys.executable, "-m", MODULE, "--mode=driver", f"--output-prefix={args.output_prefix}"],
+            [
+                sys.executable,
+                "-m",
+                driver_module,
+                "--mode=driver",
+                f"--output-prefix={output_prefix}",
+                f"--nodes={info.num_tasks}",
+            ],
             env=env,
             check=True,
-            timeout=360,
+            timeout=driver_timeout,
         )
         write_head_result(rendezvous, epoch)
     finally:
@@ -331,6 +346,7 @@ def task(args) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=["task", "driver", "worker"], default="task")
+    parser.add_argument("--nodes", type=int, default=2)
     parser.add_argument("--launcher", default="torchrun")
     parser.add_argument("--visibility", choices=["masked", "unmasked"], default="masked")
     parser.add_argument("--buffer", choices=["default", "262144"], default="default")
