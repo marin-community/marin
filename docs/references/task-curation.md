@@ -2494,15 +2494,16 @@ measured source-environment incompatibility, a scored non-resource failure is
 Source-environment incompatibilities and [approved infrastructure replays](#replaying-our-infrastructure-failures)
 use the specific rules below.
 
-A backend that cannot enforce declared limits can host a typed, versioned limit
-deviation instead of a rebuild. The PDBThink grader moved from 512 MiB memory to
-the Daytona-expressible 1 GiB (`pdbthink_verifier_repair`), and the SWE-rebench
-V2.1 ruling allows a 4 CPU / 8 GB release when its fidelity gate records no task
-that is CPU- or memory-sensitive at the lowered limits. The release card records
-the original declared limits and the reason, the full-population oracle and nop
-runs under the new limits decide admission, and a task that fails or nears
-failure only because of the lowered limits is held out with a typed reason,
-never silently dropped. A grouped-image release consolidates snapshots the same
+A limit deviation needs an explicit user ruling for that source; it is never a
+general fallback for a backend that cannot enforce declared limits. Two rulings
+exist. The PDBThink grader moved from 512 MiB memory to the Daytona-expressible
+1 GiB (`pdbthink_verifier_repair`). The SWE-rebench V2.1 ruling allows a
+versioned 4 CPU / 8 GB release only when its fidelity gate records no task that
+is CPU- or memory-sensitive at the lowered limits; if any task is sensitive, the
+source keeps its declared 6 CPU / 24 GB limits and runs on a backend that allows
+them. The release card records the original declared limits and the reason, and
+the full-population oracle and nop runs under the new limits decide admission. A
+grouped-image release consolidates snapshots the same
 allocation-aware way as FineEnvs: roughly one image per language family with
 each row's toolchain installed at setup, and faithfulness proven by the
 full-population oracle and nop runs; rows that do not reproduce go to a typed

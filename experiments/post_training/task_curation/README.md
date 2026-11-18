@@ -171,16 +171,15 @@ negative control. Preserve the frozen shared/native held-out scan inputs and
 bind final-pin evidence through the documented
 [lexical decontamination procedure](../../../docs/references/task-curation.md#lexical-decontamination-before-publication).
 
-The same typed, versioned deviation pattern covers actor-side limits.
-SWE-rebench V2.1 tasks declare 6 CPUs and 24 GB of memory, which the Daytona
-EVAL account cannot enforce (4 CPUs and 8 GB per sandbox). A versioned release
-with the Daytona-enforceable limits is allowed only when the fidelity gate
-records no task that is CPU- or memory-sensitive at the lowered limits. The
-release card records the original declared limits and the reason, the
-full-population oracle and nop runs under the new limits decide admission, and a
-task that fails or nears failure only under the lowered limits is held out with
-a typed reason, never silently dropped. If the gate shows sensitivity, the
-source keeps its declared limits and runs on a backend that allows them.
+A user ruling applies the same typed, versioned deviation to actor-side limits
+for one source; it is not a general rule. SWE-rebench V2.1 tasks declare 6 CPUs
+and 24 GB of memory, which the Daytona EVAL account cannot enforce (4 CPUs and
+8 GB per sandbox). A versioned release with the Daytona-enforceable limits is
+allowed only when the fidelity gate records no task that is CPU- or
+memory-sensitive at the lowered limits. The release card records the original
+declared limits and the reason, and the full-population oracle and nop runs
+under the new limits decide admission. If the gate shows any sensitivity, the
+whole source keeps its declared limits and runs on a backend that allows them.
 
 ## Final task selection
 
