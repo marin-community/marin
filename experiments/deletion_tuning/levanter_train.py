@@ -68,19 +68,14 @@ def _capture_model(model: SnowballLMHeadModel) -> SnowballLMHeadModel:
 
 
 def _layer_logits(weight: jax.Array, norms: jax.Array, key: jax.Array, settings, threshold: float) -> jax.Array:
-    """One layer's gate logits with the leading-axis (expert) weights and its per-channel norms.
+    """One layer's gate logits from its weights, per-channel input norms, and its layer key.
 
-    The layer key splits per expert so the noisy init stays independent across
-    experts; a single key would repeat the same noise pattern in every expert.
+    ``init_gate_logits_jax`` draws independent noise per element from the single
+    layer key, so the batched computation needs no vmap and no per-expert keys.
     """
-
-    def per_expert(w_expert, norms_expert, key_expert):
-        broadcast = norms_expert.reshape(norms_expert.shape + (1,) * (w_expert.ndim - norms_expert.ndim))
-        scores = jnp.abs(w_expert) * broadcast
-        return init_gate_logits_jax(scores, settings.eta, key_expert, threshold)
-
-    expert_keys = jax.random.split(key, weight.shape[0])
-    return jax.vmap(per_expert)(weight, norms, expert_keys)
+    broadcast = norms.reshape((*norms.shape, *((1,) * (weight.ndim - norms.ndim))))
+    scores = jnp.abs(weight) * broadcast
+    return init_gate_logits_jax(scores, settings.eta, key, threshold)
 
 
 def _reshard_like(logits: jax.Array, reference: jax.Array) -> jax.Array:
