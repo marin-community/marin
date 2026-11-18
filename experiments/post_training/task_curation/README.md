@@ -17,7 +17,7 @@ Run the [stage-0 license checker](../../../docs/references/task-curation.md#stag
 (`python -m experiments.post_training.task_curation.license_check`) before any
 conversion and pass its receipts to the driver with `--license-receipts`.
 
-Synced to preview revision 30 (2026-11-18).
+Synced to preview revision 31 (2026-11-18).
 
 Do not declare oversight levels, grader types or task-shape tags (agentic,
 multi-turn and similar) on a source. A late-stage ingestion step derives them from

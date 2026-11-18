@@ -2,7 +2,7 @@
 
 [RL Data Atlas](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
 reads a Postgres copy of the published [curation catalog](task-curation.md#run-catalog).
-This reference is synced to preview revision 30 (2026-11-18), including the
+This reference is synced to preview revision 31 (2026-11-18), including the
 stage-0 license gate; the
 admission rules are in [Current admission policy](task-curation.md#current-admission-policy).
 Every source passes the [stage-0 license gate](task-curation.md#stage-0-binding-license-gate)
@@ -1267,8 +1267,9 @@ the Snowball ablation roots — declare the band deliberately and keep the root
 and its serving children in the same band.
 
 Choose `small`, `large`, `hosted` or `snowball`. Local model serving requests
-2, 8 and 8 H100s for Small, Large and Snowball respectively; Hosted uses the
-production relay. Every prepared task preserves the original runtime packet.
+2, 8 and 8 H100s for Small, Large and Snowball respectively; Hosted uses
+Together (`zai-org/GLM-5.3`, the same model and sampling settings), recorded as
+provider `together` in the solver identity and every receipt. Every prepared task preserves the original runtime packet.
 TaskSpec trial archives include `network-policy.json`, bound to that packet's
 hash, with declared and effective actor and grader policies recorded separately.
 The Iris parent allows network access; each LOCAL role enforces its source policy.
@@ -1369,15 +1370,14 @@ uv run --no-sync python -m experiments.post_training.task_curation.difficulty_ro
   [--previous-campaign <old-run-prefix> --previous-serving-sha256 <old-serving.json-sha256>]
 ```
 
-With `--solver hosted` the preflight also checks the shared relay's serving
-pod. The launcher runs the same gate automatically on every real launch
+With `--solver hosted` the preflight also sends one short chat completion to the
+Together endpoint, with a 60-second limit, using the served model name. The launcher runs the same gate automatically on every real launch
 (continuations and hosted fresh submissions) and refuses to submit on any
 mismatch; `--receipt-stage-only` skips the local staging.
 
-The preflight reproduces the campaign's failure classes locally: it checks the
-shared relay's serving-pod liveness for hosted submissions (a pod deleted
-behind a still-running job record — the `PodDeleted` diagnostic — refuses the
-submission instead of a 30-minute probe timeout), verifies the continuation
+The preflight reproduces the campaign's failure classes locally: it checks that the hosted
+endpoint answers before submission (a dead endpoint refuses the submission in
+seconds instead of a 30-minute probe timeout), verifies the continuation
 bindings (frozen queue digest, parent ancestry, and the parent's
 `serving.json` digest computed programmatically — a hand-truncated digest is
 named, not submitted), verifies each selected source's frozen panel against

@@ -89,7 +89,10 @@ A dataset whose tasks are each built from its own upstream repository, such as
 OpenSWE, is checked per task against that repository's license at its pin; only
 tasks whose repository passes the accepted permissive list are kept, and the
 per-repository decision is recorded with its receipts. Marin's own converted and structure datasets are
-released under OpenMDW 1.1. Dependency folders such as `node_modules`, `vendor`
+released under OpenMDW 1.1. First-party data that Marin or Open Athena generates
+(for example structure-closure and the forge main split) is also OpenMDW 1.1 and
+valid for TRAIN and EVAL: its card declares `license: openmdw-1.1` with the full
+LICENSE file, and the checker resolves it from the card. Dependency folders such as `node_modules`, `vendor`
 and virtual environments are not task-license roots.
 
 Receipts retain evidence URLs, SHA-256, quoted statements, resolution time and
@@ -116,9 +119,14 @@ remain intact.
 
 ## Current admission policy
 
-Synced to preview revision 30 (2026-11-18). These rules include the admission
-display policy for Atlas preview revision 30. When a later section of this
+Synced to preview revision 31 (2026-11-18). These rules include the admission
+display policy for Atlas preview revision 31. When a later section of this
 reference conflicts with them, this section is current.
+
+**SAMPLE panels across re-pins.** A SAMPLE panel drawn at an earlier pin binds at the
+current pin when its task specs are byte-identical to the current pin's actor census
+(same digest and count); the binding records the cross-pin digest equality. A panel
+whose task bytes changed is refused, and the source needs a fresh panel.
 
 **Examples.** Atlas Examples is the admitted count after filtration. The Atlas
 has no separate oracle column. Every header count is in tasks. Admission totals
