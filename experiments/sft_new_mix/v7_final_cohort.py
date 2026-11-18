@@ -35,6 +35,10 @@ def main() -> None:
     parser.add_argument("--v7-applied-inventory-sha256", required=True)
     parser.add_argument("--destination", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--comp-prog-source-root", required=True)
+    parser.add_argument("--comp-prog-target-root", required=True)
+    parser.add_argument("--mirror-manifest", required=True)
+    parser.add_argument("--mirror-manifest-sha256", required=True)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     configure_storage()
@@ -49,11 +53,28 @@ def main() -> None:
     if v6["tokenizer_sha256"] != v7["tokenizer_sha256"]:
         raise ValueError("The V6 and V7 inventories use different tokenizers")
 
+    mirror = json.loads(read_pinned(args.mirror_manifest, args.mirror_manifest_sha256))
+    if mirror["inventory_sha256"] != args.v7_applied_inventory_sha256:
+        raise ValueError("The mirror manifest does not cover this apply inventory")
+    if mirror["target_root"] != args.comp_prog_target_root or mirror["source_root"] != args.comp_prog_source_root:
+        raise ValueError("The mirror manifest roots do not match the rewrite")
+
+    def rewritten(uri: str) -> str:
+        if not uri.startswith(args.comp_prog_source_root + "/"):
+            raise ValueError(f"Comp-prog shard URI lies outside the source root: {uri}")
+        return args.comp_prog_target_root + uri[len(args.comp_prog_source_root) :]
+
+    def rewritten_entry(source: dict) -> dict:
+        return {
+            **source,
+            "shards": [{**shard, "cache_uri": rewritten(shard["cache_uri"])} for shard in source["shards"]],
+        }
+
     sources = []
     replaced = set()
     for source in v6["sources"]:
         if source["source"] in v7_entries:
-            sources.append(v7_entries[source["source"]])
+            sources.append(rewritten_entry(v7_entries[source["source"]]))
             replaced.add(source["source"])
         else:
             sources.append(source)
@@ -78,6 +99,16 @@ def main() -> None:
             "v6_applied_inventory_sha256": args.v6_applied_inventory_sha256,
             "v7_applied_inventory_sha256": args.v7_applied_inventory_sha256,
         },
+        "v7_comp_prog_mirror": {
+            "note": "The two comp-prog sources are served from the 08a mirror of the 02a post-Atlas caches",
+            "source_root": args.comp_prog_source_root,
+            "target_root": args.comp_prog_target_root,
+            "mirror_manifest_sha256": args.mirror_manifest_sha256,
+            "mirror_manifest_uri": args.mirror_manifest,
+            "mirror_total_shards": mirror["total_shards"],
+            "mirror_total_objects": mirror["total_objects"],
+            "mirror_total_bytes": mirror["total_bytes"],
+        },
     }
     blob = json.dumps(cohort, sort_keys=True, indent=2).encode()
     destination = StoragePath(args.destination)
@@ -89,6 +120,8 @@ def main() -> None:
         "replaced": sorted(replaced),
         "rows": {name: v7_entries[name]["counts"]["output_documents"] for name in COMP_PROG_SOURCES},
         "tokens": {name: v7_entries[name]["counts"]["output_tokens"] for name in COMP_PROG_SOURCES},
+        "comp_prog_target_root": args.comp_prog_target_root,
+        "mirror_manifest_sha256": args.mirror_manifest_sha256,
     }
     (output / "receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2))
     (destination / "receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2))
