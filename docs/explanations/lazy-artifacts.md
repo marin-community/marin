@@ -190,6 +190,14 @@ Use `ArtifactStep.adopt` for datasets tokenized outside the current experiment g
 checkpoints produced by a separate run, or for any pre-existing artifact that needs to appear
 in the dependency graph with full provenance tracking.
 
+A consumer that reads the adopted cache's *value* (like `mixture`, which needs the tokenizer
+and format) resolves its record at the source path. External data without a marin record
+there resolves path-only. To give such data a full record without copying it, register a
+small seal step that writes the `TokenizedCache` record at its own `name@version` address
+and pins the underlying cache root as `config.cache_dir`; `TokenizedCache.as_component()`
+then carries the exact cache address, format, and packing. See
+`experiments/sft_new_mix/exp3_v5_mix.py` for a release-backed SFT mix built this way.
+
 ## Data builders
 
 `marin.experiment.data` provides concise builders that return `ArtifactStep[TokenizedCache]`

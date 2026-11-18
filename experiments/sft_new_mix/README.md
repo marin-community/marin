@@ -41,3 +41,15 @@ see the dataset card for attribution and provenance details.
 Matched-token control and candidate training recipes in the `snowball_h100`
 style are later work. This directory currently defines sources only; it does
 not launch training or claim a completed matched-token comparison.
+
+## Exp3 V5 mix as an artifact graph
+
+`exp3_v5_mix.py` expresses the exact SFT mix Exp3 trained on (data release
+V5) as versioned handles: an adopted release seal, one sealed-cache
+`TokenizedCache` handle per source pinning its content-addressed shard paths
+and counts, and `exp3_v5_data_config`, which assembles the training data
+config through `mixture()` with the release's three-phase weight schedule and
+shuffle/geometry. `test_exp3_v5_mix.py` resolves the graph offline and pins it
+component by component against the release's `data.json`
+(`fixtures/`). The release remains the source of truth; the module recomputes
+nothing.
