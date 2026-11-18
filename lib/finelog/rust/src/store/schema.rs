@@ -760,6 +760,18 @@ pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
             schema.max_row_group_rows, MIN_CONFIGURED_ROW_GROUP_ROWS, MAX_CONFIGURED_ROW_GROUP_ROWS,
         )));
     }
+    if schema.columns.iter().any(|column| column.index.catalog_bounds) {
+        let key_column = resolve_key_column(schema)?;
+        if schema
+            .column(&key_column)
+            .is_some_and(|column| column.index.catalog_bounds)
+        {
+            return Err(StatsError::SchemaValidation(format!(
+                "column {key_column:?}: catalog_bounds cannot flag the key column, whose \
+                 bounds the catalog already records"
+            )));
+        }
+    }
     for column in &schema.columns {
         let has_exact_index = column.index.value_counts || !column.index.exact_values.is_empty();
         if has_exact_index && column.r#type != ColumnType::COLUMN_TYPE_STRING {
@@ -1753,11 +1765,11 @@ mod tests {
         assert_eq!(merge_schemas(&reg, &subset).unwrap(), reg);
     }
 
-    /// `worker_schema` with catalog bounds on `timestamp_ms`.
-    fn time_bounded_worker_schema() -> Schema {
+    /// `worker_schema` with catalog bounds on `column`.
+    fn worker_schema_bounding(column_name: &str) -> Schema {
         let mut schema = worker_schema();
         for column in &mut schema.columns {
-            if column.name == "timestamp_ms" {
+            if column.name == column_name {
                 column.index.catalog_bounds = true;
             }
         }
@@ -1768,7 +1780,7 @@ mod tests {
     fn catalog_bounds_round_trip_and_merge_on_only() {
         use buffa::{Message, MessageView};
 
-        let flagged = time_bounded_worker_schema();
+        let flagged = worker_schema_bounding("mem_bytes");
         validate_index_policies(&flagged).unwrap();
         assert_eq!(
             schema_from_json(&schema_to_json(&flagged)).unwrap(),
@@ -1781,10 +1793,26 @@ mod tests {
         // A newer sender turns the flag on for a registered table.
         let plain = with_implicit_seq(worker_schema());
         let merged = merge_schemas(&plain, &with_implicit_seq(flagged)).unwrap();
-        assert!(merged.column("timestamp_ms").unwrap().index.catalog_bounds);
+        assert!(merged.column("mem_bytes").unwrap().index.catalog_bounds);
         // An older sender, whose schema predates the flag, neither conflicts nor
         // turns it off.
         assert_eq!(merge_schemas(&merged, &plain).unwrap(), merged);
+    }
+
+    #[test]
+    fn catalog_bounds_rejects_the_key_column() {
+        // `worker_schema` has no key_column, so `timestamp_ms` is its key.
+        let error = validate_index_policies(&worker_schema_bounding("timestamp_ms")).unwrap_err();
+        assert!(
+            error.to_string().contains("cannot flag the key column"),
+            "{error}"
+        );
+        let plain = with_implicit_seq(worker_schema());
+        assert!(merge_schemas(
+            &plain,
+            &with_implicit_seq(worker_schema_bounding("timestamp_ms"))
+        )
+        .is_err());
     }
 
     #[test]

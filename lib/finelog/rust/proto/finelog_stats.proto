@@ -49,7 +49,8 @@ message ColumnIndex {
   bool value_counts = 3;
 
   // Keep this column's per-segment min/max in the catalog. Stored outside the
-  // `.fidx` bundle: turning it on rebuilds no index. INT64 columns only.
+  // `.fidx` bundle: turning it on rebuilds no index. INT64 columns only, and
+  // not the key column, whose bounds the catalog already keeps.
   bool catalog_bounds = 4;
 }
 

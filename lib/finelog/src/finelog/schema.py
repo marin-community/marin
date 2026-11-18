@@ -79,7 +79,7 @@ class Column:
     # Persist exact per-value counts for GROUP BY + COUNT queries.
     value_counts: bool = False
     # Keep each segment's min/max of this column in the catalog. INT64 columns
-    # only.
+    # only, and not the key column, whose bounds the catalog already keeps.
     catalog_bounds: bool = False
 
 
