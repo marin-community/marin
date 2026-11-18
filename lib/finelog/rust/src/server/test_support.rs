@@ -11,7 +11,9 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use axum::response::IntoResponse;
+use axum::extract::{Request, State};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use axum::Router;
 use connectrpc::client::{ClientBody, ClientConfig, ServiceTransport};
 use hyper_util::client::legacy::connect::HttpConnector;
@@ -154,28 +156,31 @@ pub async fn serve_app(app: Router) -> (SocketAddr, tokio::task::JoinHandle<()>)
     (addr, server)
 }
 
+async fn count_requests(
+    State(requests): State<Arc<RequestStats>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let observed = requests.begin(&request);
+    let response = next.run(request).await;
+    if observed {
+        requests.finish();
+    }
+    response
+}
+
 /// Serve `store` on an ephemeral loopback port under `policy`, counting the RPC
 /// requests that reach it. Returns the address and that counter.
 pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<RequestStats>) {
     let requests = Arc::new(RequestStats::default());
-    let counted = Arc::clone(&requests);
     let app = build_app_with_config(
         store,
         ServerConfig::default().with_auth(policy),
         Arc::new(ReadExecutor::for_process().unwrap()),
     )
-    .layer(axum::middleware::from_fn(
-        move |req: axum::extract::Request, next: axum::middleware::Next| {
-            let counted = Arc::clone(&counted);
-            async move {
-                let observed = counted.begin(&req);
-                let response = next.run(req).await;
-                if observed {
-                    counted.finish();
-                }
-                response
-            }
-        },
+    .layer(axum::middleware::from_fn_with_state(
+        Arc::clone(&requests),
+        count_requests,
     ));
     let (addr, _) = serve_app(app).await;
     (addr, requests)
@@ -195,7 +200,6 @@ pub async fn serve_with_outage(
     let down = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let outage = Arc::clone(&down);
     let requests = Arc::new(RequestStats::default());
-    let counted = Arc::clone(&requests);
     let app = build_app_with_config(
         store,
         ServerConfig::default().with_auth(policy),
@@ -203,11 +207,9 @@ pub async fn serve_with_outage(
     )
     .layer(axum::middleware::from_fn(
         move |req: axum::extract::Request, next: axum::middleware::Next| {
-            let counted = Arc::clone(&counted);
             let down = Arc::clone(&down);
             async move {
-                let observed = counted.begin(&req);
-                let response = if down.load(Ordering::SeqCst) {
+                if down.load(Ordering::SeqCst) {
                     let error = connectrpc::ConnectError::new(
                         connectrpc::ErrorCode::Unavailable,
                         "hub outage",
@@ -220,13 +222,13 @@ pub async fn serve_with_outage(
                         .into_response()
                 } else {
                     next.run(req).await
-                };
-                if observed {
-                    counted.finish();
                 }
-                response
             }
         },
+    ))
+    .layer(axum::middleware::from_fn_with_state(
+        Arc::clone(&requests),
+        count_requests,
     ));
     let (addr, _) = serve_app(app).await;
     (addr, requests, outage)

@@ -199,9 +199,10 @@ mod tests {
     async fn cancelling_a_read_drops_its_work() {
         let (started, started_rx) = tokio::sync::oneshot::channel();
         let (dropped, dropped_rx) = tokio::sync::oneshot::channel::<()>();
-        let executor = ReadExecutor::for_process().unwrap();
+        let executor = Arc::new(ReadExecutor::for_process().unwrap());
+        let task_executor = Arc::clone(&executor);
         let task = tokio::spawn(async move {
-            executor
+            task_executor
                 .run(async move {
                     let _dropped = dropped;
                     started.send(()).unwrap();
@@ -212,6 +213,12 @@ mod tests {
         started_rx.await.unwrap();
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
-        assert!(dropped_rx.await.is_err());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), dropped_rx)
+                .await
+                .expect("cancelled read remained attached to the live executor")
+                .is_err()
+        );
+        drop(executor);
     }
 }

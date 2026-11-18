@@ -303,10 +303,11 @@ mod tests {
             .build()
             .unwrap();
         ingress.block_on(async {
+            let object_key = "object";
             let object = Arc::new(Mutex::new(Bytes::from_static(b"before")));
             let app = Router::new()
                 .route(
-                    "/bucket/object",
+                    &format!("/bucket/{object_key}"),
                     get(|State(value): State<Arc<Mutex<Bytes>>>| async move {
                         ([("etag", "\"version\"")], value.lock().unwrap().clone())
                     })
@@ -337,7 +338,7 @@ mod tests {
                 .spawn(async move {
                     assert_eq!(
                         reader
-                            .get(&OsPath::from("object"))
+                            .get(&OsPath::from(object_key))
                             .await
                             .unwrap()
                             .bytes()
@@ -352,7 +353,7 @@ mod tests {
             let upload = tokio::time::timeout(
                 Duration::from_secs(5),
                 backend.put(
-                    &OsPath::from("object"),
+                    &OsPath::from(object_key),
                     Bytes::from_static(b"durable").into(),
                 ),
             )

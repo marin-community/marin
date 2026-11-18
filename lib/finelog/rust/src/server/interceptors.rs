@@ -305,8 +305,8 @@ mod tests {
         futures::pin_mut!(fetch);
         assert!(futures::poll!(fetch.as_mut()).is_pending());
         for method in [
-            "/finelog.stats.StatsService/WriteRows",
-            "/finelog.logging.LogService/PushLogs",
+            crate::proto::finelog::stats::STATS_SERVICE_WRITE_ROWS_SPEC.procedure,
+            crate::proto::finelog::logging::LOG_SERVICE_PUSH_LOGS_SPEC.procedure,
         ] {
             run_chain(&chain, request(method, None), |_| async {
                 Ok(ok_response())

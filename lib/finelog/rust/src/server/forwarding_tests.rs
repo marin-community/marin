@@ -703,14 +703,16 @@ fn prepare_forward_batches_preserves_a_read_larger_than_the_string_offset_limit(
 
 #[test]
 fn bounded_batch_coalescing_preserves_rows_and_sequence_order() {
+    let column = "data";
+    let payload = "x".repeat(400);
     let schema = Arc::new(ArrowSchema::new(vec![Field::new(
-        "data",
+        column,
         DataType::Utf8,
         false,
     )]));
     let batches = (0..12)
         .map(|index| {
-            let data = format!("{index}:{}", "x".repeat(400));
+            let data = format!("{index}:{payload}");
             (
                 RecordBatch::try_new(
                     Arc::clone(&schema),
@@ -732,14 +734,14 @@ fn bounded_batch_coalescing_preserves_rows_and_sequence_order() {
     for (ipc, last_seq) in chunks {
         assert!(ipc.len() <= max_bytes);
         let batch = decode_one_record_batch(&ipc).unwrap();
-        let data = batch.column_by_name("data").unwrap().as_string::<i32>();
+        let data = batch.column_by_name(column).unwrap().as_string::<i32>();
         received.extend(data.iter().map(|value| value.unwrap().to_string()));
         assert_eq!(last_seq, received.len() as i64 * 10);
     }
     assert_eq!(
         received,
         (0..12)
-            .map(|index| format!("{index}:{}", "x".repeat(400)))
+            .map(|index| format!("{index}:{payload}"))
             .collect::<Vec<_>>()
     );
 }

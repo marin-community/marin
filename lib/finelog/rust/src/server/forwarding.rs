@@ -1047,9 +1047,9 @@ where
         fills.complete();
         let scan_elapsed = scan_started.elapsed();
 
-        let encode_started = Instant::now();
+        let prepare_started = Instant::now();
         let rows = prepare_forward_batches(result, &self.config.cluster)?;
-        let encode_elapsed = encode_started.elapsed();
+        let prepare_elapsed = prepare_started.elapsed();
         let row_count: usize = rows.iter().map(|(batch, _)| batch.num_rows()).sum();
         let complete_window = row_count < batch_rows as usize;
         let total = read_started.elapsed();
@@ -1066,7 +1066,7 @@ where
                 snapshot_ms = snapshot_elapsed.as_millis() as u64,
                 planning_ms = planning_elapsed.as_millis() as u64,
                 scan_ms = scan_elapsed.as_millis() as u64,
-                encode_ms = encode_elapsed.as_millis() as u64,
+                prepare_ms = prepare_elapsed.as_millis() as u64,
                 total_ms = total.as_millis() as u64,
                 "finelog forwarder: slow read completed"
             );
@@ -1086,7 +1086,7 @@ where
                 snapshot_ms = snapshot_elapsed.as_millis() as u64,
                 planning_ms = planning_elapsed.as_millis() as u64,
                 scan_ms = scan_elapsed.as_millis() as u64,
-                encode_ms = encode_elapsed.as_millis() as u64,
+                prepare_ms = prepare_elapsed.as_millis() as u64,
                 total_ms = total.as_millis() as u64,
                 "finelog forwarder: read completed"
             );
@@ -1381,7 +1381,8 @@ fn prepare_forward_batches(
         .collect()
 }
 
-/// Coalesce small engine batches without ever building an unbounded Arrow array.
+/// Return IPC chunks bounded by `max_bytes`, each with its highest source sequence.
+/// A single oversized row is emitted alone.
 fn chunk_batches_by_bytes(
     batches: Vec<(RecordBatch, Int64Array)>,
     max_bytes: usize,
