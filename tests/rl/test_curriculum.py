@@ -6,18 +6,21 @@
 from dataclasses import replace
 
 import pytest
-
 from marin.rl.curriculum import CurriculumEntry, CurriculumStage, RlCurriculum, SamplingMode, SourcePin
 
 RECIPE = "experiments.post_training.task_curation.pipeline.process_rows"
 
 
-def _entry(label: str = "gsm8k", version: str = "1", weight: float | None = 0.7, pin: str = "e53f048") -> CurriculumEntry:
+def _entry(
+    label: str = "gsm8k", version: str = "1", weight: float | None = 0.7, pin: str = "e53f048"
+) -> CurriculumEntry:
     return CurriculumEntry(
         label=label,
         source=label,
         version=version,
-        pin=SourcePin(name="openai/gsm8k" if pin else "", revision=pin or None, url="https://huggingface.co/datasets/openai/gsm8k"),
+        pin=SourcePin(
+            name="openai/gsm8k" if pin else "", revision=pin or None, url="https://huggingface.co/datasets/openai/gsm8k"
+        ),
         recipe=RECIPE,
         weight=weight,
     )
@@ -85,8 +88,6 @@ def test_curriculum_weighted_mode_projects_the_domain_weights_contract():
 
 def test_curriculum_ordered_mode_projects_the_declared_stages():
     curriculum = _ordered()
-    assert curriculum.stage_quota("gsm8k") == 4096
-    assert curriculum.stage_quota("svamp") is None
     assert curriculum.sampling_config() == {
         "kind": "ordered",
         "stages": [{"source": "gsm8k", "quota": 4096}, {"source": "svamp", "quota": None}],

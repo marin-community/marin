@@ -16,9 +16,9 @@ records the full curriculum and the run's artifact record names it, so any run's
 recoverable. See ``docs/references/rl-curricula.md``.
 """
 
+import math
 from dataclasses import dataclass
 from enum import StrEnum
-import math
 from typing import cast
 
 from marin.execution.artifact import validate_path_segment
@@ -145,23 +145,10 @@ class RlCurriculum:
         Entries are sorted by label so declaration order never moves the fingerprint; the stage
         order is the declared sequence and is part of the identity."""
         return {
-            "entries": sorted(
-                (
-                    {
-                        "label": entry.label,
-                        "source": entry.source,
-                        "version": entry.version,
-                        "pin": {"name": entry.pin.name, "revision": entry.pin.revision, "url": entry.pin.url},
-                        "recipe": entry.recipe,
-                        "weight": entry.weight,
-                    }
-                    for entry in self.entries
-                ),
-                key=lambda entry: entry["label"],
-            ),
+            "entries": sorted(map(entry_payload, self.entries), key=lambda payload: payload["label"]),
             "mode": self.mode.value,
             "seed": self.seed,
-            "stages": [{"source": stage.label, "quota": stage.quota} for stage in self.stages],
+            "stages": list(map(stage_payload, self.stages)),
         }
 
     @property
@@ -176,19 +163,29 @@ class RlCurriculum:
         # __post_init__ leaves no None weight in weighted mode.
         return cast(dict[str, float], {entry.label: entry.weight for entry in self.entries})
 
-    def stage_quota(self, label: str) -> int | None:
-        """The quota of the (first) stage that samples ``label``; ``None`` when unbounded."""
-        for stage in self.stages:
-            if stage.label == label:
-                return stage.quota
-        raise ValueError(f"{self.identity} has no stage for {label!r}")
-
     def sampling_config(self) -> dict:
         """The ``data.sampling`` recipe subtree this curriculum renders to."""
         if self.mode is SamplingMode.WEIGHTED:
             return {"kind": "domain-weighted", "domain_weights": self.weights(), "seed": self.seed}
         return {
             "kind": "ordered",
-            "stages": [{"source": stage.label, "quota": stage.quota} for stage in self.stages],
+            "stages": [stage_payload(stage) for stage in self.stages],
             "seed": self.seed,
         }
+
+
+def entry_payload(entry: CurriculumEntry) -> dict:
+    """The canonical record of one source entry: identity, pin, recipe identity, and weight."""
+    return {
+        "label": entry.label,
+        "source": entry.source,
+        "version": entry.version,
+        "pin": {"name": entry.pin.name, "revision": entry.pin.revision, "url": entry.pin.url},
+        "recipe": entry.recipe,
+        "weight": entry.weight,
+    }
+
+
+def stage_payload(stage: CurriculumStage) -> dict:
+    """The canonical record of one ordered stage: its source label and draw quota."""
+    return {"source": stage.label, "quota": stage.quota}

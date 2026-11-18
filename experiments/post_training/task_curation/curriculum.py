@@ -50,39 +50,52 @@ def _resolved(name: str, catalog: Mapping[str, RlDataSource]) -> RlDataSource:
     return source
 
 
-def rl_curriculum(
+def weighted_curriculum(
     name: str,
     version: str,
     *,
-    mode: SamplingMode,
-    weights: Mapping[str, float] | None = None,
-    stages: Sequence[str] = (),
+    weights: Mapping[str, float],
+    seed: int = 0,
+    catalog: Mapping[str, RlDataSource] | None = None,
+) -> RlCurriculum:
+    """Build a weight-random curriculum over named catalog sources.
+
+    ``weights`` maps a source's catalog name to its mixture weight. Every named source must exist
+    in the catalog (default: :func:`runnable_sources`) and carry a pinned dataset; the source's
+    current version, pin, and pipeline identity are recorded at build time.
+    """
+    sources = runnable_sources() if catalog is None else catalog
+    entries = tuple(_entry(label, _resolved(label, sources), weight) for label, weight in weights.items())
+    return RlCurriculum(
+        name=name,
+        version=version,
+        mode=SamplingMode.WEIGHTED,
+        entries=entries,
+        stages=(),
+        seed=seed,
+        fingerprint="",
+    )
+
+
+def ordered_curriculum(
+    name: str,
+    version: str,
+    *,
+    stages: Sequence[str],
     quotas: Mapping[str, int | None] | None = None,
     seed: int = 0,
     catalog: Mapping[str, RlDataSource] | None = None,
 ) -> RlCurriculum:
-    """Build a curriculum over named catalog sources.
+    """Build an ordered curriculum over named catalog sources.
 
-    ``weights`` maps a source's catalog name to its weighted-mode mixture weight. ``stages`` lists
-    the ordered-mode sequence of source names, and ``quotas`` bounds each stage visit in prompts (an
-    absent quota runs one full pass over that source's rows). Every named source must exist in the
-    catalog (default: :func:`runnable_sources`) and carry a pinned dataset; the source's current
-    version, pin, and pipeline identity are recorded at build time.
+    ``stages`` lists source names in the order the trainer consumes them; ``quotas`` bounds each
+    stage visit in prompts (an absent quota runs one full pass over that source's rows). Every
+    named source must exist in the catalog (default: :func:`runnable_sources`) and carry a pinned
+    dataset; the source's current version, pin, and pipeline identity are recorded at build time.
     """
     sources = runnable_sources() if catalog is None else catalog
-    if mode is SamplingMode.WEIGHTED:
-        if weights is None or not weights:
-            raise ValueError(f"weighted curriculum {name}@{version} needs weights")
-        if stages or quotas:
-            raise ValueError(f"weighted curriculum {name}@{version} takes weights, not stages or quotas")
-        entries = tuple(_entry(label, _resolved(label, sources), weight) for label, weight in weights.items())
-        return RlCurriculum(
-            name=name, version=version, mode=mode, entries=entries, stages=(), seed=seed, fingerprint=""
-        )
     if not stages:
         raise ValueError(f"ordered curriculum {name}@{version} needs a non-empty stage order")
-    if weights is not None:
-        raise ValueError(f"ordered curriculum {name}@{version} takes stages, not weights")
     quota_map = quotas or {}
     stray = sorted(set(quota_map) - set(stages))
     if stray:
@@ -90,5 +103,11 @@ def rl_curriculum(
     entries = tuple(_entry(label, _resolved(label, sources), None) for label in dict.fromkeys(stages))
     declared = tuple(CurriculumStage(label=label, quota=quota_map.get(label)) for label in stages)
     return RlCurriculum(
-        name=name, version=version, mode=mode, entries=entries, stages=declared, seed=seed, fingerprint=""
+        name=name,
+        version=version,
+        mode=SamplingMode.ORDERED,
+        entries=entries,
+        stages=declared,
+        seed=seed,
+        fingerprint="",
     )
