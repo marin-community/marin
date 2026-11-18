@@ -105,8 +105,8 @@
     {
       "path": "part-004.json",
       "repo": "open-athena/marin-license-receipts",
-      "revision": "391ab8dfb76ce2eab469d8d5bc342f1e7722cd25",
-      "sha256": "3d60bc70e09f7a00d5fece34136d4d68420089a9bcdc8e6e488d863ab6abfed6"
+      "revision": "9c55bfb2ee7d0a1284611938e009486c1099bbf3",
+      "sha256": "eaa8094b3df9b370f3b7966da27a30ff31fc0fbfcd6133c7668418979dcf797f"
     },
     {
       "path": "part-011.json",
@@ -273,8 +273,8 @@
     {
       "path": "part-002.json",
       "repo": "open-athena/marin-license-receipts",
-      "revision": "b367800eeba02cc5f97a1a3aed33f6ad78eb2cdf",
-      "sha256": "6205b0e6e3ce581fa3991dcadc0972e8b0a0d2a2755cc040890cd15b5606ca9b"
+      "revision": "9c55bfb2ee7d0a1284611938e009486c1099bbf3",
+      "sha256": "2c51259b30eaccbb5a0f181a5f3629f18c7b0d06d4540d7b67736ad3bbd22906"
     },
     {
       "path": "part-045.json",
