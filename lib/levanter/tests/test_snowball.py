@@ -333,6 +333,13 @@ def test_snowball_moe_capacity_is_a_runtime_setting():
     assert preserve_hf_runtime_settings(reloaded, cfg).moe_capacity_factor == 4.0
 
 
+def test_hf_reload_keeps_router_combine_fp32():
+    requested = _tiny_config(router_combine_fp32=True)
+    reloaded = SnowballConfig.from_hf_config(requested.to_hf_config(requested.vocab_size))
+    assert not reloaded.router_combine_fp32
+    assert preserve_hf_runtime_settings(reloaded, requested).router_combine_fp32
+
+
 def test_snowball_fp32_activations_is_a_runtime_setting():
     """The runtime flag stays out of HF metadata and rejects the BF16-only fused backend."""
     cfg = _tiny_config(fp32_activations=True)
