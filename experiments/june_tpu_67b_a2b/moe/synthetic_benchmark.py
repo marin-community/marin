@@ -25,6 +25,7 @@ parameters over a cross-node ``data`` axis (FSDP), and ``--expert-axis 16`` spre
 
 import argparse
 import dataclasses
+import json
 import logging
 import time
 from pathlib import Path
@@ -34,7 +35,7 @@ import jax
 import jmp
 import numpy as np
 from fray.cluster import ResourceConfig
-from levanter.callbacks import StepInfo
+from levanter.callbacks._metrics import log_throughput_summary
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig, XprofUploadConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -50,7 +51,6 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import multihost_broadcast_sync
 from rigging.log_setup import configure_logging
 
-from experiments.grug.snowball_synthetic.train import FIRST_TIMED_STEP, log_throughput_summary
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, RematMode
 from experiments.june_tpu_67b_a2b.moe.train import (
@@ -69,6 +69,8 @@ SNOWBALL_HIDDEN_DIM = 2560
 # The width heuristic would otherwise derive seq_len // 2 and give the medium preset a shorter window than Snowball's.
 SNOWBALL_SLIDING_WINDOW = 2048
 POOLED_WAVE_MOE_IMPL = "fixed_pooled_wave_all_to_all"
+# Steps 0 and 1 are excluded from the summary, as in the Snowball harness: step 0 compiles.
+FIRST_TIMED_STEP = 2
 
 
 def snowball_model(seq_len: int) -> GrugModelConfig:
@@ -153,6 +155,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--profile-steps", type=int, default=0, help="Profile this many steps (0 disables).")
     parser.add_argument("--profile-start", type=int, default=10, help="First profiled step.")
+    parser.add_argument(
+        "--profile-hlo",
+        action="store_true",
+        help="Save HLO protos in the profile, so trace tools can tell ragged_dot lowerings from dense GEMMs.",
+    )
     parser.add_argument("--log-dir", type=Path, default=Path("logs/june-synthetic"))
     parser.add_argument("--run-id", help="Run id under --log-dir (default: size and timestamp).")
     parser.add_argument("--compilation-cache-dir", help="Persistent JAX compilation cache directory.")
@@ -207,6 +214,21 @@ def log_model_flops(flops_per_example: float, flops_summary: dict[str, float]) -
         flops_summary[ATTENTION_FLOPS_PER_EXAMPLE_KEY],
         flops_summary[CAUSAL_ATTENTION_FLOPS_PER_EXAMPLE_KEY],
     )
+
+
+class StepDurations(logging.Handler):
+    """Collects the per-step durations the training loop logs through the JSON tracker (process 0 only)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.by_step: dict[int, float] = {}
+
+    def emit(self, record: logging.LogRecord) -> None:
+        event = json.loads(record.getMessage())
+        duration = event.get("metrics", {}).get("throughput/duration") if event.get("event") == "log" else None
+        # Keyed by step: the loop logs the last step a second time when it re-runs its hooks after training.
+        if duration is not None and event["step"] >= FIRST_TIMED_STEP:
+            self.by_step[event["step"]] = duration
 
 
 def main() -> None:
@@ -268,8 +290,7 @@ def main() -> None:
             start_step=args.profile_start,
             num_steps=args.profile_steps,
             upload=XprofUploadConfig(enabled=False),
-            # HLO protos add /host:metadata so trace tools can identify ragged_dot kernels.
-            profile_options=ProfileOptionsConfig(enable_hlo_proto=True),
+            profile_options=ProfileOptionsConfig(enable_hlo_proto=args.profile_hlo),
         ),
         jax_compilation_cache_dir=args.compilation_cache_dir,
         log_jaxprs=False,
@@ -336,16 +357,22 @@ def main() -> None:
         flops_per_example,
     )
     log_model_flops(flops_per_example, flops_summary)
-    step_durations: list[float] = []
-
-    def record_step(info: StepInfo, force: bool = False) -> None:
-        # The loop re-runs every hook with force=True after the last step; that call would duplicate the sample.
-        if not force and info.step >= FIRST_TIMED_STEP:
-            step_durations.append(info.step_duration)
-
-    _run_grug_local(config, step_hooks=[record_step])
-    if step_durations:
-        log_throughput_summary(step_durations, batch_size, model.max_seq_len, flops_per_example, args.steps)
+    step_durations = StepDurations()
+    tracker_log = logging.getLogger(JsonLoggerConfig.logger_name)
+    tracker_log.addHandler(step_durations)
+    try:
+        _run_grug_local(config)
+    finally:
+        tracker_log.removeHandler(step_durations)
+    if step_durations.by_step:
+        log_throughput_summary(
+            list(step_durations.by_step.values()),
+            batch_size,
+            model.max_seq_len,
+            flops_per_example,
+            first_step=FIRST_TIMED_STEP,
+            last_step=args.steps - 1,
+        )
     report_memory()
 
 

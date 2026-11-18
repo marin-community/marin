@@ -9,7 +9,7 @@ import faulthandler
 import functools
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -494,11 +494,8 @@ def exit_if_hung(timeout: float | None):
         faulthandler.cancel_dump_traceback_later()
 
 
-def _run_grug_local(config: GrugRunConfig, *, step_hooks: Sequence[Callable[[callbacks.StepInfo], object]] = ()) -> None:
-    """Entry point for the grug template training loop.
-
-    ``step_hooks`` run after every step alongside the logging hooks, for example to collect step durations.
-    """
+def _run_grug_local(config: GrugRunConfig) -> None:
+    """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
@@ -632,8 +629,6 @@ def _run_grug_local(config: GrugRunConfig, *, step_hooks: Sequence[Callable[[cal
                 every=1,
             )
         state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
-        for hook in step_hooks:
-            state_callbacks.add_hook(hook, every=1)
         if evaluator is not None and eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None

@@ -26,7 +26,6 @@ Example, 8 GPUs, full 67B shape, one 4096-token sequence per GPU, profile of ste
 import argparse
 import dataclasses
 import logging
-import statistics
 import time
 from pathlib import Path
 from typing import get_args
@@ -38,7 +37,7 @@ import levanter.trainer
 import numpy as np
 from haliax import Axis
 from levanter import callbacks
-from levanter.callbacks._metrics import aggregate_device_flops, compute_instant_throughput
+from levanter.callbacks._metrics import log_throughput_summary
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig, XprofUploadConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
@@ -145,6 +144,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--profile-steps", type=int, default=0, help="Profile this many steps (0 disables).")
     parser.add_argument("--profile-start", type=int, default=10, help="First profiled step.")
+    parser.add_argument(
+        "--profile-hlo",
+        action="store_true",
+        help="Save HLO protos in the profile, so trace tools can tell ragged_dot lowerings from dense GEMMs.",
+    )
     parser.add_argument("--log-dir", type=Path, default=Path("logs/snowball-synthetic"))
     parser.add_argument("--run-id", help="Run id under --log-dir (default: size and timestamp).")
     parser.add_argument("--compilation-cache-dir", help="Persistent JAX compilation cache directory.")
@@ -199,8 +203,7 @@ def build_trainer_config(args: argparse.Namespace, preset: Preset, run_id: str, 
             start_step=args.profile_start,
             num_steps=args.profile_steps,
             upload=XprofUploadConfig(enabled=False),
-            # HLO protos add /host:metadata so trace tools can identify ragged_dot kernels.
-            profile_options=ProfileOptionsConfig(enable_hlo_proto=True),
+            profile_options=ProfileOptionsConfig(enable_hlo_proto=args.profile_hlo),
         ),
         jax_compilation_cache_dir=args.compilation_cache_dir,
         log_jaxprs=False,
@@ -216,24 +219,6 @@ def log_model_flops(flops_per_example: float, attention_per_token: AttentionFlop
         flops_per_example,
         3 * attention_per_token.noncausal * seq_len,
         3 * attention_per_token.causal * seq_len,
-    )
-
-
-def log_throughput_summary(
-    step_durations: list[float], batch_size: int, seq_len: int, flops_per_example: float, num_steps: int
-) -> None:
-    if jax.process_index() != 0:
-        return
-    median = statistics.median(step_durations)
-    throughput = compute_instant_throughput(batch_size, median, seq_len, flops_per_example, aggregate_device_flops())
-    logger.info(
-        "median step over steps %d-%d: %.3f s  %s tokens/s  %s model TFLOP/s  MFU %s%%",
-        FIRST_TIMED_STEP,
-        num_steps - 1,
-        median,
-        f"{throughput.tokens_per_second:,.0f}" if throughput.tokens_per_second is not None else "n/a",
-        f"{throughput.model_flops_per_second / 1e12:.1f}" if throughput.model_flops_per_second is not None else "n/a",
-        f"{throughput.mfu:.2f}" if throughput.mfu is not None else "n/a",
     )
 
 
@@ -314,7 +299,14 @@ def main() -> None:
         trainer.tracker.finish()
 
     if step_durations:
-        log_throughput_summary(step_durations, batch_size, seq_len, flops_per_example, args.steps)
+        log_throughput_summary(
+            step_durations,
+            batch_size,
+            seq_len,
+            flops_per_example,
+            first_step=FIRST_TIMED_STEP,
+            last_step=args.steps - 1,
+        )
     report_memory()
 
 
