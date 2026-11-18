@@ -5421,6 +5421,129 @@ mod tests {
         }
     }
 
+    /// `timestamp_ms` bounds per segment, sorted, from the catalog and from the
+    /// live query view the planner reads.
+    fn catalog_and_live_bounds(store: &Store) -> (Vec<ColumnRange>, Vec<ColumnRange>) {
+        let collect = |bounds: Vec<Option<ColumnRange>>| {
+            let mut bounds: Vec<_> = bounds
+                .into_iter()
+                .map(|range| range.expect("every segment records timestamp_ms bounds"))
+                .collect();
+            bounds.sort_by_key(|range| format!("{range:?}"));
+            bounds
+        };
+        let catalog = store
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .into_iter()
+            .map(|record| record.column_bounds.get("timestamp_ms").copied())
+            .collect();
+        let live = store
+            .tables
+            .require("iris.worker")
+            .unwrap()
+            .live_segments()
+            .into_iter()
+            .map(|segment| segment.column_bounds.get("timestamp_ms").copied())
+            .collect();
+        (collect(catalog), collect(live))
+    }
+
+    fn three_write_bounds() -> Vec<ColumnRange> {
+        vec![
+            ColumnRange::new(1_000, 1_500),
+            ColumnRange::new(2_000, 2_500),
+            ColumnRange::new(3_000, 3_500),
+        ]
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn compaction_carries_column_bounds_through_merge_and_level_bump() {
+        // Compaction runs alone, without the footer backfill that would repair
+        // bounds a compaction dropped.
+        async fn compact(table: &TimeBoundedTable) {
+            let runtime = table.store.tables.require("iris.worker").unwrap();
+            maintenance::run(
+                &runtime,
+                TableWork::Compaction {
+                    force_compact_l0: true,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let table = TimeBoundedTable::new("column_bounds_compaction", false).await;
+        let runtime = table.store.tables.require("iris.worker").unwrap();
+
+        // The three L0 segments merge into one L1 object.
+        compact(&table).await;
+        assert_eq!(runtime.live_segments().len(), 1);
+        let merged = vec![ColumnRange::new(1_000, 3_500)];
+        assert_eq!(
+            catalog_and_live_bounds(&table.store),
+            (merged.clone(), merged.clone()),
+            "a merge records the union of its inputs' bounds"
+        );
+
+        // A lone L0 segment is promoted to L1 without a rewrite.
+        let (_, ipc) = worker_ipc(&[("w-4", 1, 4_000), ("w-4", 2, 4_500)]);
+        table.store.write_rows("iris.worker", &ipc, None).unwrap();
+        maintenance::run(&runtime, TableWork::Flush).await.unwrap();
+        compact(&table).await;
+        assert!(runtime.live_segments().iter().all(|segment| segment.level == 1));
+        let mut expected = merged;
+        expected.push(ColumnRange::new(4_000, 4_500));
+        assert_eq!(
+            catalog_and_live_bounds(&table.store),
+            (expected.clone(), expected),
+            "a level bump keeps its input's bounds"
+        );
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn column_bounds_survive_restart_and_checkpoint_recovery() {
+        let table = TimeBoundedTable::new("column_bounds_restart", true).await;
+        table.store.shutdown(Duration::from_secs(1)).await;
+        let TimeBoundedTable {
+            store,
+            data_dir,
+            remote_dir,
+            ..
+        } = table;
+        drop(store);
+
+        let reopened = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        reopened.bootstrap_maintenance();
+        reopened.recover_tables().await.unwrap();
+        assert_eq!(
+            catalog_and_live_bounds(&reopened),
+            (three_write_bounds(), three_write_bounds()),
+            "a restart on the same disk keeps the bounds"
+        );
+        reopened.shutdown(Duration::from_secs(1)).await;
+        drop(reopened);
+
+        let (recovered, empty_data_dir) =
+            recover_on_empty_disk(&remote_dir, "column_bounds_restart_cold").await;
+        assert_eq!(
+            catalog_and_live_bounds(&recovered),
+            (three_write_bounds(), three_write_bounds()),
+            "recovery from the remote checkpoint keeps the bounds"
+        );
+        recovered.shutdown(Duration::from_secs(1)).await;
+        for dir in [data_dir, empty_data_dir, remote_dir] {
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn flushed_segments_record_column_bounds() {
         let table = TimeBoundedTable::new("column_bounds_flushed", false).await;
