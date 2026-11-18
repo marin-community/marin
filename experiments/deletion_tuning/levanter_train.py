@@ -245,7 +245,22 @@ def _initialize_deletion(model, *, config, trainer, settings: DeletionTrainSetti
     return apply_deletion_init(model, settings, routed_norms, shared_norms, threshold=threshold, num_layers=num_layers)
 
 
-def main(config, settings: DeletionTrainSettings) -> None:
+def main(config):
+    """Run Levanter's ``train_lm.main`` with Deletion Tuning applied.
+
+    The settings ride ``config.model.deletion_tuning``; ``total_steps`` is the
+    trainer's step count.
+    """
+    settings = DeletionTrainSettings(
+        total_steps=config.trainer.num_train_steps,
+        alpha_start=config.model.deletion_tuning.alpha_start,
+        alpha_end=config.model.deletion_tuning.alpha_end,
+        eta=config.model.deletion_tuning.eta,
+        lam=config.model.deletion_tuning.lam,
+        lr=config.model.deletion_tuning.lr,
+        calibration_sequences=config.model.deletion_tuning.calibration_sequences,
+        seed=config.model.deletion_tuning.seed,
+    )
     """Run Levanter's ``train_lm.main`` with the Deletion-Tuning deltas applied.
 
     The standard main constructs ``Trainer`` and loads the model through two
@@ -253,11 +268,6 @@ def main(config, settings: DeletionTrainSettings) -> None:
     restores them afterwards, so the whole standard init/eval/checkpoint flow
     is reused verbatim.
     """
-    if config.trainer.num_train_steps != settings.total_steps:
-        raise ValueError(
-            f"settings.total_steps={settings.total_steps} disagrees with the trainer's {config.trainer.num_train_steps}"
-        )
-
     num_layers = config.model.num_layers
     original_loader = train_lm_module._load_lm_model_from_configured_source
     original_trainer_cls = train_lm_module.Trainer
