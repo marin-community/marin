@@ -4,12 +4,16 @@
 """Tests for the NCCL transport probe's log parsing and gate verdict."""
 
 import hashlib
+import os
+
+import pytest
 
 from experiments.post_training.nccl_transport_probe import (
     NcclCensus,
     gate_verdict,
     mapped_nccl_libraries,
     parse_nccl_census,
+    resolve_gloo_socket_ifname,
 )
 
 
@@ -68,3 +72,23 @@ def test_mapped_nccl_libraries_parses_proc_maps(tmp_path):
 
 def test_mapped_nccl_libraries_without_maps_is_empty(tmp_path):
     assert mapped_nccl_libraries(tmp_path / "missing") == []
+
+
+def test_resolve_gloo_socket_ifname_honors_ambient_value(monkeypatch):
+    """An ambient GLOO_SOCKET_IFNAME wins and no resolution runs."""
+    monkeypatch.setenv("GLOO_SOCKET_IFNAME", "ibp0")
+    assert resolve_gloo_socket_ifname("10.0.0.5") == "ibp0"
+
+
+def test_resolve_gloo_socket_ifname_resolves_and_exports(monkeypatch):
+    """Without an ambient value, the advertise address's interface is selected and exported."""
+    monkeypatch.delenv("GLOO_SOCKET_IFNAME", raising=False)
+    interface = resolve_gloo_socket_ifname("127.0.0.1")
+    assert os.environ["GLOO_SOCKET_IFNAME"] == interface
+
+
+def test_resolve_gloo_socket_ifname_fails_on_unowned_address(monkeypatch):
+    """An address no local interface owns must fail fast, not fall back to loopback."""
+    monkeypatch.delenv("GLOO_SOCKET_IFNAME", raising=False)
+    with pytest.raises(RuntimeError, match=r"203\.0\.113\.7"):
+        resolve_gloo_socket_ifname("203.0.113.7")
