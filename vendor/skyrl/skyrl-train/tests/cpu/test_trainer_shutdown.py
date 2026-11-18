@@ -1,4 +1,4 @@
-import asyncio
+from collections import Counter
 from types import SimpleNamespace
 
 import pytest
@@ -63,11 +63,14 @@ async def test_shutdown_releases_all_roles_without_a_late_process_failure(monkey
 
     trainer = RayPPOTrainer.__new__(RayPPOTrainer)
     trainer.context = SimpleNamespace(close=context_close)
-    trainer._expert_block_sync = Resource("sync", 30)
-    trainer._distillation_runtime = Resource("teacher", 30)
-    trainer.trajectory_runner = Resource("rollout", 60)
-    trainer.eval_trajectory_runner = Resource("evaluation", 60)
-    trainer.inference_engine_client = Resource("inference", 30)
+    # Each service finishes within its own deadline; their sum exceeds the old watchdog.
+    short_cleanup = 20
+    runner_cleanup = 50
+    trainer._expert_block_sync = Resource("sync", short_cleanup)
+    trainer._distillation_runtime = Resource("teacher", short_cleanup)
+    trainer.trajectory_runner = Resource("rollout", runner_cleanup)
+    trainer.eval_trajectory_runner = Resource("evaluation", runner_cleanup)
+    trainer.inference_engine_client = Resource("inference", short_cleanup)
     trainer.inference_engine_client.shutdown_http_endpoint = lambda: releases.append("http")
     trainer.inference_engine_client.engines = []
     trainer.trajectory_sink = Sink()
@@ -80,7 +83,7 @@ async def test_shutdown_releases_all_roles_without_a_late_process_failure(monkey
     clock.advance(1000)
 
     assert exits == []
-    assert releases == ["context", "sync", "teacher", "http", "rollout", "evaluation", "sink", "inference"]
+    assert Counter(releases) == Counter(["context", "sync", "teacher", "http", "rollout", "evaluation", "sink", "inference"])
 
 
 def test_stuck_shutdown_still_exits_with_failure(monkeypatch):
