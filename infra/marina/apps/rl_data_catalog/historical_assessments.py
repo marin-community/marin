@@ -27,17 +27,20 @@ def retain_prior_assessments(
     packet history grew past the r22 volume, and per-pipeline bounds overtook the biggest
     retained populations as well. The per-task tables (items, packets) copy in
     deterministic hash buckets of the task identity; the per-pipeline header tables
-    (populations, assessments) are small and copy whole. The missing-pipeline probe
-    deduplicates before its anti-join for the same reason.
+    (populations, assessments) are small and copy whole. The missing-pipeline probe reads
+    the prior load's materialized cohort summaries instead of scanning the retained item
+    volume, for the same reason.
     """
     copied = {}
     for table in ASSESSMENT_TABLES:
         names = [column.strip().split()[0] for column in columns[table].split(",")]
+        # The prior load's materialized cohort summaries carry its assessed pipeline
+        # set in a small indexed table; probing the per-task tables directly scans
+        # the whole retained item volume and exceeds the gateway statement timeout.
         missing = query(
-            f"SELECT pipeline_key FROM ("
-            f"SELECT DISTINCT previous.pipeline_key FROM atlas_{table} previous "
-            f"WHERE previous.load_id = :prior_load_id"
-            f") candidates WHERE NOT EXISTS (SELECT 1 FROM atlas_assessments current_assessment "
+            "SELECT pipeline_key FROM ("
+            "SELECT DISTINCT pipeline_key FROM atlas_cohort_summaries WHERE load_id = :prior_load_id"
+            ") candidates WHERE NOT EXISTS (SELECT 1 FROM atlas_assessments current_assessment "
             "WHERE current_assessment.load_id = :load_id "
             "AND current_assessment.pipeline_key = candidates.pipeline_key)",
             {"load_id": load_id, "prior_load_id": prior_load_id},
