@@ -10,6 +10,7 @@ oracle/NoP gates run, and publication is a separate ruled step.
 """
 
 import argparse
+import base64
 import io
 import json
 import logging
@@ -1155,6 +1156,7 @@ def run_oracle_campaign(
     concurrency: int = 16,
     drop_wrapper_solve_sh: bool = False,
     policy: Any,
+    actor_image: str | None = None,
     actor_repository: str | None = None,
     actor_image_tag: str = "v1",
     actor_registry_secret: str | None = None,
@@ -1172,8 +1174,18 @@ def run_oracle_campaign(
     tasks' actor image — the tracked campaign's actor-build/actor-push shape — because a
     zero-capability sandbox cannot unpack packages.
     """
-    actor_image = None
-    if actor_repository is not None:
+    if actor_image is None and actor_repository is None:
+        actor_image = None
+    registry_authfile = None
+    if actor_image is not None or actor_repository is not None:
+        # The trials' machine image pulls authenticate the same way the push does; the
+        # authfile is the GitHub packages credential wrapped for skopeo.
+        token = require_secret(actor_registry_secret or "GHCR_PUSH_TOKEN")
+        registry_authfile = work_root / "registry-auth.json"
+        encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        registry_authfile.write_text(json.dumps({"auths": {"ghcr.io": {"auth": encoded}}}))
+        registry_authfile.chmod(0o600)
+    if actor_image is None and actor_repository is not None:
         recipes = {source.info.id: source.config for source in configured_sources()}
         recipe = recipes.get(tracked_source_id)
         if recipe is None:
@@ -1187,16 +1199,11 @@ def run_oracle_campaign(
             if row.get("path") in paths:
                 decoded_rows[row["path"]] = recipe_source.source.decode(row, context)
         environment_requirements = cohort_actor_environment(decoded_rows)
-        authfile = None
-        if actor_registry_secret is not None:
-            authfile = work_root / "actor-registry-auth.json"
-            authfile.write_text(require_secret(actor_registry_secret))
-            authfile.chmod(0o600)
         actor_image = build_and_push_actor_image(
             environment_requirements,
             actor_repository,
             actor_image_tag,
-            authfile=authfile,
+            authfile=registry_authfile,
         )
     manifest = convert_cohort(
         tracked_source_id=tracked_source_id,
@@ -1234,6 +1241,8 @@ def run_oracle_campaign(
             **campaign_worker_limits(worker_root),
             **environment_kwargs,
         }
+        if registry_authfile is not None:
+            environment_kwargs.setdefault("registry_authfile", str(registry_authfile))
     export_coreweave_s3_credentials()
     calibrate_cohort(
         cohort_dir,
@@ -1375,6 +1384,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--campaign-environment", default="local")
     parser.add_argument("--campaign-environment-kwargs", default="{}")
     parser.add_argument(
+        "--actor-image",
+        help="Bind this already-pushed prepared actor image (skips the build)",
+    )
+    parser.add_argument(
         "--actor-image-repository",
         help="Build and bind the cohort's shared actor image from this internal repository",
     )
@@ -1445,6 +1458,7 @@ def main() -> None:
             concurrency=args.campaign_concurrency,
             drop_wrapper_solve_sh=args.drop_wrapper_solve_sh,
             policy=policy,
+            actor_image=args.actor_image,
             actor_repository=args.actor_image_repository,
             actor_image_tag=args.actor_image_tag,
             actor_registry_secret=args.actor_registry_secret,
