@@ -962,6 +962,7 @@ def campaign_worker_limits(root: Path, *, cgroup_root: Path | None = None, membe
     before machines can carry limits.
     """
     cgroup = cgroup_root or CGROUP_ROOT
+    root.mkdir(parents=True, exist_ok=True)
     membership = next(
         line
         for line in (membership_file or Path("/proc/self/cgroup")).read_text().splitlines()

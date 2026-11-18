@@ -1471,3 +1471,13 @@ class TestCampaignWorkerLimits:
         worker_root.mkdir()
         with pytest.raises(RuntimeError, match="no CPU/memory cgroup v2 domain"):
             lane.campaign_worker_limits(worker_root, cgroup_root=cgroup_root, membership_file=membership)
+
+
+def test_campaign_worker_limits_creates_a_fresh_worker_root(tmp_path):
+    """The worker root (and its evidence file) exists after the delegation ritual."""
+    cgroup_root = tmp_path / "sys" / "fs" / "cgroup"
+    membership = TestCampaignWorkerLimits._cgroup_tree(cgroup_root, "")
+    worker_root = tmp_path / "worker" / "fresh" / "nested"
+    kwargs = lane.campaign_worker_limits(worker_root, cgroup_root=cgroup_root, membership_file=membership)
+    assert (worker_root / "worker-cgroup.json").is_file()
+    assert kwargs["disk_root"] == str(worker_root / "sandbox-disks")
