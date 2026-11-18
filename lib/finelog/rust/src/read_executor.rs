@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::{JoinError, JoinSet};
 
-const READ_NICE: i32 = 5;
+const READ_NICE: i32 = if cfg!(target_os = "linux") { 5 } else { 0 };
 // Maintenance readers can await nested blocking cache reads. CPU affinity,
 // rather than a tiny blocking pool, limits their CPU use without deadlocking I/O.
 const MAX_BLOCKING_THREADS: usize = 32;
@@ -93,7 +93,7 @@ fn process_capacity() -> io::Result<(Vec<usize>, usize)> {
     {
         // A library caller may already be pinned. Measure the cgroup-aware CPU
         // budget with the process leader's mask without changing that caller.
-        return std::thread::Builder::new()
+        std::thread::Builder::new()
             .name("finelog-cpus".into())
             .spawn(|| {
                 let cpus = cpu_affinity(std::process::id() as libc::pid_t)?;
@@ -101,7 +101,7 @@ fn process_capacity() -> io::Result<(Vec<usize>, usize)> {
                 Ok((cpus, std::thread::available_parallelism()?.get()))
             })?
             .join()
-            .expect("CPU capacity probe panicked");
+            .expect("CPU capacity probe panicked")
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -113,7 +113,7 @@ fn process_capacity() -> io::Result<(Vec<usize>, usize)> {
 fn restrict_read_thread(_cpus: &[usize]) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     set_cpu_affinity(_cpus)?;
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     if unsafe { libc::nice(READ_NICE) } == -1 {
         return Err(io::Error::last_os_error());
     }

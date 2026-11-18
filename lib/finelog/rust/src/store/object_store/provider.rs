@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use object_store::client::SpawnedReqwestConnector;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as OsPath;
 use object_store::{
@@ -37,6 +38,7 @@ impl Provider {
             let (bucket, prefix) = split_bucket_and_prefix(rest);
             let backend = object_store::gcp::GoogleCloudStorageBuilder::from_env()
                 .with_bucket_name(bucket)
+                .with_http_connector(ingestion_connector()?)
                 .build()
                 .map_err(|error| {
                     StatsError::Internal(format!("build gcs store {bucket:?}: {error}"))
@@ -52,6 +54,7 @@ impl Provider {
             let (bucket, prefix) = split_bucket_and_prefix(rest);
             let backend = object_store::aws::AmazonS3Builder::from_env()
                 .with_bucket_name(bucket)
+                .with_http_connector(ingestion_connector()?)
                 .build()
                 .map_err(|error| {
                     StatsError::Internal(format!("build s3 store {bucket:?}: {error}"))
@@ -247,6 +250,15 @@ impl Provider {
     }
 }
 
+fn ingestion_connector() -> Result<SpawnedReqwestConnector, StatsError> {
+    // Capture the store-opening runtime, before a query can open a pooled
+    // connection on a CPU-bound read worker and strand later flush uploads.
+    let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+        StatsError::Internal(format!("open remote store on ingestion runtime: {error}"))
+    })?;
+    Ok(SpawnedReqwestConnector::new(runtime))
+}
+
 /// Whether `value` names a remote bucket URL rather than a local directory.
 pub fn is_remote_object_store(value: &str) -> bool {
     let value = value.trim();
@@ -257,5 +269,96 @@ fn split_bucket_and_prefix(value: &str) -> (&str, &str) {
     match value.split_once('/') {
         Some((bucket, prefix)) => (bucket, prefix.trim_matches('/')),
         None => (value, ""),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Bytes;
+    use axum::extract::State;
+    use axum::routing::get;
+    use axum::Router;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn remote_uploads_progress_when_the_connection_opening_read_worker_is_blocked() {
+        let ingress = tokio::runtime::Runtime::new().unwrap();
+        let reads = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        ingress.block_on(async {
+            let object = Arc::new(Mutex::new(Bytes::from_static(b"before")));
+            let app = Router::new()
+                .route(
+                    "/bucket/object",
+                    get(|State(value): State<Arc<Mutex<Bytes>>>| async move {
+                        ([("etag", "\"version\"")], value.lock().unwrap().clone())
+                    })
+                    .put(
+                        |State(value): State<Arc<Mutex<Bytes>>>, body: Bytes| async move {
+                            *value.lock().unwrap() = body;
+                            [("etag", "\"version\"")]
+                        },
+                    ),
+                )
+                .with_state(Arc::clone(&object));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let backend = Arc::new(
+                object_store::aws::AmazonS3Builder::new()
+                    .with_bucket_name("bucket")
+                    .with_region("test")
+                    .with_endpoint(endpoint)
+                    .with_allow_http(true)
+                    .with_skip_signature(true)
+                    .with_http_connector(ingestion_connector().unwrap())
+                    .build()
+                    .unwrap(),
+            );
+            let reader = Arc::clone(&backend);
+            reads
+                .spawn(async move {
+                    assert_eq!(
+                        reader
+                            .get(&OsPath::from("object"))
+                            .await
+                            .unwrap()
+                            .bytes()
+                            .await
+                            .unwrap(),
+                        "before"
+                    );
+                })
+                .await
+                .unwrap();
+            let (started, started_rx) = tokio::sync::oneshot::channel();
+            let (release, release_rx) = std::sync::mpsc::channel::<()>();
+            let blocked = reads.spawn(async move {
+                started.send(()).unwrap();
+                let _ = release_rx.recv();
+            });
+            started_rx.await.unwrap();
+            let upload = tokio::time::timeout(
+                Duration::from_secs(5),
+                backend.put(
+                    &OsPath::from("object"),
+                    Bytes::from_static(b"durable").into(),
+                ),
+            )
+            .await;
+            drop(release);
+            blocked.await.unwrap();
+            upload
+                .expect("flush upload waited for the blocked read runtime")
+                .unwrap();
+            assert_eq!(*object.lock().unwrap(), "durable");
+            server.abort();
+        });
     }
 }

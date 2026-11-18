@@ -34,14 +34,14 @@ use axum::routing::get;
 use axum::Router;
 use connectrpc::{ConnectRpcService, Limits, Router as ConnectRouter};
 
-use crate::proto::finelog::logging::{LogServiceExt, LOG_SERVICE_FETCH_LOGS_SPEC};
-use crate::proto::finelog::stats::{StatsServiceExt, STATS_SERVICE_QUERY_SPEC};
+use crate::proto::finelog::logging::LogServiceExt;
+use crate::proto::finelog::stats::StatsServiceExt;
 use crate::read_executor::read_executor;
 use crate::server::auth::{auth_gate, AuthInterceptor, AuthPolicy};
 use crate::server::forwarding::ForwardingConfig;
 use crate::server::ingest_health::IngestHealth;
 use crate::server::interceptors::{
-    ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
+    read_procedure, ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
     MAX_CONCURRENT_FETCH_LOGS, MAX_CONCURRENT_QUERY,
 };
 use crate::server::{debug, forwarded_prefix, introspection, legacy_path, spa, telemetry};
@@ -228,11 +228,7 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
 }
 
 async fn dispatch_reads(request: Request, next: Next) -> Response {
-    if request.method() != Method::POST
-        || ![STATS_SERVICE_QUERY_SPEC, LOG_SERVICE_FETCH_LOGS_SPEC]
-            .iter()
-            .any(|spec| request.uri().path() == spec.procedure)
-    {
+    if request.method() != Method::POST || read_procedure(request.uri().path()).is_none() {
         return next.run(request).await;
     }
     match read_executor()
