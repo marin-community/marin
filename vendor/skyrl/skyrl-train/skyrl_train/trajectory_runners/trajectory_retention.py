@@ -397,7 +397,6 @@ def build_trajectory_records(
         raise ValueError("verifier tests must have one entry per trajectory row")
     if metadata.global_step is None and metadata.training_phase != "eval":
         raise ValueError("Training retention requires an optimizer step")
-    # A request's step names the policy version being trained, which has completed one fewer update.
     model_version_step = (
         config.model_checkpoint_step if metadata.global_step is None else max(0, metadata.global_step - 1)
     )
@@ -640,6 +639,11 @@ def _is_mandatory(
     )
 
 
+def _fraction_selected(score: int, phase: str, config: TrajectoryRetentionConfig) -> bool:
+    fraction = config.eval_sample_fraction if phase == "eval" else None
+    return score / (1 << 256) < (config.sample_fraction if fraction is None else fraction)
+
+
 def _orphan_reasons(value: Mapping[str, Any], config: TrajectoryRetentionConfig) -> tuple[str, ...]:
     reward = value["reward"]
     response = value["response"]
@@ -654,8 +658,7 @@ def _orphan_reasons(value: Mapping[str, Any], config: TrajectoryRetentionConfig)
     if mandatory:
         return (_SELECTION_MANDATORY,)
     score = _serialized_sample_score(value)
-    fraction = config.eval_sample_fraction if value["phase"] == "eval" else None
-    if score / (1 << 256) < (config.sample_fraction if fraction is None else fraction):
+    if _fraction_selected(score, value["phase"], config):
         return (_SELECTION_FRACTION,)
     return ()
 
@@ -1056,8 +1059,7 @@ class TrajectorySink:
             return _Selection((_SELECTION_MANDATORY,))
 
         score = self._sample_score(record)
-        fraction = self.config.eval_sample_fraction if record.phase == "eval" else None
-        if score / (1 << 256) < (self.config.sample_fraction if fraction is None else fraction):
+        if _fraction_selected(score, record.phase, self.config):
             reasons.append(_SELECTION_FRACTION)
 
         displaced_id = None
