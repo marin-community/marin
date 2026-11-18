@@ -23,7 +23,7 @@ def run_checkpoint_export(cfg: DictConfig):
     if root is None:
         return checkpoint_exporter(cfg).run()
     journal = TrainingJournal(
-        prefix_join(root, "exports", f"step-{cfg.checkpoint_export.step}"),
+        prefix_join(prefix_join(root, "exports"), f"step-{cfg.checkpoint_export.step}"),
         cfg.trainer.run_name,
         "rl_export",
         "exporter",

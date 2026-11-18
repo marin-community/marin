@@ -23,6 +23,7 @@ from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_pla
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import CheckpointCallback, EvaluationCallback, HFModelSaveCallback
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.entrypoints import checkpoint_export
 from skyrl_train.hf_export import read_hf_export_request
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.rollouts.context import TrainingContext
@@ -365,3 +366,22 @@ async def test_evaluation_pauses_new_rollouts_before_checkpoint_io(tmp_path: Pat
     assert dispatched.is_set()
     assert json.loads((tmp_path / "existing-rollout.json").read_text()) == {"completed": True}
     assert (tmp_path / "validation.json").exists() is not save_fails
+
+
+def test_export_journal_preserves_success_at_step_path(tmp_path, monkeypatch):
+    result = SimpleNamespace(step=20, export_path=str(tmp_path / "model"))
+    exporter = SimpleNamespace(run=lambda: result)
+    monkeypatch.setattr(checkpoint_export, "checkpoint_exporter", lambda _cfg: exporter)
+    cfg = OmegaConf.create({
+        "trainer": {"native_telemetry_root": str(tmp_path / "telemetry"), "run_name": "export-test"},
+        "checkpoint_export": {"step": 20},
+    })
+
+    assert checkpoint_export.run_checkpoint_export._function(cfg) is result
+
+    receipts = list((tmp_path / "telemetry/exports/step-20/exporter").glob("*/receipt.json"))
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0].read_text())
+    assert receipt["status"] == "completed" and receipt["steps"] == [20]
+    history = [json.loads(line) for line in (receipts[0].parent / "history.jsonl").read_text().splitlines()]
+    assert history[0]["metrics"] == {"exported_checkpoint_step": 20}
