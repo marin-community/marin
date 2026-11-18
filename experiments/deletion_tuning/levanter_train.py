@@ -34,6 +34,7 @@ import numpy as np
 from levanter.models.snowball import SnowballLMHeadModel
 from levanter.models.snowball_deletion import (
     WANDA_SAMPLE_STRIDE,
+    DeletionTuningScope,
     deletion_trainable_filter,
     down_norms,
     init_gate_logits_jax,
@@ -59,6 +60,15 @@ class DeletionTrainSettings:
     lr: float
     calibration_sequences: int
     seed: int
+    scope: DeletionTuningScope = DeletionTuningScope.ROUTED_GATE
+
+    @property
+    def masks_up_and_down(self) -> bool:
+        return self.scope == DeletionTuningScope.ROUTED_AND_SHARED_ALL
+
+    @property
+    def masks_shared_experts(self) -> bool:
+        return self.scope == DeletionTuningScope.ROUTED_AND_SHARED_ALL
 
 
 def _capture_model(model: SnowballLMHeadModel) -> SnowballLMHeadModel:
@@ -290,6 +300,7 @@ def deletion_settings_from_config(config) -> DeletionTrainSettings:
         lr=config.model.deletion_tuning.lr,
         calibration_sequences=config.model.deletion_tuning.calibration_sequences,
         seed=config.model.deletion_tuning.seed,
+        scope=config.model.deletion_tuning.scope,
     )
 
 
