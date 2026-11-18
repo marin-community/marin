@@ -17,7 +17,7 @@ from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import runnable_sources
 
 
-def recipe_identity(pipeline: object) -> str:
+def _recipe_identity(pipeline: object) -> str:
     """The ``module.qualname`` identity of a source's curation pipeline callable."""
     qualname = getattr(pipeline, "__qualname__", None)
     if qualname is not None:
@@ -42,12 +42,9 @@ def curriculum_entry(label: str, source: RlDataSource, weight: float | None) -> 
         source=source.name,
         version=source.version,
         pin=SourcePin(name=dataset.name, revision=dataset.revision, url=dataset.url),
-        recipe=recipe_identity(source.pipeline),
+        recipe=_recipe_identity(source.pipeline),
         weight=weight,
     )
-
-
-_entry = curriculum_entry
 
 
 def _resolved(name: str, catalog: Mapping[str, RlDataSource]) -> RlDataSource:
@@ -72,7 +69,7 @@ def weighted_curriculum(
     current version, pin, and pipeline identity are recorded at build time.
     """
     sources = runnable_sources() if catalog is None else catalog
-    entries = tuple(_entry(label, _resolved(label, sources), weight) for label, weight in weights.items())
+    entries = tuple(curriculum_entry(label, _resolved(label, sources), weight) for label, weight in weights.items())
     return RlCurriculum(
         name=name,
         version=version,
@@ -106,7 +103,7 @@ def ordered_curriculum(
     stray = sorted(set(quota_map) - set(stages))
     if stray:
         raise ValueError(f"ordered curriculum {name}@{version} sets quotas for sources no stage samples: {stray}")
-    entries = tuple(_entry(label, _resolved(label, sources), None) for label in dict.fromkeys(stages))
+    entries = tuple(curriculum_entry(label, _resolved(label, sources), None) for label in dict.fromkeys(stages))
     declared = tuple(CurriculumStage(label=label, quota=quota_map.get(label)) for label in stages)
     return RlCurriculum(
         name=name,

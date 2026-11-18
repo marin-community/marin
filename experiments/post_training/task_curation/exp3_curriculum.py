@@ -22,8 +22,6 @@ counts come from the adopted releases' pinned provenance, so the curriculum and
 the release verification cannot drift apart.
 """
 
-import csv
-from pathlib import Path
 from types import MappingProxyType
 
 from marin.rl.curriculum import RlCurriculum, SamplingMode
@@ -41,9 +39,6 @@ from experiments.post_training.task_curation.source import RlDataSource
 
 CURRICULUM_NAME = "long-loop/exp3-rl"
 CURRICULUM_VERSION = "2026.11.17.55"
-RUN_ID = "users/benfeuer/checkpoints/mochi-exp3-rl-ib-2026.11.17.55"
-WANDB_RUN = "marin-community/marin-long-loop/f7m70xhc"
-
 SEED = 20261020
 BATCH_GROUPS = 64
 ROUTE_QUOTAS = MappingProxyType({"agentic": 32, "nonagentic": 32})
@@ -129,82 +124,3 @@ def exp3_rl_curriculum() -> RlCurriculum:
         stages=(),
         seed=SEED,
     )
-
-
-CSV_COLUMNS = (
-    "label",
-    "route",
-    "release",
-    "pin_revision",
-    "release_url",
-    "task_count",
-    "curriculum_share",
-    "sampled_groups",
-    "sampled_share",
-    "reward_initial",
-    "reward_initial_update",
-    "reward_peak",
-    "reward_peak_update",
-)
-
-# The run report. Sampled groups are the exact per-source group counts the 20
-# updates trained on, counted from the durable training-order dumps under the
-# run's export path (one uid per rollout row; 8 rollouts per group). Rewards are
-# each domain's mean raw (unshaped) reward per update from the W&B history
-# (f7m70xhc), the first update that sampled the domain and its maximum.
-RUN_SAMPLED_GROUPS = MappingProxyType(
-    {
-        AGENTIC_TRAIN_SOURCE: 640,
-        "open-thoughts/TaskTrove": 170,
-        REASONING_GYM_SOURCE: 139,
-        "nvidia/OpenScience": 133,
-        "nvidia/Nemotron-RL-Ultra-Training-Blends": 76,
-        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": 63,
-        "PRIME-RL/Eurus-2-RL-Data": 59,
-    }
-)
-RUN_UPDATES = 20
-RUN_REWARDS = MappingProxyType(
-    {
-        AGENTIC_TRAIN_SOURCE: ((0.244140625, 1), (0.479296875, 20)),
-        "open-thoughts/TaskTrove": ((0.58203125, 1), (0.9285714285714286, 13)),
-        REASONING_GYM_SOURCE: ((0.29407934030009325, 1), (0.868154761904762, 7)),
-        "nvidia/OpenScience": ((0.8333333333333334, 1), (0.975, 19)),
-        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": ((0.0, 1), (0.5833333333333334, 12)),
-        "nvidia/Nemotron-RL-Ultra-Training-Blends": ((0.40625, 1), (0.8035714285714286, 3)),
-        "PRIME-RL/Eurus-2-RL-Data": ((0.4375, 2), (1.0, 20)),
-    }
-)
-assert sum(RUN_SAMPLED_GROUPS.values()) == BATCH_GROUPS * RUN_UPDATES
-
-
-def write_composition_csv(path: Path) -> Path:
-    """Write the per-source composition and run-report table to ``path``."""
-    curriculum = exp3_rl_curriculum()
-    with path.open("w", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(CSV_COLUMNS)
-        for entry in curriculum.entries:
-            (initial, initial_update), (peak, peak_update) = RUN_REWARDS[entry.label]
-            writer.writerow(
-                [
-                    entry.label,
-                    SOURCE_ROUTES[entry.label],
-                    entry.source,
-                    entry.pin.revision,
-                    entry.pin.url,
-                    SOURCE_ROWS[entry.label],
-                    f"{entry.weight:.6f}",
-                    RUN_SAMPLED_GROUPS[entry.label],
-                    f"{RUN_SAMPLED_GROUPS[entry.label] / (BATCH_GROUPS * RUN_UPDATES):.6f}",
-                    initial,
-                    initial_update,
-                    peak,
-                    peak_update,
-                ]
-            )
-    return path
-
-
-if __name__ == "__main__":
-    print(write_composition_csv(Path(__file__).parent / "exp3_curriculum.csv"))
