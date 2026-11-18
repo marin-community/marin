@@ -10,11 +10,12 @@ from marina.jobs import job_engine
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from .app import EvaldashConfig, PostgresIngestor, StoreMode
+from .playground_reports import ingest_reports
 from .results_db import verify_schema
 
 
 def main() -> int:
-    """Reconcile every configured record prefix into EvalDash's PostgreSQL catalog once."""
+    """Reconcile every record prefix, then copy new playground reports, into EvalDash's PostgreSQL schema once."""
     config = EvaldashConfig.from_env(os.environ)
     if config.store is not StoreMode.POSTGRES:
         raise RuntimeError("the scheduled EvalDash ingest requires the postgres store")
@@ -24,6 +25,7 @@ def main() -> int:
         verify_schema(engine)
         ingestor = PostgresIngestor(engine, config.prefixes, config.ingest_interval, config.revalidate_after)
         failures = asyncio.run(ingestor.run_once())
+        failures += ingest_reports(engine, config.report_prefixes)
         if failures:
             raise RuntimeError(f"EvalDash ingest failed for prefixes: {', '.join(failures)}")
         return 0

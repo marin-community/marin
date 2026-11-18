@@ -657,3 +657,68 @@ export interface LaunchGroup {
   n_succeeded: number
   evals: GroupMember[]
 }
+
+// Playground reports: model feedback saved by the marin-serve dashboard's Report issue button.
+export const REPORT_STATUSES = ['new', 'triaged', 'filed', 'wont_fix'] as const
+export type ReportStatus = (typeof REPORT_STATUSES)[number]
+
+interface ReportTriage {
+  status: ReportStatus
+  notes: string
+  github_issue: string | null
+  triage_updated_at: string | null
+  triage_updated_by: string | null
+}
+
+// One row of /api/playground-reports, newest first.
+export interface ReportSummary extends ReportTriage {
+  report_id: string
+  created_at: string
+  model: string
+  reporter: string
+  description: string
+  has_conversation: boolean
+}
+
+// The serve dashboard's saved chat (marin.inference dashboard `Conversation`); only rendered fields.
+export interface PlaygroundToolCall {
+  id: string
+  name: string
+  arguments: Record<string, unknown>
+}
+
+export type PlaygroundMessage =
+  | { role: 'user'; content: string }
+  | {
+      role: 'assistant'
+      content: string
+      thinking?: string
+      error?: string | null
+      toolCalls?: PlaygroundToolCall[]
+      finishReason?: string
+    }
+  | { role: 'tool'; name: string; result: unknown; toolCallId?: string }
+
+export interface PlaygroundConversation {
+  title?: string
+  system?: string
+  customInstructions?: string
+  thinkingMode?: string
+  pythonTools?: string
+  webSearch?: boolean
+  messages: PlaygroundMessage[]
+}
+
+// /api/playground-reports/{id}: the stored report object plus its source and triage state.
+export interface ReportDetail extends ReportTriage {
+  report_id: string
+  source_url: string
+  created_at: string
+  serving: Record<string, unknown>
+  report: {
+    description: string
+    reporter: string
+    model: string
+    conversation: PlaygroundConversation | null
+  }
+}

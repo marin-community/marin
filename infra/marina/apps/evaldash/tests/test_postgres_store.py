@@ -4,6 +4,7 @@
 """Behavior of EvalDash's durable serving catalog and scheduled reconciliation."""
 
 import asyncio
+import json
 import math
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -14,6 +15,7 @@ from evaldash import app as evaldash_app
 from evaldash import fixtures, ingest, results_db
 from evaldash.db_migrations import apply_migrations
 from evaldash.metrics import record_headline
+from evaldash.playground_reports import fetch_report_summaries
 from evalrecords.records import EvalRunRecord, TaskCoverage, list_records, write_record
 from rigging.filesystem.step_status import STATUS_RUNNING, STATUS_SUCCESS, get_status_path
 from sqlalchemy.pool import StaticPool
@@ -75,7 +77,7 @@ def test_migrations_adopt_existing_serving_rows_and_boot_without_object_storage(
     assert _stored(_store(engine), record.run_id)["description"] == "seeded before migration"
     with engine.begin() as conn:
         migrations = set(conn.execute(sqlalchemy.text("SELECT name FROM schema_migrations")).scalars())
-    assert migrations == {"0001_initial", "0002_record_sources", "0003_repeat_aggregates"}
+    assert migrations == {"0001_initial", "0002_record_sources", "0003_repeat_aggregates", "0004_playground_reports"}
 
 
 def test_older_binary_rejects_a_database_with_unknown_migrations():
@@ -528,7 +530,21 @@ def test_scheduled_ingest_publishes_multiple_batches_without_loading_a_serving_s
     expected = {f"run-{index}" for index in range(257)}
     for run_id in expected:
         write_record(record.model_copy(update={"run_id": run_id}), str(prefix))
+    reports = tmp_path / "model-feedback" / "2026-11-18"
+    reports.mkdir(parents=True)
+    (reports / "090000-bbbb.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "id": "090000-bbbb",
+                "created_at": "2026-11-18T09:00:00+00:00",
+                "serving": {"model": "marin/demo"},
+                "report": {"description": "Too verbose.", "reporter": "", "model": "marin/demo", "conversation": None},
+            }
+        )
+    )
     monkeypatch.setenv("RECORDS_PREFIXES", str(prefix))
+    monkeypatch.setenv("PLAYGROUND_REPORT_PREFIXES", str(tmp_path / "model-feedback"))
     monkeypatch.setenv("MARINA_DATABASE_URL", str(engine.url))
     monkeypatch.setenv("EVALDASH_STORE", "postgres")
     monkeypatch.setattr(ingest, "job_engine", lambda: engine)
@@ -554,3 +570,4 @@ def test_scheduled_ingest_publishes_multiple_batches_without_loading_a_serving_s
     assert sum(materialized_sizes) == len(expected)
     assert max(materialized_sizes) < len(expected)
     assert results_db.prefix_statuses(engine)[0].error is None
+    assert [row["report_id"] for row in fetch_report_summaries(engine)] == ["2026-11-18-090000-bbbb"]
