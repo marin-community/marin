@@ -1,0 +1,12 @@
+id: X0241
+slug: full-bandwidth-transformer-k-2-passes
+name: Full Bandwidth Transformer (K=2 passes)
+category: Depth connections
+summary: 'Track: speedrun'
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6945851317
+  author: xTimeCrystal
+  approved_by: ClassicLarry
