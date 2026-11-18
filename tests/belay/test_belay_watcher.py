@@ -40,13 +40,27 @@ def test_the_light_sync_reports_only_runs_the_page_shows_live_that_iris_shows_en
             "belay-X0002-seed0": sync.IrisRun("/loom/belay-X0002-seed0-coord", None, "failed", "t"),
         },
     )
-    status = sync.light_sync()
+    status = sync.light_sync(reap=False)
     assert [r["name"] for r in posted[0]["runs"]] == [
         "belay-X0001-seed0"
     ]  # not the live control, nor a run the page has closed
     assert status == {
+        "reaped": [],
         "ended": ["belay-X0001-seed0"],
         "queued_event_ids": [7],
         "session_active": False,
         "dispatch_enabled": True,
     }
+
+
+def test_the_light_sync_reaps_only_when_asked(monkeypatch) -> None:
+    queue = {"runs": [], "queued": [{"id": 3}], "sessions": [], "settings": {"dispatch_enabled": True}}
+    calls = []
+
+    def call(path, body=None):
+        calls.append(path)
+        return {"lost": ["loom-1118-223158"]} if path == "agent/sessions/reap" else queue
+
+    monkeypatch.setattr(sync, "call", call)
+    assert sync.light_sync(reap=False)["reaped"] == [] and "agent/sessions/reap" not in calls
+    assert sync.light_sync(reap=True)["reaped"] == ["loom-1118-223158"]

@@ -18,7 +18,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from weaver_loom import Round
+from weaver_loom import TERMINAL_STATUSES, Round
 
 CHECKOUT = Path("/home/app/marin_belay_dispatch")
 BRANCH = "marin_belay_v1_recipe"
@@ -29,13 +29,20 @@ def sh(*args: str) -> str:
     return subprocess.run(args, cwd=CHECKOUT, check=True, capture_output=True, text=True).stdout
 
 
-def queue_status() -> dict:
-    """Update the checkout and run the light sync; its last stdout line is the queue as JSON."""
+def queue_status(reap: bool) -> dict:
+    """Update the checkout and run the light sync (``reap``: also clear sessions that died); its last stdout line is
+    the queue as JSON."""
     sh("git", "fetch", "--quiet", "origin", BRANCH)
     sh("git", "reset", "--quiet", "--hard", f"origin/{BRANCH}")
-    return json.loads(
-        sh("uv", "run", "--quiet", "python", "-m", "experiments.belay", "sync", "--light").splitlines()[-1]
-    )
+    command = ["uv", "run", "--quiet", "python", "-m", "experiments.belay", "sync", "--light"]
+    return json.loads(sh(*command, *(["--reap"] if reap else [])).splitlines()[-1])
+
+
+def belay_session_alive(rnd: Round, profile: str) -> bool:
+    """Whether Loom has a live session on the Belay profile. When it has none, a session the Belay page still shows
+    running has died (its agent was lost or it ended without reporting) and holds its events until reaped."""
+    sessions = rnd.client._request("POST", "/sessions/list", {}) or []
+    return any(s.get("profile") == profile and s.get("status") not in TERMINAL_STATUSES for s in sessions)
 
 
 def session_spec(rnd: Round) -> tuple[str, dict]:
@@ -50,8 +57,11 @@ def session_spec(rnd: Round) -> tuple[str, dict]:
 
 
 def main(rnd: Round) -> None:
-    status = queue_status()
+    profile, session = session_spec(rnd)
+    status = queue_status(reap=not rnd.dry_run and not belay_session_alive(rnd, profile))
     ended = f"{len(status['ended'])} ended run(s) reported; " if status["ended"] else ""
+    if status["reaped"]:
+        ended += f"reaped dead session(s) {', '.join(status['reaped'])}; "
     events = status["queued_event_ids"]
     if not events or status["session_active"] or not status["dispatch_enabled"]:
         why = (
@@ -64,7 +74,6 @@ def main(rnd: Round) -> None:
         rnd.would("launch", idempotency_key=key, events=len(events))
         rnd.finish(f"{ended}would launch a Belay session for {len(events)} event(s)")
         return
-    profile, session = session_spec(rnd)
     run = rnd.client.run(profile, key, session, source="ops")
     rnd.did("launch", idempotency_key=key, run=(run or {}).get("id"), events=len(events))
     rnd.finish(f"{ended}launched a Belay session for {len(events)} event(s)")
