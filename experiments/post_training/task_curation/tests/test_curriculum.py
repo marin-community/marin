@@ -7,10 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from experiments.post_training.task_curation.curriculum import rl_curriculum
+from experiments.post_training.task_curation.curriculum import ordered_curriculum, weighted_curriculum
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
-from marin.rl.curriculum import SamplingMode
 
 _DUMMY_INPUT = Path("/unused/numbers.txt")
 
@@ -22,11 +21,10 @@ def _catalog() -> dict[str, RlDataSource]:
     }
 
 
-def test_rl_curriculum_records_pinned_source_identities():
-    curriculum = rl_curriculum(
+def test_weighted_curriculum_records_pinned_source_identities():
+    curriculum = weighted_curriculum(
         "users/tester/curricula/numbers-mix",
         "2026.11.18",
-        mode=SamplingMode.WEIGHTED,
         weights={"numbers": 0.6, "letters": 0.4},
         seed=17,
         catalog=_catalog(),
@@ -45,11 +43,10 @@ def test_rl_curriculum_records_pinned_source_identities():
     assert curriculum.identity.startswith("users/tester/curricula/numbers-mix@2026.11.18:")
 
 
-def test_rl_curriculum_ordered_stages_declare_the_sequence():
-    curriculum = rl_curriculum(
+def test_ordered_curriculum_declares_the_stage_sequence():
+    curriculum = ordered_curriculum(
         "users/tester/curricula/numbers-ladder",
         "2026.11.18",
-        mode=SamplingMode.ORDERED,
         stages=("numbers", "letters", "numbers"),
         quotas={"numbers": 8},
         seed=3,
@@ -67,35 +64,32 @@ def test_rl_curriculum_ordered_stages_declare_the_sequence():
     }
 
 
-def test_rl_curriculum_rejects_unknown_source():
+def test_curriculum_rejects_unknown_source():
     with pytest.raises(ValueError, match="unknown RL source 'ghost'"):
-        rl_curriculum(
+        weighted_curriculum(
             "users/tester/curricula/broken",
             "2026.11.18",
-            mode=SamplingMode.WEIGHTED,
             weights={"ghost": 1.0},
             catalog=_catalog(),
         )
 
 
-def test_rl_curriculum_rejects_unpinned_source():
+def test_curriculum_rejects_unpinned_source():
     catalog = {**_catalog(), "inventory": RlDataSource(info=SourceInfo(id="fixture:inventory", title="x", origin="f"))}
     with pytest.raises(ValueError, match="no pinned dataset"):
-        rl_curriculum(
+        ordered_curriculum(
             "users/tester/curricula/unpinned",
             "2026.11.18",
-            mode=SamplingMode.ORDERED,
             stages=("inventory",),
             catalog=catalog,
         )
 
 
-def test_rl_curriculum_rejects_quotas_for_unstaged_sources():
+def test_ordered_curriculum_rejects_quotas_for_unstaged_sources():
     with pytest.raises(ValueError, match="no stage samples"):
-        rl_curriculum(
+        ordered_curriculum(
             "users/tester/curricula/stray-quota",
             "2026.11.18",
-            mode=SamplingMode.ORDERED,
             stages=("numbers",),
             quotas={"letters": 4},
             catalog=_catalog(),
