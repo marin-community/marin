@@ -175,6 +175,11 @@ def prepare_license_publication(receipt: LicenseReceipt, output: Path, *, use: s
         if license_verdict(tuple(identifiers)) is not LicenseVerdict.ALLOWED:
             raise ValueError("Checked grant supplies no publishable permissive license identifier")
         metadata["license"] = identifiers[0] if len(identifiers) == 1 else identifiers
+    # HF's card schema accepts its own lowercase identifier spellings.
+    if isinstance(metadata.get("license"), str):
+        metadata["license"] = metadata["license"].lower()
+    elif isinstance(metadata.get("license"), list):
+        metadata["license"] = [str(item).lower() for item in metadata["license"]]
     metadata["license_source"] = {"dataset_id": dataset_id, "revision": revision, "url": url}
     metadata["license_evidence_urls"] = sorted(
         {

@@ -71,7 +71,7 @@ def snapshot_hub(tmp_path, monkeypatch, files):
                 "license_link": "https://example.test/notice",
             },
         ),
-        (b"# Dataset\n\n## License\nLicensed under Apache License 2.0.\n", {"license": "Apache-2.0"}),
+        (b"# Dataset\n\n## License\nLicensed under Apache License 2.0.\n", {"license": "apache-2.0"}),
     ],
 )
 def test_publication_preserves_custom_notice_and_grant_when_readme_evidence_repeats(
@@ -112,6 +112,15 @@ def test_pass_receipt_card_states_the_checker_verified_license(tmp_path, monkeyp
     )
     assert publication.metadata["license"] == "cc0-1.0"
     assert b"license: other" in (tmp_path / "published" / "UPSTREAM_README.md").read_bytes()
+
+
+def test_publication_license_ids_use_the_hub_card_spelling(tmp_path, monkeypatch):
+    card = b"---\nlicense: Apache-2.0\n---\nBody cites the Apache License 2.0 grant.\n"
+    snapshot_hub(tmp_path, monkeypatch, {"README.md": card})
+    publication = license_publication.prepare_license_publication(
+        source_receipt(card), tmp_path / "published", use="train"
+    )
+    assert publication.metadata["license"] == "apache-2.0"
 
 
 def test_changed_license_bytes_fail_before_publication_provenance_is_written(tmp_path, monkeypatch):
