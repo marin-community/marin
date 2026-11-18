@@ -13,6 +13,7 @@ import argparse
 import io
 import json
 import logging
+import os
 import shutil
 import tarfile
 import tempfile
@@ -30,7 +31,7 @@ from finestore.rl.licenses import LicenseReceipt
 from marin.inference import iris as iris_inference
 from marin.inference.openai_chat import OpenAIChatClient
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.s3_compat import StoreType, configure_coreweave_s3, s3_credentials
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256, task_identity
 from taskcompendium.models import EnvironmentRequirements, TaskSpec
@@ -924,6 +925,23 @@ def convert_cohort(
     return manifest
 
 
+def export_coreweave_s3_credentials() -> None:
+    """Materialize the named CoreWeave credentials under the ``AWS_*`` names for the trial subprocess.
+
+    Harbor runs each trial via ``uv run --isolated harbor trials start``; that subprocess reads
+    s3 credentials from the standard ``AWS_*`` environment variables, not this process's
+    in-memory fsspec config. Without them the trial cannot read the grader environment's original
+    package lock (a source repair gate before any trial) and every calibration fails on
+    infrastructure. Existing values win.
+    """
+    credentials = s3_credentials(StoreType.COREWEAVE)
+    if credentials is None:
+        return
+    key, secret = credentials
+    os.environ.setdefault("AWS_ACCESS_KEY_ID", key)
+    os.environ.setdefault("AWS_SECRET_ACCESS_KEY", secret)
+
+
 def run_oracle_campaign(
     *,
     tracked_source_id: str,
@@ -970,6 +988,7 @@ def run_oracle_campaign(
     prepare(cohort_dir, export_dir / "prepared", source_revision=source_revision, controls=recipe.controls)
     task_map = export_dir / "prepared" / "task-map.json"
     calibration_dir = work_root / "calibration"
+    export_coreweave_s3_credentials()
     calibrate_cohort(
         cohort_dir,
         task_map,

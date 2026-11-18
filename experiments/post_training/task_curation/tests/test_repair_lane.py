@@ -5,6 +5,7 @@
 
 import io
 import json
+import os
 import sys
 import tarfile
 import threading
@@ -1255,3 +1256,30 @@ def test_oracle_campaign_collects_trials_from_the_calibration_root(tmp_path, mon
     assert summary["harbor_tasks"] == 0
     assert summary["receipt_tasks"] == 3
     assert summary["admitted"] == 2
+
+
+class TestSubprocessCredentials:
+    """The harbor trial subprocess reads s3 credentials from the AWS_* environment."""
+
+    def test_exports_the_named_credentials_when_absent(self, monkeypatch):
+        monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+        monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+        monkeypatch.setattr(lane, "s3_credentials", lambda store: ("cw-key", "cw-secret"))
+        lane.export_coreweave_s3_credentials()
+        assert os.environ["AWS_ACCESS_KEY_ID"] == "cw-key"
+        assert os.environ["AWS_SECRET_ACCESS_KEY"] == "cw-secret"
+
+    def test_existing_values_win(self, monkeypatch):
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ambient-key")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ambient-secret")
+        monkeypatch.setattr(lane, "s3_credentials", lambda store: ("cw-key", "cw-secret"))
+        lane.export_coreweave_s3_credentials()
+        assert os.environ["AWS_ACCESS_KEY_ID"] == "ambient-key"
+        assert os.environ["AWS_SECRET_ACCESS_KEY"] == "ambient-secret"
+
+    def test_no_credentials_is_a_noop(self, monkeypatch):
+        monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+        monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+        monkeypatch.setattr(lane, "s3_credentials", lambda store: None)
+        lane.export_coreweave_s3_credentials()
+        assert "AWS_ACCESS_KEY_ID" not in os.environ
