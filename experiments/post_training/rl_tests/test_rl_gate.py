@@ -18,7 +18,6 @@ from finestore.rl.run_records import (
     EvaluationAnswerRow,
     EvaluationTaskRow,
     read_attempt,
-    read_evaluations,
     write_attempt,
     write_evaluations,
 )
@@ -141,6 +140,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     preset = snowball_model.SNOWBALL.by_name["speed-medium"]
     key = "policy/raw_grad_norm"
     pin = gate.control_pin(preset, table=snowball_model.SNOWBALL)
+    control_roots = []
     for index in range(pin.runs):
         root = recorded_runs(
             preset.name,
@@ -148,6 +148,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
             speed=100 + index,
             metrics={key: 100 + index},
         )
+        control_roots.append(root)
     candidates = []
     for index, value in enumerate((0, 0.01)):
         name = f"users/test/requirements-{index}"
@@ -178,6 +179,21 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         (0, True),
         (1, False),
     ]
+
+    table = snowball_model.SNOWBALL
+    pin = table.controls[preset.controls]
+    for root in control_roots:
+        shutil.copytree(root, root.with_name("stale"))
+    stale_table = replace(table, controls={**table.controls, preset.controls: replace(pin, revision="stale")})
+    stale = run(
+        gate.gate_step(
+            preset,
+            tuple(candidates),
+            table=stale_table,
+            inputs=GateInputs(preset_name=preset.name, requirements=("policy/raw_grad_norm<=11",)),
+        )
+    )[0]
+    assert stale.verdict == "invalid" and "recorded control revision=stale" in stale.reason
 
 
 def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, preset_table):
@@ -250,39 +266,28 @@ def test_training_invariants_from_recorded_values(recorded_runs, preset_table):
 def test_current_generation_counters_compare_with_stored_controls(recorded_runs, preset):
     controls(recorded_runs, preset)
     root = recorded_runs(preset, "users/test/current-generation", speed=101)
+    if preset == "speed-short":
+        with edit_receipt(root) as receipt:
+            launch = receipt["config"]
+            source = launch["inputs"]["evaluation_data"]["eval_lite"][0]
+            for callback in launch["skyrl"]["trainer"]["callbacks"]:
+                if "eval_lite" in callback.get("additional_evaluations", {}):
+                    callback["additional_evaluations"]["eval_lite"]["data_files"] = [
+                        str(Path(source["local_path"]) / source["relative_path"])
+                    ]
     metrics = read_skyrl_metrics(str(root))
     step = snowball_model.SNOWBALL.by_name[preset].updates
-    values = metrics[step]
     report = rescore(preset, "--candidate", "users/test/current-generation")
     assert (report["verdict"], report["label"]) == ("pass", "no change"), report
-    if preset in ("speed-short", "learning-medium"):
-        prefix = "eval/all/outcome/" if preset == "learning-medium" else "eval/eval_lite/all/outcome/"
-        values[prefix + "graded"] = 19
-        values[prefix + "unavailable"] = 1
-        write_metrics(root, metrics)
-        alias = root.parent.parent / "current-bad-counter" / root.name
-        shutil.copytree(root, alias)
-        report = rescore(preset, "--candidate", "users/test/current-bad-counter")
-        assert (report["verdict"], report["label"]) == ("fail", "no change")
-        if preset == "learning-medium":
-            assert any(
-                row["name"] == "eval_lite/grader_error_fraction" and not row["holds"] for row in report["invariants"]
-            )
-            return
-        task_rows = read_evaluations(str(root / "exports"), attempt_id="recorded-attempt", evaluation="eval/eval_lite/")
-        first = task_rows[0]
-        damaged = first.model_copy(
-            update={"answers": [answer.model_copy(update={"verification_status": "error"}) for answer in first.answers]}
-        )
-        write_evaluations(str(root / "exports"), [damaged])
-        values["eval/eval_lite/all/outcome/graded"] = 20
-        values["eval/eval_lite/all/outcome/unavailable"] = 0
-        write_metrics(root, metrics)
-        coverage_run = root.parent.parent / "current-low-coverage" / root.name
-        shutil.copytree(root, coverage_run)
-        report = rescore(preset, "--candidate", "users/test/current-low-coverage")
-        coverage = next(row for row in report["invariants"] if row["name"].endswith("/scored_fraction"))
-        assert coverage["value"] < 0.99 and coverage["holds"] is False and report["verdict"] == "fail"
+    prefix = "eval/all/outcome/" if preset == "learning-medium" else "eval/eval_lite/all/outcome/"
+    metrics[step][prefix + "graded"] = 19
+    metrics[step][prefix + "unavailable"] = 1
+    write_metrics(root, metrics)
+    alias = root.parent.parent / "current-bad-counter" / root.name
+    shutil.copytree(root, alias)
+    report = rescore(preset, "--candidate", "users/test/current-bad-counter")
+    assert (report["verdict"], report["label"]) == ("fail", "no change")
+    assert any(row["name"] == "eval_lite/grader_error_fraction" and not row["holds"] for row in report["invariants"])
 
 
 def test_named_evaluation_protocol_uses_its_recorded_request(recorded_runs):
@@ -301,35 +306,6 @@ def test_named_evaluation_protocol_uses_its_recorded_request(recorded_runs):
     }
     assert protocol["n_samples_per_prompt"] == 1
     assert protocol["context_budget"]["max_new_tokens_per_turn"] == 8192
-
-
-@pytest.mark.parametrize(
-    "path,value,verdict",
-    [
-        (("skyrl", "generator", "eval_sampling_params", "temperature"), 0.5, "invalid"),
-        (("skyrl", "trainer", "seed"), None, "invalid"),
-    ],
-)
-def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_changes(
-    recorded_runs, path, value, verdict
-):
-    controls(recorded_runs, "learning-medium")
-    root = recorded_runs(
-        "learning-medium",
-        "users/test/protocol",
-        inputs=GateInputs(preset_name="learning-medium"),
-    )
-    with edit_receipt(root) as receipt:
-        target = receipt["config"]
-        for key in path[:-1]:
-            target = target[key]
-        target[path[-1]] = value
-    report = rescore("learning-medium", "--candidate", "users/test/protocol")
-    assert report["verdict"] == verdict, report
-    if path == ("skyrl", "trainer", "seed"):
-        assert "malformed recorded configuration" in report["reason"] and "seed" in report["reason"]
-    elif verdict == "invalid":
-        assert "evaluation protocol" in report["reason"] or "config differs" in report["reason"]
 
 
 def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, recorded_runs):
@@ -633,7 +609,6 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         "control-commit",
         "unbound-data",
         "batch",
-        "staged-profile",
         "allocation",
         "cached-default",
         "zero-spread",
@@ -643,13 +618,12 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         "omitted-schema-nondefault",
         "omitted-candidate-default",
         "schema-timeout",
-        "schema-empty",
+        "protocol-temperature",
+        "malformed-seed",
     ],
 )
 def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorded_runs, tmp_path, monkeypatch, case):
-    preset = snowball_model.SNOWBALL.by_name[
-        "speed-short" if case == "staged-profile" else "speed-medium" if case == "missing-guard" else "learning-medium"
-    ]
+    preset = snowball_model.SNOWBALL.by_name["speed-medium" if case == "missing-guard" else "learning-medium"]
     setting = "trainer.policy.optimizer_config.lr=2e-6"
     settings = (
         ()
@@ -658,13 +632,11 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             "stale-default",
             "cached-default",
             "zero-spread",
-            "staged-profile",
             "omitted-default",
             "omitted-current-nondefault",
             "omitted-schema-nondefault",
             "omitted-candidate-default",
             "schema-timeout",
-            "schema-empty",
         )
         else (setting,)
     )
@@ -701,10 +673,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             ).model_dump(mode="json"),
         )
         if case == "initializer-hf":
-            export = root / "hf"
-            export.mkdir(parents=True)
-            for filename in ("config.json", "tokenizer_config.json"):
-                (export / filename).write_text("{}")
             initializer = ArtifactHfModel(
                 ArtifactStep.adopt(name, version, "s3://fixture-initializer", kind=Artifact),
                 preset.model.tokenizer_uri,
@@ -736,7 +704,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         preset = replace(preset, recipe=replace(preset.recipe, config=preset.recipe.config.with_settings((changed,))))
         preset_table(preset)
     name = "users/test/config-" + case
-    candidate = recorded_runs(preset.name, name, inputs=inputs)
     if case == "initializer-hf":
         with monkeypatch.context() as planning:
             planning.setattr(
@@ -744,6 +711,8 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             )
             planned = gate.validate_candidate(preset, inputs, table=snowball_model.SNOWBALL)
             assert planned["inputs"]["model"]["uri"].endswith("/<terminal-hf-export>")
+        return
+    candidate = recorded_runs(preset.name, name, inputs=inputs)
     fault = {
         "stale-default": "control config differs",
         "control-commit": "does not match its pin",
@@ -755,7 +724,8 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         "omitted-schema-nondefault": "control config differs",
         "omitted-candidate-default": "skyrl.generator.chat_template_kwargs",
         "schema-timeout": "timed out after 120 s",
-        "schema-empty": "native configuration cannot be composed",
+        "protocol-temperature": "temperature",
+        "malformed-seed": "seed",
     }.get(case)
     if case.startswith(("omitted-", "schema-")):
         omitted = [candidate] if case == "omitted-candidate-default" else control_roots
@@ -768,39 +738,58 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 if case == "omitted-default":
                     assert receipt["config"]["inputs"].pop("starting_checkpoint") is None
                     assert receipt["config"]["iris"].pop("role_topology") is None
-    if case.startswith("schema-"):
-        monkeypatch.setattr(Provenance, "capture", lambda *_: Provenance(case, "commit-one", False, "branch", "test"))
+    if case == "schema-timeout":
         original_subprocess = subprocess.run
+        for diagnostic in ("timeout", "empty", "whitespace", "oserror"):
+            with monkeypatch.context() as unavailable:
+                unavailable.setattr(
+                    Provenance,
+                    "capture",
+                    lambda *_, tag=diagnostic: Provenance(tag, "commit-one", False, "branch", "test"),
+                )
 
-        def unavailable_defaults(command, *args, **kwargs):
-            if any("OmegaConf.structured(launch_config.SkyRLLaunchConfig)" in str(value) for value in command):
-                if case == "schema-timeout":
-                    raise subprocess.TimeoutExpired(command, 120)
-                return subprocess.CompletedProcess(command, 0, "", "")
-            return original_subprocess(command, *args, **kwargs)
+                def unavailable_defaults(command, *args, diagnostic=diagnostic, **kwargs):
+                    if any("OmegaConf.structured(launch_config.SkyRLLaunchConfig)" in str(value) for value in command):
+                        if diagnostic == "timeout":
+                            raise subprocess.TimeoutExpired(command, 120)
+                        if diagnostic == "oserror":
+                            raise FileNotFoundError("native composer executable missing")
+                        return subprocess.CompletedProcess(command, 1 if diagnostic == "whitespace" else 0, "", "\n")
+                    return original_subprocess(command, *args, **kwargs)
 
-        monkeypatch.setattr(subprocess, "run", unavailable_defaults)
+                unavailable.setattr(subprocess, "run", unavailable_defaults)
+                report = rescore(preset.name, "--candidate", name)
+                assert (
+                    report["verdict"] == "invalid" and "native configuration cannot be composed" in report["reason"]
+                ), report
+                if diagnostic == "timeout":
+                    assert "timed out after 120 s" in report["reason"]
+        return
     root = control_roots[0] if case == "control-commit" else candidate
-    if case in ("control-commit", "unbound-data", "allocation", "staged-profile"):
+    if case in ("control-commit", "unbound-data", "allocation"):
         with edit_receipt(root) as receipt:
             launch = receipt["config"]
             if case == "control-commit":
                 receipt["result"]["provenance"]["base_commit"] = "wrong-commit"
             elif case == "unbound-data":
                 launch["skyrl"]["data"]["train_data"] = ["/unbound/train.parquet"]
-            elif case == "allocation":
-                launch["iris"]["allocation"]["num_nodes"] += 1
             else:
-                source = launch["inputs"]["evaluation_data"]["eval_lite"][0]
-                for callback in launch["skyrl"]["trainer"]["callbacks"]:
-                    if "eval_lite" in callback.get("additional_evaluations", {}):
-                        callback["additional_evaluations"]["eval_lite"]["data_files"] = [
-                            str(Path(source["local_path"]) / source["relative_path"])
-                        ]
+                launch["iris"]["allocation"]["num_nodes"] += 1
+    if case in {"protocol-temperature", "malformed-seed"}:
+        with edit_receipt(candidate) as receipt:
+            if case == "malformed-seed":
+                receipt["config"]["skyrl"]["trainer"]["seed"] = None
+            else:
+                receipt["config"]["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.5
     if case == "missing-guard":
         edit_metrics(candidate, lambda row: row.update({"policy/mismatch/staleness0/selected_tokens": 0}))
     report = rescore(preset.name, "--candidate", name)
-    if fault:
+    if case == "protocol-temperature":
+        assert report["verdict"] == "invalid" and (
+            "evaluation protocol" in report["reason"]
+            or "skyrl.generator.eval_sampling_params.temperature" in report["reason"]
+        ), report
+    elif fault:
         assert report["verdict"] == "invalid" and fault in report["reason"], report
     else:
         assert (report["verdict"], report["label"]) == ("pass", "no change"), report

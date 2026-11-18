@@ -436,7 +436,11 @@ def _wait_for_run(
 
 
 def _run_command(
-    table: presets.ModelPresets, argv: tuple[str, ...], entry_module: str | None, function: Callable
+    table: presets.ModelPresets,
+    argv: tuple[str, ...],
+    entry_module: str | None,
+    forward_env: tuple[str, ...],
+    function: Callable,
 ) -> click.Command:
     @wraps(function)
     def checked(*args, wait: bool = False, url: str | None = None, **kwargs):
@@ -455,7 +459,7 @@ def _run_command(
             if not module:
                 raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
             submitted_at = datetime.now(UTC).isoformat()
-            job = submit_or_run(module, handles, max_concurrent, os.environ, argv=argv)
+            job = submit_or_run(module, handles, max_concurrent, os.environ, argv=argv, forward_env=forward_env)
             submitted = []
             for step in _from_handles(handles).runs:
                 config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
@@ -475,7 +479,7 @@ def _run_command(
                 )
             _print_status({"coordinator_job_id": str(job), "submitted_at": submitted_at, "runs": submitted})
         else:
-            validate_coordinator_graph(handles)
+            validate_coordinator_graph(handles, forward_env=forward_env)
             _run_graph(handles, max_concurrent)
             job = None
         if options["wait"] and job is not None:
@@ -494,7 +498,7 @@ def command(
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
-    @partial(_run_command, table, argv, entry_module)
+    @partial(_run_command, table, argv, entry_module, forward_env)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for launcher publication.")
     @click.option("--url", help="Marina origin for run publication (defaults to the Marina service).")
     @click.option(

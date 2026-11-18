@@ -51,27 +51,46 @@ class _IrisSubmissionRoute:
     container_profile: job_pb2.ContainerProfile | None
 
 
-class _CoordinatorGraph(BaseModel):
+class _CoordinatorRun(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    runs: tuple[tuple[str, str], ...]
+    name: str
+    version: str
     required_env_vars: tuple[str, ...]
 
 
-def _coordinator_graph(handles: list[ArtifactStep]) -> _CoordinatorGraph:
+class _CoordinatorGraph(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    runs: tuple[_CoordinatorRun, ...]
+    forward_env: tuple[str, ...]
+
+
+def _coordinator_graph(handles: list[ArtifactStep], forward_env: tuple[str, ...]) -> _CoordinatorGraph:
     return _CoordinatorGraph(
         runs=tuple(
-            (step.name, step.version)
+            _CoordinatorRun(
+                name=step.name,
+                version=step.version,
+                required_env_vars=tuple(
+                    sorted(
+                        {
+                            name
+                            for value in step.runtime_args.values()
+                            if isinstance(value, IrisSkyRLExecution)
+                            for name in value.required_env_vars
+                        }
+                    )
+                ),
+            )
             for step in graph_handles(handles)
             if any(isinstance(value, IrisSkyRLExecution) for value in step.runtime_args.values())
         ),
-        required_env_vars=tuple(
-            sorted({name for execution in _skyrl_executions(handles) for name in execution.required_env_vars})
-        ),
+        forward_env=tuple(sorted(set(forward_env))),
     )
 
 
-def validate_coordinator_graph(handles: list[ArtifactStep]) -> None:
+def validate_coordinator_graph(handles: list[ArtifactStep], *, forward_env: tuple[str, ...] = ()) -> None:
     """Refuse a re-entered graph whose run identities or forwarded environment names differ."""
     payload = os.environ.get(_COORDINATOR_GRAPH_ENV)
     if payload is None:
@@ -80,7 +99,7 @@ def validate_coordinator_graph(handles: list[ArtifactStep]) -> None:
         submitted = _CoordinatorGraph.model_validate_json(payload, strict=True)
     except ValidationError as error:
         raise click.UsageError("submitted RL graph identity is malformed") from error
-    rebuilt = _coordinator_graph(handles)
+    rebuilt = _coordinator_graph(handles, forward_env)
     if rebuilt != submitted:
         raise click.UsageError(
             "coordinator rebuilt a different RL graph: "
@@ -139,13 +158,15 @@ def _coordinator_request(
     argv: tuple[str, ...],
     workspace: Path,
     env_vars: Mapping[str, str],
+    *,
+    forward_env: tuple[str, ...] = (),
 ) -> tuple[str, JobRequest]:
     executions = _skyrl_executions(handles)
     selected_env = {name: env_vars[name] for name in _COORDINATOR_ENV_VARS if name in env_vars}
     for execution in executions:
         for name in execution.required_env_vars:
             selected_env[name] = env_vars[name]
-    selected_env[_COORDINATOR_GRAPH_ENV] = _coordinator_graph(handles).model_dump_json()
+    selected_env[_COORDINATOR_GRAPH_ENV] = _coordinator_graph(handles, forward_env).model_dump_json()
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
     job_name = sanitize_job_name(f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}")
@@ -178,10 +199,12 @@ def submit_or_run(
     coordinator_env: Mapping[str, str],
     *,
     argv: tuple[str, ...],
+    forward_env: tuple[str, ...] = (),
 ) -> JobName | None:
     """Run the graph in-job, or submit it and return the coordinator's ID."""
     if get_job_info() is not None:
-        validate_coordinator_graph(handles)
+        if _COORDINATOR_GRAPH_ENV in os.environ:
+            validate_coordinator_graph(handles, forward_env=forward_env)
         run(*handles, max_concurrent=max_concurrent)
         return None
 
@@ -192,6 +215,7 @@ def submit_or_run(
         argv,
         workspace,
         coordinator_env,
+        forward_env=forward_env,
     )
     with open_iris_client(config_file=Path(cluster_config), workspace=workspace) as iris_client:
         handle = FrayIrisClient.from_iris_client(iris_client).submit(request, adopt_existing=False)

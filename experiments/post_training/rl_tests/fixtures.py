@@ -27,6 +27,7 @@ from finestore.rl.run_records import (
     register_run_tables,
     run_records_root,
     update_attempt,
+    write_evaluations,
 )
 from finestore.rl.strata import MembershipState, SelectionDefinition, SelectionTaskRow, TaskStrata, read_selection_strata
 from finestore.schema import arrow_schema
@@ -436,15 +437,16 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 ]
                 export = root / "exports" / evaluation.name if index else root / "exports"
                 session = "eval_only" if step == -1 else f"global_step_{step}_evals"
-                for row in rows:
+                by_task = {}
+                for ordinal, row in enumerate(rows):
                     row.update(attempt_id=attempt, step=step, is_last_step=True)
+                    by_task.setdefault(row["task_id"], []).append((ordinal, row))
                 path = export / "dumped_evals" / attempt / session / "task_set.jsonl"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("".join(json.dumps(row) + "\n" for row in rows))
                 panel = read_selection_strata(str(directory))
                 task_rows = []
                 for item in ids:
-                    selected_answers = [row for row in rows if row["task_id"] == item]
                     answers = [
                         EvaluationAnswerRow(
                             ordinal=ordinal,
@@ -461,7 +463,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                             error_type=row.get("exception_type"),
                             error_treatment=row.get("error_treatment"),
                         )
-                        for ordinal, row in enumerate(selected_answers)
+                        for ordinal, row in by_task[item]
                     ]
                     task_rows.append(
                         EvaluationTaskRow(
@@ -480,8 +482,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                             answers=answers,
                         )
                     )
-                with DataStore.open(run_records_root(str(root / "exports"))) as store:
-                    register_run_tables(store).evaluations.extend(row.model_dump() for row in task_rows)
+                write_evaluations(str(root / "exports"), task_rows)
                 values = stored_metrics.setdefault(max(step, 0), {"step": max(step, 0)})
                 prefix = f"eval/{evaluation.name}/all/outcome/" if index else "eval/all/outcome/"
                 values.update(

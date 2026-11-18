@@ -34,8 +34,9 @@ Datakit SFT weights and tokenizer, GPU layout, evaluation schedule and measureme
 uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev
 ```
 
-A gated preset without a control pin at its current revision refuses every command, including the plan print,
-with exit 4. Controls are collected after merge; `--control` and `train-long` need no pin.
+Plan-only commands use the declared control pin. Gated execution and re-scoring require its revision to match
+the preset; a mismatch returns exit 4 before submission or INVALID during gate execution. Controls are collected
+after merge; `--control` and `train-long` need no pin.
 
 Without `--run`, the command prints the graph and saved status. Add `--run` to submit an Iris
 coordinator, or `--run --wait` to poll every 60 seconds and print the final report.

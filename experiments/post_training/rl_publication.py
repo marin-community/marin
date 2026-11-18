@@ -157,13 +157,6 @@ def build_record(
         )
     if not provenance:
         evidence.append("Recorded source provenance is unavailable.")
-    if report is not None and len(report.run.attempt_ids) == report.run.replicates:
-        replicate = report.run.attempt_ids.index(attempt_id)
-        failed = list(
-            dict.fromkeys(
-                [*failed, *(fact.name for fact in report.invariants if not fact.holds and fact.replicate == replicate)]
-            )
-        )
     return RunSummary(
         run_id=receipt.run_id,
         attempt_id=attempt_id,

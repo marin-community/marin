@@ -345,30 +345,36 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         (relative_key, "requirement"),
     }
 
-    @click.command()
-    def republish_current():
-        raise click.exceptions.Exit(
-            runner.main(
-                table,
-                argv=[
-                    "publish",
-                    "--preset",
-                    preset.name,
-                    "--url",
-                    "http://localhost",
-                    "--output",
-                    str(sources[0]),
-                    "--attempt",
-                    "native-0",
-                ],
-            )
-        )
+    for index in range(2):
 
-    republished = CliRunner().invoke(republish_current)
-    assert republished.exit_code == 0, (republished.output, republished.exception)
-    retained = stored()["native-0"]
-    assert retained["gate_result"] == expected and retained["gate"] == rows["native-0"]["gate"]
-    assert retained["issue"] == 74 and retained["wandb_url"] == rows["native-0"]["wandb_url"]
+        @click.command()
+        def republish_current(index=index):
+            raise click.exceptions.Exit(
+                runner.main(
+                    table,
+                    argv=[
+                        "publish",
+                        "--preset",
+                        preset.name,
+                        "--url",
+                        "http://localhost",
+                        "--output",
+                        str(sources[index]),
+                        "--attempt",
+                        f"native-{index}",
+                    ],
+                )
+            )
+
+        republished = CliRunner().invoke(republish_current)
+        assert republished.exit_code == 0, (republished.output, republished.exception)
+        retained = stored()[f"native-{index}"]
+        assert retained["gate_result"] == expected and retained["gate"] == rows[f"native-{index}"]["gate"]
+        assert retained["issue"] == 74 and retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
+        assert (retained["status"], retained["failed_facts"]) == (
+            rows[f"native-{index}"]["status"],
+            rows[f"native-{index}"]["failed_facts"],
+        )
     assert rows["native-0"]["status"] == "succeeded" and rows["native-0"]["failed_facts"] == []
     assert rows["native-1"]["status"] == "failed" and rows["native-1"]["failed_facts"] == ["require/policy/entropy"]
     assert rows["native-0"]["elapsed_seconds"] == 7200 and rows["native-0"]["issue"] == 74
@@ -392,7 +398,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert any("Checkpoint lineage timing is unknown" in note for note in stored()["native-0"]["evidence"])
     write_receipt(sources[0], receipt)
     # A changed replicate invalidates the entire aggregate, including the unchanged replicate.
-    write_receipt(sources[0], receipt)
     retry_metrics = read_skyrl_metrics(str(sources[0]))
     receipt["config"]["run"]["attempt_id"] = "native-retry"
     write_receipt(sources[0], receipt)
@@ -491,6 +496,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert str(sources[1]) in missing.unserved_records and any(
         "No stored native receipt" in error for error in missing.errors
     )
+    latest_peer_gate = stored()["native-1"]["gate_result"]
     write_receipt(sources[1], second_receipt)
     (sources[1] / "terminal.json").unlink()
     missing_current = deepcopy(second_receipt["config"])
@@ -501,7 +507,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert len(recovered_history.errors) == 1 and "missing-latest" in recovered_history.errors[0]
     assert (second_receipt["config"]["run"]["id"], "native-1") in recovered_history.served_records
     historical_row = stored()["native-1"]
-    assert historical_row["gate_result"]["verdict"] == "fail" and historical_row["optimizer_steps"] == preset.updates
+    assert historical_row["gate_result"] == latest_peer_gate and historical_row["optimizer_steps"] == preset.updates
     before = stored()
     command = CliRunner().invoke(
         publication.command(table),

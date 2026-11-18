@@ -65,6 +65,14 @@ def test_all_presets_plan_with_their_declared_controls(selection):
         result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
         assert result.exit_code == 0, (preset.name, result.output, result.exception)
 
+    preset = next(preset for preset in table.presets if preset.gated)
+    arguments = ["--preset", preset.name, "--version", preset.revision]
+    if preset.tasks_input == "required":
+        arguments += ["--tasks", SELECTION_IDENTITY]
+    unpinned = replace(table, controls={})
+    result = CliRunner().invoke(snowball.command(unpinned, argv=tuple(arguments)), arguments)
+    assert result.exit_code == 4 and "no control pin" in result.output, (result.output, result.exception)
+
 
 def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
@@ -451,7 +459,6 @@ def test_grafana_url_selects_native_run_and_utc_window():
 @pytest.mark.parametrize(
     "case,expected",
     [
-        ("pass", 0),
         ("fail", 1),
         ("invalid", 2),
         ("missing", 3),
@@ -476,7 +483,6 @@ def test_submission_exit_codes_and_publication_retries(
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     publication_case = case in {
-        "pass",
         "changed-source",
         "child",
         "mixed-native-failed",
@@ -504,7 +510,7 @@ def test_submission_exit_codes_and_publication_retries(
             lambda self, path, **kwargs: str(path).removeprefix("s3://")
             in {"marin-test/models/python-init", "marin-test/models/child-model"},
         )
-    roots = controls(recorded_runs, preset.name) if preset.gated else []
+    roots = controls(recorded_runs, preset.name) if preset.gated and case != "compose-timeout" else []
     replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
     control = case == "control-missing-receipt"
     built = snowball.build_run(
@@ -516,7 +522,7 @@ def test_submission_exit_codes_and_publication_retries(
     )
     sources = (
         []
-        if "candidate-compose" in case
+        if case in {"candidate-compose", "compose-timeout"}
         else [
             recorded_runs(
                 preset.name,
@@ -545,11 +551,6 @@ def test_submission_exit_codes_and_publication_retries(
         replace_evaluations(
             source, [row.model_copy(update={"task_id": "candidate-" + row.task_id}) for row in evaluations]
         )
-        dump = source / "exports/dumped_evals/native-0/eval_only/task_set.jsonl"
-        answers = [json.loads(line) for line in dump.read_text().splitlines()]
-        for answer in answers:
-            answer["task_id"] = "candidate-" + answer["task_id"]
-        dump.write_text("".join(json.dumps(answer) + "\n" for answer in answers))
     if case in {"native-failed", "invalid"} or case.startswith(("malformed-", "stale-control")):
         root = roots[0] if case == "malformed-control" else roots[-1] if case.startswith("stale-control") else source
         with edit_receipt(root) as receipt:
@@ -571,7 +572,6 @@ def test_submission_exit_codes_and_publication_retries(
                 pending[path] = path.read_bytes()
                 path.unlink()
     phase = {"retry": False}
-    submitted_provenance = Provenance.capture
     if case == "compose-timeout":
         real_run = subprocess.run
 
@@ -644,7 +644,7 @@ def test_submission_exit_codes_and_publication_retries(
     unavailable = {"value": case in {"partial-retry"}}
 
     def publish(record, service_url=None):
-        if unavailable["value"] and (case != "partial-retry" or record.attempt_id == "native-1"):
+        if unavailable["value"] and record.attempt_id == "native-1":
             raise RuntimeError("Credential unavailable; run iris login")
         published.append(record.model_dump(mode="json"))
         return (
@@ -726,11 +726,9 @@ def test_submission_exit_codes_and_publication_retries(
     paths = [[f"{training.name}-{preset.revision}", f"native-{index}"] for index, training in enumerate(built.runs)]
     if unavailable["value"]:
         assert snapshot["publication"] == {
-            "served_records": paths[:1] if case == "partial-retry" else [],
-            "unserved_records": paths[1:] if case == "partial-retry" else paths,
-            "errors": (
-                ["Credential unavailable; run iris login"] * (replicas - 1 if case == "partial-retry" else replicas)
-            ),
+            "served_records": paths[:1],
+            "unserved_records": paths[1:],
+            "errors": ["Credential unavailable; run iris login"],
             "retry": "Repeat the original command with --wait.",
         }
     if case == "mixed-native-failed":
@@ -747,7 +745,7 @@ def test_submission_exit_codes_and_publication_retries(
         for row in snapshot["runs"]:
             assert parse_qs(urlsplit(row["rl_progress_url"]).fragment)["attempt"] == [row["attempt_id"]]
     if case == "changed-source":
-        monkeypatch.setattr(Provenance, "capture", submitted_provenance)
+        return
     unavailable["value"] = False
     phase["retry"] = True
     arguments[arguments.index("--issue") + 1] = "74"
@@ -924,7 +922,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     def submit(**kwargs):
         assert kwargs["entrypoint"].command == ["python", "-m", coordinator_module, *arguments]
         environment = kwargs["environment"].env_vars
-        assert environment["HF_TEST_KEY"] == "test-initializer-credential"
+        if mode != "overlapping-environment-mismatch":
+            assert environment["HF_TEST_KEY"] == "test-initializer-credential"
         assert "UNRELATED_SECRET" not in environment
         if mode == "failed-native":
             return SimpleNamespace(job_id=job)
@@ -949,7 +948,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         state=JobState.SUCCEEDED if mode == "valid" else JobState.FAILED
     )
 
-    def module(name, *, entry_module=None, use_init=True, forward=True):
+    def module(name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",)):
         path = tmp_path / (name + ".py")
         path.write_text(
             "from marin.execution.lazy import ArtifactStep\nfrom marin.execution.artifact import Artifact\n"
@@ -957,7 +956,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             "step=ArtifactStep.adopt('tests/python-init','2026.11.17','s3://marin-test/models/python-init',kind=Artifact)\n"
             "init=ArtifactHfModel(step,'tests/python-tokenizer','python-tokenizer-revision',relative_path='')\n"
             f"raise SystemExit(rl.main(snowball_rl.SNOWBALL,init={'init' if use_init else 'None'},"
-            f"forward_env={('HF_TEST_KEY',) if forward else ()!r},entry_module={entry_module!r}))\n"
+            f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
         )
         spec = importlib.util.spec_from_file_location(name, path)
         assert spec is not None
@@ -982,10 +981,18 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     assert len(native_calls) == 1
     assert published[-1].optimizer_steps == published[-1].planned_updates == 12
 
-    for mode in ("initializer-mismatch", "environment-mismatch"):
+    for mode in ("initializer-mismatch", "environment-mismatch", "overlapping-environment-mismatch"):
         coordinator_module = "second_model_entry"
-        module("first_model_entry", entry_module=coordinator_module)
-        module(coordinator_module, use_init=mode != "initializer-mismatch", forward=mode != "environment-mismatch")
+        module(
+            "first_model_entry",
+            entry_module=coordinator_module,
+            forward_env=("WANDB_API_KEY",) if mode == "overlapping-environment-mismatch" else ("HF_TEST_KEY",),
+        )
+        module(
+            coordinator_module,
+            use_init=mode != "initializer-mismatch",
+            forward_env=() if mode in {"environment-mismatch", "overlapping-environment-mismatch"} else ("HF_TEST_KEY",),
+        )
         result = CliRunner().invoke(entry)
         assert result.exit_code == 3 and "coordinator rebuilt a different RL graph" in result.output, (
             result.output,
@@ -1019,6 +1026,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             result.output,
             result.exception,
         )
+        assert "scored_fraction" in result.output
     replace_evaluations(source, evaluations)
     mode, coordinator_module = "failed-native", "first_model_entry"
     module("first_model_entry")

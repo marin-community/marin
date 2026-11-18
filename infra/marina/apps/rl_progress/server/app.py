@@ -47,7 +47,7 @@ def create_api(services):
             raise HTTPException(422, detail=str(error)) from error
         try:
             with engine.begin() as connection:
-                return connection.execute(
+                stored = connection.execute(
                     text(
                         """INSERT INTO rl_runs (run_id, attempt_id, record)
                         VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
@@ -62,6 +62,21 @@ def create_api(services):
                     ),
                     {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": summary.model_dump_json()},
                 ).scalar_one()
+                summary = RunSummary.model_validate_json(json.dumps(stored), strict=True)
+                normalized = summary.model_dump(mode="json")
+                if normalized != stored:
+                    connection.execute(
+                        text(
+                            "UPDATE rl_runs SET record = CAST(:record AS jsonb) "
+                            "WHERE run_id = :run_id AND attempt_id = :attempt_id"
+                        ),
+                        {
+                            "run_id": summary.run_id,
+                            "attempt_id": summary.attempt_id,
+                            "record": summary.model_dump_json(),
+                        },
+                    )
+                return normalized
         except ProgrammingError as error:
             details = error.orig.args[0]
             if not isinstance(details, dict) or details.get("C") not in {"22P02", "22P05"}:

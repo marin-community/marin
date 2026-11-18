@@ -61,11 +61,6 @@ class InvalidComparison(ValueError):
     """The recorded runs cannot support this calibrated comparison."""
 
 
-def task_manifest(root: StoragePath) -> dict[str, dict]:
-    panel = read_selection_strata(str(root))
-    return {task_id: row.model_dump(mode="json") for task_id, row in panel.tasks.items()} if panel is not None else {}
-
-
 def paths(pattern: StoragePath) -> list[StoragePath]:
     return sorted(pattern.glob(), key=str)
 
@@ -219,17 +214,12 @@ def evaluation_scores(
         raise InvalidComparison(f"selection strata are unavailable: {panel_root}")
     if panel is not None:
         expected = {task_id for task_id, row in panel.tasks.items() if row.state == MembershipState.ACTIVE}
-        original_content = {
-            task_id: canonical_sha256(json.loads(raw))
-            for filename in panel.definition.task_files
-            for task_id, raw in _task_specs(StoragePath(panel_root) / filename)
-        }
         measured_content = {
             task_id: canonical_sha256(json.loads(raw))
             for source in recorded_sources(launch, evaluation.name)
             for task_id, raw in _task_specs(StoragePath(source.uri) / source.relative_path)
         }
-        if any(original_content[task_id] != measured_content.get(task_id) for task_id in expected):
+        if any(panel.tasks[task_id].task_digest != measured_content.get(task_id) for task_id in expected):
             raise InvalidComparison("panel recomputation task content differs from the measured source")
         expected_answers = evaluation_protocol(launch, evaluation.name)["n_samples_per_prompt"]
         if any(len(row.answers) != expected_answers for row in tasks if row.task_id in expected):

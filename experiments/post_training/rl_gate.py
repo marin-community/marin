@@ -517,9 +517,9 @@ def _native_json(program: str, *arguments: str):
         )
         result.check_returncode()
         return json.loads(result.stdout.splitlines()[-1])
-    except (subprocess.SubprocessError, ValueError, IndexError) as error:
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as error:
         cause = f"timed out after {error.timeout:g} s" if isinstance(error, subprocess.TimeoutExpired) else str(error)
-        if isinstance(error, subprocess.CalledProcessError) and error.stderr:
+        if isinstance(error, subprocess.CalledProcessError) and error.stderr and error.stderr.strip():
             cause = error.stderr.strip().splitlines()[-1]
         raise InvalidComparison(f"native configuration cannot be composed: {cause}") from error
 
@@ -623,6 +623,7 @@ def _write_gate(
     invariants, comparisons = [], []
     verdict, label, reason = Verdict.INVALID, None, None
     try:
+        _check_pin_revision(preset, control_pin)
         receipts = [read_stored_skyrl_attempt(path) for path in run_paths]
         metadata = metadata.model_copy(
             update={"attempt_ids": tuple(receipt.attempt_id for receipt in receipts if receipt)}
@@ -705,16 +706,31 @@ def control_name(preset: str, commit: str, replicate: int, *, table: ModelPreset
     return f"checkpoints/{table.namespace}/control/{preset}-{commit}-r{replicate}"
 
 
-def control_pin(preset: presets.Preset, *, table: ModelPresets) -> ControlPin:
+def _pin_error(preset: presets.Preset, pin: ControlPin | None) -> InvalidComparison:
+    name, replicas = (pin.preset, pin.runs) if pin else (preset.controls, 4)
+    return InvalidComparison(
+        f"no control pin for {preset.name} at {preset.revision}; "
+        f"recorded control revision={pin.revision if pin else None}; "
+        f"collect current controls with --preset {name} "
+        f"--version {preset.revision} --control --replicates {replicas} --run"
+    )
+
+
+def _declared_pin(preset: presets.Preset, table: ModelPresets) -> ControlPin:
     pin = table.controls.get(preset.controls)
-    if pin is None or pin.revision != preset.revision:
-        name, replicas = (pin.preset, pin.runs) if pin else (preset.controls, 4)
-        raise InvalidComparison(
-            f"no control pin for {preset.name} at {preset.revision}; "
-            f"recorded control revision={pin.revision if pin else None}; "
-            f"collect current controls with --preset {name} "
-            f"--version {preset.revision} --control --replicates {replicas} --run"
-        )
+    if pin is None:
+        raise _pin_error(preset, pin)
+    return pin
+
+
+def _check_pin_revision(preset: presets.Preset, pin: ControlPin) -> None:
+    if pin.revision != preset.revision:
+        raise _pin_error(preset, pin)
+
+
+def control_pin(preset: presets.Preset, *, table: ModelPresets) -> ControlPin:
+    pin = _declared_pin(preset, table)
+    _check_pin_revision(preset, pin)
     return pin
 
 
@@ -802,7 +818,7 @@ def _gate_with_evidence(step: ArtifactStep[GateReport]) -> ArtifactStep[GateRepo
 def gate_step(
     preset: presets.Preset, runs: tuple[ArtifactStep[SkyRLRun], ...], *, table: ModelPresets, inputs: GateInputs
 ) -> ArtifactStep[GateReport]:
-    pin = table.controls[preset.controls]
+    pin = _declared_pin(preset, table)
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pin.commit}"
     paths = tuple(candidate.path(recipe.artifact_prefix(preset.recipe.layout.cluster)) for candidate in runs)
     identities = tuple(f"{candidate.name}@{candidate.version}" for candidate in runs)

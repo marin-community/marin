@@ -23,7 +23,9 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         return response.json()
 
     record = progress_record()
-    sparse = {key: value for key, value in record.items() if value is not None and value != []}
+    sparse = {key: value for key, value in record.items() if value is not None}
+    sparse.pop("evaluations")
+    sparse.pop("failed_facts")
     assert publish(sparse) == record
     failed = record | {
         "attempt_id": "native-second",
