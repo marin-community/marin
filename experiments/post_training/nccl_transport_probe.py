@@ -113,9 +113,11 @@ class WorkerProcess:
     process: subprocess.Popen
     variant_name: str
     rank: int
+    world_size: int
     started: float
     log_path: Path
     output_path: Path
+    result_path: Path
     log_file: IO[bytes]
     output_file: IO[bytes]
 
@@ -230,6 +232,7 @@ def spawn_worker(
     """
     log_path = log_dir / f"{variant.name}-rank{index}.log"
     output_path = log_dir / f"{variant.name}-rank{index}.out"
+    result_path = log_dir / f"{variant.name}-rank{index}.json"
     env = dict(os.environ)
     env.update(
         {
@@ -239,6 +242,7 @@ def spawn_worker(
             "RANK": str(index),
             "LOCAL_RANK": str(local_rank),
             "NCCL_DEBUG": "INFO",
+            "PROBE_RESULT_FILE": str(result_path),
             **variant.env,
         }
     )
@@ -256,12 +260,57 @@ def spawn_worker(
         process=process,
         variant_name=variant.name,
         rank=index,
+        world_size=world_size,
         started=time.time(),
         log_path=log_path,
         output_path=output_path,
+        result_path=result_path,
         log_file=log_file,
         output_file=output_file,
     )
+
+
+def write_worker_result(result_path: Path, payload: dict) -> None:
+    """Write one worker's machine result atomically (temp file plus rename)."""
+    temp_path = result_path.with_name(result_path.name + ".tmp")
+    temp_path.write_text(json.dumps(payload))
+    os.replace(temp_path, result_path)
+
+
+def parse_worker_result(
+    result_path: Path,
+    expected_rank: int,
+    expected_variant: str,
+    expected_world_size: int,
+) -> tuple[dict | None, str | None]:
+    """Load one worker's machine result, validating its identity fields.
+
+    The per-rank result file replaces stdout payload scanning: NCCL INFO
+    writes from NCCL's C threads interleave with the Python print and can
+    embed the JSON mid-line, so a line-start scan silently loses payloads
+    (the .66 3-rack run lost 95 of 192 this way). Returns ``(payload,
+    problem)``; a missing, invalid, or mismatched file yields a problem
+    string and no payload, which fails the rank closed.
+    """
+    if not result_path.exists():
+        return None, f"worker result file missing: {result_path}"
+    try:
+        payload = json.loads(result_path.read_text())
+    except json.JSONDecodeError as error:
+        return None, f"worker result file invalid JSON ({error})"
+    expected_fields = (
+        ("rank", expected_rank),
+        ("variant", expected_variant),
+        ("world_size", expected_world_size),
+    )
+    mismatches = [
+        f"{field}={payload.get(field)!r} != {expected!r}"
+        for field, expected in expected_fields
+        if payload.get(field) != expected
+    ]
+    if mismatches:
+        return None, f"worker result identity mismatch: {'; '.join(mismatches)}"
+    return payload, None
 
 
 def worker_traceback(lines: list[str]) -> list[str]:
@@ -301,12 +350,11 @@ def collect_worker(handle: WorkerProcess) -> RankResult:
     lines = handle.log_path.read_text(errors="replace").splitlines()
     lines += handle.output_path.read_text(errors="replace").splitlines()
     census = parse_nccl_census(lines)
-    payload = None
-    for line in handle.output_path.read_text(errors="replace").splitlines():
-        stripped = line.strip()
-        if stripped.startswith("{"):
-            payload = json.loads(stripped)
-            break
+    payload, result_problem = parse_worker_result(
+        handle.result_path, handle.rank, handle.variant_name, handle.world_size
+    )
+    if result_problem:
+        lines.append(result_problem)
     pynccl_failed = bool(
         payload is not None
         and isinstance(payload.get("pynccl"), dict)
@@ -758,6 +806,7 @@ def run_worker_mode(args: argparse.Namespace) -> None:
         payload["pynccl"] = run_pynccl_init_check(device)
     dist.barrier()
     dist.destroy_process_group()
+    write_worker_result(Path(os.environ["PROBE_RESULT_FILE"]), payload)
     print(json.dumps(payload))
 
 

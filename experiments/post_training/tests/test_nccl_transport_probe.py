@@ -17,9 +17,11 @@ from experiments.post_training.nccl_transport_probe import (
     gate_verdict,
     mapped_nccl_libraries,
     parse_nccl_census,
+    parse_worker_result,
     publish_gate_report,
     resolve_gloo_socket_ifname,
     worker_traceback,
+    write_worker_result,
 )
 
 
@@ -163,6 +165,42 @@ def test_publish_gate_report_writes_task_specific_file(tmp_path):
     published = tmp_path / "evidence" / "attempt-42" / "gate-results-task1.json"
     assert uri == str(published)
     assert published.read_text() == '{"verdict": "pass"}'
+
+
+def test_worker_result_file_round_trip(tmp_path):
+    """The worker writes atomically and the launcher reads the matching payload."""
+    result_path = tmp_path / "baseline_default_env-rank3.json"
+    payload = {"variant": "baseline_default_env", "rank": 3, "world_size": 192, "gpu": "GB200"}
+    write_worker_result(result_path, payload)
+    assert not list(tmp_path.glob("*.tmp"))
+    parsed, problem = parse_worker_result(result_path, 3, "baseline_default_env", 192)
+    assert parsed == payload
+    assert problem is None
+
+
+def test_parse_worker_result_fails_closed_on_missing_file(tmp_path):
+    payload, problem = parse_worker_result(tmp_path / "absent.json", 3, "baseline_default_env", 192)
+    assert payload is None
+    assert problem == f"worker result file missing: {tmp_path / 'absent.json'}"
+
+
+def test_parse_worker_result_fails_closed_on_identity_mismatch(tmp_path):
+    """A mismatched identity fails the rank closed rather than adopting wrong data."""
+    result_path = tmp_path / "baseline_default_env-rank3.json"
+    result_path.write_text('{"variant": "all_three", "rank": 4, "world_size": 8}')
+    payload, problem = parse_worker_result(result_path, 3, "baseline_default_env", 8)
+    assert payload is None
+    assert "identity mismatch" in problem
+    assert "rank=4 != 3" in problem
+    assert "variant='all_three'" in problem
+
+
+def test_parse_worker_result_fails_closed_on_invalid_json(tmp_path):
+    result_path = tmp_path / "baseline_default_env-rank3.json"
+    result_path.write_text('{"variant": "baseline_default_env", "rank": 3, "world_size"')
+    payload, problem = parse_worker_result(result_path, 3, "baseline_default_env", 8)
+    assert payload is None
+    assert "invalid JSON" in problem
 
 
 def test_all_to_all_single_succeeds_with_non_power_of_two_ranks(tmp_path):
