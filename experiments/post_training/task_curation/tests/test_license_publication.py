@@ -66,7 +66,7 @@ def snapshot_hub(tmp_path, monkeypatch, files):
             b"license_link: https://example.test/notice\n---\n"
             b"CC0 1.0 with attribution notice.\nCopyright Example Authors.\n",
             {
-                "license": "other",
+                "license": "cc0-1.0",
                 "license_name": "cc0-with-bytedance-notice",
                 "license_link": "https://example.test/notice",
             },
@@ -99,6 +99,19 @@ def test_publication_preserves_custom_notice_and_grant_when_readme_evidence_repe
         "UPSTREAM_README.md": hashlib.sha256(card).hexdigest(),
         "NOTICE": hashlib.sha256(notice).hexdigest(),
     }
+
+
+def test_pass_receipt_card_states_the_checker_verified_license(tmp_path, monkeypatch):
+    card = (
+        b"---\nlicense: other\nlicense_name: cc0-with-bytedance-notice\n---\n"
+        b"License mirrors upstream: ByteDance licenses the dataset under CC0.\n"
+    )
+    snapshot_hub(tmp_path, monkeypatch, {"README.md": card})
+    publication = license_publication.prepare_license_publication(
+        source_receipt(card), tmp_path / "published", use="train"
+    )
+    assert publication.metadata["license"] == "cc0-1.0"
+    assert b"license: other" in (tmp_path / "published" / "UPSTREAM_README.md").read_bytes()
 
 
 def test_changed_license_bytes_fail_before_publication_provenance_is_written(tmp_path, monkeypatch):

@@ -158,7 +158,19 @@ def prepare_license_publication(receipt: LicenseReceipt, output: Path, *, use: s
     observed = {item["source_url"] for item in provenance}
     if evidence_urls - observed:
         raise ValueError("Publication did not preserve every checked upstream license document")
-    if "license" not in metadata:
+    check = check_license(receipt)
+    if check.verdict is LicenseCheckVerdict.PASS:
+        # The published card states the license the checker verified at the resolved
+        # source, not the upstream card's own declared field, which stays archived.
+        citation = next(
+            (item for item in source_evidence if license_verdict(tuple(item.license_ids)) is LicenseVerdict.ALLOWED),
+            None,
+        )
+        if citation is None:
+            raise ValueError("Publication has no checked permissive license evidence for its resolved source")
+        identifiers = sorted(set(citation.license_ids) - {"missing"})
+        metadata["license"] = identifiers[0] if len(identifiers) == 1 else identifiers
+    elif "license" not in metadata:
         identifiers = sorted({identifier for item in source_evidence for identifier in item.license_ids} - {"missing"})
         if license_verdict(tuple(identifiers)) is not LicenseVerdict.ALLOWED:
             raise ValueError("Checked grant supplies no publishable permissive license identifier")
