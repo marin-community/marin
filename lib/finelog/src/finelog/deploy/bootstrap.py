@@ -187,15 +187,14 @@ def render_bootstrap(
     if object_cache_gb is not None:
         query_env += f"-e FINELOG_OBJECT_CACHE_GB={object_cache_gb} "
     migration_env = f"-e FINELOG_TELEMETRY_MIGRATION_MODE={telemetry_migration_mode} "
-    if cluster is not None:
-        migration_env += f"-e FINELOG_CLUSTER={cluster} "
+    cluster_env = f"-e FINELOG_CLUSTER={cluster} " if cluster is not None else ""
     return render_template(
         BOOTSTRAP_SCRIPT,
         docker_image=image,
         port=port,
         remote_log_dir=remote_log_dir,
         auth_env=auth_env,
-        query_env=query_env + migration_env,
+        query_env=query_env + migration_env + cluster_env,
         cache_dir=CACHE_DIR,
         container_name=CONTAINER_NAME,
         stop_timeout=CONTAINER_STOP_TIMEOUT,
