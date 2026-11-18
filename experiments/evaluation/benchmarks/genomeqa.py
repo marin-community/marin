@@ -92,7 +92,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                         Metrics.ACCURACY,
                         *(
                             Metric(name=name, kind=MetricKind.BINARY, higher_is_better=False)
-                            for name in ("unanswered", "truncation", "refusal", "parse_failure")
+                            for name in ("unanswered", "parse_failure")
                         ),
                     ),
                     primary_metric=MACRO_METRIC,

@@ -16,7 +16,6 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.response import completion_text
 from taskcompendium.importers import genomeqa as source
 from taskcompendium.importers.evalchemy.scorers.genomeqa import grade_genomeqa
-from taskcompendium.importers.evalchemy.scorers.main import score
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
@@ -24,9 +23,8 @@ from taskcompendium.runtime.resources import resource_bytes
 
 
 def completion(content, *, reasoning=None, finish="stop", refusal=None):
-    return (
-        completion_text({"content": content, "reasoning_content": reasoning, "refusal": refusal}, finish, "final_only"),
-        finish,
+    return completion_text(
+        {"content": content, "reasoning_content": reasoning, "refusal": refusal}, finish, "final_only"
     )
 
 
@@ -36,8 +34,8 @@ def completion(content, *, reasoning=None, finish="stop", refusal=None):
         (completion("### Analysis\nA is plausible.\n### Answer\nAnswer: B"), "AB", "B", None),
         (completion("Answer: B", reasoning="Answer: A"), "ABCD", "B", None),
         (completion(None, reasoning="### Answer\nAnswer: B"), "ABCD", "", "missing_answer"),
-        (completion(None, reasoning="Answer: B", finish="length"), "ABCD", "", "truncation"),
-        (completion("", finish="stop"), "ABCD", "", "missing_answer"),
+        (completion(None, reasoning="Answer: B", finish="length"), "ABCD", "", "missing_answer"),
+        (completion("Answer: B", finish="length"), "ABCD", "B", None),
         (completion(None, refusal="No answer"), "ABCD", "", "missing_answer"),
         ("<think>Answer: A</think>\n### Answer\n**B**", "AB", "B", None),
         ("<think>### Answer\nAnswer: B", "AB", "", "missing_answer"),
@@ -59,8 +57,7 @@ def completion(content, *, reasoning=None, finish="stop", refusal=None):
     ],
 )
 def test_final_answer_grading_preserves_protocol(response, options, answer, failure):
-    text, stop = response if isinstance(response, tuple) else (response, "stop")
-    grade = grade_genomeqa("B", options, 1, text, stop)
+    grade = grade_genomeqa("B", options, 1, response)
     assert grade.detail["metrics"]["accuracy"] == (answer == "B")
     assert grade.detail["genomeqa_parsing"]["failure"] == failure
     assert grade.detail["genomeqa_parsing"]["answer"] == answer
@@ -120,13 +117,6 @@ def test_source_conversion_preserves_question_and_private_grading_inputs(tmp_pat
     assert verdict["reward"] == 1
     assert verdict["detail"]["metric_weights"] == {"genomeqa_macro": 5}
     assert source.genomeqa_item(task).groups == {"subtask": "6_motif", "format": "binary", "cell": "6_motif/binary"}
-
-
-def test_final_answer_at_length_limit_is_graded_and_flagged(monkeypatch):
-    monkeypatch.setenv("TASKCOMPENDIUM_STOP_REASON", "length")
-    verdict = score("genomeqa", {"expected": "B", "options": "AB", "cell_weight": 1}, "Answer: B")
-    assert verdict.reward == 1
-    assert verdict.detail["metrics"]["truncation"] == 1
 
 
 def test_pinned_population_validates_both_formats_before_publication(tmp_path, monkeypatch):

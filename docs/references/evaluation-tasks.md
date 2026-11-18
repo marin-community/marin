@@ -315,11 +315,9 @@ fit. A result with any excluded or missing row is not a full GenomeQA result.
 
 The grader uses final content only, removes completed thinking blocks, and reads
 the last `### Answer` section or explicit `Answer:` declarations. Missing,
-conflicting, and invalid answers receive zero. At the output limit, the grader
-scores the available final answer and records a truncation. The `content_filter`
-stop reason is classified as refusal. The shared `final_only` selector returns
-the final content without falling back to reasoning; the original message remains
-in the raw attempt archive.
+conflicting, and invalid answers receive zero. The shared `final_only` selector supplies the
+final content. For validation reports, count `length` and `content_filter` stops
+from the archived model turns.
 
 Each verdict carries `accuracy`, `genomeqa_macro`, and parsing diagnostics. The
 macro metric gives motif questions weight 5 and other questions weight 1, so

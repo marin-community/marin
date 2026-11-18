@@ -19,9 +19,8 @@ _ANSWER = re.compile(
 _LETTER = re.compile(r"(?<!\w)([A-Z])(?!\w)")
 
 
-def grade_genomeqa(expected: str, options: str, cell_weight: float, response: str, stop_reason: str) -> Reward:
+def grade_genomeqa(expected: str, options: str, cell_weight: float, response: str) -> Reward:
     selected = response
-    failure = "refusal" if stop_reason == "content_filter" else None
     # An unterminated explicit thinking block contains no usable final answer.
     if any(
         selected.rfind(start) > selected.rfind(end)
@@ -38,17 +37,15 @@ def grade_genomeqa(expected: str, options: str, cell_weight: float, response: st
     explicit = {letter for declaration in _ANSWER.findall(selected) for letter in _LETTER.findall(declaration.upper())}
     candidates = explicit if explicit else set(_LETTER.findall(selected)) if has_heading else set()
     answer = ""
-    if failure is None:
-        if len(candidates) != 1:
-            failure = "conflicting_answers" if len(candidates) > 1 else "missing_answer"
+    failure = None
+    if len(candidates) != 1:
+        failure = "conflicting_answers" if candidates else "missing_answer"
+    else:
+        candidate = candidates.pop()
+        if candidate in options:
+            answer = candidate
         else:
-            candidate = candidates.pop()
-            if candidate not in options:
-                failure = "invalid_option"
-            else:
-                answer = candidate
-    if not answer and stop_reason == "length":
-        failure = "truncation"
+            failure = "invalid_option"
     correct = float(failure is None and answer == expected)
     return scored(
         correct,
@@ -56,9 +53,7 @@ def grade_genomeqa(expected: str, options: str, cell_weight: float, response: st
             "accuracy": correct,
             MACRO_METRIC: correct,
             "unanswered": float(not answer),
-            "truncation": float(stop_reason == "length"),
-            "refusal": float(failure == "refusal"),
-            "parse_failure": float(failure in {"missing_answer", "conflicting_answers", "invalid_option"}),
+            "parse_failure": float(failure is not None),
         },
         metric_weights={MACRO_METRIC: cell_weight},
         genomeqa_parsing={"selected_span": selected, "answer": answer, "failure": failure},

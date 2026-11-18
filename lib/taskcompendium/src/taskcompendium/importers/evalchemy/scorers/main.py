@@ -7,7 +7,6 @@
 # ruff: noqa: PLC0415
 
 import json
-import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -22,13 +21,7 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
     if scorer == "genomeqa":
         from .genomeqa import grade_genomeqa
 
-        return grade_genomeqa(
-            config["expected"],
-            config["options"],
-            config["cell_weight"],
-            response,
-            os.environ.get("TASKCOMPENDIUM_STOP_REASON", ""),
-        )
+        return grade_genomeqa(config["expected"], config["options"], config["cell_weight"], response)
     if scorer == "gsm8k_cot":
         from .math import grade_gsm8k_cot
 
