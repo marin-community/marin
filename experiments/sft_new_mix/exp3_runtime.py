@@ -7,6 +7,7 @@ Every CLI stage imports from this module; it may not import a stage module,
 and ``implementation_identity`` hashes only the files a stage names.
 """
 
+import gzip
 import hashlib
 import json
 import os
@@ -19,7 +20,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
 from rigging.filesystem.storage_path import StoragePath
 from tokenizers import Tokenizer
 
-from experiments.sft_new_mix.exp3_filters import FilterConfig, Stage
+from experiments.sft_new_mix.exp3_filters import CompProgLabels, FilterConfig, Stage
 
 # The build stages whose bytes determine candidate shard output. exp3_plan and
 # exp3_build must pin exactly this list.
@@ -48,11 +49,20 @@ def tokenizer_for(uri: str, sha256: str) -> Tokenizer:
 @cache
 def build_config(uri: str, expected_sha256: str) -> tuple[dict, FilterConfig]:
     value = json.loads(read_pinned(uri, expected_sha256))
+    rescue_enabled = Stage.COMP_PROG_LABEL_RESCUE.value in value["enabled"]
+    pinned_labels = value.get("comp_prog_labels")
+    if rescue_enabled != (pinned_labels is not None):
+        raise ValueError("comp_prog_label_rescue stage and its pinned label table must be set together")
+    labels = None
+    if pinned_labels is not None:
+        table = gzip.decompress(read_pinned(pinned_labels["table_uri"], pinned_labels["table_sha256"])).decode()
+        labels = CompProgLabels.from_records(json.loads(line) for line in table.splitlines())
     config = FilterConfig(
         enabled=frozenset(Stage(stage) for stage in value["enabled"]),
         think_limits=value["think_limits"],
         tools_by_source={source: frozenset(tools) for source, tools in value["tools_by_source"].items()},
         give_up_sources=frozenset(value["give_up_sources"]),
+        comp_prog_labels=labels,
     )
     return value, config
 

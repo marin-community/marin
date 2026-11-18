@@ -7,7 +7,7 @@ import json
 import re
 import zlib
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import cached_property
@@ -52,6 +52,7 @@ class Stage(StrEnum):
     TEST_EXCUSES = "failing_test_excuses"
     HIDDEN_TESTS = "qwen38_hidden_tests"
     REAL_TOOLS = "real_harness_tools"
+    COMP_PROG_LABEL_RESCUE = "comp_prog_label_rescue"
     GIVE_UP = "give_up_endings"
     THINK_LENGTH = "think_length"
     LEAN = "lean_structural"
@@ -79,10 +80,74 @@ class Document:
     text: str
     # Only source-adapter outcomes or checked receipts may set this flag.
     passed: bool = False
+    # Pinned official-test label identity; "" when the row has no label.
+    uuid: str = ""
 
     @cached_property
     def messages(self) -> list[Turn]:
         return turns(self.text)
+
+
+@dataclass(frozen=True)
+class CompProgLabels:
+    """Pinned official-test verdicts for the competitive-programming sources.
+
+    One record per judged cache row, joined to the build by Nemotron UUID.
+    Option G: a judged row keeps only when its verdict is accepted and its
+    answer holds no give-up phrase; each problem left with no accepted row
+    keeps its shortest accepted row; unjudged rows keep the current filters.
+    """
+
+    sources: frozenset[str]
+    uuid_by_row: dict[tuple[str, int], str]
+    status_by_uuid: dict[str, str]
+    rescued: frozenset[str]
+
+    def uuid_for(self, source: str, row: int) -> str:
+        return self.uuid_by_row.get((source, row), "")
+
+    def is_rescued(self, uuid: str) -> bool:
+        return uuid in self.rescued
+
+    @classmethod
+    def from_records(cls, records: Iterable[dict]) -> "CompProgLabels":
+        uuid_by_row: dict[tuple[str, int], str] = {}
+        status_by_uuid: dict[str, str] = {}
+        accepted: list[tuple[str, str, bool, int]] = []
+        for record in records:
+            status = record["status"]
+            if status not in ("accepted", "failed"):
+                raise ValueError(f"Unknown official-test status: {status}")
+            uuid = record["uuid"]
+            if uuid in status_by_uuid:
+                raise ValueError(f"Two cache rows carry UUID {uuid}")
+            status_by_uuid[uuid] = status
+            key = (record["cache_source"], int(record["cache_row"]))
+            if key in uuid_by_row:
+                raise ValueError(f"Cache row {key} carries two UUIDs")
+            uuid_by_row[key] = uuid
+            if status == "accepted":
+                accepted.append((uuid, record["problem"], bool(record["give_up"]), int(record["think_tokens"])))
+        # Every problem left with no accepted row keeps its shortest accepted
+        # row by thought tokens, even when that row holds a give-up phrase.
+        survivors = {problem for _uuid, problem, give_up, _tokens in accepted if not give_up}
+        shortest: dict[str, tuple[int, str]] = {}
+        for uuid, problem, _give_up, tokens in accepted:
+            if problem in survivors:
+                continue
+            # First occurrence wins ties, matching the frozen record order.
+            if problem not in shortest or tokens < shortest[problem][0]:
+                shortest[problem] = (tokens, uuid)
+        rescued = frozenset(uuid for _tokens, uuid in shortest.values())
+        without_give_up = {uuid for uuid, _problem, give_up, _tokens in accepted if not give_up}
+        if rescued & without_give_up:
+            raise ValueError("A rescued row holds no give-up phrase")
+        return cls(
+            sources=frozenset(source for source, _row in uuid_by_row),
+            uuid_by_row=uuid_by_row,
+            status_by_uuid=status_by_uuid,
+            rescued=rescued,
+        )
 
 
 @dataclass(frozen=True)
@@ -93,6 +158,8 @@ class FilterConfig:
     tools_by_source: dict[str, frozenset[str]]
     give_up_sources: frozenset[str] = frozenset()
     protected_paths: tuple[str, ...] = ("tests", "test", "/tests", ".github", "grader", "verifier")
+    # Pinned official-test labels; required when COMP_PROG_LABEL_RESCUE is enabled.
+    comp_prog_labels: CompProgLabels | None = None
 
 
 @dataclass(frozen=True)
@@ -317,7 +384,19 @@ def apply_stage(document: Document, stage: Stage, config: FilterConfig, token_co
         unknown = sorted({call.get("name", "") for call in calls} - allowed)
         if unknown:
             return Decision(document, "unvetted_tools:" + ",".join(unknown))
+    if stage == Stage.COMP_PROG_LABEL_RESCUE:
+        labels = config.comp_prog_labels
+        if labels is None or not document.uuid:
+            return Decision(document)
+        status = labels.status_by_uuid.get(document.uuid)
+        if status is None or status == "accepted":
+            return Decision(document)
+        return Decision(document, "label_failed")
     if stage == Stage.GIVE_UP and source in config.give_up_sources:
+        labels = config.comp_prog_labels
+        if labels is not None and labels.is_rescued(document.uuid):
+            # The problem's shortest accepted row stays even with a give-up phrase.
+            return Decision(document)
         for content in assistant:
             thoughts = THOUGHT.findall(content)
             tail = "\n".join(thought[-REASONING_TAIL_CHARS:] for thought in thoughts)
@@ -325,6 +404,10 @@ def apply_stage(document: Document, stage: Stage, config: FilterConfig, token_co
             if GIVE_UP.search(tail) or GIVE_UP.search(answer):
                 return Decision(document, "give_up_pattern")
     if stage == Stage.THINK_LENGTH and source in config.think_limits:
+        labels = config.comp_prog_labels
+        if labels is not None and document.uuid in labels.status_by_uuid:
+            # A judged row keeps the official-test verdict instead of the length prior.
+            return Decision(document)
         if any(
             token_count(thought) > config.think_limits[source]
             for content in assistant
