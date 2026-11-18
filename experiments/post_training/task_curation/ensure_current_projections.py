@@ -23,7 +23,6 @@ from typing import Any, Literal
 from experiments.post_training.task_curation.datasets.derived_contract_measurements import (
     derived_contract_receipts,
 )
-from experiments.post_training.task_curation.registry import read_registry_json
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOGGER = logging.getLogger(__name__)

@@ -7,8 +7,8 @@ from finestore.rl.curation import ActorCensusInput
 
 from experiments.post_training.task_curation.ensure_current_projections import (
     DeclarationPin,
-    publication_preflight,
     projection_gaps,
+    publication_preflight,
     summary,
 )
 
