@@ -25,7 +25,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 TEMPLATE_PATH = "experiments/deletion_tuning/plans/template-micro210-r1-sft746.json"
 MODEL_KEY = "snowball-deletion-tuning-base"
-VERSION = "2026.11.18.1"
+VERSION = "2026.11.18.2"
 OUTPUT_PREFIX = (
     "s3://marin-us-east-02a/tmp/ttl=30d/benfeuer/snowball-deletion-tuning/micro210-base-20261118/parent-base-full"
 )
