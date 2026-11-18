@@ -319,7 +319,7 @@ TRACKS: dict[Track, Baseline] = {
         H100_CLUSTER,
         1,
         H100,
-        "batch",
+        "interactive",  # short runs: not left at the back of the queue or preempted like batch work
         PALOMA_MACRO,
         Rule.DIFFERENCE,
         LOSS_NOISE,

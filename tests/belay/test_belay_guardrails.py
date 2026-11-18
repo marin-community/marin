@@ -824,8 +824,9 @@ def test_potential_is_tied_to_the_results_it_saw() -> None:
 
 
 def test_a_priority_grant_raises_the_launch_band() -> None:
-    assert launch_band(Track.SPEEDRUN, None, "X0001") == "batch"
-    assert launch_band(Track.SPEEDRUN, "interactive", "X0001") == "interactive"
+    assert launch_band(Track.SPEEDRUN, None, "X0001") == "interactive"  # speedruns are short: not batch
+    assert launch_band(Track.COMPETITIVE_D512, None, "X0001") == "batch"
+    assert launch_band(Track.COMPETITIVE_D512, "interactive", "X0001") == "interactive"
     assert launch_band(Track.MOE_D768, "production", "X0001") == "production"
     assert launch_band(Track.HERO_MFU, "production", "X0001") == "production"
 
