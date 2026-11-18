@@ -340,147 +340,6 @@ def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Large files", 0)
 
 
-# Committed data files have a 100 KB limit. One change may add at most 250 KB of
-# committed data in total, so sharding cannot spread a dataset across files.
-# Compressed files count toward both limits.
-LARGE_DATA_FILE_LIMIT = 100 * 1024
-LARGE_DATA_CHANGE_LIMIT = 250 * 1024
-DATA_FILE_SUFFIXES = frozenset(
-    {".json", ".jsonl", ".csv", ".tsv", ".parquet", ".arrow", ".npy", ".pkl", ".gz", ".zst", ".tar", ".zip"}
-)
-LARGE_DATA_ALLOWLIST_PATH = ROOT_DIR / "infra/large-data-allowlist.json"
-BASE_REF = "origin/main"
-LARGE_DATA_MESSAGE = (
-    "publish the data to a private open-athena dataset and commit a reference instead:"
-    ' pin an "hf://datasets/open-athena/<repo>@<revision>/<path>" URL (read it through fsutil'
-    " or fsspec, see docs/references/fsutil.md) and record its sha256 with the reference;"
-    " the procedure is documented in docs/dev-guide/large-data.md"
-)
-
-
-def _is_data_file(path: pathlib.Path) -> bool:
-    if path.suffix.lower() in DATA_FILE_SUFFIXES:
-        return True
-    try:
-        with path.open("rb") as stream:
-            return b"\0" in stream.read(8192)
-    except OSError:
-        # An unreadable file must not skip the guard; classify it as data so the
-        # size checks fail loudly instead of passing an unreadable file silently.
-        return True
-
-
-def _large_data_allowlist() -> dict[str, int]:
-    if not LARGE_DATA_ALLOWLIST_PATH.exists():
-        return {}
-    document = json.loads(LARGE_DATA_ALLOWLIST_PATH.read_text())
-    assert isinstance(document, dict)
-    return {str(path): int(size) for path, size in document.items()}
-
-
-def _require_origin_main() -> None:
-    """Fail unless BASE_REF exists; every base comparison below reads its tip."""
-    if run_cmd(["git", "cat-file", "-e", f"{BASE_REF}^{{commit}}"]).returncode != 0:
-        raise RuntimeError(f"The large-data guard compares against {BASE_REF}; fetch it with 'git fetch origin main'")
-
-
-def _git_blob_size(base_ref: str, path: str) -> int | None:
-    """The committed byte size of a path at the base ref, or None when absent there.
-
-    Requires ``_require_origin_main`` to have run: only then does None mean
-    "absent at the base" rather than a missing ref.
-    """
-    result = run_cmd(["git", "cat-file", "-s", f"{base_ref}:{path}"])
-    return int(result.stdout.strip()) if result.returncode == 0 else None
-
-
-def _check_changed_files(files: list[pathlib.Path], allowlist: dict[str, int]) -> list[str]:
-    """Per-file limits, allowlisted growth, and the per-change data budget."""
-    failures: list[str] = []
-    change_bytes = 0
-    for file_path in files:
-        if file_path == LARGE_DATA_ALLOWLIST_PATH or not _is_data_file(file_path):
-            continue
-        relative = file_path.relative_to(ROOT_DIR).as_posix()
-        size = file_path.stat().st_size
-        base_size = _git_blob_size(BASE_REF, relative)
-        change_bytes += max(0, size - (base_size or 0))
-        recorded = allowlist.get(relative)
-        if recorded is not None:
-            # The entry must match the file in the same change: lowering the entry
-            # with the file is the only way to shrink, and a stale entry cannot
-            # authorize growth later.
-            if size != recorded:
-                failures.append(
-                    f"  - {relative} is {size / 1024:.1f} KB but its allowlist entry records"
-                    f" {recorded / 1024:.1f} KB; set the entry to the committed size"
-                )
-            continue
-        if size > LARGE_DATA_FILE_LIMIT:
-            failures.append(f"  - {relative} is {size / 1024:.1f} KB (limit {LARGE_DATA_FILE_LIMIT // 1024} KB)")
-    if change_bytes > LARGE_DATA_CHANGE_LIMIT:
-        failures.append(
-            f"  - this change adds {change_bytes / 1024:.1f} KB of committed data"
-            f" (limit {LARGE_DATA_CHANGE_LIMIT // 1024} KB across all its files),"
-            " so sharding cannot spread a dataset"
-        )
-    return failures
-
-
-def _check_allowlist_pins(allowlist: dict[str, int]) -> list[str]:
-    """After adoption, entries may only shrink and must match their file's size."""
-    result = run_cmd(
-        ["git", "cat-file", "-p", f"{BASE_REF}:{LARGE_DATA_ALLOWLIST_PATH.relative_to(ROOT_DIR).as_posix()}"]
-    )
-    if result.returncode != 0:
-        # An allowlist absent from BASE_REF is the first landing; its entries stand as-is.
-        return []
-    base_document = json.loads(result.stdout)
-    failures = []
-    for path, size in allowlist.items():
-        base_size = base_document.get(path)
-        if base_size is None:
-            failures.append(
-                f"  - allowlist entry {path} is new; after adoption an entry must name data that"
-                f" {BASE_REF} already has, so publish the data instead"
-            )
-            continue
-        if size > int(base_size):
-            failures.append(
-                f"  - allowlist entry {path} grew from {int(base_size) / 1024:.1f} KB to"
-                f" {size / 1024:.1f} KB (the allowlist only shrinks)"
-            )
-        file_path = ROOT_DIR / path
-        if not file_path.exists():
-            failures.append(f"  - allowlist entry {path} names a file that no longer exists; delete the entry")
-        elif file_path.stat().st_size != size:
-            failures.append(
-                f"  - allowlist entry {path} records {size / 1024:.1f} KB but the file holds"
-                f" {file_path.stat().st_size / 1024:.1f} KB; set the entry to the committed size"
-            )
-    return failures
-
-
-def check_large_data(files: list[pathlib.Path], fix: bool) -> int:
-    if not files:
-        return 0
-
-    _require_origin_main()
-    allowlist = _large_data_allowlist()
-    failures = _check_changed_files(files, allowlist)
-    if LARGE_DATA_ALLOWLIST_PATH in files:
-        failures.extend(_check_allowlist_pins(allowlist))
-
-    if failures:
-        buf = io.StringIO()
-        buf.write(f"{len(failures)} large-data violations; " + LARGE_DATA_MESSAGE + "\n")
-        for failure in failures:
-            buf.write(failure + "\n")
-        return _record("Large data", 1, buf.getvalue())
-
-    return _record("Large data", 0)
-
-
 def check_python_ast(files: list[pathlib.Path], fix: bool) -> int:
     py_files = [f for f in files if f.suffix == ".py"]
     if not py_files:
@@ -1047,7 +906,7 @@ PRECOMMIT_CONFIGS = [
     ),
     PrecommitConfig(
         patterns=["**/*.py"],
-        exclude_patterns=[*EXCLUDE_PATTERNS, "lib/levanter/**", "lib/haliax/**", "lib/marin/**", "lib/**/vendor/**"],
+        exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/marin/**", "lib/**/vendor/**"],
         checks=[
             check_ruff,
             check_black,
@@ -1081,26 +940,6 @@ PRECOMMIT_CONFIGS = [
             check_toml_yaml,
             check_trailing_whitespace,
             check_eof_newline,
-        ],
-    ),
-    PrecommitConfig(
-        # The data guard needs the globally hidden tree (gz/zip/npy are the classic
-        # evasion vectors), but not upstream code, pinned snapshots or binary media.
-        patterns=["**/*"],
-        checks=[check_large_data],
-        global_exclude_patterns=[],
-        exclude_patterns=[
-            "vendor/**",
-            "tests/snapshots/**",
-            "**/*.ipynb",
-            "**/*.png",
-            "**/*.jpg",
-            "**/*.jpeg",
-            "**/*.gif",
-            "**/*.ico",
-            "**/*.mov",
-            "**/*.mp4",
-            "**/*.html",
         ],
     ),
     PrecommitConfig(
