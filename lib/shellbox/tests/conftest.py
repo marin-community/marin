@@ -1,16 +1,37 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Offline OCI images shared by image preparation and real local machine tests."""
+"""Host requirements and offline OCI images for Shellbox tests."""
 
 import hashlib
 import json
+import sys
 from collections.abc import Callable
 from itertools import count
 from pathlib import Path
 
 import pytest
 from shellbox.image import PreparedImage, RegistryImage
+
+HOST_REQUIREMENTS = {
+    "requires_host_setsid": "The local Linux guest fake needs the host setsid executable",
+    "requires_linux_process_api": "The local process fake needs Linux /proc and waitid with WNOWAIT",
+}
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    for marker, reason in HOST_REQUIREMENTS.items():
+        config.addinivalue_line("markers", f"{marker}: {reason} (skipped on macOS)")
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    if sys.platform != "darwin":
+        return
+
+    for item in items:
+        for marker, reason in HOST_REQUIREMENTS.items():
+            if item.get_closest_marker(marker) is not None:
+                item.add_marker(pytest.mark.skip(reason=reason))
 
 
 def pytest_addoption(parser):

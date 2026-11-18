@@ -21,6 +21,10 @@ export interface ServingInfo {
   endpoint: string
   streaming: boolean
   chat_template_protocol: ChatTemplateProtocol
+  /** The server holds a Parallel API key and serves the web_search tool. */
+  web_search: boolean
+  /** The server saves model-feedback reports to Marin storage at /feedback. */
+  feedback: boolean
 }
 
 export type ServerStatus = 'connecting' | 'ok' | 'loading' | 'bad'
@@ -84,6 +88,7 @@ export interface Conversation {
   system: string
   pythonTools: string
   shellWorkspace: ShellWorkspace | null
+  webSearch: boolean
   thinkingMode: ThinkingMode
   customInstructions: string
   createdAt: number

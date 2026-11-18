@@ -88,33 +88,45 @@ def test_spawn_failure_kills_already_started_children(monkeypatch: pytest.Monkey
     assert started[0].returncode is not None and started[0].returncode < 0
 
 
-def test_external_sigterm_returns_128_plus_signum() -> None:
+@pytest.mark.parametrize("termination_phase", ["spawning", "running"])
+def test_external_sigterm_returns_128_plus_signum(termination_phase) -> None:
     # The supervisor itself is SIGTERMed (preemption/task termination). It
     # forwards the signal to the children, which die reporting negative signal
     # codes (-15). The supervisor must surface 128+SIGTERM (143) — the killed
     # task — not map a child's -15 to an arbitrary failure code (241).
     supervisor_src = textwrap.dedent(
         """
-        import sys
-        from iris.jax.multigpu_main import run
+        import os, signal, sys
+        from iris.jax import multigpu_main
         child = [sys.executable, "-c", "print('READY', flush=True); import time; time.sleep(30)"]
-        sys.exit(run(nproc=2, devices_per_proc=1, child_argv=child))
         """
     )
+    if termination_phase == "spawning":
+        supervisor_src += textwrap.dedent(
+            """
+            spawn = multigpu_main.subprocess.Popen
+            def spawn_and_terminate(*args, **kwargs):
+                process = spawn(*args, **kwargs)
+                os.kill(os.getpid(), signal.SIGTERM)
+                return process
+            multigpu_main.subprocess.Popen = spawn_and_terminate
+            """
+        )
+    supervisor_src += "sys.exit(multigpu_main.run(nproc=2, devices_per_proc=1, child_argv=child))\n"
     proc = subprocess.Popen(
         [sys.executable, "-c", supervisor_src], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
     assert proc.stdout is not None
-    # Signal only once both children are live, so the forwarded SIGTERM is what
-    # ends them (rather than racing their startup).
-    ready = 0
-    for line in proc.stdout:
-        if "READY" in line:
-            ready += 1
-            if ready == 2:
-                break
-    assert ready == 2, "children did not start"
-    proc.send_signal(signal.SIGTERM)
+    if termination_phase == "running":
+        # Child output can arrive before the supervisor finishes spawning both ranks.
+        ready = 0
+        for line in proc.stdout:
+            if "READY" in line:
+                ready += 1
+                if ready == 2:
+                    break
+        assert ready == 2, "children did not start"
+        proc.send_signal(signal.SIGTERM)
     proc.communicate(timeout=30)
     assert proc.returncode == 128 + signal.SIGTERM
 

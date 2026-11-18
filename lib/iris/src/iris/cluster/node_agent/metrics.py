@@ -23,6 +23,15 @@ class DeviceMetric:
 
 
 @dataclass(frozen=True)
+class FilesystemSample:
+    """Capacity of one host filesystem, independent of the task-cache disk."""
+
+    mountpoint: str
+    total_bytes: int
+    available_bytes: int
+
+
+@dataclass(frozen=True)
 class NodeTarget:
     """Stable identity and exporter address for one physical node."""
 
@@ -58,6 +67,7 @@ class NodeMetrics:
     dcgm_available: bool = False
     dcgm_exporter_uid: str = ""
     device_metrics: tuple[DeviceMetric, ...] = ()
+    filesystems: tuple[FilesystemSample, ...] = ()
 
 
 def publish_node_telemetry(target: NodeTarget, metrics: NodeMetrics, timestamp_seconds: float) -> None:
@@ -85,6 +95,12 @@ def publish_node_telemetry(target: NodeTarget, metrics: NodeMetrics, timestamp_s
         for name, value, unit in current_metrics:
             if value is not None:
                 telemetry.gauge(name, unit=unit).set(value, attributes=host_current)
+        for filesystem in metrics.filesystems:
+            attributes = {**host_current, "mountpoint": filesystem.mountpoint}
+            telemetry.gauge("node_filesystem_total_bytes", unit="By").set(filesystem.total_bytes, attributes=attributes)
+            telemetry.gauge("node_filesystem_available_bytes", unit="By").set(
+                filesystem.available_bytes, attributes=attributes
+            )
         host_cumulative = {
             **node_identity,
             "source_replica_uid": metrics.host_source_replica_uid,

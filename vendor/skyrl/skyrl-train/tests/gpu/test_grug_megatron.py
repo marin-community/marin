@@ -30,7 +30,6 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from transformers import AutoTokenizer
 
 import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Grug bridge
-from skyrl_train.distributed.dispatch import concatenate_outputs_after_mesh_dispatch
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, _offloaded_muon_direction_in_grad_
 from skyrl_train.distributed.megatron.megatron_utils import load_megatron_optimizer, offload_megatron_optimizer
 from skyrl_train.distributed.megatron.optimizer import HybridDeviceOptimizer
@@ -42,6 +41,15 @@ from skyrl_train.training_batch import TrainingInputBatch
 from skyrl_train.utils import initialize_ray
 from skyrl_train.utils.torch_utils import logprobs_from_logits
 from tests.gpu.grug_gpu_gates import require_hoppers
+from tests.gpu.grug_policy_training import (
+    PROMPT_LENGTH,
+    RESPONSE_LENGTH,
+    ROLLOUT_WORLD_SIZE,
+    _config,
+    _init_policy,
+    _megatron_response_logprobs,
+    _padded_batch,
+)
 from tests.gpu.grug_serving import (
     GRUG_BIAS_NAMES as BIAS_NAMES,
     GRUG_PARAMETER_NAMES as PARAMETER_NAMES,
@@ -54,11 +62,8 @@ from tests.gpu.grug_serving import (
     rollout_training_batch,
 )
 from tests.gpu.grug_tiny_checkpoint import TOY_SHAPE, write_tiny_checkpoint
-from tests.gpu.utils import get_test_actor_config, init_worker_with_type
-
-ROLLOUT_WORLD_SIZE = 2
-RESPONSE_LENGTH = 8
-PROMPT_LENGTH = 12
+from tests.gpu.utils import init_worker_with_type
+from skyrl_train.weight_sync.expert_block.driver import ExpertBlockSync
 
 
 def _spot_check_name(suffix: str) -> str:
@@ -116,7 +121,6 @@ def embedding_preprocess_model(request, tmp_path):
             expert_model_parallel_size=1,
             expert_tensor_parallel_size=1,
             bf16=provider.bf16,
-            attention_backend="fused" if provider.bf16 else "unfused",
         )
         provider.recompute_granularity = "full"
         provider.recompute_method = "uniform"
@@ -164,100 +168,6 @@ def test_grug_embedding_recompute_preserves_gradients_and_reduces_saved_activati
         assert saved_bytes[1] < saved_bytes[0], saved_bytes
 
 
-def _config(model_path: str, *, world_size: int, pp: int, ep: int):
-    cfg = get_test_actor_config()
-    cfg.trainer.policy.model.path = model_path
-    cfg.trainer.critic.model.path = None
-    cfg.trainer.strategy = "megatron"
-    cfg.trainer.flash_attn = False
-    cfg.trainer.bf16 = True
-    cfg.trainer.gradient_checkpointing = True
-    cfg.trainer.use_sample_packing = False
-    cfg.trainer.train_batch_size = 4
-    cfg.trainer.policy_mini_batch_size = 4
-    cfg.trainer.micro_train_batch_size_per_gpu = 2
-    cfg.trainer.micro_forward_batch_size_per_gpu = 2
-    cfg.trainer.update_epochs_per_batch = 1
-    cfg.trainer.algorithm.use_kl_loss = False
-    cfg.trainer.algorithm.use_entropy_loss = False
-    cfg.trainer.placement.colocate_all = False
-    cfg.trainer.placement.policy_num_nodes = 1
-    cfg.trainer.placement.policy_num_gpus_per_node = world_size
-    cfg.trainer.policy.megatron_config.tensor_model_parallel_size = 1
-    cfg.trainer.policy.megatron_config.pipeline_model_parallel_size = pp
-    cfg.trainer.policy.megatron_config.context_parallel_size = 1
-    cfg.trainer.policy.megatron_config.expert_model_parallel_size = ep
-    cfg.trainer.policy.megatron_config.expert_tensor_parallel_size = 1
-    # Large enough that one Adam step moves bf16 norm weights sitting at 1.0 (ulp 2^-7).
-    cfg.trainer.policy.optimizer_config.lr = 2.0e-2
-    cfg.trainer.policy.optimizer_config.max_grad_norm = 0.0
-    cfg.generator.backend = "vllm"
-    cfg.generator.weight_sync_backend = "nccl"
-    cfg.generator.inference_engine_tensor_parallel_size = 1
-    cfg.generator.inference_engine_data_parallel_size = ROLLOUT_WORLD_SIZE
-    cfg.generator.inference_engine_expert_parallel_size = ROLLOUT_WORLD_SIZE
-    cfg.generator.num_inference_engines = 1
-    cfg.generator.n_samples_per_prompt = 1
-    cfg.generator.gpu_memory_utilization = 0.35
-    cfg.generator.sampling_params.temperature = 1.0
-    cfg.generator.sampling_params.top_p = 1.0
-    cfg.generator.sampling_params.top_k = -1
-    cfg.generator.sampling_params.max_generate_length = 4
-    return cfg
-
-
-def _padded_batch(
-    pad_token_id: int,
-    batch_size: int = 4,
-    prompt_length: int = PROMPT_LENGTH,
-    response_length: int = RESPONSE_LENGTH,
-    variable_lengths: bool = False,
-) -> TrainingInputBatch:
-    """Return a bf16-friendly batch with left and right padding and fixed content.
-
-    With ``variable_lengths`` each row's body is shorter than the previous one, as rollouts
-    are, so consecutive micro-batches have different widths.
-    """
-    generator = torch.Generator().manual_seed(5)
-    full_body_length = prompt_length + response_length
-    total_length = full_body_length + 6
-    pad_before = [3, 0, 5, 1]
-    sequences = []
-    masks = []
-    # Each row loses this many tokens relative to the previous one; the last row still
-    # keeps some response tokens once total padding is accounted for.
-    shrink = response_length // (2 * batch_size) if variable_lengths else 0
-    for row in range(batch_size):
-        body_length = full_body_length - shrink * row
-        body = torch.randint(10, 500, (body_length,), generator=generator).tolist()
-        before = pad_before[row % len(pad_before)]
-        after = total_length - body_length - before
-        assert after < response_length, (row, after, response_length)
-        sequences.append([pad_token_id] * before + body + [pad_token_id] * after)
-        masks.append([0] * before + [1] * body_length + [0] * after)
-    sequences = torch.tensor(sequences, dtype=torch.long)
-    attention_mask = torch.tensor(masks, dtype=torch.long)
-    response_mask = attention_mask[:, -response_length:]
-    zeros = torch.zeros(batch_size, response_length, dtype=torch.float32)
-    advantages = torch.linspace(-1.0, 1.0, response_length).unsqueeze(0).repeat(batch_size, 1)
-    batch = TrainingInputBatch(
-        {
-            "sequences": sequences,
-            "attention_mask": attention_mask,
-            "action_log_probs": zeros.clone(),
-            "base_action_log_probs": zeros.clone(),
-            "rollout_logprobs": zeros.clone(),
-            "values": zeros.clone(),
-            "returns": zeros.clone(),
-            "advantages": advantages,
-            "loss_mask": response_mask.clone(),
-            "response_mask": response_mask.clone(),
-        }
-    )
-    batch.metadata = {"response_length": response_length, "global_step": 0}
-    return batch
-
-
 def _hf_response_logprobs_direct(model_path: str, batch: TrainingInputBatch) -> torch.Tensor:
     model = GrugMoeForCausalLM.from_pretrained(model_path, dtype=torch.bfloat16, attn_implementation="eager")
     model.eval().to("cuda")
@@ -277,11 +187,6 @@ def _hf_response_logprobs(model_path: str, batch: TrainingInputBatch) -> torch.T
     return _hf_response_logprobs_direct(model_path, batch)
 
 
-def _megatron_response_logprobs(policy, batch: TrainingInputBatch) -> torch.Tensor:
-    outputs = ray.get(policy.async_run_ray_method("mesh", "forward", data=batch))
-    return concatenate_outputs_after_mesh_dispatch(policy.actor_infos, outputs)["output"].float()
-
-
 def _assert_logprobs_close(actual: torch.Tensor, expected: torch.Tensor, response_mask: torch.Tensor) -> None:
     valid = response_mask.bool()
     diff = (actual[valid] - expected[valid]).abs()
@@ -290,12 +195,6 @@ def _assert_logprobs_close(actual: torch.Tensor, expected: torch.Tensor, respons
     )
     assert diff.max().item() < LOGPROB_MAX_ABS_TOLERANCE, diff.max()
     assert diff.mean().item() < LOGPROB_MEAN_ABS_TOLERANCE, diff.mean()
-
-
-def _init_policy(cfg, world_size: int):
-    return init_worker_with_type(
-        "policy", shared_pg=None, colocate_all=False, num_gpus_per_node=world_size, num_nodes=1, cfg=cfg
-    )
 
 
 def _train_step(policy, batch: TrainingInputBatch) -> dict[str, float]:
@@ -427,11 +326,11 @@ def test_grug_megatron_eval_forward_is_independent_of_peer_rank_batch(
     prompt_length: int,
     response_length: int,
 ):
-    """A rank's log-probs must not change when only the peer expert-parallel rank's rows change.
+    """Explicit BI keeps a rank's log-probs fixed when only another rank's rows change.
 
     Expert parallelism co-batches tokens from every rank in the expert group, so a
-    composition-dependent kernel would make old log-probs depend on which rows the
-    other ranks happened to hold.
+    composition-dependent kernel violates BI. Ordinary RL instead checks scoring
+    versus training at TRAIN_EVAL_LOGPROB_MAX_ABS_TOLERANCE with matching batches.
     """
     require_hoppers(world_size)
     model_path = tmp_path / "model"
@@ -440,6 +339,7 @@ def test_grug_megatron_eval_forward_is_independent_of_peer_rank_batch(
         model_path, max_position_embeddings=4096, num_experts_per_tok=num_experts_per_tok, shape=shape
     )
     cfg = _config(str(model_path), world_size=world_size, pp=pp, ep=ep)
+    cfg.trainer.algorithm.batch_invariant = True
     pad_token_id = AutoTokenizer.from_pretrained(model_path).pad_token_id
     rows = _padded_batch(pad_token_id, batch_size=6, prompt_length=prompt_length, response_length=response_length)
     first = rows.slice(0, 4)
@@ -512,20 +412,33 @@ def test_grug_megatron_pp2_train_step_updates_weights_and_exports(tmp_path):
 
 
 @pytest.mark.vllm
-@pytest.mark.parametrize("nccl_max_channels", [None, 32])
-def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollout(tmp_path, nccl_max_channels):
-    """Rollout, PP2 Megatron update, mixed-dtype broadcast, serving readback, rollout."""
+@pytest.mark.parametrize(
+    ("transport", "nccl_max_channels"),
+    [("broadcast", None), ("broadcast", 32), ("expert_block", None)],
+)
+def test_grug_megatron_four_gpu_disaggregated_rollout_train_sync_rollout(tmp_path, nccl_max_channels, transport):
+    """Rollout, Megatron update, checked weight transfer, serving readback, rollout."""
     policy_world_size = 2
     require_hoppers(policy_world_size + ROLLOUT_WORLD_SIZE)
     model_path = tmp_path / "model"
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
-    cfg = _config(str(model_path), world_size=policy_world_size, pp=2, ep=1)
+    cfg = _config(
+        str(model_path), world_size=policy_world_size, pp=2 if transport == "broadcast" else 1,
+        ep=1 if transport == "broadcast" else 2,
+    )
+    cfg.generator.weight_sync_transport = transport
+    cfg.generator.expert_block_sync.verify = transport == "expert_block"
     if nccl_max_channels is not None:
         cfg.trainer.algorithm.batch_invariant = True
         cfg.trainer.policy.megatron_config.nccl_max_channels = nccl_max_channels
     initialize_ray(cfg)
-    client = grug_engine_client(cfg, str(model_path))
+    client = grug_engine_client(
+        cfg,
+        str(model_path),
+        require_verified_placements=transport == "expert_block",
+        moe_backend="triton" if transport == "expert_block" else None,
+    )
     try:
         prompt_pattern = [[1, 17, 29, 5, 11, 3], [1, 19, 31, 7, 13, 3]]
         prompts = [prompt_pattern[idx % 2] for idx in range(cfg.trainer.train_batch_size)]
@@ -548,8 +461,17 @@ def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollou
         for name in PARAMETER_NAMES:
             assert not torch.equal(training[name], before[name]), f"{name} did not update"
 
-        ray.get(policy.async_run_ray_method("pass_through", "init_weight_sync_state", client))
-        ray.get(policy.async_run_ray_method("pass_through", "broadcast_to_inference_engines", client))
+        if transport == "expert_block":
+            sync = ExpertBlockSync(policy_model=policy, inference_engine_client=client, timeout_seconds=600)
+            asyncio.run(sync.prepare())
+            asyncio.run(client.pause_generation())
+            asyncio.run(sync.sync(0))
+            asyncio.run(sync.verify(0))
+            asyncio.run(sync.close())
+            asyncio.run(client.resume_generation(policy_step=1))
+        else:
+            ray.get(policy.async_run_ray_method("pass_through", "init_weight_sync_state", client))
+            ray.get(policy.async_run_ray_method("pass_through", "broadcast_to_inference_engines", client))
         sync_names = [
             *BIAS_NAMES,
             *SERVING_EXPERT_INDEX_BY_NAME,
@@ -650,6 +572,123 @@ def test_grug_megatron_two_gpu_colocated_sleep_sync_preserves_grouped_experts(tm
     finally:
         ray.util.remove_placement_group(shared_pg)
         ray.shutdown()
+
+
+@pytest.mark.vllm
+def test_grug_megatron_four_gpu_colocated_expert_block_matches_fresh_load_after_two_updates(tmp_path):
+    """Each sleep/wake update must match a fresh vLLM load on every EP rank."""
+    require_hoppers(4)
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    write_tiny_checkpoint(model_path)
+    cfg = _config(str(model_path), world_size=4, pp=1, ep=4)
+    cfg.trainer.placement.colocate_all = True
+    cfg.trainer.micro_train_batch_size_per_gpu = 1
+    cfg.trainer.micro_forward_batch_size_per_gpu = 1
+    cfg.generator.inference_engine_data_parallel_size = 4
+    cfg.generator.inference_engine_expert_parallel_size = 4
+    cfg.generator.weight_sync_transport = "expert_block"
+    cfg.generator.expert_block_sync.verify = True
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    prompts = [[1, 17, 29, 5, 11, 3], [1, 19, 31, 7, 13, 3]] * 2
+    rollout_sampling = get_sampling_params_for_backend(cfg.generator.backend, cfg.generator.sampling_params)
+    rollout_sampling.update({"temperature": 0.0, "ignore_eos": True, "max_tokens": 4, "logprobs": 1})
+    score_sampling = {**rollout_sampling, "max_tokens": 1, "prompt_logprobs": 1}
+    target = 47
+    score_input = InferenceEngineInput(prompt_token_ids=[prompts[0] + [target]], sampling_params=score_sampling)
+    expert_names = [
+        f"model.layers.0.mlp.experts.{expert}.{part}_proj.weight"
+        for expert in range(TOY_SHAPE["num_local_experts"])
+        for part in ("gate", "down")
+    ]
+    names = [LM_HEAD_NAME, ROUTER_NAME, *expert_names]
+    observations = []
+
+    def read_weights(engine_client):
+        rows = {}
+        for engine in engine_client.engines:
+            result = ray.get(engine.inference_engine_actor.read_engine_weights.remote(names, False))
+            for row in result if isinstance(result, list) else [result]:
+                rank = int(row["__ranks__"]["ep_rank"])
+                assert rank not in rows
+                rows[rank] = row
+        assert set(rows) == set(range(4))
+        return rows
+
+    def logprob(engine_client):
+        result = asyncio.run(engine_client.generate(score_input))
+        return float(result["prompt_logprobs"][0][-1][target])
+
+    initialize_ray(cfg)
+    shared_pg = placement_group([{"GPU": 1, "CPU": 1}] * 4, strategy="PACK")
+    ray.get(shared_pg.ready(), timeout=120)
+    client = grug_engine_client(
+        cfg,
+        str(model_path),
+        shared_pg=shared_pg,
+        inference_engine_enable_sleep=True,
+        require_verified_placements=True,
+        moe_backend="triton",
+    )
+    try:
+        policy = init_worker_with_type(
+            "policy", shared_pg=shared_pg, colocate_all=True, num_gpus_per_node=4, cfg=cfg
+        )
+        sync = ExpertBlockSync(policy_model=policy, inference_engine_client=client, timeout_seconds=600, colocated=True)
+        for step in range(3):
+            if step:
+                rollout = asyncio.run(
+                    client.generate(InferenceEngineInput(prompt_token_ids=prompts, sampling_params=rollout_sampling))
+                )
+                asyncio.run(client.pause_generation())
+                asyncio.run(client.sleep())
+                policy.backload_to_gpu()
+                batch = rollout_training_batch(prompts, rollout)
+                batch.metadata["global_step"] = step
+                _train_step(policy, batch)
+            policy.offload_to_cpu(offload_optimizer=True, offload_model=False)
+            asyncio.run(client.wake_up(tags=["weights"]))
+            if step == 0:
+                asyncio.run(client.pause_generation())
+            asyncio.run(sync.prepare())
+            asyncio.run(sync.sync(step))
+            asyncio.run(sync.verify(step))
+            asyncio.run(sync.close())
+            if step:
+                export_dir = tmp_path / f"checkpoint-{step}"
+                ray.get(policy.async_run_ray_method("pass_through", "save_hf_model", str(export_dir), tokenizer))
+                observations.append((export_dir, read_weights(client)))
+            policy.offload_to_cpu(offload_optimizer=False, offload_model=True)
+            asyncio.run(client.wake_up(tags=["kv_cache"]))
+            asyncio.run(client.resume_generation(policy_step=step + 1))
+            if step:
+                observations[-1] += (logprob(client),)
+        first, second = observations
+        assert any(
+            not torch.equal(first[1][rank][name]["tensor"], second[1][rank][name]["tensor"])
+            for rank in range(4)
+            for name in expert_names
+            if first[1][rank][name].get("found") and second[1][rank][name].get("found")
+        ), "No sampled expert changed across updates"
+    finally:
+        ray.shutdown()
+
+    for export_dir, synced_weights, synced_logprob in observations:
+        initialize_ray(cfg)
+        try:
+            fresh = grug_engine_client(cfg, str(export_dir), moe_backend="triton")
+            reference_weights = read_weights(fresh)
+            for rank in range(4):
+                for name in names:
+                    actual, expected = synced_weights[rank][name], reference_weights[rank][name]
+                    assert actual.get("found") == expected.get("found"), (rank, name)
+                    if actual.get("found"):
+                        torch.testing.assert_close(actual["tensor"], expected["tensor"], rtol=0, atol=0)
+            # Both sides use the same vLLM backend and BF16 weights. This only allows
+            # small kernel-order variation, not the trainer-vLLM numerical gap.
+            assert abs(synced_logprob - logprob(fresh)) < 2e-3
+        finally:
+            ray.shutdown()
 
 
 def _idle_pinned_host_bytes(_worker) -> int:

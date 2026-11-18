@@ -11,7 +11,7 @@ from enum import StrEnum
 from fray.types import tpu_family, tpu_hbm_capacity_bytes
 from iris.cluster.tpu_topology import get_tpu_topology
 
-from marin.evaluation.model_config import ModelConfig, ServeConfig
+from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig
 from marin.inference.config import ServingGeometry
 
 _BYTES_PER_GIB = 1024**3
@@ -109,6 +109,14 @@ def default_platform(model: ModelConfig) -> Platform:
     if model.resource_hint.gpu or model.serve.speculative is not None:
         return Platform.GPU
     return Platform.TPU
+
+
+def supports_request_seed(platform: Platform, backend: ServeBackend) -> bool:
+    """Whether the served endpoint accepts a per-request seed on sampled requests.
+
+    TPU vLLM rejects a request that combines a seed with a temperature above zero.
+    """
+    return not (platform is Platform.TPU and backend is ServeBackend.VLLM)
 
 
 def _select_tpu(hbm_gb: int, policy: HardwarePolicy) -> AcceleratorChoice:

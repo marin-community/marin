@@ -22,6 +22,7 @@ from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.models import (
     GenerationLimitReached,
+    ContextRejected,
     ContextWindowExceeded,
     GradedRollout,
     GradedRolloutInterrupted,
@@ -424,6 +425,19 @@ class TaskRolloutWorker:
             if harbor is None or self.installed_agents is None:
                 raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
             harnesses[HARBOR_TRIAL_SESSION] = self.installed_agents.original_harness(lowered, session_id, harbor, phase)
+            # Harbor owns the phase deadlines and must still run its verifier
+            # after an agent timeout. The outer attempt deadline covers the full trial.
+            lowered = lowered.model_copy(
+                update={
+                    "limits": lowered.limits.model_copy(
+                        update={
+                            "model_turn_timeout": None,
+                            "tool_turn_timeout": None,
+                            "total_turn_timeout": None,
+                        }
+                    )
+                }
+            )
         elif harbor is not None and self.installed_agents is not None:
             if not is_shell_harness(lowered.harness):
                 raise ValueError("SkyRL agents require a Shellbox task grader")
@@ -491,11 +505,10 @@ class TaskRolloutWorker:
                         session_id=session_id,
                     )
                 except (GenerationLimitReached, ContextLengthExceededError) as error:
-                    if lowered.harness != SKYRL_AGENT_HARNESS:
-                        raise
-                    raise ContextWindowExceeded(
+                    raise ContextRejected(
+                        error,
                         f"This request exceeds the maximum context length of {max_context_length} tokens. "
-                        "Compact the conversation and retry."
+                        "Compact the conversation and retry.",
                     ) from error
 
             engine = engines[index]
@@ -651,7 +664,8 @@ class TaskRolloutWorkerSpec:
         installed_agents = None
         if self.harbor_config is not None and self.harbor_config.get("installed_agent") is not None:
             # Full Harbor is an optional dependency for installed-agent runs.
-            from harbor.host_capabilities import DAYTONA_API_URL, DaytonaConnection
+            from harbor.host_capabilities import HostCapabilities
+            from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
             from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
             from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 
@@ -662,7 +676,7 @@ class TaskRolloutWorkerSpec:
             daytona_options = harbor.environment.kwargs
             daytona_connection = DaytonaConnection(
                 api_key=os.environ.get(daytona_options.get("api_key_env") or "DAYTONA_API_KEY"),
-                api_url=os.environ.get("DAYTONA_API_URL", DAYTONA_API_URL),
+                api_url=os.environ.get("DAYTONA_API_URL", DEFAULT_DAYTONA_API_URL),
                 target=os.environ.get("DAYTONA_TARGET"),
             )
             installed_agents = InstalledAgentRuntime(

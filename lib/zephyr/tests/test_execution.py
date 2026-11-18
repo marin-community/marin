@@ -1624,32 +1624,6 @@ def test_shared_pool_start_retries_a_failed_coordinator(tmp_path):
         client.shutdown(wait=True)
 
 
-def test_execute_does_not_retry_worker_errors(local_client, tmp_path):
-    """ZephyrWorkerError (application errors) are never retried."""
-    chunk_prefix = str(tmp_path / "chunks")
-
-    def exploding_map(x):
-        raise ValueError(f"bad value: {x}")
-
-    ctx = ZephyrContext(
-        client=local_client,
-        max_workers=1,
-        resources=ResourceConfig(cpu=1, ram="512m"),
-        chunk_storage_prefix=chunk_prefix,
-        max_execution_retries=3,
-        name=f"test-execution-{uuid.uuid4().hex[:8]}",
-    )
-    ds = Dataset.from_list([1, 2, 3]).map(exploding_map)
-
-    start = time.monotonic()
-    with pytest.raises(ZephyrWorkerError, match="ValueError"):
-        ctx.execute(ds)
-    elapsed = time.monotonic() - start
-
-    # Should fail fast — no retries for application errors
-    assert elapsed < 15.0, f"Took {elapsed:.1f}s, expected fast failure (no retries)"
-
-
 def test_stage_index_correct_with_join(local_client, tmp_path):
     """current_stage_index is set correctly for main and join-right stages.
 

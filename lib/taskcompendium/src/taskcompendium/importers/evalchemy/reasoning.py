@@ -5,8 +5,10 @@
 
 import hashlib
 import random
+import re
+import string
 from collections.abc import Mapping
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import Any
 
 from rigging.filesystem.storage_path import StoragePath
@@ -21,6 +23,15 @@ from taskcompendium.evaluation.spec import (
     EvaluationItem,
 )
 from taskcompendium.importers.evalchemy.grader import source_package
+from taskcompendium.importers.fewshot import (
+    ChoiceDocument,
+    ChoiceTemplate,
+    Document,
+    FewshotPolicy,
+    FewshotSampling,
+    GenerationTemplate,
+    pinned_prompts,
+)
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
@@ -36,6 +47,115 @@ MMLU_INITIAL_PROMPT = (
     'and then finish your answer with "the answer is (X)" where X is the correct letter choice.\n\n\n'
 )
 MMLU_FEWSHOT_COUNT = 5
+
+
+def clean_gpqa_answer(text: str) -> str:
+    return re.sub(r"\[.*?\]", "", text.strip().replace(" [title]", ". ")).replace("  ", " ")
+
+
+def prepare_gpqa_choices(doc: Document, rng: random.Random) -> dict[str, Any]:
+    answers = [
+        clean_gpqa_answer(doc[key])
+        for key in ("Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3", "Correct Answer")
+    ]
+    rng.shuffle(answers)
+    return {**doc, "prepared_choices": answers}
+
+
+def gpqa_likelihood_document(doc: Document) -> ChoiceDocument:
+    choices = tuple(f"({letter})" for letter in "ABCD")
+    answers = doc["prepared_choices"]
+    prompt = "What is the correct answer to this question:" + doc["Question"] + "\nChoices:\n"
+    prompt += "\n".join(f"{letter} {text}" for letter, text in zip(choices, answers, strict=True)) + "\nAnswer: "
+    return ChoiceDocument(prompt, choices, answers.index(clean_gpqa_answer(doc["Correct Answer"])))
+
+
+def gpqa_likelihood_template() -> ChoiceTemplate:
+    return ChoiceTemplate(
+        "leaderboard_gpqa",
+        gpqa_likelihood_document,
+        FewshotPolicy(0, FewshotSampling.FIRST),
+        prepare=prepare_gpqa_choices,
+    )
+
+
+def mmlu_pro_likelihood_document(doc: Document) -> ChoiceDocument:
+    choices = tuple(string.ascii_uppercase[: len(doc["options"])])
+    prompt = (
+        doc["question"]
+        + "\n"
+        + "\n".join(f"{letter}. {text}" for letter, text in zip(choices, doc["options"], strict=True))
+        + "\nAnswer:"
+    )
+    return ChoiceDocument(prompt, choices, int(doc["answer_index"]))
+
+
+def mmlu_pro_likelihood_template(pool_file: str) -> ChoiceTemplate:
+    return ChoiceTemplate(
+        "leaderboard_mmlu_pro",
+        mmlu_pro_likelihood_document,
+        FewshotPolicy(5, FewshotSampling.FIRST, pool_file=pool_file),
+    )
+
+
+def agieval_document(doc: Document) -> ChoiceDocument:
+    return ChoiceDocument(doc["query"], tuple(doc["choices"]), int(doc["gold"][0]))
+
+
+def agieval_gold(doc: Document) -> tuple[int, ...]:
+    return tuple(doc["gold"])
+
+
+def agieval_template(shots: int = 3) -> ChoiceTemplate:
+    return ChoiceTemplate(
+        "agieval_lsat_ar",
+        agieval_document,
+        FewshotPolicy(shots, FewshotSampling.RANDOM),
+        gold_indices=agieval_gold,
+    )
+
+
+def bbh_likelihood_document(doc: Document, *, subject: str) -> ChoiceDocument:
+    choices = tuple(pinned_prompts()["bbh/" + subject]["doc_to_choice"])
+    return ChoiceDocument("Q: " + doc["input"] + "\nA:", choices, choices.index(doc["target"]))
+
+
+def bbh_likelihood_template(subject: str) -> ChoiceTemplate:
+    assets = pinned_prompts()["bbh/" + subject]
+    return ChoiceTemplate(
+        "leaderboard_bbh",
+        partial(bbh_likelihood_document, subject=subject),
+        FewshotPolicy(
+            3,
+            FewshotSampling.FIRST,
+            examples=tuple(assets["fewshot_config"]["samples"]),
+            description=assets["description"] + "\n\n",
+        ),
+    )
+
+
+def bbh_cot_prompt(doc: Document) -> str:
+    return "Q: " + doc["input"] + "\nA: Let's think step by step.\n"
+
+
+def bbh_cot_demonstration(doc: Document) -> str:
+    return bbh_cot_prompt(doc) + doc["target"] + "\n\n"
+
+
+def bbh_cot_template(subject: str) -> GenerationTemplate:
+    assets = pinned_prompts()["bbh_cot/" + subject]
+    return GenerationTemplate(
+        "bbh_cot_fewshot",
+        bbh_cot_prompt,
+        bbh_cot_demonstration,
+        FewshotPolicy(
+            3,
+            FewshotSampling.FIRST,
+            examples=tuple(assets["fewshot_config"]["samples"]),
+            description=assets["description"] + "\n\n",
+        ),
+        subject=subject,
+    )
 
 
 def gpqa_choices(data: Mapping[str, Any]) -> tuple[str, str]:

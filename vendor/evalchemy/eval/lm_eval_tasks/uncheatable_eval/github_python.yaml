@@ -1,3 +1,0 @@
-include: _uncheatable_eval_template
-task: uncheatable_eval_github_python
-process_docs: !function documents.github_python

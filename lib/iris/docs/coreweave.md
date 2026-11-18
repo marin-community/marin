@@ -137,6 +137,30 @@ NVL72 gangs use stricter rack-aware placement:
   split evenly over the fewest racks with 10 to 16 replicas per rack slice.
   Valid examples include 20, 24, 32, and 48 replicas.
 
+Applications can request unequal local groups through the SDK:
+
+```python
+from iris.cluster.types import CoschedulingConfig
+
+CoschedulingConfig(group_by="nvlink.domain", group_sizes=(8, 16))
+```
+
+For a 24-task job, tasks 0–7 share one NVLink domain and tasks 8–23 share
+one NVLink domain. With one four-GPU task per host, these groups occupy
+eight and sixteen hosts. Kueue admits both groups as one workload. The groups may
+share a domain if they fit. Iris still retries and cancels the whole job.
+Each task keeps its global ordinal. Group sizes must be positive and sum to
+the task count. Explicit groups require the Kubernetes backend, a required
+topology level, and at most ten groups. `nvlink.domain` is a required level;
+preferred and sliced levels cannot be used with explicit groups. Each NVLink
+group is limited to 16 tasks. Omitting `group_sizes` keeps the existing rules above.
+
+The task status API exposes the assigned Node's topology labels in
+`attempt.topology`, including `ds.coreweave.com/nvlink.domain` for NVLink
+placement. The mapping is empty until Iris observes the assignment. It is
+recorded per attempt and retained after the Pod is deleted. These values
+describe scheduler placement; they do not measure physical connectivity.
+
 Invalid multi-rack shapes fail before submission rather than silently losing
 the one-slice-per-rack guarantee. The canonical arithmetic is in
 [`coreweave_topology.py`](../src/iris/cluster/platforms/k8s/coreweave_topology.py).
@@ -153,9 +177,13 @@ enables `TASRecomputeAssignmentWithinSchedulingCycle`, added in Kueue 0.18.2,
 so a workload's hostname assignment is recomputed when an earlier admission in
 the same scheduling cycle consumes that domain.
 
+When upgrading Kueue, check that unequal groups remain separate PodSets and
+that each PodSet's Pod indices start at zero. Iris uses preset role-hash
+annotations to keep those groups separate.
+
 #### TAS preemption and CPU spillover
 
-All Iris Pods use the topology-aware `cw-tas` ResourceFlavor. Its
+Iris Pods use topology-aware flavors. The shared `cw-tas` ResourceFlavor's
 `iris.kueue=true` selector covers every Iris-managed NodePool. Accelerator-free
 Pods request unconstrained TAS, so Kueue records their per-node CPU reservations
 in the same flavor as GPU gangs. The ClusterQueue's binding GPU and RDMA quotas
@@ -218,25 +246,45 @@ flowchart TD
     admit --> schedule[Kubernetes schedules Pods]
 ```
 
-Accelerator-free jobs use any compatible node by default. Iris does not expose
-a CPU-only placement constraint; rare jobs that require hard CPU-node placement
-must use Kubernetes-native scheduling outside Iris. GPU and RDMA resource
-requests exclude CPU nodes without an additional selector.
+Accelerator-free jobs prefer the physical CPU pool through the `iris-cpu`
+ResourceFlavor and may spill onto accelerator nodes through `cw-tas`. The 02a
+sandbox RuntimeClass adds a `cpu-genoa` selector, so those pods cannot spill
+onto H100 nodes. Iris does not expose a general CPU-only placement constraint
+for other jobs. GPU and RDMA resource requests exclude CPU nodes without an
+additional selector.
 
-Kueue requires every node in a TAS flavor to carry every level in the referenced
-Topology. CoreWeave supplies the physical hierarchy on accelerator nodes. Iris
-labels CPU NodePools with a synthetic `iris-cpu-only` fabric, superpod,
-leafgroup, and NVLink domain so unconstrained TAS can assign them at the hostname
-level. The synthetic values do not advertise GPU or RDMA resources.
+Kueue requires every topology label key to exist on a Node; an empty value is
+valid in Kueue v0.18.3. CoreWeave supplies physical fabric, superpod, leafgroup
+and NVLink-domain labels on accelerator Nodes. Its node metadata controller
+owns the `backend.coreweave.cloud/*` labels and can overwrite synthetic values.
+Do not repair CPU placement by patching those provider-owned labels.
 
-This layout replaces the selectorless, non-TAS `cw-cpu` flavor that caused
-[#7916](https://github.com/marin-community/marin/issues/7916). Kueue v0.18 could
-not reclaim those Pods during `cw-ib` topology fit; the general upstream case is
-tracked by
-[kubernetes-sigs/kueue#9992](https://github.com/kubernetes-sigs/kueue/issues/9992).
-When migrating from the split flavors, apply the NodePool labels before
-switching the ClusterQueue to `cw-tas`, then verify CPU nodes appear in Kueue's
-topology cache.
+`provisioning.coreweave.kueue.cpu_scale_group` selects the physical CPU pool for
+the `iris-cpu` ResourceFlavor: `cpu-erapids` on `cw-us-east-08a`, `cpu-genoa` on
+`cw-us-east-02a` and `cpu-turin` on `cw-rno2a`. That flavor uses the existing
+Iris scale-group selector and a separate `iris-cpu-hostname` Topology containing
+only `kubernetes.io/hostname`. Its GPU and RDMA quotas are zero. It is first in
+`iris-cq`'s resource group, so CPU-only work uses the physical CPU pool;
+requests that do not fit can still use `cw-tas`. All resources of a PodSet stay
+in one resource group and use one flavor. GPU and RDMA work retains the shared
+flavor and its binding quotas. CPU pool declarations on these clusters no
+longer set synthetic physical-topology labels.
+
+The CPU flavor is TAS and selects only the CPU pool. CPU spillover onto GPU
+Nodes stays in `cw-tas` so GPU TAS fit can reclaim it
+([#7916](https://github.com/marin-community/marin/issues/7916)). Both topologies
+end at hostname. Kueue v0.18.3's default-enabled `TASHandleOverlappingFlavors`
+accounts for any Node temporarily selected by both flavors; keep that gate
+enabled during rollout.
+
+See [CPU topology admission](../OPS.md#cpu-topology-admission) for the staged
+per-cluster apply procedure. No controller deployment is required for this
+Kueue admission change.
+
+Iris `region` constraints match the backend's advertised region. They do not
+become a Node selector: CoreWeave's `US-EAST-08A` backend has Nodes labelled
+`topology.kubernetes.io/region=US-EAST-08`. A required region mismatch is
+rejected before Pod creation; preferred regions do not restrict placement.
 
 TAS admission pins each Pod to a hostname from Kueue's capacity snapshot. The
 same-cycle recomputation gate prevents two newly admitted Workloads from keeping
@@ -249,13 +297,14 @@ resource failure and Iris returns the attempt to `PENDING` for fresh admission.
 | Resource | Owner |
 | --- | --- |
 | CKS cluster and operator kubeconfig | CoreWeave and the cluster operator |
-| Namespace, RBAC, NodePools, Kueue operator, ClusterQueue, ResourceFlavor, ingress, and DNS | `infra/pulumi` |
+| Namespace, RBAC, NodePools, configured sandbox RuntimeClass, Kueue operator, ClusterQueue, ResourceFlavor, ingress, and DNS | `infra/pulumi` |
 | Pod and Workload priority classes, Kueue LocalQueue, controller ConfigMap, Deployment, Service, PDB, state volume, and Secrets | `K8sControllerProvider` |
 | Task Pods and their lifecycle | `K8sTaskProvider` |
 | Node scheduling and provisioning | Kubernetes and CoreWeave |
 
-`K8sControllerProvider.verify_prerequisites()` only checks that the
-Pulumi-owned resources exist. It does not create or repair them. Read the
+`K8sControllerProvider.verify_prerequisites()` checks selected controller
+prerequisites, including the configured sandbox RuntimeClass. It does not create
+or repair them. Read the
 [Pulumi guide](../../../infra/pulumi/README.md) before changing that substrate;
 a destructive NodePool plan can deprovision reserved hardware.
 
@@ -556,6 +605,41 @@ reference](federation.md) for cross-cluster job semantics, the [Pulumi
 guide](../../../infra/pulumi/README.md) for infrastructure, and
 [`OPS.md`](../OPS.md) for live diagnosis.
 
+### cw-us-east-02a sandbox runtime
+
+The default CoreWeave `gvisor` RuntimeClass selects nodes marked
+`node.coreweave.cloud/gvisor=true`. On cw-us-east-02a it admits H100 nodes where
+the NVIDIA gVisor wrapper fails during sandbox creation. A CPU-pool probe also
+failed through that wrapper, and an independent CPU probe reported the same
+`cannot read client sync file: waiting for sandbox to start: EOF` as the H100
+failure. The wrapper's underlying cause is unknown. The 02a config selects the
+Pulumi-owned `iris-gvisor-cpu` RuntimeClass, which requests the direct
+`cw-gvisor-cpu` handler and restricts placement to `cpu-genoa` nodes marked
+gVisor-capable and labelled for that handler. The direct CPU handler started a
+bounded probe on cw-us-west-04a, but it has not been verified on 02a. See
+[incidents 631](https://marina.oa.dev/echo/wiki/631) and
+[976](https://marina.oa.dev/echo/wiki/976).
+
+```mermaid
+flowchart TD
+    request[CPU SANDBOX request] --> pod[Iris sets runtimeClassName<br/>iris-gvisor-cpu]
+    pod --> selector[RuntimeClass selects cpu-genoa<br/>gVisor and cw-gvisor-cpu nodes]
+    selector --> admission[Kueue prefers iris-cpu<br/>hostname-only flavor]
+    admission --> fit{CPU node fits?}
+    fit -- No --> spill[Check cw-tas spill admission]
+    fit -- Yes --> node[Kubernetes assigns cpu-genoa node]
+    node --> handler[kubelet invokes cw-gvisor-cpu]
+    handler --> runsc{runsc starts sandbox?}
+    runsc -- Yes --> running[Pod reaches Running]
+    runsc -- No --> diagnose[Capture node runtime logs<br/>repair CoreWeave handler]
+```
+
+The RuntimeClass is a placement and handler request. It does not install or
+repair a containerd handler on the node. Follow
+[02a sandbox runtime rollout](../OPS.md#02a-sandbox-runtime-rollout) before
+deploying a controller that selects this class. The 02a RuntimeClass selects
+only CPU nodes; a sandbox task that requests a GPU cannot run there.
+
 ## Source map
 
 - [`backends/k8s/tasks.py`](../src/iris/cluster/backends/k8s/tasks.py) — task Pod
@@ -627,3 +711,270 @@ To keep a repaired node cordoned for maintenance, remove the Iris annotation
 while the node is still unschedulable. Inspect reports with
 `kubectl get node NODE -o json`. Do not release the budget during an unresolved
 shared storage outage.
+
+## Runtime storage
+
+The Iris node-agent DaemonSet configures runsc logging during startup on every
+CoreWeave node, including replacements. Its `runtime-storage` init container
+mounts the host's `/etc/containerd` and `/mnt/local`, then redirects `log_path`
+and `runsc_config.debug-log` in `runsc.toml` to
+`/mnt/local/iris-runtime/runsc`. The telemetry container does not mount the host
+runtime configuration. No privileged container, runtime restart, or manual
+per-node command is needed.
+
+Setup preserves the provider's NVIDIA runtime and other options, saves the
+original configuration beside the log directory, and replaces the config
+atomically. It refuses placement on the same filesystem as the host config
+directory, so a missing NVMe mount cannot silently put logs back on root.
+Nodes without a runsc config skip this step. Configuration failures leave the
+init container failed for Kubernetes to retry; inspect its logs before changing
+the provider configuration.
+
+New shims pick up the destination; existing shims keep their previous paths.
+The step runs again when the node-agent Pod starts, including after node
+reprovisioning. Deploy the updated DaemonSet to enable it. This does not remove
+historical logs or impose retention on the NVMe directory.
+
+Task `/tmp`, workdirs, and outputs use private Kubernetes `emptyDir` volumes.
+CoreWeave puts kubelet/containerd storage on NVMe, including for Shellbox's
+gVisor sandbox profile. Shared caches use the configured NVMe `cache_dir`;
+sandbox tasks never receive those shared caches.
+
+For `NodeRuntimeFilesystemAlmostFull` or runtime ENOSPC, check bytes and inodes
+on host `/`, `/tmp`, and `/mnt/local`; Ready and DiskPressure alone are
+insufficient. When exec cannot start, run diagnostics as a node-debug Pod's
+main process:
+
+```bash
+kubectl --kubeconfig <kubeconfig> --context <context> -n <namespace> \
+  debug node/<node> --image=busybox:1.37 --profile=sysadmin --attach=false -- \
+  sh -c 'df -h /host /host/tmp /host/mnt/local; df -i /host /host/tmp; du -x -h -d 2 /host/var/log | sort -h | tail -20'
+kubectl --kubeconfig <kubeconfig> --context <context> -n <namespace> logs <debug-pod>
+```
+
+Before authorized cleanup, compare runsc log directory IDs with `crictl pods`,
+`crictl ps -a`, running processes, and open files. Preserve active and recent
+logs; do not remove the whole runtime log tree. Delete the diagnostic Pod
+afterward. Keep measurements and recovery evidence in Echo.
+
+## Operational runbooks
+
+### Access and read-only status
+
+CoreWeave configs pin a Kubernetes context, so no `kubectl config use-context`
+step is needed. The configured kubeconfig path is used unless `KUBECONFIG` is
+set in the operator shell.
+
+```bash
+CLUSTER=cw-rno2a
+
+uv run iris cluster list
+uv run iris --cluster="$CLUSTER" cluster status                 # controller and port-forward
+uv run iris --cluster="$CLUSTER" rpc controller list-backends  # accelerators, nodes, and availability
+uv run iris --cluster="$CLUSTER" cluster dashboard              # blocks until Ctrl+C
+```
+
+CoreWeave has no Iris worker daemon or Iris autoscaler. Use `list-backends`, not
+the worker count in `cluster status`, for the Kubernetes resource view.
+
+For a pending task, inspect Kueue admission and NodePool provisioning without
+rendering Pod environment values:
+
+```bash
+CW_KUBECONFIG=~/.kube/coreweave-iris
+CW_CONTEXT=<platform.coreweave.kube_context>
+CW_NAMESPACE=<kubernetes_provider.namespace>
+
+kubectl --kubeconfig "$CW_KUBECONFIG" --context "$CW_CONTEXT" -n "$CW_NAMESPACE" \
+  get pods -l iris.task_id \
+  -o custom-columns='POD:.metadata.name,PHASE:.status.phase,SCHEDULING:.status.conditions[?(@.type=="PodScheduled")].reason,NODE:.spec.nodeName'
+kubectl --kubeconfig "$CW_KUBECONFIG" --context "$CW_CONTEXT" -n "$CW_NAMESPACE" \
+  get workloads.kueue.x-k8s.io \
+  -o custom-columns='WORKLOAD:.metadata.name,QUOTA:.status.conditions[?(@.type=="QuotaReserved")].status,ADMITTED:.status.conditions[?(@.type=="Admitted")].status,REASON:.status.conditions[?(@.type=="QuotaReserved")].reason'
+kubectl --kubeconfig "$CW_KUBECONFIG" --context "$CW_CONTEXT" \
+  get nodepools.compute.coreweave.com \
+  -o custom-columns='POOL:.metadata.name,CURRENT:.status.currentNodes,QUEUED:.status.queuedNodes,IN_PROGRESS:.status.inProgressNodes,CONDITION:.status.conditions[*].type,STATUS:.status.conditions[*].status,REASON:.status.conditions[*].reason'
+```
+
+`SchedulingGated` means Kueue still holds the Pod. `QuotaReserved=True` means
+the Workload has reserved quota; check `Admitted` if the Pod remains gated.
+NodePool conditions show provisioning failures or delays. These projections
+omit Pod environment values; do not use `kubectl describe pod` on task Pods.
+
+If Iris reports that the configured context does not exist, compare the shell
+override and the canonical CoreWeave kubeconfig before changing either config:
+
+```bash
+printf 'KUBECONFIG=%s\n' "${KUBECONFIG:-<unset>}"
+rg -n 'kubeconfig_path|kube_context|namespace' "lib/iris/config/${CLUSTER}.yaml"
+kubectl --kubeconfig ~/.kube/coreweave-iris config get-contexts -o name
+
+env -u KUBECONFIG uv run iris --cluster="$CLUSTER" cluster status
+```
+
+`cluster status`, `list-backends`, `task describe`, `task events`, logs, and
+plain Kubernetes `get` calls are read-only. `kubectl describe pod` does not
+mutate the cluster, but it can print literal environment values; avoid it on
+task Pods. Starting, stopping, or restarting a cluster or controller changes
+shared infrastructure. Run those commands only with explicit user approval;
+use the `use-iris` skill for controller rollouts. Direct Kubernetes changes
+such as `apply`, `delete`,
+`scale`, `drain`, `cordon`, and `uncordon` also require explicit approval.
+
+### Public LoadBalancer reachability
+
+Federation reaches a CoreWeave controller through the public Traefik
+LoadBalancer. A direct `iris --cluster=<name> cluster status` uses a Kubernetes
+port-forward, so it can succeed while the federation route is unreachable.
+
+Test each layer separately:
+
+```bash
+KUBECONFIG=~/.kube/coreweave-iris
+CONTEXT=<platform.coreweave.kube_context>
+NAMESPACE=<platform.coreweave.namespace>
+HOST=<provisioning.coreweave.federation_dns.hostname>
+
+# Controller and ingress objects.
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n "$NAMESPACE" \
+  get pods,svc,ingress,certificate -o wide
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n traefik \
+  get pods,svc,endpointslice -o wide
+
+# Controller Service and Traefik route from inside the cluster.
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n "$NAMESPACE" \
+  exec deploy/iris-controller -- sh -c \
+  'curl -sS -o /dev/null -w "controller=%{http_code}\n" http://iris-controller-svc:10000/health'
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n "$NAMESPACE" \
+  exec deploy/iris-controller -- sh -c \
+  "curl -ksS -o /dev/null -w 'ingress=%{http_code}\n' https://$HOST/health"
+
+# The same public route from outside CoreWeave.
+curl -vk --connect-timeout 5 --max-time 10 "https://$HOST/health"
+```
+
+Interpret the result at the first failing layer:
+
+- Controller `200` and ingress `403` mean the backend, Traefik route, and
+  `ipAllowList` middleware are active. `403` is expected when the test source
+  is not allowlisted.
+- An external `403` proves the public route works. If the federation parent is
+  also rejected, compare its observed egress IP with the live
+  `iris-federation-ipallowlist` Middleware.
+- An external `503` reaches Traefik but not a healthy backend. Inspect the
+  Traefik EndpointSlice and controller Service.
+- A public VIP that answers inside the cluster but times out from multiple
+  external networks points to LoadBalancer route propagation. Check Cilium's
+  managed BGP session before escalating:
+
+```bash
+TRAEFIK_NODE=$(kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
+  -n traefik get pod -l app.kubernetes.io/name=traefik \
+  -o jsonpath='{.items[0].spec.nodeName}')
+CILIUM_POD=$(kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
+  -n cw-cilium-system get pod --field-selector "spec.nodeName=$TRAEFIK_NODE" \
+  -o jsonpath='{.items[0].metadata.name}')
+PEER=$(kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
+  get ciliumbgpclusterconfig cilium-bgp \
+  -o jsonpath='{.spec.bgpInstances[0].peers[0].peerAddress}')
+
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n cw-cilium-system \
+  exec "$CILIUM_POD" -c cilium -- cilium-dbg bgp peers
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n cw-cilium-system \
+  exec "$CILIUM_POD" -c cilium -- \
+  cilium-dbg bgp routes advertised ipv4 unicast peer "$PEER"
+```
+
+An established BGP session that advertises the public VIP, combined with an
+external TCP timeout, requires a CoreWeave route-export escalation. Restarting
+Iris or Traefik does not repair that layer.
+
+### CoreWeave kernel deadlock pending reboot
+
+`CoreWeaveNodeKernelDeadlock` means CoreWeave reported the structured node
+condition `KernelDeadlock=True`. The node lifecycle controller normally cordons
+the node and moves it toward `production-reboot`; tenant pods can block that
+transition even while `Ready=True`.
+
+Read the canonical kubeconfig and context from the cluster config, then inspect
+the condition and blockers:
+
+```bash
+kubectl --kubeconfig <kubeconfig> --context <context> get node <node> \
+  -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.status}{"\t"}{.reason}{"\t"}{.message}{"\n"}{end}'
+kubectl --kubeconfig <kubeconfig> --context <context> get pods --all-namespaces \
+  --field-selector spec.nodeName=<node> -o wide
+kubectl --kubeconfig <kubeconfig> --context <context> get pdb --all-namespaces
+```
+
+Do not uncordon a node that CoreWeave cordoned. If `PendingPhaseState` names
+`production-reboot` and `CWActive` lists tenant Deployments, get operator
+approval before changing workloads. Record each owner's original replica count
+and pod template, then choose an action by workload semantics:
+
+| Blocker | Reboot-unblocking action |
+| --- | --- |
+| Stateless or leader-elected Deployment | Add one replica, wait for it to become Ready on a healthy node, then delete only the pod bound to the deadlocked node. The current cert-manager and Kueue controllers are in this class. |
+| Singleton controller with persistent state or no concurrency protection | Do not overlap replicas. Confirm that its state is durable, accept the control-plane outage, and scale it to zero. The Iris controller uses a `Recreate` strategy and a PVC, so it belongs here. |
+| Availability service with a PodDisruptionBudget or hard placement constraints | First provide compatible capacity. If that is unavailable, use an operator-approved temporary placement change and wait for a Ready replacement. Scale to zero only with explicit approval for the resulting outage and after confirming that recovery does not depend on the service. Traefik belongs here. |
+| Running Iris task pod | Let Iris retry the task: obtain the canonical attempt ID from `IRIS_TASK_ID`, stop the parent job or mark the attempt preempted, then delete the exact pod normally so Iris can retry it. Node-local task images and caches are disposable. |
+| Completed or failed Iris task pod | Delete the exact pod normally. It does not need replacement capacity. |
+| StatefulSet, local-volume workload, unmanaged pod, or unknown owner | Stop and escalate. Do not infer that another replica is safe. |
+
+A PodDisruptionBudget states the desired availability but does not prove that
+replicas may run concurrently. Scaling an owner to zero also bypasses the
+eviction protection that operators often expect from a PodDisruptionBudget, so
+treat it as an explicit outage decision. Change one owner at a time and confirm
+that `CWActive` drops the blocker before continuing. Do not delete provider
+DaemonSets or use `kubectl drain --force`.
+
+Iris coordinator task PDBs follow the job's priority band. SYSTEM and
+PRODUCTION use `minAvailable: 1` and intentionally block voluntary eviction.
+INTERACTIVE and BATCH use `maxUnavailable: 1`; CoreWeave may evict those pods
+during a drain, and Iris records the disruption as `PREEMPTED` and retries it
+within the job's preemption budget. For a SYSTEM or PRODUCTION blocker, follow
+the running-task procedure in the table above. Do not weaken its live PDB to
+recover a node without the job owner's approval.
+
+If a replacement remains Pending because no healthy node satisfies its required
+node affinity or pod anti-affinity, stop before deleting the original pod.
+Provision compatible capacity when possible. Record and restore any temporary
+placement change after the reboot. Use the `use-iris` skill for the exact Iris
+task retry sequence or when a bound pod does not terminate.
+
+CoreWeave should continue the pending reboot without a separate Iris restart.
+Before restoring workloads, verify that the provider operation completed, the
+node boot ID changed, `KernelDeadlock=False`, `Ready=True`, CoreWeave returned
+the node lifecycle state to `production`, and both the cordon and any
+`node.coreweave.cloud/reserved` taint are gone. Restore singleton controllers
+and original replica counts first, wait for them to become Ready, then remove
+temporary capacity or placement changes.
+
+### Rolling back the egress allowlist
+
+The allowlist is described in [container profiles](container-profiles.md). Rolling it back
+changes controller config; pods already running keep their Cilium policies
+until they exit or an operator deletes the policies. `iris cluster stop` does
+not delete them.
+
+1. To stop new root jobs defaulting to `ALLOWLIST`, set
+   `defaults.egress_allowlist.default: false` and restart the controller.
+   Running `ALLOWLIST` jobs keep the policy, and so do their retries and the
+   child jobs they launch, which inherit it.
+2. To stop enforcing the allowlist for every pod started from now on, also
+   remove `kubernetes_provider.cilium` and restart the controller. New and
+   stored `ALLOWLIST` jobs then start their pods on the cluster network.
+3. To open the network of pods already running under the allowlist, delete the
+   per-pod policies first and the namespace policy second. In the other order,
+   a pod with its own rules reaches only those rules, losing the controller and
+   cluster DNS, until its policy is deleted. A pod that no policy selects is
+   unrestricted.
+
+```bash
+KUBECTL="kubectl --kubeconfig $HOME/.kube/coreweave-iris --context <context> -n <namespace>"
+$KUBECTL get ciliumnetworkpolicies -o name | grep -- '-egress$' | xargs -r $KUBECTL delete
+$KUBECTL delete ciliumnetworkpolicy iris-egress-allowlist
+```
+
+`iris cluster start` recreates `iris-egress-allowlist` while
+`kubernetes_provider.cilium` is set.
