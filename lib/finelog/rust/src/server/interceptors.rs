@@ -8,13 +8,13 @@
 //!   Registered FIRST (outermost) so it times the WHOLE chain, including the
 //!   concurrency wait.
 //!
-//! - [`ConcurrencyInterceptor`] — one shared public-read semaphore;
+//! - [`ConcurrencyInterceptor`] — independent SQL and log-fetch semaphores;
 //!   acquires permits BEFORE
 //!   `next.run` and holds it across the handler (bounding the parquet working
 //!   set). One deadline bounds admission and the whole handler; expiry drops
 //!   queued requests and running reads with `deadline_exceeded`.
-//!   Query and FetchLogs share the executor's CPU-sized budget. Writes bypass
-//!   admission. Registered AFTER SlowRpc.
+//!   Per-method caps bound the parquet working set; CPU isolation belongs to
+//!   the read executor. Writes bypass admission. Registered AFTER SlowRpc.
 //!
 //! Both identify the dispatched RPC through `ctx.spec()`. The
 //! spec is populated ONLY when the services are registered through the generated
@@ -41,10 +41,25 @@ use crate::query::{query_timeout, run_within_query_timeout};
 /// WriteRows that waits for its L0 segment doesn't spam warnings.
 pub const DEFAULT_SLOW_RPC_THRESHOLD_MS: i64 = 7000;
 
-const READ_PROCEDURES: [Spec; 2] = [LOG_SERVICE_FETCH_LOGS_SPEC, STATS_SERVICE_QUERY_SPEC];
+pub const MAX_CONCURRENT_FETCH_LOGS: usize = 4;
+pub const MAX_CONCURRENT_QUERY: usize = 2;
 
-pub(crate) fn is_read_procedure(path: &str) -> bool {
-    READ_PROCEDURES.iter().any(|spec| spec.procedure == path)
+#[derive(Clone, Copy)]
+pub(crate) enum ReadProcedure {
+    FetchLogs,
+    Query,
+}
+
+const READ_PROCEDURES: [(Spec, ReadProcedure); 2] = [
+    (LOG_SERVICE_FETCH_LOGS_SPEC, ReadProcedure::FetchLogs),
+    (STATS_SERVICE_QUERY_SPEC, ReadProcedure::Query),
+];
+
+pub(crate) fn read_procedure(path: &str) -> Option<ReadProcedure> {
+    READ_PROCEDURES
+        .iter()
+        .find(|(spec, _)| spec.procedure == path)
+        .map(|(_, method)| *method)
 }
 
 /// The dispatched method's short name (`"FetchLogs"`, `"Query"`, ...), or `None`
@@ -121,14 +136,23 @@ impl Interceptor for SlowRpcInterceptor {
 
 /// Bound read concurrency and the entire read RPC, including admission wait.
 pub struct ConcurrencyInterceptor {
-    reads: Arc<Semaphore>,
+    fetch: Arc<Semaphore>,
+    query: Arc<Semaphore>,
 }
 
 impl ConcurrencyInterceptor {
-    /// Bound SQL and log reads with one budget shared across methods.
-    pub fn new(read_limit: usize) -> Self {
+    /// Bound each method's working set without SQL consuming log-fetch permits.
+    pub fn new(fetch_limit: usize, query_limit: usize) -> Self {
         Self {
-            reads: Arc::new(Semaphore::new(read_limit)),
+            fetch: Arc::new(Semaphore::new(fetch_limit)),
+            query: Arc::new(Semaphore::new(query_limit)),
+        }
+    }
+
+    fn semaphore_for(&self, procedure: ReadProcedure) -> &Semaphore {
+        match procedure {
+            ReadProcedure::FetchLogs => &self.fetch,
+            ReadProcedure::Query => &self.query,
         }
     }
 }
@@ -152,13 +176,14 @@ impl Interceptor for ConcurrencyInterceptor {
         next: Next<'_>,
     ) -> Result<UnaryResponse, ConnectError> {
         let method = method_name(&req.ctx).unwrap_or("");
-        if !req
+        let Some(procedure) = req
             .ctx
             .spec()
-            .is_some_and(|spec| is_read_procedure(spec.procedure))
-        {
+            .and_then(|spec| read_procedure(spec.procedure))
+        else {
             return next.run(req).await;
-        }
+        };
+        let semaphore = self.semaphore_for(procedure);
         // Pre-acquire shed: a request that arrived already past its deadline is
         // not worth queuing.
         if deadline_expired(&req.ctx) {
@@ -174,8 +199,7 @@ impl Interceptor for ConcurrencyInterceptor {
         run_within_query_timeout(
             timeout,
             async {
-                let _read_permit = self
-                    .reads
+                let _read_permit = semaphore
                     .acquire()
                     .await
                     .map_err(|_| ConnectError::internal("read semaphore closed"))?;
@@ -223,7 +247,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn queued_read_expires_without_entering_the_handler() {
-        let chain: Vec<Arc<dyn Interceptor>> = vec![Arc::new(ConcurrencyInterceptor::new(0))];
+        let chain: Vec<Arc<dyn Interceptor>> = vec![Arc::new(ConcurrencyInterceptor::new(0, 0))];
         let result = run_chain(
             &chain,
             request(
@@ -242,8 +266,8 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn log_reads_and_sql_share_admission_while_writes_bypass_it() {
-        let chain: Vec<Arc<dyn Interceptor>> = vec![Arc::new(ConcurrencyInterceptor::new(1))];
+    async fn sql_saturation_keeps_log_and_write_admission_available() {
+        let chain: Vec<Arc<dyn Interceptor>> = vec![Arc::new(ConcurrencyInterceptor::new(1, 1))];
         let release = Notify::new();
         let query = run_chain(
             &chain,
@@ -255,10 +279,27 @@ mod tests {
         );
         futures::pin_mut!(query);
         assert!(futures::poll!(query.as_mut()).is_pending());
-        let fetch = run_chain(
+        let second_query = run_chain(
+            &chain,
+            request(STATS_SERVICE_QUERY_SPEC.procedure, None),
+            |_| async { Ok(ok_response()) },
+        );
+        futures::pin_mut!(second_query);
+        assert!(futures::poll!(second_query.as_mut()).is_pending());
+        run_chain(
             &chain,
             request(LOG_SERVICE_FETCH_LOGS_SPEC.procedure, None),
             |_| async { Ok(ok_response()) },
+        )
+        .await
+        .unwrap();
+        let fetch = run_chain(
+            &chain,
+            request(LOG_SERVICE_FETCH_LOGS_SPEC.procedure, None),
+            |_| async {
+                release.notified().await;
+                Ok(ok_response())
+            },
         );
         futures::pin_mut!(fetch);
         assert!(futures::poll!(fetch.as_mut()).is_pending());
@@ -272,14 +313,15 @@ mod tests {
             .await
             .unwrap();
         }
-        release.notify_one();
+        release.notify_waiters();
         query.await.unwrap();
         fetch.await.unwrap();
+        second_query.await.unwrap();
     }
 
     #[tokio::test(start_paused = true)]
     async fn read_deadline_cancels_handler_and_releases_admission() {
-        let chain: Vec<Arc<dyn Interceptor>> = vec![Arc::new(ConcurrencyInterceptor::new(1))];
+        let chain: Vec<Arc<dyn Interceptor>> = vec![Arc::new(ConcurrencyInterceptor::new(1, 1))];
         for procedure in [
             STATS_SERVICE_QUERY_SPEC.procedure,
             LOG_SERVICE_FETCH_LOGS_SPEC.procedure,
@@ -408,7 +450,8 @@ mod tests {
     async fn concurrency_caps_in_flight() {
         let limit = 2usize;
         let callers = limit + 3;
-        let interceptor: Arc<dyn Interceptor> = Arc::new(ConcurrencyInterceptor::new(limit));
+        let interceptor: Arc<dyn Interceptor> =
+            Arc::new(ConcurrencyInterceptor::new(limit, MAX_CONCURRENT_QUERY));
         let chain: Arc<Vec<Arc<dyn Interceptor>>> = Arc::new(vec![interceptor]);
 
         let in_flight = Arc::new(AtomicUsize::new(0));
@@ -495,7 +538,7 @@ mod tests {
     async fn concurrency_passthrough_unmatched() {
         // RegisterTable is uncapped: it always reaches the terminal even with a
         // cap of zero on the matched methods.
-        let interceptor: Arc<dyn Interceptor> = Arc::new(ConcurrencyInterceptor::new(0));
+        let interceptor: Arc<dyn Interceptor> = Arc::new(ConcurrencyInterceptor::new(0, 0));
         let chain: Vec<Arc<dyn Interceptor>> = vec![interceptor];
         let ran = Arc::new(AtomicUsize::new(0));
         let ran2 = Arc::clone(&ran);
@@ -523,7 +566,7 @@ mod tests {
     async fn concurrency_sheds_expired_deadline() {
         // A request whose deadline is already in the past is shed with
         // DEADLINE_EXCEEDED before the terminal runs.
-        let interceptor: Arc<dyn Interceptor> = Arc::new(ConcurrencyInterceptor::new(4));
+        let interceptor: Arc<dyn Interceptor> = Arc::new(ConcurrencyInterceptor::new(4, 4));
         let chain: Vec<Arc<dyn Interceptor>> = vec![interceptor];
         let ran = Arc::new(AtomicUsize::new(0));
         let ran2 = Arc::clone(&ran);

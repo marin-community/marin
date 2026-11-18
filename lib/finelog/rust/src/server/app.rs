@@ -41,7 +41,8 @@ use crate::server::auth::{auth_gate, AuthInterceptor, AuthPolicy};
 use crate::server::forwarding::ForwardingConfig;
 use crate::server::ingest_health::IngestHealth;
 use crate::server::interceptors::{
-    is_read_procedure, ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
+    read_procedure, ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
+    MAX_CONCURRENT_FETCH_LOGS, MAX_CONCURRENT_QUERY,
 };
 use crate::server::{debug, forwarded_prefix, introspection, legacy_path, spa, telemetry};
 use crate::store::Store;
@@ -56,6 +57,10 @@ use super::MAX_MESSAGE_BYTES;
 pub struct ServerConfig {
     /// Mount the non-proto `--debug-admin` `/debug/*` routes.
     pub debug_admin: bool,
+    /// Concurrent FetchLogs working-set cap.
+    pub max_concurrent_fetch_logs: usize,
+    /// Concurrent Query working-set cap.
+    pub max_concurrent_query: usize,
     /// Concurrent telemetry request cap; excess requests receive HTTP 429.
     pub max_concurrent_telemetry: usize,
     /// Accepted batch IDs retained for process-local retry deduplication.
@@ -77,6 +82,8 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             debug_admin: false,
+            max_concurrent_fetch_logs: MAX_CONCURRENT_FETCH_LOGS,
+            max_concurrent_query: MAX_CONCURRENT_QUERY,
             max_concurrent_telemetry: telemetry::DEFAULT_MAX_CONCURRENT_REQUESTS,
             telemetry_dedupe_capacity: telemetry::DEFAULT_DEDUPE_CAPACITY,
             slow_rpc_threshold_ms: DEFAULT_SLOW_RPC_THRESHOLD_MS,
@@ -116,7 +123,6 @@ fn build_connect_service(
     store: Arc<Store>,
     config: &ServerConfig,
     tail_cache: Arc<LogTailCache>,
-    read_limit: usize,
 ) -> ConnectRpcService<ConnectRouter> {
     let connect_router = {
         let r = ConnectRouter::new();
@@ -138,19 +144,18 @@ fn build_connect_service(
         // outside Concurrency (so it is rejected before consuming a permit). Always
         // installed; the default policy admits loopback only.
         .with_interceptor(AuthInterceptor::new(Arc::clone(&config.auth)))
-        .with_interceptor(ConcurrencyInterceptor::new(read_limit))
+        .with_interceptor(ConcurrencyInterceptor::new(
+            config.max_concurrent_fetch_logs,
+            config.max_concurrent_query,
+        ))
 }
 
 /// Build the full axum app for `store` with `config`. See the module doc for
 /// the route precedence. Re-exported as `server::build_app_with_config`.
 pub fn build_app(store: Arc<Store>, config: ServerConfig, reads: Arc<ReadExecutor>) -> Router {
     let tail_cache = Arc::new(LogTailCache::new());
-    let connect_service = build_connect_service(
-        Arc::clone(&store),
-        &config,
-        Arc::clone(&tail_cache),
-        reads.cpus().len(),
-    );
+    let connect_service =
+        build_connect_service(Arc::clone(&store), &config, Arc::clone(&tail_cache));
     let health = Arc::new(IngestHealth::new());
 
     let telemetry = telemetry::router(
@@ -223,7 +228,7 @@ async fn dispatch_reads(
     request: Request,
     next: Next,
 ) -> Response {
-    if request.method() != Method::POST || !is_read_procedure(request.uri().path()) {
+    if request.method() != Method::POST || read_procedure(request.uri().path()).is_none() {
         return next.run(request).await;
     }
     match reads.run(async move { next.run(request).await }).await {

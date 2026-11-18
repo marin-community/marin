@@ -64,11 +64,11 @@ column to every row; producers do not declare it, but SQL queries can select it.
 
 ## Diagnosing query latency
 
-Public Query and FetchLogs RPCs share one CPU-sized admission budget and a
-server-owned executor, restricted to half the CPUs at lower priority on Linux;
-`GET /api/server` reports its `readCpus` (single-CPU and non-Linux hosts cannot
-reserve separate CPUs). Ingestion, cloud HTTP I/O, scheduled flushes, and bounded
-maintenance retain the ordinary runtime, so queries cannot occupy their workers.
+Query and FetchLogs keep separate working-set limits (two SQL queries and four
+log fetches), while their shared executor uses half the CPUs at lower priority
+on Linux (`GET /api/server`: `readCpus`; no separate CPU reservation on single-CPU
+or non-Linux hosts). Ingestion, cloud HTTP I/O, flushes, and bounded maintenance
+retain the ordinary runtime; SQL saturation cannot consume log-fetch permits.
 
 Start with the server's stage timings when unrelated log and SQL requests slow
 down together. For the GCE hub:
