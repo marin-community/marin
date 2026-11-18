@@ -85,7 +85,7 @@ from experiments.post_training.long_loop.sft_runtime.model import (
     Transformer,
     _histogram_from_expert_counts,
 )
-from experiments.post_training.long_loop.sft_runtime.state_rebind import rebind_first_state
+from experiments.post_training.long_loop.sft_runtime.state_rebind import HostRebindConfig, rebind_first_state
 from experiments.post_training.long_loop.sft_runtime.validation_checkpoint import (
     BestValidationCheckpoint,
     best_validation_callback,
@@ -462,8 +462,7 @@ class GrugRunConfig:
     # long schedule requires the two to differ. None runs the whole schedule.
     stop_after_steps: int | None = None
     first_checkpoint_restore_step: int | None = None
-    first_step_host_rebind: bool = False
-    task_cgroup_path: str | None = None
+    first_step_host_rebind: HostRebindConfig | None = None
     # Optional carried-optimizer replay: preserve every restored leaf except the local loop step.
     carried_restore_step: int | None = None
     native_timing_root: str | None = None
@@ -1531,16 +1530,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     watch_stats = None
                 step_start = time.perf_counter()
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
-                first_rebind = config.first_step_host_rebind and current_step == initial_step
+                first_rebind = config.first_step_host_rebind is not None and current_step == initial_step
                 if (config.first_checkpoint_restore_step is not None and current_step == 0) or first_rebind:
                     with timing.span("first_step_compile", step=current_step):
                         train_step.lower(state, batch).compile()
-                if first_rebind:
+                if first_rebind and config.first_step_host_rebind is not None:
                     with timing.span("first_step_host_rebind", step=current_step):
                         state = rebind_first_state(
                             state,
                             batch,
-                            cgroup_path=Path(config.task_cgroup_path or "/sys/fs/cgroup"),
+                            cgroup_path=Path(config.first_step_host_rebind.cgroup_path),
                             observe=lambda phase, sample: logger.info("Host rebind %s: %s", phase, sample),
                         )
                 with timing.span("train_step", step=current_step):

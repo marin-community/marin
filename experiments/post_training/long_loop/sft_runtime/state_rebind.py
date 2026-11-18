@@ -21,6 +21,13 @@ class HostArray:
     shards: list
 
 
+@dataclass(frozen=True)
+class HostRebindConfig:
+    """Optional first-step host rebind and memory observation location."""
+
+    cgroup_path: str = "/sys/fs/cgroup"
+
+
 def state_snapshot(state):
     leaves, tree = jax.tree.flatten(state)
     saved = []
@@ -38,6 +45,7 @@ def restore_state(snapshot):
     values = []
     for leaf in leaves:
         if isinstance(leaf, HostArray):
+            # Public constructors change committed or weak-type metadata, checked below.
             buffers = [jax.device_put(data, sharding) for sharding, data in leaf.shards]
             leaf = ArrayImpl(leaf.aval, leaf.sharding, buffers, committed=leaf.committed)
         values.append(leaf)
