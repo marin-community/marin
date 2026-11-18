@@ -434,10 +434,11 @@ type SkyRLDataSource = ArtifactDataSource | TaskTroveDataSource
 class SkyRLSpec:
     """Backend-neutral, identity-bearing SkyRL experiment definition.
 
-    ``curriculum`` records the task mix the run trains on: the sampling projection renders into the
+    ``curriculum`` records the intended task mix: the sampling projection renders into the
     recipe's ``data.sampling`` subtree at construction (disagreement with declared values is an
     error), the launch document carries the full curriculum, and the run's artifact record names it.
-    Curricula sample labeled prompt pools, so a curriculum requires ``data.kind=parquet``.
+    Curricula sample labeled prompt pools, so a curriculum requires ``data.kind=parquet``. The
+    training pool remains a separate input.
     """
 
     name: str
