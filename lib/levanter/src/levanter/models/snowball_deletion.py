@@ -248,7 +248,7 @@ def pack_keep_masks(logits: jax.Array) -> jax.Array:
     return jnp.sum(groups * weights, axis=-1).astype(jnp.uint8)
 
 
-def _masked_matrices(model: SnowballLMHeadModel):
+def _masked_matrices(model):
     """Yield ``(path, weight, logits)`` for every masked matrix carrying logits."""
     for index, block in enumerate(model.transformer.blocks):
         mlp = block.mlp
@@ -267,7 +267,7 @@ def _masked_matrices(model: SnowballLMHeadModel):
             yield f"transformer.blocks.{index}.shared.w_down", shared.w_down, shared.down_logits
 
 
-def deletion_keep_masks(model: SnowballLMHeadModel) -> dict[str, np.ndarray]:
+def deletion_keep_masks(model) -> dict[str, np.ndarray]:
     """Boolean keep masks per masked matrix, keyed by the Levanter parameter path."""
     masks: dict[str, np.ndarray] = {}
     for path, _weight, logits in _masked_matrices(model):
@@ -275,7 +275,7 @@ def deletion_keep_masks(model: SnowballLMHeadModel) -> dict[str, np.ndarray]:
     return masks
 
 
-def apply_hard_mask(model: SnowballLMHeadModel) -> SnowballLMHeadModel:
+def apply_hard_mask(model):
     """The deployment model: deleted weights zeroed and the gate logits dropped.
 
     The exported checkpoint carries plain weights (deleted entries zero), so a
