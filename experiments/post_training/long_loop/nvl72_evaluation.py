@@ -97,7 +97,9 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     config = recipe["config"]
     _materialize_role_plan_config(config, plan)
     config["context_budget"].update(
-        request_window_tokens=spec.context_tokens, max_new_tokens_per_turn=spec.max_new_tokens
+        request_window_tokens=spec.context_tokens,
+        max_new_tokens_per_turn=spec.max_new_tokens,
+        serving_window_tokens=model_config["max_position_embeddings"],
     )
     serving_recipe = yaml.safe_load(RECIPE_PATH.read_text())
     serving = serving_recipe["generator"]["engine_init_kwargs"]
