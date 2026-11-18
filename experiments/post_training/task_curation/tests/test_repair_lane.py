@@ -9,12 +9,12 @@ import json
 import tarfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import cast
 
 import pytest
 from finestore.rl.licenses import LicenseDecision, LicenseDecisionKind, LicenseReceipt
 from marin.inference.openai_chat import OpenAIChatClient
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.models import (
     AnswerType,
@@ -560,14 +560,17 @@ class TestCohortConversion:
             output_root=output_root,
         )
         assert manifest["counts"] == {"converted": 2, "rejected": 1}
-        entries = [json.loads(line) for line in (Path(output_root) / "task-map.jsonl").read_text().splitlines()]
+        assert manifest["conversion_identity"]
+        entries = [
+            json.loads(line) for line in StoragePath(manifest["map_uri"]).read_text().splitlines() if line.strip()
+        ]
         assert [(entry["status"], entry["tracked_task_id"]) for entry in entries] == [
             ("converted", "tracked-0"),
             ("converted", "tracked-1"),
             ("rejected", "tracked-2"),
         ]
         assert entries[2]["rejection"]["reason"] == "reviewed_defect"
-        shards = sorted((Path(output_root) / "converted-pending").glob("*.parquet"))
+        shards = sorted(str(p) for p in StoragePath(manifest["shards_root"]).ls())
         assert len(shards) == 1
 
     def test_rerun_resumes_from_the_task_map(self, monkeypatch, tmp_path):

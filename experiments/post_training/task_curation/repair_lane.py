@@ -746,7 +746,15 @@ def convert_cohort(
                 rows[path]["task_binary"] = rewritten
                 normalized["dropped_wrapper_solve_sh"] += 1
 
-    root = StoragePath(output_root)
+    identity = canonical_sha256(
+        {
+            "recipe_version": recipe.version,
+            "drop_wrapper_solve_sh": drop_wrapper_solve_sh,
+            "report": report,
+        }
+    )[:16]
+    root = StoragePath(output_root) / f"conversion-{identity}"
+    root.mkdirs()
     done: dict[str, dict[str, Any]] = {}
     map_path = root / "task-map.jsonl"
     if map_path.exists():
@@ -808,7 +816,7 @@ def convert_cohort(
                         "winner_candidate_task_id": candidate_id,
                         "tracked_task_id": entry["tracked_task_id"],
                         "task_id": task.id,
-                        "task_spec": task.model_dump_json(exclude={"id", "source"}),
+                        "task_spec": task.model_dump_json(),
                         "runtime": json.dumps(runtime),
                     }
                     for candidate_id, entry, task, runtime in shard
@@ -831,12 +839,17 @@ def convert_cohort(
         "counts": dict(counts),
         "recipe": {"name": recipe.name, "version": recipe.version},
         "grader_environment": context.grader_environment.model_dump(mode="json"),
+        "conversion_identity": identity,
+        "map_uri": str(root / "task-map.jsonl"),
+        "shards_root": str(root / "converted-pending"),
     }
     if normalized:
         manifest["normalization"] = dict(normalized)
-    manifest_path = root / "manifest.json"
-    if not manifest_path.exists():
-        manifest_path.write_bytes((json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())
+    (root / "manifest.json").write_bytes((json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())
+    StoragePath(output_root).mkdirs()
+    (StoragePath(output_root) / "manifest.json").write_bytes(
+        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+    )
     return manifest
 
 
@@ -859,10 +872,12 @@ def prepare_harbor_export(
         raise ValueError(f"No configured source recipe for {tracked_source_id}")
     if recipe.controls is None:
         raise ValueError(f"The tracked recipe declares no controls: {tracked_source_id}")
+    manifest = json.loads(StoragePath(f"{cohort_root}/manifest.json").read_text())
+    shards_root = manifest["shards_root"]
     with tempfile.TemporaryDirectory() as scratch:
         cohort = Path(scratch) / "cohort"
         cohort.mkdir()
-        pending = StoragePath(f"{cohort_root}/converted-pending")
+        pending = StoragePath(shards_root)
         for shard in pending.ls():
             with shard.open("rb") as remote, (cohort / shard.name).open("wb") as stream:
                 shutil.copyfileobj(remote, stream)
@@ -920,6 +935,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--cohort-output-root", help="Output root for the winner cohort (specs shards, task map, manifest)"
     )
     parser.add_argument(
+        "--with-prepare",
+        action="store_true",
+        help="After the cohort conversion, export the cohort as native Harbor tasks",
+    )
+    parser.add_argument(
         "--drop-wrapper-solve-sh",
         action="store_true",
         help="Normalize FWeindel winners by dropping the verified pure-wrapper solution/solve.sh",
@@ -952,6 +972,8 @@ def main() -> None:
     if args.cohort_output_root is not None:
         if args.cohort_report is None:
             parser.error("--cohort-output-root requires --cohort-report")
+        if args.with_prepare and (args.prepare_output_root is None or not args.source_revision):
+            parser.error("--with-prepare requires --prepare-output-root and --source-revision")
         report = json.loads(StoragePath(args.cohort_report).read_text())
         manifest = convert_cohort(
             tracked_source_id=args.tracked_source_id,
@@ -963,6 +985,13 @@ def main() -> None:
             output_root=args.cohort_output_root,
             drop_wrapper_solve_sh=args.drop_wrapper_solve_sh,
         )
+        if args.with_prepare:
+            manifest["harbor"] = prepare_harbor_export(
+                tracked_source_id=args.tracked_source_id,
+                cohort_root=args.cohort_output_root,
+                output_root=args.prepare_output_root,
+                source_revision=args.source_revision,
+            )
         logger.info("RESULT %s", json.dumps(manifest, sort_keys=True))
         return
     if args.prepare_output_root is not None:
