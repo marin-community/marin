@@ -181,6 +181,40 @@ until its current-pin admission receipt exists.
   same receipt. Any differing task refuses; without a receipt the digests must
   match exactly. The receipt never re-binds a measurement: the underlying
   census, lexical or panel evidence still describes the same pin it measured.
+- *Review carry-forward.* A re-pin no longer discards a source's QC reviews.
+  `experiments/post_training/task_curation/review_carry_forward.py` is the typed
+  mechanism; it standardizes the FULL campaign's earlier grandfathering. Each
+  review is keyed on the task-contract identity
+  (`taskcompendium.identity.task_identity`), never on the task ID or the
+  population digest. A review from an earlier pin carries forward only when a
+  retained task's identity matches exactly, and only when that review is
+  conclusive. Carried reviews keep the earlier receipt's recorded reviewer
+  identity verbatim. Relabeling them as another reviewer's output is refused.
+  `plan_review_carry_forward` produces the delta plan: carried, changed, new
+  and dropped counts, plus the exact task IDs that need review. Carried counts
+  the retained tasks whose identity existed at the earlier pin, changed the
+  retained tasks whose ID existed earlier with a different identity, and
+  dropped the earlier task IDs that left the population. SAMPLE panels
+  keep their unchanged members, redraw only the replaced ones with the fixed
+  seed, and keep the slots of members whose observation was not conclusive.
+  `merged_review_result` derives the oversight level from carried plus fresh
+  reviews: FULL when every retained task has a conclusive review, or when a
+  recorded waiver covers at most 1% of the population. Otherwise the level
+  stays SAMPLE. Run the plan as an in-region CPU job when a population is
+  large:
+
+  ```bash
+  uv run iris --cluster marin job run --target-cluster cw-us-east-02a \
+    --cpu 8 --memory 64G --disk 200G --enable-extra-resources --extra cpu \
+    --priority batch --timeout 86400 --no-wait -- \
+    python -m experiments.post_training.task_curation.review_carry_forward \
+    --source-id "SOURCE_ID" \
+    --earlier-receipt EVIDENCE_RECEIPT_JSON \
+    --earlier-population EARLIER_POPULATION_ARTIFACT \
+    --current-population CURRENT_POPULATION_ARTIFACT \
+    --output s3://REGIONAL-BUCKET/rl-data/atlas/review-carry-forward/VERSION/plan.json --run
+  ```
+
 - *Declaration currency.* The canonical RL source layer is the `RlDataSource`
   declarations cataloged by `all_sources()`; the registry holds receipts ABOUT
   sources and is never the source of truth for which sources exist or at which

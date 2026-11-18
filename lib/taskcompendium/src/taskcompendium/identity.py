@@ -18,4 +18,8 @@ def canonical_sha256(row: dict[str, Any]) -> str:
 
 def task_identity(task: TaskSpec) -> str:
     """Identify the complete public and private task contract, excluding provenance."""
-    return canonical_sha256(task.model_dump(mode="json", exclude={"id", "source", "tags", "labels"}))
+    return canonical_sha256(task.model_dump(mode="json", exclude=TASK_IDENTITY_EXCLUDED_FIELDS))
+
+
+TASK_IDENTITY_EXCLUDED_FIELDS = frozenset({"id", "source", "tags", "labels"})
+"""The provenance fields task_identity excludes when it hashes a task contract."""
