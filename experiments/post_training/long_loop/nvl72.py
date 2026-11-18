@@ -123,7 +123,6 @@ PROFILES = MappingProxyType(
                 trainer=sections.Trainer(
                     project_name="mochi-three-rack",
                     policy=sections.Policy(
-                        nccl_buffer_size_bytes=262144,
                         megatron_config=sections.PolicyMegatronConfig(
                             transformer_config_kwargs={
                                 "bias_activation_fusion": True,
@@ -132,7 +131,6 @@ PROFILES = MappingProxyType(
                         ),
                     ),
                     ref=sections.Ref(
-                        nccl_buffer_size_bytes=262144,
                         megatron_config=sections.RefMegatronConfig(
                             transformer_config_kwargs={
                                 "bias_activation_fusion": True,
