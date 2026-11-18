@@ -4,6 +4,7 @@
 from copy import deepcopy
 from urllib.parse import urlencode
 
+from marin.rl.rl_progress import Comparison
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
@@ -17,7 +18,7 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
         "label": "Learning fixture",
         "grafana_url": "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training?from=1&to=now&var-run=journey%2Frun",
         "evaluations": [
-            {"metric": metric, "role": "slice", "run": value, "tasks": 2, "n_run": 1, "n_control": 0}
+            Comparison(metric=metric, role="slice", run=value, tasks=2, n_run=1, n_control=0).model_dump(mode="json")
             for metric, value in (
                 ("eval_lite_100@25/family/small/mean", 0.25),
                 ("eval_lite_100@25/aai_category/coding/mean", 0.375),
