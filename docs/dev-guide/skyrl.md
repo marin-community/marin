@@ -224,9 +224,9 @@ generator:
 In your artifact main, apply it to the existing `SkyRLSpec` named `spec` and
 `IrisSkyRLExecution` named `execution` before calling `skyrl_step`. These public
 interfaces are described in [RL launching](../references/rl-launching.md).
-The patch replaces any existing inference topology declarations to match the new
-role plan. The file stays in the submitted checkout so the coordinator reads the
-same recipe.
+The role plan below reads its inference topology from the same patch that replaces
+the recipe's old declarations. The file stays in the submitted checkout so the
+coordinator reads the same recipe.
 
 ```python
 from dataclasses import replace
@@ -242,11 +242,11 @@ inference = RecipePatch.from_document(
 )
 role_plan = replace(
     spec.topology.role_plan,
-    num_inference_engines=8,
-    inference_engine_tensor_parallel_size=1,
-    inference_engine_pipeline_parallel_size=1,
-    inference_engine_data_parallel_size=16,
-    inference_engine_expert_parallel_size=16,
+    num_inference_engines=inference.generator.num_inference_engines,
+    inference_engine_tensor_parallel_size=inference.generator.inference_engine_tensor_parallel_size,
+    inference_engine_pipeline_parallel_size=inference.generator.inference_engine_pipeline_parallel_size,
+    inference_engine_data_parallel_size=inference.generator.inference_engine_data_parallel_size,
+    inference_engine_expert_parallel_size=inference.generator.inference_engine_expert_parallel_size,
 )
 spec = replace(
     spec,
