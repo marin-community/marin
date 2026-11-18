@@ -53,7 +53,9 @@ function scopeLine(data) {
   const parts = [`Review scope: ${data.scope}`];
   if (data.review_input) {
     const panel = data.review_input.panel;
-    parts.push(`${data.review_input.current_pin ? 'Current input' : 'Archived input panel'}: ${panel.dataset_id} @ ${panel.dataset_revision}`);
+    parts.push(`${data.review_input.mapping ? 'Consolidation input' : data.review_input.current_pin ? 'Current input' : 'Archived input panel'}: ${panel.dataset_id} @ ${panel.dataset_revision}`);
+    const mapping = data.review_input.mapping_counts;
+    if (mapping) parts.push(`Original-reviewer lineage: ${mapping.mapped.toLocaleString()} tasks mapped · ${mapping.not_mapped.toLocaleString()} tasks not mapped`);
   }
   const completeness = data.review_completeness;
   if (completeness && completeness.required != null) {
@@ -118,8 +120,8 @@ function taskCard(sample, reviewer) {
   const raw = node('a', 'Open raw review →');
   raw.href = `review.html?${new URLSearchParams({source, task: sample.task_id})}`;
   metadata.append(raw);
-  const heading = node('summary', `${labels[sample.verdict] || sample.verdict} · ${sample.task_id}`);
-  heading.append(metadata);
+  const heading = node('summary');
+  heading.append(node('span', `${labels[sample.verdict] || sample.verdict} · ${sample.task_id}`), metadata);
   details.append(heading, content);
   details.addEventListener("toggle", async () => {
     if (!details.open || content.childNodes.length) return;

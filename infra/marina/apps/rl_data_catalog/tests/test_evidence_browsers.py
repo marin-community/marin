@@ -6,12 +6,16 @@
 import hashlib
 import io
 import json
+import socket
 import tarfile
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 from rigging.filesystem.storage_path import StoragePath
 
+from infra.marina.apps.rl_data_catalog.load_browse_evidence import catalog_session
 from infra.marina.apps.rl_data_catalog.load_reviews import read_batch, stage_content_reviews, task_request_evidence
 from infra.marina.apps.rl_data_catalog.load_rollouts import stage_attempt, stage_rollouts
 from infra.marina.apps.rl_data_catalog.release_browse import browse_invariants
@@ -129,10 +133,10 @@ def test_consolidated_mapping_keeps_original_identity_and_marks_ambiguous_or_mis
                 {"task_id": task, "status": "unavailable", "verdict": None, "detail": "Original failure"}
             ),
         }
-        for task in ("original", "ambiguous", "missing", "wrong-input")
+        for task in ("original", "ambiguous", "missing", "wrong-input", "different-judgment")
     ]
     root = tmp_path / "campaign"
-    for number, tasks in enumerate((["original", "ambiguous", "wrong-input"], ["ambiguous"])):
+    for number, tasks in enumerate((["original", "ambiguous", "wrong-input", "different-judgment"], ["ambiguous"])):
         batch = root / "batches" / str(number) / "attempts" / "original.json"
         batch.parent.mkdir(parents=True)
         selected = [row for row in rows if row["task_id"] in tasks]
@@ -147,19 +151,42 @@ def test_consolidated_mapping_keeps_original_identity_and_marks_ambiguous_or_mis
         for contract in document["identity"]["contracts"]:
             if contract["task_id"] == "wrong-input":
                 contract["runtime_sha256"] = "another-runtime"
+        for observation in document["reviews"]:
+            if observation["task_id"] == "different-judgment":
+                observation["detail"] = "A later, different judgment must not substitute for the sealed row"
         batch.write_text(json.dumps(document))
         # A later pointer must never retarget the original stored observation.
         (batch.parent.parent / "latest.json").write_text(json.dumps({"path": "later.json", "sha256": "0" * 64}))
-    mapping = original_batch_mapping(rows, [str(root)], 2)
+    chain = tmp_path / "chain.json"
+    chain.write_text(
+        json.dumps(
+            {
+                "identity": {},
+                "origins": {},
+                "sealed_batch_receipts": [str(root / "batches" / "1" / "attempts" / "original.json")],
+                "repair_receipt": {
+                    "kind": "batch_reviews",
+                    "path": str(root / "batches" / "0" / "attempts" / "original.json"),
+                    "sha256": (
+                        hashlib.sha256((root / "batches" / "0" / "attempts" / "original.json").read_bytes()).hexdigest()
+                    ),
+                },
+            }
+        )
+    )
+    mapping = original_batch_mapping(rows, [str(chain)], 2)
     by_task = {row["task_id"]: row for row in mapping["entries"]}
     assert by_task["original"]["status"] == "mapped"
     assert by_task["original"]["reviewer"]["model_revision"] == "original-pin"
-    assert by_task["original"]["hash_basis"] == "staging_readback"
+    assert by_task["original"]["hash_basis"] == "publisher_reference"
     assert by_task["original"]["receipt"]["uri"].endswith("original.json")
     assert by_task["ambiguous"]["status"] == "not_mapped"
     assert "ambiguous" in by_task["ambiguous"]["reason"]
-    assert by_task["missing"]["status"] == by_task["wrong-input"]["status"] == "not_mapped"
-    assert (mapping["mapped"], mapping["not_mapped"]) == (1, 3)
+    assert by_task["wrong-input"]["status"] == "mapped"
+    assert by_task["wrong-input"]["runtime_sha256"] == "runtime"
+    assert by_task["wrong-input"]["original_contract"]["runtime_sha256"] == "another-runtime"
+    assert by_task["missing"]["status"] == by_task["different-judgment"]["status"] == "not_mapped"
+    assert (mapping["mapped"], mapping["not_mapped"]) == (2, 3)
 
 
 def test_original_review_receipt_does_not_follow_an_advanced_pointer(tmp_path: Path) -> None:
@@ -211,3 +238,32 @@ def test_release_rejects_missing_review_rows_and_unstaged_attempts() -> None:
         browse_invariants(fetch, [source])
     # Private sources need no content staging; their page renders a marker before requesting detail.
     assert browse_invariants(fetch, [{**source, "data_restriction": "private_always"}])["qc_sources"] == 0
+
+
+def test_regional_loader_retries_a_lost_idempotent_write_reply() -> None:
+    class LostReply(BaseHTTPRequestHandler):
+        calls = 0
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            LostReply.calls += 1
+            if LostReply.calls == 1:
+                self.connection.shutdown(socket.SHUT_RDWR)
+                self.connection.close()
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"row_count":0}')
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), LostReply)
+    worker = threading.Thread(target=server.serve_forever)
+    worker.start()
+    try:
+        with catalog_session() as session:
+            response = session.post(f"http://127.0.0.1:{server.server_port}/query", json={"sql": "idempotent insert"})
+        assert response.json() == {"row_count": 0}
+        assert LostReply.calls == 2
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join()

@@ -347,7 +347,10 @@ checks each task/runtime contract and typed observation against the hashed recor
 Parquet and seals the original batch bytes. Provenance distinguishes a surviving
 publisher-pointer hash from a hash captured by the staging readback. For FULL
 assemblies, `map_original_batches` follows their recorded batch/overlay origins and
-requires exact task, runtime and typed-judgment equality. Multiple matches and
+requires exact task-ID and complete typed-judgment equality within the recorded
+origin graph. A unique original batch may carry older input hashes: show both
+its original contract and the consolidation's hashes as original-reviewer lineage,
+not current-pin QA. Do not rebind admission or QA from this browsing join. Multiple matches and
 missing matches stay “not mapped” with a reason. Keep the immutable mapping URI
 and SHA; never choose a later judgment to fill a missing original.
 

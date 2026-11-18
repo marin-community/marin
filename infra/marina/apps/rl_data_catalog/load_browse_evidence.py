@@ -7,17 +7,31 @@ import argparse
 import gzip
 import json
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 
+import requests
 from marina.client import applet_query
+from requests.adapters import HTTPAdapter
 from rigging.auth import StaticTokenProvider
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
+from urllib3.util.retry import Retry
 
 from infra.marina.apps.rl_data_catalog.load_reviews import load_content_reviews
 from infra.marina.apps.rl_data_catalog.load_rollouts import load_rollouts
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference, manifest_bytes
+
+
+@contextmanager
+def catalog_session():
+    """Retry lost HTTP replies only for this loader's idempotent SQL/readback operations."""
+    with requests.Session() as session:
+        retry = Retry(total=3, connect=3, read=3, status=0, backoff_factor=0.5, allowed_methods={"GET", "POST"})
+        session.mount("https://", HTTPAdapter(max_retries=retry))
+        session.mount("http://", HTTPAdapter(max_retries=retry))
+        yield session
 
 
 def main() -> None:
@@ -49,10 +63,12 @@ def main() -> None:
     def load(task):
         kind, record = task
         staged = json.loads(gzip.decompress(manifest_bytes(ManifestReference.model_validate(record["reference"]))))
-        if kind == "qc":
-            result = load_content_reviews(staged, args.load_id, record["source_id"], query)
-        else:
-            result = load_rollouts(staged["measurement"], staged["metadata"], staged["rows"], query)
+        with catalog_session() as session:
+            task_query = applet_query(args.service_url, PREVIEW_APP_ID, session=session, token_provider=provider)
+            if kind == "qc":
+                result = load_content_reviews(staged, args.load_id, record["source_id"], task_query)
+            else:
+                result = load_rollouts(staged["measurement"], staged["metadata"], staged["rows"], task_query)
         receipt = {
             "kind": kind,
             "identity": record["identity"],

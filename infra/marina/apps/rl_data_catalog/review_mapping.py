@@ -30,17 +30,23 @@ def receipt_document(uri: str, expected: str | None = None) -> tuple[dict, dict]
 
 def referenced_artifacts(batch: dict) -> list[tuple[str, str | None]]:
     """Follow explicit overlay origins instead of treating an overlay as a reviewer output."""
-    references = [batch.get("primary_review"), batch.get("repair_receipt")]
+    references = [batch.get("primary_review"), batch.get("repair_receipt"), batch.get("pass2a"), batch.get("pass2b")]
     references.extend(origin.get("receipt") for origin in batch.get("origins", {}).values())
-    return [
-        (reference["artifact"] + "/.artifact.json", reference.get("artifact_sha256"))
-        for reference in references
-        if isinstance(reference, dict) and reference.get("artifact")
-    ]
+    result = []
+    for reference in references:
+        if not isinstance(reference, dict):
+            continue
+        if reference.get("artifact"):
+            result.append(
+                (reference["artifact"] + "/.artifact.json", reference.get("artifact_sha256") or reference.get("sha256"))
+            )
+        elif reference.get("kind") == "batch_reviews":
+            result.append((reference["path"], reference["sha256"]))
+    return result
 
 
 def matching_batch_rows(batch: dict, rows: dict[str, dict]) -> list[str]:
-    """Match all three input identities and the complete typed observation."""
+    """Identify original reviewer lineage by exact task ID and complete typed observation."""
     contracts = {row["task_id"]: row for row in batch["identity"]["contracts"]}
     matched = []
     for observation in batch["reviews"]:
@@ -49,7 +55,7 @@ def matching_batch_rows(batch: dict, rows: dict[str, dict]) -> list[str]:
         contract = contracts.get(task)
         if row is None or contract is None:
             continue
-        if any(contract.get(field) != row[field] for field in ("task_id", "task_sha256", "runtime_sha256")):
+        if any(not contract.get(field) for field in ("task_id", "task_sha256", "runtime_sha256")):
             continue
         if ReviewRecord.model_validate_json(json.dumps(observation)) == ReviewRecord.model_validate_json(row["review"]):
             matched.append(task)
@@ -94,16 +100,20 @@ def original_batch_mapping(rows: list[dict], roots: list[str], workers: int) -> 
                     if "result" in document:
                         pending.extend((value, None) for value in document["result"].get("batch_receipts", []))
                         continue
-                    if "identity" not in document or "reviews" not in document:
+                    if "identity" not in document or ("reviews" not in document and "origins" not in document):
                         raise ValueError(f"Unrecognized review evidence document: {uri}")
                     if "attempts" not in document:
                         pending.extend(referenced_artifacts(document))
+                        pending.extend((uri, None) for uri in document.get("sealed_batch_receipts", []))
                         continue
                     for task in matching_batch_rows(document, by_task):
                         candidates[task][uri] = {
                             "receipt": provenance["receipt"],
                             "hash_basis": provenance["hash_basis"],
                             "reviewer": document["identity"]["reviewer"],
+                            "original_contract": next(
+                                contract for contract in document["identity"]["contracts"] if contract["task_id"] == task
+                            ),
                         }
     entries = []
     for row in rows:
@@ -115,7 +125,7 @@ def original_batch_mapping(rows: list[dict], roots: list[str], workers: int) -> 
             entry.update(
                 status="not_mapped",
                 reason=(
-                    "No original batch matches the sealed judgment and input hashes."
+                    "No original batch with recorded input identities matches the sealed task ID and complete judgment."
                     if not matches
                     else "Multiple original batches match; original reviewer attempt is ambiguous."
                 ),

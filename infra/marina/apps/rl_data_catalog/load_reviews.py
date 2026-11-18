@@ -187,7 +187,14 @@ def stage_content_reviews(
         if ReviewRecord.model_validate_json(json.dumps(actual)) != record:
             raise ValueError(f"Raw batch judgment differs from its consolidated row: {record.task_id}")
         contract = next(contract for contract in batch["identity"]["contracts"] if contract["task_id"] == record.task_id)
-        if any(contract[field] != row[field] for field in ("task_id", "task_sha256", "runtime_sha256")):
+        if mapping_entries:
+            if contract != mapping_entries[record.task_id]["original_contract"]:
+                raise ValueError("Original reviewer input identity changed after its mapping was sealed")
+            provenance.update(
+                lineage="Original-reviewer lineage; not current-pin QA",
+                consolidation_contract={field: row[field] for field in ("task_id", "task_sha256", "runtime_sha256")},
+            )
+        elif any(contract[field] != row[field] for field in ("task_id", "task_sha256", "runtime_sha256")):
             raise ValueError("Batch input differs from the panel contract")
         raw_records.append(
             {
@@ -209,6 +216,11 @@ def stage_content_reviews(
                 },
             }
         )
+    for raw in raw_records:
+        if not raw["record"]["input"] and not raw["record"]["output"] and "unavailable" not in raw["record"]:
+            raw["record"][
+                "unavailable"
+            ] = "The original receipt contains no captured model request or response for this task."
     reviewer = review.reviewer
     profiles = reviewer_profiles(reviewer)
     models = sorted({profile["model"] for profile in profiles})
@@ -285,6 +297,9 @@ def stage_content_reviews(
             "current_pin": current_pin,
             "mapping": mapping_reference.model_dump(mode="json") if mapping_reference else None,
             "mapping_counts": {key: mapping[key] for key in ("mapped", "not_mapped")} if mapping_reference else None,
+            "raw_messages_missing": sum(
+                not row["record"]["input"] and not row["record"]["output"] for row in raw_records
+            ),
         },
     }
 

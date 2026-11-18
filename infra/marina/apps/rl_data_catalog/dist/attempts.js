@@ -10,7 +10,7 @@
       $('message').textContent = 'Private data'; return;
     }
     const models = [...evidence.difficulty.models, ...evidence.difficulty.historical].filter(model => model.measurement_id);
-    const label = node('label', 'Solver measurement '), select = node('select');
+    const label = node('label', 'Solver measurement ', 'measurement-picker'), select = node('select');
     for (const model of models) {
       const option = node('option', `${model.solver} · ${model.created_at} · ${model.status}`);
       option.value = model.measurement_id; select.append(option);

@@ -21,7 +21,7 @@
     const labels = node('div', undefined, 'evidence-labels');
     labels.append(...(data.judgment.defects || []).map(defect => defectChip(defect)));
     $('content').append(labels);
-    if (data.raw_review?.unavailable) $('content').append(node('p', `Raw review not mapped: ${data.raw_review.unavailable}`, 'muted'));
+    if (data.raw_review?.unavailable) $('content').append(node('p', `${data.raw_review.provenance?.mapping_status === 'not_mapped' ? 'Raw review not mapped' : 'Raw messages unavailable'}: ${data.raw_review.unavailable}`, 'muted'));
     const fields = [
       ['Stored task judgment', data.raw_review?.typed_observation ?? data.judgment],
       [data.raw_review ? 'Reviewer output' : 'Stored normalized judgment', data.raw_review?.output ?? data.judgment],

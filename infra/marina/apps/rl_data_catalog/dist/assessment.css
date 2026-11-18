@@ -67,3 +67,6 @@
 .review-metadata a { text-decoration: underline; }
 #content { min-width: 0; }
 #content pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.measurement-picker { display: grid; gap: 6px; width: min(100%, 50rem); min-width: 0; }
+.measurement-picker select { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
