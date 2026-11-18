@@ -179,13 +179,18 @@ def down_norms(norms: jax.Array) -> jax.Array:
 def init_gate_logits_jax(scores: jax.Array, eta: float, key: PRNGKeyArray, threshold: float) -> jax.Array:
     """Per-matrix noisy gate logits under the threshold rule (paper Eq. 8 init)."""
     keep_key, delete_key = jax.random.split(key)
-    keep_noise = (
+    # The noise draws from a replicated key; the select needs the cases sharded
+    # like the scores under an explicit mesh.
+    spec = jax.typeof(scores).sharding.spec
+    keep_noise = jax.sharding.reshard(
         jax.random.normal(keep_key, scores.shape) * DeletionTuningDefaults["logit_std"]
-        + DeletionTuningDefaults["keep_logit_mean"]
+        + DeletionTuningDefaults["keep_logit_mean"],
+        spec,
     )
-    delete_noise = (
+    delete_noise = jax.sharding.reshard(
         jax.random.normal(delete_key, scores.shape) * DeletionTuningDefaults["logit_std"]
-        + DeletionTuningDefaults["delete_logit_mean"]
+        + DeletionTuningDefaults["delete_logit_mean"],
+        spec,
     )
     return jnp.where(scores <= threshold, delete_noise, keep_noise).astype(scores.dtype)
 
