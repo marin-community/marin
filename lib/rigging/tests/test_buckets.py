@@ -18,7 +18,7 @@ from aiobotocore.httpsession import AIOHTTPSession
 from fsspec.implementations.local import LocalFileSystem
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, load_cluster_config, use_data_config
-from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.factory import unbudgeted_url_to_fs, url_to_fs
 from rigging.filesystem.s3_compat import polars_s3_storage_options
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import secret_file_contents, secret_file_environment
@@ -141,7 +141,8 @@ def test_credentials_come_from_the_variables_the_backend_declares(config, monkey
         filesystem_for("s3://marin-cw/x")
 
 
-def test_routed_coreweave_refreshes_credentials_from_rotated_token(config, tmp_path, monkeypatch):
+@pytest.mark.parametrize("entrypoint", [filesystem_for, url_to_fs, unbudgeted_url_to_fs])
+def test_routed_coreweave_refreshes_credentials_from_rotated_token(config, tmp_path, monkeypatch, entrypoint):
     token_file = tmp_path / "oidc.jwt"
     token_file.write_text("oidc-one")
     monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", CW_OIDC_URI)
@@ -195,7 +196,7 @@ def test_routed_coreweave_refreshes_credentials_from_rotated_token(config, tmp_p
         return AioAWSResponse(request.url, 200, {}, _HTTPBody(body.encode()))
 
     monkeypatch.setattr(AIOHTTPSession, "send", send)
-    cw_fs, cw_path = filesystem_for("s3://marin-cw/")
+    cw_fs, cw_path = entrypoint("s3://marin-cw/")
     assert cw_fs.ls(cw_path, detail=False, refresh=True) == ["marin-cw/cw-one"]
 
     new_token_file = tmp_path / "oidc.next"

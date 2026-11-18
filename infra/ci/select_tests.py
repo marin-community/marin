@@ -46,6 +46,7 @@ SCOPES: tuple[str, ...] = (
     "finestore",
     "ducky",
     "skyrlrecipe",
+    "evalrecords",
     "verifyit",
     "deploy",
     "iac",
@@ -111,6 +112,7 @@ UV_PACKAGE: dict[str, str] = {
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
     "skyrlrecipe": "marin-skyrlrecipe",
+    "evalrecords": "marin-evalrecords",
     "verifyit": "marin-verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
@@ -179,7 +181,7 @@ EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
 # The Levanter and Marin suites run long enough to be worth spreading over extra runners;
 # every other scope finishes in a few minutes on one. A sharded scope splits its selected
 # files across this many parallel matrix legs.
-SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 3}
+SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 4}
 
 # A shard carries fixed environment-setup overhead, so stop adding runners once each would
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
