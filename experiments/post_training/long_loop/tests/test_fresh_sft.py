@@ -128,12 +128,9 @@ def test_remote_sft_timing_destination_survives_config_decode():
     assert config.native_timing_root == "s3://marin-us-east-02a/run/timing/native-sft"
 
 
-@pytest.mark.parametrize(("configured", "expected"), [(None, "EAGER"), ("LAZY", "LAZY")])
-def test_sft_cuda_mode_is_recorded_and_sent_to_fray(tmp_path, monkeypatch, configured, expected):
-    recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
-    recipe["stop_after_steps"] = 1
-    if configured is not None:
-        recipe["cuda_module_loading"] = configured
+@pytest.fixture
+def local_sft_dispatch(tmp_path, monkeypatch):
+    """Require a fake Fray client for the SFT entrypoint exercised by this test."""
     initializer = tmp_path / "initializer"
     metadata = initializer / "native/verification.json"
     metadata.parent.mkdir(parents=True)
@@ -149,12 +146,27 @@ def test_sft_cuda_mode_is_recorded_and_sent_to_fray(tmp_path, monkeypatch, confi
         checkpoint.write_text(json.dumps({"step": 1, "is_temporary": False}))
         return SimpleNamespace(wait=lambda **_: None)
 
-    monkeypatch.setattr(dispatch, "current_client", lambda: SimpleNamespace(submit=submit))
+    fake_client = SimpleNamespace(submit=submit)
+    monkeypatch.setattr(dispatch, "current_client", lambda: fake_client)
     monkeypatch.setattr(sft, "configure_coreweave_s3", lambda: None)
     monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", str(tmp_path / "cache"))
+
+    def run(recipe):
+        sft.sft_run(output=str(output), initializer=str(initializer), recipe=recipe, run_id="cuda-loading")
+        (request,) = requests
+        profile = json.loads((output / "runtime-profile.json").read_text())
+        return request, profile
+
+    return run
+
+
+@pytest.mark.parametrize(("configured", "expected"), [(None, "EAGER"), ("LAZY", "LAZY")])
+def test_sft_cuda_mode_is_recorded_and_sent_to_fray(local_sft_dispatch, monkeypatch, configured, expected):
+    recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
+    recipe["stop_after_steps"] = 1
+    if configured is not None:
+        recipe["cuda_module_loading"] = configured
     monkeypatch.setenv("CUDA_MODULE_LOADING", "LAZY" if expected == "EAGER" else "EAGER")
-    sft.sft_run(output=str(output), initializer=str(initializer), recipe=recipe, run_id="cuda-loading")
-    (request,) = requests
-    profile = json.loads((output / "runtime-profile.json").read_text())
+    request, profile = local_sft_dispatch(recipe)
     assert request.environment.env_vars["CUDA_MODULE_LOADING"] == expected
     assert profile["worker_environment"]["CUDA_MODULE_LOADING"] == expected
