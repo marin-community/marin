@@ -207,7 +207,7 @@ function clearHistory() {
               <circle cx="18" cy="19" r="3" />
               <path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4" />
             </svg>
-            <span class="hidden @3xl:inline">{{ shareLabel }}</span>
+            <span class="hidden @4xl:inline">{{ shareLabel }}</span>
           </button>
           <button
             v-if="mode === 'chat' && info?.feedback"
@@ -219,8 +219,21 @@ function clearHistory() {
             <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M4 22V4m0 0h12l-2 4 2 4H4" />
             </svg>
-            <span class="hidden @3xl:inline">Report issue</span>
+            <span class="hidden @4xl:inline">Report issue</span>
           </button>
+          <!-- In narrower columns, max tokens lives in the More options panel instead. -->
+          <label class="hidden shrink-0 items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary @3xl:flex">
+            Max tokens
+            <input
+              v-model.number="params.maxTokens"
+              type="number"
+              min="1"
+              step="1"
+              aria-label="Maximum output tokens"
+              title="Maximum output tokens generated for each response"
+              class="w-20 rounded-lg border border-surface-border bg-surface px-2 py-1 text-sm text-text outline-none transition-colors focus:border-accent"
+            />
+          </label>
           <button
             class="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1 text-xs transition-colors"
             :class="showParams ? 'bg-surface-sunken text-text' : 'text-text-muted hover:text-text-secondary'"
@@ -231,7 +244,7 @@ function clearHistory() {
             <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6m2-6h6m2 8h6" />
             </svg>
-            <span class="hidden @3xl:inline">Max tokens {{ params.maxTokens }} · Temperature {{ params.temperature }}</span>
+            <span class="hidden @3xl:inline">Temperature {{ params.temperature }}</span>
           </button>
         </div>
         <SamplingControls

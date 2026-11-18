@@ -14,7 +14,8 @@ const customInstructions = defineModel<string>('customInstructions', { default: 
 
 <template>
   <div class="flex flex-wrap items-start gap-x-5 gap-y-3 border-b border-surface-border bg-surface-raised px-4 py-3">
-    <label class="flex flex-col gap-1 text-xs text-text-muted">
+    <!-- Wide columns show max tokens in the toolbar instead (App.vue). -->
+    <label class="flex flex-col gap-1 text-xs text-text-muted @3xl:hidden">
       Max tokens
       <input
         v-model.number="params.maxTokens"
