@@ -16,13 +16,13 @@ import shutil
 import tempfile
 import time
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 import pyarrow.parquet as pq
-from finestore.rl.licenses import LicenseCheckVerdict, LicenseReceipt
+from finestore.rl.licenses import LicenseReceipt
 from marin.inference import iris as iris_inference
 from marin.inference.openai_chat import OpenAIChatClient
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,8 +35,7 @@ from taskcompendium.pipeline.repair import ComparativeOutcome, RepairMatchClass
 
 from experiments.post_training.task_curation.full_qc import LONG_REQUEST_TIMEOUT, ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
-from experiments.post_training.task_curation.license_check import check_targets
-from experiments.post_training.task_curation.license_resolution import LicenseTarget
+from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.repair_candidates import (
     CANDIDATE_REPO,
@@ -120,7 +119,7 @@ class DryRunReport(BaseModel):
     census: dict[str, Any]
     advisories: int
     license: dict[str, Any] = Field(default_factory=dict)
-    """The stage-0 gate evidence bound into every report: dataset, pin, verdict, receipt digest."""
+    """The stage-0 gate evidence bound into every report: the approved per-folder lineage receipts."""
     unresolved_pairs: int = 0
     comparative: dict[str, Any] = Field(default_factory=dict)
     diagnostics: dict[str, Any] = Field(default_factory=dict)
@@ -399,24 +398,29 @@ def match_diagnostics(
     }
 
 
-def license_gate(repo: str, revision: str, *, candidate_source_id: str, cache: Path | None = None) -> LicenseReceipt:
+def folder_license_gate(
+    repo: str, folders: tuple[str, ...], *, receipts: Mapping[str, LicenseReceipt] | None = None
+) -> dict[str, LicenseReceipt]:
     """Stage 0 for a repair candidate, before any download, conversion or matching.
 
-    The automated checker must PASS at the candidate pin and the pin must be unbanned; the
-    standing doubt rule keeps an uncertain verdict out of the lane. A FAIL or ESCALATE stops
-    the run with the rule and evidence named.
+    Under the repackager ruling (licenses follow each folder's original upstream), the gate
+    binds each folder's registered lineage receipt — the checker's per-folder decision at
+    the checked upstream pin — and requires an approved decision plus an unbanned pin. A
+    folder without a bound receipt (FAIL, ESCALATE, or unchecked) stops the run until it
+    has a ruling.
     """
-    target = LicenseTarget(candidate_source_id, repo, revision, f"https://huggingface.co/datasets/{repo}")
-    row = check_targets([target], cache, workers=1)[0]
-    verdict = row["verdict"]
-    if verdict != LicenseCheckVerdict.PASS.value:
-        raise ValueError(
-            f"License gate failed for {repo}@{revision}: {verdict} "
-            f"{row.get('rule_id')} ({row.get('quote')}); see {row.get('evidence_url')}"
-        )
-    receipt = LicenseReceipt.model_validate(row["receipt"])
-    require_unbanned(candidate_source_id, repo, receipt)
-    return receipt
+    bound_receipts = read_license_receipts(LICENSE_RECEIPT_INDEX) if receipts is None else receipts
+    bound: dict[str, LicenseReceipt] = {}
+    for folder in folders:
+        key = f"{repo.replace('/', ':')}/{folder}"
+        receipt = bound_receipts.get(key)
+        if receipt is None:
+            raise ValueError(f"License gate failed for {key}: no bound lineage receipt; the folder needs a ruling")
+        if not any(decision.approved for decision in receipt.decisions):
+            raise ValueError(f"License gate failed for {key}: no approved per-folder decision")
+        require_unbanned(key, receipt.dataset_id, receipt)
+        bound[key] = receipt
+    return bound
 
 
 def dry_run(
@@ -430,11 +434,10 @@ def dry_run(
     repo: str,
     reviewer_version: ReviewerVersion,
     run: bool,
-    license_cache: Path | None = None,
     serving_cluster: str = "",
 ) -> DryRunReport:
     """Match one candidate folder against one tracked source and comparatively review it."""
-    gate_receipt = license_gate(repo, candidate_revision, candidate_source_id=candidate_source_id, cache=license_cache)
+    gate_receipts = folder_license_gate(repo, folders)
     candidates = load_candidate_population(
         folders=folders, repo=repo, revision=candidate_revision, candidate_source_id=candidate_source_id
     )
@@ -465,9 +468,14 @@ def dry_run(
         advisories=len(outcome.advisories),
         license={
             "dataset_id": repo,
-            "revision": candidate_revision,
-            "verdict": LicenseCheckVerdict.PASS.value,
-            "receipt_sha256": canonical_sha256(gate_receipt.model_dump(mode="json")),
+            "folders": {
+                key: {
+                    "approved": True,
+                    "upstream": receipt.resolved_source.model_dump(mode="json") if receipt.resolved_source else None,
+                    "receipt_sha256": canonical_sha256(receipt.model_dump(mode="json")),
+                }
+                for key, receipt in gate_receipts.items()
+            },
         },
     )
     workload = matched_pairs(
@@ -539,11 +547,6 @@ def main() -> None:
     parser.add_argument(
         "--serving-cluster", default="", help="Recorded in the report; the cluster the serving job targets"
     )
-    parser.add_argument(
-        "--license-cache",
-        type=Path,
-        help="Directory for the stage-0 license checker's evidence cache",
-    )
     parser.add_argument("--report", required=True)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
@@ -560,7 +563,6 @@ def main() -> None:
         repo=args.repo,
         reviewer_version=args.reviewer_version,
         run=args.run,
-        license_cache=args.license_cache,
         serving_cluster=args.serving_cluster,
     )
     write_report(report, args.report)

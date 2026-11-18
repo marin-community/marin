@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
 import pytest
+from finestore.rl.licenses import LicenseDecision, LicenseDecisionKind, LicenseReceipt
 from marin.inference.openai_chat import OpenAIChatClient
 from taskcompendium.models import (
     AnswerType,
@@ -354,72 +355,81 @@ class TestTemplateSectionNormalization:
 
 
 class TestLicenseGate:
-    """Stage 0 gates every candidate: unlicensed or banned pins are refused before any work."""
+    """Stage 0 gates every candidate folder on its bound lineage receipt (repackager ruling)."""
 
-    def test_unlicensed_candidate_is_refused_before_any_loading(self, monkeypatch):
-        monkeypatch.setattr(
-            lane,
-            "check_targets",
-            lambda targets, cache, workers: [
-                {
-                    "verdict": "fail",
-                    "rule_id": "F2",
-                    "quote": "L1: ---",
-                    "evidence_url": "https://example.org/README.md",
-                    "receipt": None,
-                }
+    @staticmethod
+    def _receipt(approved: bool) -> LicenseReceipt:
+        return LicenseReceipt(
+            source_id="FWeindel:validated-tasks/nl2bash_v2",
+            dataset_id="FWeindel/validated-tasks",
+            revision="eafe9b38",
+            resolved_at="2026-11-17T00:00:00+00:00",
+            resolver_version="atlas-license-check-v10",
+            evidence=[],
+            bundled_third_party=True,
+            model_generated_outputs=False,
+            decisions=[
+                LicenseDecision(
+                    kind=LicenseDecisionKind.EXCEPTION,
+                    approved=approved,
+                    who="user via coordinator",
+                    when="2026-11-17T00:00:00+00:00",
+                    source_id="FWeindel:validated-tasks/nl2bash_v2",
+                    dataset_id="FWeindel/validated-tasks",
+                    revision="eafe9b38",
+                    scope=["train"],
+                    rationale="Repackager ruling: the folder's original upstream carries the license.",
+                    evidence_urls=["https://huggingface.co/datasets/open-thoughts/TaskTrove"],
+                    issue_url="https://github.com/marin-community/marin/issues/11497",
+                )
             ],
         )
+
+    def test_folder_without_a_bound_receipt_is_refused_before_any_loading(self, monkeypatch):
+        monkeypatch.setattr(lane, "read_license_receipts", lambda index: {})
 
         def tripwire(**kwargs):
             raise AssertionError("candidate loading ran before the license gate")
 
         monkeypatch.setattr(lane, "load_candidate_population", tripwire)
-        with pytest.raises(ValueError, match=r"License gate failed.*F2"):
-            lane.license_gate("FWeindel/validated-tasks", "eafe9b38", candidate_source_id="candidate:test")
-        with pytest.raises(ValueError, match="License gate failed"):
+        with pytest.raises(ValueError, match=r"no bound lineage receipt"):
+            lane.folder_license_gate("FWeindel/validated-tasks", ("nl2bash_v2",))
+        with pytest.raises(ValueError, match=r"no bound lineage receipt"):
             lane.dry_run(
                 tracked_source_id=TRACKED_SOURCE,
                 tracked_uris=(),
                 candidate_source_id=CANDIDATE_SOURCE,
                 candidate_revision="eafe9b38",
-                folders=("bugsinpy_v2",),
+                folders=("nl2bash_v2",),
                 repo="FWeindel/validated-tasks",
                 reviewer_version=ReviewerVersion.V3,
                 run=False,
             )
 
-    def test_banned_candidate_is_refused_after_pass(self, monkeypatch):
-        monkeypatch.setattr(
-            lane,
-            "check_targets",
-            lambda targets, cache, workers: [
-                {"verdict": "PASS", "rule_id": None, "quote": None, "evidence_url": None, "receipt": {"source_id": "c"}}
-            ],
-        )
-        monkeypatch.setattr(lane.LicenseReceipt, "model_validate", classmethod(lambda cls, value: value))
+    def test_banned_folder_is_refused(self, monkeypatch):
+        receipt = self._receipt(approved=True)
+        monkeypatch.setattr(lane, "read_license_receipts", lambda index: {receipt.source_id: receipt})
         monkeypatch.setattr(
             lane,
             "require_unbanned",
             lambda source_id, dataset_id, receipt=None: (_ for _ in ()).throw(
-                ValueError(f"License banned: {source_id}: dataset-level ban")
+                ValueError(f"License banned: {source_id}: per-folder ban")
             ),
         )
         with pytest.raises(ValueError, match="License banned"):
-            lane.license_gate("FWeindel/validated-tasks", "eafe9b38", candidate_source_id=CANDIDATE_SOURCE)
+            lane.folder_license_gate("FWeindel/validated-tasks", ("nl2bash_v2",))
 
-    def test_passing_gate_binds_the_receipt(self, monkeypatch):
-        monkeypatch.setattr(
-            lane,
-            "check_targets",
-            lambda targets, cache, workers: [
-                {"verdict": "PASS", "rule_id": None, "quote": None, "evidence_url": None, "receipt": {"source_id": "c"}}
-            ],
-        )
-        monkeypatch.setattr(lane, "require_unbanned", lambda source_id, dataset_id, receipt=None: None)
-        monkeypatch.setattr(lane.LicenseReceipt, "model_validate", classmethod(lambda cls, value: value))
-        receipt = lane.license_gate("FWeindel/validated-tasks", "eafe9b38", candidate_source_id=CANDIDATE_SOURCE)
-        assert receipt == {"source_id": "c"}
+    def test_unapproved_folder_is_refused(self, monkeypatch):
+        receipt = self._receipt(approved=False)
+        monkeypatch.setattr(lane, "read_license_receipts", lambda index: {receipt.source_id: receipt})
+        with pytest.raises(ValueError, match=r"no approved per-folder decision"):
+            lane.folder_license_gate("FWeindel/validated-tasks", ("nl2bash_v2",))
+
+    def test_approved_receipt_binds_and_records_upstream(self, monkeypatch):
+        receipt = self._receipt(approved=True)
+        monkeypatch.setattr(lane, "read_license_receipts", lambda index: {receipt.source_id: receipt})
+        bound = lane.folder_license_gate("FWeindel/validated-tasks", ("nl2bash_v2",))
+        assert bound["FWeindel:validated-tasks/nl2bash_v2"] is receipt
 
 
 class TestRepairDecision:
