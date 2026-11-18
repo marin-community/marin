@@ -8,19 +8,26 @@ Marin's CoreWeave storage.
 
 The first milestone is complete. The broader
 [metadata release proposal](hero-metadata-release-proposal.md) still has release
-work remaining, especially upstream occurrence locators and embedding coverage.
+work remaining, including upstream occurrence locators, model provenance and
+embedding coverage across the full 292-source pool.
 No public dataset was published. The reconstruction monitor was deleted after
 completion; there is no live watcher to take over.
 
 ## Code and artifacts
 
-The code checkpoint and this handoff are on
+The original code checkpoint and handoff are on
 `codex/hero-cluster22-reconstruction` in `marin-community/marin`. This branch
 starts at `3bf94b358dcb29d422e47f37b98d5030c52406c8`, the metadata proposal's
 merged-main checkpoint. It has not been refreshed against later main changes.
 The original proposal branch is `codex/hero-metadata-release`, associated with
 [PR #10527](https://github.com/marin-community/marin/pull/10527). Publishing this
 checkpoint does not assert that either branch is merged or ready for release.
+
+The refreshed review candidate is `codex/hero-cluster22-integration`. It merges
+the checkpoint with main at `139b752890939793937c00f3c1ec0605f5cae98c` and fixes
+provider-root validation so repeated object-key slashes remain distinct. The
+[November 18 verification](#november-18-verification) records fresh artifact and
+embedding readbacks from that candidate.
 
 All completed outputs use this base:
 
@@ -214,12 +221,13 @@ uv run --no-sync pytest experiments/datakit/scripts/tests experiments/datakit/st
 
 1. Check out the reconstruction branch and inspect the final marker and v11
    plan. No reconstruction job needs restarting for this completed milestone.
-2. Decide whether the next deliverable is a reviewable reconstruction tool or
-   the broader metadata release. The current branch is an execution checkpoint;
-   integration against current main and PR review are separate work.
+2. For reconstruction tooling, review the refreshed integration candidate before
+   landing it. The original reconstruction branch remains the execution
+   checkpoint.
 3. For a metadata release, resolve complete upstream locators and duplicate
-   occurrence ambiguity, measure selected embedding coverage, and validate the
-   release schema across all intended sources. Keep missing provenance explicit.
+   occurrence ambiguity, resolve Focus Crawl model provenance, extend embedding
+   coverage checks to the full release pool, and validate the release schema.
+   Keep missing provenance explicit.
 4. If another cluster is chosen, freeze its selection and provider plan first.
    Use fresh output roots, a bounded CPU allocation and heartbeat monitoring.
    Never restart a cluster, copy a raw corpus across regions, or publish a
@@ -232,3 +240,37 @@ remote v11 plan and source markers are the shared artifact inventory. The
 terminal aggregate job was
 `/dlwh/hero-cluster22-final-aggregate-v11-20261031`; its successful result and
 marker hash above are the completion record.
+
+## November 18 verification
+
+Read-only checks against `reconstruction-plan-v11.json` verified all 150
+source/index bindings and the schemas and footer counts of all 2,494
+reconstructed Parquet files, totaling 151,474,843 selected occurrences.
+Complete final-text hash and multiplicity
+checks also passed for `hplt_v3` (2,162 occurrences), `numinamath-tir` (2) and
+`cp/uspto` (8). These checks do not constitute a full-text rehash of the cluster.
+
+The selected-ID indices were joined to the pinned per-source Harrier shards:
+**151,474,843 occurrences covered, zero missing and zero unresolved**. Coverage
+required the stored `fixed_size_list<int8>[1024]` schema and zero vector null
+statistics. The audit did not rerun Harrier or compare vectors for duplicate
+IDs. It preserves source-level selection counts and does not recover historical
+provider occurrences or training token order.
+
+The first coverage job reached its two-hour execution limit. A successful
+continuation revalidated 105 source reports recovered from its logs, scanned
+the remaining sources, and wrote immutable per-source reports to a fresh audit
+prefix. The [verification record](hero-cluster22-verification-20261118.json)
+contains the sealed report URI, checksum, job IDs and all 150 source results.
+
+Model, revision and quantization metadata agree for 149 selected sources.
+`common-crawl-focus-2026-22` still lacks those fields. The metadata files for its
+recorded canonical embeddings and fuzzy-duplicate backfill were unavailable in
+US-EAST-02A and RNO2A. Its vectors passed the shape and ID-coverage checks; their
+model provenance remains unresolved.
+
+The integrated code passed 143 affected tests across 21 test files, mechanical
+lint, scoped typing and the strict documentation build. These checks cover the
+150 sources selected for cluster 22. The broader metadata release targets the
+292-source pool and still requires complete upstream locators, explicit
+duplicate-occurrence provenance limits, and release-schema validation.
