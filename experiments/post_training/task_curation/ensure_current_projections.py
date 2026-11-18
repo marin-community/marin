@@ -40,6 +40,23 @@ CURRICULUM_DECLARATION_FIELDS = ("dataset_id", "dataset_revision", "pipeline")
 
 ATLAS_APPLET_ID = "fb11c931-5861-4878-8bb5-a964d652b45f"
 MARINA_URL = "https://marina.oa.dev"
+TARGET_CONFIG = Path(__file__).with_name("atlas-target-applet.json")
+
+
+def target_applet() -> tuple[str, str]:
+    """The served-catalog target applet from config, with production as the default.
+
+    While the production catalog is on the coordinator's hold, the config points the
+    served-catalog checks at the preview applet the lanes keep current; lifting the
+    hold flips the config back to production.
+    """
+    reference = json.loads(TARGET_CONFIG.read_text())
+    return reference["marina_url"], reference["applet_id"]
+
+
+def atlas_applet_query():
+    marina_url, applet_id = target_applet()
+    return applet_query(marina_url, applet_id)
 
 
 @dataclass(frozen=True)
@@ -264,10 +281,6 @@ def publication_preflight(
             f"typed waivers:\n{named}"
         )
     return notes
-
-
-def atlas_applet_query():
-    return applet_query(MARINA_URL, ATLAS_APPLET_ID)
 
 
 def atlas_curriculum_rows() -> dict[str, dict]:

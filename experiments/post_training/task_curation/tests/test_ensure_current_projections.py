@@ -3,8 +3,12 @@
 
 """The projection currency stage pairs every pin with its grader and curriculum receipts."""
 
+import json
+
+import pytest
 from finestore.rl.curation import ActorCensusInput
 
+from experiments.post_training.task_curation import ensure_current_projections
 from experiments.post_training.task_curation.ensure_current_projections import (
     DeclarationPin,
     projection_gaps,
@@ -115,6 +119,48 @@ def test_a_stale_served_catalog_is_its_own_gap():
         served_pins={"Test:source": served},
     )
     assert [(gap.projection, gap.state) for gap in gaps] == [("served-catalog", "stale-pin")]
+
+
+def test_the_served_catalog_target_comes_from_config(monkeypatch, tmp_path):
+    """The served-catalog checks read the applet named by the target config.
+
+    While production is on the coordinator's hold the config points at the preview
+    applet the landing lanes keep current; the production applet stays the default
+    once the hold lifts.
+    """
+    config = tmp_path / "atlas-target-applet.json"
+    config.write_text(json.dumps({"marina_url": "https://marina.example", "applet_id": "preview-applet-id"}))
+    captured = {}
+
+    def fake_query(service_url: str, applet_id: str):
+        captured["url"] = service_url
+        captured["applet_id"] = applet_id
+        raise AssertionError("the target query must not contact the applet in this test")
+
+    monkeypatch.setattr(ensure_current_projections, "TARGET_CONFIG", config)
+    monkeypatch.setattr(ensure_current_projections, "applet_query", fake_query)
+    assert ensure_current_projections.target_applet() == ("https://marina.example", "preview-applet-id")
+    with pytest.raises(AssertionError):
+        ensure_current_projections.atlas_applet_query()
+    assert captured == {"url": "https://marina.example", "applet_id": "preview-applet-id"}
+
+
+def test_the_target_config_defaults_to_production_when_the_hold_lifts(monkeypatch, tmp_path):
+    """The committed config names production as the post-hold default target."""
+    config = tmp_path / "atlas-target-applet.json"
+    config.write_text(
+        json.dumps(
+            {
+                "marina_url": ensure_current_projections.MARINA_URL,
+                "applet_id": ensure_current_projections.ATLAS_APPLET_ID,
+            }
+        )
+    )
+    monkeypatch.setattr(ensure_current_projections, "TARGET_CONFIG", config)
+    assert ensure_current_projections.target_applet() == (
+        ensure_current_projections.MARINA_URL,
+        ensure_current_projections.ATLAS_APPLET_ID,
+    )
 
 
 def test_the_preflight_refuses_and_names_the_pins_with_their_last_computed_revision():
