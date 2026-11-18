@@ -49,6 +49,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from marin.experiment.data import mixture
 from marin.processing.tokenize.tokenize import TokenizedCache
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 EXP3_V7_VERSION = "2026.11.18"
@@ -347,6 +348,7 @@ def exp3_v7_data_config(ctx: StepContext) -> LmDataConfig:
 @click.option("--only", help="Comma-separated subset of source names to select (default: all).")
 @click.option("--max-concurrent", type=int, default=8, help="Max handles built concurrently.")
 def cli(build: bool, only: str | None, max_concurrent: int) -> None:
+    configure_coreweave_s3()
     selected = _exp3_v7_sources()
     if only is not None:
         keys = only.split(",")
