@@ -7,8 +7,9 @@
 The ``old-iris-jobs`` Loom watch (``infra/loom/watches/old-iris-jobs.md``) runs this
 script. Each owner has a tab with one row per old job. Children count toward their
 root, because a cancel applies to the root. The owner sets the Decision cell of a
-row: ``Kill`` makes the next run cancel the job, and a keep decision leaves the job
-alone until the Keep until date. A job that stops running leaves the sheet.
+row: ``Kill`` makes the next run cancel the job, and a revisit decision leaves the job
+alone until the Revisit on date, when the run clears the decision. A job that stops running
+leaves the sheet.
 
 The sheet is the only state. A run reads every owner tab, then writes it again, so
 an edit that an owner makes between the read and the write is lost.
@@ -35,12 +36,12 @@ from rigging.timing import Timestamp
 ACTIVE_TASK_STATES = (TaskState.ASSIGNED, TaskState.BUILDING, TaskState.RUNNING)
 MS_PER_DAY = 86_400_000
 KILL_DECISION = "Kill"
-KEEP_DAYS_BY_DECISION = {"Keep 30 days": 30, "Keep 365 days": 365}
-DECISIONS = (KILL_DECISION, *KEEP_DAYS_BY_DECISION)
+REVISIT_DAYS_BY_DECISION = {"Revisit in 30 days": 30, "Revisit in 365 days": 365}
+DECISIONS = (KILL_DECISION, *REVISIT_DAYS_BY_DECISION)
 CANCEL_REQUESTED_STATUS = "Cancel requested"
 CANCEL_FAILED_STATUS = "Cancel failed"
 UNKNOWN_DECISION_STATUS = "Unknown decision"
-HEADER = ("Cluster", "Job", "Started", "Age (days)", "Resources", "Listed", "Decision", "Keep until", "Status")
+HEADER = ("Cluster", "Job", "Started", "Age (days)", "Resources", "Listed", "Decision", "Revisit on", "Status")
 DECISION_COLUMN = HEADER.index("Decision")
 LAST_COLUMN = chr(ord("A") + len(HEADER) - 1)
 # Pixel widths of the columns whose text is longer than the default width shows.
@@ -77,7 +78,7 @@ class SheetRow:
     resources: str = ""
     listed: str = ""
     decision: str = ""
-    keep_until: str = ""
+    revisit_on: str = ""
     status: str = ""
 
     @classmethod
@@ -130,23 +131,23 @@ def tab_title(owner: str) -> str:
 
 
 def _decided_row(row: SheetRow, today: datetime.date) -> SheetRow:
-    """Apply the owner's decision to the Keep until and Status cells; an expired keep clears the decision."""
+    """Apply the owner's decision to the Revisit on and Status cells; a reached revisit date clears the decision."""
     if row.decision == KILL_DECISION:
         # The date of the first request stays while the job shuts down.
         status = row.status if row.status.startswith(CANCEL_REQUESTED_STATUS) else f"{CANCEL_REQUESTED_STATUS} {today}"
-        return replace(row, keep_until="", status=status)
-    if row.decision in KEEP_DAYS_BY_DECISION:
+        return replace(row, revisit_on="", status=status)
+    if row.decision in REVISIT_DAYS_BY_DECISION:
         # The status names the decision and its date, so a changed decision starts a new period.
         prefix = f"{row.decision} from "
         try:
             decided = datetime.date.fromisoformat(row.status.removeprefix(prefix))
         except ValueError:
             decided = today
-        keep_until = decided + datetime.timedelta(days=KEEP_DAYS_BY_DECISION[row.decision])
-        if keep_until <= today:
-            return replace(row, decision="", keep_until="", status="")
-        return replace(row, keep_until=str(keep_until), status=f"{prefix}{decided}")
-    return replace(row, keep_until="", status=UNKNOWN_DECISION_STATUS if row.decision else "")
+        revisit_on = decided + datetime.timedelta(days=REVISIT_DAYS_BY_DECISION[row.decision])
+        if revisit_on <= today:
+            return replace(row, decision="", revisit_on="", status="")
+        return replace(row, revisit_on=str(revisit_on), status=f"{prefix}{decided}")
+    return replace(row, revisit_on="", status=UNKNOWN_DECISION_STATUS if row.decision else "")
 
 
 def plan_tabs(

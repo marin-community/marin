@@ -18,8 +18,8 @@ from scripts.ops.old_iris_jobs import (
     plan_tabs,
 )
 
-KEEP_30_DAYS = "Keep 30 days"
-KEEP_365_DAYS = "Keep 365 days"
+REVISIT_IN_30_DAYS = "Revisit in 30 days"
+REVISIT_IN_365_DAYS = "Revisit in 365 days"
 # 2027-01-15 08:00 UTC.
 NOW_MS = 1_800_000_000_000
 TODAY = "2027-01-15"
@@ -133,34 +133,34 @@ def test_plan_cancels_again_a_job_whose_cancel_failed():
     assert retried["alice"][0].status == "Cancel requested 2027-01-16"
 
 
-def test_plan_asks_again_when_a_keep_decision_expires():
+def test_plan_asks_again_on_the_revisit_date():
     job = _old_job("/alice/long", 9)
     listed, _ = _replan([job], {})
-    marked = {"alice": [replace(listed["alice"][0], decision=KEEP_30_DAYS)]}
+    marked = {"alice": [replace(listed["alice"][0], decision=REVISIT_IN_30_DAYS)]}
 
     kept, kept_cancels = _replan([job], marked)
     still_kept, _ = _replan([job], kept, days_later=29)
     expired, expired_cancels = _replan([job], still_kept, days_later=30)
 
     assert kept_cancels == expired_cancels == []
-    assert (kept["alice"][0].decision, kept["alice"][0].keep_until) == (KEEP_30_DAYS, "2027-02-14")
-    assert (still_kept["alice"][0].decision, still_kept["alice"][0].keep_until) == (KEEP_30_DAYS, "2027-02-14")
-    assert (expired["alice"][0].decision, expired["alice"][0].keep_until, expired["alice"][0].status) == ("", "", "")
+    assert (kept["alice"][0].decision, kept["alice"][0].revisit_on) == (REVISIT_IN_30_DAYS, "2027-02-14")
+    assert (still_kept["alice"][0].decision, still_kept["alice"][0].revisit_on) == (REVISIT_IN_30_DAYS, "2027-02-14")
+    assert (expired["alice"][0].decision, expired["alice"][0].revisit_on, expired["alice"][0].status) == ("", "", "")
     assert expired["alice"][0].listed == TODAY
 
 
-def test_plan_starts_a_new_keep_period_when_the_owner_changes_the_keep_decision():
+def test_plan_starts_a_new_period_when_the_owner_changes_the_revisit_decision():
     job = _old_job("/alice/long", 9)
     listed, _ = _replan([job], {})
-    kept, _ = _replan([job], {"alice": [replace(listed["alice"][0], decision=KEEP_30_DAYS)]})
-    changed = {"alice": [replace(kept["alice"][0], decision=KEEP_365_DAYS, keep_until="edited by the owner")]}
+    kept, _ = _replan([job], {"alice": [replace(listed["alice"][0], decision=REVISIT_IN_30_DAYS)]})
+    changed = {"alice": [replace(kept["alice"][0], decision=REVISIT_IN_365_DAYS, revisit_on="edited by the owner")]}
 
     extended, _ = _replan([job], changed, days_later=10)
     later, _ = _replan([job], extended, days_later=300)
 
-    assert (extended["alice"][0].keep_until, extended["alice"][0].status) == (
+    assert (extended["alice"][0].revisit_on, extended["alice"][0].status) == (
         "2028-01-25",
-        "Keep 365 days from 2027-01-25",
+        "Revisit in 365 days from 2027-01-25",
     )
     assert later["alice"][0] == replace(extended["alice"][0], age_days=later["alice"][0].age_days)
 
@@ -179,14 +179,14 @@ def test_plan_keeps_a_row_across_a_preemption_and_empties_the_tab_when_every_job
     job = _old_job("/alice/preemptible", 9)
     never_listed = replace(_old_job("/carol/never-listed", 9), occupied={})
     listed, _ = _replan([job, never_listed], {})
-    decided = {"alice": [replace(listed["alice"][0], decision=KEEP_30_DAYS)]}
+    decided = {"alice": [replace(listed["alice"][0], decision=REVISIT_IN_30_DAYS)]}
 
     waiting, _ = _replan([replace(job, occupied={}), never_listed], decided)
     stopped, _ = _replan([never_listed], waiting)
 
     assert "carol" not in listed
     assert [(row.job, row.decision, row.resources) for row in waiting["alice"]] == [
-        ("/alice/preemptible", KEEP_30_DAYS, "")
+        ("/alice/preemptible", REVISIT_IN_30_DAYS, "")
     ]
     assert stopped == {"alice": []}
 

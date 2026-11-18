@@ -366,9 +366,9 @@ profile makes the uv cache read-only and permits network access only to Loom. Th
 [`scripts/ops/old_iris_jobs.py`](../../scripts/ops/old_iris_jobs.py) against the
 `marin` hub. The script keeps a Google Sheet with one tab per job owner and one
 row per Iris root job older than the prompt's `--min-age-days`. An owner sets
-the Decision cell of a row. `Kill` makes the next run cancel the job. `Keep 30
-days` or `Keep 365 days` leaves the job alone until the Keep until date, then
-the run clears the decision. A job with no decision stays in the sheet, and a job that stops
+the Decision cell of a row. `Kill` makes the next run cancel the job. `Revisit in
+30 days` or `Revisit in 365 days` leaves the job alone until the Revisit on date, then
+the run clears the decision and the owner decides again. A job with no decision stays in the sheet, and a job that stops
 running leaves it. The watch posts to `#marin-alerts` only when the script
 fails, which includes a cancel that Iris rejects. It needs:
 
