@@ -68,7 +68,7 @@ from marina.applets import (
     remove_backend_revision,
     validate_query,
 )
-from marina.client import AppletQuery
+from marina.client import AppletQuery, MarinaRequestError
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from shellbox.machine import Backend, NetworkPolicy
 from shellbox.requirements import Requirement, Support
@@ -3841,7 +3841,13 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
         "INSERT INTO atlas_populations VALUES (:load,'incomplete-sibling','admitted',2,2)",
         {"load": load_id},
     )
-    assert load_content_reviews(staged, load_id, "Marin:math", catalog_query)["atlas_items"] == 3
+
+    def bounded_query(sql, parameters):
+        if "SELECT COUNT(*) AS matched FROM jsonb_to_recordset" in sql and len(json.loads(parameters["rows"])) > 1:
+            raise MarinaRequestError(504, "deterministic multi-row deadline")
+        return catalog_query(sql, parameters)
+
+    assert load_content_reviews(staged, load_id, "Marin:math", bounded_query)["atlas_items"] == 3
     assert (
         catalog_query(
             "SELECT summary FROM atlas_cohort_summaries WHERE load_id=:load AND pipeline_key='incomplete-sibling'",
@@ -3903,7 +3909,7 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
                 },
             )
             with pytest.raises(ValueError, match="Stored atlas_raw_reviews differs"):
-                load_content_reviews(staged, load_id, "Marin:math", catalog_query)
+                load_content_reviews(staged, load_id, "Marin:math", bounded_query)
         if shared_batch == "chunked":
             catalog_query(
                 "DELETE FROM atlas_review_batch_chunks WHERE load_id=:load AND pipeline_key=:key AND chunk_index=0",

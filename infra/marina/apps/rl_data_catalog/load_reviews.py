@@ -6,6 +6,7 @@
 import hashlib
 import io
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ from typing import Any
 import click
 import pyarrow.parquet as pq
 from finestore.rl.curation import Assessment, AssessmentPopulation, CurationSummary, ModelReference
-from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
+from marina.client import DEFAULT_MARINA_URL, AppletQuery, MarinaRequestError, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.models import ReviewRecord
@@ -306,6 +307,20 @@ def stage_content_reviews(
     }
 
 
+def matched_review_rows(query: AppletQuery, sql: str, load_id: str, rows: list[dict]) -> int:
+    """Reduce deadline-bound reads while retaining the exact comparison for every row."""
+    try:
+        return query(sql, {"load": load_id, "rows": json.dumps(rows)})["rows"][0]["matched"]
+    except MarinaRequestError as error:
+        if error.status_code != 504 or len(rows) <= 1:
+            raise
+        logging.getLogger(__name__).warning("Splitting timed-out review readback: %d rows", len(rows))
+        middle = len(rows) // 2
+        return matched_review_rows(query, sql, load_id, rows[:middle]) + matched_review_rows(
+            query, sql, load_id, rows[middle:]
+        )
+
+
 def load_content_reviews(staged: dict, load_id: str, source_id: str, query: AppletQuery) -> dict[str, int]:
     """Select a verified panel additively, leaving catalog declarations and old review bytes intact."""
     declarations = query(
@@ -409,12 +424,14 @@ def load_content_reviews(staged: dict, load_id: str, source_id: str, query: Appl
             stored_fields = ",".join(f"stored.{name}" for name in fields)
             expected_fields = ",".join(f"expected.{name}" for name in fields)
             try:
-                matched = query(
+                matched = matched_review_rows(
+                    query,
                     f"SELECT COUNT(*) AS matched FROM jsonb_to_recordset(CAST(:rows AS JSONB)) "
                     f"AS expected({columns}) JOIN {table} stored ON stored.load_id=:load AND {join} "
                     f"WHERE ROW({stored_fields}) IS NOT DISTINCT FROM ROW({expected_fields})",
-                    {"load": load_id, "rows": body},
-                )["rows"][0]["matched"]
+                    load_id,
+                    json.loads(body),
+                )
             except Exception as error:
                 raise RuntimeError(f"{table} exact readback failed for {key}, {len(json.loads(body))} rows") from error
             if matched != len(json.loads(body)):

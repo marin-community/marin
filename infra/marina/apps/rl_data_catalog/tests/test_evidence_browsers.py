@@ -13,10 +13,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from marina.client import MarinaRequestError
 from rigging.filesystem.storage_path import StoragePath
 
 from infra.marina.apps.rl_data_catalog.load_browse_evidence import catalog_session
-from infra.marina.apps.rl_data_catalog.load_reviews import read_batch, stage_content_reviews, task_request_evidence
+from infra.marina.apps.rl_data_catalog.load_reviews import (
+    matched_review_rows,
+    read_batch,
+    stage_content_reviews,
+    task_request_evidence,
+)
 from infra.marina.apps.rl_data_catalog.load_rollouts import stage_attempt, stage_rollouts
 from infra.marina.apps.rl_data_catalog.release_browse import browse_invariants
 from infra.marina.apps.rl_data_catalog.review_mapping import original_batch_mapping
@@ -271,3 +277,17 @@ def test_regional_loader_retries_a_lost_idempotent_write_reply() -> None:
         server.shutdown()
         server.server_close()
         worker.join()
+
+
+@pytest.mark.parametrize(("status", "size"), [(400, 2), (500, 2), (504, 1)])
+def test_exact_readback_preserves_non_deadline_and_single_row_failures(status, size):
+    calls = []
+
+    def fail(sql, parameters):
+        calls.append(parameters)
+        raise MarinaRequestError(status, "original failure")
+
+    with pytest.raises(MarinaRequestError) as error:
+        matched_review_rows(fail, "SELECT exact rows", "load", [{"task_id": str(i)} for i in range(size)])
+    assert error.value.status_code == status
+    assert len(calls) == 1
