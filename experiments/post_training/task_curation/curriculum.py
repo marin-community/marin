@@ -17,7 +17,7 @@ from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import runnable_sources
 
 
-def _recipe_identity(pipeline: object) -> str:
+def recipe_identity(pipeline: object) -> str:
     """The ``module.qualname`` identity of a source's curation pipeline callable."""
     qualname = getattr(pipeline, "__qualname__", None)
     if qualname is not None:
@@ -37,7 +37,7 @@ def _entry(label: str, source: RlDataSource, weight: float | None) -> Curriculum
         source=label,
         version=source.version,
         pin=SourcePin(name=dataset.name, revision=dataset.revision, url=dataset.url),
-        recipe=_recipe_identity(source.pipeline),
+        recipe=recipe_identity(source.pipeline),
         weight=weight,
     )
 
