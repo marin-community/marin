@@ -17,6 +17,7 @@ from finestore.rl.curation import (
     OraclePendingExclusionReason,
     OracleValidation,
     QualityResultFinalization,
+    SamplePanelCurrency,
     SourceQualityResult,
     SourceUse,
 )
@@ -272,12 +273,42 @@ def test_current_content_attaches_after_the_filtered_pin_is_selected(admitted_re
     unrelated = receipt.sample.model_copy(
         update={
             "review": receipt.sample.review.model_copy(
-                update={"panel": receipt.sample.review.panel.model_copy(update={"dataset_revision": "d" * 40})}
+                update={
+                    "panel": receipt.sample.review.panel.model_copy(
+                        update={
+                            "dataset_revision": "d" * 40,
+                            "task_specs_sha256": "changed-" + receipt.sample.review.panel.task_specs_sha256,
+                        }
+                    )
+                }
             )
         }
     )
     with pytest.raises(ValueError, match="Sample Result belongs to another current population"):
         bind_selected_source_content(source, selected, unrelated, None)
+
+
+def test_byte_identical_repin_panel_binds_the_selected_pin_without_a_lineage(admitted_release):
+    """A cross-pin panel whose bytes equal the selected census binds the selected source.
+
+    The retained release dropped tasks, so no zero-drop lineage proof exists; the panel's
+    digest and task count still equal the selected pin's actor census, so the reviewed
+    bytes are the served population's and the panel carries forward at the current pin.
+    """
+    source, receipt = admitted_release
+    selected = bind_oracle_admitted_release(source, receipt)
+    repinned = receipt.sample.model_copy(
+        update={
+            "review": receipt.sample.review.model_copy(
+                update={"panel": receipt.sample.review.panel.model_copy(update={"dataset_revision": "d" * 40})}
+            )
+        }
+    )
+    bound = bind_selected_source_content(source, selected, repinned, None)
+
+    assert bound.info.quality_result == repinned.review.result
+    assert bound.info.independent_qc.panel_currency is SamplePanelCurrency.CURRENT_PIN
+    assert "re-pin" in bound.info.independent_qc.method
 
 
 def test_archived_original_sample_does_not_replace_filtered_sample(admitted_release):

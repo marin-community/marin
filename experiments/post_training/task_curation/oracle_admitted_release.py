@@ -59,6 +59,7 @@ from experiments.post_training.task_curation.retained_grading import RetainedGra
 from experiments.post_training.task_curation.sample_qc_binding import (
     SampleQCReceipt,
     bind_sample_result,
+    panel_matches_current_census,
     require_sample_qualification,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
@@ -287,6 +288,10 @@ def bind_selected_source_content(
             selected = bind_sample_result(
                 selected, sample, retained_lineage=retained_lineage, content_identity=content_identity
             )
+        elif selected.dataset is not None and panel_matches_current_census(sample, selected.info.actor_census_input):
+            # A byte-identical re-pin without a zero-drop lineage: the panel reviewed exactly
+            # the served population's bytes, so it binds the selected source at the current pin.
+            selected = bind_sample_result(selected, sample, content_identity=content_identity)
         else:
             bind_sample_result(original, sample, content_identity=content_identity)
     else:

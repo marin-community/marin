@@ -57,6 +57,21 @@ def sample_matches_lineage(
     )
 
 
+def panel_matches_current_census(receipt: "SampleQCReceipt", actor: ActorCensusInput | None) -> bool:
+    """Whether the panel reviewed exactly the served population's bytes at the current census.
+
+    A panel whose recorded population digest and task count equal the current actor
+    census reviewed exactly the served bytes, whatever release carried them before:
+    the content-identity carry-forward across a byte-identical re-pin.
+    """
+    panel = receipt.review.panel
+    return (
+        actor is not None
+        and panel.task_specs_sha256 == actor.task_specs_sha256
+        and panel.retained_tasks == actor.measured_tasks
+    )
+
+
 class SampleMissingObservation(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -145,13 +160,10 @@ def bind_sample_result[ConfigT: CatalogConfig](
         panel.retained_tasks,
     )
     if not full_match:
-        # Byte identity at the current pin outranks the lineage label: a panel whose
-        # recorded digest and task count equal the current actor census reviewed exactly
-        # the served population's bytes, whatever release carried them before.
-        byte_identical = (
-            panel.task_specs_sha256 == actor.task_specs_sha256 and panel.retained_tasks == actor.measured_tasks
-        )
-        if not byte_identical:
+        # Byte identity at the current pin outranks the lineage label: a panel that
+        # matches the current census reviewed exactly the served population's bytes,
+        # whatever release carried them before.
+        if not panel_matches_current_census(receipt, actor):
             identity_current = (
                 content_identity is not None
                 and (
