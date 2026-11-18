@@ -33,6 +33,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 from fray.types import ResourceConfig
+from iris.jax.init import initialize_jax
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
@@ -161,6 +162,10 @@ def _smoke_train_config(
 def run_smoke(output_root: Path | None = None) -> dict:
     """Run the V1 pod entrypoint end to end at toy scale and report what ran."""
     configure_coreweave_s3()
+    # The tiny HF save materializes JAX arrays before levanter's initialize; Iris
+    # requires the distributed init to land first, so call it explicitly now and
+    # let levanter's later call skip.
+    initialize_jax()
     with tempfile.TemporaryDirectory(prefix="v1-sft-smoke-") as tmp:
         root = Path(tmp)
         corpus_uri = f"{SMOKE_PREFIX}/corpus.jsonl"
