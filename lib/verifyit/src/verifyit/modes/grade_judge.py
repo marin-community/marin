@@ -245,6 +245,51 @@ def validate_judge_spec(spec: JudgeSpec) -> None:
     empty_output_policy(spec)
 
 
+@dataclass(frozen=True)
+class JudgeReply:
+    """A judge's complete chat reply and its transport evidence."""
+
+    text: str
+    detail: dict[str, Any]
+
+
+def judge_reply(spec: JudgeSpec, messages: list[ChatCompletionMessageParam]) -> JudgeReply:
+    """Ask the spec's judge for one complete chat reply, retrying transient transport failures.
+
+    Source scorers that run their own multi-step judge protocols use this for each step.
+    An incomplete, empty or refused reply is a grading infrastructure error.
+    """
+    _validate_spec(spec)
+    client, model = _client(spec, None)
+    options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
+    request = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.0,
+        "max_completion_tokens": spec.max_completion_tokens,
+        **options,
+    }
+    response, attempts = _judge_transport(
+        spec,
+        lambda timeout: _chat_completion(client.with_options(max_retries=0), timeout=timeout, **request),
+        request,
+    )
+    detail: dict[str, Any] = {
+        "model": model,
+        "response_model": response.model,
+        "response_id": response.id,
+        "transport_attempts": attempts,
+        "usage": response.usage.model_dump(mode="json") if response.usage else None,
+    }
+    try:
+        choice = _completion_choice(response)
+        detail["finish_reason"] = choice.finish_reason
+        text = _completed_text(choice)
+    except RuntimeError as error:
+        raise GradingInfraError(str(error), **detail) from error
+    return JudgeReply(text, detail)
+
+
 def grade_judge_candidate(
     spec: JudgeSpec,
     candidate: str,
