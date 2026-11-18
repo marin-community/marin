@@ -6,6 +6,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import socket
 import subprocess
@@ -32,7 +33,14 @@ from experiments.post_training.nccl_transport_probe import allocate_port_block, 
 MODULE = "experiments.post_training.long_loop.nccl_mechanism_probe"
 GPUS_PER_NODE = 4
 LOG_LIMIT = 8 << 20
-PROFILE_KEYS = ("NCCL_CUMEM_ENABLE", "NCCL_BUFFSIZE", "CUDA_DEVICE_MAX_CONNECTIONS", "NCCL_NVLS_ENABLE", "NCCL_ALGO")
+PROFILE_KEYS = (
+    "NCCL_CUMEM_ENABLE",
+    "NCCL_BUFFSIZE",
+    "CUDA_DEVICE_MAX_CONNECTIONS",
+    "NCCL_NVLS_ENABLE",
+    "NCCL_ALGO",
+    "NCCL_NVLSTREE_MAX_CHUNKSIZE",
+)
 PRODUCTION_ENV = {"NCCL_CUMEM_ENABLE": "0", "NCCL_BUFFSIZE": "262144", "CUDA_DEVICE_MAX_CONNECTIONS": "1"}
 PROFILE_ENVIRONMENTS = {
     "production": PRODUCTION_ENV,
@@ -49,8 +57,29 @@ PROFILE_ENVIRONMENTS = {
     "tree": {**PRODUCTION_ENV, "NCCL_ALGO": "Tree"},
     "plain-nvls-tree": {"NCCL_ALGO": "NVLSTree"},
 }
+# Diagnostic-only FIFO capacity controls; production/comparator settings are unchanged.
+for buffer_bytes in (262144, 524288, 1048576, 4194304):
+    PROFILE_ENVIRONMENTS[f"fifo-{buffer_bytes}"] = {
+        **PRODUCTION_ENV,
+        "NCCL_BUFFSIZE": str(buffer_bytes),
+        "NCCL_ALGO": "NVLSTree",
+    }
+for maximum_chunk in (32768, 65536):
+    PROFILE_ENVIRONMENTS[f"fifo-262144-chunk-{maximum_chunk}"] = {
+        **PRODUCTION_ENV,
+        "NCCL_ALGO": "NVLSTree",
+        "NCCL_NVLSTREE_MAX_CHUNKSIZE": str(maximum_chunk),
+    }
 SUITES = {
     "launcher": ("production", "production-trace", "plain"),
+    "fifo": (
+        "fifo-262144",
+        "fifo-524288",
+        "fifo-1048576",
+        "fifo-4194304",
+        "fifo-262144-chunk-32768",
+        "fifo-262144-chunk-65536",
+    ),
     "environment": (
         "production",
         "plain",
@@ -152,7 +181,7 @@ def mismatch_examples(actual: torch.Tensor, expected: torch.Tensor) -> list[dict
     """Retain the first sixteen incorrect values with their absolute element offsets."""
     indices = actual.ne(expected).nonzero().flatten()[:16]
     return [
-        {"element": index, "actual": value, "expected": reference}
+        {"element": index, "actual": value if math.isfinite(value) else str(value), "expected": reference}
         for index, value, reference in zip(
             indices.tolist(), actual[indices].tolist(), expected[indices].tolist(), strict=True
         )
@@ -227,7 +256,7 @@ def training_reduction_case(
     errors = int(result.ne(expected).sum().item())
     after = parameter_sha256(source)
     return {
-        "group": "child32",
+        "group": f"child{len(members)}",
         "group_name": group.group_name,
         "members": members,
         "dtype": str(dtype),
@@ -282,19 +311,21 @@ def exercise(rank: int, local_device: int, master: str, port: int, args) -> dict
         groups = (
             probe_groups(args.nodes * GPUS_PER_NODE, rank)
             if args.suite == "launcher"
-            else [("child32", dist.new_group(list(range(args.nodes * GPUS_PER_NODE))))]
+            else [(f"child{args.nodes * GPUS_PER_NODE}", dist.new_group(list(range(args.nodes * GPUS_PER_NODE))))]
         )
         device = torch.device("cuda", local_device)
         for label, group in groups:
             for count in (
                 (SIZES if args.suite == "launcher" else (4194304, 8388608, 16777216))
-                if label == "child32"
+                if label.startswith("child")
                 else [16777216]
             ):
                 report["cases"].append(integer_case(rank, label, group, count, device))
             write_json(f"{args.output_prefix}/{name}.json", report)
         for dtype in [torch.float32, torch.bfloat16]:
-            for operation in (["SUM"] if args.profile == "plain-nvls-tree" else ["SUM", "AVG"]):
+            for operation in (
+                ["SUM"] if profile_environment(args.profile).get("NCCL_ALGO") == "NVLSTree" else ["SUM", "AVG"]
+            ):
                 report["cases"].append(training_reduction_case(groups[0][1], dtype, device, 64 << 20, operation))
         report["passed"] = all(row["passed"] for row in report["cases"])
         report["completed"] = True
@@ -399,8 +430,8 @@ def driver(args) -> None:
 
 def task(args) -> None:
     info = get_job_info()
-    if info is None or info.num_tasks != 8 or torch.cuda.device_count() != GPUS_PER_NODE:
-        raise ValueError("This probe requires eight four-GB200 tasks in one NVLink domain")
+    if info is None or info.num_tasks != args.nodes or torch.cuda.device_count() != GPUS_PER_NODE:
+        raise ValueError("This probe requires the configured number of four-GB200 tasks in one NVLink domain")
     derived_ifname = pin_socket_ifname()
     ctx = iris_ctx()
     for profile in SUITES[args.suite]:
