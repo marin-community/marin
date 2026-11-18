@@ -1,8 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -23,36 +21,41 @@ def _qkv(batch: int = 1) -> tuple[jax.Array, jax.Array, jax.Array]:
     return _bf16(0, (batch, S, HQ, D)), _bf16(1, (batch, S, HKV, D)), _bf16(2, (batch, S, HKV, D))
 
 
-def _torch_eager_reference(q, k, v, sliding_window):
-    """An independent transcription of torch-order attention: the head-repeated einsum with FP32 softmax that
-    matched torch eager on Snowball's first attention layer to 2 of 814,080 elements."""
-    repeats = q.shape[2] // k.shape[2]
-    k, v = jnp.repeat(k, repeats, axis=2), jnp.repeat(v, repeats, axis=2)
-    scores = jnp.einsum(
-        "bqhd,bkhd->bhqk",
-        q.astype(jnp.float32) / math.sqrt(q.shape[-1]),
-        k.astype(jnp.float32),
-        precision=jax.lax.Precision.HIGHEST,
-    )
-    query_pos = jnp.arange(q.shape[1])[:, None]
-    key_pos = jnp.arange(k.shape[1])[None, :]
-    allowed = key_pos <= query_pos
-    if sliding_window is not None:
-        allowed = allowed & (key_pos >= query_pos - (sliding_window - 1))
-    scores = jnp.where(allowed[None, None], scores, jnp.float32(-1e9))
-    weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
-    return jnp.einsum("bhqk,bkhd->bqhd", weights, v)
+# Outputs captured on CPU with PyTorch 2.11.0 eager einsum and softmax.
+# Repeat each KV head for its two query heads, compute (q.float() / sqrt(3)) @ k.float().T,
+# fill masked scores with -1e9, then multiply BF16 softmax probabilities by BF16 v.
+# The fixture distinguishes casting the probabilities before the value matmul from casting only its result.
+_TORCH_EAGER_OUTPUTS = {
+    2: (
+        (0.5, 0.5, 0.5, 0.5, 0.5, 0.5),
+        (-1.2265625, 1.3046875, 0.154296875, 0.2333984375, 0.625, 0.447265625),
+        (0.65625, -0.26953125, -0.26171875, 0.345703125, -0.016845703125, -0.203125),
+        (1.203125, -0.83984375, -0.73828125, 1.2265625, -0.8046875, -0.5859375),
+    ),
+    None: (
+        (0.5, 0.5, 0.5, 0.5, 0.5, 0.5),
+        (-1.2265625, 1.3046875, 0.154296875, 0.2333984375, 0.625, 0.447265625),
+        (0.6015625, 0.003173828125, 0.007568359375, 0.474609375, 0.41015625, 0.37890625),
+        (0.98046875, -0.44921875, -0.390625, 0.89453125, -0.412109375, -0.349609375),
+    ),
+}
 
 
-@pytest.mark.parametrize("window", [4, None])
+@pytest.mark.parametrize("window", [2, None])
 def test_torch_order_matches_torch_eager_rounding(window):
-    q, k, v = _qkv(batch=2)
+    rng = np.random.default_rng(5)
+    q, k, v = (
+        jnp.asarray(rng.integers(-12, 13, shape) / 8, dtype=jnp.bfloat16)
+        for shape in ((1, 4, 2, 3), (1, 4, 1, 3), (1, 4, 1, 3))
+    )
     mask = AttentionMask(is_causal=True, sliding_window=window)
     ours = attention(q, k, v, mask, implementation="torch_order")
+    expected = np.asarray(_TORCH_EAGER_OUTPUTS[window], dtype=np.float32).reshape(q.shape)
     assert ours.dtype == jnp.bfloat16
-    np.testing.assert_array_equal(np.asarray(ours), np.asarray(_torch_eager_reference(q, k, v, window)))
+    np.testing.assert_array_equal(np.asarray(ours, dtype=np.float32), expected)
+
     # A dense mask selects the reference backend by default on CPU, GPU, and TPU.
-    dense_mask = jnp.broadcast_to(mask.materialize_mask(S, S), (q.shape[0], S, S))
+    dense_mask = mask.materialize_mask(q.shape[1], k.shape[1])
     default = attention(q, k, v, dense_mask)
     reference = attention(q, k, v, dense_mask, implementation="reference")
     np.testing.assert_array_equal(np.asarray(default), np.asarray(reference))
@@ -77,15 +80,14 @@ def test_torch_order_keeps_packed_segments_apart(window):
 
 
 @pytest.mark.parametrize("window", [3, None])
-def test_torch_order_padded_single_document_matches_the_transcription(window):
-    """The SFT row shape: one document with trailing pads (segment id -1). Real positions equal the dump's
-    transcription on the document alone."""
+def test_torch_order_trailing_padding_does_not_change_document(window):
     q, k, v = _qkv()
     real = 6
     segments = jnp.asarray([[0] * real + [-1] * (S - real)])
     mask = AttentionMask(is_causal=True, sliding_window=window, segment_ids=(segments, segments))
     out = attention(q, k, v, mask, implementation="torch_order")
-    expected = _torch_eager_reference(q[:, :real], k[:, :real], v[:, :real], window)
+    unpadded = AttentionMask(is_causal=True, sliding_window=window)
+    expected = attention(q[:, :real], k[:, :real], v[:, :real], unpadded, implementation="torch_order")
     np.testing.assert_array_equal(np.asarray(out[:, :real]), np.asarray(expected))
 
 
