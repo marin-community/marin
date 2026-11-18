@@ -753,8 +753,8 @@ class KubernetesProviderConfig(_Config):
     kubeconfig: str = ""  # empty = in-cluster auth
     kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     service_account: str = ""
-    host_network: bool = False
     sandbox_runtime_class: str = Field(default=DEFAULT_SANDBOX_RUNTIME_CLASS, min_length=1)
+    host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
     cache_max_age: DurationField | None = None  # enables cache reclamation
     node_health: NodeHealthConfig | None = None

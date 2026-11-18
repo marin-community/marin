@@ -1964,21 +1964,22 @@ def test_k8s_backend_uses_canonical_default_task_image():
 
 
 @pytest.mark.parametrize(
-    "profile,expected_runtime",
-    [(job_pb2.CONTAINER_PROFILE_SANDBOX, "iris-ci-gvisor-cpu"), (job_pb2.CONTAINER_PROFILE_DEFAULT, None)],
+    ("profile", "configured_runtime", "expected_runtime"),
+    [
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, None, "gvisor"),
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, "iris-ci-gvisor-cpu", "iris-ci-gvisor-cpu"),
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, "iris-ci-gvisor-cpu", None),
+    ],
 )
-def test_configured_sandbox_runtime_reaches_only_sandbox_pods(monkeypatch, profile, expected_runtime):
+def test_configured_sandbox_runtime_reaches_only_sandbox_pods(
+    monkeypatch, profile, configured_runtime, expected_runtime
+):
     kubernetes = InMemoryK8sService(namespace="iris")
     monkeypatch.setattr("iris.cluster.composer.CloudK8sService", lambda **_kwargs: kubernetes)
-    config = IrisClusterConfig.model_validate(
-        {
-            "kubernetes_provider": {
-                "namespace": "iris",
-                "sandbox_runtime_class": "iris-ci-gvisor-cpu",
-                "kueue": {"cluster_queue": "iris-cq"},
-            }
-        }
-    )
+    provider_config = {"namespace": "iris", "kueue": {"cluster_queue": "iris-cq"}}
+    if configured_runtime is not None:
+        provider_config["sandbox_runtime_class"] = configured_runtime
+    config = IrisClusterConfig.model_validate({"kubernetes_provider": provider_config})
     backend = make_task_backend(config, descriptor=k8s_backend_descriptor())
     request = make_run_req("/proof/runtime/0", attempt_uid="0123456789abcdef")
     request.container_profile = profile

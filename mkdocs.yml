@@ -74,6 +74,7 @@ nav:
       - Publishing an Analysis Site: tutorials/publish-analysis-site.md
       - Training an LM: tutorials/train-an-lm.md
       - Run Evaluations: tutorials/run-lm-evals.md
+      - Add an Evaluation Benchmark: tutorials/add-evaluation.md
   - Explanations:
       - The Language Modeling Pipeline: explanations/lm-pipeline.md
       - Evaluation: explanations/evaluation.md
@@ -115,6 +116,8 @@ nav:
       - Releasing to PyPI: dev-guide/releasing.md
       - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
+      - Document Low-value Scoring: references/low-value-scoring.md
+      - Replay Low-value Model Card: model-cards/replay-low-value-v1.md
       - Task Curation: references/task-curation.md
       - Evaluation tasks: references/evaluation-tasks.md
       - Specifying Hardware Resources: references/resource-config.md

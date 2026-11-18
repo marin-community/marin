@@ -350,6 +350,30 @@ config:
         - marin-community/marin
       allowedTools: []
       mcpAccess: *builtinMcpAccess
+    # Scheduled reports run `uv run` scripts that call Iris and Google APIs. A Codex profile cannot:
+    # its sandbox makes the uv cache read-only and permits network access only to Loom.
+    ops-report:
+      agent: claude
+      description: Run scheduled Marin operations reports
+      model: claude-opus-5-5
+      effort: high
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 60
+      maxConcurrent: 1
+      turnBudget: 100
+      prelude: weaver
+      instructionsFile: profiles/ops-report/AGENTS.md
+      env: *claudeSessionEnv
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
     pm:
       agent: claude
       description: Keep goal documents in sync with their GitHub project boards
@@ -554,15 +578,16 @@ config:
       repo: marin-community/marin
       promptFile: watches/belay.md
       slackChannels: []
-    # Posts long-running Iris root jobs to Slack, once per job.
+    # Lists long-running Iris root jobs in a Google Sheet and cancels the ones their owners marked Kill.
     old-iris-jobs:
       enabled: true
       cron: "0 9 * * 1-5"
       timezone: America/Los_Angeles
       runTimeoutSeconds: 1800
-      profile: ops
+      profile: ops-report
       repo: marin-community/marin
       promptFile: watches/old-iris-jobs.md
+      # Only a failed run posts.
       slackChannels:
         - C0BN20081CH
     # Disabled until an operator selects the jobs and notification destination.

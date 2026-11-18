@@ -595,8 +595,8 @@ class PodConfig:
     logship_image: str = ""
     cache_dir: str = DEFAULT_TASK_CACHE_DIR
     service_account: str = ""
-    host_network: bool = False
     sandbox_runtime_class: str = DEFAULT_SANDBOX_RUNTIME_CLASS
+    host_network: bool = False
     dns_config: PodDnsConfig | None = None
     controller_address: str | None = None
     managed_label: str = ""
