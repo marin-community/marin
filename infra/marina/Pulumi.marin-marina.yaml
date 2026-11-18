@@ -6,3 +6,4 @@ config:
   marin-marina:dns_zone_id: 169959d6aafcbfd77764b8efafa3a509
   marin-marina:applet_domains:
     - filer.marina.oa.dev
+    - atlas.oa.dev
