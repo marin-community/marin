@@ -187,6 +187,10 @@ function sourceRow(row, others, canonical) {
       anchor.href = curriculumLink(row, row.coverage.top_area);
       anchor.title = `${number.format(row.coverage.top_area.instances)} placed examples in this subject`;
       area.append(anchor);
+    } else if (row.coverage?.unavailable_reason?.startsWith('Not yet computed for this pin')) {
+      const stale = node('span', 'Unknown (stale pin)', 'muted stale-pin');
+      stale.title = `${row.coverage.unavailable_reason}. The curriculum alignment awaits the re-pinned source's projection pass.`;
+      area.append(stale);
     } else {
       const gap = node('span', 'Unknown', 'muted'); gap.title = row.coverage?.unavailable_reason || 'No curriculum release covers this source'; area.append(gap);
     }

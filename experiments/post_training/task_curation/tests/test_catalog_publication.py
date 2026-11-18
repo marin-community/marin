@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import pathlib
 from dataclasses import replace
 
 import pytest
@@ -53,6 +54,7 @@ from experiments.post_training.task_curation.tests.admission_fixtures import (
     isolated_admission_census as isolated_admission_census,
 )
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -641,3 +643,43 @@ def test_publication_and_refresh_preserve_unavailable_oversight_without_result(t
         assert row.declaration.quality_result is None
         assert row.assessment_key is None
         assert rows[selected.info.id].assessment_key == "selected-key"
+
+
+def test_assembly_publication_publishes_a_repinned_source_and_marks_the_old_measurement_stale(tmp_path):
+    root = str(tmp_path / "production")
+    source = number_source(tmp_path / "input")
+    record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "key-a")
+    publish_catalog(root, "first", [source])
+    repinned = replace(
+        source,
+        config=replace(
+            source.config,
+            dataset=replace(source.dataset, revision="b" * 40, url=source.dataset.url.replace("a" * 40, "b" * 40)),
+        ),
+        info=replace(
+            source.info,
+            within_source_dedup=deduplication_evidence(
+                source.dataset.name, "b" * 40, source.version, source.info.count or 1
+            ),
+            license_receipt=fixture_license(source.info.id, source.dataset.name, "b" * 40),
+        ),
+    )
+    from experiments.post_training.task_curation.catalog_snapshot import publish_assembly_snapshot  # noqa: PLC0415
+
+    unchanged = number_source(tmp_path / "input", "second")
+    record_attempt(root, unchanged, "second", "2026-10-16T12:00:00Z", "key-c")
+    publish_catalog(root, "second", [unchanged])
+    publish_assembly_snapshot(root, "assembly-20261118", [repinned, unchanged])
+    rows = selected_sources(root)
+    assert rows[source.info.id].declaration.dataset_revision == "b" * 40
+    assert rows[source.info.id].assessment_key is None
+    assert "Pin changed" in (rows[source.info.id].reason or "")
+    receipt = json.loads((pathlib.Path(root) / "receipts" / "assembly-20261118.json").read_text())
+    assert receipt["stale_pins"] == 1 and receipt["carried_measurements"] == 1
+    # The stale measurement stays behind at its recorded pin and the projections mark it stale.
+
+    # A source whose triple did not change carries its measurement forward as current.
+    publish_assembly_snapshot(root, "assembly-20261118-b", [repinned, unchanged])
+    rows = selected_sources(root)
+    assert rows[unchanged.info.id].assessment_key == "key-c"
+    assert rows[source.info.id].assessment_key is None

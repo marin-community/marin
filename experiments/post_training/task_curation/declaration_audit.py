@@ -188,7 +188,8 @@ def selected_pins(sources) -> dict[str, ReleasePin]:
     return pins
 
 
-def canonical_layer() -> tuple[CanonicalLayer, dict[str, dict[str, DeclaredPin]], dict[str, ReleasePin]]:
+def canonical_layer() -> tuple[CanonicalLayer, dict[str, dict[str, DeclaredPin]], dict[str, ReleasePin], dict]:
+    """Assemble the canonical layer, the receipt family rows, the release rows and the sources."""
     """Assemble the canonical layer and every receipt family's rows, and the release rows."""
     from experiments.post_training.task_curation.datasets.daytona_measurements import (  # noqa: PLC0415
         actor_census_receipts,
@@ -314,7 +315,7 @@ def canonical_layer() -> tuple[CanonicalLayer, dict[str, dict[str, DeclaredPin]]
         "grading census receipts": grading_rows,
         "within-source dedup": dedup_rows,
     }
-    return layer, families, release_rows
+    return layer, families, release_rows, sources
 
 
 def main() -> None:
@@ -323,7 +324,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, help="Write the audit summary JSON here")
     args = parser.parse_args()
 
-    layer, families, release_rows = canonical_layer()
+    layer, families, release_rows, sources = canonical_layer()
 
     findings, notes = audit_families(families, layer=layer, releases=release_rows)
 
@@ -339,6 +340,43 @@ def main() -> None:
     findings.extend(
         f"within-source dedup: {source_id} is declared but has no dedup receipt" for source_id in missing_dedup
     )
+
+    # The serving projections (the Atlas grader and curriculum-area columns) must also bind
+    # every current pin: a derived-contract census receipt and a curriculum alignment at the
+    # exact pin, served through a catalog whose declarations carry the same binding.
+    from experiments.post_training.task_curation.ensure_current_projections import (  # noqa: PLC0415
+        DeclarationPin,
+        atlas_contract_receipts,
+        atlas_curriculum_rows,
+        projection_gaps,
+        served_declaration_pins,
+        served_pin_map,
+    )
+
+    projection_pins = [
+        DeclarationPin(
+            source_id=source_id,
+            dataset_id=source.dataset.name if source.dataset else None,
+            dataset_revision=source.dataset.revision if source.dataset else None,
+            pipeline=(
+                source.pipeline_reference.model_dump(mode="json") if source.pipeline_reference is not None else None
+            ),
+            actor_binding=source.info.actor_census_input,
+        )
+        for source_id, source in sources.items()
+    ]
+    projection_findings, projection_notes = projection_gaps(
+        projection_pins,
+        atlas_contract_receipts(),
+        atlas_curriculum_rows(),
+        served_pins=served_pin_map(served_declaration_pins()),
+    )
+    findings.extend(
+        f"serving projection {gap.projection}/{gap.state}: {gap.source_id}"
+        + (f" (last computed at {gap.last_computed_revision})" if gap.last_computed_revision else "")
+        for gap in projection_findings
+    )
+    notes.extend(projection_notes)
 
     summary = {
         "sources": len(layer.source_ids),

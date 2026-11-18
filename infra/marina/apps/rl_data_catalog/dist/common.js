@@ -374,4 +374,13 @@ function remediatedReleaseLink(source) {
 }
 
 const graderLabels = {'llm-judge': 'LLM judge', 'exact-match': 'Exact match', 'math-verify': 'Math verify', 'unit-tests': 'Unit tests', script: 'Script', 'reward-model': 'Reward model', none: 'None', mixed: 'Mixed'};
-function graderChip(source) { return node('span', graderLabels[source.grader_type] || 'Pending', `chip quality-${source.grader_type ? 'good' : 'unassessed'}`); }
+function graderChip(source) {
+  const reason = source.derived_contract_pending_reason;
+  if (source.grader_type) return node('span', graderLabels[source.grader_type], 'chip quality-good');
+  if (reason?.state === 'stale-pin' && reason.last_computed_dataset_revision) {
+    const chip = node('span', 'Not computed for this pin', 'chip quality-unassessed stale-pin');
+    chip.title = `The derived-contract census last ran at ${reason.last_computed_dataset_revision}; the current pin is re-pinned and awaits its census.`;
+    return chip;
+  }
+  return node('span', 'Pending', 'chip quality-unassessed');
+}

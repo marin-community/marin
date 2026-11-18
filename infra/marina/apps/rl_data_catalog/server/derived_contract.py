@@ -66,6 +66,16 @@ def contract_projection(declaration: dict[str, Any], receipts: list[dict]) -> di
         derived_workspace_graded=None,
     )
     if not matches:
+        # Distinguish "not yet computed for this pin" from a genuine pending state: a receipt
+        # measured at an older pin is the drift the re-pin flow must repair, not an unmeasured
+        # source. The UI renders the last-computed pin beside the Pending chip.
+        stale = [row for row in receipts if canonical_source_id(row["source_id"]) == declaration["id"]]
+        if stale:
+            last = sorted(stale, key=lambda row: row.get("receipt_id") or "")[-1]
+            fields["derived_contract_pending_reason"] = {
+                "state": "stale-pin",
+                "last_computed_dataset_revision": last["input"].get("dataset_revision"),
+            }
         result = {**declaration, **fields}
         result.pop("derived_contract_receipt", None)
         return result

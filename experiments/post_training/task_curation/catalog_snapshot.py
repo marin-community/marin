@@ -3,7 +3,9 @@
 
 """Archive assessment records and select a campaign's catalog snapshot."""
 
+import hashlib
 import json
+import subprocess
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -365,6 +367,126 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                 transaction.table(INVENTORY).extend(row.model_dump(mode="json") for row in rows)
                 transaction.table(SNAPSHOTS).add(snapshot.model_dump(mode="json"))
                 transaction.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id=run_id).model_dump())
+            return snapshot
+    finally:
+        lease.release()
+
+
+def publish_assembly_snapshot(root: str, snapshot_id: str, sources: Iterable[RlDataSource]) -> CatalogSnapshot:
+    """Publish the current declarations as a catalog release: the assembly publication path.
+
+    The user ruling of 2026-11-18: the served catalog must reflect the current assembly,
+    re-pinned sources included, without routing through a conversion campaign. Per-source
+    measurements carry forward only where the source's (dataset_id, revision, pipeline)
+    triple matches the current pin; every non-matching measurement stays behind with the old
+    pin (the serving projections mark it stale with its last-computed revision) and never
+    presents as current. New sources publish without carried measurements. The publication
+    records its own receipt: the assembly commit, the source count and the declaration
+    digest. refresh_catalog keeps refusing silent pin changes; this path is the explicit one.
+    """
+    declarations = {}
+    for source in sources:
+        declarations[source.info.id] = source
+    if retired := declarations.keys() & retired_admission_source_ids():
+        raise ValueError(f"Retired sources cannot re-enter the catalog: {sorted(retired)}")
+    catalog = CurationCatalog(root)
+    pointer = catalog.view.point(CURRENT, name="latest")
+    if pointer is None:
+        raise ValueError("An assembly publication requires an existing catalog snapshot")
+    lease = create_lock(str(StoragePath(root) / "publication.lock"), worker_id=snapshot_id)
+    if not lease.try_acquire():
+        raise RuntimeError("Another writer is publishing the catalog; retry publication")
+    try:
+        with lease_refresh(lease), DataStore.open(root, writer_id=f"{snapshot_id}-catalog") as store:
+            register_catalog(store)
+            if store.read_view().point(SNAPSHOTS, snapshot_id=snapshot_id) is not None:
+                raise FileExistsError(f"Catalog snapshot already exists: {snapshot_id}")
+            prior = list(
+                catalog.view.iter_rows(
+                    INVENTORY,
+                    columns=list(SnapshotSource.model_fields),
+                    where=[("snapshot_id", "==", pointer["snapshot_id"])],
+                )
+            )
+            prior_pins = {}
+            for row in prior:
+                declaration = row["declaration"]
+                prior_pins[canonical_source_id(row["id"])] = (
+                    declaration.get("dataset_id"),
+                    declaration.get("dataset_revision"),
+                    declaration.get("pipeline"),
+                )
+            rows = []
+            carried, stale = 0, 0
+            for source_id, source in sorted(declarations.items()):
+                declaration = source.declaration.model_dump(mode="json")
+                current_triple = (declaration["dataset_id"], declaration["dataset_revision"], declaration["pipeline"])
+                prior_row = next((row for row in prior if canonical_source_id(row["id"]) == source_id), None)
+                pin_matches = prior_row is not None and prior_pins[canonical_source_id(source_id)] == current_triple
+                if prior_row is not None and pin_matches:
+                    carried += 1
+                    rows.append(
+                        SnapshotSource.model_validate(
+                            {
+                                **prior_row,
+                                "snapshot_id": snapshot_id,
+                                "declaration": declaration,
+                            }
+                        ).model_dump(mode="json")
+                    )
+                else:
+                    stale += prior_row is not None
+                    rows.append(
+                        SnapshotSource(
+                            snapshot_id=snapshot_id,
+                            id=source_id,
+                            declaration=source.declaration,
+                            assessment_key=None,
+                            latest_attempt_key=None,
+                            latest_attempt_status=AssessmentStatus.SKIPPED,
+                            reason=(
+                                None
+                                if prior_row is None
+                                else "Pin changed since the prior snapshot; the carried measurements "
+                                "stay behind at their recorded pins and the serving projections mark "
+                                "them stale."
+                            ),
+                        ).model_dump(mode="json")
+                    )
+            for row in rows:
+                require_catalog_declaration(SnapshotSource.model_validate(row).declaration)
+            digest_input = json.dumps(
+                sorted(
+                    (row["id"], row["declaration"]["dataset_id"], row["declaration"]["dataset_revision"]) for row in rows
+                ),
+                sort_keys=True,
+            ).encode()
+            receipt = {
+                "snapshot_id": snapshot_id,
+                "assembly_commit": (
+                    subprocess.run(
+                        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+                    ).stdout.strip()
+                ),
+                "source_count": len(rows),
+                "declaration_digest": hashlib.sha256(digest_input).hexdigest(),
+                "carried_measurements": carried,
+                "stale_pins": stale,
+                "prior_snapshot_id": pointer["snapshot_id"],
+            }
+            snapshot = CatalogSnapshot(
+                snapshot_id=snapshot_id, created_at=datetime.now(UTC).isoformat(), source_count=len(rows)
+            )
+            lease.refresh()
+            if store.read_view().point(CURRENT, name="latest") != pointer:
+                raise RuntimeError("Catalog selection changed during publication; retry")
+            with store.transaction() as transaction:
+                transaction.table(INVENTORY).extend(rows)
+                transaction.table(SNAPSHOTS).add(snapshot.model_dump(mode="json"))
+                transaction.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id=snapshot_id).model_dump())
+            StoragePath(str(StoragePath(root) / "receipts" / f"{snapshot_id}.json")).write_text(
+                json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+            )
             return snapshot
     finally:
         lease.release()

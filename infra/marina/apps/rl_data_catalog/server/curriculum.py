@@ -85,18 +85,28 @@ def source_coverage(connection: Connection, current: dict[str, dict[str, Any]]) 
         {"version": SOURCE_AREA_VERSION},
     ).mappings()
     return {
-        canonical_source_id(row["source_id"]): {
-            "example_count": row["example_count"],
-            "intended_use": row["intended_use"],
-            "basis": row["basis"],
-            "top_area": row["area"],
-        }
-        for row in rows
-        if canonical_source_id(row["source_id"]) in current
-        and all(
-            row["declaration"].get(key) == current[canonical_source_id(row["source_id"])].get(key)
-            for key in ("dataset_id", "dataset_revision", "pipeline")
+        canonical_source_id(row["source_id"]): (
+            {
+                "example_count": row["example_count"],
+                "intended_use": row["intended_use"],
+                "basis": row["basis"],
+                "top_area": row["area"],
+            }
+            if canonical_source_id(row["source_id"]) in current
+            and all(
+                row["declaration"].get(key) == current[canonical_source_id(row["source_id"])].get(key)
+                for key in ("dataset_id", "dataset_revision", "pipeline")
+            )
+            else {
+                # The alignment was computed at an older pin: the source's area is not yet
+                # computed for the current declaration, not genuinely unknown.
+                "unavailable_reason": (
+                    "Not yet computed for this pin (last computed at " f"{row['declaration'].get('dataset_revision')})"
+                ),
+                "last_computed_dataset_revision": row["declaration"].get("dataset_revision"),
+            }
         )
+        for row in rows
     }
 
 
