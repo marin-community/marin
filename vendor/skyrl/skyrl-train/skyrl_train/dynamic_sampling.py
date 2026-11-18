@@ -7,6 +7,12 @@ from enum import StrEnum
 import math
 import statistics
 from typing import Mapping, Protocol, Sequence
+from skyrl_train.group_admission import (
+    MIN_BASELINE_GROUP_SIZE,
+    baseline_eligible_mask,
+    final_row_mask,
+    rewards_are_flat,
+)
 
 
 class DynamicSamplingType(StrEnum):
@@ -81,7 +87,7 @@ def group_selection_result(
     *,
     criteria: DynamicSamplingCriteria,
 ) -> GroupSelectionResult:
-    """Select groups whose final outcome mean and spread satisfy the configured limits."""
+    """Select groups whose baseline-eligible final outcomes satisfy the configured mean and spread limits."""
     response_ids = trajectory_batch.get("response_ids")
     if not isinstance(response_ids, Sequence) or isinstance(response_ids, (str, bytes)):
         raise ValueError("response_ids must be a sequence")
@@ -92,22 +98,30 @@ def group_selection_result(
     outcomes = _aligned_sequence(trajectory_batch, reward_key, row_count)
     if outcomes is None:
         raise ValueError(f"dynamic sampling filter requires {reward_key} for every generated group")
+    final = final_row_mask(trajectory_batch)
+    trial_count = sum(bool(final[index]) for index in row_indices)
+    if trial_count == 0:
+        raise ValueError("dynamic sampling group must contain at least one final trial row")
+    eligible = baseline_eligible_mask(trajectory_batch)
+    rows = [index for index in row_indices if eligible[index]]
     if criteria.reward_source is DynamicSamplingRewardSource.UNSHAPED:
         availability = _aligned_sequence(trajectory_batch, "unshaped_reward_available", row_count)
-        if availability is not None and any(not availability[index] for index in row_indices):
+        if availability is not None and any(not availability[index] for index in rows):
             return GroupSelectionResult.INSUFFICIENT_REWARD_SPREAD
-    is_last_step = _aligned_sequence(trajectory_batch, "is_last_step", row_count)
-
-    final_outcomes = []
-    for index in row_indices:
-        if is_last_step is not None and not bool(is_last_step[index]):
-            continue
-        final_outcomes.append(_reward_total(outcomes[index]))
-    if not final_outcomes:
-        raise ValueError("dynamic sampling group must contain at least one final trial row")
-    if criteria.max_mean_reward is not None and statistics.mean(final_outcomes) >= criteria.max_mean_reward:
+    final_outcomes = [_reward_total(outcomes[index]) for index in rows]
+    if (
+        criteria.max_mean_reward is not None
+        and final_outcomes
+        and statistics.mean(final_outcomes) >= criteria.max_mean_reward
+    ):
         return GroupSelectionResult.REWARD_MEAN_TOO_HIGH
-    if len(final_outcomes) == 1 or statistics.pstdev(final_outcomes) > criteria.min_reward_std:
+    if trial_count == 1:
+        return GroupSelectionResult.KEEP
+    if (
+        len(final_outcomes) >= MIN_BASELINE_GROUP_SIZE
+        and not rewards_are_flat(final_outcomes)
+        and statistics.pstdev(final_outcomes) > criteria.min_reward_std
+    ):
         return GroupSelectionResult.KEEP
     return GroupSelectionResult.INSUFFICIENT_REWARD_SPREAD
 

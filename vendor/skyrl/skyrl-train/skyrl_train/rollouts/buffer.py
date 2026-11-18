@@ -289,7 +289,13 @@ class RolloutContentPolicy:
         if not decision.accepted:
             return RolloutVerdict(group.uid, decision.rejections, None, None, work)
         facts = RowFacts.from_batch(batch)
-        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), facts.rewards, work, facts)
+        final = facts.is_last_step
+        final_rewards = GroupRewards(
+            optimization=tuple(value for value, last in zip(facts.rewards.optimization, final, strict=True) if last),
+            outcome=tuple(value for value, last in zip(facts.rewards.outcome, final, strict=True) if last),
+            passed=any(value for value, last in zip(facts.passes, final, strict=True) if last),
+        )
+        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), final_rewards, work, facts)
 
 
 class RolloutWriter(Protocol):

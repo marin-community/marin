@@ -35,7 +35,7 @@ class AdvantageEstimator(StrEnum):
     GAE = "gae"
     GRPO = "grpo"
     RLOO = "rloo"
-    RLOO_N = "rloo_n"  # RLOO-Neutral: excludes masked samples from baseline
+    RLOO_N = "rloo_n"  # RLOO with a configured minimum of baseline-eligible samples per group
     REINFORCE_PP = "reinforce++"
     UNIFORM = "uniform"
     REWARD = "reward"

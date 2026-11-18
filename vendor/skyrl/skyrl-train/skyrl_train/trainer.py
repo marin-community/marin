@@ -53,7 +53,7 @@ from skyrl_train.env_vars import NCCL_BUFFER_SIZE_ENV_VAR
 from skyrl_train.tensor_math import masked_mean
 from skyrl_train.utils.policy_math import compute_approx_kl, normalize_advantages_dict
 from skyrl_train.utils.kl_controllers import get_kl_controller, FixedKLController, AdaptiveKLController
-from skyrl_train.utils.advantage_estimators import compute_advantages_and_returns
+from skyrl_train.utils.advantage_estimators import compute_advantages_and_returns, flat_group_fraction
 from marinskyrl.runtime_options import PolicyLossType, reference_model_required
 from marinskyrl.distillation import (
     DistillationObjectiveKind,
@@ -90,6 +90,8 @@ from skyrl_train.draft_trainer import (
 )
 from skyrl_train.group_admission import (
     GroupAdvantageInvariant,
+    GroupAdvantageKind,
+    baseline_eligible_mask,
     admission_stall_timeout,
     assert_training_groups_eligible,
 )
@@ -184,6 +186,7 @@ class CheckpointSnapshot:
 
 _MODEL_INITIALIZATION_TIMEOUT = 60 * 60
 
+STEP_WISE_OUTCOME_TOLERANCE = 1e-6
 
 def _active_online_eagle_results(results: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
     return [item for engine_results in results for item in engine_results if item.get("active", False)]
@@ -2097,14 +2100,8 @@ class RayPPOTrainer:
                 response_masks_tensor.bool(),
                 self.cfg.generator.sampling_params.logprobs,
             )
-            excluded = trajectory_batch.get("exclude_from_baseline")
-            final = trajectory_batch.get("is_last_step")
-            if excluded is None:
-                excluded = [False] * len(response_ids)
-            if final is None:
-                final = [True] * len(response_ids)
             loop = parse_trajectory_reward_shaping_config(self.cfg.generator.get("trajectory_reward_shaping")).loop
-            eligible = [last and not exclude for last, exclude in zip(final, excluded, strict=True)]
+            eligible = baseline_eligible_mask(trajectory_batch).tolist()
             verified_boundaries = None
             closure_targets = None
             if ftpo.boundary.uses_verified_boundaries:
@@ -2163,7 +2160,6 @@ class RayPPOTrainer:
                     raise ValueError("Verified suffix repairs require an explicit repair_sft_weight")
                 if (
                     routed_experts is not None
-                    or "token_level_shaping" in training_input
                     or "response_span_tags" in training_input
                     or trajectory_batch.get("loop_advantages") is not None
                 ):
@@ -2181,7 +2177,6 @@ class RayPPOTrainer:
                     rewards_tensor,
                     learner_loss_masks,
                     learner_logprobs,
-                    _,
                     _,
                 ) = convert_prompts_responses_to_batch_tensors(
                     self.tokenizer.pad_token_id,
@@ -2205,7 +2200,6 @@ class RayPPOTrainer:
                         logprobs[row] if not structural_only[row] else np.zeros(len(response), dtype=np.float32)
                         for row, response in enumerate(response_ids)
                     ],
-                    None,
                     None,
                 )
                 width = response_masks_tensor.shape[1]
@@ -2366,7 +2360,6 @@ class RayPPOTrainer:
             - `["sequences"]`: Integer[torch.Tensor, "batch_size seqlen"]
             - `["response_mask"]`: Integer[torch.Tensor, "batch_size seqlen"]
             - `["loss_mask"]`: Integer[torch.Tensor, "batch_size seqlen"]
-            - `["values"]`: Float[torch.Tensor, "batch_size seqlen"]
             - `["rewards"]`: Float[torch.Tensor, "batch_size seqlen"]
             - `.metadata["uids"]`: List[str]
 
@@ -2376,43 +2369,54 @@ class RayPPOTrainer:
         """
         token_level_rewards = data["rewards"]
 
-        if self.cfg.trainer.step_wise_training:
-            is_last_step = data["is_last_step"].bool()
-            response_mask = data["response_mask"]
-            index = np.array(data.metadata["uids"])
-            adv_estimator = self.cfg.trainer.algorithm.advantage_estimator
-            config = self.cfg.trainer.algorithm
-            values = data["values"]
-            gamma = self.cfg.trainer.algorithm.gamma
-            lambd = self.cfg.trainer.algorithm.lambd
-            grpo_norm_by_std = self.cfg.trainer.algorithm.grpo_norm_by_std
-            last_step_rewards = token_level_rewards[is_last_step]
-            # compatible with any advantage estimator
-            last_step_advantages, last_step_returns = compute_advantages_and_returns(
-                token_level_rewards=last_step_rewards,
-                response_mask=response_mask[is_last_step],
-                index=index[is_last_step.cpu().numpy()],
-                adv_estimator=adv_estimator,
-                values=values[is_last_step] if values is not None else None,
-                config=config,
-                gamma=gamma,
-                lambd=lambd,
-                grpo_norm_by_std=grpo_norm_by_std,
+        pad_size = data.metadata.get("pad_size", 0)
+        index = np.asarray(data.metadata["uids"])
+        exclude_from_baseline = data.metadata.get("exclude_from_baseline")
+        if exclude_from_baseline is not None:
+            exclude_from_baseline = np.asarray(exclude_from_baseline, dtype=bool)
+        outcome_rewards, outcome_mask = token_level_rewards, data["response_mask"]
+        step_wise = self.cfg.trainer.step_wise_training
+        if step_wise:
+            final = data["is_last_step"].bool()
+            final_rows = final.cpu().numpy()
+            outcome_rewards = token_level_rewards[final]
+            outcome_mask = data["response_mask"][final]
+            index = index[final_rows]
+            if exclude_from_baseline is not None:
+                exclude_from_baseline = exclude_from_baseline[final_rows]
+        if step_wise:
+            advantages, returns = compute_advantages_and_returns(
+                token_level_rewards=outcome_rewards,
+                response_mask=outcome_mask,
+                index=index,
+                adv_estimator=self.cfg.trainer.algorithm.advantage_estimator,
+                gamma=self.cfg.trainer.algorithm.gamma,
+                grpo_norm_by_std=self.cfg.trainer.algorithm.grpo_norm_by_std,
+                exclude_from_baseline=exclude_from_baseline,
                 group_advantage_invariant=self.group_advantage_invariant,
             )
-            traj_ids = (
-                torch.cat([torch.tensor([False], device=is_last_step.device), is_last_step[:-1]]).int().cumsum(dim=0)
-            )
-            num_groups = traj_ids[-1].item() + 1
-            assert num_groups == len(last_step_advantages), (
-                f"number of groups {num_groups} doesn't match the number of trajectories as given by `is_last_step` {len(last_step_advantages)}. The `is_last_step` tensor is likely malformed"
-            )
-            advantages = last_step_advantages[traj_ids]
-            returns = last_step_returns[traj_ids]
         else:
             advantages, returns = batch_advantages(
                 data, self.cfg.trainer.algorithm, invariant=self.group_advantage_invariant
             )
+        if self.group_advantage_invariant.kind is not GroupAdvantageKind.NONE:
+            real_outcomes = len(index) - pad_size
+            self.all_metrics["reward/zero_std_group_fraction"] = flat_group_fraction(
+                outcome_rewards[:real_outcomes],
+                index[:real_outcomes],
+                None if exclude_from_baseline is None else exclude_from_baseline[:real_outcomes],
+            )
+        if step_wise:
+            # Float64 reduction preserves constant float32 estimates exactly.
+            outcome = masked_mean(advantages.double(), outcome_mask, dim=-1).unsqueeze(-1)
+            if not torch.all((advantages - outcome).abs()[outcome_mask.bool()] <= STEP_WISE_OUTCOME_TOLERANCE):
+                raise ValueError("step-wise training requires an outcome advantage estimator")
+            outcome = outcome.to(advantages.dtype)
+            traj_ids = torch.cat([torch.tensor([False], device=final.device), final[:-1]]).int().cumsum(dim=0)
+            trajectory_count = traj_ids[-1].item() + 1
+            if trajectory_count != len(outcome):
+                raise ValueError(f"is_last_step marks {len(outcome)} trajectories but its rows form {trajectory_count}")
+            advantages = returns = outcome[traj_ids] * data["response_mask"]
         data["returns"] = returns
         data["advantages"] = advantages
 
@@ -2420,7 +2424,6 @@ class RayPPOTrainer:
         self.all_metrics.update(
             advantage_metrics(
                 data,
-                algorithm=self.cfg.trainer.algorithm,
                 step_wise=self.cfg.trainer.step_wise_training,
             )
         )

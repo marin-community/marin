@@ -61,5 +61,17 @@ REMOVED = MappingProxyType(
         "trainer.algorithm.use_tis": "configure trainer.algorithm.off_policy_correction (MarinSkyRL #858)",
         "trainer.policy.fsdp_config": "use trainer.policy.megatron_config (MarinSkyRL #776)",
         "terminal_bench.harbor.max_episodes": "use context_budget.max_turns; Harbor reads max_turns",
+        "generator.apply_overlong_filtering": (
+            "configure generator.trajectory_reward_shaping.overlong for an output-length penalty"
+        ),
+        "trainer.algorithm.enable_token_reward_channel": "PBS token rewards are not supported",
+        "trainer.algorithm.rloo_n_filter_zero_reward_groups": (
+            "eligible final outcomes set baselines; flat groups receive zero outcome advantage"
+        ),
+        "terminal_bench.harbor.enable_pbs_shaping": "Harbor uses terminal outcome rewards",
+        "terminal_bench.harbor.pbs_gamma": "Harbor uses terminal outcome rewards",
+        "terminal_bench.harbor.pbs_max_total_shaping": "Harbor uses terminal outcome rewards",
+        "terminal_bench.harbor.pbs_potential_shape": "Harbor uses terminal outcome rewards",
+        "terminal_bench.harbor.enable_token_reward_channel": "Harbor uses terminal outcome rewards",
     }
 )

@@ -90,8 +90,7 @@ def assemble_slice(
     batch = trajectory_batch
     if rows.step != 1 or rows.start < 0 or rows.stop > len(plan.uids) or len(rows) != len(batch["response_ids"]):
         raise ValueError("normalized rows must match their contiguous batch-plan range")
-    token_channel = bool(algorithm.get("enable_token_reward_channel", False))
-    sequences, attention, response, rewards, losses, logprobs, shaping, tags = (
+    sequences, attention, response, rewards, losses, logprobs, tags = (
         convert_prompts_responses_to_batch_tensors(
             pad_token_id,
             batch["prompt_token_ids"],
@@ -99,8 +98,7 @@ def assemble_slice(
             batch["rewards"],
             batch["loss_masks"],
             batch.get("rollout_logprobs"),
-            batch.get("token_level_shaping") if token_channel else None,
-            batch.get("response_span_tags") if token_channel else None,
+            batch.get("response_span_tags"),
             max_prompt_len=plan.max_prompt_len,
             max_response_len=plan.max_response_len,
         )
@@ -150,8 +148,6 @@ def assemble_slice(
         if len(pair_roles) != len(batch["response_ids"]):
             raise ValueError("pair_roles must carry one role per response row")
         training_input["pair_roles"] = torch.tensor(pair_roles, dtype=torch.float32)
-    if shaping is not None:
-        training_input["token_level_shaping"] = shaping
     if tags is not None:
         training_input["response_span_tags"] = tags
     loop_advantages = collate_response_token_channel(

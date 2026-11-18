@@ -7,8 +7,7 @@ The gate keys on **mean per-sample reward**, not pass@8.  RLOO learns from
 variance *within* the group of ``n_samples_per_prompt``, which is maximal near
 0.5.  Both extremes starve it — by different mechanisms:
 
-* **Sparse** (mean near 0): nearly every group is uniform-zero, gets dropped by
-  ``rloo_n_filter_zero_reward_groups``, and no gradient survives.
+* **Sparse** (mean near 0): nearly every group is uniform-zero, gets zero advantage, and no gradient survives.
 * **Saturated** (mean near 1): nearly every rollout succeeds, leaving almost no
   within-group variance.
 

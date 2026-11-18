@@ -67,8 +67,7 @@ class Experience:
     metadata: Optional[Dict[str, Any]] = None
     # MoE router-replay (R3) field — present only when moe_router_replay is on.
     rollout_routed_experts: Optional[Integer[torch.Tensor, "batch response_len L K"]] = None
-    # Stage D (F7) per-token span tags (SPAN_THINK==1) — present only when the
-    # token-reward channel is on; used to down-weight <think> tokens in the loss.
+    # Span tags select tokens for the configured thinking-token loss weight.
     response_span_tags: Optional[Integer[torch.Tensor, "batch response_len"]] = None
     distillation: Optional[TopKEvidence] = None
     ftpo: FTPOTargets | None = None

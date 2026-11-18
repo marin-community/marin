@@ -9,7 +9,6 @@ import torch
 from omegaconf import DictConfig
 from torch import Tensor
 
-from marinskyrl.runtime_options import AdvantageEstimator
 from skyrl_train.config.objective_spec import off_policy_correction
 from skyrl_train.objective.correction import compute_correction
 from skyrl_train.rollouts.buffer import RowFacts
@@ -26,7 +25,6 @@ from skyrl_train.trajectory_runners.trajectory_reward_shaping import (
     shaping_groups,
 )
 from skyrl_train.trajectory_runners.types import BatchFields
-from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE
 from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
 
 
@@ -203,19 +201,6 @@ def reward_metrics(facts: Sequence[RowFacts], uids: Sequence[str], *, n_samples_
     return metrics
 
 
-def _zero_std_group_fraction(uids: Sequence[str], rewards: torch.Tensor) -> float:
-    group_rewards: dict[str, list[torch.Tensor]] = {}
-    for uid, reward in zip(uids, rewards, strict=True):
-        group_rewards.setdefault(uid, []).append(reward)
-    if not group_rewards:
-        return 0.0
-    flat_groups = sum(
-        len(group) > 1 and torch.std(torch.stack(group)).item() <= GRPO_FLAT_REWARD_STD_TOLERANCE
-        for group in group_rewards.values()
-    )
-    return flat_groups / len(group_rewards)
-
-
 def install_correction(batch: TrainingInputBatch, algorithm: DictConfig) -> dict[str, float]:
     """Install configured policy correction weights and return their diagnostics."""
     correction = off_policy_correction(algorithm)
@@ -267,15 +252,11 @@ def forward_metrics(
 def advantage_metrics(
     batch: TrainingInputBatch,
     *,
-    algorithm: DictConfig,
     step_wise: bool,
 ) -> dict[str, float]:
     """Report reward and advantage diagnostics for finalized training credit."""
     metrics = {}
     rows = batch.batch_size - batch.metadata.get("pad_size", 0)
-    uids, group_rewards = batch.metadata["uids"][:rows], batch["rewards"][:rows]
-    if algorithm.advantage_estimator == AdvantageEstimator.GRPO and not step_wise:
-        metrics["reward/zero_std_group_fraction"] = _zero_std_group_fraction(uids, group_rewards.sum(-1))
     rewards = batch["rewards"].sum(-1)[:rows]
     if step_wise:
         rewards = rewards[batch["is_last_step"][:rows]]

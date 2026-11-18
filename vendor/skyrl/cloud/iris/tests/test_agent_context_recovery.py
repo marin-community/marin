@@ -50,7 +50,6 @@ def worker_config():
             "backend": "vllm",
             "max_input_length": 3,
             "max_model_len": 128,
-            "apply_overlong_filtering": False,
             "sampling_params": {
                 "max_generate_length": 8,
                 "temperature": 1.0,
