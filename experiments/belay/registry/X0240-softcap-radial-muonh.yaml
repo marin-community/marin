@@ -4,7 +4,7 @@ name: Softcap radial MuonH
 category: Optimizers
 summary: 'Track: speedrun'
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6968062224
@@ -26,3 +26,10 @@ trials:
     muonh_radial_softcap: '2.0'
   commit: 97213b778f
   priority: batch
+  loss:
+  - 3.0379
+  delta:
+  - -0.0084
+  steps: 3030
+  baseline: belay-X0240-control 3.0463 (same commit, seed 0)
+  step_time_change: 0%
