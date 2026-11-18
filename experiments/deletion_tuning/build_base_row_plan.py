@@ -17,6 +17,7 @@ Usage (after the staging job writes `model-binding-inputs.json`):
 """
 
 import argparse
+import hashlib
 import json
 
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -114,8 +115,6 @@ def main() -> None:
     configure_coreweave_s3()
     binding = json.loads(StoragePath(args.binding).read_bytes())
     binding61 = json.loads(StoragePath(BINDING61_URI).read_bytes())
-    import hashlib
-
     binding["self_sha256"] = hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()
     plan = build(binding, binding61)
     with open(args.output, "w") as handle:
