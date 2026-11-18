@@ -4,7 +4,7 @@
 from copy import deepcopy
 from urllib.parse import urlencode
 
-from marin.rl.rl_progress import Comparison
+from finestore.rl.rl_progress import Comparison
 from marina.journeys import Journey
 from playwright.sync_api import expect
 

@@ -11,8 +11,8 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Annotated, ClassVar, Literal
 
+from finestore.rl.rl_progress import Invariant
 from marin.execution.lazy import ArtifactStep
-from marin.rl.rl_progress import Invariant
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,

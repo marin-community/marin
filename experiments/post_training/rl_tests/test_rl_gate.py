@@ -14,6 +14,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.rl.rl_progress import Change, ComparisonRole
 from finestore.rl.run_records import (
     EvaluationAnswerRow,
     EvaluationTaskRow,
@@ -33,7 +34,6 @@ from finestore.schema import arrow_schema
 from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl import skyrl as skyrl_api
-from marin.rl.rl_progress import Change, ComparisonRole
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
 from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
 from rigging.provenance import Provenance

@@ -101,6 +101,7 @@ class ServeConfig:
     reasoning_parser: str | None = None
     vllm_batch_invariant: bool | None = None
     vllm_use_flashinfer_sampler: bool | None = None
+    vllm_use_nccl_symm_mem: bool | None = None
     runai_streamer_concurrency: int | None = None
     runai_streamer_s3_request_timeout_ms: int | None = None
     hf_hub_disable_xet: bool = False
@@ -242,9 +243,9 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
     already present there, so a hand-tuned value is never duplicated. ``tensor_parallel_size``,
     ``max_model_len``, ``max_num_batched_tokens``, ``max_num_seqs``, ``chat_template``, and
     ``auto_overrides`` are consumed by serving configuration or lowering rather than rendered as
-    extra flags. ``vllm_batch_invariant`` and ``vllm_use_flashinfer_sampler`` become GPU-worker
-    process settings. ``--trust-remote-code`` is not rendered here: the native server forces it on
-    for every evaluated model.
+    extra flags. ``vllm_batch_invariant``, ``vllm_use_flashinfer_sampler`` and ``vllm_use_nccl_symm_mem``
+    become GPU-worker process settings. ``--trust-remote-code`` is not rendered here: the native
+    server forces it on for every evaluated model.
     """
     explicit = tuple(serve.vllm_extra_args)
     derived: list[str] = []

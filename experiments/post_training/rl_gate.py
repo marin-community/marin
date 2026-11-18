@@ -18,11 +18,11 @@ from functools import lru_cache
 from pathlib import Path
 
 import click
+from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant, Label, Verdict
 from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
 from marin.experiment.namespacing import user_owned_name
-from marin.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant, Label, Verdict
 from marin.rl.skyrl import (
     ArtifactHfModel,
     ResolvedModelLocator,

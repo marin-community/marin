@@ -20,6 +20,10 @@ from levanter.compat.hf_checkpoints import (
     build_generation_config,
     save_hf_checkpoint_callback,
 )
+from levanter.compat.hf_generation_config import export_generation_config
+
+QWEN_STYLE_TEMPLATE = "{% for m in messages %}<|im_start|>{{ m['content'] }}<|im_end|>{% endfor %}"
+SAMPLING_DEFAULTS = {"do_sample": True, "temperature": 0.6, "top_p": 0.95}
 
 
 class _FakeTokenizer:
@@ -38,66 +42,18 @@ class _FakeTokenizer:
             return f"<tok_{tid}>"
         return None
 
+    def get_vocab(self) -> dict[str, int]:
+        return {"<|im_end|>": 5, "<|eot_id|>": 6, "<|endoftext|>": 7}
+
 
 class TestBuildGenerationConfig:
     def test_none_returns_none(self):
         tok = _FakeTokenizer()
         assert build_generation_config(tok, None) is None
 
-    def test_valid_ids(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2, bos_token_id=1)
-        result = build_generation_config(tok, [50])
-        assert result is not None
-        assert result["eos_token_id"] == [2, 50]
-        assert result["bos_token_id"] == 1
-
-    def test_deduplication(self):
+    def test_sorted_deduplicated_ids(self):
         tok = _FakeTokenizer(vocab_size=200, eos_token_id=2)
-        result = build_generation_config(tok, [50, 50, 2])
-        assert result is not None
-        assert result["eos_token_id"] == [2, 50]
-
-    def test_sorted_output(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2)
-        result = build_generation_config(tok, [100, 50, 75])
-        assert result is not None
-        assert result["eos_token_id"] == [2, 50, 75, 100]
-
-    def test_deterministic(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2)
-        r1 = build_generation_config(tok, [128, 64, 128])
-        r2 = build_generation_config(tok, [64, 128, 64])
-        assert r1 == r2
-
-    def test_auto_adds_tokenizer_eos(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2)
-        result = build_generation_config(tok, [50])
-        assert result is not None
-        assert 2 in result["eos_token_id"]
-
-    def test_eos_already_included(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2)
-        result = build_generation_config(tok, [2, 50])
-        assert result is not None
-        assert result["eos_token_id"] == [2, 50]
-
-    def test_tokenizer_eos_none(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=None)
-        result = build_generation_config(tok, [50])
-        assert result is not None
-        assert result["eos_token_id"] == [50]
-
-    def test_bos_included_when_present(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2, bos_token_id=1)
-        result = build_generation_config(tok, [50])
-        assert result is not None
-        assert result["bos_token_id"] == 1
-
-    def test_bos_omitted_when_none(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2, bos_token_id=None)
-        result = build_generation_config(tok, [50])
-        assert result is not None
-        assert "bos_token_id" not in result
+        assert build_generation_config(tok, [100, 50, 100]) == {"eos_token_id": [50, 100]}
 
     def test_empty_list_raises(self):
         tok = _FakeTokenizer()
@@ -118,6 +74,44 @@ class TestBuildGenerationConfig:
         tok = _FakeTokenizer(vocab_size=100)
         with pytest.raises(ValueError, match="out of range"):
             build_generation_config(tok, [-1])
+
+
+def test_export_generation_config_preserves_source_and_adds_turn_stop():
+    source = {"eos_token_id": 7, "temperature": 0.7, "top_k": 20, "transformers_version": "5.16.1"}
+
+    config = export_generation_config(
+        _FakeTokenizer(eos_token_id=7),
+        chat_template=QWEN_STYLE_TEMPLATE,
+        explicit=source,
+        sampling_defaults=SAMPLING_DEFAULTS,
+    )
+
+    assert config == {
+        "eos_token_id": [5, 7],
+        "temperature": 0.7,
+        "top_k": 20,
+        "transformers_version": "5.16.1",
+        "do_sample": True,
+        "top_p": 0.95,
+        "bos_token_id": 1,
+    }
+
+
+def test_export_generation_config_keeps_greedy_sampling():
+    config = export_generation_config(
+        _FakeTokenizer(eos_token_id=7),
+        chat_template=None,
+        explicit={"do_sample": False},
+        sampling_defaults=SAMPLING_DEFAULTS,
+    )
+
+    assert config == {"do_sample": False, "eos_token_id": [7], "bos_token_id": 1}
+
+
+def test_export_generation_config_requires_caller_sampling_policy():
+    config = export_generation_config(_FakeTokenizer(eos_token_id=7), chat_template=None)
+
+    assert config == {"eos_token_id": [7], "bos_token_id": 1}
 
 
 class _CapturingConverter:

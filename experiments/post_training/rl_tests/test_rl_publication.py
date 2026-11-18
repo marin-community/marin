@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 import click
 import pytest
 from click.testing import CliRunner
+from finestore.rl.rl_progress import RunSummary
 from finestore.rl.run_records import (
     AttemptRecord,
     CheckpointReference,
@@ -26,7 +27,6 @@ from finestore.store import DataStore
 from fsspec.core import url_to_fs
 from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, run
-from marin.rl.rl_progress import RunSummary
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from marin.rl.skyrl_records import read_skyrl_metrics, read_stored_skyrl_attempts
 from rigging.filesystem.storage_path import StoragePath

@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from marin.rl.rl_progress import RunSummary
+from finestore.rl.rl_progress import RunSummary
 
 APPLET_ID = tomllib.loads((Path(__file__).parents[1] / "apps/rl_progress/applet.toml").read_text())["applet_id"]
 

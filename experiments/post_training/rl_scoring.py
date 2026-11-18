@@ -19,9 +19,9 @@ import click
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+from finestore.rl.rl_progress import Comparison, ComparisonRole, Invariant
 from finestore.rl.run_records import AttemptRecord, read_evaluations
 from finestore.rl.strata import MembershipState, read_selection_strata
-from marin.rl.rl_progress import Comparison, ComparisonRole, Invariant
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
     RecordedLaunch,

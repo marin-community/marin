@@ -32,7 +32,7 @@ Lineage duration sums those native jobs' stored windows. Missing lineage records
 measurements unknown; a missing window leaves elapsed time unknown with a timing note.
 
 `POST /api/runs` validates each submitted record with the shared
-`marin.rl.rl_progress.RunSummary`, upserts its native key and returns the stored
+`finestore.rl.rl_progress.RunSummary`, upserts its native key and returns the stored
 record. `GET /api/runs` returns stored records and lists malformed historical rows
 in `skipped_records`. See the
 [Snowball publication rules](../../../../docs/recipes/rl-experiments.md#dashboard-publication)
@@ -55,7 +55,7 @@ and backdrop dismissal. Stop the local stack with Ctrl-C.
 
 The `Marin - Release RL Progress` workflow runs manually from main, with inspection as its default. The `rl-progress` CI job runs the packaged API and `marina journey rl_progress` browser owner.
 
-Deploy a Marina runtime containing `marin.rl.rl_progress` before releasing the app package.
+Deploy a Marina runtime containing `finestore.rl.rl_progress` before releasing the app package.
 
 For production, follow [Marina's release procedure](../../README.md). Inspect the
 current private revision, then release with its exact `--base-version`. Merging

@@ -78,7 +78,7 @@ watch(
   },
 )
 onUnmounted(stopStreaming)
-defineExpose({ send, stopStreaming })
+defineExpose({ send, stopStreaming, busy })
 
 function stopStreaming() {
   abort?.abort()
