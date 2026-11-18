@@ -93,25 +93,27 @@ class CompProgLabels:
     """Pinned official-test verdicts for the competitive-programming sources.
 
     One record per judged cache row, joined to the build by Nemotron UUID.
-    Option G: a judged row keeps only when its verdict is accepted and its
-    answer holds no give-up phrase; each problem left with no accepted row
-    keeps its shortest accepted row; unjudged rows keep the current filters.
+    Rows are addressed the way the build resolves them: source, input part
+    path, and the part-local row index. Option G: a judged row keeps only
+    when its verdict is accepted and its answer holds no give-up phrase;
+    each problem left with no accepted row keeps its shortest accepted row;
+    unjudged rows keep the current filters.
     """
 
     sources: frozenset[str]
-    uuid_by_row: dict[tuple[str, int], str]
+    uuid_by_row: dict[tuple[str, str, int], str]
     status_by_uuid: dict[str, str]
     rescued: frozenset[str]
 
-    def uuid_for(self, source: str, row: int) -> str:
-        return self.uuid_by_row.get((source, row), "")
+    def uuid_for(self, source: str, part: str, row: int) -> str:
+        return self.uuid_by_row.get((source, part, row), "")
 
     def is_rescued(self, uuid: str) -> bool:
         return uuid in self.rescued
 
     @classmethod
     def from_records(cls, records: Iterable[dict]) -> "CompProgLabels":
-        uuid_by_row: dict[tuple[str, int], str] = {}
+        uuid_by_row: dict[tuple[str, str, int], str] = {}
         status_by_uuid: dict[str, str] = {}
         accepted: list[tuple[str, str, bool, int]] = []
         for record in records:
@@ -122,7 +124,7 @@ class CompProgLabels:
             if uuid in status_by_uuid:
                 raise ValueError(f"Two cache rows carry UUID {uuid}")
             status_by_uuid[uuid] = status
-            key = (record["cache_source"], int(record["cache_row"]))
+            key = (record["cache_source"], record["cache_part"], int(record["cache_row"]))
             if key in uuid_by_row:
                 raise ValueError(f"Cache row {key} carries two UUIDs")
             uuid_by_row[key] = uuid
@@ -143,7 +145,7 @@ class CompProgLabels:
         if rescued & without_give_up:
             raise ValueError("A rescued row holds no give-up phrase")
         return cls(
-            sources=frozenset(source for source, _row in uuid_by_row),
+            sources=frozenset(source for source, _part, _row in uuid_by_row),
             uuid_by_row=uuid_by_row,
             status_by_uuid=status_by_uuid,
             rescued=rescued,

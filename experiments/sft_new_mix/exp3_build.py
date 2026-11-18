@@ -196,7 +196,11 @@ def build_shard(job_dict: dict) -> dict:
                     input_digest.update(np.asarray(original, dtype="<i4").tobytes())
                     text = tokenizer.decode(original.tolist(), skip_special_tokens=False)
                     labels = config.comp_prog_labels
-                    uuid = labels.uuid_for(job.source, index) if labels is not None else ""
+                    # Document indices are store-local plus the job range start;
+                    # the label table addresses store-local rows.
+                    uuid = (
+                        labels.uuid_for(job.source, job.input_path, index - job.row_start) if labels is not None else ""
+                    )
                     document = Document(job.source, f"{identity}:{index}", text, job.passed, uuid)
                     token_ids = original
 

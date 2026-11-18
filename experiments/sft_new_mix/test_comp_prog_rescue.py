@@ -50,53 +50,28 @@ def transcript(user: str, thought: str, answer: str) -> str:
     )
 
 
-def label_records() -> list[dict]:
+def label_records(cache_part: str = "s3://fixture/train/part-00000-of-00001") -> list[dict]:
     """One judged row per cache row; problem P2 keeps only its shortest accepted row."""
+
+    def record(uuid: str, problem: str, rating: int, status: str, give_up: bool, think: int, row: int) -> dict:
+        return {
+            "lang": "cpp",
+            "uuid": uuid,
+            "problem": problem,
+            "rating": rating,
+            "status": status,
+            "give_up": give_up,
+            "think_tokens": think,
+            "cache_source": CPP,
+            "cache_part": cache_part,
+            "cache_row": row,
+        }
+
     return [
-        {
-            "lang": "cpp",
-            "uuid": "uuid-accepted",
-            "problem": "1846A",
-            "rating": 800,
-            "status": "accepted",
-            "give_up": False,
-            "think_tokens": 10,
-            "cache_source": CPP,
-            "cache_row": 0,
-        },
-        {
-            "lang": "cpp",
-            "uuid": "uuid-failed",
-            "problem": "1846B",
-            "rating": 800,
-            "status": "failed",
-            "give_up": False,
-            "think_tokens": 5,
-            "cache_source": CPP,
-            "cache_row": 1,
-        },
-        {
-            "lang": "cpp",
-            "uuid": "uuid-give-up",
-            "problem": "1846C",
-            "rating": 1600,
-            "status": "accepted",
-            "give_up": True,
-            "think_tokens": 30,
-            "cache_source": CPP,
-            "cache_row": 2,
-        },
-        {
-            "lang": "cpp",
-            "uuid": "uuid-rescued",
-            "problem": "1846C",
-            "rating": 1600,
-            "status": "accepted",
-            "give_up": True,
-            "think_tokens": 20,
-            "cache_source": CPP,
-            "cache_row": 3,
-        },
+        record("uuid-accepted", "1846A", 800, "accepted", False, 10, 0),
+        record("uuid-failed", "1846B", 800, "failed", False, 5, 1),
+        record("uuid-give-up", "1846C", 1600, "accepted", True, 30, 2),
+        record("uuid-rescued", "1846C", 1600, "accepted", True, 20, 3),
     ]
 
 
@@ -242,7 +217,8 @@ def shard_decisions(tmp_path, job: dict) -> list[dict]:
 def test_build_applies_option_g_end_to_end(tmp_path):
     """The real shard pipeline keeps passing rows, drops failures and rescues the shortest passing row."""
     tokenizer_path = fixture_tokenizer(tmp_path / "tokenizer.json")
-    config = label_config(tmp_path)
+    cache_part = str(tmp_path / "original")
+    config = label_config(tmp_path, label_records(cache_part))
     texts = [
         transcript("Solve A", "Reasoning.", "print(1)"),  # judged accepted, kept
         transcript("Solve B", "Reasoning.", "print(2)"),  # judged failed, dropped

@@ -24,7 +24,7 @@ from huggingface_hub import hf_hub_download
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.sft_new_mix.exp3_runtime import configure_storage
+from experiments.sft_new_mix.exp3_runtime import configure_storage, read_pinned
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +192,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", required=True, action="append", help="SourceSpec JSON (lang, cache_source)")
     parser.add_argument("--join-prefix", required=True, help="In-region audit join prefix")
+    parser.add_argument("--scripted-plan", required=True)
+    parser.add_argument("--scripted-plan-sha256", required=True)
     parser.add_argument("--destination", required=True, help="Output prefix for the label table and receipt")
     parser.add_argument("--output", required=True, help="Local directory for artifacts and logs")
     args = parser.parse_args()
@@ -201,38 +203,61 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=False)
 
     specs = [SourceSpec(**json.loads(value)) for value in args.spec]
+    plan = json.loads(read_pinned(args.scripted_plan, args.scripted_plan_sha256))
+    part_paths: dict[str, dict[str, str]] = {}
+    for spec in specs:
+        jobs = [job for job in plan["jobs"] if job["source"] == spec.cache_source]
+        mapping = {}
+        for job in jobs:
+            part = Path(job["input_path"].rstrip("/")).name
+            if part in mapping:
+                raise ValueError(f"Two scripted jobs cover part {part} of {spec.cache_source}")
+            mapping[part] = job["input_path"]
+        part_paths[spec.lang] = mapping
     row_to_uuid, row_stage, identity_sha = join_rows(specs, args.join_prefix)
 
     rows: list[dict] = []
     for spec in specs:
         labels, flags = judged_labels(spec.lang), rule_flags(spec.lang)
         lang_rows = sorted(key[1] for key in row_to_uuid if key[0] == spec.lang)
-        for row in lang_rows:
-            uuid = row_to_uuid[(spec.lang, row)]
-            judged = labels.get(uuid)
-            flag = flags.get(uuid)
-            status = judged["status"] if judged else None
-            give_up = bool(flag["give_up"]) if flag else False
-            over_limit = bool(flag["think_tokens"] > THINK_LIMIT) if flag else False
-            rows.append(
-                {
-                    "lang": spec.lang,
-                    "cache_row": row,
-                    "uuid": uuid,
-                    "problem": judged["problem"] if judged else None,
-                    "rating": judged["rating"] if judged else None,
-                    "status": status,
-                    "give_up": give_up,
-                    "think_tokens": flag["think_tokens"] if flag else 0,
-                    "cache_source": spec.cache_source,
-                    "keep_A": not (give_up or over_limit),
-                    "keep_E2": (status == "accepted" and not give_up) if status else False,
-                }
-            )
-            if rows[-1]["keep_A"] != (row_stage[(spec.lang, row)] == ""):
-                raise ValueError(f"Filter disagreement for {spec.lang} row {row}")
+        # Rebuild the per-part layout so the table addresses rows the way the
+        # build does: source, part path, part-local row.
+        source_ids = json.loads(StoragePath(f"{args.join_prefix}/source_ids.json").read_text())
+        offset = 0
+        for part in sorted(source_ids[spec.lang]):
+            part_name = part.removesuffix(".parquet")
+            input_path = part_paths[spec.lang].get(part_name)
+            if input_path is None:
+                raise ValueError(f"Plan has no shard for part {part_name} of {spec.cache_source}")
+            count = len(source_ids[spec.lang][part])
+            for row in range(offset, offset + count):
+                uuid = row_to_uuid[(spec.lang, row)]
+                judged = labels.get(uuid)
+                flag = flags.get(uuid)
+                status = judged["status"] if judged else None
+                give_up = bool(flag["give_up"]) if flag else False
+                over_limit = bool(flag["think_tokens"] > THINK_LIMIT) if flag else False
+                rows.append(
+                    {
+                        "lang": spec.lang,
+                        "cache_part": input_path,
+                        "cache_row": row - offset,
+                        "uuid": uuid,
+                        "problem": judged["problem"] if judged else None,
+                        "rating": judged["rating"] if judged else None,
+                        "status": status,
+                        "give_up": give_up,
+                        "think_tokens": flag["think_tokens"] if flag else 0,
+                        "cache_source": spec.cache_source,
+                        "keep_A": not (give_up or over_limit),
+                        "keep_E2": (status == "accepted" and not give_up) if status else False,
+                    }
+                )
+                if rows[-1]["keep_A"] != (row_stage[(spec.lang, row)] == ""):
+                    raise ValueError(f"Filter disagreement for {spec.lang} row {row}")
+            offset += count
         judged_in_caches = sum(1 for key in row_to_uuid if key[0] == spec.lang and row_to_uuid[key] in labels)
-        logger.info("%s: %d cache rows, %d judged", spec.lang, len(lang_rows), judged_in_caches)
+        logger.info("%s: %d cache rows, %d judged", spec.lang, offset, judged_in_caches)
 
     for row in rows:
         if row["status"] is None:
@@ -268,6 +293,7 @@ def main() -> None:
     table_records = [
         {
             "lang": row["lang"],
+            "cache_part": row["cache_part"],
             "cache_row": row["cache_row"],
             "uuid": row["uuid"],
             "problem": row["problem"],

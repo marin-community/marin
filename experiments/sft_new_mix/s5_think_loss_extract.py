@@ -54,24 +54,24 @@ def main() -> None:
         if not jobs:
             raise ValueError(f"No scripted jobs for {source}")
         source_hash = hashlib.sha256(source.encode()).hexdigest()
+        shards_root = StoragePath(args.scripted_prefix) / "components" / source_hash / "shards"
+        shard_dirs = sorted(str(entry) for entry in shards_root.iterdir())
+        if not shard_dirs:
+            raise ValueError(f"No scripted shards for {source}")
         drops = []
         kept_lengths = []
         stage_totals: dict[str, int] = {}
-        for job in jobs:
-            # The executed job carried the full-shard row ranges; the shard
-            # directory identity hashes that exact dict.
-            executed_plan = {**job, "row_start": 0, "row_stop": job["expected_rows"]}
-            identity = hashlib.sha256(json.dumps(executed_plan, sort_keys=True).encode()).hexdigest()
-            shard = StoragePath(args.scripted_prefix) / "components" / source_hash / "shards" / identity
-            stored = json.loads((shard / "receipt.json").read_text())
-            stored_job = stored["job"]
-            for key_field in ("source", "input_path", "expected_rows", "expected_tokens", "loss_mode"):
-                if stored_job.get(key_field) != job.get(key_field):
-                    raise ValueError(f"Scripted receipt identity mismatch for {job['input_path']}")
-            if stored["complete"] is not True or stored_job.get("row_stop") != job["expected_rows"]:
-                raise ValueError(f"Scripted receipt coverage mismatch for {job['input_path']}")
+        covered_rows = 0
+        covered_jobs = 0
+        for shard in shard_dirs:
+            stored = json.loads((StoragePath(shard) / "receipt.json").read_text())
+            job = stored["job"]
+            if stored["complete"] is not True or job["source"] != source:
+                raise ValueError(f"Scripted receipt mismatch in {shard}")
             kept_lengths.extend(int(length) for length in stored["lengths"])
-            for line in (shard / "decisions.jsonl").read_text().splitlines():
+            covered_rows += job["row_stop"] - job["row_start"]
+            covered_jobs += 1
+            for line in (StoragePath(shard) / "decisions.jsonl").read_text().splitlines():
                 record = json.loads(line)
                 if record["stage"] == "retained":
                     continue
@@ -81,6 +81,8 @@ def main() -> None:
                     drops.append(
                         {"input_path": job["input_path"], "row": int(record["row"]), "tokens": int(record["tokens"])}
                     )
+        if covered_jobs != len(jobs) or covered_rows != sum(job["expected_rows"] for job in jobs):
+            raise ValueError(f"Scripted shard coverage {covered_jobs} jobs / {covered_rows} rows differs from the plan")
         table = "\n".join(json.dumps(drop, sort_keys=True) for drop in drops)
         blob = gzip.compress(table.encode())
         path = output / f"{key}-think-length-drops.jsonl.gz"
