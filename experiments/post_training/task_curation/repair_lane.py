@@ -64,6 +64,7 @@ from experiments.post_training.task_curation.repair_review import (
 )
 from experiments.post_training.task_curation.sources import configured_sources
 from experiments.post_training.task_curation.task_neighbors import PopulationIndex, TaskContent, content_rows
+from experiments.post_training.task_curation.task_spec_harbor import prepare
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
 
@@ -586,8 +587,43 @@ COHORT_SPEC_SCHEMA = pa.schema(
         ("tracked_task_id", pa.string()),
         ("task_id", pa.string()),
         ("task_spec", pa.large_string()),
+        ("runtime", pa.large_string()),
     ]
 )
+
+
+def tracked_runtimes(uris: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+    """Each tracked TaskSpec's original runtime binding, keyed by its normalized instruction hash.
+
+    The tracked sources' lexical specs carry the lowered task and the runtime binding their
+    own oracle trials ran under; a repair of the same task reuses that binding.
+    """
+    runtimes: dict[str, dict[str, Any]] = {}
+    for uri in uris:
+        with tempfile.TemporaryFile() as local:
+            with StoragePath(uri).open("rb") as remote:
+                shutil.copyfileobj(remote, local)
+            local.seek(0)
+            with pq.ParquetFile(local) as handle:
+                names = handle.schema_arrow.names
+                if "lowered_task_spec" in names:
+                    column = "lowered_task_spec"
+                elif "task_spec" in names:
+                    column = "task_spec"
+                else:
+                    raise ValueError(f"Tracked specs input has no task-spec column: {uri}")
+                for batch in handle.iter_batches(batch_size=32, columns=[column]):
+                    for encoded in batch.column(column).to_pylist():
+                        lowered = json.loads(encoded)
+                        task = TaskSpec.model_validate(lowered["task"] if "task" in lowered else lowered)
+                        runtime = lowered.get("runtime") if "task" in lowered else None
+                        if runtime is None:
+                            continue
+                        row = next(content_rows([task.model_dump(mode="json")]))
+                        runtimes.setdefault(row.instruction_hash, runtime)
+    if not runtimes:
+        raise ValueError("The tracked specs carry no runtime bindings")
+    return runtimes
 
 
 def accepted_winners(report: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -621,6 +657,7 @@ def convert_cohort(
     folders: tuple[str, ...],
     repo: str,
     candidate_revision: str,
+    tracked_spec_uris: tuple[str, ...],
     output_root: str,
     shard_size: int = 256,
 ) -> dict[str, Any]:
@@ -638,6 +675,7 @@ def convert_cohort(
     # The production conversion path: the recipe lowered to a SourceRecipe, whose SourceFiles
     # carries the dataset identity, decode and converter that row_source and the row bind need.
     recipe_source = source_recipe(recipe, {}, context.grader_environment)
+    runtime_join: dict[str, dict[str, Any]] | None = None
     winners = accepted_winners(report)
     paths = set(winner_paths(winners))
     rows = {}
@@ -656,7 +694,7 @@ def convert_cohort(
             if line.strip():
                 entry = json.loads(line)
                 done[entry["candidate_task_id"]] = entry
-    buffer: list[tuple[str, dict[str, Any], TaskSpec]] = []
+    buffer: list[tuple[str, dict[str, Any], TaskSpec, dict[str, Any]]] = []
     counts = Counter()
     for winner in winners:
         candidate_id = winner["candidate_task_id"]
@@ -683,7 +721,15 @@ def convert_cohort(
         with (root / "task-map.jsonl").open("a", auto_mkdir=True) as stream:
             stream.write(json.dumps(entry) + "\n")
         if not isinstance(task, ImportRejection):
-            buffer.append((candidate_id, entry, task))
+            instruction = next(content_rows([task.model_dump(mode="json")])).instruction_hash
+            if runtime_join is None:
+                runtime_join = tracked_runtimes(tracked_spec_uris)
+            runtime = runtime_join.get(instruction)
+            if runtime is None:
+                raise ValueError(
+                    f"No tracked runtime binding for the winner's tracked task: {winner['tracked_task_id']}"
+                )
+            buffer.append((candidate_id, entry, task, runtime))
             counts["converted"] += 1
         else:
             counts["rejected"] += 1
@@ -703,8 +749,9 @@ def convert_cohort(
                         "tracked_task_id": entry["tracked_task_id"],
                         "task_id": task.id,
                         "task_spec": task.model_dump_json(exclude={"id", "source"}),
+                        "runtime": json.dumps(runtime),
                     }
-                    for candidate_id, entry, task in shard
+                    for candidate_id, entry, task, runtime in shard
                 ],
                 schema=COHORT_SPEC_SCHEMA,
             )
@@ -729,6 +776,46 @@ def convert_cohort(
     if not manifest_path.exists():
         manifest_path.write_bytes((json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())
     return manifest
+
+
+def prepare_harbor_export(
+    *,
+    tracked_source_id: str,
+    cohort_root: str,
+    output_root: str,
+    source_revision: str,
+) -> dict[str, Any]:
+    """Export the converted cohort as native Harbor task packages for production oracle trials.
+
+    Downloads the cohort shards, runs ``task_spec_harbor.prepare`` with the tracked recipe's
+    own Controls (the same golden bindings its admission used), and uploads the native tasks
+    directory and task map to the output root.
+    """
+    recipes = {source.info.id: source.config for source in configured_sources()}
+    recipe = recipes.get(tracked_source_id)
+    if recipe is None:
+        raise ValueError(f"No configured source recipe for {tracked_source_id}")
+    if recipe.controls is None:
+        raise ValueError(f"The tracked recipe declares no controls: {tracked_source_id}")
+    with tempfile.TemporaryDirectory() as scratch:
+        cohort = Path(scratch) / "cohort"
+        cohort.mkdir()
+        pending = StoragePath(f"{cohort_root}/converted-pending")
+        for shard in pending.ls():
+            with shard.open("rb") as remote, (cohort / shard.name).open("wb") as stream:
+                shutil.copyfileobj(remote, stream)
+        output = Path(scratch) / "prepared"
+        prepare(cohort, output, source_revision=source_revision, controls=recipe.controls)
+        uploaded = 0
+        for path in sorted(output.rglob("*")):
+            if not path.is_file():
+                continue
+            uri = f"{output_root}/{path.relative_to(output)}"
+            with StoragePath(uri).open("wb", auto_mkdir=True) as stream:
+                stream.write(path.read_bytes())
+            uploaded += 1
+    tasks = sum(1 for _ in (StoragePath(f"{output_root}/tasks")).ls())
+    return {"tracked_source_id": tracked_source_id, "tasks": tasks, "files_uploaded": uploaded}
 
 
 def write_report(report: DryRunReport, output_uri: str) -> None:
@@ -769,6 +856,12 @@ def main() -> None:
     parser.add_argument(
         "--cohort-output-root", help="Output root for the winner cohort (specs shards, task map, manifest)"
     )
+    parser.add_argument(
+        "--prepare-output-root",
+        help="Output root for the native Harbor export; set with --cohort-root to run the prepare stage",
+    )
+    parser.add_argument("--cohort-root", help="Converted cohort root; set with --prepare-output-root")
+    parser.add_argument("--source-revision", default="", help="Pinned code revision declaring the controls")
     parser.add_argument("--report", required=True)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
@@ -783,9 +876,21 @@ def main() -> None:
             folders=tuple(args.folder),
             repo=args.repo,
             candidate_revision=args.candidate_revision,
+            tracked_spec_uris=tuple(args.tracked_specs or ()),
             output_root=args.cohort_output_root,
         )
         logger.info("RESULT %s", json.dumps(manifest, sort_keys=True))
+        return
+    if args.prepare_output_root is not None:
+        if args.cohort_root is None or not args.source_revision:
+            parser.error("--prepare-output-root requires --cohort-root and --source-revision")
+        summary = prepare_harbor_export(
+            tracked_source_id=args.tracked_source_id,
+            cohort_root=args.cohort_root,
+            output_root=args.prepare_output_root,
+            source_revision=args.source_revision,
+        )
+        logger.info("RESULT %s", json.dumps(summary, sort_keys=True))
         return
     tracked_uris = tuple(args.tracked_parquet) if args.tracked_parquet else resolve_tracked_uris(args.tracked_source_id)
     logger.info("Tracked population inputs: %s", list(tracked_uris))

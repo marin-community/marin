@@ -3,6 +3,7 @@
 
 """Behavior tests for the repair-candidate lane: matching, comparative review, decisions."""
 
+import collections
 import io
 import json
 import tarfile
@@ -26,7 +27,14 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.inputs import SourceFormat
-from taskcompendium.pipeline.models import Confidence, Defect, Quality, ReferenceStatus, ReviewStatus
+from taskcompendium.pipeline.models import (
+    Confidence,
+    Defect,
+    OracleCommand,
+    Quality,
+    ReferenceStatus,
+    ReviewStatus,
+)
 from taskcompendium.pipeline.repair import (
     CandidateDropAdvisory,
     ComparativeOutcome,
@@ -45,7 +53,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     unpack_task_binary,
 )
 from experiments.post_training.task_curation.full_qc import ReviewerVersion, local_reviewer
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, IntendedUse
+from experiments.post_training.task_curation.pipeline import Controls, CurationRecipe, HfSource, IntendedUse
 from experiments.post_training.task_curation.repair_lane import matched_pairs
 from experiments.post_training.task_curation.repair_match import (
     CONFLICT_THRESHOLD,
@@ -468,6 +476,22 @@ class TestCohortConversion:
         }
 
     @staticmethod
+    def _single_winner_report() -> dict:
+        return {
+            "candidate_source_id": CANDIDATE_SOURCE,
+            "candidate_revision": "eafe9b38",
+            "decisions": {
+                "pairs": [
+                    {
+                        "candidate_task_id": f"{CANDIDATE_SOURCE}:task_0",
+                        "tracked_task_id": "tracked-0",
+                        "decision": "ACCEPTED",
+                    }
+                ]
+            },
+        }
+
+    @staticmethod
     def _recipe(monkeypatch, tmp_path):
         def convert(row, context):
             files = archive_files(row.data)
@@ -488,10 +512,22 @@ class TestCohortConversion:
             version="1",
             intended_use=IntendedUse.TRAIN,
             grader=GRADER_PACKAGES,
+            controls=Controls(
+                golden=lambda task: OracleCommand("bash /solution/solve.sh", answer_file="/output/command_capture.txt")
+            ),
         )
 
-    def test_converts_accepted_winners_and_skips_the_rest(self, monkeypatch, tmp_path):
+    @staticmethod
+    def _runtime_join():
+        """A runtime join covering the two fixture tasks that convert successfully."""
+        join = {}
+        for path, instruction in (("task_0", "keep me"), ("task_1", "keep me too")):
+            task = spec(f"converted-{path}", instruction)
+            row = next(content_rows([task.model_dump(mode="json")]))
+            join[row.instruction_hash] = {"shape": {"agent_timeout_sec": 300}}
+        return join
 
+    def test_converts_accepted_winners_and_skips_the_rest(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
             lane,
             "configured_sources",
@@ -512,7 +548,7 @@ class TestCohortConversion:
                 {"path": "task_2", "task_binary": _fixture_binary("reject me")},
             ],
         )
-        monkeypatch.setattr(lane, "require_unbanned", lambda *a, **k: None)
+        monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: self._runtime_join())
         output_root = str(tmp_path / "cohort")
         manifest = lane.convert_cohort(
             tracked_source_id=TRACKED_SOURCE,
@@ -520,6 +556,7 @@ class TestCohortConversion:
             folders=("fixture_v1",),
             repo="fixture/validated-tasks",
             candidate_revision="eafe9b38",
+            tracked_spec_uris=(),
             output_root=output_root,
         )
         assert manifest["counts"] == {"converted": 2, "rejected": 1}
@@ -529,45 +566,39 @@ class TestCohortConversion:
             ("converted", "tracked-1"),
             ("rejected", "tracked-2"),
         ]
+        assert entries[2]["rejection"]["reason"] == "reviewed_defect"
         shards = sorted((Path(output_root) / "converted-pending").glob("*.parquet"))
         assert len(shards) == 1
 
     def test_rerun_resumes_from_the_task_map(self, monkeypatch, tmp_path):
-
-        recipe = self._recipe(monkeypatch, tmp_path)
-        monkeypatch.setattr(
-            lane,
-            "configured_sources",
-            lambda: [type("S", (), {"info": type("I", (), {"id": TRACKED_SOURCE})(), "config": recipe})()],
-        )
         calls = []
 
         def counting_rows(repo, folders, revision=None):
             calls.append(1)
             return [{"path": "task_0", "task_binary": _fixture_binary("keep me")}]
 
+        monkeypatch.setattr(
+            lane,
+            "configured_sources",
+            lambda: [
+                type(
+                    "S",
+                    (),
+                    {"info": type("I", (), {"id": TRACKED_SOURCE})(), "config": self._recipe(monkeypatch, tmp_path)},
+                )()
+            ],
+        )
         monkeypatch.setattr(lane, "load_folder_rows", counting_rows)
-        monkeypatch.setattr(lane, "require_unbanned", lambda *a, **k: None)
+        monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: self._runtime_join())
         output_root = str(tmp_path / "cohort")
-        report = {
-            "candidate_source_id": CANDIDATE_SOURCE,
-            "candidate_revision": "eafe9b38",
-            "decisions": {
-                "pairs": [
-                    {
-                        "candidate_task_id": f"{CANDIDATE_SOURCE}:task_0",
-                        "tracked_task_id": "tracked-0",
-                        "decision": "ACCEPTED",
-                    }
-                ]
-            },
-        }
+        report = self._single_winner_report()
         lane.convert_cohort(
             tracked_source_id=TRACKED_SOURCE,
             report=report,
             folders=("fixture_v1",),
             repo="fixture/validated-tasks",
             candidate_revision="eafe9b38",
+            tracked_spec_uris=(),
             output_root=output_root,
         )
         manifest = lane.convert_cohort(
@@ -576,12 +607,41 @@ class TestCohortConversion:
             folders=("fixture_v1",),
             repo="fixture/validated-tasks",
             candidate_revision="eafe9b38",
+            tracked_spec_uris=(),
             output_root=output_root,
         )
         assert manifest["counts"] == {"already_done": 1}
 
-    def test_missing_winner_row_fails_loudly(self, monkeypatch, tmp_path):
+    def test_missing_runtime_binding_fails_loudly(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            lane,
+            "configured_sources",
+            lambda: [
+                type(
+                    "S",
+                    (),
+                    {"info": type("I", (), {"id": TRACKED_SOURCE})(), "config": self._recipe(monkeypatch, tmp_path)},
+                )()
+            ],
+        )
+        monkeypatch.setattr(
+            lane,
+            "load_folder_rows",
+            lambda repo, folders, revision=None: [{"path": "task_0", "task_binary": _fixture_binary("keep me")}],
+        )
+        monkeypatch.setattr(lane, "tracked_runtimes", lambda uris: collections.defaultdict(dict))
+        with pytest.raises(ValueError, match="No tracked runtime binding"):
+            lane.convert_cohort(
+                tracked_source_id=TRACKED_SOURCE,
+                report=self._single_winner_report(),
+                folders=("fixture_v1",),
+                repo="fixture/validated-tasks",
+                candidate_revision="eafe9b38",
+                tracked_spec_uris=(),
+                output_root=str(tmp_path / "cohort"),
+            )
 
+    def test_missing_winner_row_fails_loudly(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
             lane,
             "configured_sources",
@@ -601,6 +661,7 @@ class TestCohortConversion:
                 folders=("fixture_v1",),
                 repo="fixture/validated-tasks",
                 candidate_revision="eafe9b38",
+                tracked_spec_uris=(),
                 output_root=str(tmp_path / "cohort"),
             )
 
