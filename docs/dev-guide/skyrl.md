@@ -192,6 +192,11 @@ trainer:
   rollout_buffer:
     max_in_flight: 128
 generator:
+  num_inference_engines: 8
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_pipeline_parallel_size: 1
+  inference_engine_data_parallel_size: 16
+  inference_engine_expert_parallel_size: 16
   model_dtype: bfloat16
   vllm_attention_backend: FLASHINFER
   max_num_seqs: 128
@@ -219,7 +224,9 @@ generator:
 In your artifact main, apply it to the existing `SkyRLSpec` named `spec` and
 `IrisSkyRLExecution` named `execution` before calling `skyrl_step`. These public
 interfaces are described in [RL launching](../references/rl-launching.md).
-The file stays in the submitted checkout so the coordinator reads the same recipe.
+The patch replaces any existing inference topology declarations to match the new
+role plan. The file stays in the submitted checkout so the coordinator reads the
+same recipe.
 
 ```python
 from dataclasses import replace
@@ -258,35 +265,14 @@ run's admission cap at two groups, use
 before updating `spec`. Use a new artifact version for the changed
 inference layout and inspect the rendered launch document before submitting it.
 
-The tested build is `marin-vllm-gpu-20261113-0ac9dcb157ee`, in BF16 on GB200.
-A matched 64-GPU serving comparison on November 17, 2026 used the same nodes,
-prompts, seeds, 256-token outputs and 2,048 concurrent requests:
-
-| Configuration | Output tokens/s per allocated inference GPU |
-| --- | ---: |
-| EP64, graphs NONE | 126 |
-| EP64, PIECEWISE | 293 |
-| Four EP16 groups, PIECEWISE | 416 |
-| Four EP16 groups with this serving bundle | 464 |
-
-The 3.68x gain measures serving throughput. Several settings changed together;
-it does not isolate FlashInfer's contribution or measure RL speedup. The raw
-matched-run receipts are not public. [Issue #11430](https://github.com/marin-community/marin/issues/11430)
-provides the public serving context. The measured gain uses the published build
-and requires neither [vLLM #130](https://github.com/marin-community/vllm/pull/130)
-nor [#11492](https://github.com/marin-community/marin/pull/11492).
-
-This configuration has CPU validation on main. On a separate experimental
-runtime, RL completed three fresh nonzero updates at a 102,400-token context
-limit. It verified updated weights and generated with them
-in all eight engines. Each of two evaluations produced scores for all 120 tasks,
-and a native checkpoint completed. Its first batch reached 56,196 attended tokens.
-That integration used separate task-setup/runtime repairs and cadence; this
-fragment keeps the caller's settings.
-Separate EP16 serving completed one request with 262,024 prompt-plus-output tokens.
-Near-262K trainer backward used the earlier inference layout. Sustained runs,
-same-version recovery and integrated near-262K training
-with all eight engines still need qualification.
+The recipe targets the pinned published vLLM build
+`marin-vllm-gpu-20261113-0ac9dcb157ee`. CPU validation covers recipe composition,
+native launch loading, training configuration and three-domain placement, with
+and without existing inference topology declarations. It also checks the two-group
+admission override. These checks provide no GPU execution or performance evidence.
+GPU memory fit, updated-weight publication, long-context training and recovery
+need validation on your runtime. [Issue #11430](https://github.com/marin-community/marin/issues/11430)
+tracks serving work.
 
 ## Expert-block weight sync placement
 
