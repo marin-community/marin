@@ -20,7 +20,8 @@ trials:
   batch: X0240
   date: '2026-11-18'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0240
-  wandb: []
+  wandb:
+  - belay-X0240-seed0
   settings:
     muonh_radial_softcap: '2.0'
   commit: 97213b778f
