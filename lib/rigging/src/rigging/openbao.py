@@ -117,7 +117,7 @@ def _public_pem(value: str) -> str:
 class OpenBaoTransitSigner:
     """Sign the existing Rigging EdDSA JWT contract with a Transit key."""
 
-    def __init__(self, client: OpenBaoClient, *, issuer: str, key_version: int, key: str = "marin-grants"):
+    def __init__(self, client: OpenBaoClient, *, issuer: str, key_version: int, key: str):
         if not key or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in key):
             raise ValueError("invalid Transit key name")
         if key_version < 1:

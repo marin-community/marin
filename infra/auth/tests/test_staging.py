@@ -9,7 +9,8 @@ import pytest
 
 from infra.auth import staging
 from infra.auth.bootstrap import OperatorClient
-from infra.auth.staging import prepare, private_directory, private_file, rotate_broker
+from infra.auth.login import private_directory
+from infra.auth.staging import prepare, private_file, rotate_broker
 
 
 def test_prepare_preserves_deployment_credentials_and_limits_file_access(tmp_path):

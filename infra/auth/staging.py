@@ -14,7 +14,6 @@ import hashlib
 import json
 import os
 import secrets
-import stat
 import subprocess
 import tempfile
 import urllib.error
@@ -32,6 +31,7 @@ from rigging.timing import Duration, ExponentialBackoff
 
 from infra.auth.bootstrap import OperatorClient, configure
 from infra.auth.fga_operator import OpenFGAOperator
+from infra.auth.login import private_directory, read_private
 from infra.auth.openfga import scope_object
 from infra.auth.proof_fga import configure_proof
 from infra.auth.proof_pod import NAMESPACE
@@ -41,17 +41,7 @@ CONTEXT = "marin_US-WEST-04A"
 DATABASE_NAMESPACE = "marin-auth-db-staging"
 DATABASE_HOST = f"auth-postgres-rw.{DATABASE_NAMESPACE}.svc"
 ISSUER = "https://auth-staging.oa.dev/v1/identity/oidc"
-CHECKOUT = Path(__file__).resolve().parents[2]
-
-
-def private_directory(directory: Path) -> Path:
-    directory = directory.resolve()
-    if directory.is_relative_to(CHECKOUT):
-        raise ValueError("Staging credentials must live outside the repository")
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if stat.S_IMODE(directory.stat().st_mode) != 0o700:
-        raise ValueError("The staging credential directory must have mode 0700")
-    return directory
+DEFAULT_BAO_ADDRESS = "https://localhost:18200"
 
 
 def private_file(path: Path, value: bytes) -> None:
@@ -59,13 +49,6 @@ def private_file(path: Path, value: bytes) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(descriptor, "wb") as stream:
         stream.write(value)
-
-
-def credential(directory: Path, name: str) -> str:
-    path = directory / name
-    if path.is_symlink() or stat.S_IMODE(path.stat().st_mode) != 0o600:
-        raise ValueError(f"Private credential file permissions are invalid: {name}")
-    return path.read_text().strip()
 
 
 def prepare(directory: Path) -> None:
@@ -80,12 +63,12 @@ def prepare(directory: Path) -> None:
     ):
         if not (directory / name).exists():
             private_file(directory / name, secrets.token_urlsafe(40).encode())
-        credential(directory, name)
+        read_private(directory / name)
     now = datetime.datetime.now(datetime.UTC)
     if (directory / "ca.key").exists():
-        ca_key = serialization.load_pem_private_key(credential(directory, "ca.key").encode(), password=None)
+        ca_key = serialization.load_pem_private_key(read_private(directory / "ca.key").encode(), password=None)
         assert isinstance(ca_key, rsa.RSAPrivateKey)
-        ca = x509.load_pem_x509_certificate(credential(directory, "ca.crt").encode())
+        ca = x509.load_pem_x509_certificate(read_private(directory / "ca.crt").encode())
     else:
         ca_key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
         ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Marin synthetic auth staging CA")])
@@ -120,8 +103,8 @@ def prepare(directory: Path) -> None:
         ("broker", [f"marin-auth.{NAMESPACE}.svc", "localhost"]),
     ):
         if (directory / f"{service}.key").exists():
-            credential(directory, f"{service}.key")
-            credential(directory, f"{service}.crt")
+            read_private(directory / f"{service}.key")
+            read_private(directory / f"{service}.crt")
             continue
         leaf_certificate(directory, service, names, ca_key, ca, now)
     # Remove the superseded shared leaf only after all isolated leaves exist.
@@ -189,19 +172,19 @@ def install_secrets(directory: Path) -> None:
             NAMESPACE,
             f"{service}-tls",
             {
-                "tls.key": credential(directory, f"{service}.key") + "\n",
-                "tls.crt": credential(directory, f"{service}.crt") + "\n",
-                "ca.crt": credential(directory, "ca.crt") + "\n",
+                "tls.key": read_private(directory / f"{service}.key") + "\n",
+                "tls.crt": read_private(directory / f"{service}.crt") + "\n",
+                "ca.crt": read_private(directory / "ca.crt") + "\n",
             },
         )
     install_database_secrets(directory)
     install_secret(
         NAMESPACE,
         "openbao-database",
-        {"username": "openbao", "password": credential(directory, "openbao.password")},
+        {"username": "openbao", "password": read_private(directory / "openbao.password")},
     )
     for name in ("openfga", "grants"):
-        password = credential(directory, f"{name}.password")
+        password = read_private(directory / f"{name}.password")
         userinfo = f"{name}:{quote(password, safe='')}"
         if name == "openfga":
             install_secret(
@@ -218,19 +201,19 @@ def install_secrets(directory: Path) -> None:
             install_secret(
                 NAMESPACE, "grants-database", {"url": f"postgresql+pg8000://{userinfo}@{DATABASE_HOST}/grants"}
             )
-    install_secret(NAMESPACE, "openfga-token", {"token": credential(directory, "openfga.token")})
-    install_secret(NAMESPACE, "openfga-runtime-token", {"token": credential(directory, "openfga-runtime.token")})
+    install_secret(NAMESPACE, "openfga-token", {"token": read_private(directory / "openfga.token")})
+    install_secret(NAMESPACE, "openfga-runtime-token", {"token": read_private(directory / "openfga-runtime.token")})
     for username in ("launcher", "iris-controller"):
         install_secret(
             NAMESPACE,
             f"synthetic-{username}",
             {
                 "username": username,
-                "password": credential(directory, f"{username}.password"),
+                "password": read_private(directory / f"{username}.password"),
             },
         )
     if (directory / "broker.token").exists():
-        install_secret(NAMESPACE, "broker-token", {"token": credential(directory, "broker.token")})
+        install_secret(NAMESPACE, "broker-token", {"token": read_private(directory / "broker.token")})
 
 
 def install_database_secrets(directory: Path) -> None:
@@ -240,7 +223,7 @@ def install_database_secrets(directory: Path) -> None:
             f"{name}-database",
             {
                 "username": name,
-                "password": credential(directory, f"{name}.password"),
+                "password": read_private(directory / f"{name}.password"),
             },
         )
 
@@ -249,7 +232,7 @@ def install_database_ca(directory: Path) -> None:
     secret = json.loads(kubectl(["-n", DATABASE_NAMESPACE, "get", "secret", "auth-postgres-ca", "-o", "json"]))
     database_ca = base64.b64decode(secret["data"]["ca.crt"]).decode()
     install_secret(NAMESPACE, "postgres-ca", {"ca.crt": database_ca})
-    bundle = credential(directory, "ca.crt") + "\n" + database_ca + "\n" + Path(requests.certs.where()).read_text()
+    bundle = read_private(directory / "ca.crt") + "\n" + database_ca + "\n" + Path(requests.certs.where()).read_text()
     install_secret(NAMESPACE, "auth-ca", {"ca.crt": bundle})
 
 
@@ -274,11 +257,11 @@ def initialize(directory: Path, addresses: list[str]) -> dict:
                 )
             ).encode(),
         )
-    material = json.loads(credential(directory, "initialization.json"))
+    material = json.loads(read_private(directory / "initialization.json"))
     for index, address in enumerate(addresses):
         client = OperatorClient(address, "", ca_file)
         ExponentialBackoff(initial=0.2, maximum=2).wait_until_or_raise(
-            lambda client=client: unsealed_peer(client, material["keys_base64"][0]),
+            lambda client=client: unseal_peer(client, material["keys_base64"][0]),
             Duration.from_seconds(90),
             "OpenBao did not unseal",
         )
@@ -307,7 +290,7 @@ def initialize(directory: Path, addresses: list[str]) -> dict:
             "POST",
             f"auth/synthetic/users/{username}",
             {
-                "password": credential(directory, f"{username}.password"),
+                "password": read_private(directory / f"{username}.password"),
                 "token_policies": ["marin-auth-identity"],
                 "token_ttl": "1h",
                 "token_max_ttl": "24h",
@@ -317,7 +300,7 @@ def initialize(directory: Path, addresses: list[str]) -> dict:
             "POST",
             f"auth/synthetic/login/{username}",
             {
-                "password": credential(directory, f"{username}.password"),
+                "password": read_private(directory / f"{username}.password"),
             },
         )["auth"]
         identities[username] = {"subject": login["entity_id"], "principal": principal, "issuer": ISSUER}
@@ -337,17 +320,17 @@ def initialize(directory: Path, addresses: list[str]) -> dict:
     path = directory / "identity.json"
     if not path.exists():
         private_file(path, json.dumps(identity).encode())
-    elif json.loads(credential(directory, "identity.json")) != identity:
+    elif json.loads(read_private(directory / "identity.json")) != identity:
         raise ValueError("The synthetic identity changed; inspect deployment recovery before proceeding")
     controller_path = directory / "iris-controller.json"
     if not controller_path.exists():
         private_file(controller_path, json.dumps(identities["iris-controller"]).encode())
-    elif json.loads(credential(directory, "iris-controller.json")) != identities["iris-controller"]:
+    elif json.loads(read_private(directory / "iris-controller.json")) != identities["iris-controller"]:
         raise ValueError("The synthetic controller identity changed; inspect deployment recovery before proceeding")
     return identities
 
 
-def unsealed_peer(client: OperatorClient, key: str) -> bool:
+def unseal_peer(client: OperatorClient, key: str) -> bool:
     if not client.request("GET", "sys/seal-status")["sealed"]:
         return True
     try:
@@ -382,9 +365,9 @@ def wait_for_broker_credential(filename: str, expected: bytes) -> int:
 
 def rotate_broker(directory: Path, address: str) -> dict:
     """Replace the staging signing credential after every replica receives it."""
-    material = json.loads(credential(directory, "initialization.json"))
+    material = json.loads(read_private(directory / "initialization.json"))
     operator = OperatorClient(address, material["root_token"], str(directory / "ca.crt"))
-    previous = credential(directory, "broker.token")
+    previous = read_private(directory / "broker.token")
     pending = directory / "broker-next.token"
     # Preserve an unfinished rotation so retrying does not leave more live tokens.
     if not pending.exists():
@@ -400,7 +383,7 @@ def rotate_broker(directory: Path, address: str) -> dict:
             },
         )["auth"]["client_token"]
         private_file(pending, token.encode())
-    token = credential(directory, pending.name)
+    token = read_private(directory / pending.name)
     metadata = operator.request("POST", "auth/token/lookup", {"token": token})["data"]
     if metadata["policies"] != ["marin-auth-broker"] or metadata["ttl"] <= 0:
         raise ValueError("The pending broker credential has unexpected authority or has expired")
@@ -415,12 +398,12 @@ def rotate_broker(directory: Path, address: str) -> dict:
 def issue_proof(directory: Path, address: str, ttl: int, *, login_directory: Path | None = None) -> dict:
     """Refresh idle proof credentials, optionally using an enrolled Google session."""
     proof = private_directory(Path(tempfile.mkdtemp(prefix="proof-", dir=directory)))
-    material = json.loads(credential(directory, "initialization.json"))
+    material = json.loads(read_private(directory / "initialization.json"))
     ca_file = str(directory / "ca.crt")
     operator = OperatorClient(address, material["root_token"], ca_file)
     canary = seed_canary(operator, token_file=proof / "task-canary.token", ttl=ttl)
-    native = operator.request("POST", "auth/token/lookup", {"token": credential(proof, "task-canary.token")})["data"]
-    install_secret(NAMESPACE, "task-canary-token", {"token": credential(proof, "task-canary.token")})
+    native = operator.request("POST", "auth/token/lookup", {"token": read_private(proof / "task-canary.token")})["data"]
+    install_secret(NAMESPACE, "task-canary-token", {"token": read_private(proof / "task-canary.token")})
     wait_for_broker_credential("/var/run/marin-auth/task-canary-token/token", (proof / "task-canary.token").read_bytes())
     expiries = {}
     for username, filename, metadata_file in (
@@ -428,16 +411,16 @@ def issue_proof(directory: Path, address: str, ttl: int, *, login_directory: Pat
         ("iris-controller", "controller.jwt", "iris-controller.json"),
     ):
         if username == "launcher" and login_directory is not None:
-            expected = json.loads(credential(login_directory, "enrollment.json"))
+            expected = json.loads(read_private(login_directory / "enrollment.json"))
             expected_subject = expected["entity_id"]
-            client = OperatorClient(address, credential(login_directory, "bao.token"), ca_file)
+            client = OperatorClient(address, read_private(login_directory / "bao.token"), ca_file)
         else:
             login = operator.request(
                 "POST",
                 f"auth/synthetic/login/{username}",
-                {"password": credential(directory, f"{username}.password")},
+                {"password": read_private(directory / f"{username}.password")},
             )["auth"]
-            expected_subject = json.loads(credential(directory, metadata_file))["subject"]
+            expected_subject = json.loads(read_private(directory / metadata_file))["subject"]
             client = OperatorClient(address, login["client_token"], ca_file)
         token = client.request("GET", "identity/oidc/token/marin-auth")["data"]["token"]
         claims = jwt.decode(token, options={"verify_signature": False})
@@ -448,6 +431,7 @@ def issue_proof(directory: Path, address: str, ttl: int, *, login_directory: Pat
     signer = OpenBaoTransitSigner(
         OpenBaoClient(address, directory / "broker.token", ca_bundle=ca_file),
         issuer=f"https://marin-auth.{NAMESPACE}.svc:8090",
+        key="marin-grants",
         key_version=1,
     )
     (public_key,) = signer.public_keys()
@@ -455,7 +439,7 @@ def issue_proof(directory: Path, address: str, ttl: int, *, login_directory: Pat
     install_secret(
         NAMESPACE,
         "auth-proof-identities",
-        {name: credential(proof, name) for name in ("launcher.jwt", "controller.jwt", "grants.pem")},
+        {name: read_private(proof / name) for name in ("launcher.jwt", "controller.jwt", "grants.pem")},
     )
     metadata = {
         "directory": str(proof),
@@ -500,9 +484,9 @@ def main() -> None:
     elif args.command == "install-database-ca":
         install_database_ca(directory)
     elif args.command == "initialize":
-        print(json.dumps(initialize(directory, args.bao_address or ["https://localhost:18200"])))
+        print(json.dumps(initialize(directory, args.bao_address or [DEFAULT_BAO_ADDRESS])))
     elif args.command == "rotate-broker":
-        print(json.dumps(rotate_broker(directory, (args.bao_address or ["https://localhost:18200"])[0])))
+        print(json.dumps(rotate_broker(directory, (args.bao_address or [DEFAULT_BAO_ADDRESS])[0])))
     elif args.command == "issue-proof":
         if args.ttl is None:
             parser.error("issue-proof requires --ttl (at most 900 seconds)")
@@ -510,7 +494,7 @@ def main() -> None:
             json.dumps(
                 issue_proof(
                     directory,
-                    (args.bao_address or ["https://localhost:18200"])[0],
+                    (args.bao_address or [DEFAULT_BAO_ADDRESS])[0],
                     args.ttl,
                     login_directory=args.login_directory,
                 )
@@ -523,7 +507,7 @@ def main() -> None:
             policy = configure_proof(operator)
             policy["token_file"] = str(policy["token_file"])
             private_file(path, json.dumps(policy).encode())
-        policy = json.loads(credential(directory, "openfga.json"))
+        policy = json.loads(read_private(directory / "openfga.json"))
         # Reconcile the dedicated store so repeating publication is idempotent.
         relationships = []
         continuation = ""
@@ -559,7 +543,7 @@ def main() -> None:
                 runtime_path,
                 json.dumps({"store_id": store_id, "model_id": model_id}).encode(),
             )
-        print(json.dumps({"openfga": policy, "runtime_grants": json.loads(credential(directory, runtime_path.name))}))
+        print(json.dumps({"openfga": policy, "runtime_grants": json.loads(read_private(directory / runtime_path.name))}))
 
 
 if __name__ == "__main__":

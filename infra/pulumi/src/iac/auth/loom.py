@@ -15,6 +15,8 @@ import pulumi_kubernetes as k8s
 from iac.auth.broker import BROKER_LABELS, BROKER_PORT
 from iac.auth.openbao import dns_egress
 
+LOOM_API_PORT = 7878
+LOOM_TLS_PORT = 8443
 LOOM_LABELS = {"app.kubernetes.io/name": "loom-cw"}
 
 
@@ -153,7 +155,16 @@ class Loom(pulumi.ComponentResource):
         )
         deployment_json = pulumi.Output.json_dumps(args.deployment, sort_keys=True)
         health_probe = {
-            "exec": {"command": ["curl", "--fail", "--silent", "--max-time", "2", "http://127.0.0.1:7878/api/health"]},
+            "exec": {
+                "command": [
+                    "curl",
+                    "--fail",
+                    "--silent",
+                    "--max-time",
+                    "2",
+                    f"http://127.0.0.1:{LOOM_API_PORT}/api/health",
+                ]
+            },
             "timeout_seconds": 3,
         }
         self.config = k8s.core.v1.ConfigMap(
@@ -162,9 +173,9 @@ class Loom(pulumi.ComponentResource):
             data={
                 "deployment.json": deployment_json,
                 "Caddyfile": (
-                    "{\n  admin off\n  auto_https off\n}\n:8443 {\n"
+                    f"{{\n  admin off\n  auto_https off\n}}\n:{LOOM_TLS_PORT} {{\n"
                     "  tls /etc/loom-tls/tls.crt /etc/loom-tls/tls.key\n"
-                    "  reverse_proxy 127.0.0.1:7878 {\n"
+                    f"  reverse_proxy 127.0.0.1:{LOOM_API_PORT} {{\n"
                     "    header_up X-Loom-Forwarded true\n  }\n}\n"
                 ),
             },
@@ -203,8 +214,8 @@ class Loom(pulumi.ComponentResource):
                                 "name": "loom",
                                 "image": args.image,
                                 # Preserve the image's tini + CLI installation entrypoint.
-                                "args": ["loom", "server", "run", "--addr", "127.0.0.1:7878"],
-                                "ports": [{"name": "http", "container_port": 7878}],
+                                "args": ["loom", "server", "run", "--addr", f"127.0.0.1:{LOOM_API_PORT}"],
+                                "ports": [{"name": "http", "container_port": LOOM_API_PORT}],
                                 "env": [
                                     {"name": "LOOM_RUNNER", "value": "local"},
                                     {"name": "HOME", "value": "/home/app"},
@@ -247,7 +258,7 @@ class Loom(pulumi.ComponentResource):
                                 "image": args.proxy_image,
                                 "command": ["caddy"],
                                 "args": ["run", "--config", "/etc/loom-deployment/Caddyfile", "--adapter", "caddyfile"],
-                                "ports": [{"name": "https", "container_port": 8443}],
+                                "ports": [{"name": "https", "container_port": LOOM_TLS_PORT}],
                                 "security_context": {
                                     "allow_privilege_escalation": False,
                                     "read_only_root_filesystem": True,
@@ -309,7 +320,7 @@ class Loom(pulumi.ComponentResource):
                     "traefik.ingress.kubernetes.io/service.serverstransport": f"{args.namespace}-loom@kubernetescrd",
                 },
             },
-            spec={"selector": LOOM_LABELS, "ports": [{"name": "https", "port": 8443, "target_port": "https"}]},
+            spec={"selector": LOOM_LABELS, "ports": [{"name": "https", "port": LOOM_TLS_PORT, "target_port": "https"}]},
             opts=child,
         )
         ingress_peer = {
@@ -327,7 +338,7 @@ class Loom(pulumi.ComponentResource):
                 "pod_selector": {"match_labels": LOOM_LABELS},
                 "policy_types": ["Ingress", "Egress"],
                 "ingress": (
-                    [{"from": [ingress_peer, broker_peer], "ports": [{"port": 8443}]}]
+                    [{"from": [ingress_peer, broker_peer], "ports": [{"port": LOOM_TLS_PORT}]}]
                     if args.exposure == "serving"
                     else []
                 ),
@@ -380,7 +391,10 @@ class Loom(pulumi.ComponentResource):
                                         "path": "/",
                                         "path_type": "Prefix",
                                         "backend": {
-                                            "service": {"name": service.metadata["name"], "port": {"number": 8443}}
+                                            "service": {
+                                                "name": service.metadata["name"],
+                                                "port": {"number": LOOM_TLS_PORT},
+                                            }
                                         },
                                     }
                                 ]

@@ -32,13 +32,12 @@ from marina.server import MCP_PATH, MarinaConfig, create_app
 from rigging.grant_auth import JWT_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT
 from rigging.shared_grants import SharedGrantConfig
 
-from infra.auth.proof_fga import free_port
+from infra.auth.proof_fga import NESTED_MEMBERSHIP, free_port
 from infra.auth.proof_http import serve
 from infra.auth.proof_iris import iris
 
 APP_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 OTHER_APP_ID = uuid.UUID("00000000-0000-4000-8000-000000000002")
-MEMBERSHIP = {"user": "group:marin-team#member", "relation": "member", "object": "group:marin-research"}
 
 
 def rpc(url: str, method: str, payload: dict, token: str | None = None) -> requests.Response:
@@ -297,9 +296,9 @@ def run_service_proof(
             lambda: rpc(finelog_url, "/finelog.stats.StatsService/Query", query, finelog_token),
         ]
         assert [check().status_code for check in checks] == [200, 200, 200]
-        fga.write(fga_config["store_id"], fga_config["model_id"], writes=[], deletes=[MEMBERSHIP])
+        fga.write(fga_config["store_id"], fga_config["model_id"], writes=[], deletes=[NESTED_MEMBERSHIP])
         assert [check().status_code for check in checks] == [403, 403, 403]
-        fga.write(fga_config["store_id"], fga_config["model_id"], writes=[MEMBERSHIP], deletes=[])
+        fga.write(fga_config["store_id"], fga_config["model_id"], writes=[NESTED_MEMBERSHIP], deletes=[])
         assert [check().status_code for check in checks] == [200, 200, 200]
         credential_path = Path(fga_config["token_file"])
         credential = credential_path.read_text()

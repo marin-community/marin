@@ -228,7 +228,7 @@ class GrantStore:
         return grant
 
     def grant_for_request(self, *, parent_id: str, idempotency_key: str) -> Grant | None:
-        """Find a delegated request for retirement, including expired or revoked grants."""
+        """Find the request-keyed child grant, including expired or revoked grants."""
         parent = self._get(parent_id)
         grant = self.runtime.get(_request_id(parent.actor, idempotency_key))
         return grant if grant is not None and grant.parent_id == parent_id else None

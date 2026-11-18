@@ -25,8 +25,9 @@ from rigging.timing import Duration, ExponentialBackoff
 from sqlalchemy.engine import URL, make_url
 
 from infra.auth.bootstrap import OperatorClient
+from infra.auth.login import private_directory, read_private
 from infra.auth.prove import isolated_openbao
-from infra.auth.staging import DATABASE_HOST, credential, private_directory, private_file
+from infra.auth.staging import DATABASE_HOST, private_file
 
 
 def database_digest(url: URL, ca_file: Path) -> dict:
@@ -122,9 +123,9 @@ def database_restore(directory: Path, source_file: Path, ca_file: Path, postgres
 
 
 def bao_snapshot(directory: Path, address: str) -> dict:
-    initialized = json.loads(credential(directory, "initialization.json"))
+    initialized = json.loads(read_private(directory / "initialization.json"))
     source = OperatorClient(address, initialized["root_token"], str(directory / "ca.crt"))
-    identity = json.loads(credential(directory, "identity.json"))
+    identity = json.loads(read_private(directory / "identity.json"))
     expected_key = source.request("GET", "transit/keys/marin-grants")["data"]["keys"]
     source.request("GET", f"identity/entity/id/{identity['subject']}")
     request = urllib.request.Request(
@@ -149,7 +150,7 @@ def bao_restore(directory: Path, executable: Path) -> dict:
     # A restored Raft peer map must have no route to the source cluster.
     if {path.name for path in Path("/sys/class/net").iterdir()} != {"lo"}:
         raise ValueError("Run the restore command inside Docker --network=none")
-    initialized = json.loads(credential(directory, "initialization.json"))
+    initialized = json.loads(read_private(directory / "initialization.json"))
     snapshot = (directory / "openbao.snap").read_bytes()
     with tempfile.TemporaryDirectory(prefix="restore-", dir=directory) as scratch:
         with isolated_openbao(executable, Path(scratch)) as (local, certificate):
@@ -188,18 +189,18 @@ def bao_restore(directory: Path, executable: Path) -> dict:
 
 def verify_bao_state(client: OperatorClient, directory: Path) -> None:
     """Match the restored signing key and fixed synthetic identity to the snapshot."""
-    expected = json.loads(credential(directory, "openbao-recovery.json"))
+    expected = json.loads(read_private(directory / "openbao-recovery.json"))
     assert client.request("GET", "transit/keys/marin-grants")["data"]["keys"] == expected["keys"]
     assert client.request("GET", f"identity/entity/id/{expected['subject']}")["data"]["id"] == expected["subject"]
     login = client.request(
-        "POST", "auth/synthetic/login/launcher", {"password": credential(directory, "launcher.password")}
+        "POST", "auth/synthetic/login/launcher", {"password": read_private(directory / "launcher.password")}
     )["auth"]
     assert login["entity_id"] == expected["subject"]
 
 
 def bao_verify(directory: Path, address: str) -> dict:
     """Validate the unsealed PostgreSQL-backed staging server against its Raft snapshot."""
-    initialized = json.loads(credential(directory, "initialization.json"))
+    initialized = json.loads(read_private(directory / "initialization.json"))
     client = OperatorClient(address, initialized["root_token"], str(directory / "ca.crt"))
     health = client.request("GET", "sys/health")
     if not health["initialized"] or health["sealed"]:

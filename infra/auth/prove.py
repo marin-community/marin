@@ -13,7 +13,6 @@ import ipaddress
 import json
 import os
 import secrets
-import socket
 import subprocess
 import tempfile
 import time
@@ -37,7 +36,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from infra.auth.bootstrap import OperatorClient, configure
-from infra.auth.proof_fga import configure_proof, configure_runtime, isolated_openfga
+from infra.auth.proof_fga import NESTED_MEMBERSHIP, configure_proof, configure_runtime, free_port, isolated_openfga
 from infra.auth.proof_http import serve
 from infra.auth.prove_loom import isolated_loom, run_loom_proof
 from infra.auth.service import ServiceConfig, create_service
@@ -61,16 +60,10 @@ def synthetic_coreweave_exchange():
             }
         )
 
-    port = _free_port()
+    port = free_port()
     app = Starlette(routes=[Route("/exchange", exchange, methods=["POST"])])
     with serve(app, port), patch("infra.auth.coreweave.OIDC_EXCHANGE_URL", f"http://127.0.0.1:{port}/exchange"):
         yield issued
-
-
-def _free_port() -> int:
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return listener.getsockname()[1]
 
 
 def _certificate(directory: Path) -> tuple[Path, Path]:
@@ -104,7 +97,7 @@ def _certificate(directory: Path) -> tuple[Path, Path]:
 @contextmanager
 def isolated_openbao(executable: Path, directory: Path, *, database_uri: str | None = None):
     certificate, key = _certificate(directory)
-    api_port, cluster_port = _free_port(), _free_port()
+    api_port, cluster_port = free_port(), free_port()
     address = f"https://127.0.0.1:{api_port}"
     (directory / "raft").mkdir()
     configuration = {
@@ -230,7 +223,7 @@ def prove(
                 {"service": "iris", "actions": ["job.submit"], "resource": "/clusters/isolated-proof/jobs/proof/"},
                 storage_permission,
             ]
-            auth_port = _free_port()
+            auth_port = free_port()
             auth_url = f"http://127.0.0.1:{auth_port}"
             loom = None
             if loom_executable is not None:
@@ -374,8 +367,7 @@ def prove(
                 evidence["checks"].append(
                     "OpenFGA HTTP decisions: cross-session, audience, namespace and explicit-forbid denials"
                 )
-                membership = {"user": "group:marin-team#member", "relation": "member", "object": "group:marin-research"}
-                fga.write(fga_config["store_id"], fga_config["model_id"], writes=[], deletes=[membership])
+                fga.write(fga_config["store_id"], fga_config["model_id"], writes=[], deletes=[NESTED_MEMBERSHIP])
                 assert (
                     client.post(
                         "/v1/authorize",
@@ -388,7 +380,7 @@ def prove(
                     ).status_code
                     == 403
                 )
-                fga.write(fga_config["store_id"], fga_config["model_id"], writes=[membership], deletes=[])
+                fga.write(fga_config["store_id"], fga_config["model_id"], writes=[NESTED_MEMBERSHIP], deletes=[])
                 assert (
                     client.post(
                         "/v1/authorize",
@@ -461,6 +453,7 @@ def prove(
                 next_signer = OpenBaoTransitSigner(
                     OpenBaoClient(operator.address, broker_file, ca_bundle=str(certificate)),
                     issuer=auth_url,
+                    key="marin-grants",
                     key_version=2,
                 )
                 claims = jwt.decode(iris, options={"verify_signature": False})

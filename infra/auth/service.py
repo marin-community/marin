@@ -206,7 +206,9 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
     runtime = OpenFGARuntime(**config.runtime_grants.model_dump(), ca_bundle=config.ca_bundle)
     store = GrantStore(runtime, policy.authorities, policy)
     broker = OpenBaoClient(config.bao_address, config.broker_token_file, ca_bundle=config.ca_bundle)
-    signer = OpenBaoTransitSigner(broker, issuer=config.issuer, key_version=config.signing_key_version)
+    signer = OpenBaoTransitSigner(
+        broker, issuer=config.issuer, key="marin-grants", key_version=config.signing_key_version
+    )
     audiences = frozenset(service for service, _action in ACTIONS)
     verifier = OpenBaoTransitVerifier(signer, audiences=audiences)
     authority = GrantAuthService(

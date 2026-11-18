@@ -17,6 +17,8 @@ import requests
 from infra.auth.fga_operator import OpenFGAOperator
 from infra.auth.openfga import scope_object
 
+NESTED_MEMBERSHIP = {"user": "group:marin-team#member", "relation": "member", "object": "group:marin-research"}
+
 
 def free_port() -> int:
     with socket.socket() as listener:
@@ -81,7 +83,7 @@ def configure_proof(operator: OpenFGAOperator) -> dict:
     store_id, model_id = operator.publish("marin-auth-proof", json.loads((directory / "model.json").read_text()))
     relationships = [
         {"user": "principal:launcher", "relation": "member", "object": "group:marin-team"},
-        {"user": "group:marin-team#member", "relation": "member", "object": "group:marin-research"},
+        NESTED_MEMBERSHIP,
         *(
             {
                 "user": "group:marin-research#member",

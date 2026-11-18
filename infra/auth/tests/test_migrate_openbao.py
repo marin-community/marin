@@ -13,9 +13,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import DatabaseError
 
 from infra.auth import migrate_openbao
+from infra.auth.login import private_directory
 from infra.auth.prove import _certificate
 from infra.auth.recover_staging import bao_verify
-from infra.auth.staging import private_directory, private_file
+from infra.auth.staging import private_file
 
 
 @pytest.fixture

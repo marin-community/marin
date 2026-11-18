@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.grant_auth import GrantAuthService
 from rigging.grant_database import GrantDatabase
-from rigging.grants import GrantDenied, Permission
+from rigging.grants import Grant, GrantDenied, Permission
 from rigging.server_auth import extract_bearer_token
 from sqlalchemy import text
 from starlette.applications import Starlette
@@ -190,24 +190,7 @@ class IrisAttemptBroker:
                 parent_id=parent.id,
                 idempotency_key=binding.key,
             )
-            minted = self.authority.mint_for(child, audience=self.config.audience)
-            # A disconnected replica can lose its session lock while its signer
-            # is still working. Recheck the durable tombstone before releasing
-            # credentials; retirement never permits a late issuance to revive it.
-            try:
-                self._record(binding, retiring=False)
-            except GrantDenied:
-                self.authority.store.revoke(child.id, principal=child.actor)
-                raise
-            return {
-                "grant_id": child.id,
-                "parent_grant_id": parent.id,
-                "actor": child.actor,
-                "attempt_uid": request.attempt_uid,
-                "access_token": minted["access_token"],
-                "expires_at": child.credential_expires_at,
-                "auth_url": self.auth_url,
-            }
+            return self._credentials(binding, child)
 
     def renew(self, identity_token: str, request: IrisAttemptRequest) -> dict:
         """Accept fresh liveness only from the trusted cluster controller."""
@@ -222,7 +205,7 @@ class IrisAttemptBroker:
             child = self.authority.store.grant_for_request(parent_id=parent.id, idempotency_key=binding.key)
             if child is None or child.actor != binding.actor:
                 raise GrantDenied("No issued grant matches this attempt")
-            # Accept each liveness report, but replace the OpenFGA tuple only
+            # Accept each liveness report, but append an OpenFGA lease only
             # after a third of the lease has elapsed to avoid needless churn.
             if child.credential_expires_at - self.now() <= self.config.max_attempt_ttl * 2 / 3:
                 child = self.authority.store.renew_delegated(
@@ -230,21 +213,27 @@ class IrisAttemptBroker:
                 )
             else:
                 child = self.authority.store.active(child.id)
-            minted = self.authority.mint_for(child, audience=self.config.audience)
-            try:
-                self._record(binding, retiring=False)
-            except GrantDenied:
-                self.authority.store.revoke(child.id, principal=child.actor)
-                raise
-            return {
-                "grant_id": child.id,
-                "parent_grant_id": parent.id,
-                "actor": child.actor,
-                "attempt_uid": request.attempt_uid,
-                "access_token": minted["access_token"],
-                "expires_at": child.credential_expires_at,
-                "auth_url": self.auth_url,
-            }
+            return self._credentials(binding, child)
+
+    def _credentials(self, binding: AttemptBinding, child: Grant) -> dict:
+        minted = self.authority.mint_for(child, audience=self.config.audience)
+        # A disconnected replica can lose its session lock while its signer
+        # is still working. Recheck the durable tombstone before releasing
+        # credentials; retirement never permits a late issuance to revive it.
+        try:
+            self._record(binding, retiring=False)
+        except GrantDenied:
+            self.authority.store.revoke(child.id, principal=child.actor)
+            raise
+        return {
+            "grant_id": child.id,
+            "parent_grant_id": binding.request.grant_id,
+            "actor": child.actor,
+            "attempt_uid": binding.request.attempt_uid,
+            "access_token": minted["access_token"],
+            "expires_at": child.credential_expires_at,
+            "auth_url": self.auth_url,
+        }
 
     def retire(self, identity_token: str, request: IrisAttemptRequest) -> dict:
         binding = self._binding(identity_token, request)

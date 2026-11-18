@@ -27,7 +27,7 @@ from rigging.grants import Permission
 from rigging.timing import Duration, ExponentialBackoff
 
 from infra.auth.bootstrap import configure
-from infra.auth.proof_fga import configure_proof, free_port, isolated_openfga
+from infra.auth.proof_fga import NESTED_MEMBERSHIP, configure_proof, free_port, isolated_openfga
 from infra.auth.proof_http import serve
 from infra.auth.prove import create_proof_identity, isolated_openbao, proof_identity_token
 from infra.auth.service import ServiceConfig, create_service
@@ -35,7 +35,6 @@ from infra.auth.service import ServiceConfig, create_service
 NAMESPACE = "marin-pg-trial"
 CLUSTER = "auth-postgres"
 HOST = f"{CLUSTER}-rw.{NAMESPACE}.svc"
-MEMBERSHIP = {"user": "group:marin-team#member", "relation": "member", "object": "group:marin-research"}
 logger = logging.getLogger(__name__)
 
 
@@ -174,7 +173,7 @@ def prove() -> dict:
 
         assert decision() == 200
         # A successful tuple deletion must remain effective after database failover.
-        fga.write(fga_config["store_id"], fga_config["model_id"], writes=[], deletes=[MEMBERSHIP])
+        fga.write(fga_config["store_id"], fga_config["model_id"], writes=[], deletes=[NESTED_MEMBERSHIP])
         assert decision() == 403
         before = cluster_status(api)["currentPrimary"]
         started = time.monotonic()
@@ -196,7 +195,7 @@ def prove() -> dict:
         recovered_after = time.monotonic() - started
         wait_healthy(api)
         assert decision() == 403
-        fga.write(fga_config["store_id"], fga_config["model_id"], writes=[MEMBERSHIP], deletes=[])
+        fga.write(fga_config["store_id"], fga_config["model_id"], writes=[NESTED_MEMBERSHIP], deletes=[])
         assert decision() == 200
         renewed = authority.mint_for(grant, audience="iris")["access_token"]
         assert (

@@ -153,7 +153,9 @@ def bao(tmp_path):
 
 @pytest.fixture
 def signer(bao):
-    return OpenBaoTransitSigner(OpenBaoClient(bao.address, bao.token_file), issuer="https://auth.example", key_version=1)
+    return OpenBaoTransitSigner(
+        OpenBaoClient(bao.address, bao.token_file), issuer="https://auth.example", key="marin-grants", key_version=1
+    )
 
 
 def test_remote_transit_signature_matches_rigging_contract_and_rotating_broker_credential(bao, signer):
@@ -180,7 +182,7 @@ def test_remote_transit_rotation_accepts_retained_and_new_keys_after_refresh_bou
     assert jwt.get_unverified_header(signer.mint({"sub": "pinned"}, audience="loom", ttl_seconds=60))["kid"] == (
         jwt.get_unverified_header(old)["kid"]
     )
-    next_signer = OpenBaoTransitSigner(signer.client, issuer=signer.issuer, key_version=2)
+    next_signer = OpenBaoTransitSigner(signer.client, issuer=signer.issuer, key="marin-grants", key_version=2)
     new = next_signer.mint({"sub": "loom:two"}, audience="loom", ttl_seconds=60)
     with pytest.raises(ValueError):
         verifier.verify(new)
@@ -198,7 +200,7 @@ def test_transit_wrong_signing_version_cannot_return_a_grant_token(bao, signer):
 def test_transit_key_retirement_invalidates_cached_key_after_five_minutes(bao, signer):
     old = signer.mint({"sub": "loom:one"}, audience="loom", ttl_seconds=600)
     bao.keys[2] = generate_ed25519_keypair()
-    next_signer = OpenBaoTransitSigner(signer.client, issuer=signer.issuer, key_version=2)
+    next_signer = OpenBaoTransitSigner(signer.client, issuer=signer.issuer, key="marin-grants", key_version=2)
     new = next_signer.mint({"sub": "loom:two"}, audience="loom", ttl_seconds=600)
     clock = [0.0]
     verifier = OpenBaoTransitVerifier(next_signer, audiences=frozenset({"loom"}), now=lambda: clock[0])
@@ -233,7 +235,7 @@ def test_transit_concurrent_refresh_preserves_only_fresh_cached_authority(bao, s
     verifier = OpenBaoTransitVerifier(signer, audiences=frozenset({"loom"}), now=lambda: clock[0])
     old = signer.mint({"sub": "loom:one"}, audience="loom", ttl_seconds=600)
     bao.keys[2] = generate_ed25519_keypair()
-    next_signer = OpenBaoTransitSigner(signer.client, issuer=signer.issuer, key_version=2)
+    next_signer = OpenBaoTransitSigner(signer.client, issuer=signer.issuer, key="marin-grants", key_version=2)
     new = next_signer.mint({"sub": "loom:two"}, audience="loom", ttl_seconds=600)
     started, release = threading.Event(), threading.Event()
     bao.key_metadata_gate = started, release

@@ -31,12 +31,16 @@ from rigging.shared_grants import SharedGrantConfig
 from rigging.timing import Duration, ExponentialBackoff
 
 from infra.auth.client import StorageCredentials
-from infra.auth.proof_fga import free_port
-from infra.auth.proof_http import serve
 from infra.auth.proof_identity import controller_identity_file, google_identity, refreshing_identity_file
-from infra.auth.prove_execution import PROOF_PYTHON, ExecutionConfig, execution_agent_command, execution_controller
-from infra.auth.prove_loom import isolated_loom, prepare_loom_profile
-from infra.auth.service import LoomConfig, ServiceConfig, SqliteDatabaseConfig, create_service
+from infra.auth.prove_execution import (
+    PROOF_PYTHON,
+    ExecutionConfig,
+    execution_agent_command,
+    execution_broker,
+    execution_controller,
+)
+from infra.auth.prove_loom import isolated_loom
+from infra.auth.service import ServiceConfig
 from infra.auth.storage_probe import (
     OBSERVER_TOKEN_FILE,
     PROGRESS_MARKER,
@@ -294,25 +298,13 @@ def main() -> None:
         with isolated_loom(
             args.output_dir / "loom", executable=args.loom_executable, source=args.loom_source, agent_command=command
         ) as loom:
-            local = service.model_copy(
-                update={
-                    "database": SqliteDatabaseConfig(backend="sqlite", path=args.output_dir / "loom.sqlite"),
-                    "loom": LoomConfig(
-                        base_url=loom.base_url,
-                        observer_token_file=loom.observer_token_file,
-                        callback_token_file=loom.callback_token_file,
-                    ),
-                    "iris": None,
-                }
-            )
-            app, authority = create_service(local)
-            with serve(app, free_port()) as broker_url:
-                prepare_loom_profile(
-                    loom,
-                    trust=config.trust,
-                    template_name="storage-task-proof",
-                    credentials_url=broker_url + "/v1/loom/credentials",
-                )
+            with execution_broker(
+                args.output_dir / "loom.sqlite",
+                service=service,
+                loom=loom,
+                trust=config.trust,
+                template_name="storage-task-proof",
+            ) as (_, authority, broker_url):
                 identity = args.identity_token_file.read_text().strip()
                 principal = authority.identity_verifier.verify(identity)
                 with httpx.Client(base_url=broker_url, timeout=15) as client:

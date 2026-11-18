@@ -25,16 +25,15 @@ from rigging.shared_grants import SharedGrantClient, SharedGrantConfig
 from infra.auth.bootstrap import OperatorClient, configure, configure_google
 from infra.auth.login import close_session, enroll, read_private, verify_google_identity, write_private
 from infra.auth.login import login as login_session
-from infra.auth.proof_fga import configure_proof, configure_runtime, isolated_openfga
+from infra.auth.proof_fga import NESTED_MEMBERSHIP, configure_proof, configure_runtime, free_port, isolated_openfga
 from infra.auth.proof_http import serve
 from infra.auth.proof_iris import iris
-from infra.auth.prove import _certificate, _free_port, isolated_openbao
+from infra.auth.prove import _certificate, isolated_openbao
 from infra.auth.service import ServiceConfig, create_service
 
 AUDIENCE = "private-desktop-client"
 SUBJECT = "private-google-subject"
 EMAIL = "trial@example.test"
-NESTED_MEMBERSHIP = {"user": "group:marin-team#member", "relation": "member", "object": "group:marin-research"}
 
 
 @contextmanager
@@ -237,7 +236,7 @@ def prove(
                     "POST", "auth/token/create", {"policies": ["marin-auth-broker"], "no_default_policy": True}
                 )["auth"]["client_token"]
             )
-            auth_port = _free_port()
+            auth_port = free_port()
             config = ServiceConfig.model_validate(
                 {
                     "bao_address": operator.address,
@@ -303,6 +302,7 @@ def prove(
                         public_keys=OpenBaoTransitSigner(
                             OpenBaoClient(operator.address, broker_file, ca_bundle=str(ca_file)),
                             issuer=auth_url,
+                            key="marin-grants",
                             key_version=1,
                         ).public_keys(),
                     )

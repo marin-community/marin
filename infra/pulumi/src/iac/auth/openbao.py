@@ -12,6 +12,8 @@ from ipaddress import ip_network
 import pulumi
 import pulumi_kubernetes as k8s
 
+OPENBAO_API_PORT = 8200
+OPENBAO_CLUSTER_PORT = 8201
 OIDC_PATH = "/v1/identity/oidc"
 DISCOVERY_PATHS = (f"{OIDC_PATH}/.well-known/openid-configuration", f"{OIDC_PATH}/.well-known/keys")
 APP_LABELS = {"app.kubernetes.io/name": "openbao"}
@@ -107,11 +109,11 @@ def openbao_config(args: OpenBaoArgs) -> dict:
     return {
         "ui": False,
         "disable_mlock": True,
-        "api_addr": f"https://openbao.{args.namespace}.svc:8200",
+        "api_addr": f"https://openbao.{args.namespace}.svc:{OPENBAO_API_PORT}",
         "listener": {
             "tcp": {
-                "address": "[::]:8200",
-                "cluster_address": "[::]:8201",
+                "address": f"[::]:{OPENBAO_API_PORT}",
+                "cluster_address": f"[::]:{OPENBAO_CLUSTER_PORT}",
                 "tls_min_version": "tls12",
                 "tls_cert_file": "/openbao/tls/tls.crt",
                 "tls_key_file": "/openbao/tls/tls.key",
@@ -209,7 +211,7 @@ class OpenBao(pulumi.ComponentResource):
                 "cluster_ip": "None",
                 "publish_not_ready_addresses": True,
                 "selector": APP_LABELS,
-                "ports": [{"name": "api", "port": 8200}, {"name": "cluster", "port": 8201}],
+                "ports": [{"name": "api", "port": OPENBAO_API_PORT}, {"name": "cluster", "port": OPENBAO_CLUSTER_PORT}],
             },
             opts=child,
         )
@@ -224,7 +226,7 @@ class OpenBao(pulumi.ComponentResource):
                     "traefik.ingress.kubernetes.io/service.serverstransport": f"{args.namespace}-openbao@kubernetescrd",
                 },
             },
-            spec={"selector": APP_LABELS, "ports": [{"name": "https", "port": 8200, "target_port": "api"}]},
+            spec={"selector": APP_LABELS, "ports": [{"name": "https", "port": OPENBAO_API_PORT, "target_port": "api"}]},
             opts=child,
         )
         self.stateful_set = k8s.apps.v1.StatefulSet(
@@ -289,8 +291,8 @@ class OpenBao(pulumi.ComponentResource):
                                 "command": ["bao"],
                                 "args": ["server", "-config=/openbao/config/config.json"],
                                 "ports": [
-                                    {"name": "api", "container_port": 8200},
-                                    {"name": "cluster", "container_port": 8201},
+                                    {"name": "api", "container_port": OPENBAO_API_PORT},
+                                    {"name": "cluster", "container_port": OPENBAO_CLUSTER_PORT},
                                 ],
                                 "env": [
                                     {"name": "PGHOST", "value": args.database_host},
@@ -306,8 +308,8 @@ class OpenBao(pulumi.ComponentResource):
                                         for variable, key in (("PGUSER", "username"), ("PGPASSWORD", "password"))
                                     ),
                                     {"name": "POD_IP", "value_from": {"field_ref": {"field_path": "status.podIP"}}},
-                                    {"name": "BAO_CLUSTER_ADDR", "value": "https://$(POD_IP):8201"},
-                                    {"name": "BAO_ADDR", "value": "https://127.0.0.1:8200"},
+                                    {"name": "BAO_CLUSTER_ADDR", "value": f"https://$(POD_IP):{OPENBAO_CLUSTER_PORT}"},
+                                    {"name": "BAO_ADDR", "value": f"https://127.0.0.1:{OPENBAO_API_PORT}"},
                                     {"name": "BAO_TLS_SERVER_NAME", "value": args.listener_tls_server_name},
                                     {"name": "BAO_CACERT", "value": "/openbao/tls/ca.crt"},
                                     {"name": "HOME", "value": "/tmp"},
@@ -385,12 +387,15 @@ class OpenBao(pulumi.ComponentResource):
                 "ingress": [
                     {
                         "from": [{"pod_selector": {"match_labels": APP_LABELS}}],
-                        "ports": [{"port": 8200}, {"port": 8201}],
+                        "ports": [{"port": OPENBAO_API_PORT}, {"port": OPENBAO_CLUSTER_PORT}],
                     },
-                    {"from": [ingress_peer, client_peer], "ports": [{"port": 8200}]},
+                    {"from": [ingress_peer, client_peer], "ports": [{"port": OPENBAO_API_PORT}]},
                 ],
                 "egress": [
-                    {"to": [{"pod_selector": {"match_labels": APP_LABELS}}], "ports": [{"port": 8200}, {"port": 8201}]},
+                    {
+                        "to": [{"pod_selector": {"match_labels": APP_LABELS}}],
+                        "ports": [{"port": OPENBAO_API_PORT}, {"port": OPENBAO_CLUSTER_PORT}],
+                    },
                     {
                         "to": [
                             {
@@ -428,8 +433,8 @@ class OpenBao(pulumi.ComponentResource):
                 opts=child,
             )
         if args.discovery_mode == "private":
-            self.issuer = pulumi.Output.from_input(f"https://openbao.{args.namespace}.svc:8200{OIDC_PATH}")
-            self.api_address = pulumi.Output.from_input(f"https://openbao.{args.namespace}.svc:8200")
+            self.issuer = pulumi.Output.from_input(f"https://openbao.{args.namespace}.svc:{OPENBAO_API_PORT}{OIDC_PATH}")
+            self.api_address = pulumi.Output.from_input(f"https://openbao.{args.namespace}.svc:{OPENBAO_API_PORT}")
             self.register_outputs({"issuer": self.issuer, "api_address": self.api_address})
             return
         transport = k8s.apiextensions.CustomResource(
@@ -462,7 +467,12 @@ class OpenBao(pulumi.ComponentResource):
                                 {
                                     "path": path,
                                     "path_type": "Exact",
-                                    "backend": {"service": {"name": service.metadata["name"], "port": {"number": 8200}}},
+                                    "backend": {
+                                        "service": {
+                                            "name": service.metadata["name"],
+                                            "port": {"number": OPENBAO_API_PORT},
+                                        }
+                                    },
                                 }
                                 for path in DISCOVERY_PATHS
                             ]
@@ -473,7 +483,7 @@ class OpenBao(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(parent=self, provider=k8s_provider, depends_on=[namespace, transport]),
         )
         self.issuer = pulumi.Output.from_input(f"https://{args.public_hostname}{OIDC_PATH}")
-        self.api_address = pulumi.Output.from_input(f"https://openbao.{args.namespace}.svc:8200")
+        self.api_address = pulumi.Output.from_input(f"https://openbao.{args.namespace}.svc:{OPENBAO_API_PORT}")
         self.register_outputs(
             {"issuer": self.issuer, "api_address": self.api_address, "namespace": namespace.metadata["name"]}
         )

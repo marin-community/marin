@@ -36,7 +36,7 @@ from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
 from iris.managed_thread import thread_container_scope
 from iris.version import client_revision_date
-from rigging.grant_auth import JWT_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT
+from rigging.grant_auth import JWT_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT, GrantAuthService
 from rigging.shared_grants import SHARED_GRANT_TOKEN_SECRET, SharedGrantConfig
 from rigging.timing import Duration, ExponentialBackoff
 from sqlalchemy import select, text
@@ -69,6 +69,35 @@ class ExecutionRuntime:
     controller_url: str
     kubernetes: CloudK8sService
     database: ControllerDB
+
+
+@contextmanager
+def execution_broker(
+    database_file: Path,
+    *,
+    service: ServiceConfig,
+    loom: IsolatedLoom,
+    trust: SharedGrantConfig,
+    template_name: str,
+) -> Iterator[tuple[ServiceConfig, GrantAuthService, str]]:
+    """Bind an isolated Loom lifecycle to the deployed shared grant authority."""
+    local = service.model_copy(
+        update={
+            "database": SqliteDatabaseConfig(backend="sqlite", path=database_file),
+            "loom": LoomConfig(
+                base_url=loom.base_url,
+                observer_token_file=loom.observer_token_file,
+                callback_token_file=loom.callback_token_file,
+            ),
+            "iris": None,
+        }
+    )
+    app, authority = create_service(local)
+    with serve(app, free_port()) as broker_url:
+        prepare_loom_profile(
+            loom, trust=trust, template_name=template_name, credentials_url=broker_url + "/v1/loom/credentials"
+        )
+        yield local, authority, broker_url
 
 
 @contextmanager
@@ -400,27 +429,13 @@ def main() -> None:
                 source=args.loom_source,
                 agent_command=command,
             ) as loom:
-                local_config = service_config.model_copy(
-                    update={
-                        "database": SqliteDatabaseConfig(
-                            backend="sqlite", path=case_directory / "loom-lifecycle.sqlite"
-                        ),
-                        "loom": LoomConfig(
-                            base_url=loom.base_url,
-                            observer_token_file=loom.observer_token_file,
-                            callback_token_file=loom.callback_token_file,
-                        ),
-                        "iris": None,
-                    }
-                )
-                app, authority = create_service(local_config)
-                with serve(app, free_port()) as broker_url:
-                    prepare_loom_profile(
-                        loom,
-                        trust=config.trust,
-                        template_name=args.template_name,
-                        credentials_url=broker_url + "/v1/loom/credentials",
-                    )
+                with execution_broker(
+                    case_directory / "loom-lifecycle.sqlite",
+                    service=service_config,
+                    loom=loom,
+                    trust=config.trust,
+                    template_name=args.template_name,
+                ) as (local_config, authority, broker_url):
                     identity = args.identity_token_file.read_text().strip()
                     principal = authority.identity_verifier.verify(identity)
                     with httpx.Client(base_url=broker_url, timeout=15) as client:

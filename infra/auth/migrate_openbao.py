@@ -12,9 +12,10 @@ from urllib.parse import urlsplit
 from rigging.timing import Duration, ExponentialBackoff
 
 from infra.auth.bootstrap import OperatorClient
+from infra.auth.login import private_directory, read_private
 from infra.auth.proof_pod import NAMESPACE
 from infra.auth.recover_staging import bao_snapshot
-from infra.auth.staging import DATABASE_HOST, DATABASE_NAMESPACE, credential, kubectl, private_directory, private_file
+from infra.auth.staging import DATABASE_HOST, DATABASE_NAMESPACE, kubectl, private_file
 
 JOB_NAME = "openbao-raft-to-postgres"
 SOURCE_FILE = "openbao-migration.json"
@@ -45,7 +46,7 @@ class MigrationSource:
 
 def prepare(directory: Path, leader_pod: str, address: str) -> dict:
     """Capture the selected active peer's retained volume and recovery snapshot."""
-    initialized = json.loads(credential(directory, "initialization.json"))
+    initialized = json.loads(read_private(directory / "initialization.json"))
     client = OperatorClient(address, initialized["root_token"], str(directory / "ca.crt"))
     pod = json.loads(kubectl(["-n", NAMESPACE, "get", "pod", leader_pod, "-o", "json"]))
     leader = client.request("GET", "sys/leader")
@@ -173,7 +174,7 @@ def migration_job(source: MigrationSource) -> dict:
 
 def run(directory: Path) -> dict:
     """Copy the recorded source only after every OpenBao server has stopped."""
-    source = MigrationSource(**json.loads(credential(directory, SOURCE_FILE)))
+    source = MigrationSource(**json.loads(read_private(directory / SOURCE_FILE)))
     stateful_set = json.loads(kubectl(["-n", NAMESPACE, "get", "statefulset", "openbao", "-o", "json"]))
     pods = json.loads(kubectl(["-n", NAMESPACE, "get", "pods", "-l", "app.kubernetes.io/name=openbao", "-o", "json"]))
     server_pods = [

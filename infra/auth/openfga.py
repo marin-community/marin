@@ -43,15 +43,15 @@ def _timestamp(value: float) -> str:
 
 
 def principal_user(principal: str) -> str:
-    """Encode a Marin identity as one OpenFGA principal object ID."""
+    """Encode a Marin identity as an OpenFGA principal reference."""
     return f"principal:{quote(principal, safe='')}"
 
 
 class OpenFGARuntime:
-    """Persist and evaluate runtime grants in an independently authorized store.
+    """Persist grant bounds and enforce live ancestry, leases and revocation.
 
-    Creation writes the immutable metadata singleton, actor, bounds and ancestry
-    together. Revocation is monotonic and retains metadata for lifecycle cleanup.
+    Conflicting creation requests preserve the first grant's immutable identity
+    and bounds. Revocation is permanent; metadata remains readable for cleanup.
     The gateway credential must be scoped to this store's Read, Write and Check.
     """
 
@@ -192,9 +192,10 @@ class OpenFGARuntime:
                 "consistency": "HIGHER_CONSISTENCY",
             },
         )
-        if type(result.get("allowed")) is not bool:
+        allowed = result.get("allowed")
+        if not isinstance(allowed, bool):
             raise AuthorizationUnavailable("OpenFGA returned an invalid runtime authorization decision")
-        return result["allowed"]
+        return allowed
 
     def is_active(self, grant: Grant, now: float) -> bool:
         return self._check(grant, "valid", {"current_time": _timestamp(now)})
@@ -374,9 +375,12 @@ class OpenFGAPolicy:
             if response.status_code != 200:
                 raise AuthorizationUnavailable("OpenFGA did not return an authorization decision")
             result = response.json()
-            if not isinstance(result, dict) or type(result.get("allowed")) is not bool:
+            if not isinstance(result, dict):
                 raise AuthorizationUnavailable("OpenFGA returned an invalid authorization decision")
-            return result["allowed"]
+            allowed = result.get("allowed")
+            if not isinstance(allowed, bool):
+                raise AuthorizationUnavailable("OpenFGA returned an invalid authorization decision")
+            return allowed
         except (requests.RequestException, OSError, ValueError) as error:
             raise AuthorizationUnavailable("OpenFGA authorization is unavailable") from error
 

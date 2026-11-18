@@ -18,7 +18,7 @@ DATABASE_PATH = "/var/lib/marin-auth/grants.db"
 
 
 def coreweave_identity_metadata(bindings: list[dict]) -> dict:
-    """Publish the complete provider scope without private credential references."""
+    """Return the complete provider scope without private credential references."""
     metadata = {}
     subjects = set()
     for binding in bindings:

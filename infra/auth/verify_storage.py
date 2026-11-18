@@ -5,7 +5,7 @@
 
 import argparse
 import json
-import os
+import re
 import tempfile
 import threading
 import time
@@ -21,11 +21,32 @@ from botocore.exceptions import BotoCoreError, ClientError
 from botocore.httpsession import URLLib3Session
 from botocore.session import Session
 from botocore.utils import ContainerMetadataFetcher
-from rigging.filesystem.s3_compat import CoreWeaveFederation, coreweave_federation
+from rigging.filesystem.s3_compat import VIRTUAL_HOST_ONLY_S3_DOMAINS, CoreWeaveFederation
+from rigging.filesystem.storage_path import prefix_join
 from rigging.grants import Permission
 from rigging.secrets import require_secret
 
 from infra.auth.client import StorageCredentials, refreshing_storage_credentials
+
+
+def validate_storage_endpoint(value: str) -> None:
+    """Require a CoreWeave object-storage HTTPS origin before sending credentials."""
+    endpoint = urlsplit(value)
+    if (
+        endpoint.scheme != "https"
+        or not endpoint.hostname
+        or not any(
+            endpoint.hostname == domain or endpoint.hostname.endswith("." + domain)
+            for domain in VIRTUAL_HOST_ONLY_S3_DOMAINS
+        )
+        or endpoint.username
+        or endpoint.password
+        or endpoint.query
+        or endpoint.fragment
+        or endpoint.path not in ("", "/")
+        or endpoint.port not in (None, 443)
+    ):
+        raise ValueError("The storage endpoint must be a CoreWeave object-storage HTTPS origin")
 
 
 class CredentialExpirations(ContainerMetadataFetcher):
@@ -67,11 +88,11 @@ def probe_access(s3, *, bucket: str, allowed_key: str, denied_key: str, prefix: 
         raise ValueError("The supplied fixtures must be inside and outside the approved prefix respectively")
     read_fixture(s3, bucket, allowed_key)
     results: dict[str, bool | str] = {"inside_read": True}
-    sentinel = prefix + "marin-auth-probe-" + uuid.uuid4().hex
+    sentinel = prefix_join(prefix, "marin-auth-probe-" + uuid.uuid4().hex)
     for name, operation in (
         ("outside_read_denied", lambda: read_fixture(s3, bucket, denied_key)),
         ("write_denied", lambda: s3.put_object(Bucket=bucket, Key=sentinel, Body=b"x", IfNoneMatch="*")),
-        ("delete_denied", lambda: s3.delete_object(Bucket=bucket, Key=prefix + "marin-auth-probe-" + uuid.uuid4().hex)),
+        ("delete_denied", lambda: s3.delete_object(Bucket=bucket, Key=sentinel + "-delete")),
     ):
         try:
             operation()
@@ -84,8 +105,12 @@ def probe_access(s3, *, bucket: str, allowed_key: str, denied_key: str, prefix: 
             if name == "write_denied":
                 try:
                     s3.delete_object(Bucket=bucket, Key=sentinel)
-                except (ClientError, BotoCoreError):
+                except (ClientError, BotoCoreError) as error:
                     results["cleanup_required_key"] = sentinel
+                    code = error.response["Error"]["Code"] if isinstance(error, ClientError) else type(error).__name__
+                    results["cleanup_error_code"] = (
+                        code if re.fullmatch(r"[A-Za-z][A-Za-z0-9]{0,63}", code) else "ProviderError"
+                    )
     results["passed"] = all(
         results.get(name) is True for name in ("outside_read_denied", "write_denied", "delete_denied")
     )
@@ -126,22 +151,7 @@ def main() -> None:
     args = parser.parse_args()
     if not 0 <= args.wait_up_to <= 7200:
         parser.error("--wait-up-to must be between 0 and 7200 seconds")
-    endpoint = urlsplit(args.endpoint)
-    if (
-        endpoint.scheme != "https"
-        or not endpoint.hostname
-        or not any(
-            endpoint.hostname == domain or endpoint.hostname.endswith("." + domain)
-            for domain in ("cwobject.com", "cwlota.com")
-        )
-        or endpoint.username
-        or endpoint.password
-        or endpoint.query
-        or endpoint.fragment
-        or endpoint.path not in ("", "/")
-        or endpoint.port not in (None, 443)
-    ):
-        parser.error("--endpoint must be a CoreWeave object-storage HTTPS origin")
+    validate_storage_endpoint(args.endpoint)
     with tempfile.TemporaryDirectory(prefix="marin-auth-storage-") as directory:
         token_file = Path(directory) / "native.jwt"
         credentials = StorageCredentials(
@@ -151,10 +161,9 @@ def main() -> None:
             token_file=token_file,
             ca_bundle=args.ca_bundle,
         )
-        os.environ["AWS_CONTAINER_CREDENTIALS_FULL_URI"] = credentials.credentials_url
-        os.environ["AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"] = str(token_file)
-        federation = coreweave_federation()
-        assert federation is not None
+        federation = CoreWeaveFederation(
+            credentials.credentials_url, str(token_file), str(args.ca_bundle) if args.ca_bundle else None
+        )
         metadata = CredentialExpirations(args.ca_bundle)
         session = native_session(federation, metadata)
         with (

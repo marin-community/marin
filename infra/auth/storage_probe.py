@@ -12,18 +12,18 @@ import uuid
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import jwt
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from rigging.filesystem.s3_compat import CoreWeaveFederation
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.grants import Permission
 from rigging.secrets import require_secret, secret_path
 
 from infra.auth.client import StorageCredentials, refreshing_storage_credentials
 from infra.auth.login import write_private
-from infra.auth.verify_storage import CredentialExpirations, native_session, read_fixture
+from infra.auth.verify_storage import CredentialExpirations, native_session, read_fixture, validate_storage_endpoint
 
 PROGRESS_MARKER = "AUTH_STORAGE_PROGRESS "
 RESULT_MARKER = "AUTH_STORAGE_RESULT "
@@ -43,27 +43,13 @@ class StorageProbeConfig:
     interval: float = 15
 
     def __post_init__(self):
-        endpoint = urlsplit(self.endpoint)
-        if (
-            endpoint.scheme != "https"
-            or not endpoint.hostname
-            or not any(
-                endpoint.hostname == domain or endpoint.hostname.endswith("." + domain)
-                for domain in ("cwobject.com", "cwlota.com")
-            )
-            or endpoint.username
-            or endpoint.password
-            or endpoint.query
-            or endpoint.fragment
-            or endpoint.path not in ("", "/")
-            or endpoint.port not in (None, 443)
-        ):
-            raise ValueError("The storage endpoint must be a CoreWeave object-storage HTTPS origin")
+        validate_storage_endpoint(self.endpoint)
         Permission("cw_s3", frozenset({"s3:GetObject", "s3:PutObject"}), f"s3://{self.bucket}/{self.prefix}")
+        Permission("cw_s3", frozenset({"s3:PutObject"}), f"s3://{self.bucket}/{self.denied_write_prefix}")
+        if StoragePath(f"s3://{self.bucket}/{self.denied_key}").key != self.denied_key:
+            raise ValueError("The denied fixture must use a canonical object key")
         if self.denied_key.startswith(self.prefix) or self.denied_write_prefix.startswith(self.prefix):
             raise ValueError("Denied fixtures must lie outside the granted prefix")
-        if not self.prefix.endswith("/") or not self.denied_write_prefix.endswith("/"):
-            raise ValueError("Probe prefixes must end in a slash")
         if not 900 <= self.duration <= 1200 or not 1 <= self.interval <= 30:
             raise ValueError("Proof requires 900-1200 seconds and a 1-30 second interval")
 
@@ -135,8 +121,8 @@ def validate_progress(progress: dict, config: StorageProbeConfig) -> None:
 def run_probe(config: StorageProbeConfig) -> None:
     """Run small native operations repeatedly, renewing credentials from the attempt grant."""
     identifier = uuid.uuid4().hex
-    key = config.prefix + "probe-" + identifier
-    denied_write_key = config.denied_write_prefix + "probe-" + identifier
+    key = prefix_join(config.prefix, "probe-" + identifier)
+    denied_write_key = prefix_join(config.denied_write_prefix, "probe-" + identifier)
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="auth-storage-probe-") as directory:
         token_file = Path(directory) / "native.jwt"
