@@ -2,7 +2,7 @@
 
 [RL Data Atlas](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
 reads a Postgres copy of the published [curation catalog](task-curation.md#run-catalog).
-This reference is synced to preview revision 28 (2026-11-17), including the
+This reference is synced to preview revision 29 (2026-11-17), including the
 stage-0 license gate; the
 admission rules are in [Current admission policy](task-curation.md#current-admission-policy).
 Every source passes the [stage-0 license gate](task-curation.md#stage-0-binding-license-gate)

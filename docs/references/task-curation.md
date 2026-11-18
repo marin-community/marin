@@ -116,7 +116,7 @@ remain intact.
 
 ## Current admission policy
 
-Synced to preview revision 28 (2026-11-17). These rules include the admission
+Synced to preview revision 29 (2026-11-17). These rules include the admission
 display policy for Atlas preview revision 28. When a later section of this
 reference conflicts with them, this section is current.
 
