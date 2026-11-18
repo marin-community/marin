@@ -19,12 +19,12 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import levanter.callbacks
 from levanter.models.snowball import SnowballLMHeadModel
 from levanter.models.snowball_deletion import (
     down_norms,
     init_gate_logits_jax,
 )
-import levanter.callbacks
 from levanter.trainer import Trainer
 
 logger = logging.getLogger(__name__)
