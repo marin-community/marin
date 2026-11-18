@@ -200,7 +200,6 @@ def test_threshold_rule_matches_core(mesh):
 
 
 def test_alpha_ramp_matches_core():
-    from marin.rl.deletion_tuning import alpha_ramp as core_alpha_ramp
 
     for step, total in [(0, 10), (5, 10), (10, 10)]:
         np.testing.assert_allclose(alpha_ramp(step, total, 1e2, 1e3), core_alpha_ramp(step, total, 1e2, 1e3))
