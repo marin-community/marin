@@ -946,9 +946,8 @@ def test_snowball_packed_context_parallel_hidden_states_and_loss_are_isolated(
             max_seq_len=sequence_length,
             sliding_window=sequence_length // 2,
             attention_implementation=implementation,
+            # The default capacity is dropless; drops would couple tokens independently of attention.
             moe_implementation="ring",
-            # Eliminate capacity drops, which couple tokens independently of attention.
-            moe_capacity_factor=4,
         )
         Batch, Pos = Axis("batch", 4), Axis("position", sequence_length)
         ids = hax.named(jnp.arange(Batch.size * Pos.size).reshape(Batch.size, Pos.size) % cfg.vocab_size, (Batch, Pos))
@@ -1014,6 +1013,8 @@ def test_snowball_capacity_preserves_imbalanced_outputs_and_gradients():
                     moe_capacity_factor=capacity,
                 )
                 model = SnowballMoEMLP.init(cfg, key=jax.random.key(19))
+                if capacity is None:
+                    assert model.expert_mlp.capacity_factor == expert_axis
                 # All tokens choose experts on the same destination shard.
                 model = eqx.tree_at(lambda m: m.router_bias, model, jnp.array([10.0, 9.0, -10.0, -10.0]))
                 inputs = jnp.arange(256, dtype=jnp.float32).reshape(4, 8, 8) / 256
@@ -1027,10 +1028,10 @@ def test_snowball_capacity_preserves_imbalanced_outputs_and_gradients():
                     np.asarray(grad.expert_mlp.w_down),
                 ]
 
-        reference = run(1, 2)
-        preserved = run(2, 2)
+        reference = run(1, None)
+        for preserved in (run(2, None), run(2, 2)):
+            for actual, expected in zip(preserved, reference, strict=True):
+                np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
         dropped = run(2, 1)
-        for actual, expected in zip(preserved, reference, strict=True):
-            np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
         assert not np.allclose(dropped[0], reference[0], rtol=1e-5, atol=1e-5)
         assert not np.allclose(dropped[2], reference[2], rtol=1e-5, atol=1e-5)
