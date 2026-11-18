@@ -8007,6 +8007,8 @@ optimizer:
   decay: 475
   default_weight_decay_mask: null
   epsilon: 3.8339433005718795e-15
+  expert_normalization: all_experts
+  global_grad_norm: 1.0
   haps: null
   learning_rate: 5.0e-05
   lr_schedule: linear
@@ -8017,6 +8019,7 @@ optimizer:
   nesterov: true
   rewarmup: 0.0
   type: grug_moe_muonh_v1
+  use_syrk: true
   warmup: 0
   weight_decay: 0
   weight_decay_modules: null
