@@ -75,7 +75,6 @@ from taskcompendium.evaluation.corpus import file_sha256
 from experiments.post_training.task_curation import difficulty_report
 from experiments.post_training.task_curation.difficulty_contracts import ContractVintageError
 from experiments.post_training.task_curation.difficulty_preflight import preflight_continuation
-from experiments.post_training.task_curation.difficulty_protocol import GLM_RELAY_JOB
 from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import (
     DifficultyCoverage,
     campaign_queue,
@@ -272,7 +271,7 @@ def preflight_launch(plan: LaunchPlan) -> dict[str, Any]:
     frozen-receipt vintage mismatch, hosted-v13b on a runtime/task validation
     conflict, hosted-v13c on a serving pod deleted behind a running relay
     record, and small-v22 on a truncated serving digest. The gate reproduces
-    every one on the submitting machine: relay liveness for hosted, the
+    every one on the submitting machine: hosted endpoint liveness, the
     continuation bindings, the frozen-receipt comparison per selected source,
     and full local task staging.
     """
@@ -285,7 +284,7 @@ def preflight_launch(plan: LaunchPlan) -> dict[str, Any]:
                 plan.previous_campaign,
                 plan.previous_serving_sha256,
                 stage_root=Path(scratch) / "tasks",
-                relay_job=GLM_RELAY_JOB if plan.solver == Solver.HOSTED else None,
+                probe_hosted=plan.solver == Solver.HOSTED,
             )
     except (ContractVintageError, ValueError) as error:
         raise RoundsError(f"launch preflight failed; refusing to submit: {error}") from error
@@ -815,7 +814,7 @@ def main() -> None:
     preflight.add_argument(
         "--solver",
         choices=[solver.value for solver in Solver],
-        help="With hosted, also checks the shared relay's serving-pod liveness.",
+        help="With hosted, also probes the hosted endpoint's liveness.",
     )
     preflight.add_argument(
         "--receipt-stage-only",
@@ -965,7 +964,7 @@ def main() -> None:
                 args.previous_campaign,
                 args.previous_serving_sha256,
                 None if args.receipt_stage_only else Path(scratch) / "tasks",
-                relay_job=GLM_RELAY_JOB if args.solver == Solver.HOSTED else None,
+                probe_hosted=args.solver == Solver.HOSTED,
             )
         print(json.dumps(receipt, indent=2))
         if args.json:

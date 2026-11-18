@@ -290,15 +290,20 @@ def test_every_judge_tier_carries_an_immutable_checkpoint_pin():
         assert len(definition.model_revision) >= 40, f"{tier.value} pins a shortened revision"
 
 
-def test_hosted_relay_liveness_fails_fast_and_reports_the_relay_job(monkeypatch):
+def test_hosted_endpoint_liveness_fails_fast_and_sends_the_hosted_model(monkeypatch):
+    sent = {}
+
     def dead_post(self, url, **kwargs):
+        sent["url"] = url
+        sent["model"] = kwargs["json"]["model"]
         raise httpx.ConnectError("connection refused")
 
     monkeypatch.setattr(httpx.Client, "post", dead_post)
-    monkeypatch.setattr(difficulty_campaign, "TOGETHER_BASE_URL", "https://relay.fixture/v1")
+    monkeypatch.setattr(difficulty_campaign, "TOGETHER_BASE_URL", "https://hosted.fixture/v1")
     monkeypatch.setattr(difficulty_campaign, "require_secret", lambda name: "fixture-key")
     try:
         with difficulty_campaign.solver_endpoint(Solver.HOSTED, sampling_settings(Solver.HOSTED, []), 0):
-            raise AssertionError("The dead relay must fail the endpoint context")
+            raise AssertionError("The dead endpoint must fail the endpoint context")
     except RuntimeError as error:
-        assert "liveness" in str(error) and "glm53-relay" in str(error)
+        assert "liveness" in str(error) and "hosted.fixture" in str(error)
+    assert sent["model"] == difficulty_campaign.TOGETHER_MODEL

@@ -17,15 +17,20 @@ refuses the launch with the precise diff.
 
 import json
 import logging
-import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import require_secret
 from taskcompendium.evaluation.corpus import file_sha256
 
+from experiments.post_training.task_curation.difficulty_campaign import (
+    TOGETHER_API_KEY_ENV,
+    TOGETHER_BASE_URL,
+    TOGETHER_MODEL,
+    hosted_endpoint_liveness,
+)
 from experiments.post_training.task_curation.difficulty_contracts import (
     ContractVintageError,
     describe_vintage,
@@ -36,64 +41,6 @@ from experiments.post_training.task_curation.difficulty_samples import Difficult
 from experiments.post_training.task_curation.sample_qc import panel_task_runtimes
 
 LOGGER = logging.getLogger(__name__)
-
-# A serving pod deleted behind a still-"running" job record (the hosted-v13c
-# relay outage): the job's task row carries this diagnostic while its state
-# column still says running.
-IRIS_CLUSTER = "marin"
-POD_DELETED_DIAGNOSTIC = "PodDeleted"
-DEAD_TASK_STATES = ("failed", "killed", "cancelled")
-
-
-def relay_liveness(relay_job: str) -> dict:
-    """Whether a shared relay's serving pod is actually alive behind its job record.
-
-    ``iris job describe`` can report state=running while the serving pod is
-    gone (``PodDeleted`` diagnostic, preemptions>0); a probe to that relay
-    times out (hosted-v13c died exactly there). The check refuses a submission
-    against a dead relay instead of burning a root on it.
-    """
-    listing = subprocess.run(
-        ["uv", "run", "--no-sync", "iris", f"--cluster={IRIS_CLUSTER}", "job", "describe", relay_job],
-        capture_output=True,
-        text=True,
-        timeout=300,
-        check=False,
-    )
-    output = listing.stdout
-    if listing.returncode != 0 or "Job:" not in output:
-        raise ValueError(f"could not describe the shared relay job {relay_job}: {listing.stderr.strip()[:300]}")
-    preemptions = 0
-    match = re.search(r"preemptions=(\d+)", output)
-    if match:
-        preemptions = int(match.group(1))
-    dead_rows = []
-    for line in output.splitlines():
-        fields = line.split(maxsplit=5)
-        if len(fields) < 6 or fields[0] == "TASK":
-            continue
-        task_state, tail = fields[1], fields[5].strip()
-        # The duration column contains spaces, so the tail carries duration and
-        # memory fragments before the diagnostic; the named diagnostic is what
-        # the refusal quotes.
-        if POD_DELETED_DIAGNOSTIC in tail:
-            tail = tail[tail.index(POD_DELETED_DIAGNOSTIC) :]
-        elif tail == "-":
-            tail = ""
-        if task_state.lower() in DEAD_TASK_STATES or POD_DELETED_DIAGNOSTIC in tail:
-            dead_rows.append({"state": task_state, "diagnostic": tail})
-    verdict = {
-        "relay_job": relay_job,
-        "preemptions": preemptions,
-        "dead_tasks": dead_rows,
-        "alive": not dead_rows,
-    }
-    if not verdict["alive"]:
-        raise ValueError(
-            f"The shared relay's serving pod is gone behind a running job record: {relay_job} "
-            f"(preemptions={preemptions}, diagnostics={dead_rows}); wait for its revival before submitting"
-        )
-    return verdict
 
 
 @dataclass(frozen=True)
@@ -150,17 +97,19 @@ def preflight_continuation(
     previous_campaign: str | None = None,
     previous_serving_sha256: str | None = None,
     stage_root: Path | None = None,
-    relay_job: str | None = None,
+    probe_hosted: bool = False,
 ) -> dict:
-    """Verify a submission locally: shared relay liveness, continuation bindings,
+    """Verify a submission locally: hosted endpoint liveness, continuation bindings,
     then every selected source's receipt (and staging when ``stage_root`` is set).
 
     Returns the preflight receipt; raises ``ValueError`` naming the failures.
     """
     configure_coreweave_s3()
-    relay: dict | None = None
-    if relay_job is not None:
-        relay = relay_liveness(relay_job)
+    if probe_hosted:
+        try:
+            hosted_endpoint_liveness(TOGETHER_BASE_URL, require_secret(TOGETHER_API_KEY_ENV), TOGETHER_MODEL)
+        except Exception as error:
+            raise ValueError(f"Hosted endpoint liveness failed; refusing the submission: {error}") from error
     if bool(previous_campaign) != bool(previous_serving_sha256):
         raise ValueError("Continuation requires both the previous campaign and its serving receipt digest")
     queue_sources = load_queue_sources(sources, sources_sha256, source_ids)
@@ -208,7 +157,6 @@ def preflight_continuation(
     failures = [result for result in results if result.error is not None]
     receipt = {
         **bindings,
-        "relay": relay,
         "sources": len(results),
         "tasks": sum(result.tasks for result in results),
         "vintages": sorted({result.vintage for result in results if result.vintage is not None}),

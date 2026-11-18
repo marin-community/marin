@@ -133,56 +133,33 @@ def test_preflight_names_a_truncated_serving_digest(tmp_path, monkeypatch):
         preflight_continuation(QUEUE, QUEUE_SHA, None, str(parent), digest[:16])
 
 
-_RELAY_HEALTHY_OUTPUT = (
-    "Job: /muchanem/relay (/muchanem/relay)\n"
-    "State: running  exit=0  failures=0  preemptions=0\n"
-    "Tasks: 0/1 completed  running=1\n"
-    "\n"
-    "  TASK  STATE    EXIT    DURATION   PEAK MEM    CUR MEM    DIAGNOSTIC\n"
-    "     0  running  -       3 days     -           -          -\n"
-)
+def test_preflight_probes_the_hosted_endpoint_and_refuses_a_dead_one(monkeypatch):
+    """The hosted campaign now serves Together; the preflight probes the same endpoint
+    before bindings, and a dead endpoint refuses the submission (the v13c class)."""
+    calls = []
 
-_RELAY_DEAD_OUTPUT = (
-    "Job: /muchanem/relay (/muchanem/relay)\n"
-    "State: running  exit=0  failures=0  preemptions=1\n"
-    "Tasks: 0/1 completed  running=1\n"
-    "\n"
-    "  TASK  STATE    EXIT    DURATION                     PEAK MEM    CUR MEM    DIAGNOSTIC\n"
-    "     0  running  -       1 week, 2 days and 13 hours  -           -          "
-    "PodDeleted: pod was deleted while the attempt was active\n"
-)
+    def fake_probe(base_url, api_key, model):
+        calls.append((base_url, model))
+        raise RuntimeError("did not answer a liveness completion within 60s")
+
+    monkeypatch.setattr(difficulty_preflight, "hosted_endpoint_liveness", fake_probe)
+    monkeypatch.setattr(difficulty_preflight, "require_secret", lambda name: "fixture-key")
+    monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [])
+    with pytest.raises(ValueError, match=r"Hosted endpoint liveness failed.*liveness"):
+        preflight_continuation(QUEUE, QUEUE_SHA, None, probe_hosted=True)
+    assert calls == [(difficulty_preflight.TOGETHER_BASE_URL, difficulty_preflight.TOGETHER_MODEL)]
 
 
-def _fake_iris_describe(monkeypatch, output: str):
-    def fake_run(command, capture_output, text, timeout, check):
-        return type("R", (), {"returncode": 0, "stdout": output, "stderr": ""})()
-
-    monkeypatch.setattr(difficulty_preflight.subprocess, "run", fake_run)
-
-
-def test_relay_liveness_accepts_a_live_relay(monkeypatch):
-    _fake_iris_describe(monkeypatch, _RELAY_HEALTHY_OUTPUT)
-    verdict = difficulty_preflight.relay_liveness("/muchanem/relay")
-    assert verdict["alive"] is True
-    assert verdict["dead_tasks"] == []
-    assert verdict["preemptions"] == 0
-
-
-def test_relay_liveness_refuses_a_pod_deleted_behind_a_running_record(monkeypatch):
-    """hosted-v13c's failure: the job record says running, the serving pod is gone."""
-    _fake_iris_describe(monkeypatch, _RELAY_DEAD_OUTPUT)
-    with pytest.raises(ValueError, match=r"serving pod is gone.*preemptions=1.*PodDeleted"):
-        difficulty_preflight.relay_liveness("/muchanem/relay")
-
-
-def test_relay_liveness_refuses_a_failed_task_row(monkeypatch):
-    output = _RELAY_HEALTHY_OUTPUT.replace(
-        "     0  running  -       3 days     -           -          -",
-        "     0  failed   1       3 days     -           -          boom",
+def test_preflight_skips_the_hosted_probe_for_local_solvers(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        difficulty_preflight,
+        "hosted_endpoint_liveness",
+        lambda *a: calls.append(a),
     )
-    _fake_iris_describe(monkeypatch, output)
-    with pytest.raises(ValueError, match="serving pod is gone"):
-        difficulty_preflight.relay_liveness("/muchanem/relay")
+    monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [])
+    preflight_continuation(QUEUE, QUEUE_SHA, None)
+    assert calls == []
 
 
 def test_load_queue_sources_filters_and_verifies(tmp_path, difficulty_source):

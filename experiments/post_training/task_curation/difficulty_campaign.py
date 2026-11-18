@@ -38,7 +38,6 @@ from experiments.post_training.task_curation.difficulty_config import CandidateR
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_preparation import PreparedSource, prepare_source
 from experiments.post_training.task_curation.difficulty_protocol import (
-    GLM_RELAY_JOB,
     PINS,
     TARGET_CLUSTER,
     serving_model,
@@ -58,25 +57,25 @@ TOGETHER_API_KEY_ENV = "TOGETHER_API_KEY"
 TOGETHER_MODEL = "zai-org/GLM-5.3"
 
 
-def hosted_relay_liveness(base_url: str, api_key: str) -> None:
-    """Fail in seconds when the hosted relay is dead, instead of a 30-minute probe timeout.
+def hosted_endpoint_liveness(base_url: str, api_key: str, model: str) -> None:
+    """Fail in seconds when the hosted endpoint is dead, instead of a 30-minute probe timeout.
 
-    A relay job can sit in the running state with its serving pod deleted; the campaign's
-    serving probe would then hang for its full 1800-second window. One short chat
-    completion with a 60-second timeout separates a live relay from a dead one.
+    One short chat completion with a 60-second timeout separates a live serving
+    endpoint from a dead one (a dead relay once sat in the running state with its
+    serving pod deleted, and the campaign's serving probe hung for its full window).
     """
     try:
         with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=60) as client:
             response = client.post(
                 base_url.rstrip("/") + "/chat/completions",
-                json={"model": GLM_MODEL, "messages": [{"role": "user", "content": "liveness"}], "max_tokens": 1},
+                json={"model": model, "messages": [{"role": "user", "content": "liveness"}], "max_tokens": 1},
             )
             response.raise_for_status()
     except Exception as error:
         raise RuntimeError(
-            f"The hosted relay at {base_url} ({GLM_RELAY_JOB}) did not answer a liveness completion "
-            f"within 60s: {type(error).__name__}: {str(error)[:160]}. The relay job may be in the running "
-            "state with its serving pod deleted - check `iris job describe` diagnostics before resubmitting."
+            f"The hosted endpoint {base_url} (model {model}) did not answer a liveness completion "
+            f"within 60s: {type(error).__name__}: {str(error)[:160]}. Check the endpoint and its "
+            "credential before resubmitting."
         ) from error
 
 
@@ -87,21 +86,23 @@ PRIORITY_CHOICES = ("production", "interactive", "batch", "system")
 MODEL_CACHE_ROOT = "s3://marin-rno2a"
 JOB_TIMEOUT = Duration.from_seconds(259200)
 NATIVE_CONTEXT_SAFETY_BUFFER = 0
-# The shared GLM relay queues probes behind hosted traffic; a retry succeeds
-# once the relay drains instead of killing the campaign (hosted-v13c died on a
+# A hosted endpoint queues probes behind hosted traffic; a retry succeeds once
+# the queue drains instead of killing the campaign (hosted-v13c died on a
 # single probe ReadTimeout).
-RELAY_PROBE_ATTEMPTS = 3
+SERVING_PROBE_ATTEMPTS = 3
 
 
-def probe_with_relay_retries(solver: Solver, endpoint: str, api_model: str, api_key: str, settings: SamplingSettings):
-    """Probe a shared-relay endpoint, retrying the queue-drain timeouts."""
-    for attempt_number in range(1, RELAY_PROBE_ATTEMPTS + 1):
+def probe_with_transient_retries(
+    solver: Solver, endpoint: str, api_model: str, api_key: str, settings: SamplingSettings
+):
+    """Probe a hosted endpoint, retrying the queue-drain timeouts."""
+    for attempt_number in range(1, SERVING_PROBE_ATTEMPTS + 1):
         try:
             return probe_endpoint(solver, endpoint, api_model, api_key, settings)
         except httpx.TimeoutException as error:
-            if attempt_number == RELAY_PROBE_ATTEMPTS:
+            if attempt_number == SERVING_PROBE_ATTEMPTS:
                 raise
-            LOGGER.warning("Relay probe attempt %d timed out: %s", attempt_number, error)
+            LOGGER.warning("Serving probe attempt %d timed out: %s", attempt_number, error)
     raise AssertionError("the retry loop always returns or raises on the final attempt")
 
 
@@ -177,7 +178,7 @@ def worker_limits(root: Path) -> dict:
 def solver_endpoint(solver: Solver, settings: SamplingSettings, priority: int):
     if solver == Solver.HOSTED:
         base_url = TOGETHER_BASE_URL
-        hosted_relay_liveness(base_url, require_secret(TOGETHER_API_KEY_ENV))
+        hosted_endpoint_liveness(base_url, require_secret(TOGETHER_API_KEY_ENV), TOGETHER_MODEL)
         yield base_url, TOGETHER_MODEL, require_secret(TOGETHER_API_KEY_ENV), []
         return
     definition = serving_model(solver, settings.context_tokens)
@@ -468,7 +469,7 @@ def main() -> None:
         jobs,
     ):
         probe = (
-            probe_with_relay_retries(args.solver, endpoint, api_model, api_key, settings)
+            probe_with_transient_retries(args.solver, endpoint, api_model, api_key, settings)
             if args.solver == Solver.HOSTED
             else probe_endpoint(args.solver, endpoint, api_model, api_key, settings)
         )
@@ -522,7 +523,7 @@ def main() -> None:
                     else:
                         # The shared GLM relay may queue the probe behind hosted traffic; a
                         # retry succeeds once the relay drains instead of killing the campaign.
-                        judge_probe = probe_with_relay_retries(
+                        judge_probe = probe_with_transient_retries(
                             Solver.HOSTED,
                             judge_endpoint,
                             judge_api_model,
