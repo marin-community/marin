@@ -32,6 +32,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import require_oracle_filter
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
+from experiments.post_training.task_curation.content_identity import ContentIdentityReceipt
 from experiments.post_training.task_curation.full_content_binding import (
     RetainedLineageProof,
     bind_full_content_result,
@@ -265,13 +266,16 @@ def bind_selected_source_content(
     sample: SampleQCReceipt | None,
     full_content: FullContentResultBinding | None,
     retained_lineage: RetainedLineageProof | None = None,
+    content_identity: ContentIdentityReceipt | None = None,
 ) -> RlDataSource:
     """Attach current content after pin selection and validate archived original evidence.
 
     ``retained_lineage`` carries the byte-preserving subset proof: an archived
     receipt pinned to the original population validates against it instead of
     failing the post-retention pin, and its proof is recorded on the retained
-    declaration. Anything else still raises.
+    declaration. A ``content_identity`` receipt extends that proof to a panel
+    recorded against a byte-identical re-serialization of the same pin. Anything
+    else still raises.
     """
     dataset = selected.dataset
     if sample is not None and (
@@ -280,11 +284,13 @@ def bind_selected_source_content(
         != (dataset.name, dataset.revision, selected.version)
     ):
         if retained_lineage is not None:
-            selected = bind_sample_result(selected, sample, retained_lineage=retained_lineage)
+            selected = bind_sample_result(
+                selected, sample, retained_lineage=retained_lineage, content_identity=content_identity
+            )
         else:
-            bind_sample_result(original, sample)
+            bind_sample_result(original, sample, content_identity=content_identity)
     else:
-        selected = bind_sample_result(selected, sample)
+        selected = bind_sample_result(selected, sample, content_identity=content_identity)
     if full_content is not None and not matches_full_content_input(selected, full_content):
         if retained_lineage is not None:
             selected = bind_full_content_result(selected, full_content, retained_lineage=retained_lineage)

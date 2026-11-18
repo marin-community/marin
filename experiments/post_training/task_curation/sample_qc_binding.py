@@ -5,10 +5,11 @@
 
 from dataclasses import replace
 
-from finestore.rl.curation import ContentEvidenceReference, IndependentQC, SamplePanelCurrency
+from finestore.rl.curation import ActorCensusInput, ContentEvidenceReference, IndependentQC, SamplePanelCurrency
 from pydantic import BaseModel, ConfigDict, model_validator
 from taskcompendium.pipeline.models import ReviewRecord
 
+from experiments.post_training.task_curation.content_identity import ContentIdentityReceipt
 from experiments.post_training.task_curation.full_content_binding import (
     RetainedLineageProof,
     clear_stale_full_content_result,
@@ -20,21 +21,39 @@ from infra.marina.apps.rl_data_catalog.server.quality import SAMPLE_MAX_MISSING_
 from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
 
 
-def sample_matches_lineage(receipt: "SampleQCReceipt", lineage: RetainedLineageProof) -> bool:
-    """Whether an archived panel is exactly the retained release's byte-identical original panel."""
+def sample_matches_lineage(
+    receipt: "SampleQCReceipt",
+    lineage: RetainedLineageProof,
+    content_identity: ContentIdentityReceipt | None = None,
+) -> bool:
+    """Whether an archived panel is exactly the retained release's byte-identical original panel.
+
+    A recorded content-identity receipt binds an archived panel whose artifact
+    digest differs from the lineage input's only through re-serialization:
+    every TaskSpec byte verified identical across the two conversions. Any
+    differing task refuses, and without a receipt the digests must match exactly.
+    """
     panel = receipt.review.panel
-    return receipt.source_id == lineage.source_id and (
+    if receipt.source_id != lineage.source_id or (
         panel.dataset_id,
         panel.dataset_revision,
         panel.converter_version,
-        panel.task_specs_sha256,
         panel.retained_tasks,
-    ) == (
+    ) != (
         lineage.original_dataset_id,
         lineage.original_dataset_revision,
         lineage.original_input.converter_version,
-        lineage.original_input.task_specs_sha256,
         lineage.original_input.measured_tasks,
+    ):
+        return False
+    if panel.task_specs_sha256 == lineage.original_input.task_specs_sha256:
+        return True
+    return (
+        content_identity is not None
+        and content_identity.dataset_id == lineage.original_dataset_id
+        and content_identity.dataset_revision == lineage.original_dataset_revision
+        and content_identity.original.task_count == panel.retained_tasks
+        and content_identity.binds(receipt.source_id, panel.task_specs_sha256, lineage.original_input.task_specs_sha256)
     )
 
 
@@ -76,38 +95,68 @@ def require_sample_qualification(receipt: SampleQCReceipt) -> None:
         raise ValueError("SAMPLE receipt must enumerate every missing task and its batch evidence")
 
 
+def panel_matches_identity(
+    receipt: "SampleQCReceipt",
+    actor: ActorCensusInput,
+    content_identity: ContentIdentityReceipt,
+) -> bool:
+    """Whether a pin-matching panel's digest differs only by artifact re-serialization.
+
+    The panel was drawn at this exact pin; a content-identity receipt binding
+    the panel's recorded digest and the current census input's digest proves
+    every TaskSpec byte identical across the two conversions of the pin.
+    """
+    panel = receipt.review.panel
+    return (
+        content_identity.dataset_id == panel.dataset_id
+        and content_identity.dataset_revision == panel.dataset_revision
+        and content_identity.original.task_count == panel.retained_tasks == actor.measured_tasks
+        and content_identity.binds(receipt.source_id, panel.task_specs_sha256, actor.task_specs_sha256)
+    )
+
+
 def bind_sample_result[ConfigT: CatalogConfig](
     source: RlDataSource[ConfigT],
     receipt: SampleQCReceipt | None,
     *,
     retained_lineage: RetainedLineageProof | None = None,
+    content_identity: ContentIdentityReceipt | None = None,
 ) -> RlDataSource[ConfigT]:
     """Attach exact-input content evidence while preserving execution qualification."""
     if receipt is None:
         return clear_stale_full_content_result(source)
     panel = receipt.review.panel
     dataset, actor = source.dataset, source.info.actor_census_input
-    if (
-        dataset is None
-        or actor is None
-        or (
-            source.info.id,
-            dataset.name,
-            dataset.revision,
-            source.version,
-            actor.task_specs_sha256,
-            actor.measured_tasks,
+    if dataset is None or actor is None:
+        raise ValueError(f"Sample Result belongs to another current population: {source.info.id}")
+    full_match = (
+        source.info.id,
+        dataset.name,
+        dataset.revision,
+        source.version,
+        actor.task_specs_sha256,
+        actor.measured_tasks,
+    ) == (
+        receipt.source_id,
+        panel.dataset_id,
+        panel.dataset_revision,
+        panel.converter_version,
+        panel.task_specs_sha256,
+        panel.retained_tasks,
+    )
+    if not full_match:
+        identity_current = (
+            content_identity is not None
+            and (
+                source.info.id,
+                dataset.name,
+                dataset.revision,
+                source.version,
+            )
+            == (receipt.source_id, panel.dataset_id, panel.dataset_revision, panel.converter_version)
+            and panel_matches_identity(receipt, actor, content_identity)
         )
-        != (
-            receipt.source_id,
-            panel.dataset_id,
-            panel.dataset_revision,
-            panel.converter_version,
-            panel.task_specs_sha256,
-            panel.retained_tasks,
-        )
-    ):
-        if retained_lineage is not None and sample_matches_lineage(receipt, retained_lineage):
+        if retained_lineage is not None and sample_matches_lineage(receipt, retained_lineage, content_identity):
             result = receipt.review.result
             return replace(
                 source,
@@ -123,11 +172,27 @@ def bind_sample_result[ConfigT: CatalogConfig](
                     ),
                 ),
             )
-        raise ValueError(f"Sample Result belongs to another current population: {source.info.id}")
+        if not identity_current:
+            raise ValueError(f"Sample Result belongs to another current population: {source.info.id}")
     source = clear_stale_full_content_result(source)
     if source.info.full_content_result_binding is not None:
         return source
     result = receipt.review.result
+    if actor.task_specs_sha256 == panel.task_specs_sha256:
+        method = (
+            f"SAMPLE content panel: seed {panel.sample_seed}, {panel.sample_size} selected / "
+            f"{panel.retained_tasks} current tasks; pinned GLM-5.3 v3; execution qualification pending"
+        )
+    else:
+        # The panel was drawn at this pin before a byte-identical re-serialization;
+        # the content-identity receipt is what keeps it current.
+        method = (
+            f"SAMPLE content panel: seed {panel.sample_seed}, {panel.sample_size} selected / "
+            f"{panel.retained_tasks} current tasks; pinned GLM-5.3 v3; execution qualification pending; "
+            f"content-identity receipt {content_identity.identity_sha256[:12]} binds the panel digest "
+            f"{panel.task_specs_sha256[:12]} byte-identical to the re-serialized population "
+            f"{actor.task_specs_sha256[:12]}"
+        )
     return replace(
         source,
         info=replace(
@@ -135,10 +200,7 @@ def bind_sample_result[ConfigT: CatalogConfig](
             quality_result=result,
             independent_qc=IndependentQC(
                 verdict=result.verdict,
-                method=(
-                    f"SAMPLE content panel: seed {panel.sample_seed}, {panel.sample_size} selected / "
-                    f"{panel.retained_tasks} current tasks; pinned GLM-5.3 v3; execution qualification pending"
-                ),
+                method=method,
                 reviewed=result.reviewed,
                 evidence_url=receipt.review.path,
                 panel_currency=SamplePanelCurrency.CURRENT_PIN,

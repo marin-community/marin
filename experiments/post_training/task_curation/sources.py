@@ -9,6 +9,7 @@ from pathlib import Path
 from finestore.rl.curation import OversightLevel
 
 from experiments.post_training.task_curation.census_binding import bind_actor_census
+from experiments.post_training.task_curation.content_identity import read_content_identity_receipts
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
     crosscode_python_repair,
@@ -211,6 +212,7 @@ def all_sources() -> dict[str, RlDataSource]:
         sources[source_id] = bind_oracle_admitted_release(sources[source_id], receipt)
     sources = {source_id: crosscode_python_repair.bind_source(source) for source_id, source in sources.items()}
     samples, full_content = sample_qc_receipts(), full_content_result_bindings()
+    content_identities = read_content_identity_receipts()
     retained_records = dict(retained_release_receipts())
     for source_id, receipt in admitted.items():
         if receipt.archived_original is not None:
@@ -225,6 +227,7 @@ def all_sources() -> dict[str, RlDataSource]:
             samples.get(source_id),
             full_content.get(source_id),
             retained_lineage=lineages.get(source_id),
+            content_identity=content_identities.get(source_id),
         )
         for source_id, source in sources.items()
     }

@@ -1,35 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The pinned source declarations convert and verify native structural rows."""
+"""The structural-closure cohorts declare their first retained release pins."""
 
-import json
-from pathlib import Path
+from taskcompendium.pipeline.models import IntendedUse
 
-from taskcompendium.models import TaskResource, TextMessage
-from taskcompendium.pipeline.controls import run_controls
-from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import CheckStatus, IntendedUse
-from taskcompendium.runtime.resources import resource_bytes
-
-from experiments.post_training.task_curation.datasets.structure_closure import sources
-from experiments.post_training.task_curation.tests.conversion import converted_task
-
-FIXTURE = Path(__file__).parent / "fixtures/structure_closure.json"
+from experiments.post_training.task_curation.datasets.structure_closure import (
+    CONVERTER_VERSION,
+    RELEASES,
+    sources,
+)
 
 
-def test_structure_closure_source_uses_text_prefill_and_passes_grader_controls():
-    source = next(
-        source for source in sources() if source.config is not None and source.config.intended_use == IntendedUse.TRAIN
-    )
-    config = source.config
-    assert config is not None and config.controls is not None and config.source.select is not None
-    row = json.loads(FIXTURE.read_text())
-    native = json.loads(row["lowered_task_spec"])["task"]
-    native_config = json.loads(resource_bytes(TaskResource.model_validate(native["resources"]["verifier"][0])))
-    task = converted_task(config, row)
-    assert task.context.events[-1] == TextMessage(role="assistant", content=native_config["extras"]["prefix"])
-    verification = run_controls(task, controls=config.controls, machines=None)
-    assert verification.checks and all(check.status == CheckStatus.PASS for check in verification.checks)
-    other_family = {"lowered_task_spec": json.dumps({"task": {"source": {"dataset": "NVIDIA"}}})}
-    assert not config.source.select(other_family, ConversionContext({}, None))
+def test_structure_closure_declares_the_retained_release_pins():
+    declared = {source.info.id: source for source in sources()}
+    assert set(declared) == {"OpenAthena:structure-closure", "OpenAthena:structure-closure/validation"}
+    for _split, (release, revision, rows, intended_use) in RELEASES.items():
+        source = declared["OpenAthena:structure-closure" + ("/validation" if intended_use == IntendedUse.EVAL else "")]
+        config = source.config
+        assert config is not None
+        assert (config.repo, config.revision, config.expected_rows) == (release, revision, rows)
+        assert config.version == CONVERTER_VERSION
+        assert config.intended_use == intended_use
+        assert source.pipeline is not None
+        assert source.dataset.revision == revision
+        assert source.info.count == rows
+
+
+def test_validation_split_is_a_separate_eval_population():
+    train, validation = {source.info.id: source for source in sources()}.values()
+    assert train.info.subset is None and train.config.intended_use == IntendedUse.TRAIN
+    assert validation.info.subset == "validation" and validation.config.intended_use == IntendedUse.EVAL
+    assert train.dataset.name != validation.dataset.name

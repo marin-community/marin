@@ -159,6 +159,20 @@ until its current-pin admission receipt exists.
   SAMPLE panel drawn on the current pin (`SamplePanelCurrency.CURRENT_PIN`)
   before its status is current; an archived-lineage panel cannot qualify a new
   admission (`require_sample_pin_currency`).
+- *Content identity.* Re-measuring a pin can re-serialize the same TaskSpec
+  bytes into a different artifact layout, changing the artifact-level
+  `task_specs_sha256` without changing any task. `content_identity.py` records
+  when that happened: the builder digests every TaskSpec's exact bytes on both
+  sides and refuses unless the two per-task maps are identical, then binds both
+  artifact digests and the task counts in a `ContentIdentityReceipt` with the
+  per-task digest evidence staged beside it. The SAMPLE binding consults the
+  receipt two ways: `sample_matches_lineage` accepts an archived panel whose
+  recorded digest and the lineage input's digest are exactly the receipt's
+  bound pair (zero-drop retained lineage), and a pin-matching panel whose
+  digest differs only through re-serialization stays `CURRENT_PIN` under the
+  same receipt. Any differing task refuses; without a receipt the digests must
+  match exactly. The receipt never re-binds a measurement: the underlying
+  census, lexical or panel evidence still describes the same pin it measured.
 
 **Non-agentic tasks.** A TaskSpec with no actor role, agent harness or agent
 workspace is non-agentic: the model answers and the task's grader checks the

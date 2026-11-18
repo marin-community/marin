@@ -471,10 +471,10 @@ def sources() -> list[RlDataSource]:
             config=PrebuiltCohort(
                 intended_use=IntendedUse.TRAIN,
                 name="competitive-coding-v1-rebuilt",
-                version="2026.11.12.1",
-                repo="open-athena/tasktrove-competitive-coding-v1-taskcompendium-20261112",
-                revision="5a7b7a75eb32901947157e39516a15d894db332b",
-                expected_rows=13973,
+                version="2026.11.13.1",
+                repo="open-athena/campaign-release-tasktrove-competitive-coding-rebuilt-v-6ce7836f-retained-20261113-v1",
+                revision="93e1cc49e06e2efba6fd5cf1cb611596644f7f9d",
+                expected_rows=13969,
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
@@ -488,21 +488,14 @@ def sources() -> list[RlDataSource]:
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
-                daytona_snapshot_count=1,
-                daytona_count_basis=(
-                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
-                    "Offline Daytona factory validation refuses all 13,973 declared package-lock graders. The declared "
-                    "grader environments require local execution; this cohort is Daytona-unsafe."
-                ),
-                daytona_execution_failures=13973,
                 oracle_validation=OracleValidation.SKIPPED,
                 recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
                     verification=(
                         "Unverified historical reward-only sample; does not certify test execution. "
-                        "setup fidelity executed on all 13,973 converted specs at this revision (all "
-                        "reproduce their archive's lowered base, working directory, steps and environment "
+                        "setup fidelity executed on all 13,973 converted specs at the original conversion revision "
+                        "(all reproduce their archive's lowered base, working directory, steps and environment "
                         "variables) and verifier liveness on 20 sampled tasks drawn across the cohort's "
                         "single environment (20 negative verdicts, reward 0.0, no infrastructure errors)"
                     ),
@@ -510,16 +503,17 @@ def sources() -> list[RlDataSource]:
                     admitted=13973,
                 ),
                 notes=(
-                    "13,973 competitive-coding tasks converted to run in the environment their archives "
-                    "specify: the ubuntu:24.04 recipe each task ships is lowered onto the digest-pinned "
-                    "base and its RUN steps replay as setup commands, one distinct environment across the "
-                    "cohort, measured at the pinned upstream revision "
+                    "13,969 competitive-coding tasks: the 2026.11.13.1 retained release published from the "
+                    "tasktrove-competitive-coding-v1-taskcompendium-20261112 conversion (13,973 converted; the "
+                    "release's exact-duplicate selection kept 13,969), measured at the pinned upstream revision "
                     "laion__nemotron-gym-competitive-coding-v2 @ 02923004846e4e73862c20962f823a6d05100e7a "
-                    "with zero substitutions. 1,739 rows are refused for gold leaked into the instruction "
-                    "and one as a reviewed defect; refused rows are the conversion's own reviewed outcome "
-                    "classes. Withdrawn reward-only claim: setup fidelity matches on every converted row "
-                    "and 20 of 20 sampled verifiers return a negative verdict on an empty submission. "
-                    "The repository is private pending release."
+                    "with zero substitutions. The 2026.11.17.1 census repair re-measured the release pin with "
+                    "every TaskSpec byte identical to the original conversion (content-identity receipts), and "
+                    "the 2026.11.18.1-r1 retained re-publication selects this pin after one lexical-flag drop. "
+                    "1,739 rows were refused for gold leaked into the instruction and one as a reviewed defect; "
+                    "refused rows are the conversion's own reviewed outcome classes. Withdrawn reward-only "
+                    "claim: setup fidelity matches on every converted row and 20 of 20 sampled verifiers return "
+                    "a negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
         ),
