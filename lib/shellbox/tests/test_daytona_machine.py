@@ -45,6 +45,7 @@ from shellbox.backends.daytona.machine import (
     DaytonaMachineFactory,
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
+    DaytonaOutputUnavailable,
     _create_sandbox,
 )
 from shellbox.backends.daytona.snapshot import (
@@ -496,7 +497,7 @@ def test_daytona_output_collection_uses_its_own_deadline(collection_timeout: flo
                 result = await machine.run(command)
                 assert (result.stdout, result.stderr) == (b"out", b"err")
             else:
-                with pytest.raises(RuntimeError, match="Cannot collect Daytona command output"):
+                with pytest.raises(DaytonaOutputUnavailable):
                     await machine.run(command)
         finally:
             await machine.close()

@@ -58,9 +58,10 @@ def test_daytona_sdk_error_is_infrastructure() -> None:
     assert error_category("DaytonaError") is ErrorCategory.INFRASTRUCTURE
 
 
-def test_daytona_connection_reset_is_retryable_infrastructure() -> None:
-    assert error_category("DaytonaConnectionError") is ErrorCategory.INFRASTRUCTURE
-    assert is_resume_retryable("DaytonaConnectionError")
+@pytest.mark.parametrize("name", ["DaytonaConnectionError", "DaytonaOutputUnavailable"])
+def test_daytona_sandbox_failures_are_retryable_infrastructure(name: str) -> None:
+    assert error_category(name) is ErrorCategory.INFRASTRUCTURE
+    assert is_resume_retryable(name)
 
 
 def test_llm_request_timeout_is_retryable_infrastructure() -> None:

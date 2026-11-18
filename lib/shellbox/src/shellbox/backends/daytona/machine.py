@@ -166,6 +166,10 @@ class DaytonaNetworkPolicy:
         return {"network_block_all": mode == DaytonaNetworkMode.BLOCK_ALL}
 
 
+class DaytonaOutputUnavailable(RuntimeError):
+    """A command ran, but its output could not be read back from the sandbox in time."""
+
+
 class DaytonaMachine:
     """One Daytona sandbox. Each command gets a fresh process and shared files."""
 
@@ -405,7 +409,7 @@ class DaytonaMachine:
             )
         except TimeoutError as error:
             if response is not None:
-                primary_error = RuntimeError("Cannot collect Daytona command output")
+                primary_error = DaytonaOutputUnavailable("Cannot collect Daytona command output")
                 raise primary_error from error
             if not deadline.expired():
                 primary_error = error
