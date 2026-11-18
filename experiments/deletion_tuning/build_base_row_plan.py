@@ -121,7 +121,8 @@ def main() -> None:
         json.dump(plan, handle, indent=1, sort_keys=True)
         handle.write("\n")
     print(
-        f"wrote {args.output}: model {plan['model']['hf_uri']} shards={len(plan['model']['shards'])} policy_replicas={plan['policy_replicas']}"
+        f"wrote {args.output}: model {plan['model']['hf_uri']}"
+        f" shards={len(plan['model']['shards'])} policy_replicas={plan['policy_replicas']}"
     )
 
 
