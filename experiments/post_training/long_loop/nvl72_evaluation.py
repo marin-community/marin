@@ -99,9 +99,20 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     config["context_budget"].update(
         request_window_tokens=spec.context_tokens, max_new_tokens_per_turn=spec.max_new_tokens
     )
-    serving = yaml.safe_load(RECIPE_PATH.read_text())["generator"]["engine_init_kwargs"]
+    serving_recipe = yaml.safe_load(RECIPE_PATH.read_text())
+    serving = serving_recipe["generator"]["engine_init_kwargs"]
     for setting in ("compilation_config", "model_loader_extra_config"):
         config["generator"]["engine_init_kwargs"][setting] = serving[setting]
+    # Match the graph-enabled Mochi serving profile qualified in #11353 and #11430.
+    config["generator"].update(
+        vllm_attention_backend="FLASHINFER",
+        max_num_seqs=128,
+        max_num_batched_tokens=2048,
+        gpu_memory_utilization=0.90,
+        enable_prefix_caching=False,
+    )
+    config["generator"]["engine_init_kwargs"]["moe_backend"] = serving["moe_backend"]
+    config["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"] = serving_recipe["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"]
     config["generator"]["enforce_eager"] = False
     for role in ("policy", "ref"):
         config["trainer"][role]["megatron_config"]["expert_model_parallel_size"] = 4
