@@ -456,8 +456,6 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
     assert load_launch_config(path).runtime.training_type == expected
 
 
-
-
 def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

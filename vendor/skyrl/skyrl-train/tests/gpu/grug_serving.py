@@ -12,7 +12,6 @@ from skyrl_train.inference_engines.ray_wrapped_inference_engine import (
     create_ray_wrapped_inference_engines_with_retry,
 )
 from skyrl_train.training_batch import TrainingInputBatch
-
 from tests.gpu.grug_tiny_checkpoint import TOY_SHAPE, router_bias_names
 
 MAX_MODEL_LEN = 128
@@ -61,7 +60,6 @@ def grug_engine_client(
     engine_init_kwargs = {"max_model_len": MAX_MODEL_LEN}
     if moe_backend is not None:
         engine_init_kwargs["kernel_config"] = {"moe_backend": moe_backend}
-
     def create_engines(remaining_timeout_seconds: float):
         return create_ray_wrapped_inference_engines(
             num_inference_engines=cfg.generator.num_inference_engines,

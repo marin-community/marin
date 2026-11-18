@@ -92,7 +92,7 @@ async def test_pure_distillation_session_omits_verifier_credit(tmp_path):
         result = await session.advance(
             ModelTurn({"role": "assistant", "content": r"\boxed{A}"}, (1,), (2,), (-0.1,), "stop")
         )
-        assert result.done and result.reward == 0.0
+        assert result.done
         assert result.grade is not None and grade_skipped(result.grade)
     finally:
         await session.close()

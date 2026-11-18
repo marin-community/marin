@@ -31,10 +31,9 @@ def inference_engine_kwargs_from_config(
     cfg: DictConfig,
     role: InferenceEngineRoleConfig,
     *,
-    tokenizer: object | None = None,
     engine_init_kwargs: dict[str, Any],
 ) -> dict[str, Any]:
-    """Combine generator settings and role geometry; the tokenizer argument is unused."""
+    """Combine shared generator settings with explicit role geometry and ownership."""
     kwargs = {
         "num_inference_engines": role.num_inference_engines,
         "tensor_parallel_size": role.tensor_parallel_size,

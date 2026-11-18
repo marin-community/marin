@@ -1688,11 +1688,13 @@ class RayPPOTrainer:
 
     def build_models(self, PolicyWorker, CriticWorker, RefWorker, policy_pg: Optional[PlacementGroup] = None):
         """
-        Initialize policy/reference actors; CriticWorker is unused.
+        Initialize the actors for training, and handle colocation logic
+
+        CriticWorker is unused.
 
         Args:
-            policy_pg: Optional placement group supplied by the caller for
-                the policy and colocated reference actors. When
+            policy_pg: Optional placement group reserved before inference
+                startup for the policy and colocated reference actors. When
                 absent, model actors reserve their placement group lazily.
         """
         cfg = self.cfg
@@ -1777,7 +1779,7 @@ class RayPPOTrainer:
                 else:
                     pg = policy_pg
 
-            # A policy without a reference model uses the caller-supplied group.
+            # The no-reference policy also uses the group reserved before inference.
             if pg is None:
                 pg = policy_pg
 

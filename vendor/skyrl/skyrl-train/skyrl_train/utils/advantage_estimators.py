@@ -453,7 +453,6 @@ def compute_advantages_and_returns(
     exclude_from_baseline: Optional[np.ndarray] = None,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Dispatch policy advantages to the configured estimator."""
     estimator_func = AdvantageEstimatorRegistry.get(adv_estimator)
 
     return estimator_func(

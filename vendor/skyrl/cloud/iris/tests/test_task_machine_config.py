@@ -55,9 +55,7 @@ def test_empty_mapping_preserves_config_merge_contracts(key, error):
     raw = yaml.safe_load(recipe.read_text())
     raw["trainer"][key] = {}
     with pytest.raises(ValueError, match=error):
-        compose_skyrl_config(
-            parse_rl_config(raw), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
-        )
+        compose_skyrl_config(parse_rl_config(raw), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100"))
 
 
 def test_empty_session_settings_preserve_published_limits_and_shell_timeout():

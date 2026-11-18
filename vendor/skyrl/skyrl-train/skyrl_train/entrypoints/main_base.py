@@ -126,7 +126,6 @@ def create_ray_wrapped_inference_engines_from_config(
     entrypoint: str = STANDARD_TRAINING_ENTRYPOINT,
     operation: EntrypointOperation = EntrypointOperation.TRAIN,
 ):
-    """Create rollout engines from config."""
     from skyrl_train.inference_engines.configuration import (
         InferenceEngineRoleConfig,
         inference_engine_kwargs_from_config,
@@ -153,10 +152,11 @@ def create_ray_wrapped_inference_engines_from_config(
         **OmegaConf.to_container(cfg.generator.engine_init_kwargs, resolve=True),
         "openai_sampling_params": OmegaConf.to_container(cfg.generator.sampling_params, resolve=True),
     }
-    engine_init_kwargs["chat_template"] = get_custom_chat_template(cfg.generator.chat_template)
-    engine_init_kwargs["default_chat_template_kwargs"] = OmegaConf.to_container(
-        cfg.generator.chat_template_kwargs, resolve=True
-    )
+    if cfg.generator.backend == "vllm":
+        engine_init_kwargs["chat_template"] = get_custom_chat_template(cfg.generator.chat_template)
+        engine_init_kwargs["default_chat_template_kwargs"] = OmegaConf.to_container(
+            cfg.generator.chat_template_kwargs, resolve=True
+        )
     engine_init_kwargs["tokenizer"] = cfg.trainer.policy.model.tokenizer_path
     tokenizer_revision = cfg.trainer.policy.model.get("tokenizer_revision")
     if tokenizer_revision is not None:
@@ -236,7 +236,7 @@ def create_ray_wrapped_inference_engines_from_config(
         engine_kwargs["fully_sharded_loras"] = cfg.generator.fully_sharded_loras
 
         # TODO(devpatel): Bandaid solution, replace this once we have a better solution for LoRA performance degradation on the vLLM side
-        if cfg.generator.enforce_eager:
+        if cfg.generator.enforce_eager and cfg.generator.backend == "vllm":
             logger.warning(
                 "LoRA is enabled but generator.enforce_eager=true. "
                 "This combination causes significant performance degradation (2-3x slower generation). "
@@ -244,7 +244,7 @@ def create_ray_wrapped_inference_engines_from_config(
             )
             engine_kwargs["enforce_eager"] = False
 
-    if stream_policy_model and rollout_model_path.startswith("s3://"):
+    if stream_policy_model and rollout_model_path.startswith("s3://") and cfg.generator.backend == "vllm":
         retry = cfg.trainer.model_load_retry
 
         def create_engines(remaining_timeout_seconds: float):
@@ -636,6 +636,7 @@ class BasePPOExp:
             colocate_pg=self.colocate_pg,
         )
 
+        # Pass the policy placement group reserved before inference startup.
         logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
         try:
             trainer.build_models(PolicyWorker, None, RefWorker, policy_pg=self.policy_pg)

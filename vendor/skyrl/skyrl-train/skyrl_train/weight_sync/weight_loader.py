@@ -8,7 +8,9 @@ from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest
 class WeightLoader(ABC):
     """Loads received weights into inference engine.
 
-    Implementations coordinate vLLM weight transfer and apply received weights.
+    Implementations are engine-specific and handle
+    the mechanics of coordinating weight transfer and applying weights
+    to the inference model.
     """
 
     @abstractmethod

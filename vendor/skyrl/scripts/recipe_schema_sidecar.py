@@ -28,9 +28,7 @@ from marinskyrl.speculative_decoding import SpeculativeDecodingMethod
 
 
 def _literal(choices) -> str:
-    return (
-        "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
-    )
+    return "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
 
 
 CORRECTION_PRESETS = tuple(
@@ -255,8 +253,6 @@ UNDECLARED = MappingProxyType(
 
 NAMES = MappingProxyType(
     {
-        "generator.speculative_decoding.model": "SpeculatorModel",
-        "generator.speculative_decoding.training": "SpeculatorTraining",
         "trainer.policy.megatron_config": "PolicyMegatronConfig",
         "trainer.ref.megatron_config": "RefMegatronConfig",
         "trainer.policy.model": "PolicyModel",
@@ -269,5 +265,7 @@ NAMES = MappingProxyType(
         "trainer.ref.megatron_config.torch_profiler_config": "RefTorchProfilerConfig",
         "trainer.policy.megatron_config.optimizer_config_kwargs": "OptimizerConfigKwargs",
         "trainer.ref.megatron_config.optimizer_config_kwargs": "RefOptimizerConfigKwargs",
+        "generator.speculative_decoding.model": "SpeculatorModel",
+        "generator.speculative_decoding.training": "SpeculatorTraining",
     }
 )

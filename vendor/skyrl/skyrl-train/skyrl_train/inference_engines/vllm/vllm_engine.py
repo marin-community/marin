@@ -761,6 +761,14 @@ class WorkerWrap:
                 out[name] = {"found": False, "error": repr(e)}
         return out
 
+    def report_host(self):
+        """TEST-ONLY (disaggregation proof): this engine worker's hostname (one per
+        TP/EP worker via collective_rpc) so the driver can prove the engine node is
+        DISJOINT from the policy nodes (=> the broadcast is genuinely cross-node)."""
+        import socket
+
+        return socket.gethostname()
+
     def report_device_placement(self) -> dict[str, str | int]:
         """This worker's host, GPU and ranks, as a plain dict."""
         return asdict(self._device_placement())
@@ -1585,6 +1593,11 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         """
         engine = self.llm
         return await engine.collective_rpc("read_named_weights", args=(list(hf_names), dump_inventory))
+
+    async def report_engine_hosts(self):
+        """TEST-ONLY (disaggregation proof): hostname of every engine TP/EP worker."""
+        engine = self.llm
+        return await engine.collective_rpc("report_host")
 
     async def report_engine_placement(self):
         """Host, GPU and ranks of every worker of this engine."""

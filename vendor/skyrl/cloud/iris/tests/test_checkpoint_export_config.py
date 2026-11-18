@@ -15,6 +15,7 @@ from cloud.iris.export_hf_checkpoint import (
 )
 from cloud.iris.launch_config import derive_launch_topology
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
+from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, RuntimeProfile
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import HFModelSaveCallback
 from skyrl_train.config.utils import get_default_config
@@ -86,6 +87,8 @@ def test_checkpoint_export_config_preserves_saved_policy_geometry_on_whole_nodes
 
     assert config.iris.allocation.gpus_per_node == 8
     assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
+    assert config.runtime.entrypoint == CHECKPOINT_EXPORT_ENTRYPOINT
+    assert config.runtime.profile == RuntimeProfile.MEGATRON_EXPORT.value
 
 
 @pytest.mark.parametrize("policy_loss_type", ["dpo", "ftpo"])
