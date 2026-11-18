@@ -36,7 +36,7 @@ class TrajectoryID:
 
 @dataclass
 class BatchMetadata:
-    global_step: int
+    global_step: int | None
     training_phase: TrainingPhase
 
 

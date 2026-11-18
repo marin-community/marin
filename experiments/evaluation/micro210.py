@@ -36,7 +36,12 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.evaluation.micro210_policy import Micro210Evaluation, Micro210Model, micro210_evaluation
+from experiments.evaluation.micro210_policy import (
+    MODEL_IDENTITY_PREFIX,
+    Micro210Evaluation,
+    Micro210Model,
+    micro210_evaluation,
+)
 
 PREPARED_INPUTS = (
     "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3/" "documents/mochi-exp3-final-eval-inputs/2026.11.18.61"
@@ -48,19 +53,23 @@ MODEL_MANIFEST = ".marinskyrl-model-manifest.json"
 class Micro210Run:
     skyrl: SkyRLRunConfig
     evaluation: Micro210Evaluation
+    canonical_launch_sha256: str
 
 
 def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
     """Reject changed prepared tasks or export metadata before GPU allocation."""
-    table = (StoragePath(inputs) / "rollouts.parquet").read_bytes()
-    if hashlib.sha256(table).hexdigest() != evaluation.policy()["prepared_rollouts_sha256"]:
+    policy = evaluation.policy()
+    table = (StoragePath(inputs) / policy["evaluation"]["data_relative_path"]).read_bytes()
+    if hashlib.sha256(table).hexdigest() != policy["prepared_rollouts_sha256"]:
         raise ValueError("Canonical Micro210 prepared task bytes changed")
     manifest = (StoragePath(evaluation.model.uri) / MODEL_MANIFEST).read_bytes()
-    if "sha256:" + hashlib.sha256(manifest).hexdigest() != evaluation.model.identity:
+    if MODEL_IDENTITY_PREFIX + hashlib.sha256(manifest).hexdigest() != evaluation.model.identity:
         raise ValueError("Micro210 model export manifest differs from the model binding")
 
 
 def run_micro210(config: Micro210Run) -> SkyRLRun:
+    if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
+        raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
     validate_inputs(config.evaluation, PREPARED_INPUTS)
     (StoragePath(config.evaluation.output_uri) / "canonical-evaluation.json").write_text(
         json.dumps(asdict(config.evaluation.record()), indent=2)
@@ -78,21 +87,17 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
         capability_origin=policy["capability_origin"],
         api_model=judge.location,
     )
-    previous = {name: os.environ.get(name) for name in ("JUDGE_API_KEY", "OPENAI_API_KEY")}
-    try:
-        with remote_inference(inference) as served:
-            launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] = served.model.endpoint.base_url
-            for section in (launch["skyrl"]["extra_env"], launch["runtime"]["task_env"]):
-                section["JUDGE_BASE_URL"] = served.model.endpoint.base_url
-            os.environ["JUDGE_API_KEY"] = served.model.endpoint.api_key or "EMPTY"
-            os.environ["OPENAI_API_KEY"] = os.environ["TOGETHER_API_KEY"]
-            return run_skyrl(replace(config.skyrl, launch_config_yaml=yaml.safe_dump(launch)))
-    finally:
-        for name, value in previous.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
+    with remote_inference(inference) as served:
+        launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] = served.model.endpoint.base_url
+        for section in (launch["skyrl"]["extra_env"], launch["runtime"]["task_env"]):
+            section["JUDGE_BASE_URL"] = served.model.endpoint.base_url
+        return run_skyrl(
+            replace(config.skyrl, launch_config_yaml=yaml.safe_dump(launch)),
+            env_vars={
+                "JUDGE_API_KEY": served.model.endpoint.api_key or "EMPTY",
+                "OPENAI_API_KEY": os.environ["TOGETHER_API_KEY"],
+            },
+        )
 
 
 def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides) -> ArtifactStep[SkyRLRun]:
@@ -135,8 +140,11 @@ def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides)
         run = builder(context)
         document = yaml.safe_load(run.launch_config_yaml)
         document["ray"].update(policy["ray_timeouts"])
+        rendered = yaml.safe_dump(document)
         return Micro210Run(
-            replace(run, launch_config_yaml=yaml.safe_dump(document)), replace(binding, output_uri=context.output_path)
+            replace(run, launch_config_yaml=rendered),
+            replace(binding, output_uri=context.output_path),
+            hashlib.sha256(rendered.encode()).hexdigest(),
         )
 
     return replace(step, run=run_micro210, build_config=build)
@@ -153,7 +161,7 @@ def main(
     model_uri: str, model_manifest_sha256: str, tokenizer_uri: str, tokenizer_revision: str, name: str
 ) -> ArtifactStep:
     configure_coreweave_s3()
-    model = Micro210Model(model_uri, "sha256:" + model_manifest_sha256, tokenizer_uri, tokenizer_revision)
+    model = Micro210Model(model_uri, MODEL_IDENTITY_PREFIX + model_manifest_sha256, tokenizer_uri, tokenizer_revision)
     return micro210_step(model, name=name, version=resolve_version(name, None))
 
 

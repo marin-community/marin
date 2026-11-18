@@ -55,6 +55,18 @@ def _model_step() -> ArtifactStep[LevanterCheckpoint]:
     )
 
 
+def test_launcher_credentials_are_scoped_to_its_subprocess(monkeypatch):
+    key = "MICRO210_TEST_JUDGE_KEY"
+    monkeypatch.setenv(key, "parent")
+    completed = run_launcher_for_test(
+        [sys.executable, "-c", "import os,sys; print(os.environ[sys.argv[1]])", key],
+        env_vars={key: "per-evaluation"},
+    )
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == "per-evaluation"
+    assert os.environ[key] == "parent"
+
+
 @pytest.mark.parametrize("relative_path", [".", "hf/.", "hf/../policy"])
 def test_artifact_hf_model_rejects_literal_object_store_dot_segments(relative_path: str) -> None:
     # A trailing '/.' caused a real export to appear empty during GPU startup.
@@ -741,7 +753,7 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     catalog_rows = []
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", catalog_rows.append)
 
-    model = run_skyrl(config)
+    model = run_skyrl(config, env_vars={})
 
     assert model.hf_model_uri is not None and model.hf_model_uri.endswith("global_step_8/policy")
     assert model.global_step == 8
@@ -810,7 +822,7 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
     )
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", lambda _record: None)
 
-    run = run_skyrl(config)
+    run = run_skyrl(config, env_vars={})
 
     assert run.hf_model_uri is None
     assert run.global_step is None
@@ -884,7 +896,7 @@ def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.Monkey
     )
 
     with pytest.raises(RuntimeError, match="entrypoint must be a registered name"):
-        run_skyrl(config)
+        run_skyrl(config, env_vars={})
 
     assert len(catalog_rows) == 1
     assert catalog_rows[0].status == "failed"

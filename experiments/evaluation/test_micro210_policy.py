@@ -4,14 +4,24 @@
 import hashlib
 import json
 from contextlib import contextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 import yaml
 from marin.execution.lazy import StepContext
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.micro210 import micro210_step, run_micro210
-from experiments.evaluation.micro210_policy import SPEC_PATH, Micro210Model, micro210_evaluation
+from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
+from tests.rl.micro210_fixture import policy_fixture_reference
+
+
+@pytest.fixture(autouse=True)
+def policy_reference(monkeypatch):
+    reference = policy_fixture_reference()
+    monkeypatch.setattr("experiments.evaluation.micro210_policy.POLICY_REFERENCE", reference)
+    return reference
 
 
 @pytest.mark.parametrize(
@@ -30,25 +40,24 @@ def test_micro210_binding_refuses_protocol_overrides(override):
         micro210_evaluation(model, run_id="test", output_uri="s3://test/eval", **override)
 
 
-def test_micro210_model_change_preserves_the_protocol_and_records_its_identity():
-    first = micro210_evaluation(
+def test_micro210_record_contains_content_digest_of_protocol(policy_reference):
+    evaluation = micro210_evaluation(
         Micro210Model("s3://test/sft", "sha256:" + "b" * 64, "test/tokenizer", "a" * 40),
         run_id="sft",
         output_uri="s3://test/sft-eval",
     )
-    second = micro210_evaluation(
-        Micro210Model("s3://test/rl", "sha256:" + "c" * 64, "test/tokenizer", "a" * 40),
-        run_id="rl",
-        output_uri="s3://test/rl-eval",
+    assert (
+        evaluation.record().canonical_spec_sha256
+        == hashlib.sha256(StoragePath(policy_reference.uri).read_bytes()).hexdigest()
     )
-    assert first.policy() == second.policy()
-    assert first.record().canonical_spec_sha256 == hashlib.sha256(SPEC_PATH.read_bytes()).hexdigest()
 
 
-def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch):
+def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch, policy_reference):
     changed = tmp_path / "protocol.json"
-    changed.write_text(SPEC_PATH.read_text().replace('"seed": 20261030', '"seed": 0'))
-    monkeypatch.setattr("experiments.evaluation.micro210_policy.SPEC_PATH", changed)
+    changed.write_text(StoragePath(policy_reference.uri).read_text().replace('"seed": 20261030', '"seed": 0'))
+    monkeypatch.setattr(
+        "experiments.evaluation.micro210_policy.POLICY_REFERENCE", replace(policy_reference, uri=str(changed))
+    )
     with pytest.raises(ValueError, match="hash mismatch"):
         micro210_evaluation(
             Micro210Model("s3://test/model", "sha256:" + "a" * 64, "test/tokenizer", "a" * 40),
@@ -63,7 +72,9 @@ def test_micro210_model_rejects_mutable_references(identity, revision):
         Micro210Model("s3://test/latest", identity, "test/tokenizer", revision)
 
 
-def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_allocation(tmp_path, monkeypatch):
+def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_allocation(
+    tmp_path, monkeypatch, policy_reference
+):
     model_dir = tmp_path / "model"
     model_dir.mkdir()
     manifest = b'{"files": []}'
@@ -72,13 +83,15 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     inputs.mkdir()
     task_bytes = b"pinned-prepared-task-fixture"
     (inputs / "rollouts.parquet").write_bytes(task_bytes)
-    protocol = json.loads(SPEC_PATH.read_text())
+    protocol = json.loads(StoragePath(policy_reference.uri).read_text())
     protocol["prepared_rollouts_sha256"] = hashlib.sha256(task_bytes).hexdigest()
     protocol_path = tmp_path / "protocol.json"
     raw = json.dumps(protocol).encode()
     protocol_path.write_bytes(raw)
-    monkeypatch.setattr("experiments.evaluation.micro210_policy.SPEC_PATH", protocol_path)
-    monkeypatch.setattr("experiments.evaluation.micro210_policy.SPEC_SHA256", hashlib.sha256(raw).hexdigest())
+    monkeypatch.setattr(
+        "experiments.evaluation.micro210_policy.POLICY_REFERENCE",
+        replace(policy_reference, uri=str(protocol_path), sha256=hashlib.sha256(raw).hexdigest(), byte_size=len(raw)),
+    )
     monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(inputs))
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
     monkeypatch.setenv("TOGETHER_API_KEY", "test-counterpart-key")
@@ -105,7 +118,8 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
             model=SimpleNamespace(endpoint=SimpleNamespace(base_url="http://judge.test/v1", api_key="test"))
         )
 
-    def submit_evaluation(skyrl):
+    def submit_evaluation(skyrl, *, env_vars):
+        assert env_vars == {"JUDGE_API_KEY": "test", "OPENAI_API_KEY": "test-counterpart-key"}
         submitted.append(yaml.safe_load(skyrl.launch_config_yaml))
         return None
 
@@ -119,6 +133,12 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
     )
     assert "eval_override_storage_mb" not in submitted[1]["skyrl"]["terminal_bench"]["harbor"]
+    altered = yaml.safe_load(config.skyrl.launch_config_yaml)
+    altered["skyrl"]["terminal_bench"]["harbor"]["eval_override_storage_mb"] = 131072
+    submitted.clear()
+    with pytest.raises(ValueError, match="launch_config_yaml"):
+        run_micro210(replace(config, skyrl=replace(config.skyrl, launch_config_yaml=yaml.safe_dump(altered))))
+    assert submitted == []
     (inputs / "rollouts.parquet").write_bytes(b"changed-tasks")
     submitted.clear()
     with pytest.raises(ValueError, match="task bytes changed"):
