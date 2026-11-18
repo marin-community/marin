@@ -6,6 +6,7 @@ population totals, Iris association, and the missing-artifact honesty rules."""
 
 import hashlib
 import json
+import subprocess
 
 import pytest
 from finestore.rl.difficulty import register_difficulty
@@ -81,6 +82,33 @@ def test_classify_marks_a_row_that_added_nothing_as_inherited():
     classification = drep.classify_run_sources(child, {parent.root: parent, child.root: child})
     assert classification["sources"]["Src:a"]["own"] is False
     assert classification["sources"]["Src:a"]["own_gpu_hours"] == 0.0
+
+
+def test_added_counts_only_sources_no_ancestor_in_the_chain_measured():
+    grandparent = _run("s3://x/2026.11.13.1/hosted-v0", [_row("Src:c", "2026-11-13T01:00:00+00:00")])
+    parent = _run(
+        "s3://x/2026.11.14.1/hosted-v1",
+        [_row("Src:a", "2026-11-14T01:00:00+00:00")],
+        parent=grandparent.root,
+    )
+    child = _run(
+        "s3://x/2026.11.15.1/hosted-v2",
+        [
+            # re-aggregates a source the parent measured: own work, but never added
+            _row("Src:a", "2026-11-15T01:00:00+00:00", gpu_hours=1.5, input_tokens=150),
+            # re-aggregates a source two steps up the chain: still not added
+            _row("Src:c", "2026-11-15T01:00:00+00:00", gpu_hours=1.2, input_tokens=120),
+            # measured fresh by the child
+            _row("Src:b", "2026-11-15T01:00:00+00:00"),
+        ],
+        parent=parent.root,
+    )
+    classification = drep.classify_run_sources(
+        child, {grandparent.root: grandparent, parent.root: parent, child.root: child}
+    )
+    assert classification["sources"]["Src:a"]["own"] is True
+    assert classification["sources"]["Src:c"]["own"] is True
+    assert classification["added"] == 1
 
 
 def test_classify_uses_the_run_seal_windows_when_present():
@@ -163,6 +191,59 @@ def test_associate_jobs_exact_and_ambiguous():
     assert len(ambiguous["ambiguous"]) == 2
 
 
+def test_list_iris_jobs_attaches_the_solver_label(monkeypatch):
+    listing = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=(
+            "/benfeuer/atlas-difficulty-hosted-20261118-v20  running  2026-11-18T19:00:00+00:00\n"
+            "/benfeuer/atlas-difficulty-small-canary-20261117-v3  running  2026-11-17T10:00:00+00:00\n"
+            "/benfeuer/atlas-difficulty/child-task  running\n"
+            "unrelated-job  running\n"
+        ),
+        stderr="",
+    )
+    monkeypatch.setattr(drep.subprocess, "run", lambda *args, **kwargs: listing)
+    jobs = drep.list_iris_jobs()
+    assert [(job.job_id, job.solver, job.kind) for job in jobs] == [
+        ("/benfeuer/atlas-difficulty-hosted-20261118-v20", "hosted", "run"),
+        ("/benfeuer/atlas-difficulty-small-canary-20261117-v3", "small", "canary"),
+    ]
+
+
+def test_active_runs_by_solver_counts_active_run_jobs_per_solver():
+    jobs = [
+        drep.IrisJob(
+            "/benfeuer/atlas-difficulty-hosted-20261118-v20",
+            "running",
+            "2026-11-18T19:00:00+00:00",
+            None,
+            "run",
+            "hosted",
+        ),
+        drep.IrisJob(
+            "/benfeuer/atlas-difficulty-large-20261118-v20", "running", "2026-11-18T18:00:00+00:00", None, "run", "large"
+        ),
+        drep.IrisJob(
+            "/benfeuer/atlas-difficulty-small-canary-20261117-v3",
+            "running",
+            "2026-11-17T10:00:00+00:00",
+            None,
+            "canary",
+            "small",
+        ),
+        drep.IrisJob(
+            "/benfeuer/atlas-difficulty-snowball-20261117-v9",
+            "failed",
+            "2026-11-17T09:00:00+00:00",
+            None,
+            "run",
+            "snowball",
+        ),
+    ]
+    assert drep.active_runs_by_solver(jobs) == {"hosted": 1, "small": 0, "large": 1, "snowball": 0}
+
+
 def test_load_run_reads_a_local_tree_with_a_real_catalog(tmp_path):
     root = tmp_path / "2026.11.18.1" / "hosted-v13c"
     (root / "trials").mkdir(parents=True)
@@ -231,6 +312,7 @@ def test_render_text_reports_the_missing_artifacts():
         "catalog": {
             "rows": 2,
             "sources_with_rows": 2,
+            "added": 1,
             "aggregated_by_run": 1,
             "aggregated_by_run_statuses": {"measured": 1},
             "inherited": 1,
@@ -249,7 +331,17 @@ def test_render_text_reports_the_missing_artifacts():
     report = {
         "generated_at": "2026-11-18T16:00:00+00:00",
         "solvers": {"hosted": {"runs": [run_section], "catalog_totals_by_queue": {}, "identity": None}},
-        "active_iris_jobs": [],
+        "active_iris_jobs": [
+            {
+                "job_id": "/benfeuer/atlas-difficulty-hosted-20261118-v20",
+                "state": "running",
+                "submitted": "2026-11-18T15:00:00+00:00",
+                "kind": "run",
+                "solver": "hosted",
+                "reason": None,
+            }
+        ],
+        "active_runs_by_solver": {"hosted": 1, "small": 0, "large": 0, "snowball": 0},
         "active_jobs_without_run_root": ["/benfeuer/atlas-difficulty-hosted-20261118-v13"],
         "unattributed_runs": [],
     }
@@ -258,7 +350,10 @@ def test_render_text_reports_the_missing_artifacts():
     assert "reconstructed" in text
     assert "derived from cumulative row deltas" in text
     assert "wall (first→last catalog row):" in text
+    assert "added=1 (no ancestor in its chain measured these)" in text
     assert "atlas-difficulty-hosted-20261118-v13" in text
+    assert "active runs by solver: hosted=1 small=0 large=0 snowball=0" in text
+    assert "solver=hosted" in text
 
 
 def test_render_source_section_lists_every_run_and_missing_sources():

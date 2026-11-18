@@ -11,7 +11,8 @@ Answers, from artifacts alone (never a hand-edited status log):
   not_measured (by reason code), and its own GPU-hours and tokens rather than
   the cumulative counters the catalog rows carry across a continuation chain;
 * per solver — current catalog totals over the frozen queue population;
-* which runs are active right now;
+* which runs are active right now, per solver — including runs whose output
+  root was never written;
 * one source across solvers with ``--source``.
 
 Every number names its evidence. When an artifact a number needs was never
@@ -68,6 +69,8 @@ JOB_NAME_PATTERN = re.compile(
     r"(?P<variant>-canary|-preflight)?-(?P<date>\d{8})-(?P<version>v[\w]+)$"
 )
 QUEUE_CACHE_ROOT = Path(tempfile.gettempdir()) / "difficulty-report-cache"
+# Per-solver active summary order, matching the job and run label naming.
+SOLVER_LABELS = ("hosted", "small", "large", "snowball")
 
 
 class ReportError(RuntimeError):
@@ -234,6 +237,10 @@ def classify_run_sources(run: RunArtifacts, by_root: dict[str, RunArtifacts]) ->
     and token deltas are exact. Older runs recorded only cumulative counters,
     so their own share is derived by subtracting the latest inherited row's
     accounting; the report labels that basis.
+
+    ``added`` counts only sources no ancestor in the run's chain measured: a
+    child that re-aggregates a parent's source does work (``own``) but adds
+    nothing the chain had not already measured.
     """
     inherited_base = ancestor_latest_rows(run, by_root)
     own_windows = (run.run_seal or {}).get("sources", {})
@@ -273,6 +280,7 @@ def classify_run_sources(run: RunArtifacts, by_root: dict[str, RunArtifacts]) ->
     exact = bool(own_windows) or run.run_seal is not None
     return {
         "sources": classification,
+        "added": sum(1 for source_id in classification if source_id not in inherited_base),
         "own_basis": "exact own windows from trials/run-seal.json" if exact else "derived from cumulative row deltas",
     }
 
@@ -331,6 +339,7 @@ class IrisJob:
     submitted: str | None
     reason: str | None
     kind: str  # run | canary | preflight | other
+    solver: str | None = None  # from JOB_NAME_PATTERN; None when the job id does not match
 
     @property
     def active(self) -> bool:
@@ -373,8 +382,10 @@ def list_iris_jobs(limit: int = 300) -> list[IrisJob]:
             continue  # a child task row, not a root job
         match = JOB_NAME_PATTERN.match(job_id)
         kind = "other"
+        solver = None
         if match:
             kind = {"-canary": "canary", "-preflight": "preflight"}.get(match.group("variant"), "run")
+            solver = match.group("solver")
         jobs.append(
             IrisJob(
                 job_id=job_id,
@@ -382,9 +393,23 @@ def list_iris_jobs(limit: int = 300) -> list[IrisJob]:
                 submitted=fields[2] if len(fields) > 2 else None,
                 reason=fields[3] if len(fields) > 3 else None,
                 kind=kind,
+                solver=solver,
             )
         )
     return jobs
+
+
+def active_runs_by_solver(jobs: Sequence[IrisJob]) -> dict[str, int]:
+    """Active run jobs per solver label, including runs whose output root was never written.
+
+    Canary and preflight jobs carry a solver label but are not runs, so they
+    stay out of the summary.
+    """
+    counts = {solver: 0 for solver in SOLVER_LABELS}
+    for job in jobs:
+        if job.active and job.kind == "run" and job.solver in counts:
+            counts[job.solver] += 1
+    return counts
 
 
 def associate_jobs(runs: Sequence[RunArtifacts], jobs: Sequence[IrisJob]) -> dict[str, dict[str, Any]]:
@@ -517,7 +542,14 @@ def build_report(
 
     jobs = list_iris_jobs() if with_iris else []
     active_jobs = [
-        {"job_id": job.job_id, "state": job.state, "submitted": job.submitted, "kind": job.kind, "reason": job.reason}
+        {
+            "job_id": job.job_id,
+            "state": job.state,
+            "submitted": job.submitted,
+            "kind": job.kind,
+            "solver": job.solver,
+            "reason": job.reason,
+        }
         for job in jobs
         if job.active
     ]
@@ -532,6 +564,7 @@ def build_report(
             for run in unattributed
         ],
         "active_iris_jobs": active_jobs,
+        "active_runs_by_solver": active_runs_by_solver(jobs) if with_iris else None,
         "active_jobs_without_run_root": [job["job_id"] for job in active_jobs if job["job_id"] not in associated_ids],
     }
     if source_ids:
@@ -598,6 +631,7 @@ def run_section(
         "catalog": {
             "rows": len(run.rows),
             "sources_with_rows": len(sources),
+            "added": classification["added"],
             "aggregated_by_run": sum(1 for item in sources.values() if item["own"]),
             "aggregated_by_run_statuses": dict(sorted(own_status_counts.items())),
             "inherited": sum(1 for item in sources.values() if not item["own"]),
@@ -685,9 +719,15 @@ def render_text(report: dict[str, Any]) -> str:
                     lines.append(f"    {status} reasons: {joined}")
         lines.append("")
     lines.append("== active Iris jobs ==")
+    if report.get("active_runs_by_solver") is not None:
+        summary = report["active_runs_by_solver"]
+        lines.append("  active runs by solver: " + " ".join(f"{solver}={count}" for solver, count in summary.items()))
     if report["active_iris_jobs"]:
         for job in report["active_iris_jobs"]:
-            lines.append(f"  {job['job_id']}  state={job['state']}  submitted={job['submitted']}  kind={job['kind']}")
+            solver = f"  solver={job['solver']}" if job.get("solver") else ""
+            lines.append(
+                f"  {job['job_id']}  state={job['state']}  submitted={job['submitted']}  kind={job['kind']}{solver}"
+            )
     else:
         lines.append("  none")
     if report["active_jobs_without_run_root"]:
@@ -734,6 +774,7 @@ def render_run(run: dict[str, Any]) -> list[str]:
         lines.append("    wall: unavailable — the run wrote no catalog rows")
     lines.append(
         f"    catalog: {catalog['sources_with_rows']} sources with rows; "
+        f"added={catalog['added']} (no ancestor in its chain measured these); "
         f"aggregated by this run={catalog['aggregated_by_run']}"
         + (f" ({catalog['aggregated_by_run_statuses']})" if catalog.get("aggregated_by_run_statuses") else "")
         + f" inherited={catalog['inherited']} ({catalog['own_basis']})"

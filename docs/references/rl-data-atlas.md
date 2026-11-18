@@ -1340,8 +1340,10 @@ status log). `report` enumerates every run root under the difficulty tree, and
 answers per solver: identity, every run with its Iris job, submit/seal
 evidence and wall time, what "succeeded" sealed, per-run measured-vs-inherited
 accounting with pending and not_measured reason codes, per-run own GPU-hours
-and token deltas, current catalog totals over each frozen queue's population,
-and which runs are active right now. `--source <id>` shows one source across
+and token deltas, per-run added sources (measured by this run and by no
+ancestor in its chain), current catalog totals over each frozen queue's
+population, and which runs are active right now per solver — including runs
+whose output root was never written. `--source <id>` shows one source across
 solvers; `--json` writes the document.
 
 ```bash
