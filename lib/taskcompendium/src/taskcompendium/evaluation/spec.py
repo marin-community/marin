@@ -89,8 +89,14 @@ Operation = Annotated[
 
 
 class CohortOrder(StrEnum):
+    """Candidate order before a limit.
+
+    ``SHUFFLED`` sorts rows by a hash of their source row, so a limit selects a fixed uniform sample.
+    """
+
     SOURCE = "source"
     ROUND_ROBIN = "round_robin"
+    SHUFFLED = "shuffled"
 
 
 class LimitStage(StrEnum):

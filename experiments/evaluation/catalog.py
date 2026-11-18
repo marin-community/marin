@@ -25,6 +25,7 @@ from experiments.evaluation.benchmarks import (
     question_answering,
     reasoning,
     simpleqa,
+    supergpqa,
 )
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
 from experiments.post_training.task_curation.source import RlDataSource
@@ -59,6 +60,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             simpleqa,
             long_context,
             nupa,
+            supergpqa,
         )
         for benchmark in family.benchmarks()
     ]

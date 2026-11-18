@@ -58,6 +58,10 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
 
         grade = grade_gpqa_answer if scorer == "gpqa" else grade_mmlu_answer
         return grade(config["expected"], response)
+    if scorer == "supergpqa":
+        from .supergpqa import grade_supergpqa
+
+        return grade_supergpqa(config["expected"], config["options"], response)
     if scorer == "zeroeval_mcqa":
         from .zeroeval import grade_zeroeval_mcqa
 
