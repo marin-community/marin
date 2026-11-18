@@ -723,6 +723,10 @@ fn bounded_batch_coalescing_preserves_rows_and_sequence_order() {
         .collect();
     let chunks = chunk_batches_by_bytes(batches, 4096).unwrap();
     assert!(chunks.len() > 1);
+    assert!(
+        chunks.len() < 12,
+        "small batches must share durable hub writes"
+    );
     let mut received = Vec::new();
     for (ipc, last_seq) in chunks {
         assert!(ipc.len() <= 4096);

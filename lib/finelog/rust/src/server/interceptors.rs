@@ -421,7 +421,7 @@ mod tests {
         let interceptor: Arc<dyn Interceptor> = Arc::new(ConcurrencyInterceptor::new(
             limit,
             MAX_CONCURRENT_QUERY,
-            limit,
+            limit + 1,
         ));
         let chain: Arc<Vec<Arc<dyn Interceptor>>> = Arc::new(vec![interceptor]);
 

@@ -34,8 +34,8 @@ use axum::routing::get;
 use axum::Router;
 use connectrpc::{ConnectRpcService, Limits, Router as ConnectRouter};
 
-use crate::proto::finelog::logging::LogServiceExt;
-use crate::proto::finelog::stats::StatsServiceExt;
+use crate::proto::finelog::logging::{LogServiceExt, LOG_SERVICE_FETCH_LOGS_SPEC};
+use crate::proto::finelog::stats::{StatsServiceExt, STATS_SERVICE_QUERY_SPEC};
 use crate::read_executor::read_executor;
 use crate::server::auth::{auth_gate, AuthInterceptor, AuthPolicy};
 use crate::server::forwarding::ForwardingConfig;
@@ -229,10 +229,9 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
 
 async fn dispatch_reads(request: Request, next: Next) -> Response {
     if request.method() != Method::POST
-        || !matches!(
-            request.uri().path(),
-            "/finelog.stats.StatsService/Query" | "/finelog.logging.LogService/FetchLogs"
-        )
+        || ![STATS_SERVICE_QUERY_SPEC, LOG_SERVICE_FETCH_LOGS_SPEC]
+            .iter()
+            .any(|spec| request.uri().path() == spec.procedure)
     {
         return next.run(request).await;
     }

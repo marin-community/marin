@@ -1334,8 +1334,7 @@ fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-/// Keep source batches separate: one forwarding read can exceed Utf8's 2 GiB
-/// offset limit even though each engine batch and outbound request fits.
+/// Stamp each batch's origin and return its source sequences separately.
 fn ship_batches(
     result: QueryResult,
     cluster: &str,
@@ -1353,6 +1352,8 @@ fn ship_batches(
         .map(|(_, field)| field.as_ref().clone())
         .collect();
     let schema = Arc::new(ArrowSchema::new(fields));
+    // A complete forwarding read can exceed Utf8's 2 GiB offset limit. Keep
+    // engine batches separate until byte-bounded coalescing.
     result
         .batches
         .into_iter()
