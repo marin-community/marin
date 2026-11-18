@@ -15,6 +15,7 @@ from skyrl_train.training_batch import TrainingInputBatch
 def test_training_dump_round_trip_at_export_path(tmp_path, monkeypatch, cloud):
     monkeypatch.chdir(tmp_path)
     filesystem = MemoryFileSystem(skip_instance_cache=True)
+    monkeypatch.setattr(filesystem, "store", {})
     export_path = "s3://training-dump-test/exports" if cloud else str(tmp_path / "exports")
     if cloud:
         monkeypatch.setattr(io, "filesystem_and_path", lambda path: (filesystem, path))
