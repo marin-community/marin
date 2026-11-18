@@ -62,6 +62,7 @@ from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import EndpointAccess
+from rigging.network import interface_for_ipv4
 
 logger = logging.getLogger("nccl_transport_probe")
 
@@ -342,6 +343,25 @@ def asdict_without_worker_noise(rank: RankResult) -> dict:
     }
 
 
+def resolve_gloo_socket_ifname(advertise_host: str) -> str:
+    """Pick the interface workers must use for cross-host Gloo bootstrap.
+
+    Gloo resolves peer addresses from the hostname and binds loopback in the
+    task containers, so the Gloo control group behind the PyNccl stage fails
+    connectFullMesh cross-host while NCCL itself works (Snowball .64).
+    Production vLLM solves this with ``GLOO_SOCKET_IFNAME``: honor an ambient
+    value first, otherwise resolve the interface owning the advertise
+    address, the same interface NCCL's rendezvous already rides. Setting it
+    in the launcher environment propagates to spawned workers.
+    """
+    ambient = os.environ.get("GLOO_SOCKET_IFNAME")
+    if ambient:
+        return ambient
+    interface = interface_for_ipv4(advertise_host)
+    os.environ["GLOO_SOCKET_IFNAME"] = interface
+    return interface
+
+
 def run_launcher(args: argparse.Namespace) -> None:
     """Run every variant on this task and print the aggregate JSON report."""
     import torch  # noqa: PLC0415 - torch is an optional dependency outside the vendor runtime env
@@ -354,6 +374,8 @@ def run_launcher(args: argparse.Namespace) -> None:
     local_gpus = min(torch.cuda.device_count(), args.max_local_gpus) or 1
     world_size = args.world_size if args.world_size else num_tasks * local_gpus
     rank_offset = args.rank_offset if args.rank_offset is not None else task_index * local_gpus
+    gloo_interface = resolve_gloo_socket_ifname(job_info.advertise_host)
+    logger.info("Gloo bootstrap interface %s for %s", gloo_interface, job_info.advertise_host)
     if num_tasks < 2 and args.endpoint_name is None:
         logger.warning("num_tasks=%d: single-task run exercises intra-node transport only", num_tasks)
 
@@ -403,6 +425,7 @@ def run_launcher(args: argparse.Namespace) -> None:
             "num_tasks": num_tasks,
             "local_gpus": local_gpus,
             "host": job_info.advertise_host,
+            "gloo_socket_ifname": gloo_interface,
             "ib_ports": collect_ib_port_inventory(),
         },
         "results": results,
@@ -441,6 +464,8 @@ def run_gate(args: argparse.Namespace) -> None:
     else:
         local_gpus = torch.cuda.device_count()
         world_size = num_tasks * local_gpus
+    gloo_interface = resolve_gloo_socket_ifname(job_info.advertise_host)
+    logger.info("gate: Gloo bootstrap interface %s for %s", gloo_interface, job_info.advertise_host)
     ctx = iris_ctx()
     endpoint_name = f"{ENDPOINT_BASE_NAME}-gate-attempt-{job_info.attempt_id}"
     gate_variants = [
@@ -475,6 +500,7 @@ def run_gate(args: argparse.Namespace) -> None:
                 "gate": {
                     "task_index": task_index,
                     "verdict": verdict,
+                    "gloo_socket_ifname": gloo_interface,
                     "results": results,
                     "ib_ports": collect_ib_port_inventory(),
                 }
