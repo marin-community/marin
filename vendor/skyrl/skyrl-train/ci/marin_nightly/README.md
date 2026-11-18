@@ -101,7 +101,8 @@ python3 skyrl-train/ci/marin_nightly/gate.py \
 ```
 
 The Grug lane runs the softmax value/gradient check in `tests/gpu/test_megatron_worker.py`,
-`tests/gpu/test_grug_megatron.py`, `tests/gpu/test_grug_levanter_parity.py`, the CP2
+`tests/gpu/test_grug_megatron.py`, `tests/gpu/test_hero_megatron.py`,
+`tests/gpu/test_grug_levanter_parity.py`, the CP2
 FlashAttention forward/backward check in `tests/gpu/test_megatron_worker.py`, then
 `tests/gpu/test_grug_sampler_trainer.py` with the frozen Megatron runtime closure;
 see [SkyRL CI checks](../../../../../docs/dev-guide/skyrl.md#ci-checks).
