@@ -28,28 +28,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use connectrpc::interceptor::{UnaryRequest, UnaryResponse};
+use connectrpc::spec::Spec;
 use connectrpc::{async_trait, ConnectError, Interceptor, Next, RequestContext};
 use tokio::sync::Semaphore;
 
 use crate::proto::finelog::logging::LOG_SERVICE_FETCH_LOGS_SPEC;
 use crate::proto::finelog::stats::STATS_SERVICE_QUERY_SPEC;
 use crate::query::{query_timeout, run_within_query_timeout};
-
-pub(super) enum ReadProcedure {
-    FetchLogs,
-    Query,
-}
-
-/// Classify normalized procedure paths for both runtime dispatch and admission.
-pub(super) fn read_procedure(procedure: &str) -> Option<ReadProcedure> {
-    if procedure == LOG_SERVICE_FETCH_LOGS_SPEC.procedure {
-        Some(ReadProcedure::FetchLogs)
-    } else if procedure == STATS_SERVICE_QUERY_SPEC.procedure {
-        Some(ReadProcedure::Query)
-    } else {
-        None
-    }
-}
 
 /// Default per-method slow-RPC threshold.
 /// Picked well above the durable-write floor (one bg flush cycle) so a normal
@@ -61,6 +46,24 @@ pub const DEFAULT_SLOW_RPC_THRESHOLD_MS: i64 = 7000;
 /// wedges the process.
 pub const MAX_CONCURRENT_FETCH_LOGS: usize = 4;
 pub const MAX_CONCURRENT_QUERY: usize = 2;
+
+#[derive(Clone, Copy)]
+pub(crate) enum ReadProcedure {
+    FetchLogs,
+    Query,
+}
+
+const READ_PROCEDURES: [(Spec, ReadProcedure); 2] = [
+    (LOG_SERVICE_FETCH_LOGS_SPEC, ReadProcedure::FetchLogs),
+    (STATS_SERVICE_QUERY_SPEC, ReadProcedure::Query),
+];
+
+pub(crate) fn read_procedure(path: &str) -> Option<ReadProcedure> {
+    READ_PROCEDURES
+        .iter()
+        .find(|(spec, _)| spec.procedure == path)
+        .map(|(_, procedure)| *procedure)
+}
 
 /// The dispatched method's short name (`"FetchLogs"`, `"Query"`, ...), or `None`
 /// when the spec is absent (manual `route_*` registration without `with_spec`).
@@ -151,11 +154,10 @@ impl ConcurrencyInterceptor {
         }
     }
 
-    /// The semaphore for a public read procedure, or `None` for other RPCs.
-    fn semaphore_for(&self, procedure: &str) -> Option<&Arc<Semaphore>> {
-        match read_procedure(procedure)? {
-            ReadProcedure::FetchLogs => Some(&self.fetch),
-            ReadProcedure::Query => Some(&self.query),
+    fn semaphore_for(&self, procedure: ReadProcedure) -> &Arc<Semaphore> {
+        match procedure {
+            ReadProcedure::FetchLogs => &self.fetch,
+            ReadProcedure::Query => &self.query,
         }
     }
 }
@@ -179,10 +181,14 @@ impl Interceptor for ConcurrencyInterceptor {
         next: Next<'_>,
     ) -> Result<UnaryResponse, ConnectError> {
         let method = method_name(&req.ctx).unwrap_or("");
-        let procedure = req.ctx.spec().map(|spec| spec.procedure).unwrap_or("");
-        let Some(sem) = self.semaphore_for(procedure) else {
+        let Some(procedure) = req
+            .ctx
+            .spec()
+            .and_then(|spec| read_procedure(spec.procedure))
+        else {
             return next.run(req).await;
         };
+        let sem = self.semaphore_for(procedure);
         // Pre-acquire shed: a request that arrived already past its deadline is
         // not worth queuing.
         if deadline_expired(&req.ctx) {
