@@ -111,9 +111,13 @@ def projection_gaps(
     for declaration in declarations:
         if served_pins is not None and declaration.measured:
             served = served_pins.get(canonical_source_id(declaration.source_id))
-            if served is None or served.actor_binding is None or (
-                served.actor_binding.model_dump(exclude={"evidence_url"})
-                != declaration.actor_binding.model_dump(exclude={"evidence_url"})
+            if (
+                served is None
+                or served.actor_binding is None
+                or (
+                    served.actor_binding.model_dump(exclude={"evidence_url"})
+                    != declaration.actor_binding.model_dump(exclude={"evidence_url"})
+                )
             ):
                 gaps.append(
                     ProjectionGap(
@@ -242,9 +246,7 @@ def publication_preflight(
     """
     gaps, notes = projection_gaps(declarations, contract_receipts, curriculum_rows, served_pins=served_pins)
     blocking = [
-        gap
-        for gap in gaps
-        if f"{gap.source_id}:{gap.projection}" not in waivers and gap.source_id not in waivers
+        gap for gap in gaps if f"{gap.source_id}:{gap.projection}" not in waivers and gap.source_id not in waivers
     ]
     if blocking:
         counts: Counter = Counter((gap.projection, gap.state) for gap in blocking)
@@ -328,9 +330,7 @@ def assembled_declaration_pins() -> tuple[list[DeclarationPin], dict[str, Any]]:
     pins = []
     for source_id, source in sources.items():
         dataset = source.dataset
-        pipeline = (
-            source.pipeline_reference.model_dump(mode="json") if source.pipeline_reference is not None else None
-        )
+        pipeline = source.pipeline_reference.model_dump(mode="json") if source.pipeline_reference is not None else None
         pins.append(
             DeclarationPin(
                 source_id=source_id,
@@ -347,7 +347,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="Print the gap report over the served catalog")
-    parser.add_argument("--assembled", action="store_true", help="Audit the assembled layer instead of the served catalog")
+    parser.add_argument(
+        "--assembled", action="store_true", help="Audit the assembled layer instead of the served catalog"
+    )
     parser.add_argument("--plan", type=Path, help="Write the derived-contract census inputs manifest here")
     parser.add_argument("--waivers", type=Path, help="JSON list of source:projection waivers for the preflight")
     parser.add_argument("--preflight", action="store_true", help="Refuse while a current pin lacks a projection")
@@ -363,8 +365,12 @@ def main() -> None:
         )
         print(
             json.dumps(
-                {"plan": str(args.plan), "census_inputs": len(rows), "unrunnable": len(unrunnable),
-                 "counts": summary(gaps, notes)["counts"]},
+                {
+                    "plan": str(args.plan),
+                    "census_inputs": len(rows),
+                    "unrunnable": len(unrunnable),
+                    "counts": summary(gaps, notes)["counts"],
+                },
                 indent=2,
             )
         )
