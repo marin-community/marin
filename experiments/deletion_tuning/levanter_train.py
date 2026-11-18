@@ -229,7 +229,6 @@ def _initialize_deletion(model, *, config, trainer, settings: DeletionTrainSetti
     logger.info("calibrated Wanda norms over %d batches", settings.calibration_sequences)
 
     # The delete threshold comes from a strided host-pooled subsample of the scores.
-    layer_keys = jrandom.split(jrandom.PRNGKey(settings.seed), num_layers)
     sample_parts = []
     for block in model.transformer.blocks:
         mlp = block.mlp
