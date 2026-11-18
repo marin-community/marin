@@ -178,8 +178,11 @@ rolls through it.
 When several processes save to a local or NFS path, each OCDBT manifest commit takes a lock
 file that every other writer waits on. One process publishes the array metadata before the
 others open the arrays, and the others open it without reading it back. Each chunk commits
-as soon as it is staged. Set `checkpointer.write.file_io_locking` to `os`, `lockfile`, or
-`none` to override that default.
+as soon as it is staged. Before that commit, the writer refreshes the directory and holds a
+commit-order lock until the commit finishes, so it rewrites the manifest the previous client
+published instead of a cached copy. A save also publishes a writer lease for its lifetime.
+Lock files left in the directory are removed only after that lease is gone or stale.
+Set `checkpointer.write.file_io_locking` to `os`, `lockfile`, or `none` to override that default.
 
 | Parameter                                  | Description                                                                            | Default |
 |--------------------------------------------|----------------------------------------------------------------------------------------|---------|
