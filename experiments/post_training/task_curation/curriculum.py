@@ -26,11 +26,13 @@ def _recipe_identity(pipeline: object) -> str:
     return f"{kind.__module__}.{kind.__qualname__}"
 
 
-def curriculum_entry(label: str, source: RlDataSource, weight: float | None) -> CurriculumEntry:
+def _entry(label: str, source: RlDataSource, weight: float | None) -> CurriculumEntry:
     """One curriculum entry over a catalog source: its sampling label, pin, recipe identity, and weight.
 
-    ``label`` is the sampling key the trainer resolves rows by (a ``teacher_route``
-    value); it usually equals the source's catalog name but need not.
+    ``label`` is the sampling key the trainer resolves rows by: the pool row's
+    ``teacher_route`` value. A curriculum samples only a pool whose rows carry its
+    labels, so a label may name a route or a stamped source population rather than
+    the catalog name; ``source`` is always the catalog invocation name.
     """
     dataset = source.dataset
     if dataset is None:
@@ -69,7 +71,7 @@ def weighted_curriculum(
     current version, pin, and pipeline identity are recorded at build time.
     """
     sources = runnable_sources() if catalog is None else catalog
-    entries = tuple(curriculum_entry(label, _resolved(label, sources), weight) for label, weight in weights.items())
+    entries = tuple(_entry(label, _resolved(label, sources), weight) for label, weight in weights.items())
     return RlCurriculum(
         name=name,
         version=version,
@@ -103,7 +105,7 @@ def ordered_curriculum(
     stray = sorted(set(quota_map) - set(stages))
     if stray:
         raise ValueError(f"ordered curriculum {name}@{version} sets quotas for sources no stage samples: {stray}")
-    entries = tuple(curriculum_entry(label, _resolved(label, sources), None) for label in dict.fromkeys(stages))
+    entries = tuple(_entry(label, _resolved(label, sources), None) for label in dict.fromkeys(stages))
     declared = tuple(CurriculumStage(label=label, quota=quota_map.get(label)) for label in stages)
     return RlCurriculum(
         name=name,

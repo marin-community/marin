@@ -17,6 +17,7 @@ import json
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
+from types import MappingProxyType
 
 import pyarrow.parquet as pq
 from marin.execution.lazy import ArtifactStep
@@ -63,6 +64,19 @@ REASONING_GYM_SOURCE = (
     "https://files.pythonhosted.org/packages/42/21/"
     "bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl"
 )
+
+RELEASE_SOURCE_ROUTES = MappingProxyType(
+    {
+        AGENTIC_TRAIN_SOURCE: "agentic",
+        "PRIME-RL/Eurus-2-RL-Data": "nonagentic",
+        "nvidia/Nemotron-RL-Ultra-Training-Blends": "nonagentic",
+        "nvidia/OpenScience": "nonagentic",
+        REASONING_GYM_SOURCE: "nonagentic",
+        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": "nonagentic",
+        "open-thoughts/TaskTrove": "nonagentic",
+    }
+)
+"""Each training row's ``data_source`` and the route the runs admitted it through."""
 
 
 @dataclass(frozen=True)
@@ -297,3 +311,8 @@ def nonagentic_release() -> RlDataSource[AdoptedRelease]:
 
 def sources() -> list[RlDataSource[AdoptedRelease]]:
     return [agentic_release(), nonagentic_release()]
+
+
+AGENTIC_RELEASE = agentic_release()
+NONAGENTIC_RELEASE = nonagentic_release()
+"""The two adopted releases as catalog sources; curricula bind entries against them."""
