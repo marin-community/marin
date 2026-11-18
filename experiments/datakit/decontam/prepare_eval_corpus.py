@@ -41,6 +41,10 @@ lm-eval-harness package:
         -e MARIN_PREFIX s3://marin-us-east-02a/marin \\
         -- python experiments/datakit/decontam/prepare_eval_corpus.py
 
+The job needs an ``HF_TOKEN`` with access to the gated ``Idavidrein/gpqa``
+dataset, which the required ``leaderboard_gpqa`` task reads. The Iris CLI
+copies the token from the shell or from ``.marin.yaml`` at the checkout root.
+
 The Iris worker installs lm-eval through the Levanter ``lm_eval`` extra. The
 script monkey-patches ``datasets.load_dataset`` to force
 ``trust_remote_code=True`` and sets ``HF_ALLOW_CODE_EVAL=1`` before
