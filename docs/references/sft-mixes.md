@@ -80,11 +80,14 @@ Every step output is fingerprint-addressed and carries a `.artifact.json` record
 | `provenance` | Who, when, which commit, and which argv produced the output. |
 
 For a training run or checkpoint, read the record at the run's output path. The
-`config` holds the training config; its `data` field is the `LmDataConfig`:
+`config` holds the materialized config that ran. For a `train_lm` run it is the
+`TrainLmOnPodConfig`, and the data config is `config["train_config"]["data"]`:
 
 - `train_weights` — `{component: weight}`.
 - `components` — keyed by component name; each component's `cache_dir` points at
-  the component's tokenized-cache artifact (a `{name}/{version}` path).
+  the component's tokenized cache. A produced handle resolves to a
+  `{name}/{version}` path; an adopted or pinned handle resolves to its
+  pre-existing location, which may carry no record.
 - `shuffle`, `permutation_type`, `tokenizer`.
 
 Each component path carries its own record with the component's `name@version`,
@@ -95,10 +98,14 @@ configs, so it answers which exact bytes trained the model.
 from marin.execution.artifact import read_record
 
 run = read_record("<run output path>")
-print(run.config["train_config"]["data"]["train_weights"])  # {"fineweb-edu-10M": 1.0}
-for name, component in run.config["train_config"]["data"]["components"].items():
+data = run.config["train_config"]["data"]
+print(data["train_weights"])  # {"fineweb-edu-10M": 1.0}
+for name, component in data["components"].items():
     cache = read_record(component["cache_dir"])
-    print(name, cache.name, cache.version, cache.fingerprint)
+    if cache is None:
+        print(name, "no record at the resolved path")
+    else:
+        print(name, cache.name, cache.version, cache.fingerprint)
 ```
 
 ## Example
