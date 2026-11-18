@@ -169,3 +169,33 @@ def test_missing_manifest_slot_fails_before_any_restore(tmp_path, cpu_mesh, monk
     monkeypatch.setattr(carried_restore, "load_checkpoint", forbidden_load)
     with pytest.raises(ValueError, match="checkpoint layout mismatch"):
         restore_1005_carried_state(target, str(path), mesh=cpu_mesh, expected_step=161750)
+
+
+def test_streaming_restore_deletes_each_cast_source_before_loading_next(tmp_path, cpu_mesh, monkeypatch):
+    target, _ = make_state()
+    path = tmp_path / "checkpoint"
+    save_checkpoint(populated_source(target), step=161750, checkpoint_path=path, is_temporary=False)
+    target = restore_template_from(target)
+    target_specs = _array_specs(_shared(target, legacy=True))
+    real_load = carried_restore.load_checkpoint
+    prior_cast_source = None
+    seen = 0
+
+    def tracked_load(*args, **kwargs):
+        nonlocal prior_cast_source, seen
+        if prior_cast_source is not None:
+            assert prior_cast_source.is_deleted(), "previous FP32 cast source still live before next load"
+        out = real_load(*args, **kwargs)
+        leaf = next(iter(out.values()))
+        subpath = kwargs.get("subpath") or ""
+        name = next(iter(out))
+        key = "/".join(part for part in (subpath, name) if part)
+        prior_cast_source = leaf if leaf.dtype == jnp.float32 and target_specs[key][1] == "bfloat16" else None
+        seen += 1
+        return out
+
+    monkeypatch.setattr(carried_restore, "load_checkpoint", tracked_load)
+    restore_1005_carried_state(target, str(path), mesh=cpu_mesh, expected_step=161750)
+    if prior_cast_source is not None:
+        assert prior_cast_source.is_deleted()
+    assert seen == len(read_manifest(str(path)).arrays)

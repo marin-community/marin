@@ -81,6 +81,36 @@ def _cast_to_target(source, target):
     return jax.tree.map(cast, source, target)
 
 
+def _restore_one_leaf_at_a_time(target, checkpoint, *, mesh):
+    """Load and convert one manifest leaf at a time; no complete FP32 tree is built."""
+    serializable, nonserializable = eqx.partition(target, is_jax_array_like)
+    leaves, treedef = jax.tree.flatten(serializable)
+    paths = jax.tree.leaves(leaf_key_paths(serializable))
+    if len(paths) != len(leaves):
+        raise ValueError("checkpoint template path/leaf mismatch")
+    restored = []
+    for path, target_leaf in zip(paths, leaves, strict=True):
+        key = path.replace(".", "/")
+        parent, _, name = key.rpartition("/")
+        dtype = jnp.float32 if target_leaf.dtype == jnp.bfloat16 else target_leaf.dtype
+        exemplar = jax.ShapeDtypeStruct(target_leaf.shape, dtype, sharding=getattr(target_leaf, "sharding", None))
+        # A one-key exemplar avoids a spurious trailing slash in OCDBT paths.
+        loaded = load_checkpoint({name: exemplar}, checkpoint, subpath=parent or None, mesh=mesh, allow_partial=False)
+        value = loaded.pop(name)
+        del loaded
+        if value.dtype != target_leaf.dtype:
+            if value.dtype != jnp.float32 or target_leaf.dtype != jnp.bfloat16:
+                raise ValueError(f"unsupported restored dtype conversion: {value.dtype} to {target_leaf.dtype}")
+            converted = value.astype(jnp.bfloat16)
+            converted.block_until_ready()
+            value.delete()
+            del value
+            restored.append(converted)
+        else:
+            restored.append(value)
+    return eqx.combine(jax.tree.unflatten(treedef, restored), nonserializable)
+
+
 def restore_1005_carried_state(state, checkpoint: str, *, mesh, expected_step: int):
     """Strictly restore every saved array and explicitly round FP32 parameters/moments to BF16.
 
@@ -106,8 +136,7 @@ def restore_1005_carried_state(state, checkpoint: str, *, mesh, expected_step: i
         extra = sorted(actual.keys() - expected.keys())
         mismatched = sorted(k for k in expected.keys() & actual.keys() if expected[k] != actual[k])
         raise ValueError(f"checkpoint layout mismatch: missing={missing}, extra={extra}, changed={mismatched}")
-    loaded = load_checkpoint(template, checkpoint, mesh=mesh, allow_partial=False)
-    if int(loaded.step) != expected_step:
+    restored = _restore_one_leaf_at_a_time(target_legacy, checkpoint, mesh=mesh)
+    if int(restored.step) != expected_step:
         raise ValueError("restored step differs from the explicit carried checkpoint step")
-    cast = _cast_to_target(loaded, target_legacy)
-    return _shared(cast, legacy=False)
+    return _shared(restored, legacy=False)
