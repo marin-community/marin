@@ -26,7 +26,12 @@ def recipe_identity(pipeline: object) -> str:
     return f"{kind.__module__}.{kind.__qualname__}"
 
 
-def _entry(label: str, source: RlDataSource, weight: float | None) -> CurriculumEntry:
+def curriculum_entry(label: str, source: RlDataSource, weight: float | None) -> CurriculumEntry:
+    """One curriculum entry over a catalog source: its sampling label, pin, recipe identity, and weight.
+
+    ``label`` is the sampling key the trainer resolves rows by (a ``teacher_route``
+    value); it usually equals the source's catalog name but need not.
+    """
     dataset = source.dataset
     if dataset is None:
         raise ValueError(f"source {label} has no pinned dataset; curricula record pinned sources only")
@@ -34,12 +39,15 @@ def _entry(label: str, source: RlDataSource, weight: float | None) -> Curriculum
         raise ValueError(f"source {label} has no curation pipeline; curricula record runnable sources only")
     return CurriculumEntry(
         label=label,
-        source=label,
+        source=source.name,
         version=source.version,
         pin=SourcePin(name=dataset.name, revision=dataset.revision, url=dataset.url),
         recipe=recipe_identity(source.pipeline),
         weight=weight,
     )
+
+
+_entry = curriculum_entry
 
 
 def _resolved(name: str, catalog: Mapping[str, RlDataSource]) -> RlDataSource:
