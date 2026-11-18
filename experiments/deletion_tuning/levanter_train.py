@@ -270,7 +270,7 @@ def _initialize_deletion(model, *, config, trainer, settings: DeletionTrainSetti
     norms_host = jnp.asarray(routed_norms, dtype=jnp.float32)
     for index, block in enumerate(model.transformer.blocks):
         norms_layer = norms_host[index]
-        scores = jnp.abs(block.mlp.expert_mlp.w_gate) * norms_layer.reshape(norms_layer.shape + (1,))
+        scores = jnp.abs(block.mlp.expert_mlp.w_gate) * norms_layer.reshape((*norms_layer.shape, 1))
         strided = scores[..., ::WANDA_SAMPLE_STRIDE]
         sample_parts.append(strided.reshape(strided.shape[0], -1))
     pooled = np.concatenate([np.asarray(part).reshape(-1) for part in sample_parts])
