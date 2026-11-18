@@ -359,14 +359,27 @@ The `belay` watch runs the `belay` profile every 10 minutes
 runbook session that drains the queue only when events wait. Turning dispatch off in the
 Belay app's admin page pauses it without a Loom deploy.
 
-The `old-iris-jobs` watch runs the `ops` profile at 09:00 Pacific on weekdays
-([prompt](watches/old-iris-jobs.md)). It runs
+The `old-iris-jobs` watch runs the `ops-report` profile
+([instructions](profiles/ops-report/AGENTS.md)) at 09:00 Pacific on weekdays
+([prompt](watches/old-iris-jobs.md)). The profile runs Claude: the sandbox of a Codex
+profile makes the uv cache read-only and permits network access only to Loom. The watch runs
 [`scripts/ops/old_iris_jobs.py`](../../scripts/ops/old_iris_jobs.py) against the
-`marin` hub and posts the Iris root jobs older than the prompt's
-`--min-age-days` to `#marin-alerts`, once per job while the job keeps running.
-Loom has no CoreWeave kubeconfig, so the report has the jobs the hub federates
-to CoreWeave but not the jobs submitted directly to a CoreWeave controller. The
-watch does not cancel jobs.
+`marin` hub. The script keeps a Google Sheet with one tab per job owner and one
+row per Iris root job older than the prompt's `--min-age-days`. An owner sets
+the Decision cell of a row. `Kill` makes the next run cancel the job. `Revisit in
+30 days` or `Revisit in 365 days` leaves the job alone until the Revisit on date, then
+the run clears the decision and the owner decides again. A job with no decision stays in the sheet, and a job that stops
+running leaves it. The watch posts to `#marin-alerts` only when the script
+fails, which includes a cancel that Iris rejects. It needs:
+
+- the sheet shared with `loom-vm@hai-gcp-models.iam.gserviceaccount.com` as an
+  editor. Every person with edit access to the sheet can make the watch cancel
+  a job, so share it only with job owners and operators;
+- the `marin` IAM stack applied, for the `loom-vm` token-creator grant on
+  itself that mints a spreadsheets-scoped token.
+
+Loom has no CoreWeave kubeconfig, so the sheet has the jobs the hub federates
+to CoreWeave but not the jobs submitted directly to a CoreWeave controller.
 
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
 before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)
