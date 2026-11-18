@@ -117,8 +117,6 @@ def test_resolve_gloo_socket_ifname_fails_on_unowned_address(monkeypatch):
 
 def test_all_to_all_element_count_rounds_down_to_world_size():
     """The 192-rank gate run failed because 2**24 elements left a remainder mod 192."""
-    from experiments.post_training.nccl_transport_probe import all_to_all_element_count
-
     count = all_to_all_element_count(64 * 2**20, 192)
     assert count % 192 == 0
     assert count == 33_554_304
@@ -129,8 +127,6 @@ def test_all_to_all_element_count_rounds_down_to_world_size():
 
 
 def test_all_to_all_element_count_rejects_buffer_too_small_for_world():
-    from experiments.post_training.nccl_transport_probe import all_to_all_element_count
-
     with pytest.raises(ValueError, match="too few for world_size=192"):
         all_to_all_element_count(8, 192)
     with pytest.raises(ValueError, match="world_size must be positive"):
