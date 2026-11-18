@@ -278,7 +278,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Task Trove",
                 origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "single-turn", "language:python"),
                 count=10000,
                 notes=(
                     "Keep rows with at least 5 test files; drop the zero-test fallback (currently full "
@@ -302,7 +302,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Task Trove",
                 origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "single-turn", "language:python"),
                 count=15713,
                 notes="50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
                 task_format=TaskFormat.TASKCOMPENDIUM,

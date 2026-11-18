@@ -598,7 +598,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
-            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=1884,
         ),
         f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_REBENCH}": SourceInfo(
@@ -612,7 +612,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
-            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=5307,
         ),
         "swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
@@ -732,7 +732,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="math-answer",
-            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("agentic", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=5917,
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
@@ -840,7 +840,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="tool-use",
-            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("license:cc-by-4.0", "gym/nemotron_ultra"),
             count=2666,
         ),
         "ultra_v3_agentic_rl_step73_citation_format_v2": SourceInfo(
@@ -876,7 +876,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
-            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("rlvr", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=10000,
         ),
         "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": SourceInfo(
@@ -914,7 +914,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="preference",
-            tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("alignment", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=4795,
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
@@ -1010,7 +1010,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="math-answer",
-            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("agentic", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=5917,
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
@@ -1106,7 +1106,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
-            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=2838,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -1118,7 +1118,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
-            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=11060,
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
@@ -1142,7 +1142,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="tool-use",
-            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("license:cc-by-4.0", "gym/nemotron_ultra"),
             count=4011,
         ),
     },
@@ -1156,7 +1156,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="preference",
-            tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("alignment", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=4757,
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
@@ -1252,7 +1252,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="math-answer",
-            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("agentic", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=5917,
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
@@ -1348,7 +1348,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
-            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=2838,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -1360,7 +1360,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
-            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=11060,
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
@@ -1384,7 +1384,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="tool-use",
-            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("license:cc-by-4.0", "gym/nemotron_ultra"),
             count=2666,
         ),
         "ultra_sft_step3200_ds2_freeform": SourceInfo(
@@ -1432,7 +1432,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             build_path="MarinSkyRL",
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
-            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            tags=("rlvr", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=1398,
         ),
     },

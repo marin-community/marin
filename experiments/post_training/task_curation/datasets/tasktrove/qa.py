@@ -353,7 +353,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="TaskTrove",
                 origin=SourceOrigin.TASKTROVE,
                 family="qa-short-answer",
-                tags=("agentic", "multi-turn"),
+                tags=("single-turn",),
                 count=616888,
                 notes=(
                     "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at conversion "

@@ -88,7 +88,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="TaskTrove",
                 origin=SourceOrigin.TASKTROVE,
                 family="math-answer",
-                tags=("agentic", "multi-turn"),
+                tags=("single-turn",),
                 count=6926,
                 notes=(
                     "Numeric compare on real puzzles. Gold lives in /tests, which the harness must hide; "

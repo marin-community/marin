@@ -486,7 +486,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                tags=("agentic", "single-turn", "language:python", "campaign-release", "converted"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 oracle_validation=OracleValidation.SKIPPED,
                 recipe_qa_history=RecipeQAHistoricalNotes(

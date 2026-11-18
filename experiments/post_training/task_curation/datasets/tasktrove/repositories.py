@@ -140,7 +140,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 family="swe-repo",
                 tags=(
                     "agentic",
-                    "multi-turn",
+                    "single-turn",
                     "language:python",
                     "language:go",
                     "language:rust",
@@ -189,7 +189,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Task Trove",
                 origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
-                tags=("agentic", "multi-turn", "language:python", "deprecated"),
+                tags=("agentic", "single-turn", "language:python", "deprecated"),
                 count=12927,
                 notes=(
                     "Deprecated: this upstream SWE-smith conversion predates the hardened "

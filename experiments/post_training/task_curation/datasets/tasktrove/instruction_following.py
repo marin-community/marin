@@ -225,7 +225,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="TaskTrove",
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
-                tags=("agentic", "multi-turn"),
+                tags=("single-turn",),
                 count=46391,
                 notes=(
                     "IFEval-style deterministic checkers. Filter rows with empty constraint lists "
