@@ -22,7 +22,9 @@ import uvicorn
 from finelog.client import RemoteLogHandler
 from rigging import telemetry
 from rigging.filesystem.storage_path import prefix_join
+from rigging.grants import GrantDenied
 from rigging.server_auth import IAP_ISSUER, IAP_PUBLIC_KEYS_URL, TokenVerifier
+from rigging.shared_grants import SharedGrantUnavailable
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
 
@@ -107,6 +109,11 @@ from iris.cluster.controller.scheduling.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.shared_attempts import (
+    renew_shared_attempts,
+    retire_shared_attempts,
+    with_shared_attempt_credentials,
+)
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.tasks import PendingKick
 from iris.cluster.controller.transition_reader import DbTransitionReader
@@ -201,6 +208,12 @@ class _TickInputs:
     # peer; the tick fails them UNSCHEDULABLE (they own no task rows, so the task-level
     # timeout scan never sees them).
     expired_queued_federation: list[JobName] = field(default_factory=list)
+
+
+@dataclass
+class _CredentialDispatch:
+    withheld_uids: set[str] = field(default_factory=set)
+    failures: list[PendingKick] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -866,6 +879,9 @@ class Controller:
             default_user_role=(
                 auth.role_policy.default_role if auth is not None and auth.role_policy else DEFAULT_USER_ROLE
             ),
+            shared_grants=(
+                auth.shared_grants.config.model_dump() if auth is not None and auth.shared_grants is not None else None
+            ),
         )
 
     def stop(self) -> None:
@@ -1035,6 +1051,8 @@ class Controller:
             return
 
         self._drain_pending_evictions()
+        if self._config.auth is not None:
+            retire_shared_attempts(self._db, self._config.auth.shared_attempts)
         pending_kicks = self._drain_pending_kicks()
 
         run_autoscale = autoscale_limiter.should_run()
@@ -1063,6 +1081,11 @@ class Controller:
             if scan_timeouts:
                 inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
 
+        credentials = _CredentialDispatch()
+        if inputs.reconcile_request is not None:
+            credentials = self._stamp_task_credentials(inputs.reconcile_request)
+            pending_kicks.extend(credentials.failures)
+
         sched_result: ScheduleResult | None = None
         backend_pins: list[tuple[JobName, str]] = []
         if run_schedule:
@@ -1087,7 +1110,12 @@ class Controller:
             observation = self.backend.reconcile(inputs.reconcile_request)
             application = apply_observation(
                 DbTransitionReader(self._db),
-                observation.task_updates,
+                [
+                    update
+                    for update in observation.task_updates
+                    if update.new_state != job_pb2.TASK_STATE_MISSING
+                    or update.attempt_uid not in credentials.withheld_uids
+                ],
                 observation.worker_health_events,
                 worker_health=self._worker_health,
                 now=Timestamp.now(),
@@ -1145,14 +1173,66 @@ class Controller:
             self._remove_worker_capacity(reaped_workers, reason=_WORKER_RECONCILE_TEARDOWN_REASON)
 
         self._refresh_backend_observation()
+        if self._config.auth is not None:
+            retire_shared_attempts(self._db, self._config.auth.shared_attempts)
+            if run_reconcile:
+                renew_shared_attempts(self._db, self._config.auth.shared_attempts, observation.task_updates)
+
+    def _task_credentials(self, request: job_pb2.RunTaskRequest) -> job_pb2.RunTaskRequest:
+        auth = self._config.auth
+        shared = with_shared_attempt_credentials(
+            request,
+            db=self._db,
+            broker=auth.shared_attempts if auth is not None else None,
+            job_prefix=auth.shared_job_prefix if auth is not None else "",
+        )
+        if shared is not None:
+            return shared
+        return with_task_token(request, JobName.from_wire(request.task_id).require_task()[0], auth)
+
+    def _stamp_task_credentials(self, request: ReconcileRequest) -> _CredentialDispatch:
+        result = _CredentialDispatch()
+
+        def stamp(task: job_pb2.RunTaskRequest) -> job_pb2.RunTaskRequest | None:
+            try:
+                return self._task_credentials(task)
+            except SharedGrantUnavailable:
+                logger.warning("Shared attempt credential issuance remains unavailable for %s", task.attempt_uid)
+            except GrantDenied:
+                logger.warning("Shared attempt credential issuance was denied for %s", task.attempt_uid)
+                result.failures.append(
+                    PendingKick(
+                        task_id=JobName.from_wire(task.task_id),
+                        attempt_id=task.attempt_id,
+                        attempt_uid=task.attempt_uid,
+                        kind=TerminalKind.TIMEOUT,
+                        reason="Shared attempt authorization was denied or expired",
+                    )
+                )
+            result.withheld_uids.add(task.attempt_uid)
+            return None
+
+        if isinstance(request, DirectReconcileRequest):
+            stamped = [stamp(task) for task in request.tasks_to_run]
+            request.tasks_to_run[:] = [task for task in stamped if task is not None]
+            # Keep the desired Pod roster: a lost dispatch response may hide an
+            # already-running Pod. Its absence observations cannot fail a deferred launch.
+            return result
+        for target in request.targets:
+            for attempt in target.plan.request.desired:
+                if attempt.HasField("run") and attempt.run.HasField("request"):
+                    stamped = stamp(attempt.run.request)
+                    if stamped is None:
+                        # Poll an already-held attempt without giving the worker an
+                        # unauthenticated launch spec. Missing observations are deferred.
+                        attempt.run.ClearField("request")
+                    else:
+                        attempt.run.request.CopyFrom(stamped)
+        return result
 
     def _direct_reconcile_request(self) -> DirectReconcileRequest:
         drain = self._drain_dispatch_snapshot()
-        tasks_to_run = [
-            with_task_token(request, JobName.from_wire(request.task_id).require_task()[0], self._config.auth)
-            for request in drain.tasks_to_run
-        ]
-        return DirectReconcileRequest(tasks_to_run=tasks_to_run, running_tasks=drain.running_tasks)
+        return DirectReconcileRequest(tasks_to_run=drain.tasks_to_run, running_tasks=drain.running_tasks)
 
     def _scheduling_inputs(self, snap: Tx, now: Timestamp) -> _SchedulingInputs:
         budget_context = self._budgets.context(snap)
@@ -1182,9 +1262,7 @@ class Controller:
                 continue
             if row.job_id not in templates:
                 template = snap.caches[RunTemplatesProjection].get(snap, row.job_id)
-                templates[row.job_id] = (
-                    with_task_token(template, row.job_id, self._config.auth) if template is not None else None
-                )
+                templates[row.job_id] = template
         worker_snapshot = reads.ControlSnapshot(
             worker_addresses=control.worker_addresses,
             reconcile_rows=control.reconcile_rows,
@@ -1588,6 +1666,10 @@ class Controller:
         """
         decisions: list[TerminalDecision] = []
         for kick in pending_kicks:
+            if kick.attempt_uid is not None and (
+                kick.attempt_id is None or reads.attempt_uid_for(cur, kick.task_id, kick.attempt_id) != kick.attempt_uid
+            ):
+                continue
             if kick.attempt_id is not None:
                 detail = reads.get_task_detail(cur, kick.task_id)
                 if detail is None or detail.current_attempt_id != kick.attempt_id:

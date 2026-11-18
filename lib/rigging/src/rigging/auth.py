@@ -29,17 +29,20 @@ hook), so the header rides on every RPC shape — unary and streaming alike — 
 both sync and async clients.
 """
 
+import getpass
 import json
 import logging
 import os
 import tempfile
 import threading
 import time
+import warnings
 import webbrowser
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
+from urllib.parse import urlsplit
 
 import google.auth
 import google.auth.credentials
@@ -408,7 +411,8 @@ def run_iap_desktop_login(
     With ``headless=False`` (default) opens the system browser and catches the
     redirect on a localhost port — the right choice on a workstation. With
     ``headless=True`` (no local browser, e.g. an SSH session) it instead prints
-    the authorization URL and reads back the pasted redirect URL or code, so no
+    the authorization URL and reads back the full redirected URL through hidden
+    terminal input, so no
     browser or port-forward on the box is required. Even with ``headless=False``
     we fall back to that paste flow automatically when no browser is registered,
     since ``run_local_server``'s localhost redirect is unreachable from wherever
@@ -445,7 +449,9 @@ def run_iap_desktop_login(
     if headless or not _browser_available():
         creds = _console_oauth(Flow, client_config)
     else:
-        flow = InstalledAppFlow.from_client_config(client_config, scopes=IAP_LOGIN_SCOPES)
+        flow = InstalledAppFlow.from_client_config(
+            client_config, scopes=IAP_LOGIN_SCOPES, autogenerate_code_verifier=True
+        )
         creds = flow.run_local_server(port=port, open_browser=True)
 
     if not creds.id_token:
@@ -471,7 +477,7 @@ def _browser_available() -> bool:
 
 
 def _console_oauth(flow_cls, client_config: dict):
-    """Manual loopback OAuth: print the URL, read back the pasted redirect/code.
+    """Manual loopback OAuth with PKCE and state-checked, hidden callback input.
 
     Works without a local browser or a reachable localhost port — the user opens
     the URL on any machine and pastes the resulting ``http://localhost/?code=...``
@@ -480,18 +486,30 @@ def _console_oauth(flow_cls, client_config: dict):
     first (``run_iap_desktop_login`` does), since the http loopback redirect and
     Google's scope expansion both trip oauthlib's strict defaults.
     """
-    flow = flow_cls.from_client_config(client_config, scopes=IAP_LOGIN_SCOPES, redirect_uri="http://localhost")
+    flow = flow_cls.from_client_config(
+        client_config,
+        scopes=IAP_LOGIN_SCOPES,
+        redirect_uri="http://localhost",
+        autogenerate_code_verifier=True,
+    )
     auth_url, _ = flow.authorization_url(access_type="offline", prompt="consent")
     print(
         "\nOpen this URL in a browser, authorize, then paste the FULL redirected URL\n"
         "(it looks like http://localhost/?...code=...; the page itself will not load):\n\n"
         f"{auth_url}\n"
     )
-    response = input("Redirected URL (or just the code): ").strip()
-    if response.startswith("http"):
-        flow.fetch_token(authorization_response=response)
-    else:
-        flow.fetch_token(code=response)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", getpass.GetPassWarning)
+        response = getpass.getpass("Full redirected URL (hidden): ").strip()
+    callback = urlsplit(response)
+    if (
+        callback.scheme != "http"
+        or callback.netloc != "localhost"
+        or callback.path not in ("", "/")
+        or callback.fragment
+    ):
+        raise ValueError("Paste the full http://localhost callback URL, including its state parameter")
+    flow.fetch_token(authorization_response=response)
     return flow.credentials
 
 

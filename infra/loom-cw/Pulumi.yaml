@@ -1,0 +1,8 @@
+name: marin-loom-cw
+backend:
+  url: gs://marin-iac-state/
+runtime:
+  name: python
+  options:
+    virtualenv: ../../.venv
+description: Isolated CoreWeave Loom staging for native shared-grant sessions.

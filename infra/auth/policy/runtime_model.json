@@ -1,0 +1,323 @@
+{
+  "schema_version": "1.1",
+  "type_definitions": [
+    {
+      "type": "principal"
+    },
+    {
+      "type": "grant",
+      "relations": {
+        "actor": {
+          "this": {}
+        },
+        "enabled": {
+          "this": {}
+        },
+        "bounds": {
+          "this": {}
+        },
+        "root": {
+          "this": {}
+        },
+        "parent": {
+          "this": {}
+        },
+        "revoked": {
+          "this": {}
+        },
+        "active": {
+          "difference": {
+            "base": {
+              "intersection": {
+                "child": [
+                  {
+                    "computedUserset": {
+                      "relation": "enabled"
+                    }
+                  },
+                  {
+                    "union": {
+                      "child": [
+                        {
+                          "computedUserset": {
+                            "relation": "root"
+                          }
+                        },
+                        {
+                          "tupleToUserset": {
+                            "tupleset": {
+                              "relation": "parent"
+                            },
+                            "computedUserset": {
+                              "relation": "active"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "union": {
+                      "child": [
+                        {
+                          "computedUserset": {
+                            "relation": "unleased"
+                          }
+                        },
+                        {
+                          "tupleToUserset": {
+                            "tupleset": {
+                              "relation": "lease"
+                            },
+                            "computedUserset": {
+                              "relation": "active"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "subtract": {
+              "computedUserset": {
+                "relation": "revoked"
+              }
+            }
+          }
+        },
+        "valid": {
+          "intersection": {
+            "child": [
+              {
+                "computedUserset": {
+                  "relation": "actor"
+                }
+              },
+              {
+                "computedUserset": {
+                  "relation": "active"
+                }
+              }
+            ]
+          }
+        },
+        "permitted": {
+          "intersection": {
+            "child": [
+              {
+                "computedUserset": {
+                  "relation": "bounds"
+                }
+              },
+              {
+                "computedUserset": {
+                  "relation": "active"
+                }
+              },
+              {
+                "union": {
+                  "child": [
+                    {
+                      "computedUserset": {
+                        "relation": "root"
+                      }
+                    },
+                    {
+                      "tupleToUserset": {
+                        "tupleset": {
+                          "relation": "parent"
+                        },
+                        "computedUserset": {
+                          "relation": "permitted"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "allowed": {
+          "intersection": {
+            "child": [
+              {
+                "computedUserset": {
+                  "relation": "actor"
+                }
+              },
+              {
+                "computedUserset": {
+                  "relation": "permitted"
+                }
+              }
+            ]
+          }
+        },
+        "unleased": {
+          "this": {}
+        },
+        "lease": {
+          "this": {}
+        }
+      },
+      "metadata": {
+        "relations": {
+          "actor": {
+            "directly_related_user_types": [
+              {
+                "type": "principal"
+              }
+            ]
+          },
+          "enabled": {
+            "directly_related_user_types": [
+              {
+                "type": "principal",
+                "wildcard": {},
+                "condition": "live_grant"
+              }
+            ]
+          },
+          "bounds": {
+            "directly_related_user_types": [
+              {
+                "type": "principal",
+                "wildcard": {},
+                "condition": "grant_bounds"
+              }
+            ]
+          },
+          "root": {
+            "directly_related_user_types": [
+              {
+                "type": "principal",
+                "wildcard": {}
+              }
+            ]
+          },
+          "parent": {
+            "directly_related_user_types": [
+              {
+                "type": "grant"
+              }
+            ]
+          },
+          "revoked": {
+            "directly_related_user_types": [
+              {
+                "type": "principal",
+                "wildcard": {},
+                "condition": "revoked_grant"
+              }
+            ]
+          },
+          "unleased": {
+            "directly_related_user_types": [
+              {
+                "type": "principal",
+                "wildcard": {}
+              }
+            ]
+          },
+          "lease": {
+            "directly_related_user_types": [
+              {
+                "type": "lease"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "lease",
+      "relations": {
+        "active": {
+          "this": {}
+        }
+      },
+      "metadata": {
+        "relations": {
+          "active": {
+            "directly_related_user_types": [
+              {
+                "type": "principal",
+                "wildcard": {},
+                "condition": "live_lease"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "conditions": {
+    "live_grant": {
+      "name": "live_grant",
+      "expression": "current_time < expires_at && grant_json != \"\"",
+      "parameters": {
+        "current_time": {
+          "type_name": "TYPE_NAME_TIMESTAMP"
+        },
+        "expires_at": {
+          "type_name": "TYPE_NAME_TIMESTAMP"
+        },
+        "grant_json": {
+          "type_name": "TYPE_NAME_STRING"
+        }
+      }
+    },
+    "grant_bounds": {
+      "name": "grant_bounds",
+      "expression": "permissions.exists(p, p.service == service && action in p.actions && resource.startsWith(p.resource))",
+      "parameters": {
+        "permissions": {
+          "type_name": "TYPE_NAME_LIST",
+          "generic_types": [
+            {
+              "type_name": "TYPE_NAME_MAP",
+              "generic_types": [
+                {
+                  "type_name": "TYPE_NAME_ANY"
+                }
+              ]
+            }
+          ]
+        },
+        "service": {
+          "type_name": "TYPE_NAME_STRING"
+        },
+        "action": {
+          "type_name": "TYPE_NAME_STRING"
+        },
+        "resource": {
+          "type_name": "TYPE_NAME_STRING"
+        }
+      }
+    },
+    "revoked_grant": {
+      "name": "revoked_grant",
+      "expression": "revoked_at >= 0.0",
+      "parameters": {
+        "revoked_at": {
+          "type_name": "TYPE_NAME_DOUBLE"
+        }
+      }
+    },
+    "live_lease": {
+      "name": "live_lease",
+      "expression": "current_time < expires_at",
+      "parameters": {
+        "current_time": {
+          "type_name": "TYPE_NAME_TIMESTAMP"
+        },
+        "expires_at": {
+          "type_name": "TYPE_NAME_TIMESTAMP"
+        }
+      }
+    }
+  }
+}

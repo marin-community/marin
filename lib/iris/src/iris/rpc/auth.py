@@ -17,6 +17,7 @@ from enum import StrEnum
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.server_auth import VerifiedIdentity, require_identity
+from rigging.shared_grants import SHARED_GRANT_ROLE
 
 # Browser session cookie the dashboard sets; passed to rigging's auth
 # interceptors as ``cookie_name`` so a cookie-bearing browser RPC authenticates.
@@ -34,6 +35,7 @@ DASHBOARD_ROLE = "dashboard"
 # bearer the composite verifier accepts cannot reach any other RPC even though it
 # authenticated.
 FEDERATION_PEER_ROLE = "federation-peer"
+SHARED_GRANT_RPCS = frozenset({"LaunchJob", "GetJobStatus", "GetJobState", "TerminateJob"})
 
 # RPCs a federation-peer identity may call unconditionally: whole-job handoff, routed
 # cancel, delta-sync, and the capability heartbeat. A default-deny allowlist, like
@@ -112,6 +114,8 @@ def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
     ``authorize_resource_owner``. Raises ``PERMISSION_DENIED`` for a dashboard
     caller invoking a non-readable method.
     """
+    if identity.role == SHARED_GRANT_ROLE and method_name not in SHARED_GRANT_RPCS:
+        raise ConnectError(Code.PERMISSION_DENIED, "Shared grant has no authority for this RPC")
     if identity.audience is not None:
         raise ConnectError(
             Code.PERMISSION_DENIED,

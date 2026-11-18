@@ -68,6 +68,27 @@ inherit neither parent `env_vars` nor secrets. A sandbox always receives only
 its own explicit secrets, even with `INHERIT`, and no cluster credentials. See
 [container profiles](container-profiles.md).
 
+## Shared grant attempts
+
+A controller configured with `auth.shared_grants` records each shared job's
+submitting grant. `auth.shared_attempts.identity_token_file` opts into the
+broker's bounded task profile using a separate controller workload identity.
+The task receives an attempt-specific `MARIN_GRANT_TOKEN` secret file and
+`MARIN_GRANT_ID`, `MARIN_AUTH_URL`, and `IRIS_ATTEMPT_UID` environment metadata.
+Read the credential with `require_secret("MARIN_GRANT_TOKEN")`. This credential
+has only the deployment-selected shared permissions; it grants no native Iris
+RPC access.
+
+Shared jobs require a self-contained sandbox image without workspace bundles or
+staged workdir files. Kubernetes images must declare a non-root numeric user.
+The controller retires credentials after completion, cancellation or an attempt
+retry and retries retirement after restart or authority outages. The broker
+permanently retires each exact attempt identity. Delayed retirement leaves at
+most the fixed, configured attempt lifetime of 60 seconds; refreshing a token
+cannot extend it. Queueing time also consumes that lifetime. See the
+[authority configuration](../../../infra/auth/README.md) for the trusted
+controller mapping, permissions and private network policy.
+
 ## Source references
 
 Rigging also resolves explicit source references:

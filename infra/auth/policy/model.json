@@ -1,0 +1,129 @@
+{
+  "schema_version": "1.1",
+  "type_definitions": [
+    {
+      "type": "principal"
+    },
+    {
+      "type": "group",
+      "relations": {
+        "member": {
+          "this": {}
+        }
+      },
+      "metadata": {
+        "relations": {
+          "member": {
+            "directly_related_user_types": [
+              {
+                "type": "principal"
+              },
+              {
+                "type": "group",
+                "relation": "member"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "scope",
+      "relations": {
+        "parent": {
+          "this": {}
+        },
+        "accessor": {
+          "this": {}
+        },
+        "blocked": {
+          "this": {}
+        },
+        "denied": {
+          "union": {
+            "child": [
+              {
+                "computedUserset": {
+                  "relation": "blocked"
+                }
+              },
+              {
+                "tupleToUserset": {
+                  "tupleset": {
+                    "relation": "parent"
+                  },
+                  "computedUserset": {
+                    "relation": "denied"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "allowed": {
+          "difference": {
+            "base": {
+              "union": {
+                "child": [
+                  {
+                    "computedUserset": {
+                      "relation": "accessor"
+                    }
+                  },
+                  {
+                    "tupleToUserset": {
+                      "tupleset": {
+                        "relation": "parent"
+                      },
+                      "computedUserset": {
+                        "relation": "allowed"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "subtract": {
+              "computedUserset": {
+                "relation": "denied"
+              }
+            }
+          }
+        }
+      },
+      "metadata": {
+        "relations": {
+          "parent": {
+            "directly_related_user_types": [
+              {
+                "type": "scope"
+              }
+            ]
+          },
+          "accessor": {
+            "directly_related_user_types": [
+              {
+                "type": "principal"
+              },
+              {
+                "type": "group",
+                "relation": "member"
+              }
+            ]
+          },
+          "blocked": {
+            "directly_related_user_types": [
+              {
+                "type": "principal"
+              },
+              {
+                "type": "group",
+                "relation": "member"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

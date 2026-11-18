@@ -11,9 +11,73 @@ its own.
 import json
 import threading
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any, cast
 
+from rigging.grants import Grant, permissions_allow
 from rigging.server_auth import VerifiedIdentity
+
+
+class MemoryRuntimeGrants:
+    """Thread-safe grant authority double for orchestration tests.
+
+    Keep the same instance when reopening GrantStore to model durable authority.
+    Model correctness is exercised separately against the OpenFGA engine.
+    """
+
+    def __init__(self):
+        self.grants: dict[str, Grant] = {}
+        self.revocations: dict[str, float] = {}
+        self._lock = threading.RLock()
+
+    def get(self, grant_id: str) -> Grant | None:
+        with self._lock:
+            grant = self.grants.get(grant_id)
+            return None if grant is None else replace(grant, revoked_at=self.revocations.get(grant_id))
+
+    def put(self, grant: Grant) -> Grant:
+        with self._lock:
+            self.grants.setdefault(grant.id, grant)
+            return self.grants[grant.id]
+
+    def _chain(self, grant: Grant) -> list[Grant]:
+        stored = self.grants.get(grant.id)
+        if stored is None or stored.actor != grant.actor:
+            return []
+        chain = [stored]
+        while chain[-1].parent_id is not None:
+            parent = self.grants.get(chain[-1].parent_id)
+            if parent is None or parent.id in {item.id for item in chain}:
+                return []
+            chain.append(parent)
+        return chain
+
+    def is_active(self, grant: Grant, now: float) -> bool:
+        with self._lock:
+            chain = self._chain(grant)
+            return bool(chain) and all(
+                item.id not in self.revocations and item.credential_expires_at > now for item in chain
+            )
+
+    def allows(self, grant: Grant, *, service: str, action: str, resource: str, now: float) -> bool:
+        with self._lock:
+            return self.is_active(grant, now) and all(
+                permissions_allow(item.permissions, service=service, action=action, resource=resource)
+                for item in self._chain(grant)
+            )
+
+    def renew(self, grant: Grant, *, expires_at: float) -> Grant:
+        with self._lock:
+            renewed = replace(self.grants[grant.id], lease_expires_at=expires_at)
+            self.grants[grant.id] = renewed
+            return renewed
+
+    def revoke(self, grant: Grant, now: float) -> None:
+        with self._lock:
+            self.revocations.setdefault(grant.id, now)
+
+    def close(self) -> None:
+        pass
 
 
 class MockVerifier:

@@ -24,6 +24,7 @@ from pathlib import Path
 
 import yaml
 from rigging.secrets import SecretSpec, as_secret_spec
+from rigging.shared_grants import SharedGrantConfig
 from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget
 
 USER_CONFIG_DIR = Path.home() / ".config" / "marin" / "finelog"
@@ -176,7 +177,18 @@ class JwtAuthLayer:
 
 # One entry in the ordered auth stack. Evaluation order == list order (first
 # Allow admits, first Reject denies, none → deny; see the Rust `AuthPolicy`).
-AuthLayer = CidrAuthLayer | JwtAuthLayer
+@dataclass(frozen=True)
+class SharedGrantAuthLayer:
+    """Instance-wide query access; never a cluster filter or ingestion identity."""
+
+    trust: SharedGrantConfig
+    instance: str
+
+    def to_policy_dict(self) -> dict:
+        return {"type": "shared_grants", "trust": self.trust.model_dump(), "instance": self.instance}
+
+
+AuthLayer = CidrAuthLayer | JwtAuthLayer | SharedGrantAuthLayer
 
 
 def auth_policy_json(layers: tuple[AuthLayer, ...]) -> str:
@@ -327,8 +339,12 @@ def _build_auth_layers(raw: list, path: Path) -> tuple[AuthLayer, ...]:
                 JwtKeyEntry(cluster=k["cluster"], public_keys=tuple(k["public_keys"])) for k in item.get("keys") or ()
             )
             layers.append(JwtAuthLayer(keys=keys))
+        elif layer_type == "shared_grants":
+            layers.append(
+                SharedGrantAuthLayer(trust=SharedGrantConfig.model_validate(item["trust"]), instance=item["instance"])
+            )
         else:
-            raise ValueError(f"{path}: auth[{i}] has unknown type {layer_type!r} (expected cidr|jwt)")
+            raise ValueError(f"{path}: auth[{i}] has unknown type {layer_type!r} (expected cidr|jwt|shared_grants)")
     return tuple(layers)
 
 

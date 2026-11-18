@@ -60,7 +60,8 @@ dependencies = [
     "chex>=0.1.86",
     "jmp>=0.0.3",
     "fsspec[http]>=2024.2,<2027",
-    "tensorstore>=0.1.82,<0.1.85",
+    # 0.1.85 accepts CoreWeave's temporary S3 credentials with an empty session token.
+    "tensorstore>=0.1.85,<0.1.86",
     "pytimeparse>=1.1.8",
     "humanfriendly==10.0",
     "safetensors[numpy]>=0.4.2,<0.7.0",

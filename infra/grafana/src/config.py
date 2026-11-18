@@ -9,6 +9,10 @@ per entry and addresses it by name in the URL path.
 
 import dataclasses
 import os
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from rigging.shared_grants import authority_origin
 
 # Port finelog listens on, set in lib/finelog/config/{marin,marin-dev}.yaml.
 FINELOG_PORT = 10001
@@ -188,6 +192,26 @@ class SlackAlertConfig:
     channel: str
 
 
+class SharedLoomAuth(BaseModel):
+    """A workload's OpenBao credential; each alert gets its own bounded grant."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    authority_url: str
+    bao_address: str
+    bao_token_file: Path
+    actor: str
+    ca_bundle: str | None = None
+    grant_ttl: int = Field(default=300, gt=0)
+
+    @model_validator(mode="after")
+    def validate_destinations(self):
+        authority_origin(self.authority_url)
+        authority_origin(self.bao_address)
+        if not self.actor or self.grant_ttl <= 0:
+            raise ValueError("Shared Loom alerts require an actor and positive grant lifetime")
+        return self
+
+
 @dataclasses.dataclass(frozen=True)
 class LoomAlertConfig:
     """The identity-federated Loom destination for critical alerts, and the Slack
@@ -198,6 +222,7 @@ class LoomAlertConfig:
     repository: str
     http_timeout: float
     slack: SlackAlertConfig
+    shared_auth: SharedLoomAuth | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -254,6 +279,11 @@ class BridgeConfig:
                 repository=repository,
                 http_timeout=http_timeout,
                 slack=SlackAlertConfig(bot_token=bot_token, channel=channel),
+                shared_auth=(
+                    SharedLoomAuth.model_validate_json(Path(os.environ["LOOM_ALERT_AUTH_CONFIG"]).read_text())
+                    if os.environ.get("LOOM_ALERT_AUTH_CONFIG")
+                    else None
+                ),
             )
         return BridgeConfig(
             max_rows=int(os.environ.get("GRAFANA_BRIDGE_MAX_ROWS", "200000")),

@@ -34,7 +34,8 @@ FROM --platform=$BUILDPLATFORM rust:1-bookworm AS iris-native-wheel
 
 COPY --from=iris-native-uv /uv /uvx /bin/
 
-WORKDIR /build/iris-native
+WORKDIR /build/lib/iris/rust
+COPY lib/rigging/rust/ /build/lib/rigging/rust/
 
 ARG BUILDARCH
 ARG TARGETARCH
@@ -70,7 +71,7 @@ RUN mkdir -p src pyext/src && \
     printf 'pub fn placeholder() {}\n' > src/lib.rs && \
     printf 'pub fn placeholder() {}\n' > pyext/src/lib.rs
 RUN --mount=type=cache,id=iris-native-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=iris-native-target-linux-gnu-${TARGETARCH}-${CARGO_PROFILE},target=/build/iris-native/target,sharing=locked \
+    --mount=type=cache,id=iris-native-target-linux-gnu-${TARGETARCH}-${CARGO_PROFILE},target=/build/lib/iris/rust/target,sharing=locked \
     rust_target="$(cat /usr/local/lib/iris-rust-target)" && \
     cargo build --locked --workspace --profile "${CARGO_PROFILE}" --target "${rust_target}"
 
@@ -79,7 +80,7 @@ COPY lib/iris/rust/src/ ./src/
 COPY lib/iris/rust/pyext/src/ ./pyext/src/
 RUN --mount=type=cache,id=iris-native-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    --mount=type=cache,id=iris-native-target-linux-gnu-${TARGETARCH}-${CARGO_PROFILE},target=/build/iris-native/target,sharing=locked \
+    --mount=type=cache,id=iris-native-target-linux-gnu-${TARGETARCH}-${CARGO_PROFILE},target=/build/lib/iris/rust/target,sharing=locked \
     rust_target="$(cat /usr/local/lib/iris-rust-target)" && \
     find src pyext/src -type f -exec touch {} + && \
     uvx --python 3.12 --from 'maturin>=1.5,<2.0' maturin build \

@@ -1,0 +1,8 @@
+name: marin-postgres-trial
+backend:
+  url: gs://marin-iac-state/
+runtime:
+  name: python
+  options:
+    virtualenv: ../../.venv
+description: Isolated CloudNativePG and authorization failover prototype on CW.

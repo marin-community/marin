@@ -60,6 +60,24 @@ export CW_KEY_SECRET=<key-secret>
 
 CoreWeave also accepts the generic `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` pair.
 
+For broker-scoped CoreWeave access, run the command through the auth client:
+
+```bash
+uv run --no-sync python -m infra.auth.client \
+  --auth-url "$MARIN_AUTH_URL" --binding checkpoint-reader \
+  --token-file /path/to/private/storage-auth.token \
+  --ca-bundle /path/to/auth-ca.pem -- uv run fsutil ls s3://YOUR-BUCKET/YOUR-PREFIX/
+```
+
+The client reads `MARIN_GRANT_TOKEN` from the task's secret file, renews it, and
+configures the native SDK's container credential provider. For declared CoreWeave
+buckets, this provider takes precedence over static keys. The broker keeps its
+provider identity private and returns S3 credentials bounded by the grant's lease.
+Credential requests are restricted to the configured broker's storage endpoint.
+Rigging uses `MARIN_AUTH_CA_BUNDLE` for broker TLS while preserving the object
+store's normal certificate trust. Generic AWS clients need a publicly trusted
+broker certificate; their default metadata fetcher does not use this private CA setting.
+
 Hugging Face uses `HF_TOKEN` or a token saved by `hf auth login`. For `cp` and `mv`
 with `--remote`, fsutil forwards that token to the Iris job through its environment;
 the token does not appear in the job command. The remote Iris worker uses its
@@ -68,7 +86,7 @@ fsutil is created private. Existing storage keeps its current visibility.
 Creating storage requires permission in the owning user or organization;
 uploading requires write access to the destination.
 
-`fsutil buckets` reports which backends are reachable, so an unconfigured one shows up
+`fsutil buckets` reports which backends have credentials configured, so an unconfigured one shows up
 before a command fails against it. A backend with no credentials only breaks commands
 that touch its buckets; the rest keep working.
 

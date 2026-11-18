@@ -33,6 +33,7 @@ from rigging.secrets import (
     secret_file_environment,
     validate_secret_name,
 )
+from rigging.shared_grants import SHARED_GRANT_TOKEN_SECRET
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.backends.k8s.output_contract import (
@@ -569,6 +570,15 @@ def _build_volumes_and_mounts(
 
 
 @dataclass(frozen=True)
+class PodDnsConfig:
+    """Explicit resolver settings for a Pod using dnsPolicy=None."""
+
+    nameservers: tuple[str, ...]
+    searches: tuple[str, ...]
+    options: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class PodConfig:
     """Non-request parameters for pod manifest construction.
 
@@ -587,6 +597,7 @@ class PodConfig:
     service_account: str = ""
     sandbox_runtime_class: str = DEFAULT_SANDBOX_RUNTIME_CLASS
     host_network: bool = False
+    dns_config: PodDnsConfig | None = None
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
@@ -1096,6 +1107,16 @@ def _build_pod_manifest(
 
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
     container["securityContext"] = _security_context(run_req.container_profile, has_tpu)
+    if (
+        run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
+        and SHARED_GRANT_TOKEN_SECRET in run_req.environment.secrets
+    ):
+        container["securityContext"] = {
+            "capabilities": {"drop": ["ALL"]},
+            "allowPrivilegeEscalation": False,
+            "runAsNonRoot": True,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        }
 
     if resources:
         container["resources"] = resources
@@ -1248,9 +1269,10 @@ def _build_pod_manifest(
         **({"securityContext": {"fsGroup": SECRET_GROUP}} if job_secrets else {}),
     }
 
-    # gVisor isolates the whole pod via a node RuntimeClass; the container
-    # securityContext stays at the DEFAULT posture (see _security_context).
+    # The RuntimeClass isolates the whole pod independently of container security settings.
     if run_req.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX):
+        if not config.sandbox_runtime_class:
+            raise PodManifestError("Sandbox tasks require a RuntimeClass")
         spec["runtimeClassName"] = config.sandbox_runtime_class
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
@@ -1275,6 +1297,13 @@ def _build_pod_manifest(
     if host_network:
         spec["hostNetwork"] = True
         spec["dnsPolicy"] = "ClusterFirstWithHostNet"
+    if config.dns_config is not None:
+        spec["dnsPolicy"] = "None"
+        spec["dnsConfig"] = {
+            "nameservers": list(config.dns_config.nameservers),
+            "searches": list(config.dns_config.searches),
+            "options": [{"name": name, "value": value} for name, value in config.dns_config.options.items()],
+        }
 
     # K8s starts activeDeadlineSeconds at pod creation, so omit it for gangs that
     # may wait SchedulingGated while nodes provision. The controller times gangs
@@ -3451,14 +3480,13 @@ class K8sTaskProvider:
                     # application failure, so charge the preemption budget either
                     # way: PREEMPTED when the pod was seen terminating under a
                     # disruption (Kueue deletes every pod of a preempted Workload,
-                    # leaving no terminal status), WORKER_FAILED when the cause was
-                    # never observed.
+                    # leaving no terminal status), MISSING when the cause was
+                    # never observed. The controller resolves absence against the
+                    # current attempt and may still be deferring its dispatch.
                     disruption_reason = self._disruption_reasons.get(entry)
                     terminal_reason = disruption_reason or _POD_DELETED_TERMINAL_REASON
                     new_state = (
-                        job_pb2.TASK_STATE_PREEMPTED
-                        if disruption_reason is not None
-                        else job_pb2.TASK_STATE_WORKER_FAILED
+                        job_pb2.TASK_STATE_PREEMPTED if disruption_reason is not None else job_pb2.TASK_STATE_MISSING
                     )
                     updates.append(
                         TaskUpdate(

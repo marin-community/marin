@@ -497,6 +497,13 @@ async fn post_telemetry(
     let origin_cluster = match request.extensions().get::<AuthIdentity>() {
         Some(AuthIdentity::Jwt { cluster }) => Some(cluster.clone()),
         Some(AuthIdentity::Network) => None,
+        Some(AuthIdentity::SharedGrant { .. }) => {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                ERROR_CODE_INTERNAL,
+                "read grants cannot ingest telemetry",
+            ));
+        }
         None => {
             return Err(ApiError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,

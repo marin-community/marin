@@ -58,6 +58,7 @@ class PendingKick:
     attempt_id: int | None
     kind: TerminalKind
     reason: str
+    attempt_uid: str | None = None
 
 
 class TaskRuntime(Protocol):

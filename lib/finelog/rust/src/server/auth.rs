@@ -70,6 +70,8 @@ const EXP_LEEWAY_SECONDS: u64 = 60;
 /// origin `cluster` to the credential that carried it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthIdentity {
+    /// A live instance-wide read grant; never a replication or ingest identity.
+    SharedGrant { principal: String, grant_id: String },
     /// Admitted by a token: this cluster's public key verified the bearer, so the
     /// writer may only claim this cluster as a row's origin.
     Jwt { cluster: String },
@@ -247,6 +249,10 @@ impl JwtVerifier {
     /// HS256/`alg:none` token is rejected as algorithm confusion), audience, and
     /// expiry in one pass; we try each trusted key and return the first that admits.
     fn verify(&self, token: &str) -> Option<&str> {
+        // Shared grants use this audience too, but carry no native writer authority.
+        if is_grant_token(token) {
+            return None;
+        }
         self.keys
             .iter()
             .find(|k| {
@@ -275,6 +281,10 @@ fn finelog_validation() -> Validation {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AuthLayerConfig {
+    SharedGrants {
+        trust: marin_grants::Config,
+        instance: String,
+    },
     /// Admit a request whose transport peer is in one of these networks.
     Cidr { cidrs: Vec<String> },
     /// Admit a request bearing an EdDSA JWT (`aud="finelog"`) that verifies
@@ -293,16 +303,43 @@ struct JwtKeyConfig {
 /// One compiled entry in the ordered auth stack.
 #[derive(Debug)]
 enum AuthLayer {
+    SharedGrants(Box<InstanceGrants>),
     Cidr(Vec<Cidr>),
     // Boxed: JwtVerifier dwarfs the Cidr variant, and an unboxed enum would carry that
     // footprint for every layer in the stack.
     Jwt(Box<JwtVerifier>),
 }
 
+struct InstanceGrants {
+    client: marin_grants::Client,
+    resource: String,
+}
+
+impl fmt::Debug for InstanceGrants {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InstanceGrants")
+            .field("resource", &self.resource)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AuthLayer {
     /// Compile a config layer into its runtime form, validating CIDRs and keys.
     fn compile(config: AuthLayerConfig) -> Result<Self, String> {
         match config {
+            AuthLayerConfig::SharedGrants { trust, instance } => {
+                if instance.is_empty()
+                    || !instance
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+                {
+                    return Err("shared-grant instance must be a stable path component".into());
+                }
+                Ok(AuthLayer::SharedGrants(Box::new(InstanceGrants {
+                    client: marin_grants::Client::new(&trust, FINELOG_AUDIENCE)?,
+                    resource: format!("/instances/{instance}/"),
+                })))
+            }
             AuthLayerConfig::Cidr { cidrs } => {
                 if cidrs.is_empty() {
                     return Err("cidr layer has no networks".to_string());
@@ -330,6 +367,15 @@ impl AuthLayer {
     /// (already stripped of `Bearer `) and the transport peer IP.
     fn check(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>) -> Verdict {
         match self {
+            // Live grants are admitted only by the RPC path, after it derives the
+            // operation. Plain diagnostic/admin routes have no shared grant API.
+            AuthLayer::SharedGrants(_) => {
+                if bearer.is_some_and(is_grant_token) {
+                    Verdict::Reject
+                } else {
+                    Verdict::Fallthrough
+                }
+            }
             AuthLayer::Cidr(nets) => match peer_ip {
                 Some(ip) if nets.iter().any(|n| n.contains(ip)) => {
                     Verdict::Allow(AuthIdentity::Network)
@@ -424,6 +470,7 @@ impl AuthPolicy {
             .map(|l| match l {
                 AuthLayer::Cidr(nets) => format!("cidr[{}]", nets.len()),
                 AuthLayer::Jwt(v) => format!("jwt[{}]", v.keys.len()),
+                AuthLayer::SharedGrants(_) => "shared_grants[instance-wide reads]".into(),
             })
             .collect::<Vec<_>>()
             .join(", ")
@@ -455,6 +502,57 @@ impl AuthPolicy {
         self.admits(bearer_token(ctx), peer_ip(ctx))
             .ok_or_else(unauthenticated)
     }
+
+    async fn authorize_rpc(&self, ctx: &RequestContext) -> Result<AuthIdentity, ConnectError> {
+        if let Some(token) = bearer_token(ctx).filter(|token| is_grant_token(token)) {
+            let grants = self.layers.iter().find_map(|layer| {
+                if let AuthLayer::SharedGrants(grants) = layer {
+                    Some(grants)
+                } else {
+                    None
+                }
+            });
+            if let Some(grants) = grants {
+                let method = ctx.spec().map(|spec| spec.method()).unwrap_or("");
+                if !matches!(
+                    method,
+                    "Query"
+                        | "FetchLogs"
+                        | "ListNamespaces"
+                        | "GetTableSchema"
+                        | "GetTableStatus"
+                        | "ListRelayStatus"
+                ) {
+                    return Err(ConnectError::permission_denied(
+                        "shared grants permit instance-wide reads only",
+                    ));
+                }
+                let access = grants
+                    .client
+                    .authorize(token, "logs.query", &grants.resource)
+                    .await
+                    .map_err(|error| match error {
+                        marin_grants::CheckError::Denied => ConnectError::permission_denied(
+                            "grant does not authorize this instance",
+                        ),
+                        marin_grants::CheckError::Unavailable => {
+                            ConnectError::unavailable("shared authorization is unavailable")
+                        }
+                    })?;
+                return Ok(AuthIdentity::SharedGrant {
+                    principal: access.sub,
+                    grant_id: access.grant_id,
+                });
+            }
+        }
+        self.authorize(ctx)
+    }
+}
+
+fn is_grant_token(token: &str) -> bool {
+    jsonwebtoken::decode_header(token)
+        .ok()
+        .is_some_and(|header| header.typ.as_deref() == Some("at+jwt"))
 }
 
 fn unauthenticated() -> ConnectError {
@@ -510,7 +608,7 @@ impl Interceptor for AuthInterceptor {
         mut req: UnaryRequest,
         next: Next<'_>,
     ) -> Result<UnaryResponse, ConnectError> {
-        let identity = self.policy.authorize(&req.ctx)?;
+        let identity = self.policy.authorize_rpc(&req.ctx).await?;
         req.ctx.extensions_mut().insert(identity);
         next.run(req).await
     }
@@ -825,6 +923,25 @@ mod tests {
 
     fn token_policy() -> AuthPolicy {
         AuthPolicy::parse(&jwt_policy_json("alpha", PUB_A)).unwrap()
+    }
+
+    #[test]
+    fn shared_query_grant_cannot_become_a_native_writer_when_keys_overlap() {
+        let mut header = jsonwebtoken::Header::new(Algorithm::EdDSA);
+        header.typ = Some("at+jwt".into());
+        let claims = serde_json::json!({
+            "iss": "alpha", "aud": "finelog", "sub": "reader", "exp": FUTURE,
+            "iat": unix_now(), "act": {"sub": "reader"}, "owner": "team",
+            "grant_id": "query-only", "policy_revision": "one", "grant_version": 1,
+            "jti": "one", "permissions": [{"service": "finelog", "actions": ["logs.query"], "resource": "/instances/proof/"}]
+        });
+        let key = jsonwebtoken::EncodingKey::from_ed_pem(PRIV_A.as_bytes()).unwrap();
+        let token = jsonwebtoken::encode(&header, &claims, &key).unwrap();
+        let policy = token_policy();
+        assert!(policy
+            .admits(Some(&mint_finelog(PRIV_A, FUTURE)), None)
+            .is_some());
+        assert!(policy.admits(Some(&token), None).is_none());
     }
 
     fn stacked_policy() -> AuthPolicy {

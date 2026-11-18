@@ -101,8 +101,16 @@ accelerator tasks are rejected at submit.
 
 **Operator prerequisite:** `runsc` must be installed and registered on the
 workers — as a docker runtime named `runsc` in `/etc/docker/daemon.json` on
-docker-worker clusters (worker bootstrap does this), or as the configured
-`RuntimeClass` on k8s. The Kubernetes controller checks that class at startup.
+docker-worker clusters (worker bootstrap does this), or as a `RuntimeClass`
+named by `kubernetes_provider.sandbox_runtime_class` on Kubernetes. The default
+is `gvisor`. Select a class whose handler and node scheduling selector match
+the deployment; the synthetic CoreWeave CPU proof uses `iris-ci-gvisor-cpu`.
+The Kubernetes controller checks that class at startup. Without a working
+RuntimeClass, a `SANDBOX` job fails at container creation.
+
+An embedding can pass `PodDnsConfig` through `PodConfig.dns_config` to select
+explicit nameservers, search domains and resolver options with `dnsPolicy: None`.
+Omit it to preserve the cluster's default DNS behavior.
 
 To instead run an *inner* gVisor sandbox around an untrusted child image while
 keeping the outer container normal, use `CONTAINER_PROFILE_PRIVILEGED` and run

@@ -24,6 +24,7 @@ name = "iris_proxy"
 path = "src/lib.rs"
 
 [dependencies]
+marin-grants = { path = "../../rigging/rust" }
 axum = "0.7"
 blake3 = "1"
 http = "1"

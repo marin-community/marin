@@ -14,12 +14,12 @@
 FROM node:24.22.1-bookworm-slim AS infra-panel
 
 WORKDIR /plugin
-COPY marin-infra-panel/package.json marin-infra-panel/package-lock.json ./
+COPY infra/grafana/marin-infra-panel/package.json infra/grafana/marin-infra-panel/package-lock.json ./
 RUN npm ci
-COPY marin-infra-panel/.config .config
-COPY marin-infra-panel/src src
-COPY marin-infra-panel/CHANGELOG.md marin-infra-panel/LICENSE marin-infra-panel/README.md ./
-COPY marin-infra-panel/tsconfig.json ./
+COPY infra/grafana/marin-infra-panel/.config .config
+COPY infra/grafana/marin-infra-panel/src src
+COPY infra/grafana/marin-infra-panel/CHANGELOG.md infra/grafana/marin-infra-panel/LICENSE infra/grafana/marin-infra-panel/README.md ./
+COPY infra/grafana/marin-infra-panel/tsconfig.json ./
 RUN npm run build
 
 FROM grafana/grafana:13.1.1-ubuntu
@@ -43,22 +43,26 @@ COPY --from=infra-panel /plugin/dist /var/lib/grafana/plugins/marin-infra-panel
 # which breaks aiobotocore at import). uv's `prerelease = "if-necessary"` in
 # pyproject.toml takes prereleases only for packages that have no stable release.
 COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv
-COPY pyproject.toml uv.lock /opt/bridge/
-COPY src /opt/bridge/src
-RUN cd /opt/bridge \
-    && UV_PROJECT_ENVIRONMENT=/opt/bridge/venv uv sync --frozen --no-dev --compile-bytecode
+COPY infra/grafana/pyproject.toml infra/grafana/uv.lock /opt/source/infra/grafana/
+COPY infra/grafana/src /opt/source/infra/grafana/src
+COPY lib/rigging/pyproject.toml /opt/source/lib/rigging/
+COPY lib/rigging/src /opt/source/lib/rigging/src
+COPY config /opt/source/config
+RUN cd /opt/source/infra/grafana \
+    && UV_PROJECT_ENVIRONMENT=/opt/bridge/venv uv sync --frozen --no-dev --no-editable --compile-bytecode \
+    && rm -rf /opt/source
 
-COPY provisioning /etc/grafana/provisioning
+COPY infra/grafana/provisioning /etc/grafana/provisioning
 # dashboards/*.json holds panelRef markers for panels shared across dashboards
 # (see src/dashboard_stitch.py); this resolves them into the full panel bodies
 # Grafana actually loads, the same way the infra-panel build above resolves
 # TSX into JS. The source stays git-reviewable; only the resolved output ships.
-COPY dashboards /tmp/dashboards-src
+COPY infra/grafana/dashboards /tmp/dashboards-src
 RUN /opt/bridge/venv/bin/python -m dashboard_stitch \
     --src-dir /tmp/dashboards-src --panels-dir /tmp/dashboards-src/panels --out-dir /etc/grafana/dashboards \
     && rm -rf /tmp/dashboards-src
-COPY nginx.conf /etc/nginx/marin.conf
-COPY entrypoint.sh /opt/entrypoint.sh
+COPY infra/grafana/nginx.conf /etc/nginx/marin.conf
+COPY infra/grafana/entrypoint.sh /opt/entrypoint.sh
 RUN mkdir -p /tmp/nginx/client-body /tmp/nginx/fastcgi /tmp/nginx/proxy /tmp/nginx/scgi /tmp/nginx/uwsgi \
     && chmod +x /opt/entrypoint.sh \
     && chown -R grafana:root /opt/bridge /etc/grafana/dashboards /tmp/nginx

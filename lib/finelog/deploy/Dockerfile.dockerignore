@@ -15,6 +15,7 @@
 # Rust workspace (built by the `rustbuild` stage). Only finelog's own workspace
 # is needed now; compiled artifacts (target/) are excluded below.
 !lib/finelog/rust/
+!lib/rigging/rust/
 
 # Exclude build artifacts within included paths.
 lib/finelog/rust/**/target/

@@ -204,7 +204,7 @@ def _resolve_missing_observation(snapshot: TransitionSnapshot, observation: Task
         if task is not None and task.state in ACTIVE_TASK_STATES
         else job_pb2.TASK_STATE_FAILED
     )
-    return replace(observation, new_state=missing_state, error="worker_lost_spec")
+    return replace(observation, new_state=missing_state, error=observation.error or "worker_lost_spec")
 
 
 def finalize(

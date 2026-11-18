@@ -172,7 +172,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 }
             ),
             tag_prefix="iris-native-v",
-            source_patterns=("lib/iris/rust/**", "rust/iris-*/**"),
+            source_patterns=("lib/iris/rust/**", "lib/rigging/rust/**", "rust/iris-*/**"),
             build_legs=(
                 ("ubuntu-latest", BuildOperation.LINUX),
                 ("macos-15", BuildOperation.MACOS),
@@ -233,6 +233,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 "lib/finelog/config/**",
                 "lib/finelog/src/**",
                 "lib/finelog/rust/**",
+                "lib/rigging/rust/**",
                 "rust/finelog/**",
                 "rust/finelog-pyext/**",
             ),

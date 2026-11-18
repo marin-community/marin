@@ -4,13 +4,16 @@
 """Tests for auth: session cookies, CSRF, default-deny middleware, stateless JWT,
 controller auth setup, and null-auth mode."""
 
+import time
 from unittest.mock import Mock
 
+import httpx
 import jwt
 import pytest
 import uvicorn
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from google.protobuf.json_format import MessageToDict
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import AuthConfig, IapAuthConfig, PeerConfig
 from iris.cluster.controller.auth import (
@@ -44,8 +47,9 @@ from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method
 from iris.rpc.controller_connect import EndpointServiceClientSync
-from iris.testing.controller import worker_backend_descriptor
+from iris.testing.controller import FakeProvider, make_job_request, make_mock_controller, worker_backend_descriptor
 from iris.testing.controller_state import ControllerTestState
+from iris.version import client_revision_date
 from rigging.auth import BearerTokenInjector
 from rigging.server_auth import (
     PolicyAuthInterceptor,
@@ -56,6 +60,7 @@ from rigging.server_auth import (
     get_verified_identity,
     requires_auth,
 )
+from rigging.shared_grants import SharedGrantConfig
 from rigging.testing import MockVerifier
 from rigging.timing import Duration, ExponentialBackoff
 from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem
@@ -73,6 +78,126 @@ CSRF_HEADERS = {"Origin": "http://testserver"}
 _SIGNING_KEYPAIR = generate_ed25519_keypair()
 _SIGNING_KEY = _SIGNING_KEYPAIR.private_pem
 _PUBLIC_KEY = _SIGNING_KEYPAIR.public_pem
+
+
+@pytest.mark.usefixtures("state")
+def test_shared_grants_scope_real_job_rpcs_without_native_privilege_or_outage_fallback(
+    db, log_client, tmp_path, monkeypatch
+):
+    trust = SharedGrantConfig(
+        issuer="https://auth.example", public_keys=(_PUBLIC_KEY,), authority_url="https://auth.example"
+    )
+    auth = create_controller_auth(AuthConfig(shared_grants=trust), cluster_name=_CLUSTER)
+    runtime = make_mock_controller()
+    runtime.backend = FakeProvider()
+    EndpointsProjection(db)
+    service = ControllerServiceImpl(
+        controller=runtime,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_client=log_client,
+        db=db,
+        auth=auth,
+        endpoint_service=EndpointServiceImpl(db=db),
+    )
+    dashboard = ControllerDashboard(service, auth_policy=request_auth_policy(auth))
+    now = int(time.time())
+    claims = {
+        "iss": trust.issuer,
+        "aud": "iris",
+        "sub": "session",
+        "act": {"sub": "session"},
+        "owner": "research",
+        "grant_id": "one",
+        "policy_revision": "one",
+        "grant_version": 1,
+        "permissions": [
+            {
+                "service": "iris",
+                "actions": ["job.submit", "job.read", "job.cancel"],
+                "resource": f"/clusters/{_CLUSTER}/jobs/research/",
+            }
+        ],
+        "iat": now,
+        "exp": now + 300,
+        "jti": "one",
+        "role": "admin",
+    }
+    token = jwt.encode(claims, _SIGNING_KEY, algorithm="EdDSA", headers={"typ": "at+jwt"})
+    remote_status = [200]
+
+    def decision(_url, *, json, **_kwargs):
+        assert json["resource"].startswith(f"/clusters/{_CLUSTER}/jobs/research/")
+        return httpx.Response(
+            remote_status[0],
+            json={
+                "grant_id": "one",
+                "actor": "session",
+                "owner": "research",
+                "policy_revision": "one",
+                "expires_at": now + 300,
+            },
+        )
+
+    monkeypatch.setattr("rigging.shared_grants.requests.post", decision)
+    request = make_job_request("/research/train", task_image="registry.invalid/proof:synthetic")
+    request.client_revision_date = client_revision_date()
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    prefix = "/iris.cluster.ControllerService/"
+    with TestClient(dashboard.app, client=("127.0.0.1", 1234)) as client:
+        assert client.post(prefix + "LaunchJob", json=MessageToDict(request)).status_code == 401
+        client.headers["Authorization"] = f"Bearer {token}"
+        submitted = client.post(prefix + "LaunchJob", json=MessageToDict(request))
+        assert submitted.status_code == 200, submitted.text
+        assert submitted.json()["jobId"] == "/research/train"
+        scoped_claims = {
+            **claims,
+            "permissions": [
+                {"service": "iris", "actions": ["job.read"], "resource": f"/clusters/{_CLUSTER}/jobs/research/train/"}
+            ],
+        }
+        scoped = jwt.encode(scoped_claims, _SIGNING_KEY, algorithm="EdDSA", headers={"typ": "at+jwt"})
+        assert (
+            client.post(
+                prefix + "GetJobStatus", json={"jobId": "/research/train"}, headers={"Authorization": f"Bearer {scoped}"}
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                prefix + "GetJobStatus",
+                json={"jobId": "/research/sibling"},
+                headers={"Authorization": f"Bearer {scoped}"},
+            ).status_code
+            == 403
+        )
+        other_cluster_claims = {
+            **claims,
+            "permissions": [
+                {"service": "iris", "actions": ["job.read"], "resource": "/clusters/another/jobs/research/"}
+            ],
+        }
+        other_cluster = jwt.encode(other_cluster_claims, _SIGNING_KEY, algorithm="EdDSA", headers={"typ": "at+jwt"})
+        assert (
+            client.post(
+                prefix + "GetJobStatus",
+                json={"jobId": "/research/train"},
+                headers={"Authorization": f"Bearer {other_cluster}"},
+            ).status_code
+            == 403
+        )
+        assert client.post(prefix + "ListWorkers", json={}).status_code == 403
+        request.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
+        request.name = "/research/unsafe"
+        assert client.post(prefix + "LaunchJob", json=MessageToDict(request)).status_code == 403
+        assert (
+            client.post(prefix + "GetJobState", json={"jobIds": ["/research/train", "/other/private"]}).status_code
+            == 403
+        )
+        for status in [200, 403, 503, 200]:
+            remote_status[0] = status
+            response = client.post(prefix + "GetJobStatus", json={"jobId": "/research/train"})
+            assert response.status_code == status
+        assert client.post(prefix + "TerminateJob", json={"jobId": "/research/train"}).status_code == 200
 
 
 def _jwt_manager() -> JwtTokenManager:

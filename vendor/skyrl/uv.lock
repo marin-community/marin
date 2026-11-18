@@ -2966,6 +2966,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "s3fs" },
+    { name = "sqlalchemy" },
     { name = "starlette" },
     { name = "zstandard" },
 ]
@@ -2980,7 +2981,7 @@ secrets = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiobotocore", specifier = ">=2.12.2" },
+    { name = "aiobotocore", specifier = ">=3.3.0" },
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "braceexpand", specifier = ">=0.1.7" },
     { name = "click", specifier = ">=8.3.1" },
@@ -2999,6 +3000,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.0.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "starlette", specifier = ">=0.40" },
     { name = "zstandard", specifier = ">=0.22" },
 ]
@@ -3006,6 +3008,7 @@ provides-extras = ["iap", "prometheus", "secrets"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "google-auth-oauthlib", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "prometheus-client", specifier = ">=0.24" },
     { name = "pytest", specifier = ">=8.3.2" },
@@ -3014,6 +3017,7 @@ dev = [
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "google-auth-oauthlib", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "prometheus-client", specifier = ">=0.24" },
     { name = "pytest", specifier = ">=8.3.2" },

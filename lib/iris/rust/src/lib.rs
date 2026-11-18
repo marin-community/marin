@@ -375,6 +375,7 @@ struct ProxyDecision {
 struct ControllerHandoff {
     secret: HeaderValue,
     identity: Option<HeaderValue>,
+    grant_authorization: Option<HeaderValue>,
 }
 
 enum ForwardMode {
@@ -729,6 +730,9 @@ fn prepare_controller_request(headers: &mut HeaderMap, handoff: ControllerHandof
     if let Some(identity) = handoff.identity {
         headers.insert(IDENTITY_HEADER, identity);
     }
+    if let Some(authorization) = handoff.grant_authorization {
+        headers.insert(header::AUTHORIZATION, authorization);
+    }
 }
 
 fn parse_proxy_route(uri: &Uri) -> Result<ProxyRoute, Box<Response<Body>>> {
@@ -875,6 +879,12 @@ async fn verified_identity(
         )
         .await
     {
+        VerifyOutcome::Verified(identity) if identity.role == marin_grants::SHARED_GRANT_ROLE => {
+            Err(Box::new(error_response(
+                StatusCode::FORBIDDEN,
+                "shared grants cannot use endpoint proxies",
+            )))
+        }
         VerifyOutcome::Verified(identity) => Ok(identity),
         VerifyOutcome::Anonymous => Ok(anonymous_identity()),
         VerifyOutcome::Invalid | VerifyOutcome::Missing => Err(Box::new(error_response(
@@ -931,6 +941,7 @@ fn controller_handoff(
     Ok(ControllerHandoff {
         secret: state.decision_secret.clone(),
         identity,
+        grant_authorization: None,
     })
 }
 
@@ -1257,13 +1268,31 @@ async fn forward_controller(
         .verifier
         .verify_request(request.headers(), None, peer.ip(), direct_connection)
         .await;
+    let shared = matches!(&auth, VerifyOutcome::Verified(identity) if identity.role == marin_grants::SHARED_GRANT_ROLE);
+    if shared
+        && !request
+            .uri()
+            .path()
+            .starts_with("/iris.cluster.ControllerService/")
+    {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "shared grants are restricted to scoped job RPCs",
+        );
+    }
+    let grant_authorization = if shared {
+        request.headers().get(header::AUTHORIZATION).cloned()
+    } else {
+        None
+    };
     if matches!(auth, VerifyOutcome::Missing) && request.uri().path().starts_with("/iris.") {
         return error_response(StatusCode::UNAUTHORIZED, "authentication required");
     }
-    let handoff = match controller_handoff(state, auth) {
+    let mut handoff = match controller_handoff(state, auth) {
         Ok(handoff) => handoff,
         Err(response) => return *response,
     };
+    handoff.grant_authorization = grant_authorization;
     let uri = match controller_uri(&state.controller_url, request.uri()) {
         Ok(uri) => uri,
         Err(response) => return *response,

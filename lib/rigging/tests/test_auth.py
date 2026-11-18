@@ -1,12 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
+import hashlib
 import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.request import urlopen
 
 import google.auth.exceptions
 import google.auth.identity_pool
@@ -15,6 +20,8 @@ import jwt
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from oauthlib.oauth2 import MismatchingStateError
+from rigging import auth
 from rigging.auth import (
     BearerTokenInjector,
     GcpAccessTokenProvider,
@@ -24,6 +31,7 @@ from rigging.auth import (
     IapServiceAccountTokenProvider,
     RefreshingTokenProvider,
     read_desktop_client,
+    run_iap_desktop_login,
 )
 
 
@@ -328,6 +336,102 @@ def test_read_desktop_client_rejects_web_client_secret(tmp_path):
 
     with pytest.raises(ValueError, match="desktop"):
         read_desktop_client(str(secret_file))
+
+
+@pytest.fixture
+def desktop_oauth(monkeypatch):
+    state = {"challenge": None, "verifier": None}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            fields = parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode())
+            state["verifier"] = fields.get("code_verifier", [None])[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "access_token": "local-access",
+                        "refresh_token": "local-refresh",
+                        "id_token": "local-identity",
+                        "token_type": "Bearer",
+                        "expires_in": 3600,
+                        "scope": "openid email",
+                    }
+                ).encode()
+            )
+
+        def log_message(self, *_args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        address = f"http://127.0.0.1:{server.server_port}"
+        monkeypatch.setattr(auth, "_GOOGLE_AUTH_URI", address + "/authorize")
+        monkeypatch.setattr(auth, "_GOOGLE_TOKEN_URI", address + "/token")
+        monkeypatch.setenv("OAUTHLIB_INSECURE_TRANSPORT", "1")
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            yield state
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+def oauth_callback(url: str, state: dict, *, mismatched: bool = False) -> str:
+    fields = parse_qs(urlsplit(url).query)
+    assert fields["code_challenge_method"] == ["S256"]
+    state["challenge"] = fields["code_challenge"][0]
+    callback_state = "another-login" if mismatched else fields["state"][0]
+    return fields["redirect_uri"][0].rstrip("/") + "/?" + urlencode({"state": callback_state, "code": "local-code"})
+
+
+@pytest.mark.parametrize("headless", [True, False])
+def test_desktop_login_exchanges_pkce_verifier_matching_browser_challenge(desktop_oauth, monkeypatch, capsys, headless):
+    callbacks = []
+
+    def hidden_input(_prompt):
+        output = capsys.readouterr().out
+        authorization = next(line.strip() for line in output.splitlines() if line.strip().startswith("http"))
+        return oauth_callback(authorization, desktop_oauth)
+
+    class Browser:
+        def open(self, url, **_kwargs):
+            callback = oauth_callback(url, desktop_oauth)
+
+            def complete():
+                with urlopen(callback, timeout=5) as response:
+                    callbacks.append(response.status)
+
+            thread = threading.Thread(target=complete)
+            thread.start()
+            return True
+
+    monkeypatch.setattr(auth.getpass, "getpass", hidden_input)
+    monkeypatch.setattr(auth.webbrowser, "get", lambda *_args, **_kwargs: Browser())
+    assert run_iap_desktop_login("local-client", "public-client-secret", headless=headless) == (
+        "local-identity",
+        "local-refresh",
+    )
+    digest = hashlib.sha256(desktop_oauth["verifier"].encode()).digest()
+    assert base64.urlsafe_b64encode(digest).decode().rstrip("=") == desktop_oauth["challenge"]
+
+
+@pytest.mark.parametrize("callback", ["mismatched-state", "bare-code"])
+def test_headless_login_rejects_callback_without_matching_state(desktop_oauth, monkeypatch, capsys, callback):
+    def hidden_input(_prompt):
+        output = capsys.readouterr().out
+        authorization = next(line.strip() for line in output.splitlines() if line.strip().startswith("http"))
+        if callback == "bare-code":
+            return "local-code"
+        return oauth_callback(authorization, desktop_oauth, mismatched=True)
+
+    monkeypatch.setattr(auth.getpass, "getpass", hidden_input)
+    error = ValueError if callback == "bare-code" else MismatchingStateError
+    with pytest.raises(error):
+        run_iap_desktop_login("local-client", "public-client-secret", headless=True)
+    assert desktop_oauth["verifier"] is None
 
 
 @pytest.fixture
