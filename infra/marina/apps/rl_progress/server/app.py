@@ -47,6 +47,7 @@ def create_api(services):
             raise HTTPException(422, detail=str(error)) from error
         try:
             with engine.begin() as connection:
+                incoming = summary.model_dump(mode="json")
                 stored = connection.execute(
                     text(
                         """INSERT INTO rl_runs (run_id, attempt_id, record)
@@ -62,7 +63,15 @@ def create_api(services):
                     ),
                     {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": summary.model_dump_json()},
                 ).scalar_one()
-                summary = RunSummary.model_validate_json(json.dumps(stored), strict=True)
+                try:
+                    summary = RunSummary.model_validate_json(json.dumps(stored), strict=True)
+                except ValidationError as error:
+                    invalid = {item["loc"][0] for item in error.errors() if item["loc"]}
+                    repaired = dict(stored)
+                    for field in ("issue", "gate", "gate_result"):
+                        if field in invalid and incoming[field] is None:
+                            repaired[field] = None
+                    summary = RunSummary.model_validate_json(json.dumps(repaired), strict=True)
                 normalized = summary.model_dump(mode="json")
                 if normalized != stored:
                     connection.execute(

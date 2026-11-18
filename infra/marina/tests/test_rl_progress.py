@@ -99,6 +99,12 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert "evaluation: extra_forbidden" in skipped["test/legacy"]
     assert set(skipped) == {"test/bad-shape", "test/bad-result", "test/huge-extra", "test/wrong-sql-key", "test/legacy"}
 
+    repaired = record | {"run_id": "test/bad-result", "attempt_id": "bad", "gate_result": None}
+    assert publish(repaired) == repaired
+    recovered = client.get(api_path).json()
+    assert repaired in recovered["runs"]
+    assert "test/bad-result" not in {row["run_id"] for row in recovered["skipped_records"]}
+
     before = client.get(api_path).json()
     for invalid in (
         changed | {"started_at": "2026-11-02T01:00:00+01:00"},

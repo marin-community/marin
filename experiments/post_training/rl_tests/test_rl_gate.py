@@ -18,6 +18,7 @@ from finestore.rl.run_records import (
     EvaluationAnswerRow,
     EvaluationTaskRow,
     read_attempt,
+    read_evaluations,
     write_attempt,
     write_evaluations,
 )
@@ -68,26 +69,12 @@ from experiments.post_training.task_curation.selection import (
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 KL = "policy/mismatch/staleness0/kl_k3"
 
-INSPECT_NATIVE_LAUNCH = """
-import json
-import sys
-from cloud.iris import launch
 
-args = launch.create_parser().parse_args(sys.argv[1:])
-config = launch.load_launch_config(args.config)
-print(json.dumps({
-    "forward_env": args.forward_env,
-    "disk": config.iris.allocation.disk,
-    "tokenizer": config.inputs.model.tokenizer_uri,
-}))
-"""
-
-
-def rescore(preset, *args, exit_code=None):
+def rescore(preset, *args):
     result = CliRunner().invoke(gate.command(snowball_model.SNOWBALL), ["--preset", preset, *args])
     assert result.exception is None or isinstance(result.exception, SystemExit), (result.output, result.exception)
     payload = json.loads(result.output.splitlines()[-1])
-    assert result.exit_code == (exit_code if exit_code is not None else EXIT_CODES[payload["verdict"]]), (
+    assert result.exit_code == EXIT_CODES[payload["verdict"]], (
         result.output,
         result.exception,
     )
@@ -275,6 +262,23 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
                     callback["additional_evaluations"]["eval_lite"]["data_files"] = [
                         str(Path(source["local_path"]) / source["relative_path"])
                     ]
+    if preset == "speed-short":
+        evaluations = read_evaluations(
+            str(root / "exports"), attempt_id="recorded-attempt", evaluation="eval/eval_lite/"
+        )
+        damaged = evaluations[0].model_copy(
+            update={
+                "answers": [
+                    answer.model_copy(update={"error_treatment": "passthrough"}) for answer in evaluations[0].answers
+                ]
+            }
+        )
+        write_evaluations(str(root / "exports"), [damaged])
+        facts = {
+            fact.name: fact for fact in scoring.load_run(str(root), snowball_model.SNOWBALL.by_name[preset]).invariants
+        }
+        assert not facts["eval_lite/scored_fraction"].holds and facts["eval_lite/grader_error_fraction"].holds
+        write_evaluations(str(root / "exports"), evaluations)
     metrics = read_skyrl_metrics(str(root))
     step = snowball_model.SNOWBALL.by_name[preset].updates
     report = rescore(preset, "--candidate", "users/test/current-generation")
@@ -316,7 +320,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         _answer("mixed", 0),
         _answer("mixed", 1),
         _answer("stem", 0),
-        _answer("stem", 0.8) | {"error_treatment": "retry"},
+        _answer("stem", 0.8) | {"error_treatment": "passthrough"},
         _answer("general", 1),
         {key: value for key, value in _answer("general", 1).items() if key != "verification"},
         _answer("coding", 0.8),
@@ -651,27 +655,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
     if case.startswith("initializer"):
         name, version = "tests/custom-init", "2026.11.07"
         root = tmp_path / name / version
-        model = SkyRLRun(
-            path=str(root),
-            hf_model_uri="s3://fixture-initializer/policy",
-            global_step=25,
-            tokenizer_uri=preset.model.tokenizer_uri,
-            tokenizer_revision=preset.model.tokenizer_revision,
-            checkpoint_root=str(root / "checkpoints"),
-            draft_checkpoint_root=None,
-            terminal_manifest_uri=str(root / "terminal.json"),
-            iris_job_id="/test-user/initializer",
-        )
-        _json(
-            root / RECORD_FILENAME,
-            ArtifactRecord(
-                name=name,
-                version=version,
-                fingerprint="initializer",
-                result_type=result_type_name(SkyRLRun),
-                result=model.result_payload(),
-            ).model_dump(mode="json"),
-        )
         if case == "initializer-hf":
             initializer = ArtifactHfModel(
                 ArtifactStep.adopt(name, version, "s3://fixture-initializer", kind=Artifact),
@@ -679,15 +662,32 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 preset.model.tokenizer_revision,
             )
             monkeypatch.setattr(
-                "s3fs.S3FileSystem.glob", lambda self, path, **kwargs: ["fixture-initializer/policy/config.json"]
-            )
-            monkeypatch.setattr("s3fs.S3FileSystem.modified", lambda self, path: datetime(2026, 1, 1, tzinfo=UTC))
-            monkeypatch.setattr(
                 "s3fs.S3FileSystem.exists",
                 lambda self, path, **kwargs: str(path).removeprefix("s3://")
                 in {"fixture-initializer", "fixture-initializer/policy/tokenizer_config.json"},
             )
         else:
+            model = SkyRLRun(
+                path=str(root),
+                hf_model_uri="s3://fixture-initializer/policy",
+                global_step=25,
+                tokenizer_uri=preset.model.tokenizer_uri,
+                tokenizer_revision=preset.model.tokenizer_revision,
+                checkpoint_root=str(root / "checkpoints"),
+                draft_checkpoint_root=None,
+                terminal_manifest_uri=str(root / "terminal.json"),
+                iris_job_id="/test-user/initializer",
+            )
+            _json(
+                root / RECORD_FILENAME,
+                ArtifactRecord(
+                    name=name,
+                    version=version,
+                    fingerprint="initializer",
+                    result_type=result_type_name(SkyRLRun),
+                    result=model.result_payload(),
+                ).model_dump(mode="json"),
+            )
             initializer = SkyRLPolicyModel(ArtifactStep.adopt(name, version, str(root), kind=SkyRLRun))
         inputs = inputs.model_copy(update={"init": recipe.stored_initializer(initializer, preset=preset)})
     control_roots = controls(recorded_runs, preset.name)
@@ -725,7 +725,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         "omitted-candidate-default": "skyrl.generator.chat_template_kwargs",
         "schema-timeout": "timed out after 120 s",
         "protocol-temperature": "temperature",
-        "malformed-seed": "seed",
+        "malformed-seed": "malformed recorded configuration",
     }.get(case)
     if case.startswith(("omitted-", "schema-")):
         omitted = [candidate] if case == "omitted-candidate-default" else control_roots
@@ -791,6 +791,8 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         ), report
     elif fault:
         assert report["verdict"] == "invalid" and fault in report["reason"], report
+        if case == "malformed-seed":
+            assert "seed" in report["reason"]
     else:
         assert (report["verdict"], report["label"]) == ("pass", "no change"), report
         if case.startswith("initializer") or case == "batch":
@@ -995,6 +997,6 @@ def test_python_run_saves_typed_inputs_for_rescoring(
     assert report["run"]["attempt_ids"] == ["recorded-attempt"]
     assert comparisons(report)["eval_lite/family_mean/gain_per_h100_hour"]["run"] == pytest.approx(0.005)
     if tasks is None:
-        assert {"skyrl.trainer.policy.optimizer_config.lr", "skyrl.generator.max_num_seqs"} <= set(
+        assert {"inputs.model.uri", "skyrl.trainer.policy.optimizer_config.lr", "skyrl.generator.max_num_seqs"} <= set(
             report["run"]["config_changes"]
         )

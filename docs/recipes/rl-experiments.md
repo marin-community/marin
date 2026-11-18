@@ -34,7 +34,8 @@ Datakit SFT weights and tokenizer, GPU layout, evaluation schedule and measureme
 uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev
 ```
 
-Plan-only commands use the declared control pin. Gated execution and re-scoring require its revision to match
+A plan without `--require` uses the declared control pin. `--require` validates the pin and requested metric
+against control r0 even during planning. Gated execution and re-scoring require the pin's revision to match
 the preset; a mismatch returns exit 4 before submission or INVALID during gate execution. Controls are collected
 after merge; `--control` and `train-long` need no pin.
 

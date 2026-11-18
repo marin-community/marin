@@ -24,10 +24,10 @@ from finestore.rl.run_records import (
 )
 from finestore.store import DataStore
 from fsspec.core import url_to_fs
-from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
+from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.rl_progress import RunSummary
-from marin.rl.skyrl import SkyRLRun
+from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from marin.rl.skyrl_records import read_skyrl_metrics, read_stored_skyrl_attempts
 from rigging.filesystem.storage_path import StoragePath
 
@@ -186,16 +186,14 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
                 str(source),
                 preset,
                 table=table,
-                attempt_id="native-attempt",
-                attempts=read_stored_skyrl_attempts(str(source)),
+                receipt=read_stored_skyrl_attempts(str(source))[1]["native-attempt"],
             )
         return
     row = publication.build_record(
         str(source),
         table.by_name["data-medium"],
         table=table,
-        attempt_id="native-attempt",
-        attempts=read_stored_skyrl_attempts(str(source)),
+        receipt=read_stored_skyrl_attempts(str(source))[1]["native-attempt"],
     ).model_dump(mode="json")
     assert row["artifact_uri"] == str(source) and row["attempt_id"] == "native-attempt"
     assert row["iris_job_id"] == "/tests/native-run"
@@ -363,6 +361,9 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                         "--attempt",
                         f"native-{index}",
                     ],
+                    init=ArtifactHfModel(
+                        ArtifactStep.adopt("tests/unbuilt-init", "2026.11.17", "s3://unused/init", kind=Artifact)
+                    ),
                 )
             )
 

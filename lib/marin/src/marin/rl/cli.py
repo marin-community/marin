@@ -10,6 +10,7 @@ import sys
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from types import ModuleType
 
@@ -57,21 +58,24 @@ class _CoordinatorRun(BaseModel):
     name: str
     version: str
     required_env_vars: tuple[str, ...]
+    forward_env: tuple[str, ...]
 
 
 class _CoordinatorGraph(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     runs: tuple[_CoordinatorRun, ...]
-    forward_env: tuple[str, ...]
 
 
-def _coordinator_graph(handles: list[ArtifactStep], forward_env: tuple[str, ...]) -> _CoordinatorGraph:
+def _coordinator_graph(handles: list[ArtifactStep]) -> _CoordinatorGraph:
     return _CoordinatorGraph(
         runs=tuple(
             _CoordinatorRun(
                 name=step.name,
                 version=step.version,
+                forward_env=(
+                    tuple(sorted(set(step.run.keywords.get("forward_env", ())))) if isinstance(step.run, partial) else ()
+                ),
                 required_env_vars=tuple(
                     sorted(
                         {
@@ -86,11 +90,10 @@ def _coordinator_graph(handles: list[ArtifactStep], forward_env: tuple[str, ...]
             for step in graph_handles(handles)
             if any(isinstance(value, IrisSkyRLExecution) for value in step.runtime_args.values())
         ),
-        forward_env=tuple(sorted(set(forward_env))),
     )
 
 
-def validate_coordinator_graph(handles: list[ArtifactStep], *, forward_env: tuple[str, ...] = ()) -> None:
+def validate_coordinator_graph(handles: list[ArtifactStep]) -> None:
     """Refuse a re-entered graph whose run identities or forwarded environment names differ."""
     payload = os.environ.get(_COORDINATOR_GRAPH_ENV)
     if payload is None:
@@ -99,7 +102,7 @@ def validate_coordinator_graph(handles: list[ArtifactStep], *, forward_env: tupl
         submitted = _CoordinatorGraph.model_validate_json(payload, strict=True)
     except ValidationError as error:
         raise click.UsageError("submitted RL graph identity is malformed") from error
-    rebuilt = _coordinator_graph(handles, forward_env)
+    rebuilt = _coordinator_graph(handles)
     if rebuilt != submitted:
         raise click.UsageError(
             "coordinator rebuilt a different RL graph: "
@@ -158,15 +161,13 @@ def _coordinator_request(
     argv: tuple[str, ...],
     workspace: Path,
     env_vars: Mapping[str, str],
-    *,
-    forward_env: tuple[str, ...] = (),
 ) -> tuple[str, JobRequest]:
     executions = _skyrl_executions(handles)
     selected_env = {name: env_vars[name] for name in _COORDINATOR_ENV_VARS if name in env_vars}
     for execution in executions:
         for name in execution.required_env_vars:
             selected_env[name] = env_vars[name]
-    selected_env[_COORDINATOR_GRAPH_ENV] = _coordinator_graph(handles, forward_env).model_dump_json()
+    selected_env[_COORDINATOR_GRAPH_ENV] = _coordinator_graph(handles).model_dump_json()
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
     job_name = sanitize_job_name(f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}")
@@ -199,12 +200,11 @@ def submit_or_run(
     coordinator_env: Mapping[str, str],
     *,
     argv: tuple[str, ...],
-    forward_env: tuple[str, ...] = (),
 ) -> JobName | None:
     """Run the graph in-job, or submit it and return the coordinator's ID."""
     if get_job_info() is not None:
         if _COORDINATOR_GRAPH_ENV in os.environ:
-            validate_coordinator_graph(handles, forward_env=forward_env)
+            validate_coordinator_graph(handles)
         run(*handles, max_concurrent=max_concurrent)
         return None
 
@@ -215,7 +215,6 @@ def submit_or_run(
         argv,
         workspace,
         coordinator_env,
-        forward_env=forward_env,
     )
     with open_iris_client(config_file=Path(cluster_config), workspace=workspace) as iris_client:
         handle = FrayIrisClient.from_iris_client(iris_client).submit(request, adopt_existing=False)

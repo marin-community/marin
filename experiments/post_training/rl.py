@@ -439,7 +439,6 @@ def _run_command(
     table: presets.ModelPresets,
     argv: tuple[str, ...],
     entry_module: str | None,
-    forward_env: tuple[str, ...],
     function: Callable,
 ) -> click.Command:
     @wraps(function)
@@ -459,7 +458,7 @@ def _run_command(
             if not module:
                 raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
             submitted_at = datetime.now(UTC).isoformat()
-            job = submit_or_run(module, handles, max_concurrent, os.environ, argv=argv, forward_env=forward_env)
+            job = submit_or_run(module, handles, max_concurrent, os.environ, argv=argv)
             submitted = []
             for step in _from_handles(handles).runs:
                 config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
@@ -479,7 +478,7 @@ def _run_command(
                 )
             _print_status({"coordinator_job_id": str(job), "submitted_at": submitted_at, "runs": submitted})
         else:
-            validate_coordinator_graph(handles, forward_env=forward_env)
+            validate_coordinator_graph(handles)
             _run_graph(handles, max_concurrent)
             job = None
         if options["wait"] and job is not None:
@@ -498,7 +497,7 @@ def command(
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
-    @partial(_run_command, table, argv, entry_module, forward_env)
+    @partial(_run_command, table, argv, entry_module)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for launcher publication.")
     @click.option("--url", help="Marina origin for run publication (defaults to the Marina service).")
     @click.option(
@@ -634,8 +633,8 @@ def main(
     args = list(sys.argv[1:] if argv is None else argv)
     try:
         if args and args[0] in {"rescore", "publish"}:
-            if init is not None:
-                raise click.UsageError(f"Python init cannot be used with {args[0]}")
+            if init is not None and args[0] == "rescore":
+                raise click.UsageError("Python init cannot be used with rescore")
             selected = (rl_gate if args[0] == "rescore" else rl_publication).command(table)
             args = args[1:]
         else:

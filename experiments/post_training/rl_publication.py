@@ -88,17 +88,12 @@ def build_record(
     preset: presets.Preset,
     *,
     table: presets.ModelPresets,
-    attempt_id: str,
-    attempts: tuple[str | None, dict[str, AttemptRecord]],
+    receipt: AttemptRecord,
     report: gate.GateReport | None = None,
     gate_name: str | None = None,
     issue: int | None = None,
 ) -> RunSummary:
     """Build a terminal progress record from stored native outputs without live lookups."""
-    _, receipts = attempts
-    receipt = receipts.get(attempt_id)
-    if receipt is None:
-        raise FileNotFoundError(f"No stored native receipt at {run_output} for {attempt_id}")
     launch, result = recorded_launch(receipt), receipt.native.result
     if result.state not in {"succeeded", "failed"}:
         raise ValueError("A progress record requires a terminal native attempt")
@@ -261,8 +256,7 @@ def publish_runs(
                     path,
                     preset,
                     table=table,
-                    attempt_id=selected_id,
-                    attempts=(current_id, attempts),
+                    receipt=receipt,
                     report=current_report,
                     gate_name=read_record(gate_path).name if current_report is not None else None,
                     issue=issue if selected_id == current_id else None,

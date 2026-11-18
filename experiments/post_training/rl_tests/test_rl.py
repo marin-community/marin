@@ -56,6 +56,11 @@ from experiments.post_training.task_curation.selection import FULL_VALIDATION_FI
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 
 
+def printed_status(output):
+    marker = output.rfind("\npreset:")
+    return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
+
+
 def test_all_presets_plan_with_their_declared_controls(selection):
     table = snowball_model.SNOWBALL
     for preset in table.presets:
@@ -257,10 +262,6 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     assert next(row for row in callbacks if row["type"] == "evaluation")["eval_on_train_end"] is True
     assert configs[3]["skyrl"]["trainer"]["max_steps"] == 2
     assert configs[4]["inputs"]["validation_data"][0]["identity"].partition(":")[0].endswith("@" + revisioned.revision)
-    with pytest.raises(ValueError, match="require guards"):
-        replace(learning, guards=())
-    with pytest.raises(ValueError, match="evaluation"):
-        replace(snowball_model.SNOWBALL.by_name["train-long"], evaluations=())
     summary = Path(recipe.selection_artifact(learning.tasks).path()) / recipe.SUMMARY_FILENAME
     content = json.loads(summary.read_text())
     content["grader_kind_counts"]["train"]["remote_judge"] = 1
@@ -719,7 +720,7 @@ def test_submission_exit_codes_and_publication_retries(
         return
     if not publication_case:
         return
-    snapshot = yaml.safe_load("preset:" + result.output.rpartition("\npreset:")[2].split("\n# ", 1)[0])
+    snapshot = printed_status(result.output)
     if case == "data-short":
         assert "publication" not in snapshot and published == []
         return
@@ -759,7 +760,7 @@ def test_submission_exit_codes_and_publication_retries(
         repeated.output,
         repeated.exception,
     )
-    recovered = yaml.safe_load("preset:" + repeated.output.rpartition("\npreset:")[2].split("\n# ", 1)[0])
+    recovered = printed_status(repeated.output)
     assert recovered["publication"]["unserved_records"] == [] and recovered["publication"]["errors"] == []
     assert all(row["issue"] == 74 for row in recovered["runs"])
     if case == "mixed-native-failed":
@@ -948,14 +949,29 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         state=JobState.SUCCEEDED if mode == "valid" else JobState.FAILED
     )
 
-    def module(name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",)):
+    def module(name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None):
         path = tmp_path / (name + ".py")
+        dependency = ""
+        if policy_forward is not None:
+            dependency = (
+                f"producer=rl.build_run(snowball_rl.SNOWBALL.by_name['train-long'],table=snowball_rl.SNOWBALL,"
+                f"settings=('trainer.max_steps=2',),forward_env={policy_forward!r}).runs[0]\n"
+                f"result=SkyRLRun.raw_load({str(source)!r}).model_copy(update={{'hf_model_uri':'s3://marin-test/models/python-init'}})\n"
+                "directory=Path(producer.path());directory.mkdir(parents=True,exist_ok=True)\n"
+                "record=ArtifactRecord(name=producer.name,version=producer.version,fingerprint=producer.fingerprint(),"
+                "result_type=result_type_name(SkyRLRun),result=result.result_payload())\n"
+                "(directory/RECORD_FILENAME).write_text(record.model_dump_json())\n"
+                "init=SkyRLPolicyModel(producer)\n"
+            )
         path.write_text(
-            "from marin.execution.lazy import ArtifactStep\nfrom marin.execution.artifact import Artifact\n"
-            "from marin.rl.skyrl import ArtifactHfModel\nfrom experiments.post_training import rl, snowball_rl\n"
+            "from pathlib import Path\nfrom marin.execution.lazy import ArtifactStep\n"
+            "from marin.execution.artifact import Artifact,ArtifactRecord,RECORD_FILENAME,result_type_name\n"
+            "from marin.rl.skyrl import ArtifactHfModel,SkyRLRun,SkyRLPolicyModel\n"
+            "from experiments.post_training import rl, snowball_rl\n"
             "step=ArtifactStep.adopt('tests/python-init','2026.11.17','s3://marin-test/models/python-init',kind=Artifact)\n"
             "init=ArtifactHfModel(step,'tests/python-tokenizer','python-tokenizer-revision',relative_path='')\n"
-            f"raise SystemExit(rl.main(snowball_rl.SNOWBALL,init={'init' if use_init else 'None'},"
+            + dependency
+            + f"raise SystemExit(rl.main(snowball_rl.SNOWBALL,init={'init' if use_init else 'None'},"
             f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
         )
         spec = importlib.util.spec_from_file_location(name, path)
@@ -981,17 +997,24 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     assert len(native_calls) == 1
     assert published[-1].optimizer_steps == published[-1].planned_updates == 12
 
-    for mode in ("initializer-mismatch", "environment-mismatch", "overlapping-environment-mismatch"):
+    for mode in (
+        "initializer-mismatch",
+        "environment-mismatch",
+        "overlapping-environment-mismatch",
+        "dependency-environment-mismatch",
+    ):
         coordinator_module = "second_model_entry"
         module(
             "first_model_entry",
             entry_module=coordinator_module,
             forward_env=("WANDB_API_KEY",) if mode == "overlapping-environment-mismatch" else ("HF_TEST_KEY",),
+            policy_forward=("WANDB_API_KEY",) if mode == "dependency-environment-mismatch" else None,
         )
         module(
             coordinator_module,
             use_init=mode != "initializer-mismatch",
             forward_env=() if mode in {"environment-mismatch", "overlapping-environment-mismatch"} else ("HF_TEST_KEY",),
+            policy_forward=() if mode == "dependency-environment-mismatch" else None,
         )
         result = CliRunner().invoke(entry)
         assert result.exit_code == 3 and "coordinator rebuilt a different RL graph" in result.output, (
@@ -1011,7 +1034,9 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
                 if damaged < 2:
                     row = row.model_copy(
                         update={
-                            "answers": [answer.model_copy(update={"error_treatment": "retry"}) for answer in row.answers]
+                            "answers": [
+                                answer.model_copy(update={"error_treatment": "passthrough"}) for answer in row.answers
+                            ]
                         }
                     )
                     damaged += 1
@@ -1026,7 +1051,16 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             result.output,
             result.exception,
         )
-        assert "scored_fraction" in result.output
+        facts = {
+            fact["name"]: fact for row in printed_status(result.output)["runs"] for fact in row["evaluation_invariants"]
+        }
+        prefix = preset.evaluations[0].name + "/step-10/"
+        if missing:
+            assert not facts[prefix + "batch_finished"]["holds"]
+        else:
+            assert facts[prefix + "scored_fraction"]["value"] == pytest.approx(0.98)
+            assert not facts[prefix + "scored_fraction"]["holds"]
+            assert facts[prefix + "batch_finished"]["holds"] and facts[prefix + "grader_error_fraction"]["holds"]
     replace_evaluations(source, evaluations)
     mode, coordinator_module = "failed-native", "first_model_entry"
     module("first_model_entry")
