@@ -64,23 +64,6 @@ def _fp32_template(tree):
     return jax.tree.map(source_leaf, tree)
 
 
-def _cast_to_target(source, target):
-    """Cast only saved FP32 arrays whose target template is BF16, leaving all other leaves exact."""
-
-    def cast(value, exemplar):
-        if not is_jax_array_like(value):
-            return value
-        if value.shape != exemplar.shape:
-            raise ValueError("restored leaf shape differs from target")
-        if value.dtype == exemplar.dtype:
-            return value
-        if value.dtype == jnp.float32 and exemplar.dtype == jnp.bfloat16:
-            return value.astype(jnp.bfloat16)
-        raise ValueError(f"unsupported restored dtype conversion: {value.dtype} to {exemplar.dtype}")
-
-    return jax.tree.map(cast, source, target)
-
-
 def _restore_one_leaf_at_a_time(target, checkpoint, *, mesh):
     """Load and convert one manifest leaf at a time; no complete FP32 tree is built."""
     serializable, nonserializable = eqx.partition(target, is_jax_array_like)
