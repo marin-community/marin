@@ -4,6 +4,7 @@
 import re
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -11,6 +12,7 @@ import optax
 from levanter.optim.config import OptimizerConfig, _convert_frac_or_steps
 from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
+from optax import tree_utils as otu
 
 from experiments.grug.fast_track.adamh import scale_by_adamh
 from experiments.grug.fast_track.grugmuon_stacked import _grug_scale_with_muon, _target_named_sharding
@@ -279,6 +281,97 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(muon_transform.init, update_fn)
 
 
+class RadialMuonHState(NamedTuple):
+    muon: optax.OptState
+    count: jax.Array
+    init_radius: optax.Params
+    log_radius: optax.Params
+    mu: optax.Params
+    nu: optax.Params
+
+
+def _slice_sum(x: jax.Array) -> jax.Array:
+    """Float32 sum over each hyperball sphere: the whole 2-D matrix, or each slice along a stack's leading axis."""
+    axes = tuple(range(x.ndim)) if x.ndim == 2 else tuple(range(1, x.ndim))
+    return jnp.sum(x.astype(jnp.float32), axis=axes, keepdims=True)
+
+
+def _slice_norm(x: jax.Array) -> jax.Array:
+    return jnp.sqrt(_slice_sum(jnp.square(x.astype(jnp.float32))))
+
+
+def scale_with_grug_muonh_radial(
+    momentum: float,
+    nesterov: bool,
+    steps: int,
+    muon_eps: float,
+    learning_rate,
+    coefficient_type: CoefficientType,
+    pre_norm: str,
+    softcap: float,
+    b1: float,
+    b2: float,
+    eps: float,
+) -> optax.GradientTransformation:
+    """MuonH with a learned, bounded radius per sphere: ``W = r0 exp(s) W_hat``.
+
+    ``W_hat`` takes the MuonH hyperball step. The log-radius ``s`` (zero at init, ``r0`` the init norm) takes an Adam
+    step at ``learning_rate`` on the radial gradient ``<dL/dW, W>``; a step away from ``s = 0`` is scaled by
+    ``1 - (s / softcap)**2`` and a step toward it is taken in full, and ``s`` is clipped to ``[-softcap, softcap]``.
+    """
+    muon_transform = _grug_scale_with_muon(
+        momentum=momentum,
+        nesterov=nesterov,
+        steps=steps,
+        muon_eps=muon_eps,
+        coefficient_type=coefficient_type,
+        pre_norm=pre_norm,
+    )
+
+    def init_fn(params):
+        init_radius = jax.tree.map(_slice_norm, params)
+        zeros = jax.tree.map(jnp.zeros_like, init_radius)
+        return RadialMuonHState(
+            muon=muon_transform.init(params),
+            count=jnp.zeros([], jnp.int32),
+            init_radius=init_radius,
+            log_radius=zeros,
+            mu=zeros,
+            nu=zeros,
+        )
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_with_grug_muonh_radial requires params")
+        directions, muon_state = muon_transform.update(updates, state.muon, params)
+        sphere_steps = _scale_invariant_hyperball_updates(params, directions, learning_rate)
+        grads = _match_named_sharding_to_params(updates, params)
+        radial = jax.tree.map(lambda g, p: _slice_sum(g.astype(jnp.float32) * p.astype(jnp.float32)), grads, params)
+        count = optax.safe_increment(state.count)
+        mu = jax.tree.map(lambda m, g: b1 * m + (1 - b1) * g, state.mu, radial)
+        nu = jax.tree.map(lambda v, g: b2 * v + (1 - b2) * jnp.square(g), state.nu, radial)
+        mu_hat = otu.tree_bias_correction(mu, b1, count)
+        nu_hat = otu.tree_bias_correction(nu, b2, count)
+
+        def step_log_radius(s, m, v):
+            step = -learning_rate * m / (jnp.sqrt(v) + eps)
+            outward = step * s > 0
+            step = jnp.where(outward, step * jnp.maximum(1.0 - jnp.square(s / softcap), 0.0), step)
+            return jnp.clip(s + step, -softcap, softcap)
+
+        log_radius = jax.tree.map(step_log_radius, state.log_radius, mu_hat, nu_hat)
+
+        def rescale(p, sphere_step, r0, s):
+            stepped = _pin_sharding(p.astype(jnp.float32) + sphere_step.astype(jnp.float32), p)
+            target = r0 * jnp.exp(s)
+            return (stepped * (target / jnp.maximum(_slice_norm(stepped), 1e-10)) - p).astype(p.dtype)
+
+        new_updates = jax.tree.map(rescale, params, sphere_steps, state.init_radius, log_radius)
+        return new_updates, RadialMuonHState(muon_state, count, state.init_radius, log_radius, mu, nu)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def _is_matrix_stack(x) -> bool:
     return hasattr(x, "ndim") and x.ndim >= 2
 
@@ -291,6 +384,11 @@ _ADAM_LEAVES = re.compile(
     r"(?:^|\.)(value_embed|ve_lambda|ve_gate|head_ve_lambda|head_ve_gate|head_ve_gain|qk_mult"
     r"|pointer_w|pointer_b|pointer_open)$"
 )
+# Matrices whose output passes through a scale-removing norm, so their radial gradient is zero: the softmax layers'
+# q/k projections under the q/k norms (``qk_norm``, or ``mla_q_norm``/``mla_k_norm``), the MLA KV down-projection
+# (``kv_latent_norm``) and the MoE latent down-projection (``latent_norm``). They keep plain MuonH under
+# ``muonh_radial_softcap``.
+_RADIUS_FROZEN = re.compile(r"(?:^|\.)(?:stacked_blocks\.stacked\.attn\.(?:w_q|w_k|w_uk|w_dkv)|mlp\.w_latent_down)$")
 
 
 @OptimizerConfig.register_subclass("grug_fast_track_muonh_v1")
@@ -342,6 +440,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """``token_embed`` (the input table alone) in its own ``embed_lr`` group, identical to the ``adam`` group it
     otherwise shares (schedule, moments, decoupled decay) at ``embed_lr_mult`` x ``adam_lr``. None: off. Needs
     ``embed_optimizer`` ``adam_group``."""
+    muonh_radial_softcap: float = 0.0
+    """Softcap radial MuonH: each MuonH sphere learns a bounded log-radius ``s``, ``|s| <= muonh_radial_softcap``
+    (``scale_with_grug_muonh_radial``), at the group's MuonH LR, in the ``muonh_radial`` and ``kda_beta_radial``
+    groups. The ``_RADIUS_FROZEN`` matrices keep plain MuonH. 0: off."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -354,6 +456,24 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 self.muonh_decay_power,
             )
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+
+        def muonh_radial_at(lr):
+            return optax.chain(
+                scale_with_grug_muonh_radial(
+                    momentum=self.momentum,
+                    nesterov=self.nesterov,
+                    steps=self.backend_steps,
+                    muon_eps=self.muon_epsilon,
+                    learning_rate=lr,
+                    coefficient_type=self.coefficient_type,
+                    pre_norm=self.muon_pre_norm,
+                    softcap=self.muonh_radial_softcap,
+                    b1=self.beta1,
+                    b2=self.beta2,
+                    eps=self.epsilon,
+                ),
+                _match_named_update_sharding(),
+            )
 
         def muonh_at(lr):
             return optax.chain(
@@ -422,6 +542,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # Only when on, so the optimizer state of runs without it keeps its groups.
             if self.embed_lr_mult is not None:
                 transforms["embed_lr"] = adam_at(adam_lr * self.embed_lr_mult, decay=True)
+            if self.muonh_radial_softcap:
+                transforms["muonh_radial"] = muonh_radial_at(learning_rate)
+                transforms["kda_beta_radial"] = muonh_radial_at(learning_rate * KDA_BETA_LR_MULT)
             return optax.multi_transform(
                 {name: _named_scope_transform(f"opt_{name}", tx) for name, tx in transforms.items()}, self.create_mask
             )
@@ -437,11 +560,20 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             self.embed_lr_mult <= 0 or self.embed_optimizer != EmbedOptimizer.ADAM_GROUP
         ):
             raise ValueError("embed_lr_mult needs a positive multiplier and embed_optimizer adam_group")
+        if self.muonh_radial_softcap < 0:
+            raise ValueError("muonh_radial_softcap must be non-negative")
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
 
         def mask_fn(param, path):
+            label = group_fn(param, path)
+            if not self.muonh_radial_softcap or label not in ("muonh", "kda_beta") or param.ndim < 2:
+                return label
+            path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
+            return label if _RADIUS_FROZEN.search(path_lower) else f"{label}_radial"
+
+        def group_fn(param, path):
             path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
             kda_leaf = _kda_leaf(path_lower)
             if kda_leaf == _KDA_BETA_LEAF:
