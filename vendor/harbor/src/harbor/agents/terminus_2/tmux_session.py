@@ -22,7 +22,7 @@ _MAX_CAPTURE_BYTES = 1_000_000
 _FOREGROUND_STOP_TIMEOUT = 5
 # Bounds tmux bookkeeping commands so a lost sandbox fails the turn instead of
 # stalling it until the agent timeout.
-_TMUX_PROBE_TIMEOUT = 30
+_TMUX_COMMAND_TIMEOUT = 30
 _ENTER_KEYS = {"Enter", "C-m", "KPEnter", "C-j", "^M", "^J"}
 
 
@@ -512,7 +512,7 @@ class TmuxSession:
         result = await self.environment.exec(
             command="tmux has-session -t {}".format(self._session_name),
             user=self._user,
-            timeout_sec=_TMUX_PROBE_TIMEOUT,
+            timeout_sec=_TMUX_COMMAND_TIMEOUT,
         )
         return result.return_code == 0
 
@@ -523,7 +523,7 @@ class TmuxSession:
         result = await self.environment.exec(
             command=f"tmux kill-session -t {shlex.quote(self._session_name)}",
             user=self._user,
-            timeout_sec=_TMUX_PROBE_TIMEOUT,
+            timeout_sec=_TMUX_COMMAND_TIMEOUT,
         )
         if result.return_code != 0 or await self.is_session_alive():
             raise TmuxCommandError("Cannot stop the agent tmux session")
@@ -868,7 +868,7 @@ class TmuxSession:
         result = await self.environment.exec(
             self._tmux_capture_pane(capture_entire=capture_entire),
             user=self._user,
-            timeout_sec=_TMUX_PROBE_TIMEOUT,
+            timeout_sec=_TMUX_COMMAND_TIMEOUT,
         )
         return result.stdout or ""
 
