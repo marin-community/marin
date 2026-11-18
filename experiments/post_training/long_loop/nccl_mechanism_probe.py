@@ -32,14 +32,45 @@ from experiments.post_training.nccl_transport_probe import allocate_port_block, 
 MODULE = "experiments.post_training.long_loop.nccl_mechanism_probe"
 GPUS_PER_NODE = 4
 LOG_LIMIT = 8 << 20
-PROFILE_KEYS = ("NCCL_CUMEM_ENABLE", "NCCL_BUFFSIZE", "CUDA_DEVICE_MAX_CONNECTIONS")
+PROFILE_KEYS = ("NCCL_CUMEM_ENABLE", "NCCL_BUFFSIZE", "CUDA_DEVICE_MAX_CONNECTIONS", "NCCL_NVLS_ENABLE", "NCCL_ALGO")
 PRODUCTION_ENV = {"NCCL_CUMEM_ENABLE": "0", "NCCL_BUFFSIZE": "262144", "CUDA_DEVICE_MAX_CONNECTIONS": "1"}
-PROFILES = ("production", "production-trace", "plain")
+PROFILE_ENVIRONMENTS = {
+    "production": PRODUCTION_ENV,
+    "production-trace": PRODUCTION_ENV,
+    "plain": {},
+    "cumem-only": {"NCCL_CUMEM_ENABLE": "0"},
+    "buffer-only": {"NCCL_BUFFSIZE": "262144"},
+    "connections-only": {"CUDA_DEVICE_MAX_CONNECTIONS": "1"},
+    "without-cumem": {key: value for key, value in PRODUCTION_ENV.items() if key != "NCCL_CUMEM_ENABLE"},
+    "without-buffer": {key: value for key, value in PRODUCTION_ENV.items() if key != "NCCL_BUFFSIZE"},
+    "without-connections": {key: value for key, value in PRODUCTION_ENV.items() if key != "CUDA_DEVICE_MAX_CONNECTIONS"},
+    "nvls-off": {**PRODUCTION_ENV, "NCCL_NVLS_ENABLE": "0"},
+    "ring": {**PRODUCTION_ENV, "NCCL_ALGO": "Ring"},
+    "tree": {**PRODUCTION_ENV, "NCCL_ALGO": "Tree"},
+    "plain-nvls-tree": {"NCCL_ALGO": "NVLSTree"},
+}
+SUITES = {
+    "launcher": ("production", "production-trace", "plain"),
+    "environment": (
+        "production",
+        "plain",
+        "cumem-only",
+        "buffer-only",
+        "connections-only",
+        "without-cumem",
+        "without-buffer",
+        "without-connections",
+        "nvls-off",
+        "ring",
+        "tree",
+        "plain-nvls-tree",
+    ),
+}
 SIZES = (1024, 4194304, 4194305, 8388608, 16777215, 16777216, 16777217)
 
 
 def profile_environment(profile: str) -> dict[str, str]:
-    return dict(PRODUCTION_ENV) if profile != "plain" else {}
+    return dict(PROFILE_ENVIRONMENTS[profile])
 
 
 def configured_environment(profile: str) -> dict[str, str]:
@@ -117,6 +148,17 @@ def probe_groups(world: int, rank: int) -> list[tuple[str, dist.ProcessGroup]]:
     return groups
 
 
+def mismatch_examples(actual: torch.Tensor, expected: torch.Tensor) -> list[dict]:
+    """Retain the first sixteen incorrect values with their absolute element offsets."""
+    indices = actual.ne(expected).nonzero().flatten()[:16]
+    return [
+        {"element": index, "actual": value, "expected": reference}
+        for index, value, reference in zip(
+            indices.tolist(), actual[indices].tolist(), expected[indices].tolist(), strict=True
+        )
+    ]
+
+
 def integer_case(rank: int, label: str, group: dist.ProcessGroup, count: int, device: torch.device) -> dict:
     members = dist.get_process_group_ranks(group)
     base = torch.arange(count, dtype=torch.int32, device=device).remainder_(128)
@@ -148,6 +190,14 @@ def integer_case(rank: int, label: str, group: dist.ProcessGroup, count: int, de
         "input_sha256": before,
         "input_after_sha256": after,
         "outputs": {name: parameter_sha256(value) for name, value in [("MIN", low), ("MAX", high), ("SUM", total)]},
+        "mismatch_examples": {
+            name: mismatch_examples(value, expected) if errors[name] else []
+            for name, value, expected in [
+                ("MIN", low, base + min(members)),
+                ("MAX", high, base + max(members)),
+                ("SUM", total, base * len(members) + sum(members)),
+            ]
+        },
         "errors": errors,
         "passed": not any(errors.values()) and before == after,
     }
@@ -192,6 +242,7 @@ def training_reduction_case(
         "offset_sum": offset_sum,
         "expected_sha256": parameter_sha256(expected),
         "errors": {operation: errors},
+        "mismatch_examples": mismatch_examples(result, expected) if errors else [],
         "passed": errors == 0 and before == after,
     }
 
@@ -202,10 +253,8 @@ def exercise(rank: int, local_device: int, master: str, port: int, args) -> dict
     os.environ.update(profile_environment(args.profile))
     log_path = Path(f"/tmp/nccl-mechanism-{args.launcher}-{args.profile}-rank{rank}-{os.getpid()}.log")
     os.environ.update(
-        NCCL_DEBUG={"production": "WARN", "production-trace": "TRACE", "plain": "INFO"}[args.profile],
-        NCCL_DEBUG_SUBSYS=(
-            "INIT,ENV,GRAPH,TUNING,COLL,CALL,NET,NVLS" if args.profile == "production-trace" else "INIT,NET"
-        ),
+        NCCL_DEBUG=("WARN" if args.profile == "production" else "TRACE"),
+        NCCL_DEBUG_SUBSYS=("INIT,ENV,GRAPH,TUNING,COLL,CALL,NET,NVLS" if args.profile != "production" else "INIT,NET"),
         NCCL_DEBUG_FILE=str(log_path),
     )
     torch.cuda.set_device(local_device)
@@ -230,17 +279,26 @@ def exercise(rank: int, local_device: int, master: str, port: int, args) -> dict
         )
         report["runtime"] = runtime_receipt()
         write_json(f"{args.output_prefix}/{name}.json", report)
-        groups = probe_groups(args.nodes * GPUS_PER_NODE, rank)
+        groups = (
+            probe_groups(args.nodes * GPUS_PER_NODE, rank)
+            if args.suite == "launcher"
+            else [("child32", dist.new_group(list(range(args.nodes * GPUS_PER_NODE))))]
+        )
         device = torch.device("cuda", local_device)
         for label, group in groups:
-            for count in SIZES if label == "child32" else [16777216]:
+            for count in (
+                (SIZES if args.suite == "launcher" else (4194304, 8388608, 16777216))
+                if label == "child32"
+                else [16777216]
+            ):
                 report["cases"].append(integer_case(rank, label, group, count, device))
             write_json(f"{args.output_prefix}/{name}.json", report)
         for dtype in [torch.float32, torch.bfloat16]:
-            for operation in ["SUM", "AVG"]:
+            for operation in (["SUM"] if args.profile == "plain-nvls-tree" else ["SUM", "AVG"]):
                 report["cases"].append(training_reduction_case(groups[0][1], dtype, device, 64 << 20, operation))
         report["passed"] = all(row["passed"] for row in report["cases"])
         report["completed"] = True
+        write_json(f"{args.output_prefix}/{name}.json", report)
         dist.barrier()
         return report
     finally:
@@ -282,7 +340,7 @@ def driver(args) -> None:
     ray.get(pg.ready(), timeout=120)
     outcomes = []
     try:
-        for profile in PROFILES:
+        for profile in SUITES[args.suite]:
             actor_type = ray.remote(num_gpus=1, num_cpus=1)(MechanismActor)
             actors = [
                 actor_type.options(
@@ -299,6 +357,7 @@ def driver(args) -> None:
                     "nodes": args.nodes,
                     "launcher": "ray",
                     "profile": profile,
+                    "suite": args.suite,
                     "output_prefix": args.output_prefix,
                 }
                 outcomes.extend(
@@ -309,13 +368,13 @@ def driver(args) -> None:
             finally:
                 for actor in actors:
                     ray.kill(actor)
-        for profile in PROFILES:
+        for profile in SUITES[args.suite]:
             for rank in range(args.nodes * GPUS_PER_NODE):
                 filesystem, path = filesystem_for(f"{args.output_prefix}/torchrun-{profile}-rank{rank}.json")
                 with filesystem.open(path) as stream:
                     outcomes.append(json.load(stream))
         for launcher in ["ray", "torchrun"]:
-            for profile in PROFILES:
+            for profile in SUITES[args.suite]:
                 rows = [r for r in outcomes if r["launcher"] == launcher and r["profile"] == profile]
                 if (
                     sorted(r["rank"] for r in rows) != list(range(args.nodes * GPUS_PER_NODE))
@@ -344,7 +403,7 @@ def task(args) -> None:
         raise ValueError("This probe requires eight four-GB200 tasks in one NVLink domain")
     derived_ifname = pin_socket_ifname()
     ctx = iris_ctx()
-    for profile in PROFILES:
+    for profile in SUITES[args.suite]:
         name = f"nccl-mechanism-{info.attempt_id}-{profile}"
         endpoint = None
         if info.task_index == 0:
@@ -368,6 +427,7 @@ def task(args) -> None:
                     "--mode=worker",
                     "--launcher=torchrun",
                     f"--profile={profile}",
+                    f"--suite={args.suite}",
                     f"--nodes={info.num_tasks}",
                     f"--output-prefix={args.output_prefix}",
                 ],
@@ -378,7 +438,26 @@ def task(args) -> None:
         finally:
             if endpoint is not None:
                 ctx.registry.unregister(endpoint)
-    run_ray_control(args.output_prefix, info, derived_ifname, MODULE, driver_timeout=600)
+    if args.suite == "launcher":
+        run_ray_control(args.output_prefix, info, derived_ifname, MODULE, driver_timeout=600)
+    elif info.task_index == 0:
+        outcomes = []
+        for profile in SUITES[args.suite]:
+            for rank in range(info.num_tasks * GPUS_PER_NODE):
+                filesystem, path = filesystem_for(f"{args.output_prefix}/torchrun-{profile}-rank{rank}.json")
+                with filesystem.open(path) as stream:
+                    outcomes.append(json.load(stream))
+        write_json(
+            f"{args.output_prefix}/receipt.json",
+            {
+                "completed": all(row["completed"] for row in outcomes),
+                "rank_reports": len(outcomes),
+                "all_correct": all(row["passed"] for row in outcomes),
+                "failed_case_count": sum(not case["passed"] for row in outcomes for case in row["cases"]),
+            },
+        )
+        if not all(row["passed"] for row in outcomes):
+            raise RuntimeError("Completed environment matrix reproduces collective corruption; inspect rank receipts")
 
 
 def main() -> None:
@@ -386,7 +465,8 @@ def main() -> None:
     parser.add_argument("--mode", choices=["task", "driver", "worker"], default="task")
     parser.add_argument("--nodes", type=int, default=8)
     parser.add_argument("--launcher", choices=["torchrun", "ray"], default="torchrun")
-    parser.add_argument("--profile", choices=PROFILES, default="production")
+    parser.add_argument("--profile", choices=tuple(PROFILE_ENVIRONMENTS), default="production")
+    parser.add_argument("--suite", choices=tuple(SUITES), default="launcher")
     parser.add_argument("--output-prefix", required=True)
     args = parser.parse_args()
     if args.mode == "task":
