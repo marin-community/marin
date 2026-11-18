@@ -1531,9 +1531,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 step_start = time.perf_counter()
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
                 first_rebind = config.first_step_host_rebind is not None and current_step == initial_step
+                compiled_first_step = None
                 if (config.first_checkpoint_restore_step is not None and current_step == 0) or first_rebind:
                     with timing.span("first_step_compile", step=current_step):
-                        train_step.lower(state, batch).compile()
+                        compiled_first_step = train_step.lower(state, batch).compile()
                 if first_rebind and config.first_step_host_rebind is not None:
                     with timing.span("first_step_host_rebind", step=current_step):
                         state = rebind_first_state(
@@ -1542,6 +1543,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             cgroup_path=Path(config.first_step_host_rebind.cgroup_path),
                             observe=lambda phase, sample: logger.info("Host rebind %s: %s", phase, sample),
                         )
+                # Match v7a2: retain the AOT object through rebind, then release it before the stock call.
+                del compiled_first_step
                 with timing.span("train_step", step=current_step):
                     state, metrics, inline_watch_stats = train_step(state, batch)
                     if inline_watch_stats is not None and watch_due:
