@@ -90,6 +90,20 @@ def _private_dataset(api: HfApi, repo: str) -> None:
         raise ValueError(f"Reference dataset must be private: {repo}")
 
 
+def _verify_write_base(api: HfApi, index: DataReferenceIndex, head: str, documents: Mapping[str, bytes]) -> None:
+    paths = set(api.list_repo_files(repo_id=index.repo, repo_type="dataset", revision=head))
+    expected = {reference.path: reference.sha256 for reference in index.references}
+    for path in documents.keys() - expected.keys():
+        if path in paths:
+            raise ValueError(f"New reference path already exists: {index.repo}@{head}:{path}; refresh the index")
+    for path, sha in expected.items():
+        if path not in paths:
+            raise ValueError(f"Referenced dataset file disappeared: {index.repo}@{head}:{path}; refresh the index")
+        downloaded = hf_hub_download(repo_id=index.repo, repo_type="dataset", revision=head, filename=path)
+        if hashlib.sha256(Path(downloaded).read_bytes()).hexdigest() != sha:
+            raise ValueError(f"Referenced dataset bytes changed: {index.repo}@{head}:{path}; refresh the index")
+
+
 def commit_reference_documents(
     index_path: Path, documents: Mapping[str, bytes], *, message: str, max_attempts: int = 5
 ) -> str:
@@ -98,7 +112,9 @@ def commit_reference_documents(
     Each write creates a new immutable revision parented at the dataset's current head;
     an existing file is replaced in that revision, so an upsert rewrites one shard while
     every other pinned file keeps its bytes. A concurrent writer moves the head between
-    the listing and the commit, so the commit retries against the fresh tree. The
+    the listing and the commit, so the commit retries only while indexed bytes remain
+    unchanged and new document paths remain vacant. Changed shards require a fresh
+    index and a new read-modify-write before any upload occurs. The
     rewritten index is staged on disk for the caller's next git commit; this function
     never touches git.
     """
@@ -108,6 +124,7 @@ def commit_reference_documents(
     last_error: Exception | None = None
     for attempt in range(max_attempts):
         head = api.repo_info(repo_id=index.repo, repo_type="dataset").sha
+        _verify_write_base(api, index, head, documents)
         operations = [
             CommitOperationAdd(path_in_repo=path, path_or_fileobj=data) for path, data in sorted(documents.items())
         ]

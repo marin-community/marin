@@ -58,6 +58,10 @@ def hub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
                 state["head"] = f"{next(counter):x}".zfill(40)  # the empty-repository commit
                 state["revisions"].add(state["head"])
 
+        def list_repo_files(self, repo_id, repo_type="dataset", revision=None):
+            assert revision == state["head"]
+            return list(state["files"])
+
         def create_commit(self, repo_id, repo_type="dataset", parent_commit=None, commit_message="", operations=()):
             if state["fail_next_commit"]:
                 state["fail_next_commit"] = False
@@ -170,8 +174,9 @@ def test_commit_reference_documents_retries_a_stale_head(tmp_path: Path, hub: di
     index_path = tmp_path / "index.json"
     reference_data.create_reference_index(index_path, "open-athena/example", {"part-000.json": b"{}\n"}, message="Seed")
     stale = hub["head"]
-    hub["files"]["part-000.json"] = b'{"moved": true}\n'
+    hub["files"]["unrelated.json"] = b'{"moved": true}\n'
     hub["head"] = f"{99000000000:x}".zfill(40)  # a concurrent writer moved the head
+    hub["revisions"].add(hub["head"])
     hub["fail_next_commit"] = True
     reference_data.commit_reference_documents(index_path, {"part-000.json": b'{"a": 1}\n'}, message="Upsert")
     assert hub["files"]["part-000.json"] == b'{"a": 1}\n'
@@ -209,6 +214,72 @@ def test_append_license_receipt_upserts_the_row_in_place(tmp_path: Path, hub: di
     receipts = license_binding.read_license_receipts(index_path)
     assert len(receipts) == 1
     assert receipts["fixture:source"].revision == "c" * 40
+
+
+def test_append_license_receipt_preserves_other_rows_in_the_same_part(tmp_path: Path, hub: dict):
+    index_path = tmp_path / "index.json"
+    original = {
+        f"fixture:source-{number}": (
+            _receipt(f"fixture:source-{number}", "fixture/dataset", "a" * 40).model_dump(mode="json")
+        )
+        for number in range(64)
+    }
+    reference_data.create_reference_index(
+        index_path,
+        license_binding.LICENSE_RECEIPT_REPO,
+        {"part-002.json": json.dumps(original).encode()},
+        message="Seed",
+    )
+    updated = _receipt("fixture:source-0", "fixture/dataset", "b" * 40)
+    license_binding.append_license_receipt(index_path, updated, message="Update one receipt")
+    assert json.loads(hub["files"]["part-002.json"]) == {
+        **original,
+        updated.source_id: updated.model_dump(mode="json"),
+    }
+    assert set(license_binding.read_license_receipts(index_path)) == set(original)
+
+
+def test_append_license_receipt_cannot_replace_an_unindexed_part(tmp_path: Path, hub: dict):
+    index_path = tmp_path / "index.json"
+    reference_data.create_reference_index(
+        index_path,
+        license_binding.LICENSE_RECEIPT_REPO,
+        {"part-000.json": b"{}\n", "part-001.json": b"{}\n"},
+        message="Seed",
+    )
+    existing = {
+        f"fixture:source-{number}": (
+            _receipt(f"fixture:source-{number}", "fixture/dataset", "a" * 40).model_dump(mode="json")
+        )
+        for number in range(64)
+    }
+    hub["files"]["part-002.json"] = json.dumps(existing).encode()
+    hub["head"] = "f" * 40
+    hub["revisions"].add(hub["head"])
+    prior_files, prior_index = dict(hub["files"]), index_path.read_bytes()
+    with pytest.raises(ValueError, match="New reference path already exists"):
+        license_binding.append_license_receipt(
+            index_path, _receipt("fixture:new", "fixture/dataset", "b" * 40), message="Append"
+        )
+    assert hub["head"] == "f" * 40
+    assert hub["files"] == prior_files
+    assert index_path.read_bytes() == prior_index
+
+
+def test_commit_reference_documents_rejects_changed_shards_before_upload(tmp_path: Path, hub: dict):
+    index_path = tmp_path / "index.json"
+    reference_data.create_reference_index(
+        index_path, "open-athena/example", {"part-002.json": b'{"old": 1}\n'}, message="Seed"
+    )
+    hub["files"]["part-002.json"] = b'{"old": 1, "concurrent": 2}\n'
+    hub["head"] = "f" * 40
+    hub["revisions"].add(hub["head"])
+    prior_index = index_path.read_bytes()
+    with pytest.raises(ValueError, match="bytes changed"):
+        reference_data.commit_reference_documents(index_path, {"part-002.json": b'{"old": 3}\n'}, message="Update")
+    assert hub["head"] == "f" * 40
+    assert json.loads(hub["files"]["part-002.json"]) == {"old": 1, "concurrent": 2}
+    assert index_path.read_bytes() == prior_index
 
 
 def test_append_license_receipt_rejects_a_mismatched_key(tmp_path: Path, hub: dict):
