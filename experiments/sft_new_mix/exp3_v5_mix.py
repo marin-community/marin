@@ -211,13 +211,18 @@ def _verify_shard_paths(cache_dir: str, shards: list[str]) -> None:
 
 
 @cache
-def exp3_v5_sources() -> dict[str, ArtifactStep[TokenizedCache]]:
+def _exp3_v5_sources() -> dict[str, ArtifactStep[TokenizedCache]]:
     """One sealed-cache handle per release source, keyed by the mixture's component name.
 
-    Each handle is a ``TokenizedCache`` step that writes a seal record; its config is pure
-    literals (the entry digest, counts, and loss mode), so the fingerprint pins the exact
-    sealed content. The data is never copied or recomputed; the record is what makes the
-    source's cache addressable, and ``mixture`` reads it at run time.
+    Private on purpose: each seal record pins the shared release cache root, so the
+    per-source cache addresses only resolve through the catalog that
+    :func:`exp3_v5_data_config` attaches as ``cache_catalog``. Mixing these handles
+    directly (without that catalog) would point every component at the root.
+
+    Each handle is a ``TokenizedCache`` step that writes a seal record; its config is
+    pure literals (the entry digest, counts, and loss mode), so the fingerprint pins the
+    exact sealed content. The data is never copied or recomputed; the record is what
+    makes the source's cache addressable, and ``mixture`` reads it at run time.
     """
     return {
         name: ArtifactStep(
@@ -312,7 +317,7 @@ def exp3_v5_seal_check() -> ArtifactStep[Artifact]:
 
 def exp3_v5_mix_deps() -> tuple[ArtifactStep, ...]:
     """The dependencies a consumer of :func:`exp3_v5_data_config` must declare."""
-    return (exp3_v5_release, exp3_v5_cache_catalog, exp3_v5_seal_check(), *exp3_v5_sources().values())
+    return (exp3_v5_release, exp3_v5_cache_catalog, exp3_v5_seal_check(), *_exp3_v5_sources().values())
 
 
 def exp3_v5_data_config(ctx: StepContext) -> LmDataConfig:
@@ -324,7 +329,7 @@ def exp3_v5_data_config(ctx: StepContext) -> LmDataConfig:
     the schedule, shuffle, and validation reservations come from the release document.
     """
     phase_weights = _SCHEDULE[0][1]
-    train = {handle: phase_weights[handle.name] for handle in exp3_v5_sources().values()}
+    train = {handle: phase_weights[handle.name] for handle in _exp3_v5_sources().values()}
     cfg = mixture(ctx, train, shuffle=_DATA["shuffle"])
     return replace(
         cfg,
@@ -344,7 +349,7 @@ def exp3_v5_data_config(ctx: StepContext) -> LmDataConfig:
 @click.option("--only", help="Comma-separated subset of source names to select (default: all).")
 @click.option("--max-concurrent", type=int, default=8, help="Max handles built concurrently.")
 def cli(build: bool, only: str | None, max_concurrent: int) -> None:
-    selected = exp3_v5_sources()
+    selected = _exp3_v5_sources()
     if only is not None:
         keys = only.split(",")
         unknown = [key for key in keys if key not in selected]

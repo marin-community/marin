@@ -193,10 +193,13 @@ in the dependency graph with full provenance tracking.
 A consumer that reads the adopted cache's *value* (like `mixture`, which needs the tokenizer
 and format) resolves its record at the source path. External data without a marin record
 there resolves path-only. To give such data a full record without copying it, register a
-small seal step that writes the `TokenizedCache` record at its own `name@version` address
-and pins the underlying cache root as `config.cache_dir`; `TokenizedCache.as_component()`
-then carries the exact cache address, format, and packing. See
-`experiments/sft_new_mix/exp3_v5_mix.py` for a release-backed SFT mix built this way.
+small seal step that writes the `TokenizedCache` record at its own `name@version` address,
+pinning the cache root the data lives under and the digests that identify its exact
+content. When one cache root holds many sources — a release-backed mix, for example — the
+record pins the shared root and the per-source entry digest, and the consumer attaches the
+release's cache catalog (`LmDataConfig.cache_catalog`) so each component resolves to its
+own entry. Consume such a mix through its data-config function, not by mixing the seal
+handles directly. See `experiments/sft_new_mix/exp3_v5_mix.py`.
 
 ## Data builders
 

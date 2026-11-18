@@ -50,7 +50,7 @@ def _consumer() -> ArtifactStep[TokenizedCache]:
 
 def _resolved_data_config(prefix: str):
     """The resolved ``LmDataConfig`` a consumer of the mix would assemble at run time."""
-    for handle in mix.exp3_v5_sources().values():
+    for handle in mix._exp3_v5_sources().values():
         # The exact record a seal step leaves: config equals its literal build config.
         write_record(
             ArtifactRecord(
