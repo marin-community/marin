@@ -1241,9 +1241,7 @@ class RayPPOTrainer:
                 self.global_step, self.loaded_checkpoint_path = self.load_checkpoints()
             logger.info(f"Resumed training from global_step {self.global_step}")
             if self._restored_rollout_state is not None:
-                await self.context.load_state_dict(
-                    self._restored_rollout_state, rebuild_row_facts=self.batch_builder is BatchBuilder.WORKER
-                )
+                await self.context.load_state_dict(self._restored_rollout_state)
                 self._restored_rollout_state = None
                 restored_data = True
 
@@ -1477,10 +1475,7 @@ class RayPPOTrainer:
                 scored_distillation = await self._await_admitted_teacher_evidence(groups)
 
         step_wall.start("batch_assembly")
-        facts = tuple(
-            admitted.row_facts if admitted.row_facts is not None else RowFacts.from_batch(group.trajectory_batch)
-            for admitted, group in zip(metadata.groups, groups, strict=True)
-        )
+        facts = tuple(admitted.row_facts for admitted in metadata.groups)
         training_input = await asyncio.to_thread(self.convert_rollout_groups_to_training_input, groups, facts=facts)
         if scored_distillation is not None:
             self._attach_teacher_evidence(training_input, scored_distillation)

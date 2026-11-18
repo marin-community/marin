@@ -344,7 +344,7 @@ class TrainingContext:
             dataclasses.replace(loader, retries=retries), ready, self._payloads.object_store_root
         )
 
-    async def load_state_dict(self, state: TrainingContextState, *, rebuild_row_facts: bool) -> None:
+    async def load_state_dict(self, state: TrainingContextState) -> None:
         """Restore a checkpoint's rollout state before ``start``."""
         if self._dispatcher is not None:
             raise RuntimeError("rollout state must be restored before dispatching starts")
@@ -360,19 +360,18 @@ class TrainingContext:
         ready = [
             dataclasses.replace(rollout, payload=self._payloads.restore(rollout.payload)) for rollout in state.ready
         ]
-        if rebuild_row_facts:
-            for start in range(0, len(ready), PAYLOAD_IO_THREADS):
-                indices = [
-                    index
-                    for index in range(start, min(start + PAYLOAD_IO_THREADS, len(ready)))
-                    if ready[index].verdict.trainable
-                ]
-                groups = await self._payloads.fetch([ready[index].payload for index in indices])
-                for index, group in zip(indices, groups, strict=True):
-                    verdict = dataclasses.replace(
-                        ready[index].verdict, row_facts=RowFacts.from_batch(group.trajectory_batch)
-                    )
-                    ready[index] = dataclasses.replace(ready[index], verdict=verdict)
+        for start in range(0, len(ready), PAYLOAD_IO_THREADS):
+            indices = [
+                index
+                for index in range(start, min(start + PAYLOAD_IO_THREADS, len(ready)))
+                if ready[index].verdict.trainable
+            ]
+            groups = await self._payloads.fetch([ready[index].payload for index in indices])
+            for index, group in zip(indices, groups, strict=True):
+                verdict = dataclasses.replace(
+                    ready[index].verdict, row_facts=RowFacts.from_batch(group.trajectory_batch)
+                )
+                ready[index] = dataclasses.replace(ready[index], verdict=verdict)
         await self._buffer.restore.remote(BufferSnapshot(ready=ready, retries=[], leases=frozenset()))
         self._live_uids.update(rollout.verdict.uid for rollout in ready)
         logger.info(
