@@ -509,7 +509,16 @@ def task_library_ab(args) -> None:
         )
         environment = configured_environment(profile)
         if libraries[role]["path"]:
-            environment["LD_PRELOAD"] = libraries[role]["path"] + (
+            library = Path(libraries[role]["path"])
+            # PyTorch preloads CUDA dependencies by absolute path from sys.path.
+            # LD_PRELOAD alone leaves its packaged NCCL mapped beside our build.
+            overlay = library.parent / "python"
+            dependency = overlay / "nvidia/nccl/lib/libnccl.so.2"
+            dependency.parent.mkdir(parents=True, exist_ok=True)
+            if not dependency.exists():
+                dependency.symlink_to(library)
+            environment["PYTHONPATH"] = str(overlay) + os.pathsep + environment.get("PYTHONPATH", "")
+            environment["LD_PRELOAD"] = str(library) + (
                 ":" + environment["LD_PRELOAD"] if environment.get("LD_PRELOAD") else ""
             )
         try:
