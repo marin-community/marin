@@ -29,6 +29,7 @@ from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from omegaconf import OmegaConf
 from rigging.filesystem.buckets import filesystem_for
+from rigging.network import interface_for_ipv4
 from skyrl_train.distributed.megatron.megatron_strategy import MegatronStrategy
 from skyrl_train.weight_sync.expert_block.megatron_source import local_source_slices
 from skyrl_train.workers.megatron.megatron_worker import MegatronPolicyWorkerBase, _MegatronInitMode
@@ -88,6 +89,7 @@ class ReplicaProbeWorker(MegatronPolicyWorkerBase):
             "rank": dist.get_rank(),
             "host": socket.gethostname(),
             "gpu_uuid": str(torch.cuda.get_device_properties(torch.cuda.current_device()).uuid),
+            "gloo_interface": os.environ["GLOO_SOCKET_IFNAME"],
             "seconds": time.monotonic() - started,
             "parameters": [asdict(row) for row in rows],
         }
@@ -166,6 +168,9 @@ def launch(args: argparse.Namespace) -> None:
     info = get_job_info()
     if info is None or info.num_tasks != 8 or torch.cuda.device_count() != 4:
         raise ValueError("Submit an eight-task gang with four GB200 GPUs per task")
+    # Resolve on each node before torchrun inherits the environment. Hostname
+    # resolution in these pods otherwise makes Gloo advertise loopback to peers.
+    os.environ["GLOO_SOCKET_IFNAME"] = interface_for_ipv4(info.advertise_host)
     ctx = iris_ctx()
     name = f"snowball-replica-probe-{info.attempt_id}"
     endpoint_id = None
