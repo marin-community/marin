@@ -82,7 +82,7 @@ def _key(record: TrialOwnershipRecord) -> str:
 
 
 class QuarantineReservePool:
-    """Use the maintained conditional-object API for one slot per root and pool-wide CAS."""
+    """Reserve at most one extra slot per root until tracked sandboxes are confirmed absent."""
 
     def __init__(self, config: QuarantineReserveConfig):
         self.config = config
