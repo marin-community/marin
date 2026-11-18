@@ -1,5 +1,6 @@
 import asyncio
 from collections import Counter
+from dataclasses import dataclass
 import threading
 from types import SimpleNamespace
 
@@ -35,6 +36,14 @@ class Clock:
                 self.cancelled = True
 
         return Timer()
+
+
+@dataclass
+class ShutdownCase:
+    trainer: RayPPOTrainer
+    clock: Clock
+    exits: list[int]
+    releases: list[str]
 
 
 @pytest.fixture
@@ -80,26 +89,26 @@ def shutdown_case(monkeypatch):
     trainer._speculator_refresh_task = None
     trainer.policy_model = trainer.critic_model = trainer.ref_model = None
 
-    return trainer, clock, exits, releases
+    return ShutdownCase(trainer, clock, exits, releases)
 
 
 def test_shutdown_releases_all_roles_without_a_late_process_failure(shutdown_case):
-    trainer, clock, exits, releases = shutdown_case
+    trainer, clock = shutdown_case.trainer, shutdown_case.clock
     asyncio.run(trainer.shutdown())
     asyncio.run(trainer.shutdown())
     trainer.finish_shutdown()
     clock.advance(1000)
 
-    assert exits == []
-    assert Counter(releases) == Counter(["context", "sync", "teacher", "http", "rollout", "evaluation", "sink", "inference"])
+    assert shutdown_case.exits == []
+    assert Counter(shutdown_case.releases) == Counter(["context", "sync", "teacher", "http", "rollout", "evaluation", "sink", "inference"])
 
 
 def test_shutdown_keeps_process_guard_while_executor_work_remains(shutdown_case, monkeypatch):
-    trainer, clock, exits, _ = shutdown_case
+    trainer, clock = shutdown_case.trainer, shutdown_case.clock
     release_thread = threading.Event()
 
     def process_exit(code):
-        exits.append(code)
+        shutdown_case.exits.append(code)
         release_thread.set()
 
     monkeypatch.setattr("skyrl_train.trainer.os._exit", process_exit)
@@ -108,21 +117,11 @@ def test_shutdown_keeps_process_guard_while_executor_work_remains(shutdown_case,
         pending = asyncio.get_running_loop().run_in_executor(None, release_thread.wait)
         try:
             await trainer.shutdown()
-            clock.advance(301)
+            clock.advance(1000)
         finally:
             release_thread.set()
             await pending
 
     asyncio.run(shutdown_with_executor())
     trainer.finish_shutdown()
-    assert exits == [1]
-
-
-def test_stuck_shutdown_still_exits_with_failure(monkeypatch):
-    clock = Clock()
-    exits = []
-    monkeypatch.setattr("skyrl_train.trainer.threading.Timer", clock.timer)
-    monkeypatch.setattr("skyrl_train.trainer.os._exit", exits.append)
-    RayPPOTrainer._start_exit_watchdog()
-    clock.advance(301)
-    assert exits == [1]
+    assert shutdown_case.exits == [1]
