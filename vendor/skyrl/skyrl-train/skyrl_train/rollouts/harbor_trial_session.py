@@ -73,8 +73,8 @@ async def run_task_setup(
                 result = await environment.exec(
                     f"exec /bin/sh -c {shlex.quote(command)}", cwd=cwd, user="root", timeout_sec=math.ceil(timeout)
                 )
-                (evidence_dir / f"{index}.stdout").write_text(result.stdout)
-                (evidence_dir / f"{index}.stderr").write_text(result.stderr)
+                (evidence_dir / f"{index}.stdout").write_text(result.stdout or "")
+                (evidence_dir / f"{index}.stderr").write_text(result.stderr or "")
                 if result.return_code != 0:
                     raise RuntimeError(f"Declared task setup command {index} exited {result.return_code}")
         receipt["completed"] = True
