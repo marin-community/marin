@@ -18,7 +18,9 @@ from evalrecords.rollout_results import terminal_attempts
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
+from marin.rollouts import evaluation
 from marin.rollouts.evaluation import (
+    RESPONSE_SOURCES,
     REUSED_FROM_RUN,
     EvaluationInfrastructureError,
     EvaluationRunConfig,
@@ -1220,6 +1222,32 @@ async def test_reuse_asks_the_model_when_a_sampling_option_changed(tmp_path, run
     for attempt, raw in terminal_evidence(output).values():
         assert raw[REUSED_FROM_RUN] is None
         assert (stored_text(raw), raw["grade"]["reward"], attempt["completion_tokens"]) == ("Red", 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_reuse_records_the_source_run_and_its_driver_revision_outside_the_run_identity(
+    tmp_path, run_config, monkeypatch
+):
+    strict = publish_colors_corpus(tmp_path, "strict")
+    lenient = publish_colors_corpus(tmp_path, "lenient", converter=convert_ignoring_case)
+    source, output, fresh = (str(tmp_path / name) for name in ("stored", "regraded", "fresh"))
+    red = dict.fromkeys(COLORS, "red")
+    with monkeypatch.context() as older:
+        older.setattr(evaluation, "EVALUATION_EXECUTION_REVISION", "older-driver")
+        await run_evaluation((strict,), source, run_config, ScriptedModel(red), machine_factories={})
+    await run_evaluation((lenient,), fresh, run_config, ScriptedModel(red), machine_factories={})
+
+    await run_evaluation((lenient,), output, run_config, no_model, machine_factories={}, reuse_from=source)
+    # A resume that names no source keeps the record.
+    await run_evaluation((lenient,), output, run_config, no_model, machine_factories={})
+
+    regraded = json.loads(ReadView(output).read_blob(RUN_OBJECT))
+    assert regraded[RESPONSE_SOURCES] == [
+        {"root": source, "run": stored_run_identity(source), "driver_revision": "older-driver"}
+    ]
+    assert regraded["driver_revision"] == evaluation.EVALUATION_EXECUTION_REVISION
+    assert RESPONSE_SOURCES not in json.loads(ReadView(fresh).read_blob(RUN_OBJECT))
+    assert run_identity(regraded) == stored_run_identity(fresh)
 
 
 @pytest.mark.asyncio

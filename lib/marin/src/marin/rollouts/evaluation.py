@@ -76,6 +76,8 @@ logger = logging.getLogger(__name__)
 
 # Raw evidence and turn metadata key naming the root, run identity and evidence blob of a reused model response.
 REUSED_FROM_RUN = "reused_response_from_run"
+# Run descriptor key listing, for each run whose responses this root reused, its root, run identity and driver revision.
+RESPONSE_SOURCES = "response_sources"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
 EVALUATION_EXECUTION_REVISION = "2026.11.05.1"
 
@@ -117,8 +119,12 @@ class EvaluationRunConfig(RunModel):
 
 
 def run_identity(run: Mapping[str, Any]) -> str:
-    """Identify a stored run descriptor by everything except request concurrency, which a resume may change."""
-    return canonical_sha256({**run, "config": scoring_settings(run["config"])})
+    """Identify a stored run descriptor, leaving out what a resume may change.
+
+    Request concurrency and the sources of reused model responses are not part of the identity.
+    """
+    described = {key: value for key, value in run.items() if key != RESPONSE_SOURCES}
+    return canonical_sha256({**described, "config": scoring_settings(run["config"])})
 
 
 def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig, trial: int) -> dict[str, Any]:
@@ -248,6 +254,16 @@ def _grading_retry_turn(reader: ReadView, old: Attempt | None) -> ModelTurn | No
     return _completed_turn(raw)
 
 
+@dataclasses.dataclass(frozen=True)
+class ResponseSource:
+    """A run whose stored model responses another run reused."""
+
+    root: str
+    run: str
+    """The run identity of the source."""
+    driver_revision: str
+
+
 class _StoredResponses:
     """Completed model responses that another run of the same model stored, by benchmark, source row and trial."""
 
@@ -259,7 +275,7 @@ class _StoredResponses:
         run = json.loads(saved)
         if run["config"]["model"] != model.model_dump(mode="json"):
             raise ValueError(f"Reused model responses require the same model identity as {root}")
-        self._source = {"root": root, "run": run_identity(run)}
+        self.source = ResponseSource(root, run_identity(run), run["driver_revision"])
         datasets: dict[str, str] = {}
         for entry in run["datasets"]:
             benchmark = entry["protocol"]["benchmark"]
@@ -285,8 +301,19 @@ class _StoredResponses:
             raw = json.loads(saved)
             turn = _completed_turn(raw) if "conversations" in raw else None
             if turn is not None:
-                return {**self._source, "result_blob": attempt.result_blob}, turn
+                provenance = {"root": self.source.root, "run": self.source.run, "result_blob": attempt.result_blob}
+                return provenance, turn
         return None
+
+
+def _response_sources(
+    previous_run: Mapping[str, Any] | None, responses: _StoredResponses | None
+) -> list[dict[str, str]]:
+    """The sources a result root has reused: those its run descriptor lists, then this invocation's."""
+    sources = list(previous_run.get(RESPONSE_SOURCES, ())) if previous_run is not None else []
+    if responses is not None and (source := dataclasses.asdict(responses.source)) not in sources:
+        sources.append(source)
+    return sources
 
 
 async def _saved_model_turn(_request: ModelRequest, turn: ModelTurn) -> ModelTurn:
@@ -629,7 +656,8 @@ async def run_evaluation(
     With ``reuse_from``, a generation attempt takes the latest completed model response that result root
     stored for the same benchmark, source row and trial when it sends the identical request; any other
     attempt asks the model. That root must hold a run of the same model identity, and it is not part of
-    this run's identity.
+    this run's identity. The run descriptor lists every such root with its run identity and driver
+    revision, since responses stored under another driver revision are graded by this one.
     """
     if (config.judge is None) != (judge_connection is None):
         raise ValueError("A judge requires both an explicit connection and a recorded judge identity")
@@ -653,7 +681,7 @@ async def run_evaluation(
         if reuse_from
         else None
     )
-    run = {
+    run: dict[str, Any] = {
         "schema_version": 1,
         "driver_revision": EVALUATION_EXECUTION_REVISION,
         "config": config.model_dump(mode="json"),
@@ -669,8 +697,11 @@ async def run_evaluation(
     }
     identity = run_identity(run)
     previous = ReadView(output).read_blob(RUN_OBJECT)
-    if previous is not None and run_identity(json.loads(previous)) != identity:
+    previous_run = json.loads(previous) if previous is not None else None
+    if previous_run is not None and run_identity(previous_run) != identity:
         raise ValueError("Resume requires the identical model, corpora, protocol, selection and run settings")
+    if sources := _response_sources(previous_run, responses):
+        run[RESPONSE_SOURCES] = sources
     with DataStore.open(output) as store:
         EvaluationStore(store)
         store.table(
