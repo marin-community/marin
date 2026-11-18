@@ -12,7 +12,7 @@ from urllib.parse import urlencode, urlsplit
 from playwright.sync_api import Page, expect
 
 from .release_browser import LAYOUTS as RELEASE_LAYOUTS
-from .release_browser import evidence_cases, pending_release_ids
+from .release_browser import browser_json, evidence_cases, pending_release_ids
 from .release_curriculum import representative_domain
 from .release_receipts import BrowserScope
 
@@ -177,7 +177,7 @@ def readability_layout(
 
     visit("", "#rows tr")
     root = page.url.split("#")[0].split("?")[0]
-    sources = page.evaluate("async() => (await (await fetch('api/sources')).json()).sources")
+    sources = browser_json(page, "api/sources")["sources"]
     pending_ids = pending_release_ids(page, root)
     capture("sources", focus=True)
     # Exercise every filter value; captures include selected/empty states.
@@ -294,7 +294,7 @@ def readability_layout(
     domains = page.locator("#domain option").evaluate_all("es=>es.map(e=>e.value).filter(Boolean)")
     if scope is BrowserScope.REPRESENTATIVE:
         page.locator("#confidence").select_option("0")
-        data = page.evaluate("async()=> (await fetch('api/curriculum')).json()")
+        data = browser_json(page, "api/curriculum")
         selected = representative_domain(data)
         domains = [selected] if selected else []
     opened_task = False

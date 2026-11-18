@@ -39,7 +39,15 @@ from .prepare_preview import (
 )
 from .readability import readability_smoke, readability_sweep
 from .release_browse import browse_invariants
-from .release_browser import curriculum_full_sweep, curriculum_sweep, evidence_smoke, evidence_sweep, source_sweep
+from .release_browser import (
+    curriculum_full_sweep,
+    curriculum_sweep,
+    evidence_smoke,
+    evidence_sweep,
+    report_failed_request,
+    report_failed_response,
+    source_sweep,
+)
 from .release_curriculum import curriculum_invariants
 from .release_evidence import (
     SqlQuery,
@@ -395,6 +403,8 @@ def browser_checks(
             page = context.new_page()
             page.set_default_navigation_timeout(60000)
             page.on("pageerror", lambda error: errors.append(str(error)))
+            page.on("response", report_failed_response)
+            page.on("requestfailed", report_failed_request)
             sources = source_sweep(page, root, expected["sources"], shots)
             curriculum = (curriculum_full_sweep if scope is BrowserScope.FULL else curriculum_sweep)(
                 page, root, releases, shots

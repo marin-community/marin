@@ -5,7 +5,9 @@
 
 import pytest
 from marina.journeys import Journey
-from playwright.sync_api import expect
+from playwright.sync_api import Error, expect
+
+from infra.marina.apps.rl_data_catalog.release_browser import browser_json, report_failed_request, report_failed_response
 
 APP_ROOT = "a/fb11c931-5861-4878-8bb5-a964d652b45f"
 AUXILIARIES = [
@@ -65,3 +67,57 @@ def test_removed_archive_page_preserves_archive_api(journey: Journey, readabilit
     archive = page.request.get(base + "api/archive")
     assert archive.status == 200
     assert archive.json()["reviews"], "Removing the page must retain stored review collections"
+
+
+@pytest.mark.parametrize(
+    "status,body",
+    [(500, "An internal server error"), (404, "Missing ledger"), (200, "not JSON"), (500, "server error " + "x" * 1000)],
+)
+def test_auxiliary_audit_failure_reports_url_status_and_body(
+    journey: Journey, status: int, body: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    page = journey.page.context.new_page()
+    try:
+        page.goto(f"{journey.origin}/{APP_ROOT}/")
+        url = page.url + "measurements/audit-fixture.json?source=example"
+        page.route("**/measurements/audit-fixture.json?*", lambda route: route.fulfill(status=status, body=body))
+        with page.expect_response(url) as response:
+            with pytest.raises(Error) as failure:
+                browser_json(page, url)
+        assert url in str(failure.value)
+        assert f"HTTP {status}" in str(failure.value)
+        prefix = body.encode()[:256].decode()
+        assert prefix in str(failure.value)
+        if len(body) > 256:
+            assert body not in str(failure.value)
+        report_failed_response(response.value)
+        if status >= 400:
+            assert url in caplog.text and f"HTTP {status}" in caplog.text and prefix in caplog.text
+    finally:
+        page.close()
+
+
+def test_auxiliary_audit_returns_valid_json(journey: Journey) -> None:
+    page = journey.page.context.new_page()
+    try:
+        page.goto(f"{journey.origin}/{APP_ROOT}/")
+        page.route("**/measurements/audit-fixture.json", lambda route: route.fulfill(json={"sources": []}))
+        assert browser_json(page, "measurements/audit-fixture.json") == {"sources": []}
+    finally:
+        page.close()
+
+
+def test_auxiliary_audit_network_failure_identifies_request(journey: Journey, caplog: pytest.LogCaptureFixture) -> None:
+    page = journey.page.context.new_page()
+    try:
+        page.goto(f"{journey.origin}/{APP_ROOT}/")
+        url = page.url + "measurements/audit-fixture.json"
+        page.route("**/measurements/audit-fixture.json", lambda route: route.abort("connectionfailed"))
+        with page.expect_event("requestfailed") as request:
+            with pytest.raises(Error) as failure:
+                browser_json(page, url)
+        assert url in str(failure.value) and "HTTP unavailable" in str(failure.value)
+        report_failed_request(request.value)
+        assert url in caplog.text and "body prefix unavailable" in caplog.text
+    finally:
+        page.close()

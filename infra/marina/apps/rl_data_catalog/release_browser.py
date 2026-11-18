@@ -3,16 +3,20 @@
 
 """Browser gates shared by local-package and immutable hosted release checks."""
 
+import logging
 import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Error, Page, Request, Response, expect
 
 from .release_curriculum import count_projection, representative_domain
 from .release_evidence import admission_text, task_totals
+
+LOGGER = logging.getLogger(__name__)
+BODY_PREFIX_BYTES = 256
 
 LAYOUTS = tuple((theme, width) for theme in ("light", "dark") for width in (1440, 390))
 
@@ -272,11 +276,47 @@ def evidence_cases(sources: list[dict[str, Any]], pending_ids: set[str] | None =
     return list(selected.values())
 
 
+def report_failed_response(response: Response) -> None:
+    """Retain the request and bounded error body without changing the gate result."""
+    if response.status < 400:
+        return
+    try:
+        prefix = response.body()[:BODY_PREFIX_BYTES].decode("utf-8", errors="replace")
+    except Error as error:
+        prefix = f"unavailable ({error})"
+    LOGGER.error("Audit HTTP %s %s; body prefix %r", response.status, response.url, prefix)
+
+
+def report_failed_request(request: Request) -> None:
+    """Identify requests that failed before an HTTP response was available."""
+    LOGGER.error("Audit HTTP unavailable %s; body prefix unavailable; %s", request.url, request.failure)
+
+
+def browser_json(page: Page, url: str) -> dict[str, Any]:
+    """Fetch audit JSON with request/status/body context on HTTP or parse failure."""
+    return page.evaluate(
+        """async ({path, prefixBytes}) => {
+          const url = new URL(path, location.href).href;
+          let status = 'unavailable', prefix = 'unavailable';
+          try {
+            const response = await fetch(url);
+            status = response.status;
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            prefix = new TextDecoder().decode(bytes.slice(0, prefixBytes));
+            if (!response.ok) throw new Error('HTTP request failed');
+            return JSON.parse(new TextDecoder().decode(bytes));
+          } catch (error) {
+            throw new Error(`Audit JSON ${url}: HTTP ${status}; ` +
+                `body prefix ${JSON.stringify(prefix)}; ${error.message}`);
+          }
+        }""",
+        {"path": url, "prefixBytes": BODY_PREFIX_BYTES},
+    )
+
+
 def pending_release_ids(page: Page, root: str) -> set[str]:
     """Read candidate presentations from this package without changing catalog inputs."""
-    manifest = page.evaluate(
-        "async root => (await fetch(new URL('measurements/pending-filtered-releases.json', root))).json()", root
-    )
+    manifest = browser_json(page, root + "measurements/pending-filtered-releases.json")
     return {row["source_id"] for row in manifest["sources"]}
 
 
@@ -339,12 +379,15 @@ def curriculum_full_sweep(page: Page, root: str, releases: list[dict[str, Any]],
                 page.goto("about:blank")
                 page.goto(root + "curriculum.html#" + urlencode({"release": release["release_id"], "intended_use": use}))
                 result = check_map(page)
-                confidence = page.evaluate(
-                    """async () => {
-                    const params = new URLSearchParams({release: document.querySelector('#release').value,
-                        intended_use: document.querySelector('#use').value});
-                    return (await fetch('api/curriculum?' + params)).json();
-                }"""
+                confidence = browser_json(
+                    page,
+                    "api/curriculum?"
+                    + urlencode(
+                        {
+                            "release": page.locator("#release").input_value(),
+                            "intended_use": page.locator("#use").input_value(),
+                        }
+                    ),
                 )
                 levels = confidence.get("confidence", {}).get("levels", []) if confidence.get("confidence") else []
                 for index, level in enumerate(levels):
@@ -381,7 +424,7 @@ def curriculum_full_sweep(page: Page, root: str, releases: list[dict[str, Any]],
         page.goto("about:blank")
         page.goto(root + "curriculum.html")
         check_map(page)
-        coverage = page.evaluate("async()=> (await fetch('api/curriculum')).json()")
+        coverage = browser_json(page, "api/curriculum")
         subjects = {node["subject_id"]: node["name"] for node in coverage["hierarchy"] if node["kind"] == "subject"}
 
         def normalize(label: str) -> str:
@@ -435,10 +478,7 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
         page.goto(root + "curriculum.html#" + urlencode({"release": release["release_id"], "intended_use": "all"}))
         expect(page.locator("#provenance")).to_contain_text('"release_id"', timeout=60000)
         check_map(page)
-        data = page.evaluate(
-            """async()=> (await fetch('api/curriculum?' + new URLSearchParams({
-                release: document.querySelector('#release').value}))).json()"""
-        )
+        data = browser_json(page, "api/curriculum?" + urlencode({"release": page.locator("#release").input_value()}))
         levels = data["confidence"]["levels"] if data.get("confidence") else [None]
         for level in sorted({0, len(levels) - 1}, reverse=True):
             page.locator("#confidence").select_option(str(level))
