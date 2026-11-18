@@ -5,9 +5,10 @@ import ChatView from './components/ChatView.vue'
 import CompareView from './components/CompareView.vue'
 import CompletionView from './components/CompletionView.vue'
 import HistoryPanel from './components/HistoryPanel.vue'
+import ReportIssueDialog from './components/ReportIssueDialog.vue'
 import SamplingControls from './components/SamplingControls.vue'
 import { useServing } from './composables/useServing'
-import { createChatShare, fetchChatShare } from './lib/api'
+import { createChatShare, fetchChatShare, type ReportInput, submitFeedback } from './lib/api'
 import { ThinkingMode } from './lib/chat_template'
 import { loadComparison } from './lib/comparison_storage'
 import {
@@ -55,6 +56,8 @@ const shareState = ref<'idle' | 'sharing' | 'copied' | 'ready' | 'failed'>('idle
 const sharedUrl = ref<string | null>(null)
 const sharedUrlInput = ref<HTMLInputElement | null>(null)
 const shareImportFailed = ref(false)
+const reportDialog = ref<InstanceType<typeof ReportIssueDialog> | null>(null)
+const chatView = ref<InstanceType<typeof ChatView> | null>(null)
 const shareLabel = computed(() => {
   if (shareState.value === 'sharing') return 'Creating link…'
   if (shareState.value === 'copied') return 'Link copied'
@@ -123,6 +126,16 @@ async function copyShareLink() {
   } catch {
     sharedUrlInput.value?.select()
   }
+}
+
+function saveFeedback({ description, reporter, includeConversation }: ReportInput): Promise<string> {
+  const conversation = active.value
+  return submitFeedback({
+    description,
+    reporter,
+    model: conversation.model || info.value?.model || '',
+    conversation: includeConversation ? conversation : null,
+  })
 }
 
 function persist() {
@@ -218,6 +231,18 @@ function clearHistory() {
             </svg>
             <span class="hidden sm:inline">{{ shareLabel }}</span>
           </button>
+          <button
+            v-if="mode === 'chat' && info?.feedback"
+            class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-40"
+            :disabled="!active.messages.length || chatView?.busy"
+            title="Save a private report about a poor response to Marin storage"
+            @click="reportDialog?.open()"
+          >
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 22V4m0 0h12l-2 4 2 4H4" />
+            </svg>
+            <span class="hidden sm:inline">Report issue</span>
+          </button>
           <label class="flex items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary">
             Max tokens
             <input
@@ -280,6 +305,7 @@ function clearHistory() {
           Could not import the shared chat. The link is invalid or was truncated.
         </div>
         <ChatView
+          ref="chatView"
           v-if="mode === 'chat'"
           :conversation="active"
           :params="params"
@@ -299,6 +325,7 @@ function clearHistory() {
           :thinking-mode="compareSettings.thinkingMode"
           :custom-instructions="compareSettings.customInstructions"
         />
+        <ReportIssueDialog ref="reportDialog" :save="saveFeedback" />
         <CompletionView v-if="mode === 'completion'" :params="params" :model="model" :streaming="info ? info.streaming : true" />
       </main>
     </div>

@@ -220,6 +220,15 @@ can point at an incomplete export. Keep resume behavior and terminal export expl
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
 
+Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
+training entrypoint first waits up to 30 seconds for remote node loggers, then
+finishes its own uploads using the same SDK deadline. These waits can take up to
+60 seconds, plus other cleanup. Upload timeouts produce warnings and preserve
+the workload's success or original exception. W&B may show the run as Crashed
+or Failed after a primary upload timeout even when training succeeds. Some W&B
+records may remain unuploaded. Other cleanup can still exhaust the existing
+120-second teardown watchdog.
+
 SkyRL keeps the two most recent recovery checkpoints by default. For an RSI loop
 that needs only the latest recovery point, set
 `retention=SkyRLRetentionPolicy(resume_checkpoint_count=1)` in `SkyRLSpec`.
@@ -232,6 +241,16 @@ model and a separate export job. The structured launch config defaults `run.expo
 to false as well. Without export, successful runs retain native recovery checkpoints,
 in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
 is null. Pipelines that serve the resulting model for downstream evaluation must request export.
+
+Every HF export writes `generation_config.json` through SkyRL's Hugging Face
+model lifecycle utilities. It keeps the explicit fields of the source model's
+generation config and fills in the rest:
+`bos_token_id`, `eos_token_id` as the union of the tokenizer EOS id and the
+end-of-turn tokens the chat template emits (128001 and 128009 for the Llama 3
+header template), and `do_sample: true`, `temperature: 0.6`, `top_p: 0.95`.
+vLLM applies these sampling values to requests that omit them. SkyRL rollouts
+send explicit sampling parameters, and behavior-logprob training sets
+`generation_config: vllm` so the checkpoint's defaults never reach rollouts.
 
 The `best_checkpoint` callback accepts a `selection_metric` whose values must be
 finite normalized scores in [0, 1], with larger values preferred. Set

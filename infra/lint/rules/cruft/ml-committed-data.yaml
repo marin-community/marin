@@ -1,0 +1,23 @@
+schema_version: 1
+code: ml-committed-data
+lane: cruft
+title: Dataset, run output, or result dump committed to git
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Committed datasets, run outputs, and result dumps bloat
+  every clone and cannot be reviewed like code. The run that produced them is
+  usually gone, so nobody can regenerate or vouch for the bytes. Sharding a
+  dataset across files, or renaming a dump (`.json` to `.jsonl`, a version or
+  date suffix) does not change this.
+
+  **When allowed:** Small test fixtures a test reads, lockfiles, dashboards,
+  and config. Publish real data to object storage or a Hugging Face dataset
+  and commit a reference to it instead; the procedure is in
+  docs/dev-guide/large-data.md.
+
+  **Bad example:**
+  ```text
+  experiments/my-run/output/part-00000.json     # run output, 4 MB
+  experiments/my-run/output/part-00001.json     # shard 2 of the same dump
+  experiments/my-run/metrics_dump_v2.jsonl      # result dump, renamed
+  ```

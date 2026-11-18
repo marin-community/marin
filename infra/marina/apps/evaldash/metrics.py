@@ -3,9 +3,9 @@
 
 """Panel views over eval records, built on the shared statistics engine.
 
-Every score the dashboard shows is a :class:`~marin.evaluation.eval_stats.Measurement`: a value, the
+Every score the dashboard shows is a :class:`~evalrecords.eval_stats.Measurement`: a value, the
 items behind it, and an interval that widens when a run graded less than it attempted. This module
-turns records into measurements, answers a :class:`~marin.evaluation.eval_stats.SelectionRequest`
+turns records into measurements, answers a :class:`~evalrecords.eval_stats.SelectionRequest`
 with them, and shapes the result for the API -- the statistics and the selection rules live in the
 engine, which the eval runners share, so the dashboard and the producers cannot drift.
 
@@ -21,15 +21,15 @@ from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from marin.evaluation.eval_measurements import (
+from evalrecords.eval_measurements import (
     MetricRow,
     declared_metric_gap,
     declared_metric_rows,
     measurement_from_record,
     undeclared_metric_rows,
 )
-from marin.evaluation.eval_policy import POLICIES, record_policy_violations
-from marin.evaluation.eval_stats import (
+from evalrecords.eval_policy import POLICIES, record_policy_violations
+from evalrecords.eval_stats import (
     DEFAULT_EXCLUDE_FLAGS,
     DEFAULT_MIN_COVERAGE,
     Aggregate,
@@ -51,10 +51,10 @@ from marin.evaluation.eval_stats import (
     panel_aggregate,
     select,
 )
-from marin.evaluation.historical_protocols import comparison_column, compatible_selection, historical_selection
-from marin.evaluation.metric_selection import PUBLICATION_METRIC_POLICY
-from marin.evaluation.records import EvalRunRecord, RunStatus
-from marin.execution.step_status import STATUS_SUCCESS
+from evalrecords.historical_protocols import comparison_column, compatible_selection, historical_selection
+from evalrecords.metric_selection import PUBLICATION_METRIC_POLICY
+from evalrecords.records import EvalRunRecord, RunStatus
+from rigging.filesystem.step_status import STATUS_SUCCESS
 
 # Capped-instance launcher validation runs; kept out of the headline panel (they stay visible in the
 # runs list and history).

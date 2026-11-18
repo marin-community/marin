@@ -20,27 +20,8 @@ from datetime import UTC, datetime
 from functools import partial
 from urllib.parse import urlsplit
 
-from fray.current_client import current_client
-from fray.types import ResourceConfig
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
-from iris.client.client import IrisClient
-from iris.cluster.config import load_config
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.rpc import job_pb2
-from marin.evaluation.dataset_evaluator import DatasetEvaluator
-from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
-from marin.evaluation.eval_policy import RUNTIME_COMMITS, policy_violations, runtime_violations
-from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
-from marin.evaluation.harbor.driver_config import (
-    ValidatedHarborConfig,
-    harbor_runtime_descriptor,
-    preflight_harbor_configs,
-)
-from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
-from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform, supports_request_seed
-from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import (
+from evalrecords.eval_policy import RUNTIME_COMMITS, policy_violations, runtime_violations
+from evalrecords.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
     EvalRef,
@@ -52,6 +33,25 @@ from marin.evaluation.records import (
     list_records,
     scoring_settings,
 )
+from fray.current_client import current_client
+from fray.types import ResourceConfig
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
+from iris.client.client import IrisClient
+from iris.cluster.config import load_config
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.rpc import job_pb2
+from marin.evaluation.dataset_evaluator import DatasetEvaluator
+from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
+from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
+from marin.evaluation.harbor.driver_config import (
+    ValidatedHarborConfig,
+    harbor_runtime_descriptor,
+    preflight_harbor_configs,
+)
+from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
+from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform, supports_request_seed
+from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import (
     EndpointRoute,
     EvalExecutor,

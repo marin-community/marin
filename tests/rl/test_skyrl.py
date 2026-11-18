@@ -20,7 +20,7 @@ import yaml
 from marin.execution.artifact import Artifact, ArtifactRecord, FingerprintMismatchError, write_record
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, materialized_config
 from marin.execution.step_runner import StepRunner
-from marin.execution.step_status import STATUS_SUCCESS, StatusFile
+from marin.execution.step_status import StatusFile
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -42,6 +42,7 @@ from marin.rl.skyrl import (
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
+from rigging.filesystem.step_status import STATUS_SUCCESS
 from skyrlrecipe.locality import RoleTopologyMode
 
 

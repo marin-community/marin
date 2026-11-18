@@ -6,7 +6,7 @@
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 
-from marin.evaluation.records import BenchmarkMetricRef, MetricKind
+from evalrecords.records import BenchmarkMetricRef, MetricKind
 
 PUBLICATION_METRIC_POLICY = "marin-2026-10-16-v1"
 PUBLICATION_METRICS: Mapping[str, BenchmarkMetricRef] = MappingProxyType(

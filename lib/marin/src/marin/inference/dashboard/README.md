@@ -107,6 +107,22 @@ requests. The command that mints the URL prints its expiration time. Share chat
 links only with trusted users. The share operation grants the same access as the
 current dashboard URL; it does not narrow or revoke that access.
 
+## Report a poor response
+
+**Report issue** in Chat saves a private report about the active conversation
+to Marin storage. Describe what went wrong, optionally enter your name, and
+choose **Save report**. The browser remembers the name for later reports; the
+server does not verify it. The report contains the description, the name, the
+model and serving settings, and the saved
+conversation, including the system prompt, reasoning, tool calls, and tool
+configuration. Uncheck **Include the conversation** to leave the conversation
+out. The dialog then links to the stored JSON in Filer. Reports from CoreWeave
+workers go to `s3://marin-us-east-02a/marin/model-feedback/`, and reports from
+GCP workers go to `gs://marin-eval-metadata/model-feedback/`, one object per
+report under a `YYYY-MM-DD/` folder. The button appears only for
+`marin-serve iris` jobs. Each serving process accepts up to 256 reports of at
+most 1 MiB each.
+
 ## Custom Python tools
 
 Open **Python tools** above the Chat composer to define functions for the active

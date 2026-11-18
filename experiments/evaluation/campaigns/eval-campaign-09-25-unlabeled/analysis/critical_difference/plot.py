@@ -25,8 +25,8 @@ import matplotlib as mpl
 mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from evalrecords.lm_eval_samples import summarize_native_eval_samples
 from finestore.reader import ReadView
-from marin.evaluation.lm_eval_samples import summarize_native_eval_samples
 from rigging.filesystem.buckets import filesystem_for
 from scipy.stats import rankdata, studentized_range
 

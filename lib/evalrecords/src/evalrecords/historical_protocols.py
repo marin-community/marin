@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from marin.evaluation.records import EvalRunRecord, ResolvedEvaluationSelection
+from evalrecords.records import EvalRunRecord, ResolvedEvaluationSelection
 
 
 @dataclass(frozen=True)

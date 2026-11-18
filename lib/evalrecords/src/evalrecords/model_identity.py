@@ -6,7 +6,7 @@
 import hashlib
 import json
 
-from marin.evaluation.records import ModelConfigRef, ModelRef
+from evalrecords.records import ModelConfigRef, ModelRef
 
 
 def model_config_digest(config: ModelConfigRef) -> str:
