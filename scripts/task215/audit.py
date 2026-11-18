@@ -261,6 +261,7 @@ def main():
                             "repo_by_label": by_label,
                             "repo_by_trace": by_trace,
                             "n_commands": len(cmds),
+                            "git_history_commands": [c[:300] for c in cmds if GIT_HISTORY_READ.search(c)],
                             "hits": hits,
                             "source_flags": r.get("source_flags"),
                         }
