@@ -18,14 +18,17 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.grader_type import GraderType, derive_grader_type
 from taskcompendium.models import (
     AnswerType,
+    AssistantToolCalls,
     CommandSemantics,
     ConversationInput,
+    ConversationToolCall,
     EnvironmentRequirements,
     NoGrader,
     PlainText,
     Source,
     TaskSpec,
     TextMessage,
+    ToolResult,
 )
 
 IMAGE = "private/grader@sha256:" + "a" * 64
@@ -65,6 +68,46 @@ def test_reply_only_judged_source_derives_nonagentic_single_turn_llm_judge():
         workspace_graded=False,
         grader_type=GraderType.LLM_JUDGE,
     )
+
+
+@pytest.mark.parametrize(
+    ("events", "single_turn"),
+    [
+        (
+            (TextMessage(role="system", content="Follow instructions."), TextMessage(role="user", content="Answer.")),
+            True,
+        ),
+        (
+            (TextMessage(role="developer", content="Use a short reply."), TextMessage(role="user", content="Answer.")),
+            True,
+        ),
+        (
+            (TextMessage(role="user", content="Answer."), TextMessage(role="assistant", content="The answer is")),
+            True,
+        ),
+        (
+            (
+                TextMessage(role="user", content="Look this up."),
+                AssistantToolCalls(calls=(ConversationToolCall(call_id="lookup-1", name="lookup", arguments={}),)),
+                ToolResult(call_id="lookup-1", content="Found it."),
+            ),
+            False,
+        ),
+        (
+            (
+                TextMessage(role="user", content="First question."),
+                TextMessage(role="assistant", content="First answer."),
+                TextMessage(role="user", content="Second question."),
+            ),
+            False,
+        ),
+        ((TextMessage(role="system", content="Wait for a question."),), False),
+    ],
+    ids=("system", "developer", "prefill", "tool-history", "second-user-turn", "no-user-turn"),
+)
+def test_single_turn_counts_user_messages_without_tool_history(events, single_turn):
+    specification = task(JUDGE, context=ConversationInput(events=events))
+    assert derive_contract(specification).single_turn is single_turn
 
 
 def test_workspace_answer_delivery_is_not_reply_only():

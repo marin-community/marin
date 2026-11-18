@@ -18,9 +18,11 @@ from taskcompendium.execution_applicability import is_nonagentic_task
 from taskcompendium.grader_type import GraderType, JudgeDetails, derive_grader_type
 from taskcompendium.models import (
     AnswerType,
+    AssistantToolCalls,
     Grader,
     ScriptGrader,
     TaskSpec,
+    TextMessage,
     VerifyitGrader,
     judge_spec,
 )
@@ -61,9 +63,12 @@ def derive_contract(task: TaskSpec) -> DerivedContract:
     for rewritten sources the converter's delivery rewrite is what produced that shape, so the
     rewrite need not be re-recorded.
     """
+    events = task.context.events
+    single_turn = sum(1 for event in events if isinstance(event, TextMessage) and event.role == "user") == 1
+    single_turn = single_turn and not any(isinstance(event, AssistantToolCalls) for event in events)
     return DerivedContract(
         agentic=not is_nonagentic_task(task),
-        single_turn=len(task.context.events) == 1,
+        single_turn=single_turn,
         reply_only=task.answer_type in REPLY_ANSWER_TYPES,
         workspace_graded=is_workspace_graded(task.grader),
         grader_type=derive_grader_type(task.grader),
