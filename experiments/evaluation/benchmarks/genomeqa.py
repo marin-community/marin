@@ -30,80 +30,67 @@ from taskcompendium.importers.genomeqa import (
     read_genomeqa,
 )
 from taskcompendium.pipeline.inputs import SourceFormat
-from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.evaluation.benchmarks.environments import BASIC_GRADER
-from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.evaluation.preparation import EvaluationCorpusRecipe
+from experiments.evaluation.prompt_compilation import evaluation_source
+from experiments.post_training.task_curation.pipeline import HfSource, UrlSource
+from experiments.post_training.task_curation.source import RlDataSource
 
+VERSION = "2026.11.18"
 MAX_TOKENS = 16384
 
 
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
+    protocol = EvaluationProtocol(
+        benchmark="genomeqa",
+        version=VERSION,
+        operation=OperationKind.CHAT_GENERATION,
+        sampling=Sampling(
+            temperature=0.7,
+            top_p=0.95,
+            top_k=None,
+            stop=(),
+            max_tokens=MAX_TOKENS,
+            chat_template_kwargs={"enable_thinking": True},
+        ),
+        trials=TrialPolicy(count=1, seed=42),
+        metrics=(
+            Metric(name=MACRO_METRIC, kind=MetricKind.CONTINUOUS, higher_is_better=True),
+            Metrics.ACCURACY,
+            Metric(name="unanswered", kind=MetricKind.BINARY, higher_is_better=False),
+        ),
+        primary_metric=MACRO_METRIC,
+        summary=SummaryKind.WEIGHTED_MEAN,
+        expected_population=POPULATION,
+        context_policy=ContextPolicy(
+            output_fit=OutputFit.REQUIRE,
+            context_reserve=0,
+            output_budget=OutputBudget(minimum=MAX_TOKENS, reserve=0, multiplier=1),
+        ),
+    )
     return [
-        RlDataSource(
-            info=SourceInfo(
-                id="GenomeQA",
-                title="GenomeQA",
-                origin="GenomeQA",
-                family="generated-choice",
-                tags=("eval", "single-turn", "biology", "benchmark:GenomeQA"),
-                count=POPULATION,
+        evaluation_source(
+            name="genomeqa",
+            source=HfSource(
+                DATASET,
+                REVISION,
+                tuple(f"{answer_format}/train-00000-of-00001.parquet" for answer_format in FORMATS),
+                SourceFormat.PARQUET,
+                read=read_genomeqa,
             ),
-            config=EvaluationCorpusRecipe(
-                CurationRecipe(
-                    name="genomeqa",
-                    source=HfSource(
-                        DATASET,
-                        REVISION,
-                        tuple(f"{answer_format}/train-00000-of-00001.parquet" for answer_format in FORMATS),
-                        SourceFormat.PARQUET,
-                        read=read_genomeqa,
-                    ),
-                    convert=convert_genomeqa,
-                    version=scorer_revision("genomeqa"),
-                    intended_use=IntendedUse.EVAL,
-                    grader=BASIC_GRADER,
-                    inputs={
-                        "prompt": UrlSource(
-                            PROMPT_URL,
-                            "bc932144c20e02ccb18e4d8407f90814ca4f8fdc389d9309cd0cbc1525db58a3",
-                            PROMPT_FILENAME,
-                            SourceFormat.GENERATED,
-                        )
-                    },
-                ),
-                EvaluationProtocol(
-                    benchmark="GenomeQA",
-                    version="2026.11.10",
-                    operation=OperationKind.CHAT_GENERATION,
-                    sampling=Sampling(
-                        temperature=0.7,
-                        top_p=0.95,
-                        top_k=None,
-                        stop=(),
-                        max_tokens=MAX_TOKENS,
-                        chat_template_kwargs={"enable_thinking": True},
-                    ),
-                    trials=TrialPolicy(count=1, seed=42),
-                    metrics=(
-                        Metric(name=MACRO_METRIC, kind=MetricKind.CONTINUOUS, higher_is_better=True),
-                        Metrics.ACCURACY,
-                        Metric(name="unanswered", kind=MetricKind.BINARY, higher_is_better=False),
-                    ),
-                    primary_metric=MACRO_METRIC,
-                    summary=SummaryKind.WEIGHTED_MEAN,
-                    expected_population=POPULATION,
-                    context_policy=ContextPolicy(
-                        output_fit=OutputFit.REQUIRE,
-                        context_reserve=0,
-                        output_budget=OutputBudget(minimum=MAX_TOKENS, reserve=0, multiplier=1),
-                    ),
-                ),
-                genomeqa_item,
-                protocol_name="genomeqa",
-            ),
-            pipeline=prepare_evaluation,
+            convert=convert_genomeqa,
+            version=VERSION + "-" + scorer_revision("genomeqa"),
+            protocol=protocol,
+            item_builder=genomeqa_item,
+            grader=BASIC_GRADER,
+            inputs={
+                "prompt": UrlSource(
+                    PROMPT_URL,
+                    "bc932144c20e02ccb18e4d8407f90814ca4f8fdc389d9309cd0cbc1525db58a3",
+                    PROMPT_FILENAME,
+                    SourceFormat.GENERATED,
+                )
+            },
         )
     ]

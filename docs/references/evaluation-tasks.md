@@ -301,7 +301,7 @@ requires the recorded checkout.
 
 ## GenomeQA
 
-The `genomeqa` source publishes all 5,200 original questions from the pinned
+The `eval-genomeqa` curation source publishes all 5,200 original questions from the pinned
 `HuggingFaceBio/genomeqa` binary and MCQ files. Conversion checks file hashes,
 question identities, answers, and the twelve task-by-format populations. The
 system prompt is read as a literal from a separately downloaded, pinned upstream
