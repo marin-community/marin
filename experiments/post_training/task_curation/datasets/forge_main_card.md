@@ -1,5 +1,5 @@
 ---
-license: other
+license: openmdw-1.1
 pretty_name: Forge main split, 2026-11-17 (TaskCompendium)
 tags:
 - agentic
@@ -115,9 +115,9 @@ identity.
 
 ## License
 
-Synthetic tasks written by forge's agentic author. Licensing for an external release has not been
-determined; do not redistribute. The selection and conversion code is Apache-2.0, as with the rest of
-this repository.
+First-party Marin / Open Athena data: synthetic tasks written by forge's agentic author, released under
+the [OpenMDW License Agreement, version 1.1](LICENSE) for training and evaluation. The repository itself
+stays private until an explicit release.
 
 ## Contents
 
@@ -127,5 +127,7 @@ and `source.row` equal its `path`; `source.dataset` is `forge-task-records`, and
 SHA-256 of the task's exported forge record.
 
 Revision history: the first revision (`b1b06874…`) kept the ids and `source` fields each author wrote,
-which dropped the zero padding from slots and gave two pairs of distinct tasks the same id. This
-revision replaces only `id` and `source`; instructions, files, graders and machines are unchanged.
+which dropped the zero padding from slots and gave two pairs of distinct tasks the same id. The second
+(`5d18615f…`) replaced only `id` and `source`; instructions, files, graders and machines are unchanged.
+The third adds the OpenMDW 1.1 license and omits the optional `integrity_contract` field when it is
+unset, so rows also load with TaskCompendium versions that predate it.
