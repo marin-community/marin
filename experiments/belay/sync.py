@@ -108,10 +108,13 @@ def iris_runs() -> dict[str, IrisRun]:
     return runs
 
 
-def light_sync() -> dict:
+def light_sync(reap: bool) -> dict:
     """The dispatch watch's minute check: report each run the page still shows live that Iris shows ended (which
     queues its run_finished event), then return what dispatch needs: the queued event ids, whether a session is
-    running, and whether dispatch is on. Iris only: no W&B, storage, registry or GitHub, which the full sync does."""
+    running, and whether dispatch is on. Iris only: no W&B, storage, registry or GitHub, which the full sync does.
+    ``reap`` (the caller found no live Belay session in Loom) first marks any session the page shows running as lost,
+    queueing its events again."""
+    reaped = call("agent/sessions/reap", {})["lost"] if reap else []
     state = call("agent/state")
     live = {r["name"] for r in state["runs"] if r["state"] not in TERMINAL_RUN_STATES}
     ended = []
@@ -126,6 +129,7 @@ def light_sync() -> dict:
         call("agent/sync/runs", {"runs": ended})
         state = call("agent/state")
     return {
+        "reaped": reaped,
         "ended": [r["name"] for r in ended],
         "queued_event_ids": [e["id"] for e in state["queued"]],
         "session_active": any(s["state"] == "running" for s in state["sessions"]),

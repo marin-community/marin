@@ -2353,6 +2353,11 @@ def main(argv: list[str]) -> None:
         action="store_true",
         help="the dispatch watch's minute check: report ended runs from Iris only, print the queue as JSON",
     )
+    p.add_argument(
+        "--reap",
+        action="store_true",
+        help="with --light: Loom has no live Belay session, so mark any session the page shows running as lost",
+    )
     command("claim")
     p = command("finish")
     p.add_argument("--session", required=True, help="the session id claim printed")
@@ -2458,7 +2463,7 @@ def main(argv: list[str]) -> None:
         today = args.today
 
     if args.command == "sync" and args.light:
-        print(json.dumps(light_sync()))
+        print(json.dumps(light_sync(reap=args.reap)))
     elif args.command == "sync":
         sync()
     elif args.command == "claim":
