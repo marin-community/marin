@@ -70,7 +70,9 @@ def main() -> None:
             if stored["complete"] is not True or job["source"] != source:
                 raise ValueError(f"Scripted receipt mismatch in {shard}")
             kept_lengths.extend(int(length) for length in stored["lengths"])
-            covered_rows += job["row_stop"] - job["row_start"]
+            # Some scripted plans carried explicit row ranges; the v4
+            # remainder jobs covered each part fully without them.
+            covered_rows += job.get("row_stop", job["expected_rows"]) - job.get("row_start", 0)
             covered_jobs += 1
             for line in (StoragePath(shard) / "decisions.jsonl").read_text().splitlines():
                 record = json.loads(line)
