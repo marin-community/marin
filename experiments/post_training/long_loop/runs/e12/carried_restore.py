@@ -182,6 +182,10 @@ def _device_moment_stats(source, converted):
     )
 
 
+def _has_nonfinite(value):
+    return jnp.any(~jnp.isfinite(value))
+
+
 def _audit_moment_cast(path, source, converted):
     """Gate on globally reduced lost values, retaining exact per-slice count sums on host."""
     if source.ndim and math.prod(source.shape[1:]) >= (1 << 31):
@@ -250,7 +254,7 @@ def _restore_one_leaf_at_a_time(target, checkpoint, *, mesh):
                 if not isinstance(value.sharding, jax.sharding.NamedSharding):
                     raise ValueError(f"moment source requires NamedSharding: {key}")
                 replicated = jax.sharding.NamedSharding(value.sharding.mesh, jax.sharding.PartitionSpec())
-                nonfinite = jax.jit(lambda x: jnp.any(~jnp.isfinite(x)), out_shardings=replicated)(value)
+                nonfinite = jax.jit(_has_nonfinite, out_shardings=replicated)(value)
                 if bool(jax.device_get(nonfinite)):
                     raise ValueError(f"nonfinite FP32 moment in {key}")
                 logger.info(

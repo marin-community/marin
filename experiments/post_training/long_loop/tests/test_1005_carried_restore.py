@@ -258,3 +258,16 @@ def test_host_reference_and_device_audit_agree(cpu_mesh, caplog):
         carried_restore._audit_moment_cast_reference("opt_state/adam/nu/weight", source, converted, chunk_elements=2)
         carried_restore._audit_moment_cast("opt_state/adam/nu/weight", source, converted)
     assert caplog.text.count("nonzero=3 nonzero_to_zero=0") == len(jax.devices()) + 1
+    stats = jax.device_get(carried_restore._device_moment_stats(source, converted))
+    actual_min = float(np.asarray(stats[6], dtype=np.uint32).view(np.float32))
+    expected_min = float(np.min(np.abs(np.asarray(source))[np.asarray(source) != 0]))
+    expected_max = float(
+        np.max(
+            np.abs(np.asarray(converted, dtype=np.float64) - np.asarray(source, dtype=np.float64))[
+                np.asarray(source) != 0
+            ]
+            / np.abs(np.asarray(source, dtype=np.float64))[np.asarray(source) != 0]
+        )
+    )
+    assert actual_min == expected_min
+    np.testing.assert_allclose(float(stats[7]), expected_max, rtol=1e-6)
