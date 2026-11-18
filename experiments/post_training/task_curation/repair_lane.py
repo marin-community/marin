@@ -927,30 +927,34 @@ def convert_cohort(
     return manifest
 
 
+_LOCAL_TOOLING_PACKAGES = (
+    ("bwrap", "bubblewrap"),
+    ("umoci", "umoci"),
+    ("skopeo", "skopeo"),
+    ("mkfs.ext4", "e2fsprogs"),
+    ("losetup", "util-linux"),
+    ("findmnt", "util-linux"),
+)
+
+
 def install_local_sandbox_tooling() -> None:
-    """Ensure the LOCAL route's sandbox tooling (bubblewrap, umoci, skopeo) is present."""
-    if all(shutil.which(tool) for tool in ("bwrap", "umoci", "skopeo")):
+    """Ensure the LOCAL route's sandbox and disk tooling is present, installing only what is missing.
+
+    The disk pool verifies mkfs.ext4, mount, umount, losetup and findmnt beside the sandbox
+    programs; the Iris task image ships some but not all of them.
+    """
+    missing = sorted({package for program, package in _LOCAL_TOOLING_PACKAGES if shutil.which(program) is None})
+    if not missing:
         return
     os.environ["DEBIAN_FRONTEND"] = "noninteractive"
     os.environ["PATH"] = "/usr/sbin:/sbin:" + os.environ["PATH"]
     subprocess.run(["apt-get", "update"], check=True)
-    subprocess.run(
-        [
-            "apt-get",
-            "install",
-            "-y",
-            "--no-install-recommends",
-            "bubblewrap",
-            "e2fsprogs",
-            "util-linux",
-            "umoci",
-            "skopeo",
-        ],
-        check=True,
-    )
+    subprocess.run(["apt-get", "install", "-y", "--no-install-recommends", *missing], check=True)
 
 
-def campaign_worker_limits(root: Path, *, cgroup_root: Path | None = None, membership_file: Path | None = None) -> dict:
+def campaign_worker_limits(
+    root: Path, *, cgroup_root: Path | None = None, membership_file: Path | None = None, device_root: Path | None = None
+) -> dict:
     """Delegate CPU and memory for the campaign's LOCAL machines on a qualified Iris CPU worker.
 
     The tracked oracle campaigns ran ``--environment local`` with the worker's own containerd
@@ -961,6 +965,13 @@ def campaign_worker_limits(root: Path, *, cgroup_root: Path | None = None, membe
     emptied of internal processes and have its CPU and memory subtree controllers enabled
     before machines can carry limits.
     """
+    devices = device_root or Path("/dev")
+    if not (devices / "loop-control").exists():
+        raise RuntimeError(
+            "The LOCAL route requires a privileged worker with loop devices "
+            "(submit with --container-profile container_profile_privileged); "
+            "/dev/loop-control is absent"
+        )
     cgroup = cgroup_root or CGROUP_ROOT
     root.mkdir(parents=True, exist_ok=True)
     membership = next(

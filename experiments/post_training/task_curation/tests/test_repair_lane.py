@@ -1402,6 +1402,14 @@ def test_oracle_campaign_publishes_collect_artifacts_to_the_receipt_uri(tmp_path
         assert (tmp_path / name).exists()
 
 
+def _campaign_devices(tmp_path):
+    """A device root carrying the loop-control node the LOCAL route requires."""
+    devices = tmp_path / "dev"
+    devices.mkdir(exist_ok=True)
+    (devices / "loop-control").write_text("")
+    return devices
+
+
 class TestCampaignWorkerLimits:
     """The LOCAL route's delegated cgroup resolves under both worker layouts."""
 
@@ -1425,7 +1433,12 @@ class TestCampaignWorkerLimits:
         membership = self._cgroup_tree(cgroup_root, "")
         worker_root = tmp_path / "worker"
         worker_root.mkdir()
-        kwargs = lane.campaign_worker_limits(worker_root, cgroup_root=cgroup_root, membership_file=membership)
+        kwargs = lane.campaign_worker_limits(
+            worker_root,
+            cgroup_root=cgroup_root,
+            membership_file=membership,
+            device_root=_campaign_devices(tmp_path),
+        )
         assert kwargs["cgroup_parent"] == str(cgroup_root)
         assert kwargs["disk_root"] == str(worker_root / "sandbox-disks")
         assert (cgroup_root / "atlas-repair-campaign-driver").is_dir()
@@ -1438,7 +1451,12 @@ class TestCampaignWorkerLimits:
         membership = self._cgroup_tree(scope, "kubepods.slice/cri-containerd-abc123.scope")
         worker_root = tmp_path / "worker"
         worker_root.mkdir()
-        kwargs = lane.campaign_worker_limits(worker_root, cgroup_root=cgroup_root, membership_file=membership)
+        kwargs = lane.campaign_worker_limits(
+            worker_root,
+            cgroup_root=cgroup_root,
+            membership_file=membership,
+            device_root=_campaign_devices(tmp_path),
+        )
         assert kwargs["cgroup_parent"] == str(scope)
         assert (scope / "cgroup.subtree_control").read_text().strip() == "+cpu +memory"
 
@@ -1449,7 +1467,12 @@ class TestCampaignWorkerLimits:
         worker_root = tmp_path / "worker"
         worker_root.mkdir()
         with pytest.raises(RuntimeError, match="retains internal processes"):
-            lane.campaign_worker_limits(worker_root, cgroup_root=cgroup_root, membership_file=membership)
+            lane.campaign_worker_limits(
+                worker_root,
+                cgroup_root=cgroup_root,
+                membership_file=membership,
+                device_root=_campaign_devices(tmp_path),
+            )
         driver = cgroup_root / "atlas-repair-campaign-driver"
         assert (driver / "cgroup.procs").read_text().strip() == "4321"
         assert (cgroup_root / "cgroup.subtree_control").read_text().strip() == ""
@@ -1461,7 +1484,12 @@ class TestCampaignWorkerLimits:
         worker_root = tmp_path / "worker"
         worker_root.mkdir()
         with pytest.raises(RuntimeError, match="Refuse cgroup delegation"):
-            lane.campaign_worker_limits(worker_root, cgroup_root=cgroup_root, membership_file=membership)
+            lane.campaign_worker_limits(
+                worker_root,
+                cgroup_root=cgroup_root,
+                membership_file=membership,
+                device_root=_campaign_devices(tmp_path),
+            )
 
     def test_refuses_a_worker_without_a_cpu_memory_domain(self, tmp_path):
         cgroup_root = tmp_path / "sys" / "fs" / "cgroup"
@@ -1470,7 +1498,12 @@ class TestCampaignWorkerLimits:
         worker_root = tmp_path / "worker"
         worker_root.mkdir()
         with pytest.raises(RuntimeError, match="no CPU/memory cgroup v2 domain"):
-            lane.campaign_worker_limits(worker_root, cgroup_root=cgroup_root, membership_file=membership)
+            lane.campaign_worker_limits(
+                worker_root,
+                cgroup_root=cgroup_root,
+                membership_file=membership,
+                device_root=_campaign_devices(tmp_path),
+            )
 
 
 def test_campaign_worker_limits_creates_a_fresh_worker_root(tmp_path):
@@ -1478,6 +1511,47 @@ def test_campaign_worker_limits_creates_a_fresh_worker_root(tmp_path):
     cgroup_root = tmp_path / "sys" / "fs" / "cgroup"
     membership = TestCampaignWorkerLimits._cgroup_tree(cgroup_root, "")
     worker_root = tmp_path / "worker" / "fresh" / "nested"
-    kwargs = lane.campaign_worker_limits(worker_root, cgroup_root=cgroup_root, membership_file=membership)
+    kwargs = lane.campaign_worker_limits(
+        worker_root,
+        cgroup_root=cgroup_root,
+        membership_file=membership,
+        device_root=_campaign_devices(tmp_path),
+    )
     assert (worker_root / "worker-cgroup.json").is_file()
     assert kwargs["disk_root"] == str(worker_root / "sandbox-disks")
+
+
+def test_campaign_worker_limits_fails_fast_without_loop_control(tmp_path):
+    """A default-profile worker (no /dev/loop-control) cannot run the LOCAL route."""
+    cgroup_root = tmp_path / "sys" / "fs" / "cgroup"
+    membership = TestCampaignWorkerLimits._cgroup_tree(cgroup_root, "")
+    worker_root = tmp_path / "worker"
+    worker_root.mkdir()
+    devices = tmp_path / "dev"
+    devices.mkdir()
+    with pytest.raises(RuntimeError, match="container_profile_privileged"):
+        lane.campaign_worker_limits(
+            worker_root, cgroup_root=cgroup_root, membership_file=membership, device_root=devices
+        )
+
+
+def test_install_local_sandbox_tooling_installs_only_missing_packages(monkeypatch):
+    """The image ships some disk/sandbox programs; apt installs only their missing packages."""
+    installed = []
+    monkeypatch.setattr(
+        lane.shutil,
+        "which",
+        lambda program: "/usr/bin/bwrap" if program == "bwrap" else None,
+    )
+    monkeypatch.setattr(lane.subprocess, "run", lambda argv, **kwargs: installed.append(argv) or None)
+    lane.install_local_sandbox_tooling()
+    assert [argv[0] for argv in installed] == ["apt-get", "apt-get"]
+    assert sorted(installed[1][4:]) == ["e2fsprogs", "skopeo", "umoci", "util-linux"]
+
+
+def test_install_local_sandbox_tooling_skips_when_complete(monkeypatch):
+    installed = []
+    monkeypatch.setattr(lane.shutil, "which", lambda program: "/usr/bin/tool")
+    monkeypatch.setattr(lane.subprocess, "run", lambda argv, **kwargs: installed.append(argv) or None)
+    lane.install_local_sandbox_tooling()
+    assert not installed
