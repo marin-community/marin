@@ -23,6 +23,9 @@ app without a redirect; pages redirect to ``marina.oa.dev/echo/`` or
 holds the named apps. ``applets.marina.oa.dev`` maps to the service but the kernel
 exposes only dynamic applet routes on that host.
 ``public.applets.marina.oa.dev`` maps to the unauthenticated public applet reader.
+Hosts in ``applet_domains`` map to the authenticated service; hosts in
+``public_applet_domains`` map to the public reader, which serves a bound app only while
+its stored mode is public.
 """
 
 from pathlib import Path
@@ -123,6 +126,13 @@ def job_template(
     )
 
 
+def host_list(config: pulumi.Config, key: str) -> list[str]:
+    hosts = config.get_object(key) or []
+    if not isinstance(hosts, list) or not all(isinstance(host, str) for host in hosts):
+        raise ValueError(f"marin-marina:{key} must be a list of host names")
+    return [normalize_hostname(host) for host in hosts]
+
+
 def main() -> None:
     if pulumi.get_stack() == "marin-marina" and not pulumi.runtime.is_dry_run():
         require_current_main(Path(__file__).resolve().parents[2])
@@ -130,10 +140,10 @@ def main() -> None:
     applet_operators = config.get_object("applet_operators") or []
     if not isinstance(applet_operators, list) or not all(isinstance(item, str) for item in applet_operators):
         raise ValueError("marin-marina:applet_operators must be a list of user IDs")
-    applet_domains = config.get_object("applet_domains") or []
-    if not isinstance(applet_domains, list) or not all(isinstance(host, str) for host in applet_domains):
-        raise ValueError("marin-marina:applet_domains must be a list of host names")
-    applet_domains = [normalize_hostname(host) for host in applet_domains]
+    applet_domains = host_list(config, "applet_domains")
+    public_applet_domains = host_list(config, "public_applet_domains")
+    if overlap := set(applet_domains) & set(public_applet_domains):
+        raise ValueError(f"applet hosts {sorted(overlap)} are in both applet_domains and public_applet_domains")
     gcp_provider = gcp.Provider("gcp", project=PROJECT)
     child = pulumi.ResourceOptions(provider=gcp_provider)
 
@@ -278,7 +288,8 @@ def main() -> None:
                 "MARINA_APPLET_ORIGIN": f"https://{APPLET_HOST}",
                 "MARINA_PUBLIC_APPLET_ORIGIN": f"https://{PUBLIC_APPLET_HOST}",
                 "MARINA_APPLET_OPERATORS": ",".join(applet_operators),
-                "MARINA_APPLET_DOMAINS": ",".join(applet_domains),
+                # Public hosts are listed too so operators can bind them through this service.
+                "MARINA_APPLET_DOMAINS": ",".join(applet_domains + public_applet_domains),
                 "MARINA_AGENT_ORIGIN": "https://loom.oa.dev",
                 **DATABASE_ENV,
                 **runner_env,
@@ -339,6 +350,7 @@ def main() -> None:
                             "MARINA_DATA_ROOT": f"gs://{DATA_BUCKET}",
                             "MARINA_PUBLIC_APPLET_ORIGIN": f"https://{PUBLIC_APPLET_HOST}",
                             "MARINA_SURFACE": "public_applets",
+                            "MARINA_APPLET_DOMAINS": ",".join(public_applet_domains),
                             **DATABASE_ENV,
                         }.items()
                     ]
@@ -377,7 +389,9 @@ def main() -> None:
     # Vanity hosts: a Cloud Run domain mapping per host routes it to the service and provisions
     # the managed cert; a DNS-only Cloudflare CNAME points the host at Cloud Run's frontend
     # (a Cloudflare proxy would block cert issuance). Mappings are immutable and carry
-    # server-set metadata, so those fields are ignored. Set marin-marina:dns_zone_id to enable.
+    # server-set metadata, so those fields are ignored. Because the route is ignored too, moving a
+    # host between applet_domains and public_applet_domains needs two deploys: remove, then re-add.
+    # Set marin-marina:dns_zone_id to enable.
     dns_zone_id = config.get("dns_zone_id")
     if dns_zone_id:
         hosts = {
@@ -386,6 +400,7 @@ def main() -> None:
             PUBLIC_APPLET_HOST: (PUBLIC_APPLET_SERVICE, public_applet_service),
             **{host: (SERVICE, service) for host in HOST_APPS},
             **{host: (SERVICE, service) for host in applet_domains},
+            **{host: (PUBLIC_APPLET_SERVICE, public_applet_service) for host in public_applet_domains},
         }
         for host, (route_name, route_service) in hosts.items():
             slug = host.split(".")[0]
