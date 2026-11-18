@@ -3,14 +3,18 @@
 
 """Behavior tests for the repair-candidate lane: matching, comparative review, decisions."""
 
+import io
 import json
+import tarfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import cast
 
 import pytest
 from finestore.rl.licenses import LicenseDecision, LicenseDecisionKind, LicenseReceipt
 from marin.inference.openai_chat import OpenAIChatClient
+from taskcompendium.convert.answers import unsupported
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -21,6 +25,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import Confidence, Defect, Quality, ReferenceStatus, ReviewStatus
 from taskcompendium.pipeline.repair import (
     CandidateDropAdvisory,
@@ -34,7 +39,13 @@ from taskcompendium.pipeline.repair import (
 )
 
 from experiments.post_training.task_curation import repair_lane as lane
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    archive_files,
+    unpack_task_binary,
+)
 from experiments.post_training.task_curation.full_qc import ReviewerVersion, local_reviewer
+from experiments.post_training.task_curation.pipeline import CurationRecipe, IntendedUse
 from experiments.post_training.task_curation.repair_lane import matched_pairs
 from experiments.post_training.task_curation.repair_match import (
     CONFLICT_THRESHOLD,
@@ -434,6 +445,174 @@ class TestLicenseGate:
         monkeypatch.setattr(lane, "read_license_receipts", lambda index: {receipt.source_id: receipt})
         bound = lane.folder_license_gate("FWeindel/validated-tasks", ("nl2bash_v2",))
         assert bound["FWeindel:validated-tasks/nl2bash_v2"] is receipt
+
+
+class TestCohortConversion:
+    """The merge stage's first step: winners converted through the tracked source's own converter."""
+
+    @staticmethod
+    def _report() -> dict:
+        return {
+            "candidate_source_id": CANDIDATE_SOURCE,
+            "candidate_revision": "eafe9b38",
+            "decisions": {
+                "pairs": [
+                    {
+                        "candidate_task_id": f"{CANDIDATE_SOURCE}:task_{index}",
+                        "tracked_task_id": f"tracked-{index}",
+                        "decision": "ACCEPTED",
+                    }
+                    for index in range(3)
+                ]
+            },
+        }
+
+    @staticmethod
+    def _recipe(monkeypatch, tmp_path):
+        def convert(row, context):
+            files = archive_files(row.data)
+            if files.text("instruction.md") == "reject me":
+                return unsupported("reviewed_defect", "fixture rejection")
+            return spec(f"converted-{row.data['path']}", files.text("instruction.md"))
+
+        return CurationRecipe(
+            name="tasktrove-fixture",
+            source=SourceFiles(
+                dataset="fixture",
+                revision="r1",
+                patterns=("x/tasks.parquet",),
+                format=SourceFormat.PARQUET,
+                decode=unpack_task_binary,
+            ),
+            convert=convert,
+            version="1",
+            intended_use=IntendedUse.TRAIN,
+            grader=GRADER_PACKAGES,
+        )
+
+    def test_converts_accepted_winners_and_skips_the_rest(self, monkeypatch, tmp_path):
+
+        monkeypatch.setattr(
+            lane,
+            "configured_sources",
+            lambda: [
+                type(
+                    "S",
+                    (),
+                    {"info": type("I", (), {"id": TRACKED_SOURCE})(), "config": self._recipe(monkeypatch, tmp_path)},
+                )()
+            ],
+        )
+        monkeypatch.setattr(
+            lane,
+            "load_folder_rows",
+            lambda repo, folders, revision=None: [
+                {"path": "task_0", "task_binary": _fixture_binary("keep me")},
+                {"path": "task_1", "task_binary": _fixture_binary("keep me too")},
+                {"path": "task_2", "task_binary": _fixture_binary("reject me")},
+            ],
+        )
+        monkeypatch.setattr(lane, "require_unbanned", lambda *a, **k: None)
+        output_root = str(tmp_path / "cohort")
+        manifest = lane.convert_cohort(
+            tracked_source_id=TRACKED_SOURCE,
+            report=self._report(),
+            folders=("fixture_v1",),
+            repo="fixture/validated-tasks",
+            candidate_revision="eafe9b38",
+            output_root=output_root,
+        )
+        assert manifest["counts"] == {"converted": 2, "rejected": 1}
+        entries = [json.loads(line) for line in (Path(output_root) / "task-map.jsonl").read_text().splitlines()]
+        assert [(entry["status"], entry["tracked_task_id"]) for entry in entries] == [
+            ("converted", "tracked-0"),
+            ("converted", "tracked-1"),
+            ("rejected", "tracked-2"),
+        ]
+        shards = sorted((Path(output_root) / "converted-pending").glob("*.parquet"))
+        assert len(shards) == 1
+
+    def test_rerun_resumes_from_the_task_map(self, monkeypatch, tmp_path):
+
+        recipe = self._recipe(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            lane,
+            "configured_sources",
+            lambda: [type("S", (), {"info": type("I", (), {"id": TRACKED_SOURCE})(), "config": recipe})()],
+        )
+        calls = []
+
+        def counting_rows(repo, folders, revision=None):
+            calls.append(1)
+            return [{"path": "task_0", "task_binary": _fixture_binary("keep me")}]
+
+        monkeypatch.setattr(lane, "load_folder_rows", counting_rows)
+        monkeypatch.setattr(lane, "require_unbanned", lambda *a, **k: None)
+        output_root = str(tmp_path / "cohort")
+        report = {
+            "candidate_source_id": CANDIDATE_SOURCE,
+            "candidate_revision": "eafe9b38",
+            "decisions": {
+                "pairs": [
+                    {
+                        "candidate_task_id": f"{CANDIDATE_SOURCE}:task_0",
+                        "tracked_task_id": "tracked-0",
+                        "decision": "ACCEPTED",
+                    }
+                ]
+            },
+        }
+        lane.convert_cohort(
+            tracked_source_id=TRACKED_SOURCE,
+            report=report,
+            folders=("fixture_v1",),
+            repo="fixture/validated-tasks",
+            candidate_revision="eafe9b38",
+            output_root=output_root,
+        )
+        manifest = lane.convert_cohort(
+            tracked_source_id=TRACKED_SOURCE,
+            report=report,
+            folders=("fixture_v1",),
+            repo="fixture/validated-tasks",
+            candidate_revision="eafe9b38",
+            output_root=output_root,
+        )
+        assert manifest["counts"] == {"already_done": 1}
+
+    def test_missing_winner_row_fails_loudly(self, monkeypatch, tmp_path):
+
+        monkeypatch.setattr(
+            lane,
+            "configured_sources",
+            lambda: [
+                type(
+                    "S",
+                    (),
+                    {"info": type("I", (), {"id": TRACKED_SOURCE})(), "config": self._recipe(monkeypatch, tmp_path)},
+                )()
+            ],
+        )
+        monkeypatch.setattr(lane, "load_folder_rows", lambda repo, folders, revision=None: [])
+        with pytest.raises(ValueError, match="missing from the candidate folders"):
+            lane.convert_cohort(
+                tracked_source_id=TRACKED_SOURCE,
+                report=self._report(),
+                folders=("fixture_v1",),
+                repo="fixture/validated-tasks",
+                candidate_revision="eafe9b38",
+                output_root=str(tmp_path / "cohort"),
+            )
+
+
+def _fixture_binary(instruction: str) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, data in (("instruction.md", instruction.encode()), ("task.toml", b"")):
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    return buffer.getvalue()
 
 
 class TestRepairDecision:

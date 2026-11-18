@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.licenses import LicenseReceipt
 from marin.inference import iris as iris_inference
@@ -30,16 +31,21 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256, task_identity
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.models import ImportRejection, ReviewStatus
+from taskcompendium.pipeline.conversion import row_source, row_task_id
+from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, RawRow, ReviewStatus
 from taskcompendium.pipeline.repair import ComparativeOutcome, RepairMatchClass
 
 from experiments.post_training.task_curation.full_qc import LONG_REQUEST_TIMEOUT, ReviewerVersion, local_reviewer
+from experiments.post_training.task_curation.images.build import EnvironmentArtifact, identity_digest
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
+from experiments.post_training.task_curation.pipeline import environment_requirements, planned_lock_url
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.repair_candidates import (
     CANDIDATE_REPO,
     load_candidate_population,
+    load_folder_rows,
     preview_task,
 )
 from experiments.post_training.task_curation.repair_match import (
@@ -52,6 +58,7 @@ from experiments.post_training.task_curation.repair_review import (
     ComparativePair,
     ComparativePairReviewer,
 )
+from experiments.post_training.task_curation.sources import configured_sources
 from experiments.post_training.task_curation.task_neighbors import PopulationIndex, TaskContent, content_rows
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
@@ -569,6 +576,152 @@ def decision_summary(decisions: list[dict[str, Any]]) -> dict[str, Any]:
     return {"decisions": dict(counts), "failure_reasons": dict(reasons)}
 
 
+COHORT_SPEC_SCHEMA = pa.schema(
+    [
+        ("winner_candidate_task_id", pa.string()),
+        ("tracked_task_id", pa.string()),
+        ("task_id", pa.string()),
+        ("task_spec", pa.large_string()),
+    ]
+)
+
+
+def accepted_winners(report: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """The ACCEPTED pairs of a sealed review report, in report order."""
+    return [pair for pair in report["decisions"]["pairs"] if pair["decision"] == "ACCEPTED"]
+
+
+def winner_paths(winners: list[Mapping[str, Any]]) -> list[str]:
+    """Each winner's archive path: the candidate task ID's final segment."""
+    return [str(pair["candidate_task_id"]).rsplit(":", 1)[-1] for pair in winners]
+
+
+def cohort_conversion_context(recipe) -> ConversionContext:
+    """The production conversion context: the recipe's own grader environment binding.
+
+    The binding is the artifact the tracked source's own admission built — the deterministic
+    environment-artifact lock under the active prefix — so the winners' graders run under
+    exactly the environment their tracked counterparts ran under.
+    """
+    built = EnvironmentArtifact(
+        path=str(StoragePath(planned_lock_url(recipe.grader)).parent),
+        identity=identity_digest(recipe.grader),
+    )
+    return ConversionContext({}, environment_requirements(recipe.grader, built))
+
+
+def convert_cohort(
+    *,
+    tracked_source_id: str,
+    report: Mapping[str, Any],
+    folders: tuple[str, ...],
+    repo: str,
+    candidate_revision: str,
+    output_root: str,
+    shard_size: int = 256,
+) -> dict[str, Any]:
+    """Convert the report's ACCEPTED winners through the tracked source's own converter.
+
+    Crash-safe: converted winners are recorded in ``task-map.jsonl`` as they finish and are
+    skipped on rerun; specs land in resumable parquet shards; the manifest summarizes. A
+    rejected winner keeps its original tracked task and is recorded with its rejection.
+    """
+    recipes = {source.info.id: source.config for source in configured_sources()}
+    recipe = recipes.get(tracked_source_id)
+    if recipe is None:
+        raise ValueError(f"No configured source recipe for {tracked_source_id}")
+    context = cohort_conversion_context(recipe)
+    winners = accepted_winners(report)
+    paths = set(winner_paths(winners))
+    rows = {}
+    for row in load_folder_rows(repo, folders, revision=candidate_revision):
+        if row.get("path") in paths:
+            rows[row["path"]] = row
+    missing = paths - set(rows)
+    if missing:
+        raise ValueError(f"Winners missing from the candidate folders: {sorted(missing)[:3]}")
+
+    root = StoragePath(output_root)
+    done: dict[str, dict[str, Any]] = {}
+    map_path = root / "task-map.jsonl"
+    if map_path.exists():
+        for line in map_path.read_text().splitlines():
+            if line.strip():
+                entry = json.loads(line)
+                done[entry["candidate_task_id"]] = entry
+    buffer: list[tuple[str, dict[str, Any], TaskSpec]] = []
+    counts = Counter()
+    for winner in winners:
+        candidate_id = winner["candidate_task_id"]
+        if candidate_id in done:
+            counts["already_done"] += 1
+            continue
+        path = winner_paths([winner])[0]
+        locator = f"{candidate_revision}:{path}"
+        source = row_source(recipe, locator)
+        decoded = recipe.source.decode(rows[path], context) if recipe.source.decode is not None else rows[path]
+        row = RawRow(row_task_id(recipe, source), source, decoded)
+        converted = recipe.convert(row, context)
+        task = converted.task if isinstance(converted, NormalizedTask) else converted
+        entry = {
+            "candidate_task_id": candidate_id,
+            "tracked_task_id": winner["tracked_task_id"],
+            "converted_task_id": task.id if not isinstance(task, ImportRejection) else None,
+            "status": "converted" if not isinstance(task, ImportRejection) else "rejected",
+            "rejection": None if not isinstance(task, ImportRejection) else task.model_dump(mode="json"),
+        }
+        done[candidate_id] = entry
+        with (root / "task-map.jsonl").open("a", auto_mkdir=True) as stream:
+            stream.write(json.dumps(entry) + "\n")
+        if not isinstance(task, ImportRejection):
+            buffer.append((candidate_id, entry, task))
+            counts["converted"] += 1
+        else:
+            counts["rejected"] += 1
+    if buffer:
+        pending_dir = root / "converted-pending"
+        pending_dir.mkdirs()
+        existing = {p.name for p in pending_dir.ls()} if pending_dir.exists() else set()
+        index = 0
+        while f"specs-part-{index:06d}.parquet" in existing:
+            index += 1
+        for start in range(0, len(buffer), shard_size):
+            shard = buffer[start : start + shard_size]
+            table = pa.Table.from_pylist(
+                [
+                    {
+                        "winner_candidate_task_id": candidate_id,
+                        "tracked_task_id": entry["tracked_task_id"],
+                        "task_id": task.id,
+                        "task_spec": task.model_dump_json(exclude={"id", "source"}),
+                    }
+                    for candidate_id, entry, task in shard
+                ],
+                schema=COHORT_SPEC_SCHEMA,
+            )
+            name = f"specs-part-{index:06d}.parquet"
+            with tempfile.TemporaryDirectory() as scratch:
+                local = Path(scratch) / name
+                with pq.ParquetWriter(local, COHORT_SPEC_SCHEMA) as writer:
+                    writer.write_table(table)
+                with (pending_dir / name).open("wb", auto_mkdir=True) as stream:
+                    stream.write(local.read_bytes())
+            index += 1
+    manifest = {
+        "tracked_source_id": tracked_source_id,
+        "candidate_source_id": report["candidate_source_id"],
+        "candidate_revision": report["candidate_revision"],
+        "winners": len(winners),
+        "counts": dict(counts),
+        "recipe": {"name": recipe.name, "version": recipe.version},
+        "grader_environment": context.grader_environment.model_dump(mode="json"),
+    }
+    manifest_path = root / "manifest.json"
+    if not manifest_path.exists():
+        manifest_path.write_bytes((json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())
+    return manifest
+
+
 def write_report(report: DryRunReport, output_uri: str) -> None:
     payload = (report.model_dump_json(indent=2) + "\n").encode()
     path = StoragePath(output_uri)
@@ -600,10 +753,31 @@ def main() -> None:
     parser.add_argument(
         "--serving-cluster", default="", help="Recorded in the report; the cluster the serving job targets"
     )
+    parser.add_argument(
+        "--cohort-report",
+        help="Sealed review report URI; set with --cohort-output-root to run the winner-conversion stage",
+    )
+    parser.add_argument(
+        "--cohort-output-root", help="Output root for the winner cohort (specs shards, task map, manifest)"
+    )
     parser.add_argument("--report", required=True)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     configure_coreweave_s3()
+    if args.cohort_output_root is not None:
+        if args.cohort_report is None:
+            parser.error("--cohort-output-root requires --cohort-report")
+        report = json.loads(StoragePath(args.cohort_report).read_text())
+        manifest = convert_cohort(
+            tracked_source_id=args.tracked_source_id,
+            report=report,
+            folders=tuple(args.folder),
+            repo=args.repo,
+            candidate_revision=args.candidate_revision,
+            output_root=args.cohort_output_root,
+        )
+        logger.info("RESULT %s", json.dumps(manifest, sort_keys=True))
+        return
     tracked_uris = tuple(args.tracked_parquet) if args.tracked_parquet else resolve_tracked_uris(args.tracked_source_id)
     logger.info("Tracked population inputs: %s", list(tracked_uris))
     report = dry_run(
