@@ -245,7 +245,7 @@ def main(dry_run: bool = False) -> None:
         "source_receipt": SOURCE_RECEIPT_URI,
         "source_model_ref": source,
         "copy_manifest": completion_path,
-        "total_bytes": result.total_bytes,
+        "total_bytes": total_bytes,
         "sidecar_sha256": sidecar_pins,
         "shards": shard_pins,
         "synthesized_sidecars": sorted(synthesized) if missing_sidecars else [],
