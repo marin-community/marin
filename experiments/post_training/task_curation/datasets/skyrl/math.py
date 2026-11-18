@@ -216,6 +216,83 @@ def convert_hardmath(row: RawRow, _context: ConversionContext) -> TaskSpec | Imp
     )
 
 
+HARDMATH_RHS_TOKENS = ("\\approx", "\\sim", "\\equiv", "\\propto")
+
+
+def hardmath_rhs_reference(reference: str) -> str:
+    """The right-hand side of one equation reference, keeping relation chains whole.
+
+    The measured remediation rule (#11511): left-hand sides make math-verify compare
+    two equations, and that comparison follows the reply. Stripping the left-hand side
+    of an equality (or the compared side of a proportionality) removes the
+    reply-dependent deadline without changing any grading outcome.
+    """
+    stripped = reference.strip()
+    for token in HARDMATH_RHS_TOKENS:
+        index = stripped.find(token)
+        if index != -1:
+            return stripped[index + len(token) :].strip()
+    index = stripped.find("=")
+    return stripped[index + 1 :].strip() if index != -1 else stripped
+
+
+def split_top_level_members(reference: str) -> list[str]:
+    """Split a bracketed reference list into its top-level members."""
+    inner = reference.strip()
+    if inner.startswith("[") and inner.endswith("]"):
+        inner = inner[1:-1]
+    members: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for character in inner:
+        if character in "{([":
+            depth += 1
+        elif character in "})]":
+            depth -= 1
+        if character == "," and depth == 0:
+            members.append("".join(current).strip())
+            current = []
+        else:
+            current.append(character)
+    if "".join(current).strip():
+        members.append("".join(current).strip())
+    return [member for member in members if member]
+
+
+def convert_hardmath_rhs(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
+    """Remediated HARDMath conversion: equation references keep only the right-hand side.
+
+    ODE list references become LIST references with the per-member right-hand sides, so
+    both solution branches stay graded; a member that fails the reference parse excludes
+    the row as a typed source defect.
+    """
+    problem, reference = row.data.get("question"), row.data.get("ground_truths")
+    if not isinstance(problem, str) or not problem.strip():
+        return source_defect("missing_prompt", "A nonempty question is required")
+    text = reference if isinstance(reference, str) else str(reference)
+    expected = extract_boxed(text) or text
+    members = split_top_level_members(expected)
+    if len(members) > 1:
+        rhs_members = [hardmath_rhs_reference(member) for member in members]
+        if not all(parses_reference(member) for member in rhs_members):
+            return source_defect("invalid_reference", "A right-hand-side ODE member is not a parseable math target")
+        return math_answer_task(
+            row,
+            prompt=problem,
+            answer="[" + ", ".join(rhs_members) + "]",
+            evidence={"ground_truths": reference, "remediation": "rhs_only_list"},
+        )
+    rhs = hardmath_rhs_reference(expected)
+    if not parses_reference(rhs):
+        return source_defect("invalid_reference", "The right-hand-side reference is not a parseable math target")
+    return math_answer_task(
+        row,
+        prompt=problem,
+        answer=rhs,
+        evidence={"ground_truths": reference, "remediation": "rhs_only"},
+    )
+
+
 def convert_hendrycks_math(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     solution = row.data.get("solution")
     if isinstance(solution, str) and r"\boxed" not in solution:
@@ -447,6 +524,29 @@ SOURCES = (
             origin=SourceOrigin.PAFITIS,
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
+        ),
+    ),
+    MathSource(
+        "hardmath_rhs",
+        HfSource(
+            "pafitis/HARDMath_processed_training",
+            "937e9f10356e31e854f6efb9a2507f1e200c8b25",
+            ("data/train-00000-of-00001.parquet",),
+            SourceFormat.PARQUET,
+        ),
+        convert_hardmath_rhs,
+        IntendedUse.TRAIN,
+        HARDMATH_RUBRIC,
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="hardmath",
+            upstream_name="hardmath",
+            subset=None,
+            variant="rhs",
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.PAFITIS,
+            family="math-answer",
+            tags=("rlvr", "single-turn", "private", "remediated", "gym/aime"),
         ),
     ),
     MathSource(

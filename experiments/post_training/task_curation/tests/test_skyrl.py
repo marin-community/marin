@@ -588,3 +588,71 @@ def test_kto_join_failure_releases_no_component_row(tmp_path, failure):
     expected = ImportFailureKind.SOURCE_DEFECT if failure == "malformed_label" else ImportFailureKind.UNSUPPORTED
     assert error.value.kind == expected
     assert "Valid request" not in str(error.value)
+
+
+# Real HARDMath rows (pafitis/HARDMath_processed_training@937e9f10356e31e854f6efb9a2507f1e200c8b25).
+HARDMATH_ODE_ROW = {
+    "question": (
+        "Consider the following third-order ordinary differential equation "
+        "$$y''' = \\frac{y}{\\sin{\\left(x \\right)} + 2} + y'^{4} + \\frac{y''}{\\cos{\\left(x \\right)} + 4} "
+        "- \\frac{1}{x - 1}$$\nwith initial conditions at $x = 0: y(0) = 2.00, y'(0) = 3.00, y''(0) = 0.00.$\n"
+        "Find analytical expressions that approximate the solution of $y(x)$ in the small and large $x$ regimes.\n\n"
+    ),
+    "ground_truths": (
+        "$\\boxed{[y = x^{3} \\cdot \\left(\\frac{41}{3} + \\frac{1}{3 \\left(\\sin{\\left(x \\right)} + 2\\right)}\\right) + 3 x + 2, "
+        "y = - \\sqrt[3]{30}(0.27 - x)^{\\frac{1}{3}}+4.01]}$"
+    ),
+}
+HARDMATH_NONDIM_ROW = {
+    "question": (
+        "Nondimensionalize the polynomial\\[a_{1} x^{21} + a_{2} x^{7} + a_{3}\\]"
+        "into one of the form $\\epsilon y^{21} + y^{7} + 1. $Express $\\epsilon$ as a function of "
+        "$a_1$, $a_2$, and $a_3.$"
+    ),
+    "ground_truths": "$\\boxed{\\epsilon=\\frac{a_{1} a_{3}^{2}}{a_{2}^{3}}}$",
+}
+HARDMATH_SCALAR_ROW = {
+    "question": "Find the limit of $x/(2x+1)$ as $x \\to \\infty$.",
+    "ground_truths": "\\frac{1}{2}",
+}
+
+
+def test_convert_hardmath_rhs_strips_left_hand_sides_from_real_rows():
+    ode = convert_row(RECIPES["hardmath_rhs"], HARDMATH_ODE_ROW)
+    assert not isinstance(ode, ImportRejection)
+    assert (
+        ode.grader.parameters["expected"]
+        == "[x^{3} \\cdot \\left(\\frac{41}{3} + \\frac{1}{3 \\left(\\sin{\\left(x \\right)} + 2\\right)}\\right) + 3 x + 2, - \\sqrt[3]{30}(0.27 - x)^{\\frac{1}{3}}+4.01]"
+    )
+
+    nondim = convert_row(RECIPES["hardmath_rhs"], HARDMATH_NONDIM_ROW)
+    assert not isinstance(nondim, ImportRejection)
+    assert nondim.grader.parameters["expected"] == "\\frac{a_{1} a_{3}^{2}}{a_{2}^{3}}"
+
+    # A reference without a left-hand side is already canonical: the rule is a no-op.
+    scalar = convert_row(RECIPES["hardmath_rhs"], HARDMATH_SCALAR_ROW)
+    assert not isinstance(scalar, ImportRejection)
+    assert scalar.grader.parameters["expected"] == "\\frac{1}{2}"
+
+
+def test_convert_hardmath_rhs_differs_from_the_original_only_in_the_reference():
+    original = convert_row(RECIPES["hardmath"], HARDMATH_NONDIM_ROW)
+    remediated = convert_row(RECIPES["hardmath_rhs"], HARDMATH_NONDIM_ROW)
+    assert not isinstance(original, ImportRejection) and not isinstance(remediated, ImportRejection)
+    assert original.grader.parameters["expected"] == "\\epsilon=\\frac{a_{1} a_{3}^{2}}{a_{2}^{3}}"
+    assert original.grader.parameters["expected"] != remediated.grader.parameters["expected"]
+    # The grading machinery stays the math grader: only the reference text (and the
+    # math_type it derives) is normalized.
+    assert original.grader.mode == remediated.grader.mode == "math"
+
+
+def test_convert_hardmath_rhs_excludes_unparseable_members():
+    row = {
+        "question": "Solve the differential equation and state both branches.",
+        "ground_truths": "$\\boxed{[y = \\unknownmacro{1}, y = 2]}$",
+    }
+    rejection = convert_row(RECIPES["hardmath_rhs"], row)
+    assert isinstance(rejection, ImportRejection)
+    assert rejection.kind is ImportFailureKind.SOURCE_DEFECT
+    assert rejection.reason == "invalid_reference"
+    assert "parseable math target" in rejection.detail
