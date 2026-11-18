@@ -157,6 +157,7 @@ class _LabelCompletion:
     response_id: str | None
     finish_reason: str | None
     transport_attempts: tuple[dict[str, Any], ...] = ()
+    usage: dict[str, Any] | None = None
 
 
 def grade(
@@ -254,40 +255,29 @@ class JudgeReply:
 
 
 def judge_reply(spec: JudgeSpec, messages: list[ChatCompletionMessageParam]) -> JudgeReply:
-    """Ask the spec's judge for one complete chat reply, retrying transient transport failures.
+    """Return the spec's judge's complete reply to ``messages``, retrying transient transport failures.
 
-    Source scorers that run their own multi-step judge protocols use this for each step.
-    An incomplete, empty or refused reply is a grading infrastructure error.
+    An incomplete, empty or refused reply raises ``GradingInfraError``.
     """
     _validate_spec(spec)
     client, model = _client(spec, None)
-    options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
-    request = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.0,
-        "max_completion_tokens": spec.max_completion_tokens,
-        **options,
-    }
-    response, attempts = _judge_transport(
-        spec,
-        lambda timeout: _chat_completion(client.with_options(max_retries=0), timeout=timeout, **request),
-        request,
-    )
+    try:
+        completion = _label_completion(
+            spec, client.with_options(max_retries=0), model, messages, spec.max_completion_tokens
+        )
+    except RuntimeError as error:
+        raise GradingInfraError(str(error), model=model) from error
     detail: dict[str, Any] = {
         "model": model,
-        "response_model": response.model,
-        "response_id": response.id,
-        "transport_attempts": attempts,
-        "usage": response.usage.model_dump(mode="json") if response.usage else None,
+        "response_model": completion.response_model,
+        "response_id": completion.response_id,
+        "finish_reason": completion.finish_reason,
+        "transport_attempts": completion.transport_attempts,
+        "usage": completion.usage,
     }
-    try:
-        choice = _completion_choice(response)
-        detail["finish_reason"] = choice.finish_reason
-        text = _completed_text(choice)
-    except RuntimeError as error:
-        raise GradingInfraError(str(error), **detail) from error
-    return JudgeReply(text, detail)
+    if completion.incomplete:
+        raise GradingInfraError("judge completion is incomplete", **detail)
+    return JudgeReply(completion.text, detail)
 
 
 def grade_judge_candidate(
@@ -482,6 +472,7 @@ def _label_completion(
             lambda timeout: _chat_completion(client, timeout=timeout, **request),
             request,
         )
+        usage = response.usage.model_dump(mode="json") if response.usage else None
         if spec.completion_policy is JudgeCompletionPolicy.CONTENT:
             if len(response.choices) != 1:
                 raise GradingInfraError(
@@ -499,14 +490,15 @@ def _label_completion(
                 response.id,
                 choice.finish_reason,
                 attempts,
+                usage,
             )
         choice = _completion_choice(response)
         if choice.finish_reason == "length":
             return _LabelCompletion(
-                choice.message.content or "", True, response.model, response.id, choice.finish_reason, attempts
+                choice.message.content or "", True, response.model, response.id, choice.finish_reason, attempts, usage
             )
         return _LabelCompletion(
-            _completed_text(choice), False, response.model, response.id, choice.finish_reason, attempts
+            _completed_text(choice), False, response.model, response.id, choice.finish_reason, attempts, usage
         )
     options = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
     request = {

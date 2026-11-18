@@ -6,6 +6,7 @@
 import json
 
 import pytest
+from verifyit.modes.grade_judge import JudgeReply
 
 from taskcompendium.importers.evalchemy.scorers.facts_grounding import (
     grade_facts_grounding,
@@ -36,7 +37,7 @@ class ScriptedJudge:
 
     def __call__(self, messages):
         self.conversations.append(messages)
-        return self.replies.pop(0), {"model": "fake/judge"}
+        return JudgeReply(self.replies.pop(0), {"model": "fake/judge"})
 
 
 def test_eligible_grounded_response_scores_one_after_three_judge_steps():

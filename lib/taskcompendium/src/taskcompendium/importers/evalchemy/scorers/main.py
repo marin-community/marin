@@ -60,12 +60,13 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
 
         judge = parse_spec(Path("/tests/judge.toml").read_text())
         assert isinstance(judge, JudgeSpec)
-
-        def ask(messages):
-            reply = judge_reply(judge, messages)
-            return reply.text, reply.detail
-
-        return grade_facts_grounding(config["full_prompt"], judge.question, judge.references[0], response, ask)
+        return grade_facts_grounding(
+            config["full_prompt"],
+            judge.question,
+            judge.references[0],
+            response,
+            lambda messages: judge_reply(judge, messages),
+        )
     if scorer in {"gpqa", "mmlu_pro"}:
         from .choices import grade_gpqa_answer, grade_mmlu_answer
 

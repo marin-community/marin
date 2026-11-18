@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 from verifyit.grade import Reward, scored
+from verifyit.modes.grade_judge import JudgeReply
 
 ELIGIBILITY_SYSTEM_PROMPT = "You are a helpful assistant. Your task is to evaluate the quality of a Response."
 
@@ -141,7 +142,7 @@ Example: "The response states, `This is the way it goes`". DO NOT attempt any es
 
 MAJOR_ISSUES = "Major Issue(s)"
 
-Ask = Callable[[list[dict[str, str]]], tuple[str, dict[str, Any]]]
+Ask = Callable[[list[dict[str, str]]], JudgeReply]
 
 
 def extract_instruction_json(ans: str) -> dict:
@@ -223,37 +224,39 @@ def parse_ufg_rev21_verdict(answer: str) -> tuple[bool, list[dict[str, Any]]]:
 
 def grade_facts_grounding(full_prompt: str, user_request: str, context_document: str, response: str, ask: Ask) -> Reward:
     """Score 1 when the judge finds the response eligible and every factual sentence grounded."""
-    baseline, baseline_detail = ask([{"role": "user", "content": full_prompt}])
-    eligibility_prompt = ELIGIBILITY_PROMPT.format(user_request=user_request, response_a=response, response_b=baseline)
-    eligibility_text, eligibility_detail = ask(
+    baseline = ask([{"role": "user", "content": full_prompt}])
+    eligibility_prompt = ELIGIBILITY_PROMPT.format(
+        user_request=user_request, response_a=response, response_b=baseline.text
+    )
+    eligibility = ask(
         [
             {"role": "system", "content": ELIGIBILITY_SYSTEM_PROMPT},
             {"role": "user", "content": eligibility_prompt},
         ]
     )
-    rating = extract_instruction_json(eligibility_text)["Instruction Following"]
+    rating = extract_instruction_json(eligibility.text)["Instruction Following"]
     # An unparseable rating counts as eligible, as in the reference notebook.
     eligible = MAJOR_ISSUES not in rating
     detail: dict[str, Any] = {
-        "baseline": baseline,
-        "baseline_judge": baseline_detail,
+        "baseline": baseline.text,
+        "baseline_judge": baseline.detail,
         "eligibility_rating": rating,
-        "eligibility_text": eligibility_text,
-        "eligibility_judge": eligibility_detail,
+        "eligibility_text": eligibility.text,
+        "eligibility_judge": eligibility.detail,
     }
     grounded = False
     if eligible:
         grounding_prompt = GROUNDING_PROMPT.format(user_query=user_request, context=context_document, response=response)
-        grounding_text, grounding_detail = ask(
+        grounding = ask(
             [
                 {"role": "system", "content": GROUNDING_SYSTEM_PROMPT},
                 {"role": "user", "content": grounding_prompt},
             ]
         )
-        grounded, sentences = parse_ufg_rev21_verdict(grounding_text)
+        grounded, sentences = parse_ufg_rev21_verdict(grounding.text)
         detail.update(
-            grounding_text=grounding_text,
-            grounding_judge=grounding_detail,
+            grounding_text=grounding.text,
+            grounding_judge=grounding.detail,
             parsed_sentences=len(sentences),
             unsupported_sentences=[sentence for sentence in sentences if sentence["label"] == "not_supported"],
         )
