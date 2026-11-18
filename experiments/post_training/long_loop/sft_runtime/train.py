@@ -1544,7 +1544,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             cgroup_path=Path(config.first_step_host_rebind.cgroup_path),
                             observe=lambda phase, sample: logger.info("Host rebind %s: %s", phase, sample),
                         )
-                    # Match the successful diagnostic's AOT reference lifetime.
+                    # Match the v7a2 diagnostic's AOT reference lifetime.
                     del compiled_first_step
                 with timing.span("train_step", step=current_step):
                     state, metrics, inline_watch_stats = train_step(state, batch)
