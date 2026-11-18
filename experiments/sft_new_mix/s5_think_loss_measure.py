@@ -241,7 +241,9 @@ def main() -> None:
                     "response_index": record["response_index"],
                 }
     matched = [lineage[digest] for digest in instruction_hashes if digest in lineage]
-    datasets = Counter(entry["source_dataset_name"] for entry in matched)
+    datasets = Counter(
+        str(entry["source_dataset_name"]) if entry["source_dataset_name"] is not None else "-" for entry in matched
+    )
     report["openthoughts4_code"] = {
         "dropped_rows": len(prompts_manifest),
         "dropped_tokens": sum(drop["tokens"] for drop in prompts_manifest),
