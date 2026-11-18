@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -449,66 +450,111 @@ def task(args) -> None:
             raise RuntimeError("Completed environment matrix reproduces collective corruption; inspect rank receipts")
 
 
-def task_api(args) -> None:
-    """Run direct-NCCL and Gloo-parent ProcessGroup controls in fresh workers."""
+def task_library_ab(args) -> None:
+    """Compare the packaged, source baseline and patched NCCL libraries."""
     info = get_job_info()
     if info is None or info.num_tasks != args.nodes or torch.cuda.device_count() != GPUS_PER_NODE:
-        raise ValueError("API controls require the configured four-GB200 tasks")
+        raise ValueError("Library A/B requires the configured four-GB200 tasks")
     pin_socket_ifname()
+    filesystem, path = filesystem_for(args.library_receipt)
+    with filesystem.open(path, "rb") as stream:
+        raw_receipt = stream.read()
+    if hashlib.sha256(raw_receipt).hexdigest() != args.library_receipt_sha256:
+        raise ValueError("The source-library receipt does not match its launch pin")
+    receipt = json.loads(raw_receipt)
+    if receipt["status"] != "built;not_qualified":
+        raise ValueError("The library pair has not completed its verified build")
+    libraries = {}
+    for role in ("baseline", "patched"):
+        artifact = receipt["libraries"][role]
+        local = Path(f"/tmp/nccl-ab-{info.attempt_id}/{role}/libnccl.so.2")
+        local.parent.mkdir(parents=True, exist_ok=True)
+        filesystem, path = filesystem_for(artifact["uri"])
+        with filesystem.open(path, "rb") as source, local.open("wb") as target:
+            shutil.copyfileobj(source, target, length=1 << 20)
+        with local.open("rb") as stream:
+            actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        if actual != artifact["sha256"] or local.stat().st_size != artifact["bytes"]:
+            raise ValueError(f"Downloaded {role} NCCL artifact does not match the build receipt")
+        libraries[role] = {"path": str(local), "sha256": actual}
+    libraries["packaged"] = {"path": "", "sha256": "fc7ea66334edbc934aa25959b9907dbb2b91a1d2485beff18839afc45cbc08d0"}
+    variants = [
+        ("packaged", "direct-nccl", "fifo-262144"),
+        ("baseline", "process-group", "fifo-262144"),
+        ("baseline", "direct-nccl", "fifo-262144"),
+        ("patched", "process-group", "fifo-262144"),
+        ("patched", "direct-nccl", "fifo-262144"),
+        ("patched", "direct-nccl", "fifo-1048576"),
+        ("baseline", "direct-nccl", "fifo-4194304"),
+        ("patched", "direct-nccl", "fifo-4194304"),
+        ("packaged", "direct-nccl", "fifo-4194304"),
+        ("baseline", "direct-nccl", "fifo-1048576"),
+        ("packaged", "direct-nccl", "fifo-1048576"),
+    ]
     ctx = iris_ctx()
-    for api in ("process-group", "direct-nccl"):
-        for profile in ("fifo-262144", "fifo-1048576"):
-            name = f"nccl-api-{info.attempt_id}-{api}-{profile}"
-            endpoint = None
-            if info.task_index == 0:
-                master, port = info.advertise_host, allocate_port_block(1)
-                endpoint = ctx.registry.register(name, f"{master}:{port}")
-            else:
-                master, port = wait_for_rendezvous(ctx.resolver, name, timeout=180)
-            directory = Path(f"/tmp/{name}")
-            try:
-                subprocess.run(
-                    [
-                        sys.executable,
-                        "-m",
-                        "torch.distributed.run",
-                        f"--nnodes={info.num_tasks}",
-                        "--nproc-per-node=4",
-                        f"--node-rank={info.task_index}",
-                        f"--master-addr={master}",
-                        f"--master-port={port}",
-                        "-m",
-                        "experiments.post_training.long_loop.nccl_api_reproducer",
-                        f"--api={api}",
-                        f"--profile={profile}",
-                        f"--output-directory={directory}",
-                    ],
-                    env=configured_environment(profile),
-                    check=True,
-                    timeout=240,
-                )
-            finally:
-                # A failed worker still leaves useful partial inputs and error traces.
-                for rank in range(info.task_index * GPUS_PER_NODE, (info.task_index + 1) * GPUS_PER_NODE):
-                    stem = f"{api}-{profile}-rank{rank}"
-                    report_path = directory / f"{stem}.json"
-                    if not report_path.is_file():
-                        continue
-                    report = json.loads(report_path.read_text())
-                    log_path = directory / f"{stem}.log"
-                    if log_path.is_file():
-                        raw = log_path.read_bytes()
-                        report["nccl_log"] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
-                        filesystem, path = filesystem_for(f"{args.output_prefix}/nccl-logs/{stem}.log")
-                        with filesystem.open(path, "wb") as stream:
-                            stream.write(raw)
-                    else:
-                        report["nccl_log"] = {"state": "not_created"}
-                    write_json(f"{args.output_prefix}/{stem}.json", report)
-                if endpoint is not None:
-                    ctx.registry.unregister(endpoint)
-    # This CPU-only barrier makes every uploaded report visible before the verdict.
-    name = f"nccl-api-final-{info.attempt_id}"
+    for role, api, profile in variants:
+        label = f"{role}-{profile}"
+        name = f"nccl-ab-{info.attempt_id}-{api}-{label}"
+        endpoint = None
+        if info.task_index == 0:
+            master, port = info.advertise_host, allocate_port_block(1)
+            endpoint = ctx.registry.register(name, f"{master}:{port}")
+        else:
+            master, port = wait_for_rendezvous(ctx.resolver, name, timeout=180)
+        directory = Path(f"/tmp/{name}")
+        sizes = (
+            (16, 32, 64)
+            if role in ("baseline", "packaged") and profile == "fifo-262144"
+            else (16, 32, 64, 128, 256, 512)
+        )
+        environment = configured_environment(profile)
+        if libraries[role]["path"]:
+            environment["LD_PRELOAD"] = libraries[role]["path"] + (
+                ":" + environment["LD_PRELOAD"] if environment.get("LD_PRELOAD") else ""
+            )
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "torch.distributed.run",
+                    f"--nnodes={info.num_tasks}",
+                    "--nproc-per-node=4",
+                    f"--node-rank={info.task_index}",
+                    f"--master-addr={master}",
+                    f"--master-port={port}",
+                    "-m",
+                    "experiments.post_training.long_loop.nccl_api_reproducer",
+                    f"--api={api}",
+                    f"--profile={label}",
+                    f"--output-directory={directory}",
+                    f"--expected-library-sha256={libraries[role]['sha256']}",
+                    "--message-bytes",
+                    *[str(n << 20) for n in sizes],
+                ],
+                env=environment,
+                check=True,
+                timeout=240,
+            )
+        finally:
+            for rank in range(info.task_index * GPUS_PER_NODE, (info.task_index + 1) * GPUS_PER_NODE):
+                stem = f"{api}-{label}-rank{rank}"
+                report_path = directory / f"{stem}.json"
+                if not report_path.is_file():
+                    continue
+                report = json.loads(report_path.read_text())
+                log_path = directory / f"{stem}.log"
+                if log_path.is_file():
+                    raw = log_path.read_bytes()
+                    report["nccl_log"] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+                    filesystem, path = filesystem_for(f"{args.output_prefix}/nccl-logs/{stem}.log")
+                    with filesystem.open(path, "wb") as stream:
+                        stream.write(raw)
+                report["library_role"] = role
+                write_json(f"{args.output_prefix}/{stem}.json", report)
+            if endpoint is not None:
+                ctx.registry.unregister(endpoint)
+    name = f"nccl-ab-final-{info.attempt_id}"
     endpoint = None
     if info.task_index == 0:
         master, port = info.advertise_host, allocate_port_block(1)
@@ -526,23 +572,36 @@ def task_api(args) -> None:
         dist.barrier()
         if info.task_index == 0:
             outcomes = []
-            for api in ("process-group", "direct-nccl"):
-                for profile in ("fifo-262144", "fifo-1048576"):
-                    for rank in range(info.num_tasks * GPUS_PER_NODE):
-                        filesystem, path = filesystem_for(f"{args.output_prefix}/{api}-{profile}-rank{rank}.json")
-                        with filesystem.open(path) as stream:
-                            outcomes.append(json.load(stream))
+            for role, api, profile in variants:
+                for rank in range(info.num_tasks * GPUS_PER_NODE):
+                    filesystem, path = filesystem_for(f"{args.output_prefix}/{api}-{role}-{profile}-rank{rank}.json")
+                    with filesystem.open(path) as stream:
+                        outcomes.append(json.load(stream))
+            completed = all(row["completed"] for row in outcomes)
+            positive = [
+                r
+                for r in outcomes
+                if r["library_role"] in ("baseline", "packaged") and r["profile"].endswith("fifo-262144")
+            ]
+            corrected = [r for r in outcomes if r["library_role"] == "patched"]
+            defaults = [r for r in outcomes if r["profile"].endswith("fifo-4194304")]
+            qualified = (
+                completed and all(not r["passed"] for r in positive) and all(r["passed"] for r in corrected + defaults)
+            )
             write_json(
                 f"{args.output_prefix}/receipt.json",
                 {
-                    "completed": all(row["completed"] for row in outcomes),
+                    "completed": completed,
+                    "qualification_passed": qualified,
                     "rank_reports": len(outcomes),
-                    "all_correct": all(row["passed"] for row in outcomes),
-                    "failed_case_count": sum(not case["passed"] for row in outcomes for case in row["cases"]),
+                    "all_correct": all(r["passed"] for r in outcomes),
+                    "positive_control_reports": len(positive),
+                    "patched_reports": len(corrected),
+                    "library_receipt_sha256": args.library_receipt_sha256,
                 },
             )
-            if not all(row["passed"] for row in outcomes):
-                raise RuntimeError("Completed direct-NCCL matrix reproduces corruption; inspect receipts")
+            if not qualified:
+                raise RuntimeError("Library A/B did not meet its baseline-reproduction/patched-correctness criteria")
     finally:
         if dist.is_initialized():
             dist.destroy_process_group()
@@ -552,15 +611,17 @@ def task_api(args) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=["task", "driver", "worker", "api-task"], default="task")
+    parser.add_argument("--mode", choices=["task", "driver", "worker", "library-task"], default="task")
     parser.add_argument("--nodes", type=int, default=8)
     parser.add_argument("--launcher", choices=["torchrun", "ray"], default="torchrun")
     parser.add_argument("--profile", choices=tuple(PROFILE_ENVIRONMENTS), default="production")
     parser.add_argument("--suite", choices=tuple(SUITES), default="launcher")
     parser.add_argument("--output-prefix", required=True)
+    parser.add_argument("--library-receipt", default="")
+    parser.add_argument("--library-receipt-sha256", default="")
     args = parser.parse_args()
-    if args.mode == "api-task":
-        task_api(args)
+    if args.mode == "library-task":
+        task_library_ab(args)
     elif args.mode == "task":
         task(args)
     elif args.mode == "driver":

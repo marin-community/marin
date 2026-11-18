@@ -48,6 +48,6 @@ def runtime_receipt() -> dict:
             key: value
             for key, value in os.environ.items()
             if key.startswith(("NCCL_", "TORCH_NCCL_", "TORCH_FR_"))
-            or key in ("CUDA_DEVICE_MAX_CONNECTIONS", "CUDA_VISIBLE_DEVICES", "PYTORCH_CUDA_ALLOC_CONF")
+            or key in ("CUDA_DEVICE_MAX_CONNECTIONS", "CUDA_VISIBLE_DEVICES", "PYTORCH_CUDA_ALLOC_CONF", "LD_PRELOAD")
         },
     }
