@@ -1293,12 +1293,21 @@ an infrastructure-failed task, is sealed under `trials/judge/`.
 Inspect `serving.json`, `prepared.json`, `trials/*/measurement.json` and
 `completion.json` in the new run prefix. A completed coordinator can still have
 pending, blocked or unmeasured sources. Each infrastructure retry receives a
-fresh trial directory. Three consecutive attempts with a typed
-`math_verifier_deadline` verdict block that task. The third attempt remains
-unscored, and its receipt records the reason. The measurement counts blocked
-tasks separately from pending tasks and excludes them from `n` and `solved`.
-When no retryable tasks remain, the source status is `blocked`. Keep existing
-run prefixes immutable.
+fresh trial directory. A math verifier deadline is tagged with the grading
+phase that ran out: the reference parse is a property of the task, while the
+candidate parse and the comparison follow the reply (the deadline is spent in
+math-verify's equation comparison, mostly on wrong or regrouped replies).
+Three consecutive attempts whose deadline is in the reference parse block that
+task; the third attempt remains unscored and its receipt records the reason.
+A comparison-phase deadline is an unscored attempt that follows the reply: it
+never blocks by itself, and a task whose attempts end without a score because
+of comparison deadlines keeps the typed `math_verifier_deadline` gap on the
+measurement with its counts, so the source never reads as a complete
+measurement. Recovery re-reads bare-deadline blocks recorded before the phase
+tagging as retryable attempts. The measurement counts blocked tasks separately
+from pending tasks and excludes them from `n` and `solved`. When no retryable
+tasks remain, the source status is `blocked`. Keep existing run prefixes
+immutable.
 
 To continue a campaign after its worker has stopped and sealed
 `trials/model-requests-final.json`, select a new output prefix and add

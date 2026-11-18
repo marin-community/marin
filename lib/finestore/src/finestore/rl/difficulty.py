@@ -652,7 +652,8 @@ def measurement_from_attempts(
     scored = {}
     infrastructure = 0
     blocked = set()
-    blocked_reasons = set()
+    blocked_reasons: set[str] = set()
+    last_reason: dict[str, str | None] = {}
     for attempt in attempts:
         if attempt.task_id not in selected:
             raise ValueError(f"Attempt is outside the selected sample: {attempt.task_id}")
@@ -668,6 +669,13 @@ def measurement_from_attempts(
             blocked_reasons.add(attempt.reason)
         if attempt.status == AttemptStatus.SCORED:
             scored[attempt.task_id] = attempt.reward
+        last_reason[attempt.task_id] = attempt.reason
+    # Unscored tasks whose final attempt carries a typed gap keep that gap on the
+    # measurement: a comparison-deadline task that exhausts the attempt budget stays
+    # deadline-stalled, so the source never reads as a complete measurement (#11511).
+    unscored_reasons = {
+        reason for task_id in selected - scored.keys() - blocked if (reason := last_reason.get(task_id)) is not None
+    }
     n = len(scored)
     solved = sum(reward == 1.0 for reward in scored.values())
     interval = None
@@ -685,6 +693,7 @@ def measurement_from_attempts(
     status = MeasurementStatus.PENDING
     if not pending:
         status = MeasurementStatus.BLOCKED if blocked else MeasurementStatus.MEASURED
+    gap_reasons: set[str] = blocked_reasons | unscored_reasons
     return DifficultyMeasurement.model_validate(
         {
             **measurement.model_dump(mode="json"),
@@ -693,8 +702,8 @@ def measurement_from_attempts(
                 None
                 if status is MeasurementStatus.MEASURED
                 else (
-                    join_difficulty_gap_reasons(sorted(blocked_reasons))
-                    if status is MeasurementStatus.BLOCKED
+                    join_difficulty_gap_reasons(sorted(gap_reasons))
+                    if gap_reasons
                     else DifficultyGap.AWAITING_SCORED_COVERAGE.value
                 )
             ),

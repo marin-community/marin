@@ -14,17 +14,20 @@ from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.difficulty import (
     PROTOCOL_ID,
     PROTOCOLS,
+    AttemptStatus,
     DifficultyAttempt,
+    DifficultyGap,
     DifficultyMeasurement,
     SamplingSettings,
     Solver,
     SolverIdentity,
+    difficulty_gap_reason,
 )
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
-from verifyit.modes.grade_math import MATH_VERIFIER_DEADLINE
+from verifyit.modes.grade_math import MATH_DEADLINE_REFERENCE_PARSE, MATH_VERIFIER_DEADLINE
 
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource
 
@@ -309,11 +312,22 @@ def recovered_source(
                         or not network_policy_qualified(binding, policy)
                     ):
                         raise ValueError("Previous scored trial does not qualify against the original source runtime")
-        if attempt.status in {"scored", "blocked"}:
+        if attempt.status == "scored" or (attempt.status == "blocked" and attempt.reason != MATH_VERIFIER_DEADLINE):
             terminal.add(attempt.task_id)
+        if attempt.status == "blocked" and attempt.reason == MATH_VERIFIER_DEADLINE:
+            # Bare math_verifier_deadline blocks come from the pre-#11511 streak rule:
+            # comparison deadlines follow the reply, so those attempts are re-read as
+            # retryable infrastructure evidence instead of staying terminal.
+            attempt = attempt.model_copy(update={"status": AttemptStatus.INFRASTRUCTURE})
         if attempt.status in {"infrastructure", "blocked"}:
+            # Only reference-parse deadlines are a task property; they alone continue
+            # the streak. Bare deadline reasons (old receipts) carry no phase and
+            # never count.
+            reference_deadline = attempt.reason == difficulty_gap_reason(
+                DifficultyGap.MATH_VERIFIER_DEADLINE, MATH_DEADLINE_REFERENCE_PARSE
+            )
             math_deadline_streaks[attempt.task_id] = (
-                math_deadline_streaks.get(attempt.task_id, 0) + 1 if attempt.reason == MATH_VERIFIER_DEADLINE else 0
+                math_deadline_streaks.get(attempt.task_id, 0) + 1 if reference_deadline else 0
             )
         attempts.append(attempt)
     return RecoveredSource(

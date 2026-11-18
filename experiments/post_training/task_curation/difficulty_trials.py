@@ -50,7 +50,7 @@ from rigging.secrets import require_secret
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
 from taskcompendium.request_budget import RequestBudget
-from verifyit.modes.grade_math import MATH_VERIFIER_DEADLINE
+from verifyit.modes.grade_math import MATH_DEADLINE_REFERENCE_PARSE, MATH_VERIFIER_DEADLINE
 
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence, write_same_json_evidence
@@ -196,17 +196,23 @@ def scored_reward(result, trial: Trial) -> float | None:
     return float(reward)
 
 
-def has_math_verifier_deadline(trial: Trial) -> bool:
+def math_deadline_phase(trial: Trial) -> str | None:
+    """The grading phase whose deadline fired, or None when this is not a math deadline.
+
+    Reference-parse deadlines are a task property; candidate-parse and comparison
+    deadlines follow the reply (the #11511 replay), so only the reference phase may
+    drive the terminal block.
+    """
     path = trial.paths.verifier_dir / "verdict.json"
     if not path.exists():
-        return False
+        return None
     verdict = json.loads(path.read_text())
     detail = verdict.get("detail")
-    return (
-        verdict.get("status") == "infra_error"
-        and isinstance(detail, dict)
-        and detail.get("code") == MATH_VERIFIER_DEADLINE
-    )
+    if verdict.get("status") != "infra_error" or not isinstance(detail, dict):
+        return None
+    if detail.get("code") != MATH_VERIFIER_DEADLINE:
+        return None
+    return detail.get("phase")
 
 
 def worker_host_capabilities(
@@ -418,10 +424,17 @@ def run_task(
                 # grade is invalid but the condition belongs to the task, not the fleet.
                 reward = None
                 pending_reason = NETWORK_POLICY_REASON
-        deadline = reward is None and not (unserved or provider_wait) and has_math_verifier_deadline(trial)
-        math_deadlines = math_deadlines + 1 if deadline else 0
-        terminal_deadline = deadline and math_deadlines >= MATH_DEADLINE_LIMIT
-        reason = MATH_VERIFIER_DEADLINE if deadline else pending_reason if reward is None else None
+        deadline_phase = None if reward is not None or unserved or provider_wait else math_deadline_phase(trial)
+        # Only a reference-parse deadline is a task property; candidate-parse and
+        # comparison deadlines follow the reply and must not terminal-block (#11511).
+        reference_deadline = deadline_phase == MATH_DEADLINE_REFERENCE_PARSE
+        math_deadlines = math_deadlines + 1 if reference_deadline else 0
+        terminal_deadline = reference_deadline and math_deadlines >= MATH_DEADLINE_LIMIT
+        reason = (
+            difficulty_gap_reason(DifficultyGap.MATH_VERIFIER_DEADLINE, deadline_phase)
+            if deadline_phase is not None
+            else pending_reason if reward is None else None
+        )
         attempt = DifficultyAttempt(
             task_id=task.task_id,
             status=(
