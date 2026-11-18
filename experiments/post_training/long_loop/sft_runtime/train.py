@@ -14,6 +14,7 @@ from collections.abc import Callable
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from typing import Literal
 from uuid import uuid4
 
 import equinox as eqx
@@ -25,6 +26,7 @@ import levanter.tracker
 import numpy as np
 import optax
 from fray.cluster import ResourceConfig
+from fray.types import GpuConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
@@ -470,6 +472,7 @@ class GrugRunConfig:
     stop_after_steps: int | None = None
     first_checkpoint_restore_step: int | None = None
     native_timing_root: str | None = None
+    cuda_module_loading: Literal["EAGER", "LAZY"] = "EAGER"
     flops_baseline: FlopsBaseline | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.jax.multigpu_main supervisor instead of one process per node.
@@ -481,6 +484,12 @@ class GrugRunConfig:
     max_retries_preemption: int = 0
     max_retries_failure: int = 0
     max_task_failures: int = 10
+
+    def launch_environment(self) -> dict[str, str]:
+        """Return explicit environment overrides for the training request."""
+        if isinstance(self.resources.device, GpuConfig):
+            return {"CUDA_MODULE_LOADING": self.cuda_module_loading}
+        return {}
 
 
 def build_train_dataset(
@@ -1601,7 +1610,7 @@ def run_grug(config: GrugRunConfig) -> None:
     if trainer.id is None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
-    # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
+    # Apply the hero defaults before the dispatcher collects environment variables.
     inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
     _apply_hero_ep_runtime_defaults(
         inline_watch_enabled=inline_watch_enabled,
@@ -1618,6 +1627,7 @@ def run_grug(config: GrugRunConfig) -> None:
         max_retries_failure=config.max_retries_failure,
         max_retries_preemption=config.max_retries_preemption,
         max_task_failures=config.max_task_failures,
+        env_vars=config.launch_environment(),
     )
 
 

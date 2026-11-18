@@ -3,18 +3,22 @@
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import equinox as eqx
 import jax
 import jmp
 import numpy as np
 import optax
+import pytest
 import yaml
 from jax.sharding import AxisType, Mesh
 from levanter.checkpoint import save_checkpoint
 from safetensors.flax import load_file
 
+from experiments.grug import dispatch
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.post_training.long_loop import sft
 from experiments.post_training.long_loop.sft import SMOKE_CONFIG, fresh_sft_config
 from experiments.post_training.long_loop.sft_runtime.export_writer import ExportConfig, export_weights
 from experiments.post_training.long_loop.sft_runtime.model import grugmoe_inference_state_dict
@@ -122,3 +126,47 @@ def test_remote_sft_timing_destination_survives_config_decode():
     )
     # TrainerConfig.log_dir is a local Path: the old implementation collapsed s3:// to s3:/.
     assert config.native_timing_root == "s3://marin-us-east-02a/run/timing/native-sft"
+
+
+@pytest.fixture
+def local_sft_dispatch(tmp_path, monkeypatch):
+    """Require a fake Fray client for the SFT entrypoint exercised by this test."""
+    initializer = tmp_path / "initializer"
+    metadata = initializer / "native/verification.json"
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text(json.dumps({"exact_parity": True, "tensors": [None] * 502}))
+
+    output = tmp_path / "training"
+    requests = []
+
+    def submit(request):
+        requests.append(request)
+        checkpoint = output / "checkpoints/step-1/metadata.json"
+        checkpoint.parent.mkdir(parents=True)
+        checkpoint.write_text(json.dumps({"step": 1, "is_temporary": False}))
+        return SimpleNamespace(wait=lambda **_: None)
+
+    fake_client = SimpleNamespace(submit=submit)
+    monkeypatch.setattr(dispatch, "current_client", lambda: fake_client)
+    monkeypatch.setattr(sft, "configure_coreweave_s3", lambda: None)
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", str(tmp_path / "cache"))
+
+    def run(recipe):
+        sft.sft_run(output=str(output), initializer=str(initializer), recipe=recipe, run_id="cuda-loading")
+        (request,) = requests
+        profile = json.loads((output / "runtime-profile.json").read_text())
+        return request, profile
+
+    return run
+
+
+@pytest.mark.parametrize(("configured", "expected"), [(None, "EAGER"), ("LAZY", "LAZY")])
+def test_sft_cuda_mode_is_recorded_and_sent_to_fray(local_sft_dispatch, monkeypatch, configured, expected):
+    recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
+    recipe["stop_after_steps"] = 1
+    if configured is not None:
+        recipe["cuda_module_loading"] = configured
+    monkeypatch.setenv("CUDA_MODULE_LOADING", "LAZY" if expected == "EAGER" else "EAGER")
+    request, profile = local_sft_dispatch(recipe)
+    assert request.environment.env_vars["CUDA_MODULE_LOADING"] == expected
+    assert profile["worker_environment"]["CUDA_MODULE_LOADING"] == expected
