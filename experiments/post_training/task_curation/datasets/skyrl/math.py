@@ -527,6 +527,29 @@ SOURCES = (
         ),
     ),
     MathSource(
+        "hardmath_rhs",
+        HfSource(
+            "pafitis/HARDMath_processed_training",
+            "937e9f10356e31e854f6efb9a2507f1e200c8b25",
+            ("data/train-00000-of-00001.parquet",),
+            SourceFormat.PARQUET,
+        ),
+        convert_hardmath_rhs,
+        IntendedUse.TRAIN,
+        HARDMATH_RUBRIC,
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="hardmath",
+            upstream_name="hardmath",
+            subset=None,
+            variant="rhs",
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.PAFITIS,
+            family="math-answer",
+            tags=("rlvr", "single-turn", "private", "remediated", "gym/aime"),
+        ),
+    ),
+    MathSource(
         "hendrycks_math",
         HfSource(
             "EleutherAI/hendrycks_math",
