@@ -553,8 +553,9 @@ def run_pynccl_init_check(device) -> dict:
     whose failure aborted the Snowball .60 restart. The wrapper returns
     silently unavailable when it cannot load its NCCL library, so pass
     requires available and not disabled. The mapped libnccl path and hash go
-    next to the version because the .60 warning text does not exist in the
-    pinned NCCL source.
+    next to the version as qualification evidence; the NCCL guard that
+    produced the .60 warning compares remote and local link layers, not
+    library identity.
     """
     info: dict[str, object] = {"stage": "pynccl_init"}
     try:
