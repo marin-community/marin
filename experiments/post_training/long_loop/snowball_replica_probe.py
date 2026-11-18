@@ -125,6 +125,9 @@ def worker(args: argparse.Namespace) -> None:
     compiled = OmegaConf.create(raw.decode())
     cfg = compiled["skyrl"]
     cfg.trainer.policy.megatron_config.pipeline_model_parallel_size = 1
+    # CPU activation offload is PP-only. This PP1 diagnostic never executes a
+    # forward/backward pass, so no activation checkpoint can be offloaded.
+    cfg.trainer.policy.megatron_config.transformer_config_kwargs.grug_checkpoint_cpu_offload = False
     model = cfg.trainer.policy.model
     metadata_dir = f"/tmp/snowball-replica-metadata-{args.config_sha256}"
     if int(os.environ["LOCAL_RANK"]) == 0:
