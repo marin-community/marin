@@ -21,6 +21,7 @@ import abc
 import logging
 import os
 from dataclasses import dataclass
+from typing import Any
 
 import draccus
 import haliax
@@ -57,6 +58,7 @@ class AdaptorExportConfig:
     hf_save_steps: int | None = None
     hf_save_dtype: str | None = None
     generation_config: GenerationConfigDict | None = None
+    generation_config_defaults: dict[str, Any] | None = None
     # Override the tokenizer template when the training data uses a different one.
     chat_template: str | None = None
 
@@ -138,6 +140,7 @@ def _install_full_model_export_hook(
             upload_to_hf=export.hf_upload or False,
             save_dtype=save_dtype,
             generation_config=export.generation_config,
+            generation_config_defaults=export.generation_config_defaults,
             chat_template=export.chat_template,
             field_dtype_overrides=trainer.config.field_dtype_overrides,
         ),
@@ -287,6 +290,7 @@ class LoraAdaptorConfig(LoraConfig, AdaptorConfig):
                     converter,
                     export.merged_hf_upload,
                     generation_config=export.generation_config,
+                    generation_config_defaults=export.generation_config_defaults,
                     chat_template=export.chat_template,
                     model_getter=export_model,
                     field_dtype_overrides=trainer.config.field_dtype_overrides,
