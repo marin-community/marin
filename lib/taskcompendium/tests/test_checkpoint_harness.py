@@ -11,6 +11,7 @@ import pytest
 from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.evaluation.spec import ChoiceLikelihood
+from taskcompendium.importers.evalchemy.biomedical import pubmedqa_template
 from taskcompendium.importers.evalchemy.code import read_humaneval_fewshot
 from taskcompendium.importers.evalchemy.commonsense import commonsense_qa_template, copa_template, wsc_template
 from taskcompendium.importers.evalchemy.reasoning import agieval_template, gpqa_likelihood_template
@@ -82,6 +83,30 @@ def test_checkpoint_gpqa_cleans_answers_before_shuffling_and_selecting_gold(tmp_
     assert operation.requests[3].continuation == " (D)"
     assert "(D) Correct. Answer Text\nAnswer: " in operation.requests[3].context
     assert "[ignored]" not in operation.requests[3].context
+
+
+def test_pubmedqa_joins_abstract_sections_and_scores_three_way_decision(tmp_path):
+    document = {
+        "QUESTION": "Does aspirin reduce fever in adults?",
+        "CONTEXTS": ["Background sentence.", "Results sentence."],
+        "final_decision": "maybe",
+    }
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.Table.from_pylist([document]), path)
+    (row,) = read_choice_file(
+        StoragePath(str(path)),
+        ConversionContext(inputs={}, grader_environment=None),
+        template=pubmedqa_template(),
+    )
+    operation = ChoiceLikelihood.model_validate(row["operation"])
+    # Rendered by lm-eval v0.4.12 preprocess_pubmedqa.doc_to_text for this row.
+    prompt = "Abstract: Background sentence.\nResults sentence.\nQuestion: Does aspirin reduce fever in adults?\nAnswer:"
+    assert [(request.context, request.continuation) for request in operation.requests] == [
+        (prompt, " yes"),
+        (prompt, " no"),
+        (prompt, " maybe"),
+    ]
+    assert operation.gold == (2,)
 
 
 def test_winogrande_fewshots_precede_both_candidate_contexts():

@@ -304,6 +304,42 @@ def test_dashboard_shared_chat_rejects_payload_over_512_kib(dashboard_tool_base_
     assert oversized.status_code == 413
 
 
+def test_dashboard_feedback_saves_report_with_serving_metadata(tmp_path):
+    info = ServingInfo("fake-model", "vllm", 1, 4096, "bfloat16", True, "/serve/fake")
+    app = build_dashboard_app(
+        upstream_base_url="http://127.0.0.1:1",
+        model_id="fake-model",
+        info=info,
+        feedback_prefix=str(tmp_path),
+    )
+    report = {
+        "description": "Ignored the system prompt.",
+        "reporter": "Ada",
+        "model": "fake-model",
+        "conversation": {"title": "Be terse", "messages": [{"role": "user", "content": "Hi"}]},
+    }
+    with TestClient(app) as client:
+        assert client.get("/info").json()["feedback"] is True
+        saved = client.post("/feedback", json=report)
+        missing_description = client.post("/feedback", json={"description": " ", "conversation": None})
+        oversized = client.post("/feedback", json={"description": "x" * (1024 * 1024)})
+
+    assert saved.status_code == 201
+    location = Path(saved.json()["location"])
+    assert location.parent.parent == tmp_path
+    record = json.loads(location.read_text())
+    assert record["report"] == report
+    assert record["serving"] == asdict(info)
+    assert missing_description.status_code == 400
+    assert oversized.status_code == 413
+    assert [path.name for path in tmp_path.rglob("*.json")] == [location.name]
+
+    unconfigured = build_dashboard_app(upstream_base_url="http://127.0.0.1:1", model_id="fake-model", info=info)
+    with TestClient(unconfigured) as client:
+        assert client.get("/info").json()["feedback"] is False
+        assert client.post("/feedback", json=report).status_code in (404, 405)
+
+
 def test_dashboard_shell_workspace_replays_git_branch_workflow(dashboard_tool_base_url):
     files = {
         "calculator.py": "def add(left: int, right: int) -> int:\n    return left - right\n",
