@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Small real-checkpoint proofs for explicit 10/05 optimizer-state conversion."""
 
 import dataclasses

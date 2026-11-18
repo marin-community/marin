@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Carried-state replay changes only the trainer/data index."""
 
 import jax.numpy as jnp
