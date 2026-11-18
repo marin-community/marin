@@ -23,7 +23,8 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         return response.json()
 
     record = progress_record()
-    assert publish(record) == record
+    sparse = {key: value for key, value in record.items() if value is not None and value != []}
+    assert publish(sparse) == record
     failed = record | {
         "attempt_id": "native-second",
         "started_at": "2026-11-03T00:00:00+00:00",
@@ -38,10 +39,11 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert publish(changed) == changed
     for omit_issue in (False, True):
         missing_issue = copy.deepcopy(changed)
-        if omit_issue:
-            missing_issue.pop("issue")
-        else:
-            missing_issue["issue"] = None
+        for field in ("issue", "gate", "gate_result"):
+            if omit_issue:
+                missing_issue.pop(field)
+            else:
+                missing_issue[field] = None
         assert publish(missing_issue) == changed
     unknown = record | {
         "run_id": "test/unknown",

@@ -21,6 +21,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
+from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.config_discovery import find_project_root
 from rigging.timing import Duration
 
@@ -32,6 +33,7 @@ from marin.rl.skyrl import IrisSkyRLExecution
 _COORDINATOR_CPU = 4
 _COORDINATOR_MEMORY = "16GB"
 _COORDINATOR_DISK = "64GB"
+_COORDINATOR_GRAPH_ENV = "MARIN_RL_COORDINATOR_GRAPH"
 _COORDINATOR_ENV_VARS = (
     "DAYTONA_API_KEY",
     "DAYTONA_RL_API_KEY",
@@ -47,6 +49,43 @@ class _IrisSubmissionRoute:
     priority: str
     timeout_hours: int
     container_profile: job_pb2.ContainerProfile | None
+
+
+class _CoordinatorGraph(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    runs: tuple[tuple[str, str], ...]
+    required_env_vars: tuple[str, ...]
+
+
+def _coordinator_graph(handles: list[ArtifactStep]) -> _CoordinatorGraph:
+    return _CoordinatorGraph(
+        runs=tuple(
+            (step.name, step.version)
+            for step in graph_handles(handles)
+            if any(isinstance(value, IrisSkyRLExecution) for value in step.runtime_args.values())
+        ),
+        required_env_vars=tuple(
+            sorted({name for execution in _skyrl_executions(handles) for name in execution.required_env_vars})
+        ),
+    )
+
+
+def validate_coordinator_graph(handles: list[ArtifactStep]) -> None:
+    """Refuse a re-entered graph whose run identities or forwarded environment names differ."""
+    payload = os.environ.get(_COORDINATOR_GRAPH_ENV)
+    if payload is None:
+        raise click.UsageError("submitted RL graph identity is missing from the coordinator")
+    try:
+        submitted = _CoordinatorGraph.model_validate_json(payload, strict=True)
+    except ValidationError as error:
+        raise click.UsageError("submitted RL graph identity is malformed") from error
+    rebuilt = _coordinator_graph(handles)
+    if rebuilt != submitted:
+        raise click.UsageError(
+            "coordinator rebuilt a different RL graph: "
+            f"submitted={submitted.model_dump_json()}, rebuilt={rebuilt.model_dump_json()}"
+        )
 
 
 def _module_name(module: ModuleType) -> str:
@@ -106,6 +145,7 @@ def _coordinator_request(
     for execution in executions:
         for name in execution.required_env_vars:
             selected_env[name] = env_vars[name]
+    selected_env[_COORDINATOR_GRAPH_ENV] = _coordinator_graph(handles).model_dump_json()
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
     job_name = sanitize_job_name(f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}")
@@ -141,6 +181,7 @@ def submit_or_run(
 ) -> JobName | None:
     """Run the graph in-job, or submit it and return the coordinator's ID."""
     if get_job_info() is not None:
+        validate_coordinator_graph(handles)
         run(*handles, max_concurrent=max_concurrent)
         return None
 

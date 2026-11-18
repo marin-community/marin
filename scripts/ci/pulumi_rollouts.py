@@ -60,7 +60,7 @@ ROLLOUTS = (
             "lib/finestore",
             "lib/iris",
             "lib/marin/src/marin/evaluation",
-            "lib/marin/src/marin/rl",
+            "lib/marin/src/marin/rl/rl_progress.py",
             "lib/rigging",
         ),
         # App packages have their own release lifecycle.

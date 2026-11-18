@@ -48,7 +48,7 @@ MINIMUM_SCORED_FRACTION = 0.99
 class WindowStatistic(StrEnum):
     MEAN = "mean"
     PHASE_SUM_MEDIAN = "phase-sum-median"
-    GAIN_PER_H100_HOUR = "gain-per-h100-hour"
+    GAIN_PER_GPU_HOUR = "gain-per-h100-hour"
     FIRST = "first"
     SELECTED_TOKEN_WEIGHTED_MEAN = "selected-token-weighted-mean"
 

@@ -18,8 +18,7 @@ from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training import iceball_micro, rl, skyrl_port_smoke, snowball_online_eagle
-from experiments.post_training import rl_presets as snowball
+from experiments.post_training import iceball_micro, rl, rl_presets, skyrl_port_smoke, snowball_online_eagle
 from experiments.post_training import rl_recipe as recipe
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.cat_count_canary import launcher as canary
@@ -47,7 +46,7 @@ def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
     return curriculum.build_arms(specs=(arm,), scale=scale, policy=policy, version=VERSION)[arm.name].rl
 
 
-def _snowball_step(preset: snowball.Preset, settings: tuple[str, ...] = ()) -> ArtifactStep[SkyRLRun]:
+def _snowball_step(preset: rl_presets.Preset, settings: tuple[str, ...] = ()) -> ArtifactStep[SkyRLRun]:
     eval_lite = recipe.selection_artifact(preset.eval_lite)
     selection = recipe.selection_artifact(preset.tasks)
     for source, full_rows in ((selection, 910), (eval_lite, 20)):

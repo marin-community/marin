@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import tomllib
 from pathlib import Path
 from uuid import UUID
 
 import pytest
+from marin.rl.rl_progress import RunSummary
 
 APPLET_ID = tomllib.loads((Path(__file__).parents[1] / "apps/rl_progress/applet.toml").read_text())["applet_id"]
 
@@ -45,7 +47,7 @@ def rl_progress_client(tmp_path, monkeypatch):
 
 
 def progress_record() -> dict:
-    return {
+    record = {
         "run_id": "test/control",
         "attempt_id": "native-first",
         "label": "learning-medium lr=2e-06",
@@ -76,3 +78,5 @@ def progress_record() -> dict:
         "artifact_uri": "s3://example/test",
         "evidence": [],
     }
+
+    return RunSummary.model_validate_json(json.dumps(record), strict=True).model_dump(mode="json")

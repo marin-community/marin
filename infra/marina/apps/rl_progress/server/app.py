@@ -51,13 +51,16 @@ def create_api(services):
                     text(
                         """INSERT INTO rl_runs (run_id, attempt_id, record)
                         VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
-                        ON CONFLICT (run_id, attempt_id) DO UPDATE SET record = jsonb_set(
-                            EXCLUDED.record, '{issue}',
-                            COALESCE(NULLIF(EXCLUDED.record -> 'issue', 'null'::jsonb),
-                                     rl_runs.record -> 'issue', 'null'::jsonb))
+                        ON CONFLICT (run_id, attempt_id) DO UPDATE SET record = EXCLUDED.record || jsonb_build_object(
+                            'issue', COALESCE(NULLIF(EXCLUDED.record -> 'issue', 'null'::jsonb),
+                                              rl_runs.record -> 'issue', 'null'::jsonb),
+                            'gate', COALESCE(NULLIF(EXCLUDED.record -> 'gate', 'null'::jsonb),
+                                             rl_runs.record -> 'gate', 'null'::jsonb),
+                            'gate_result', COALESCE(NULLIF(EXCLUDED.record -> 'gate_result', 'null'::jsonb),
+                                                    rl_runs.record -> 'gate_result', 'null'::jsonb))
                         RETURNING record"""
                     ),
-                    {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": encoded},
+                    {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": summary.model_dump_json()},
                 ).scalar_one()
         except ProgrammingError as error:
             details = error.orig.args[0]

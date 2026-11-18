@@ -102,6 +102,8 @@ def _selected_evaluation_record(
     run_output: str, launch: RecordedLaunch | None, receipt: AttemptRecord | None
 ) -> tuple[AttemptRecord, RecordedLaunch]:
     record = receipt or _evaluation_record(run_output)
+    if record.evaluation_storage_version != 1:
+        raise InvalidComparison("per-task evaluation records require storage version 1")
     selected = recorded_launch(record)
     if (record.run_id, record.attempt_id) != (selected.run_id, selected.attempt_id):
         raise InvalidComparison("evaluation receipt identity differs from its configuration")
@@ -115,18 +117,13 @@ def _selected_evaluation_record(
 
 
 def _attempt_answers(record: AttemptRecord, root: StoragePath) -> list[EvaluationAnswer]:
-    if record.evaluation_storage_version == 1:
-        root = root / record.attempt_id
-        if not root.exists():
-            raise InvalidComparison(f"evaluation dump is missing for attempt {record.attempt_id}: {root}")
+    root = root / record.attempt_id
+    if not root.exists():
+        raise InvalidComparison(f"evaluation dump is missing for attempt {record.attempt_id}: {root}")
     answers = _evaluation_answers(root)
-    if record.evaluation_storage_version == 1:
-        if any(
-            row.answer.get("attempt_id") != record.attempt_id or row.answer.get("step") != row.step for row in answers
-        ):
-            raise InvalidComparison(f"evaluation dump attribution differs from attempt {record.attempt_id}")
-        answers = [row for row in answers if row.answer["is_last_step"]]
-    return answers
+    if any(row.answer.get("attempt_id") != record.attempt_id or row.answer.get("step") != row.step for row in answers):
+        raise InvalidComparison(f"evaluation dump attribution differs from attempt {record.attempt_id}")
+    return [row for row in answers if row.answer["is_last_step"]]
 
 
 def evaluation_answers(
@@ -204,7 +201,6 @@ def evaluation_protocol(launch: RecordedLaunch, name: str) -> dict:
 def evaluation_scores(
     evaluation: presets.Evaluation,
     run_output: str,
-    primary_answers: list[EvaluationAnswer] | None = None,
     *,
     launch: RecordedLaunch | None = None,
     panel_root: str | None = None,
@@ -213,11 +209,6 @@ def evaluation_scores(
 ) -> pa.Table:
     """Read one recorded attempt, optionally joining an earlier panel's active membership."""
     record, launch = _selected_evaluation_record(run_output, launch, receipt)
-    if record.evaluation_storage_version != 1:
-        if panel_root is not None:
-            raise InvalidComparison("version recomputation requires per-task evaluation records")
-        scores = _legacy_evaluation_scores(evaluation, run_output, primary_answers, launch=launch, receipt=record)
-        return scores.filter(pc.equal(scores["step"], step)) if step is not None else scores
     tasks = read_evaluations(
         launch.export_root, attempt_id=record.attempt_id, evaluation=native_prefix(launch, evaluation.name), step=step
     )
@@ -269,57 +260,6 @@ def evaluation_scores(
             }
         )
         attempts[task.step, task.task_id] += 1
-    return pa.Table.from_pylist(rows, schema=EVAL_SCORE_SCHEMA)
-
-
-def _legacy_evaluation_scores(
-    evaluation: presets.Evaluation,
-    run_output: str,
-    primary_answers: list[EvaluationAnswer] | None = None,
-    *,
-    launch: RecordedLaunch,
-    receipt: AttemptRecord,
-) -> pa.Table:
-    sources = recorded_sources(launch, evaluation.name)
-    answers = (
-        _attempt_answers(receipt, StoragePath(launch.export_root) / evaluation.name / "dumped_evals")
-        if native_prefix(launch, evaluation.name) != "eval/"
-        else evaluation_answers(run_output, launch, receipt=receipt) if primary_answers is None else primary_answers
-    )
-    manifest = {}
-    for source in sources:
-        manifest.update(task_manifest(StoragePath(source.uri)))
-    attempts = Counter()
-    rows = []
-    for step, path, row in answers:
-        if not row.get("is_last_step", True):
-            continue
-        item = row.get("task_id")
-        if not item:
-            raise InvalidComparison(f"evaluation answer lacks a TaskSpec id: {path}")
-        metadata = manifest.get(item, {})
-        if evaluation.held_out and not metadata:
-            raise InvalidComparison(f"evaluation task {item} is absent from its task manifest")
-        verdict = row.get("verification")
-        verified = bool(verdict and verdict["status"] == "verified")
-        score = 0.0
-        if verified:
-            value, lower, upper = (float(verdict[key]) for key in ("score", "score_min", "score_max"))
-            if not all(math.isfinite(number) for number in (value, lower, upper)) or upper <= lower:
-                raise InvalidComparison(f"invalid verifier score or bounds for {item}")
-            score = min(1.0, max(0.0, (value - lower) / (upper - lower)))
-        rows.append(
-            {
-                "evaluation": evaluation.name,
-                "step": step,
-                "item": item,
-                "attempt": attempts[step, item],
-                **{column: metadata.get(column) for column in SLICE_COLUMNS},
-                "score": score,
-                "scored": verified and not row.get("exception_type") and not row.get("error_treatment"),
-            }
-        )
-        attempts[step, item] += 1
     return pa.Table.from_pylist(rows, schema=EVAL_SCORE_SCHEMA)
 
 
@@ -561,9 +501,45 @@ class RunData:
     evaluations: tuple[Comparison, ...]
     slices: dict[str, int]
     evaluation_identity: dict[str, tuple[str | None, dict]]
-    h100_hours: float | None
+    gpu_hours: float | None
     engine: dict
     attempt_id: str
+
+
+class EvaluationStatus(BaseModel):
+    evaluations: tuple[Comparison, ...] = ()
+    evaluation_invariants: tuple[Invariant, ...] = ()
+    evaluation_error: str | None = None
+
+
+def evaluation_status(
+    path: str, preset: presets.Preset, receipt: AttemptRecord, launch: RecordedLaunch
+) -> EvaluationStatus:
+    """Read successful-attempt evaluation summaries and invariants for status and publication."""
+    if not preset.evaluations or receipt.native.result.state != "succeeded":
+        return EvaluationStatus()
+    try:
+        effective = preset.with_updates(launch.max_steps if launch.max_steps is not None else preset.updates)
+        try:
+            inputs = read_gate_inputs(path)
+        except FileNotFoundError:
+            inputs = None
+        data = load_run(path, effective, inputs, receipt=receipt)
+        return EvaluationStatus(
+            evaluations=data.evaluations,
+            evaluation_invariants=tuple(
+                fact
+                for fact in data.invariants
+                if any(fact.name.startswith(evaluation.name + "/") for evaluation in preset.evaluations)
+            ),
+        )
+    except (InvalidComparison, FileNotFoundError) as error:
+        return EvaluationStatus(
+            evaluation_error=str(error),
+            evaluation_invariants=(
+                Invariant(name="evaluation_records_available", value=False, limit=True, comparator="==", holds=False),
+            ),
+        )
 
 
 def training_invariants(preset: presets.Preset, metrics: Mapping[int, Mapping[str, float]]) -> tuple[Invariant, ...]:
@@ -595,7 +571,11 @@ def load_run(
         launch = recorded_launch(terminal)
     except ValueError as error:
         raise InvalidComparison(str(error)) from None
-    answers = evaluation_answers(path, launch, receipt=terminal) if preset.evaluations else []
+    answers = (
+        evaluation_answers(path, launch, receipt=terminal)
+        if preset.evaluations and preset.recipe.fixed_reply_tokens is not None
+        else []
+    )
     tracking = attempt_tracking(terminal, launch)
     try:
         recorded_task_sets = {
@@ -621,7 +601,7 @@ def load_run(
         expected = recipe.evaluation_answer_count(
             evaluation, recipe.evaluation_source(evaluation, selection, default, preset.eval_lite)
         )
-        all_scores = evaluation_scores(evaluation, path, answers, launch=launch, receipt=terminal)
+        all_scores = evaluation_scores(evaluation, path, launch=launch, receipt=terminal)
         table = all_scores
         initial = table.filter(pc.equal(table["step"], 0))
         table = table.filter(pc.equal(table["step"], workload.scored_step(preset.updates)))
@@ -686,11 +666,11 @@ def load_run(
         if key in values:
             values[key + "/gain"] = values[key] - value
     result = terminal.native.result
-    h100_hours = None
+    gpu_hours = None
     if result.started_at and result.finished_at:
         seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(result.started_at)) / 1000
         if seconds > 0:
-            h100_hours = seconds * launch.num_nodes * launch.gpus_per_node / 3600
+            gpu_hours = seconds * launch.num_nodes * launch.gpus_per_node / 3600
     slices = {key: len({row["item"] for row in rows}) for key, rows in score_slices(final).items()}
     return RunData(
         config=terminal.native.config,
@@ -703,7 +683,7 @@ def load_run(
         evaluations=tuple(evaluations),
         slices=slices,
         evaluation_identity=identities,
-        h100_hours=h100_hours,
+        gpu_hours=gpu_hours,
         engine=tracking.get("engine", {}),
         attempt_id=terminal.attempt_id,
     )
@@ -712,10 +692,10 @@ def load_run(
 def with_objectives(candidate: RunData, preset: presets.Preset) -> RunData:
     values = dict(candidate.values)
     for metric in preset.objectives:
-        if metric.window == presets.WindowStatistic.GAIN_PER_H100_HOUR:
+        if metric.window == presets.WindowStatistic.GAIN_PER_GPU_HOUR:
             gain = values.get(metric.key.removesuffix("_per_h100_hour"))
-            if gain is not None and candidate.h100_hours:
-                values[metric.key] = gain / candidate.h100_hours
+            if gain is not None and candidate.gpu_hours:
+                values[metric.key] = gain / candidate.gpu_hours
     return replace(candidate, values=values)
 
 

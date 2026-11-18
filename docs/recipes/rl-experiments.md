@@ -61,7 +61,7 @@ checkpoints or export; learner and engine token rates are descriptive telemetry.
 Publish a stored attempt after an app release, without starting native work:
 
 ```bash
-uv run python -m experiments.post_training.snowball_rl_publication --preset train-long \
+uv run python -m experiments.post_training.snowball_rl publish --preset train-long \
   --output RUN_OUTPUT --attempt ATTEMPT_ID --url MARINA_ORIGIN
 ```
 
@@ -86,7 +86,7 @@ requires a report for exactly the current native attempts.
 Publish learning-medium or data-medium controls from their stored paths:
 
 ```bash
-python -m experiments.post_training.snowball_rl_publication --preset learning-medium
+python -m experiments.post_training.snowball_rl publish --preset learning-medium
 ```
 
 The pins in `snowball_rl.SNOWBALL.controls` must match the preset's current revision; unavailable pins

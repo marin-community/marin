@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, replace
 from datetime import datetime
-from functools import partial
 from pathlib import Path, PurePosixPath
 
 import click
@@ -32,7 +31,6 @@ from marin.rl.skyrl import (
     SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
-    run_skyrl,
     skyrl_step,
 )
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
@@ -388,7 +386,7 @@ def run_spec(
     workload = preset.recipe.layout.workload
     preset = preset.with_updates(config.trainer.max_steps)
     model = preset.model if init is None else init
-    initial_model_uri = model.step.path()
+    initial_model_uri = model.step.path(artifact_prefix(preset.recipe.layout.cluster))
     validation_data = ()
     evaluation_data = []
     profiles = {}
@@ -456,7 +454,7 @@ def run_step(
     """Bind an RL specification to its declared execution resources."""
     layout = preset.recipe.layout
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
-    step = skyrl_step(
+    return skyrl_step(
         spec,
         IrisSkyRLExecution(
             cluster=layout.cluster,
@@ -476,7 +474,6 @@ def run_step(
         ),
         export_hf=preset.export_hf,
     )
-    return replace(step, run=partial(run_skyrl, forward_env=forward_env))
 
 
 def evaluation_source(

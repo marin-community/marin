@@ -34,8 +34,8 @@ from marin.execution.lazy import run as build_artifacts
 from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.experiment.namespacing import user_owned_name
-from marin.rl.cli import submit_or_run
-from marin.rl.rl_progress import Invariant, Verdict
+from marin.rl.cli import submit_or_run, validate_coordinator_graph
+from marin.rl.rl_progress import Verdict
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     IrisSkyRLExecution,
@@ -64,8 +64,7 @@ from experiments.post_training.rl_scoring import (
     GATE_INPUTS_FILENAME,
     GateInputs,
     InvalidComparison,
-    load_run,
-    read_gate_inputs,
+    evaluation_status,
 )
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
@@ -215,36 +214,6 @@ def _grafana_links(receipt: AttemptRecord | None, cluster: str, launch: Recorded
     return {"run": grafana_url(receipt.run_id, cluster, launch.training_type, result.started_at, result.finished_at)}
 
 
-def _evaluation_status(path: str, preset: presets.Preset, receipt: AttemptRecord, launch: RecordedLaunch) -> dict:
-    if not preset.evaluations or receipt.native.result.state != "succeeded":
-        return {}
-    try:
-        effective = preset.with_updates(launch.max_steps if launch.max_steps is not None else preset.updates)
-        try:
-            inputs = read_gate_inputs(path)
-        except FileNotFoundError:
-            inputs = None
-        data = load_run(path, effective, inputs, receipt=receipt)
-        facts = [
-            fact
-            for fact in data.invariants
-            if any(fact.name.startswith(evaluation.name + "/") for evaluation in preset.evaluations)
-        ]
-        return {
-            "evaluations": [row.model_dump(mode="json", exclude_none=True) for row in data.evaluations],
-            "evaluation_invariants": [fact.model_dump(mode="json") for fact in facts],
-        }
-    except (InvalidComparison, FileNotFoundError) as error:
-        return {
-            "evaluation_error": str(error),
-            "evaluation_invariants": [
-                Invariant(
-                    name="evaluation_records_available", value=False, limit=True, comparator="==", holds=False
-                ).model_dump(mode="json")
-            ],
-        }
-
-
 def _evaluation_failed(snapshot: dict, preset: presets.Preset) -> bool:
     return bool(preset.checkpoint_every) and any(
         not fact["holds"] for row in snapshot["runs"] for fact in row.get("evaluation_invariants", ())
@@ -313,7 +282,9 @@ def _status(
                 },
                 **({"grafana_links": grafana} if grafana else {}),
                 **(
-                    _evaluation_status(path, preset, receipt, launch)
+                    evaluation_status(path, preset, receipt, launch).model_dump(
+                        mode="json", exclude_unset=True, exclude_none=True
+                    )
                     if receipt is not None and launch is not None
                     else {}
                 ),
@@ -504,6 +475,7 @@ def _run_command(
                 )
             _print_status({"coordinator_job_id": str(job), "submitted_at": submitted_at, "runs": submitted})
         else:
+            validate_coordinator_graph(handles)
             _run_graph(handles, max_concurrent)
             job = None
         if options["wait"] and job is not None:
@@ -657,10 +629,11 @@ def main(
     """Run the selected model table's CLI, retaining Click's exit status."""
     args = list(sys.argv[1:] if argv is None else argv)
     try:
-        if args and args[0] == "rescore":
+        if args and args[0] in {"rescore", "publish"}:
             if init is not None:
-                raise click.UsageError("Python init cannot be used with rescore")
-            selected, args = rl_gate.command(table), args[1:]
+                raise click.UsageError(f"Python init cannot be used with {args[0]}")
+            selected = (rl_gate if args[0] == "rescore" else rl_publication).command(table)
+            args = args[1:]
         else:
             selected = command(table, argv=tuple(args), init=init, entry_module=entry_module, forward_env=forward_env)
         result = selected.main(args=args, standalone_mode=False)

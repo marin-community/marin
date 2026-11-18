@@ -18,10 +18,11 @@ Malformed records are skipped individually and named in a visible note.
 
 The app's release migration creates its `rl_runs` table in the application schema.
 Each native `(run_id, attempt_id)` identifies one updatable JSON record. Repeat
-publication refreshes that attempt's record; a missing issue preserves its stored
-issue link. Other attempts remain separate.
+publication refreshes that attempt's record; null issue, gate and gate-result values
+preserve their stored values. Other attempts remain separate.
 
 Native failures and failed training or evaluation invariants set `status: failed` and name `failed_facts`.
+Training grader errors are reported in rollout metrics; they do not fail an ungated run's status.
 Records carry native identity, source and engine facts, and the launcher's issue.
 The planned update count and measured update indices come from the run's effective configuration;
 the detail view shows them beside the observed optimizer count. Missing stored values are unknown.
