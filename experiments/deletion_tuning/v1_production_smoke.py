@@ -24,6 +24,7 @@ ramp, and the hard-mask HF export with the packed mask artifact.
 import dataclasses
 import json
 import logging
+import tempfile
 from datetime import timedelta
 from pathlib import Path
 
@@ -161,8 +162,6 @@ def run_production_smoke(output_root: Path | None = None) -> dict:
     configure_coreweave_s3()
     release = v1_data_release(require_ready=False)
     spec = _smoke_spec(release)
-    import tempfile
-
     with tempfile.TemporaryDirectory(prefix="v1-production-smoke-") as tmp:
         output_path = Path(tmp) / "run"
         from marin.training.training import TrainLmOnPodConfig
