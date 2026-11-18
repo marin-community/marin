@@ -27,6 +27,7 @@ from levanter.models.snowball_deletion import (
     deletion_regularizer,
     deletion_trainable_filter,
     wanda_delete_threshold,
+    wanda_input_sums_local,
 )
 from marin.rl.deletion_tuning import alpha_ramp as core_alpha_ramp
 
@@ -207,8 +208,6 @@ def test_alpha_ramp_matches_core():
 
 def test_wanda_capture_shard_local_stats(mesh):
     """The shard-local Wanda capture runs under shard_map and counts valid tokens."""
-    from levanter.models.snowball_deletion import wanda_input_sums_local
-
     batch, seq, experts, hidden = 2, 4, 4, 3
     rng = np.random.default_rng(7)
     x = hax.named(rng.normal(size=(batch, seq, hidden)).astype(np.float32), ("batch", "sequence", "mlp"))
