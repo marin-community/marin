@@ -29,7 +29,7 @@ from experiments.sft_new_mix.exp3_runtime import configure_storage
 logger = logging.getLogger(__name__)
 
 
-def read_remote_parquet(uri: str) -> pq.Table:
+def read_remote_parquet(uri: str):
     """Read one small parquet object through the bucket-aware filesystem."""
     fs = filesystem_for(uri)
     fs = fs[0] if isinstance(fs, tuple) else fs
