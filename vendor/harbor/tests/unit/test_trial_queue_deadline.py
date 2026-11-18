@@ -789,6 +789,7 @@ async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(
     retry = RetryConfig(
         max_retries=1,
         include_exceptions={"AgentTimeoutError", "TimeoutError"},
+        exclude_exceptions=None,
         min_wait_sec=0,
         max_wait_sec=0,
     )
