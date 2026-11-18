@@ -1055,6 +1055,36 @@ ACTOR_IMAGE_BASE_LABEL = "org.opencontainers.image.base.digest"
 ACTOR_IMAGE_KANIKO_PATHS = (Path("/kaniko/executor"), Path("/usr/local/bin/executor"))
 """Where the kaniko executor lives in the task image; the tracked actor builds used it."""
 
+KANIKO_EXECUTOR_IMAGE = (
+    "gcr.io/kaniko-project/executor@sha256:2562c4fe551399514277ffff7dcca9a3b1628c4ea38cb017d7286dc6ea52f4cd"
+)
+"""The pinned kaniko executor image; the task image ships no kaniko, so the binary is extracted from it."""
+
+
+def resolve_kaniko_executor(scratch: Path) -> Path:
+    """The kaniko executor: the task image's own, or extracted from the pinned executor image.
+
+    The tracked actor builds ran inside the kaniko executor image itself; the Iris task image
+    ships no kaniko, so the pinned executor binary is pulled out of its image with the tools
+    the task image does carry (skopeo and umoci).
+    """
+    found = next((path for path in ACTOR_IMAGE_KANIKO_PATHS if path.exists()), None) or shutil.which("kaniko")
+    if found is not None:
+        return Path(found)
+    layout = scratch / "kaniko-oci"
+    bundle = scratch / "kaniko-bundle"
+    subprocess.run(
+        ["skopeo", "copy", "--retry-times", "3", f"docker://{KANIKO_EXECUTOR_IMAGE}", f"oci:{layout}:kaniko"], check=True
+    )
+    subprocess.run(["umoci", "unpack", "--image", f"{layout}:kaniko", str(bundle)], check=True)
+    extracted = bundle / "rootfs" / "kaniko" / "executor"
+    if not extracted.is_file():
+        raise RuntimeError(f"The pinned kaniko image carries no /kaniko/executor: {KANIKO_EXECUTOR_IMAGE}")
+    target = scratch / "executor"
+    shutil.copy(extracted, target)
+    target.chmod(0o755)
+    return target
+
 
 def actor_image_dockerfile(base_ref: str, setup_commands: tuple[str, ...]) -> str:
     """The prepared actor image's recipe: the pinned base plus the task's own setup commands.
@@ -1100,11 +1130,10 @@ def build_and_push_actor_image(
     base_ref = environment.docker_image
     if base_ref is None:
         raise ValueError("The actor environment declares no base image to bake")
-    executor = next((path for path in ACTOR_IMAGE_KANIKO_PATHS if path.exists()), None) or shutil.which("kaniko")
-    if executor is None:
-        raise RuntimeError("The kaniko executor is unavailable; the actor image cannot be built")
     with tempfile.TemporaryDirectory() as scratch:
-        directory = Path(scratch)
+        executor = resolve_kaniko_executor(Path(scratch))
+        directory = Path(scratch) / "context"
+        directory.mkdir()
         (directory / "Dockerfile").write_text(actor_image_dockerfile(base_ref, environment.setup_commands))
         tar = directory / "actor.tar"
         subprocess.run(
