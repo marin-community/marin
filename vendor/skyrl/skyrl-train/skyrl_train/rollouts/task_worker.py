@@ -427,7 +427,7 @@ class TaskRolloutWorker:
             engine_requirements = lowered.task.environment_requirements.model_copy(
                 update={"setup_commands": (), "working_directory": None}
             )
-            if engine_requirements.model_copy(update={"tool_providers": {}}) != EnvironmentRequirements():
+            if engine_requirements != EnvironmentRequirements():
                 raise ValueError(
                     "Declare environment requirements in the Harbor package; "
                     "TaskSpec overrides support only setup_commands and their working_directory"

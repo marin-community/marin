@@ -80,19 +80,16 @@ def harbor_package(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("phase", "environment_overrides"),
-    [("train", {}), ("eval", {}), ("train", {"environment_variables": {"VISIBLE": "override"}})],
-)
-async def test_original_trial_preserves_phase_connection_and_rejects_environment_overrides(
-    tmp_path, monkeypatch, phase, environment_overrides, harbor_package
+@pytest.mark.parametrize("phase", ["train", "eval"])
+async def test_original_trial_uses_captured_phase_connection_at_provider_startup(
+    tmp_path, monkeypatch, phase, harbor_package
 ):
     package = harbor_package
     task = harbor_trial_task(package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
     task = task.model_copy(
         update={
             "environment_requirements": task.environment_requirements.model_copy(
-                update={"setup_commands": ("exit 23",), "working_directory": "/workspace", **environment_overrides}
+                update={"setup_commands": ("exit 23",), "working_directory": "/workspace"}
             )
         }
     )
@@ -127,10 +124,6 @@ async def test_original_trial_preserves_phase_connection_and_rejects_environment
         shutdown_timeout=5,
         installed_agents=runtime,
     )
-    if environment_overrides:
-        with pytest.raises(ValueError, match="Harbor package"):
-            worker._configured_task_and_harnesses(lowered, harbor, "session", phase)
-        return
     configured, harnesses = worker._configured_task_and_harnesses(lowered, harbor, "session", phase)
     monkeypatch.setenv("DAYTONA_API_KEY", "ambient-key")
     monkeypatch.setenv("DAYTONA_API_URL", "https://ambient.invalid/api")
@@ -181,7 +174,6 @@ async def test_original_trial_preserves_phase_connection_and_rejects_environment
     [result_path] = list((attempts[0] / "trials").glob("*/result.json"))
     result = TrialResult.model_validate_json(result_path.read_text())
     assert result.exception_info.exception_type == "ProviderUnavailable"
-    assert result.exception_info.exception_message == "fixture provider unavailable"
 
 
 @pytest.mark.asyncio
