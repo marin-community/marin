@@ -231,7 +231,8 @@ def test_render_text_reports_the_missing_artifacts():
         "catalog": {
             "rows": 2,
             "sources_with_rows": 2,
-            "measured_by_run": 1,
+            "aggregated_by_run": 1,
+            "aggregated_by_run_statuses": {"measured": 1},
             "inherited": 1,
             "own_basis": "derived from cumulative row deltas",
             "pending_reasons": {"awaiting_scored_coverage": 1},

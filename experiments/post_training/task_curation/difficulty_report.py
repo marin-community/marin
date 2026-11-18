@@ -554,7 +554,9 @@ def run_section(
     sources = classification["sources"]
     pending_reasons: dict[str, int] = defaultdict(int)
     not_measured_reasons: dict[str, int] = defaultdict(int)
+    own_status_counts: dict[str, int] = defaultdict(int)
     for item in sources.values():
+        own_status_counts[item["status"]] += 1
         if item["status"] == "pending" and item["reason"]:
             pending_reasons[item["reason"]] += 1
         if item["status"] == "not_measured" and item["reason"]:
@@ -596,7 +598,8 @@ def run_section(
         "catalog": {
             "rows": len(run.rows),
             "sources_with_rows": len(sources),
-            "measured_by_run": sum(1 for item in sources.values() if item["own"]),
+            "aggregated_by_run": sum(1 for item in sources.values() if item["own"]),
+            "aggregated_by_run_statuses": dict(sorted(own_status_counts.items())),
             "inherited": sum(1 for item in sources.values() if not item["own"]),
             "own_basis": classification["own_basis"],
             "pending_reasons": dict(sorted(pending_reasons.items())),
@@ -731,8 +734,9 @@ def render_run(run: dict[str, Any]) -> list[str]:
         lines.append("    wall: unavailable — the run wrote no catalog rows")
     lines.append(
         f"    catalog: {catalog['sources_with_rows']} sources with rows; "
-        f"measured by this run={catalog['measured_by_run']} inherited={catalog['inherited']} "
-        f"({catalog['own_basis']})"
+        f"aggregated by this run={catalog['aggregated_by_run']}"
+        + (f" ({catalog['aggregated_by_run_statuses']})" if catalog.get("aggregated_by_run_statuses") else "")
+        + f" inherited={catalog['inherited']} ({catalog['own_basis']})"
     )
     if catalog["pending_reasons"]:
         lines.append(
