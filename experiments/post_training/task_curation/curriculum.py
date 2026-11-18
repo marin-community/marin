@@ -5,9 +5,8 @@
 
 The catalog (:func:`~experiments.post_training.task_curation.sources.runnable_sources`) owns which
 sources exist and what pins them; this module owns the policy binding: which of them a curriculum
-samples, at what weights or in what stage order. Mixes are policy, not catalog — declare weights in
-the experiment that launches the run, exactly as SFT mixture weights stay out of the dataset
-catalog.
+samples, at what weights or in what stage order. The experiment that launches the run declares
+weights, as with SFT mixture weights.
 """
 
 from collections.abc import Mapping, Sequence
@@ -73,7 +72,6 @@ def weighted_curriculum(
         entries=entries,
         stages=(),
         seed=seed,
-        fingerprint="",
     )
 
 
@@ -89,7 +87,7 @@ def ordered_curriculum(
     """Build an ordered curriculum over named catalog sources.
 
     ``stages`` lists source names in the order the trainer consumes them; ``quotas`` bounds each
-    stage visit in prompts (an absent quota runs one full pass over that source's rows). Every
+    stage visit in prompts (an absent quota draws the source pool's row count). Every
     named source must exist in the catalog (default: :func:`runnable_sources`) and carry a pinned
     dataset; the source's current version, pin, and pipeline identity are recorded at build time.
     """
@@ -109,5 +107,4 @@ def ordered_curriculum(
         entries=entries,
         stages=declared,
         seed=seed,
-        fingerprint="",
     )

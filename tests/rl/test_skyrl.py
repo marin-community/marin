@@ -29,7 +29,6 @@ from marin.rl.skyrl import (
     MegatronGeometry,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
-    SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
@@ -1103,7 +1102,6 @@ def _curriculum(mode: SamplingMode) -> RlCurriculum:
         entries=entries,
         stages=stages,
         seed=17,
-        fingerprint="",
     )
 
 
@@ -1123,6 +1121,7 @@ def test_skyrl_spec_renders_the_curriculum_into_the_recipe_and_launch_document(m
     launch = yaml.safe_load(config.launch_config_yaml)
     recorded = launch["inputs"]["curriculum"]
     assert recorded["identity"] == spec.curriculum.identity
+    assert config.curriculum_identity == spec.curriculum.identity
     assert recorded["mode"] == mode.value
     assert [source["source"] for source in recorded["sources"]] == ["gsm8k", "svamp"]
     assert recorded["sources"][0]["pin"] == {
@@ -1142,23 +1141,6 @@ def test_skyrl_spec_renders_the_curriculum_into_the_recipe_and_launch_document(m
             {"source": "svamp", "quota": None},
         ]
         assert recorded["stages"] == [{"source": "gsm8k", "quota": 4096}, {"source": "svamp", "quota": None}]
-
-
-def test_skyrl_run_record_names_the_curriculum() -> None:
-    curriculum = _curriculum(SamplingMode.WEIGHTED)
-    result = SkyRLRun(
-        path="runs/terminal.json",
-        hf_model_uri=None,
-        global_step=8,
-        tokenizer_uri="test/tokenizer",
-        tokenizer_revision="rev",
-        checkpoint_root="runs/checkpoints",
-        draft_checkpoint_root=None,
-        terminal_manifest_uri="runs/terminal.json",
-        iris_job_id="/cluster/job",
-        curriculum=curriculum.identity,
-    )
-    assert result.result_payload()["curriculum"] == curriculum.identity
 
 
 def test_skyrl_spec_rejects_a_recipe_that_disagrees_with_its_curriculum() -> None:

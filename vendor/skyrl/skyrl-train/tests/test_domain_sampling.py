@@ -48,13 +48,12 @@ def test_order_resumes_from_another_instance_state(build):
 
 
 def test_domain_weighted_windows_compose_the_exact_weighted_quotas():
-    """Every window's route composition is exactly the weighted_quotas allocation for that window."""
+    """Each ten-prompt window contains seven math and three SWE prompts."""
     dataset = _route_dataset(ROUTES)
     order = DomainWeightedOrder(dataset, WEIGHTS, seed=7, window_size=10)
-    for window in range(4):
+    for _ in range(4):
         drawn = [_route_of(dataset, order.next_index()) for _ in range(10)]
-        quotas = weighted_quotas(10, WEIGHTS, window)
-        assert Counter(drawn) == Counter({name: quota for name, quota in quotas.items() if quota})
+        assert Counter(drawn) == Counter({"math": 7, "swe": 3})
 
 
 def test_ordered_stages_yield_the_declared_sequence():
@@ -67,7 +66,7 @@ def test_ordered_stages_yield_the_declared_sequence():
     assert [_route_of(dataset, replay.next_index()) for _ in range(20)] == labels
 
 
-def test_ordered_stages_without_quota_run_one_full_pass():
+def test_ordered_stages_without_quota_draw_the_pool_row_count():
     dataset = _route_dataset(["a"] * 2 + ["b"] * 1)
     order = OrderedStages(dataset, [{"source": "a"}, {"source": "b"}], seed=3, window_size=2)
     labels = [_route_of(dataset, order.next_index()) for _ in range(6)]

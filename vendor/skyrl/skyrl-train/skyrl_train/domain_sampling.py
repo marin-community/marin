@@ -126,8 +126,8 @@ class DomainWeightedOrder:
 class OrderedStages:
     """Consume route pools in a declared stage sequence.
 
-    Each stage draws from one route's pool: ``quota`` prompts per stage visit, or one full pass
-    when the stage declares no quota. When a stage's quota is spent the sequence advances, and past
+    Each stage draws from one route's pool: ``quota`` prompts per stage visit, or the pool's row
+    count when the stage declares no quota. When a stage's quota is spent the sequence advances, and past
     the last stage it restarts from the first. Draws are deterministic given the seed, and rows stay
     unique within each window of ``window_size`` draws, as :class:`DomainWeightedOrder` requires.
     """
