@@ -34,6 +34,15 @@ TASKS_FILENAME = "tasks.parquet"
 CARD_FILENAME = "README.md"
 
 
+def _source_pin_line(card_text: str) -> str | None:
+    """The ``Source pin:`` line a publication card declares, for content-pin comparison."""
+    for line in card_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Source pin:"):
+            return stripped
+    return None
+
+
 def publish(
     tasks: Path, card: Path, repo: str, *, data_restriction: DataRestriction, evidence_files: tuple[Path, ...] = ()
 ) -> str:
@@ -41,16 +50,34 @@ def publish(
 
     The caller passes the source population's tier: a PRIVATE_ALWAYS payload is
     refused here at the shared helper, never published anywhere.
+
+    A repo left behind by a partial prior run is resumed into, never clobbered:
+    the existing card must declare the same ``Source pin`` as the new card, or
+    the publication refuses and a new version name is required.
     """
     require_public_data(data_restriction, destination=repo)
     api = HfApi()
+    exist_ok = False
+    try:
+        existing_card_path = hf_hub_download(repo_id=repo, filename=CARD_FILENAME, repo_type="dataset")
+        existing_pin = _source_pin_line(Path(existing_card_path).read_text())
+        new_pin = _source_pin_line(card.read_text())
+        if existing_pin is not None and existing_pin != new_pin:
+            raise ValueError(
+                f"Publication destination holds another content pin: {repo}; "
+                f"existing {existing_pin!r} != new {new_pin!r} — use a new version name"
+            )
+        exist_ok = True
+    except Exception as error:
+        if "Source pin" in str(error):
+            raise
     with tempfile.TemporaryDirectory(prefix="calibforge-publish-") as directory:
         staging = Path(directory)
         shutil.copyfile(tasks, staging / TASKS_FILENAME)
         shutil.copyfile(card, staging / CARD_FILENAME)
         for source in evidence_files:
             shutil.copyfile(source, staging / source.name)
-        api.create_repo(repo_id=repo, repo_type="dataset", private=True, exist_ok=False)
+        api.create_repo(repo_id=repo, repo_type="dataset", private=True, exist_ok=exist_ok)
         if not api.repo_info(repo, repo_type="dataset").private:
             raise ValueError(f"Publication destination must be private: {repo}")
         commit = api.upload_folder(
