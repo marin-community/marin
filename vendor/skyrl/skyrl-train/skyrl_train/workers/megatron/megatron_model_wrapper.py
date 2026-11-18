@@ -116,9 +116,11 @@ class MegatronModelWrapper:
         policy_loss_fn: Optional[Callable] = None,
         logprob_chunk_size: Any = _UNSET,
         vocabulary_size: int | None = None,
+        fp32_lm_head: bool = False,
     ):
         self.cfg = config
         self.vocabulary_size = vocabulary_size
+        self.fp32_lm_head = fp32_lm_head
         self.actor_module = actor_module
         self.actor_optimizer = actor_optimizer
         self.policy_loss_fn = policy_loss_fn
@@ -352,7 +354,7 @@ class MegatronModelWrapper:
             # Only the mixed-precision wrapper consumes the precision kwarg; a raw fp32
             # module (equivalence experiments) already returns module-precision outputs.
             inner = model.module if isinstance(model, MegatronDDP) else model
-            precision_kwargs = {"fp32_output": False} if isinstance(inner, Float16Module) else {}
+            precision_kwargs = {"fp32_output": self.fp32_lm_head} if isinstance(inner, Float16Module) else {}
             outputs = model(
                 model_sequences,
                 model_position_ids,

@@ -49,6 +49,35 @@ to check runtime behavior after dependency changes.
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
 
+## FP32 LM head trial
+
+The Megatron policy and reference model can use an FP32 output projection at
+TP1 while keeping BF16 model weights and earlier layers. For a paired Mochi
+train/serve trial, set these fields in the RL recipe:
+
+```yaml
+trainer:
+  policy:
+    megatron_config:
+      fp32_lm_head: true
+generator:
+  engine_init_kwargs:
+    hf_overrides:
+      head_dtype: float32
+```
+
+The Megatron setting casts the output layer input and weight before the matrix
+multiplication, keeps the resulting logits in FP32, and sends gradients through
+the casts to the BF16 weight. It disables fused gradient accumulation for that
+layer. The vLLM setting requires the pinned Marin vLLM fork's `head_dtype`
+support. Set `trainer.ref.megatron_config.fp32_lm_head` separately if a
+reference model is scored. Both Megatron settings default to `false`.
+
+Only TP1, non-sequence-parallel Megatron output layers without deferred
+embedding gradients are supported. Compare fixed response tokens and captured
+routes with replay enabled before adopting the setting; this option has no
+measured Mochi parity or throughput result yet.
+
 ## Grug activation storage
 
 With full/uniform recomputation and pipeline parallelism, Grug can store saved

@@ -37,6 +37,7 @@ transformer_config_kwargs:
 empty_cuda_cache: true
 
 logprob_chunk_size: 1024
+fp32_lm_head: false
 
 # dp_reshardable avoids a CPU optimizer gather when the checkpoint keeps the same
 # tensor/pipeline/context/expert geometry. Loading reads the format from the checkpoint.

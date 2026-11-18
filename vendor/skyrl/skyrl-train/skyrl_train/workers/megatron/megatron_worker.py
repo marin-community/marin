@@ -63,7 +63,10 @@ from skyrl_train.workers.megatron.megatron_model_wrapper import (
 )
 from skyrl_train.workers.megatron.bridge_provider_config import configure_bridge_provider
 from skyrl_train.workers.megatron.router_replay_install import install_megatron_router_replay
-from skyrl_train.workers.megatron.output_projection_layout import install_dpo_batch_major_output_projection
+from skyrl_train.workers.megatron.output_projection_layout import (
+    install_dpo_batch_major_output_projection,
+    install_fp32_output_projection,
+)
 from skyrl_train.workers.megatron.weight_extractor import BucketedMegatronWeightExtractor, mapping_hf_names
 from skyrl_train.workers.worker import (
     CriticWorkerBase,
@@ -185,6 +188,7 @@ class MegatronWorker:
         wrap_with_ddp: bool = True,
         ddp_config: dict[str, Any] | None = None,
         bf16: bool = True,
+        fp32_lm_head: bool = False,
     ) -> list[nn.Module]:
         """
         Creates a megatron GPTModel (optionally DDP wrapped) using the bridge.
@@ -205,6 +209,8 @@ class MegatronWorker:
             if self.remote_hf_state is not None:
                 self.remote_hf_state.store.close()
         install_dpo_batch_major_output_projection(model, self.provider, self.cfg.trainer.algorithm.policy_loss_type)
+        if fp32_lm_head:
+            install_fp32_output_projection(model)
         return model
 
     def forward(self, data, *, probe_micro_batch_size: int | None = None):
@@ -507,6 +513,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             wrap_with_ddp=for_training,
             ddp_config=ddp_config,
             bf16=self.cfg.trainer.bf16,
+            fp32_lm_head=self.cfg.trainer.policy.megatron_config.fp32_lm_head,
         )
 
         self._download_hf_snapshot_if_needed(model_path, self.cfg.trainer.policy.model)
@@ -558,6 +565,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             logprob_chunk_size=OmegaConf.select(
                 self.cfg, "trainer.policy.megatron_config.logprob_chunk_size", default=None
             ),
+            fp32_lm_head=self.cfg.trainer.policy.megatron_config.fp32_lm_head,
         )
         self._maybe_install_router_replay("policy")
 
@@ -590,6 +598,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             logprob_chunk_size=OmegaConf.select(
                 self.cfg, "trainer.policy.megatron_config.logprob_chunk_size", default=None
             ),
+            fp32_lm_head=self.cfg.trainer.policy.megatron_config.fp32_lm_head,
         )
 
     def _ppo_train_impl(self, train_data, timing: PhaseBreakdown) -> "TrainingOutputBatch":
@@ -1010,6 +1019,7 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
             wrap_with_ddp=False,
             ddp_config=None,
             bf16=self.cfg.trainer.bf16,
+            fp32_lm_head=self.cfg.trainer.ref.megatron_config.fp32_lm_head,
         )
 
         self._download_hf_snapshot_if_needed(model_path, self.cfg.trainer.ref.model)
@@ -1027,6 +1037,7 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
             logprob_chunk_size=OmegaConf.select(
                 self.cfg, "trainer.ref.megatron_config.logprob_chunk_size", default=None
             ),
+            fp32_lm_head=self.cfg.trainer.ref.megatron_config.fp32_lm_head,
         )
         self._maybe_install_router_replay("ref")
 
