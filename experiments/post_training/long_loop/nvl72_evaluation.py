@@ -30,7 +30,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation, run_judged
-from experiments.post_training.long_loop.nvl72 import EXECUTION, SEED
+from experiments.post_training.long_loop.nvl72 import EXECUTION, RECIPE_PATH, SEED
 
 RECIPE = Path(__file__).with_name("specs") / "evaluation.yaml"
 
@@ -99,7 +99,9 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     config["context_budget"].update(
         request_window_tokens=spec.context_tokens, max_new_tokens_per_turn=spec.max_new_tokens
     )
-    config["generator"]["engine_init_kwargs"]["compilation_config"] = {"mode": 3, "cudagraph_mode": "PIECEWISE"}
+    serving = yaml.safe_load(RECIPE_PATH.read_text())["generator"]["engine_init_kwargs"]
+    for setting in ("compilation_config", "model_loader_extra_config"):
+        config["generator"]["engine_init_kwargs"][setting] = serving[setting]
     config["generator"]["enforce_eager"] = False
     for role in ("policy", "ref"):
         config["trainer"][role]["megatron_config"]["expert_model_parallel_size"] = 4
