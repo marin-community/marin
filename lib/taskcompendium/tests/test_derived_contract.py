@@ -18,14 +18,17 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.grader_type import GraderType, derive_grader_type
 from taskcompendium.models import (
     AnswerType,
+    AssistantToolCalls,
     CommandSemantics,
     ConversationInput,
+    ConversationToolCall,
     EnvironmentRequirements,
     NoGrader,
     PlainText,
     Source,
     TaskSpec,
     TextMessage,
+    ToolResult,
 )
 
 IMAGE = "private/grader@sha256:" + "a" * 64
@@ -142,6 +145,54 @@ def test_unclassifiable_grader_raises():
     unsolvable = verifyit_package(UnsolvableSpec()).grader
     with pytest.raises(ValueError, match="no GraderType mapping"):
         derive_grader_type(unsolvable)
+
+
+def test_prefilled_assistant_prefix_is_context_not_a_turn():
+    specification = task(EXACT).model_copy(
+        update={
+            "context": ConversationInput(
+                events=(
+                    TextMessage(role="user", content="Continue the supplied assistant prefix."),
+                    TextMessage(role="assistant", content='["live_multiple_153-58-7",'),
+                )
+            )
+        }
+    )
+    assert derive_contract(specification).single_turn is True
+
+
+def test_system_message_is_context_not_a_turn():
+    specification = task(EXACT).model_copy(
+        update={
+            "context": ConversationInput(
+                events=(
+                    TextMessage(role="system", content="Answer with JUST the answer, no elaboration."),
+                    TextMessage(role="user", content="What age threshold is given for the risk factor?"),
+                )
+            )
+        }
+    )
+    assert derive_contract(specification).single_turn is True
+
+
+def test_tool_call_history_in_the_prefix_is_multi_step():
+    events = (
+        TextMessage(role="user", content="Fetch reviews for the product."),
+        AssistantToolCalls(calls=(ConversationToolCall(call_id="c1", name="search", arguments={"sku": "x"}),)),
+        ToolResult(call_id="c1", content="[]"),
+    )
+    specification = task(EXACT).model_copy(update={"context": ConversationInput(events=events)})
+    assert derive_contract(specification).single_turn is False
+
+
+def test_a_second_user_turn_is_multi_turn():
+    events = (
+        TextMessage(role="user", content="Extract the fields from the document."),
+        TextMessage(role="assistant", content='{"concept_name": "Class analysis"}'),
+        TextMessage(role="user", content="Now convert your response to CSV format."),
+    )
+    specification = task(EXACT).model_copy(update={"context": ConversationInput(events=events)})
+    assert derive_contract(specification).single_turn is False
 
 
 def test_empty_population_summary_raises():

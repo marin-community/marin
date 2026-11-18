@@ -18,9 +18,12 @@ from taskcompendium.execution_applicability import is_nonagentic_task
 from taskcompendium.grader_type import GraderType, JudgeDetails, derive_grader_type
 from taskcompendium.models import (
     AnswerType,
+    AssistantToolCalls,
     Grader,
     ScriptGrader,
     TaskSpec,
+    TextMessage,
+    ToolResult,
     VerifyitGrader,
     judge_spec,
 )
@@ -57,13 +60,21 @@ def is_workspace_graded(grader: Grader) -> bool:
 def derive_contract(task: TaskSpec) -> DerivedContract:
     """Derive one task's contract shape from its final TaskSpec.
 
+    ``single_turn`` counts user turns: a task is single-turn when its context carries exactly
+    one user message and no tool-call history. System and developer messages and a prefilled
+    assistant prefix are context, not turns — the model still replies once — while historical
+    assistant tool calls and their results make the task multi-step.
+
     ``reply_only`` records that the finished contract asks for the answer as an assistant reply;
     for rewritten sources the converter's delivery rewrite is what produced that shape, so the
     rewrite need not be re-recorded.
     """
+    events = task.context.events
+    user_turns = sum(1 for event in events if isinstance(event, TextMessage) and event.role == "user")
+    tool_history = any(isinstance(event, (AssistantToolCalls, ToolResult)) for event in events)
     return DerivedContract(
         agentic=not is_nonagentic_task(task),
-        single_turn=len(task.context.events) == 1,
+        single_turn=user_turns == 1 and not tool_history,
         reply_only=task.answer_type in REPLY_ANSWER_TYPES,
         workspace_graded=is_workspace_graded(task.grader),
         grader_type=derive_grader_type(task.grader),
