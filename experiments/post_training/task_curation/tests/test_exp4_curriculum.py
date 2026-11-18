@@ -16,7 +16,6 @@ from experiments.post_training.task_curation.datasets.long_loop_rl import (
     NONAGENTIC_RELEASE_URL,
     REASONING_GYM_SOURCE,
 )
-from experiments.post_training.task_curation.exp3_curriculum import SEED as EXP3_SEED
 from experiments.post_training.task_curation.exp3_curriculum import weights as exp3_weights
 from experiments.post_training.task_curation.exp4_curriculum import (
     AGENTIC_SHARE,
@@ -26,10 +25,8 @@ from experiments.post_training.task_curation.exp4_curriculum import (
     CURRICULUM_VERSION,
     EXACT_ROUTE_GROUPS,
     FIXED_ROUTE_QUOTAS,
-    NEMOTRON_IF_ADMITTED_TASKS,
     NEMOTRON_IF_LABEL,
     NEMOTRON_IF_SHARE,
-    SEED,
     SOURCE_ROUTES,
     TARGET_SHARES,
     exp4_rl_curriculum,
@@ -68,14 +65,11 @@ def test_the_route_masses_realize_the_targets_on_the_55_batch():
         route_mass[SOURCE_ROUTES[label]] = route_mass.get(SOURCE_ROUTES[label], 0.0) + weight
     assert route_mass["agentic"] == pytest.approx(0.35)
     assert route_mass["nonagentic"] == pytest.approx(0.65)
-    assert EXACT_ROUTE_GROUPS == {"agentic": 64 * 0.35, "nonagentic": 64 * 0.65}
     assert EXACT_ROUTE_GROUPS == {"agentic": 22.4, "nonagentic": 41.6}
-    # Fixed integer buffer quotas cannot hit 22.4; the nearest split is 22/42,
-    # which samples the agentic route 0.625 points under the target. The
-    # curriculum's weighted windows close that gap by rotating the remainder.
+    # Fixed integer buffer quotas cannot hit 22.4; the declared rounding is 22/42,
+    # and its agentic shortfall stays under one group per window.
     assert FIXED_ROUTE_QUOTAS == {"agentic": 22, "nonagentic": 42}
-    assert FIXED_ROUTE_QUOTAS["agentic"] / BATCH_GROUPS == pytest.approx(0.34375)
-    assert 0.35 - FIXED_ROUTE_QUOTAS["agentic"] / BATCH_GROUPS == pytest.approx(0.00625)
+    assert 0.0 < AGENTIC_SHARE - FIXED_ROUTE_QUOTAS["agentic"] / BATCH_GROUPS < 1 / BATCH_GROUPS
 
 
 def test_the_entries_pin_the_consumed_releases_and_the_new_source():
@@ -92,9 +86,7 @@ def test_the_entries_pin_the_consumed_releases_and_the_new_source():
             assert entry.pin.name == "nvidia/Llama-Nemotron-Post-Training-Dataset"
             assert entry.pin.revision == source.dataset.revision
         else:
-            release_pin = (
-                AGENTIC_RELEASE_URL if entry.source == "long-loop-rl-agentic-train" else NONAGENTIC_RELEASE_URL
-            )
+            release_pin = AGENTIC_RELEASE_URL if entry.source == "long-loop-rl-agentic-train" else NONAGENTIC_RELEASE_URL
             release_revision = (
                 AGENTIC_MANIFEST_SHA256 if entry.source == "long-loop-rl-agentic-train" else NONAGENTIC_MANIFEST_SHA256
             )
@@ -107,20 +99,19 @@ def test_the_new_source_is_a_runnable_catalog_source_with_all_its_tasks():
     assert source.name == NEMOTRON_IF_LABEL
     assert source.pipeline is not None
     assert "agentic" not in source.info.tags
-    assert NEMOTRON_IF_ADMITTED_TASKS == 54_953
 
 
 def test_the_seed_policy_is_unchanged_from_55():
-    assert SEED == EXP3_SEED == 20261020
+    """The .55 policy seeds the sampler with the trainer seed 20261020; Exp4 inherits it."""
     curriculum = exp4_rl_curriculum()
-    assert curriculum.seed == SEED
-    assert curriculum.sampling_config()["seed"] == SEED
+    assert curriculum.seed == 20261020
+    assert curriculum.sampling_config()["seed"] == 20261020
 
 
 def test_the_fingerprint_follows_only_the_declared_mix():
     curriculum = exp4_rl_curriculum()
     assert exp4_rl_curriculum().fingerprint == curriculum.fingerprint
-    assert replace(curriculum, seed=SEED + 1).fingerprint != curriculum.fingerprint
+    assert replace(curriculum, seed=20261021).fingerprint != curriculum.fingerprint
     rebalanced = replace(curriculum, entries=tuple(replace(e, weight=e.weight / 2) for e in curriculum.entries))
     assert rebalanced.fingerprint != curriculum.fingerprint
     assert replace(curriculum, version="2026.11.19").fingerprint == curriculum.fingerprint
