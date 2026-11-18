@@ -4,7 +4,7 @@ name: Document n-gram count cache mixture
 category: Output head and loss
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6972547895
@@ -12,3 +12,16 @@ intake:
   approved_by: armorfaye (trusted)
 code_commits:
 - f0bf6035601c8afb215081475741d65a2a8e0cb9
+trials:
+- id: t001
+  variant: document n-gram count cache mixed into output
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0242
+  date: '2026-11-18'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0242
+  wandb: []
+  settings:
+    ngram_cache_mixture: 'true'
+  commit: 6909b71dbb
+  priority: batch
