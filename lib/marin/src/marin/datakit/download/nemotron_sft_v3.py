@@ -15,8 +15,9 @@ from openai_harmony import Message
 from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset
+from zephyr.dataset import Dataset, ShardInfo
 from zephyr.readers import open_file
+from zephyr.worker_context import zephyr_worker_ctx
 
 from marin.datakit.chat_normalize import (
     CHAT_SCHEMA,
@@ -41,6 +42,7 @@ _MATH_PROOFS_V1_FAMILY = "math_proofs_v1"
 _MATH_PROOFS_V1_REVISION = "97229c590831adfe96202f5cd071d444d535bf91"
 _LEAN_PARTITION = "lean"
 _UUID_FIELD = "uuid"
+_EXCLUDED_UUIDS_KEY = "excluded_uuids"
 # Row list from the audit of the pinned Lean proofs revision, keyed by `uuid`. The source keeps every round of
 # its prove, compile and fix loop as a row, so the rounds that failed are rows too. The list applies to the pinned
 # source revision only, so a new source revision needs a new list.
@@ -412,6 +414,16 @@ def download_nemotron_sft_v3_step(family: str) -> StepSpec:
     )
 
 
+def _drop_excluded_rows(rows: Iterator[dict], _: ShardInfo) -> Iterator[dict]:
+    """Drop the rows on the audit lists.
+
+    Workers read the list from Zephyr shared data. A list held in the plan would be sent with every coordinator
+    request, and the Lean list has several hundred thousand IDs.
+    """
+    excluded_uuids: frozenset[str] = zephyr_worker_ctx().get_shared(_EXCLUDED_UUIDS_KEY)
+    return (row for row in rows if row.get(_UUID_FIELD) not in excluded_uuids)
+
+
 def _transform_chat(
     input_path: str, output_path: str, *, family: str, partition_name: str, excluded_uuids: frozenset[str]
 ) -> None:
@@ -425,18 +437,20 @@ def _transform_chat(
     else:
         rows = files.load_jsonl()
 
-    pipeline = (
-        rows.filter(lambda row: row.get(_UUID_FIELD) not in excluded_uuids)
-        .flat_map(lambda row: row_to_chat_doc(row, family=family, partition_name=partition_name))
-        .write_parquet(
-            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
-            schema=SOURCE_CHAT_SCHEMA,
-            skip_existing=True,
-        )
-    )
-    ZephyrContext(
+    context = ZephyrContext(
         name=f"nemotron-sft-chat-{family}-{partition_name}", resources=ResourceConfig(cpu=1, ram="16g")
-    ).execute(pipeline)
+    )
+    if excluded_uuids:
+        context.put(_EXCLUDED_UUIDS_KEY, excluded_uuids)
+        rows = rows.map_shard(_drop_excluded_rows)
+    pipeline = rows.flat_map(
+        lambda row: row_to_chat_doc(row, family=family, partition_name=partition_name)
+    ).write_parquet(
+        prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+        schema=SOURCE_CHAT_SCHEMA,
+        skip_existing=True,
+    )
+    context.execute(pipeline)
 
 
 def _processed_chat_step(download: StepSpec, *, family: str, partition_name: str) -> StepSpec:
