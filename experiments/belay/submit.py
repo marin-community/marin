@@ -46,14 +46,13 @@ class Stage(StrEnum):
     DATA = "data"
     """The variant and its control at the baseline's steps (equal data)."""
     PROBE = "probe"
-    """A short variant run that measures its s/step."""
+    """A short variant run that measured its s/step: no longer launched (equal time is sized from the equal-data run),
+    kept so specs that recorded one still parse."""
     TIME = "time"
     """The variant at train_seconds / its s/step steps, against the stage-1 control (equal time)."""
 
 
 STAGE_ORDER = (Stage.DATA, Stage.PROBE, Stage.TIME)
-PROBE_STEPS = 150
-PROBE_SKIP = 20  # compile and warm-up steps left out of the probe's s/step
 
 
 @dataclass(frozen=True)
@@ -646,15 +645,10 @@ def spec_with_runs(text: str, runs: dict[str, dict]) -> str:
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=120)
 
 
-def next_stage_runs(spec: ExperimentSpec, stage: Stage, suffix: str, steps: int | None = None) -> dict[str, dict]:
-    """The runs that start ``stage`` (PROBE, or TIME at ``steps``), keyed like the spec."""
+def next_stage_runs(spec: ExperimentSpec, steps: int, suffix: str) -> dict[str, dict]:
+    """The equal-time run at ``steps``, keyed like the spec."""
     variant = next(r for r in spec.runs.values() if r.stage is Stage.DATA and not r.control)
     flags = list(variant_settings(spec))
-    if stage is Stage.PROBE:
-        probe_flags = [*flags, "--num-steps", str(PROBE_STEPS)]
-        probe = {"seed": variant.seed, "variant": f"{variant.variant} (timing probe)", "flags": probe_flags}
-        return {f"probe{suffix}": {**probe, "stage": "probe"}}
-    assert steps is not None
     timed_flags = [*flags, "--num-steps", str(steps)]
     timed = {"seed": variant.seed, "variant": variant.variant, "flags": timed_flags, "stage": "time"}
     return {f"seed{variant.seed}-t{suffix}": timed}

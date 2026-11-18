@@ -181,7 +181,6 @@ from experiments.belay.submit import (
     LADDER,
     LADDER_RUNGS,
     MAX_REPAIRS,
-    PROBE_SKIP,
     RUN_PREFIX,
     ExperimentSpec,
     HeroMfuResult,
@@ -1456,18 +1455,6 @@ def run_finished(experiment: str, *, dry_run: bool) -> None:
     idea = state.idea_for(registry_id)
     stage = latest_stage(spec)
     trials = [t for t in entry.get("trials") or [] if t.get("comment_url") == url]
-    if stage is Stage.PROBE:
-        probe = next(r for r in stage_runs(spec, Stage.PROBE))
-        s_step = measure(run_id(spec, probe), baseline.metric, PROBE_SKIP).s_step
-        steps = round(baseline.train_seconds / s_step)
-        print(f"timing probe: {s_step:.4f} s/step, so {steps:,} steps make {baseline.train_seconds:g} s")
-        note = f"Timing probe: {s_step:.4f} s/step, so the variant trains {steps:,} steps."
-        data_variant = run_id(spec, stage_pairs(spec, Stage.DATA)[0][1])
-        data_trial = next(t for t in trials if data_variant in t["wandb"])
-        prior = str(verdict(data_trial["delta"][0], baseline))
-        nxt = Next(repo, branch, spec, experiment, Stage.TIME, steps, url, entry, state, note, prior)
-        advance(nxt, dry_run=dry_run)
-        return
     trial = next(t for t in trials if run_id(spec, stage_pairs(spec, stage)[0][1]) in t["wandb"])
     number = trials.index(trial) + 1
     rows: dict[str, Row] = {}
@@ -1530,8 +1517,13 @@ def run_finished(experiment: str, *, dry_run: bool) -> None:
         idea_state = "running" if rungs_left else "recorded"
         report_idea(idea.id, {"state": idea_state, "result": {**result, "summary": status}}, dry_run=dry_run)
     idea_id = None if idea is None else idea.id
-    if run_equal_time:
-        nxt = Next(repo, branch, spec, experiment, Stage.PROBE, None, url, entry, state, prior=str(overall))
+    if run_equal_time:  # the equal-data run measured the variant's s/step over ~3,000 steps: size equal time from it
+        s_step = rows[run_id(spec, pairs[0][1])].s_step
+        assert s_step is not None
+        steps = round(baseline.train_seconds / s_step)
+        note = f"Equal time: the variant ran {s_step:.4f} s/step at equal data, so it trains {steps:,} steps."
+        print(note)
+        nxt = Next(repo, branch, spec, experiment, Stage.TIME, steps, url, entry, state, note, str(overall))
         advance(nxt, dry_run=dry_run)
         return
     if rungs_left:
@@ -1599,7 +1591,7 @@ def latest_by_experiment(trials: list[dict]) -> dict[str, dict]:
 
 
 def sweep_members_left(trials: list[dict], finished: str, live: set[str]) -> list[str]:
-    """The sweep's other members still going: one with a live run (a timing probe or equal-time run included) or a
+    """The sweep's other members still going: one with a live run (an equal-time run included) or a
     latest trial with no result yet. While any remain the idea stays running and only the last member scores it."""
     latest = latest_by_experiment(trials)
     members = {e for e in [*latest, *live] if is_sweep_member(e)}
@@ -1635,7 +1627,6 @@ class Next:
 
 
 STATUS_RUNNING = {
-    Stage.PROBE: "{prior} at equal data · equal-time timing probe running",
     Stage.TIME: "{prior} at equal data · equal-time run running",
 }
 
@@ -1650,8 +1641,8 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
     repo, branch, spec, experiment, stage = nxt.repo, nxt.branch, nxt.spec, nxt.experiment, nxt.stage
     registry_id = registry_of(experiment)
     jobs = iris_jobs()
-    stage_keys = {Stage.PROBE: ("probe",), Stage.TIME: (f"seed{CONFIG.seed}-t",)}
-    runs = next_stage_runs(spec, stage, run_suffix(experiment, jobs, stage_keys[stage]), nxt.steps)
+    assert stage is Stage.TIME and nxt.steps is not None
+    runs = next_stage_runs(spec, nxt.steps, run_suffix(experiment, jobs, (f"seed{CONFIG.seed}-t",)))
     text = spec_with_runs(spec_path(experiment, repo / SPECS).read_text(), runs)
     new_spec = write_spec(repo, branch, text, dry_run=dry_run, replace=True)
     commit = "dry-run" if dry_run else require_clean_pushed_head(repo, branch)
@@ -1659,14 +1650,10 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
     started_spec = ExperimentSpec(new_spec.experiment, new_spec.track, {r.name: r for r in started})
     check_launch(started_spec, jobs, nxt.state.node_caps, node_grant(nxt.state, registry_id))
     number = len([t for t in nxt.entry.get("trials") or [] if t.get("comment_url") == nxt.url]) + 1
-    if stage is Stage.PROBE:
-        pending = "Pending: a timing probe measures the variant's s/step."
-        section = stage_section(number, comparison_text(spec.track, Stage.TIME), [], pending)
-    else:
-        pair = stage_pairs(new_spec, stage)[0]
-        planned = plan_rows(new_spec, [*pair], commit)
-        notes = "\n\n".join(n for n in (nxt.note, reproduce(experiment, commit, pair[1].name)) if n)
-        section = stage_section(number, comparison_text(spec.track, stage), planned, notes)
+    pair = stage_pairs(new_spec, stage)[0]
+    planned = plan_rows(new_spec, [*pair], commit)
+    notes = "\n\n".join(n for n in (nxt.note, reproduce(experiment, commit, pair[1].name)) if n)
+    section = stage_section(number, comparison_text(spec.track, stage), planned, notes)
     new_title = title(registry_id, nxt.entry["name"], spec.track, STATUS_RUNNING[stage].format(prior=nxt.prior))
     body = updated(read_thread(registry_id) or "", new_title, number, section)
     idea = nxt.state.idea_for(registry_id)
@@ -1674,22 +1661,20 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
     if dry_run:
         launch_stage(repo, branch, new_spec, started, None, nxt.state, dry_run=True)
         return
-    trial_id = None
-    if stage is not Stage.PROBE:
-        variant = next(r for r in started if not r.control)
-        settings = settings_of(variant.flags)
-        trial_id, path = add_trial(
-            registry_id,
-            spec.track,
-            Protocol.FIXED_TIME,
-            variant.variant,
-            commit,
-            settings,
-            nxt.url,
-            granted_band(nxt.state, registry_id, spec.track),
-            node_grant(nxt.state, registry_id),
-        )
-        commit_and_push([path], f"Belay registry: {registry_id} {trial_id} planned ({stage})", dry_run=False)
+    variant = next(r for r in started if not r.control)
+    settings = settings_of(variant.flags)
+    trial_id, path = add_trial(
+        registry_id,
+        spec.track,
+        Protocol.FIXED_TIME,
+        variant.variant,
+        commit,
+        settings,
+        nxt.url,
+        granted_band(nxt.state, registry_id, spec.track),
+        node_grant(nxt.state, registry_id),
+    )
+    commit_and_push([path], f"Belay registry: {registry_id} {trial_id} planned ({stage})", dry_run=False)
     launch_stage(repo, branch, new_spec, started, trial_id, nxt.state, dry_run=False)
     say_next("stop (the watcher starts a new session when the runs finish)")
 

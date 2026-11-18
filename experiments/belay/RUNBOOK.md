@@ -226,9 +226,9 @@ trials (`comment_url`). Nothing is posted on #9451.
         - Variant slower (Δt > +1%): stage 2 only after a stage-1 win, since fewer steps can't turn noise or a
           loss into a win. Otherwise final: "<verdict> at equal data; slower, equal time not run".
         - Variant faster (Δt < −1%): stage 2 always, since it gets more steps at equal time.
-     3. **Timing probe:** a 150-step variant run that measures its s/step.
-     4. **Equal time:** the variant at 480 s ÷ its s/step steps, against the equal-data control. This verdict is
-        final.
+     3. **Equal time:** the variant at 480 s ÷ its s/step steps, against the equal-data control, launched as soon as
+        stage 1 is recorded. Its s/step is the median the equal-data run measured over its ~3,000 steps (no separate
+        timing probe). This verdict is final.
    - Other Tracks have one stage: equal data.
    - **Expect**, at each recorded stage:
      - the registry entry and the trial's analysis report pushed together
@@ -436,8 +436,8 @@ ladder finished before this rule.
 
 **Sweep.** A sweep (`--sweep-model-set` / `--sweep-opt-set` on `new-idea`) runs one value per spec, with the value's
 number in its id (`runs/X0229v2.yaml`, `belay-X0229v2-seed0`), all on one Track. The first value launches the
-control and the rest reuse it. Each value goes through its Track's stages on its own (on `speedrun`, its own timing
-probe and equal-time run when its step time calls for one) and records its own trial on the one `X####` entry and
+control and the rest reuse it. Each value goes through its Track's stages on its own (on `speedrun`, its own equal-time
+run when its step time calls for one) and records its own trial on the one `X####` entry and
 thread. The idea stays running until no value has a live run or an unrecorded trial; the last value's `run-finished`
 judges the sweep by its best value (a win if any value won) and names that value in the status.
 
