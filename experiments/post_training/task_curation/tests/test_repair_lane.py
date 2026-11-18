@@ -7,7 +7,6 @@ import io
 import json
 import tarfile
 import threading
-from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
@@ -588,7 +587,6 @@ class TestCohortConversion:
             calls.append(1)
             return [{"path": "task_0", "task_binary": _fixture_binary("keep me")}]
 
-        rows = [{"path": "task_0", "task_binary": _fixture_binary("keep me")}]
         monkeypatch.setattr(
             lane,
             "configured_sources",
@@ -644,15 +642,6 @@ class TestCohortConversion:
                 runtimes=self._runtime_join(),
                 output_root=str(tmp_path / "cohort"),
             )
-
-
-def manifest_counts(output_root: str) -> dict:
-    import glob
-
-    maps = sorted(glob.glob(f"{output_root}/conversion-*/task-map.jsonl"))
-    latest = maps[-1]
-    entries = [json.loads(line) for line in open(latest).read().splitlines() if line.strip()]
-    return dict(Counter(entry["status"] for entry in entries))
 
 
 def _fixture_binary(instruction: str, *, solve_sh: str | None = None) -> bytes:
@@ -712,8 +701,6 @@ class TestDropWrapperSolveSh:
                 {"path": "task_0", "task_binary": _fixture_binary("keep me", solve_sh=self.WRAPPER)}
             ],
         )
-        from experiments.post_training.task_curation.task_neighbors import content_rows
-
         converted = spec("converted-task_0", "keep me")
         instruction_hash = next(content_rows([converted.model_dump(mode="json")])).instruction_hash
         monkeypatch.setattr(lane, "tracked_instruction_hashes", lambda uris: {"tracked-0": instruction_hash})
