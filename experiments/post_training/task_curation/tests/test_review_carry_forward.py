@@ -363,15 +363,16 @@ def test_sample_recovery_outcome_rules():
     assert outcome.carried_reviews == 4
     assert outcome.coverage_conclusive == 100
     assert outcome.reviewed_fraction == 0.5
-    # A carried review for a task the panel observed is redundant, not evidence.
-    redundant = CarriedReview(
+    # A carried review for a task the panel observed joins the reviewed set
+    # once: the coverage counts the task, the panel's record governs the Result.
+    overlapping = CarriedReview(
         task_identity_sha256="b" * 64,
         original_task_id="task-000",
         current_task_id="task-000",
         review=good_review("task-000"),
     )
-    outcome = sample_recovery_outcome(SOURCE_ID, 200, partial_panel, (*carried[:4], redundant), reviewers=(REVIEWER,))
-    assert outcome.carried_reviews == 4
+    outcome = sample_recovery_outcome(SOURCE_ID, 200, partial_panel, (*carried[:4], overlapping), reviewers=(REVIEWER,))
+    assert outcome.carried_reviews == 5
     assert outcome.coverage_conclusive == 100
 
 

@@ -227,9 +227,10 @@ until its current-pin admission receipt exists.
   reviews onto one source's fixed panel under the augmented rules. The Result
   stays computed from the fixed panel alone, so carried reviews cannot bias
   its issue rate; the carried set's own rate is reported beside the coverage.
-  Carried reviews for tasks the panel observed are redundant and do not count.
-  The level promotes to FULL only when the merged observations cover every
-  retained task under the existing completeness and waiver rules.
+  Carried reviews join the reviewed set: a task the panel also observed counts
+  once in the coverage, and the panel's own observation governs its merged
+  determination. The level promotes to FULL only when the merged observations
+  cover every retained task under the existing completeness and waiver rules.
   `sample_review_recovery` surveys the registry's superseded SAMPLE receipts
   and recovers every source in one in-region job; the recovered coverage binds
   on the declaration's oversight evidence, and the Atlas Quality display shows

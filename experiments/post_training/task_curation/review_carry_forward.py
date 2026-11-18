@@ -51,7 +51,7 @@ from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
 from experiments.post_training.task_curation.content_identity import PopulationDigest
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
-from experiments.post_training.task_curation.review_quality import quality_result
+from experiments.post_training.task_curation.review_quality import is_conclusive, quality_result
 from experiments.post_training.task_curation.sample_qc_artifacts import SAMPLE_SEED, SAMPLE_SIZE, SamplePanel
 from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt
 from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
@@ -710,18 +710,23 @@ def sample_recovery_outcome(
 
     The Result stays computed from the fixed panel alone. The carried set's
     conclusive reviews join the reviewed set for coverage and for the merged
-    FULL determination, never into the panel's issue rate. Carried observations
-    for tasks the panel already observed are ignored in favor of the panel's
-    own fixed-design record.
+    FULL determination, never into the panel's issue rate. A task the panel
+    also observed counts once in the coverage, and the panel's own observation
+    governs the merged determination for it.
     """
     if retained <= 0:
         raise ValueError("Recovery requires a nonempty retained population")
     panel_ids = {record.task_id for record in panel_reviews}
-    carried = tuple(entry for entry in carried if entry.current_task_id not in panel_ids)
     panel_result = quality_result(panel_reviews)
     carried_result = quality_result([entry.review for entry in carried])
-    coverage_conclusive = panel_result.reviewed + carried_result.reviewed
-    merged = merged_review_result(retained, carried, panel_reviews)
+    covered = {record.task_id for record in panel_reviews if is_conclusive(record)}
+    covered |= {entry.current_task_id for entry in carried if is_conclusive(entry.review)}
+    coverage_conclusive = len(covered)
+    merged = merged_review_result(
+        retained,
+        tuple(entry for entry in carried if entry.current_task_id not in panel_ids),
+        panel_reviews,
+    )
     return SampleRecovery(
         source_id=source_id,
         retained=retained,

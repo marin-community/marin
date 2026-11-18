@@ -26,26 +26,38 @@ def has_review_issues(verdict: ReviewVerdict) -> bool:
     )
 
 
+def is_conclusive(record: ReviewRecord) -> bool:
+    """Whether one observation resolves to a usable quality judgment.
+
+    Mirrors ``quality_result``'s counting rule: a REVIEWED record whose verdict
+    is neither low-confidence nor an issueless unknown.
+    """
+    verdict = record.verdict
+    if record.status is not ReviewStatus.REVIEWED or verdict is None:
+        return False
+    issueless_unknown = verdict.quality is Quality.UNKNOWN and not has_review_issues(verdict)
+    return not (verdict.confidence is Confidence.LOW or issueless_unknown)
+
+
 def quality_result(reviews: Sequence[ReviewRecord]) -> SourceQualityResult:
     """Compute informational Result without treating missing observations as clean."""
     reviewed = unavailable = uncertain = 0
     issues = []
     issue_count = 0
     for review in reviews:
-        verdict = review.verdict
-        if review.status is not ReviewStatus.REVIEWED or verdict is None:
-            unavailable += 1
+        if is_conclusive(review):
+            reviewed += 1
+            verdict = review.verdict
+            assert verdict is not None
+            if has_review_issues(verdict):
+                issue_count += 1
+                if len(issues) < MAX_SUMMARY_ISSUES:
+                    issues.append(f"{review.task_id}: {verdict.evidence}")
             continue
-        if verdict.confidence is Confidence.LOW or (
-            verdict.quality is Quality.UNKNOWN and not has_review_issues(verdict)
-        ):
+        if review.status is ReviewStatus.REVIEWED and review.verdict is not None:
             uncertain += 1
-            continue
-        reviewed += 1
-        if has_review_issues(verdict):
-            issue_count += 1
-            if len(issues) < MAX_SUMMARY_ISSUES:
-                issues.append(f"{review.task_id}: {verdict.evidence}")
+        else:
+            unavailable += 1
     recommendation = (
         "Inspect all task-level issue evidence and qualify repairs with renewed QA."
         if issue_count
