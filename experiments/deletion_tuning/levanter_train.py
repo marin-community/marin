@@ -18,6 +18,7 @@ import logging
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jax.random as jrandom
 import levanter.callbacks
 import numpy as np
 from levanter.models.snowball import SnowballLMHeadModel
@@ -212,3 +213,66 @@ class DeletionTrainer(Trainer):
 def _alpha_ramp_jax(step, total_steps: int, alpha_start: float, alpha_end: float) -> jax.Array:
     fraction = jnp.clip(step.astype(jnp.float32) / jnp.asarray(total_steps, jnp.float32), 0.0, 1.0)
     return alpha_start + fraction * (alpha_end - alpha_start)
+
+
+def _initialize_deletion(model, *, config, trainer, settings: DeletionTrainSettings, num_layers: int):
+    """Calibrate Wanda norms on the run's training data, then insert the gate logits."""
+    seq_len = config.train_seq_len or config.model.max_seq_len
+    pos = config.model.max_Pos.resize(seq_len)
+    data_key = jrandom.PRNGKey(config.trainer.data_seed if config.trainer.data_seed is not None else config.trainer.seed)
+    train_dataset = config.data.train_set(pos, config.trainer.batch_schedule, key=data_key)
+    loader = trainer.data_loader(train_dataset)
+    batches = itertools.islice(loader.iter_from_step(0), max(1, settings.calibration_sequences))
+    routed_norms, shared_norms = capture_wanda_norms(model, batches, num_layers=num_layers)
+    scores = None
+    logger.info("calibrated Wanda norms over %d batches", settings.calibration_sequences)
+
+    # The delete threshold comes from a strided host-pooled subsample of the scores.
+    layer_keys = jrandom.split(jrandom.PRNGKey(settings.seed), num_layers)
+    sample_parts = []
+    for block in model.transformer.blocks:
+        mlp = block.mlp
+        broadcast = jnp.asarray(routed_norms, dtype=jnp.float32).reshape(routed_norms.shape + (1,))
+        scores = jnp.abs(mlp.expert_mlp.w_gate) * broadcast
+        strided = scores[..., ::WANDA_SAMPLE_STRIDE]
+        sample_parts.append(strided.reshape(strided.shape[0], -1))
+    pooled = np.concatenate([np.asarray(part).reshape(-1) for part in sample_parts])
+    threshold = wanda_delete_threshold(pooled, settings.eta)
+    levanter.tracker.log_summary({"deletion/wanda_threshold": threshold, "deletion/wanda_samples": int(pooled.size)})
+    return apply_deletion_init(model, settings, routed_norms, shared_norms, threshold=threshold, num_layers=num_layers)
+
+
+def main(config, settings: DeletionTrainSettings) -> None:
+    """Run Levanter's ``train_lm.main`` with the Deletion-Tuning deltas applied.
+
+    The standard main constructs ``Trainer`` and loads the model through two
+    module globals; this launcher swaps them for the Deletion variants and
+    restores them afterwards, so the whole standard init/eval/checkpoint flow
+    is reused verbatim.
+    """
+    import levanter.main.train_lm as train_lm_module
+
+    if config.trainer.num_train_steps != settings.total_steps:
+        raise ValueError(
+            f"settings.total_steps={settings.total_steps} disagrees with the trainer's {config.trainer.num_train_steps}"
+        )
+
+    num_layers = config.model.num_layers
+    original_loader = train_lm_module._load_lm_model_from_configured_source
+    original_trainer_cls = train_lm_module.Trainer
+
+    def deletion_loader(**kwargs):
+        model = original_loader(**kwargs)
+        return _initialize_deletion(
+            model, config=kwargs["config"], trainer=kwargs["trainer"], settings=settings, num_layers=num_layers
+        )
+
+    trainer_cls = type("DeletionTrainerPatched", (DeletionTrainer,), {"deletion_settings": settings})
+
+    train_lm_module._load_lm_model_from_configured_source = deletion_loader
+    train_lm_module.Trainer = trainer_cls
+    try:
+        train_lm_module.main(config)
+    finally:
+        train_lm_module._load_lm_model_from_configured_source = original_loader
+        train_lm_module.Trainer = original_trainer_cls
