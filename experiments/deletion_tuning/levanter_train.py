@@ -192,8 +192,6 @@ class DeletionTrainer(Trainer):
 
     def add_eval_hook(self, eval_dataset, name: str | None = None):
         """Evaluate with the hard mask (deploy semantics), unlike the training forward."""
-        from levanter import callbacks
-
         eval_loader = self.data_loader(eval_dataset, self.EvalBatch)
         if eval_loader and (self.config.max_eval_batches is None or self.config.max_eval_batches > 0):
 
