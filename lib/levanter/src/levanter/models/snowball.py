@@ -35,7 +35,7 @@ from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 
 import haliax as hax
-from haliax import Axis, NamedArray
+from haliax import Axis, NamedArray, NamedOrNumeric
 from haliax.jax_utils import named_call
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
@@ -50,6 +50,12 @@ from levanter.grug.attention import (
     attention,
 )
 from levanter.grug.grug_moe import MoEExpertMlpPspecs, MoeImplementation, MoEExpertMlp
+from levanter.models.snowball_deletion import (
+    DeletionTuningConfig,
+    deletion_mask,
+    deletion_regularizer,
+    wanda_input_sums_local,
+)
 from levanter.grug.sharding import (
     Pembed_vocab,
     Plm_head,
@@ -245,6 +251,11 @@ class SnowballConfig(HFCompatConfig):
 
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
+    deletion_tuning: Optional[DeletionTuningConfig] = None
+    """When set, train one logit per masked expert weight and freeze the pretrained weights
+    (Deletion Tuning, arXiv 2611.10866). The model masks the routed experts' gate projection
+    (``routed_gate``) or gate, up and down of routed and shared experts
+    (``routed_and_shared_all``); see ``levanter.models.snowball_deletion``."""
 
     def __post_init__(self) -> None:
         if self.num_heads % self.num_kv_heads != 0:
@@ -544,6 +555,12 @@ class DenseMLP(eqx.Module):
     w_gate: jax.Array
     w_up: jax.Array
     w_down: jax.Array
+    gate_logits: Optional[jax.Array] = None
+    """Per-weight deletion-tuning logits for this shared expert's gate projection (V3 scope)."""
+    up_logits: Optional[jax.Array] = None
+    """Per-weight deletion-tuning logits for this shared expert's up projection (V3 scope)."""
+    down_logits: Optional[jax.Array] = None
+    """Per-weight deletion-tuning logits for this shared expert's down projection (V3 scope)."""
     fp32_activations: bool = eqx.field(static=True, default=False)
 
     @staticmethod
@@ -570,13 +587,28 @@ class DenseMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        *,
+        deletion_alpha: jax.Array | None = None,
+        deletion_hard: jax.Array | None = None,
+    ) -> Float[Array, "B S D"]:
         b, s, _ = x.shape
         x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
-        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
-        up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
+        w_gate = self.w_gate
+        w_up = self.w_up
+        w_down = self.w_down
+        if self.gate_logits is not None:
+            if deletion_alpha is None or deletion_hard is None:
+                raise ValueError("deletion-tuned shared experts require deletion_alpha and deletion_hard")
+            w_gate = deletion_mask(self.gate_logits, w_gate, deletion_alpha, deletion_hard)
+            w_up = deletion_mask(self.up_logits, w_up, deletion_alpha, deletion_hard)
+            w_down = deletion_mask(self.down_logits, w_down, deletion_alpha, deletion_hard)
+        gate = jnp.einsum("td,dm->tm", x_flat, w_gate)
+        up = jnp.einsum("td,dm->tm", x_flat, w_up)
         silu = silu_fp32 if self.fp32_activations else jax.nn.silu
-        out_flat = jnp.einsum("tm,md->td", silu(gate) * up, self.w_down, out_sharding=_token_spec())
+        out_flat = jnp.einsum("tm,md->td", silu(gate) * up, w_down, out_sharding=_token_spec())
         return jax.lax.reshape(out_flat, (b, s, out_flat.shape[-1]), out_sharding=_activation_spec())
 
 
@@ -605,11 +637,14 @@ class MoeForwardOutput(NamedTuple):
 
     ``routes`` is set when the caller asked for the selected expert ids. ``counts``
     is set when the caller passed ``token_valid`` and the dispatch counted drops.
+    ``wanda`` carries shard-local calibration statistics when the caller asked for
+    Wanda capture (Deletion Tuning).
     """
 
     output: Array
     routes: Array | None
     counts: MoeDispatchCounts | None
+    wanda: dict[str, Array] | None = None
 
 
 class SnowballMoEMLP(eqx.Module):
@@ -624,6 +659,14 @@ class SnowballMoEMLP(eqx.Module):
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
     cfg: SnowballConfig = eqx.field(static=True)
+    gate_logits: Optional[jax.Array] = None
+    """Per-weight deletion-tuning logits for the routed experts' gate projection."""
+    up_logits: Optional[jax.Array] = None
+    """Per-weight deletion-tuning logits for the routed experts' up projection (V3 scope)."""
+    down_logits: Optional[jax.Array] = None
+    """Per-weight deletion-tuning logits for the routed experts' down projection (V3 scope)."""
+    capture_input_sums: bool = eqx.field(static=True, default=False)
+    """Emit shard-local Wanda calibration statistics alongside the routed output."""
 
     @staticmethod
     def init(cfg: SnowballConfig, *, key: PRNGKeyArray) -> "SnowballMoEMLP":
@@ -660,7 +703,13 @@ class SnowballMoEMLP(eqx.Module):
         return result.output, result.routes
 
     def _forward(
-        self, x: Float[Array, "B S D"], return_routes: bool, token_valid: Array | None = None
+        self,
+        x: Float[Array, "B S D"],
+        return_routes: bool,
+        token_valid: Array | None = None,
+        *,
+        deletion_alpha: jax.Array | None = None,
+        deletion_hard: jax.Array | None = None,
     ) -> MoeForwardOutput:
         b, s, _ = x.shape
         x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
@@ -685,7 +734,30 @@ class SnowballMoEMLP(eqx.Module):
         combine_weights = combine_weights_f.astype(x.dtype)
 
         valid_flat = None if token_valid is None else reshard(token_valid.reshape(b * s), P(_token_spec()[0]))
-        result = self.expert_mlp(
+        mesh = get_abstract_mesh()
+        wanda: dict[str, Array] | None = None
+        if self.capture_input_sums:
+            wanda = wanda_input_sums_local(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                valid_flat if valid_flat is not None else jnp.ones((x_flat.shape[0],), dtype=jnp.bool_),
+                mesh,
+                batch_axes=_token_axes(mesh),
+                num_experts=self.cfg.num_experts,
+            )
+        expert_mlp = self.expert_mlp
+        if self.gate_logits is not None:
+            if deletion_alpha is None or deletion_hard is None:
+                raise ValueError("deletion-tuned experts require deletion_alpha and deletion_hard")
+            w_gate = deletion_mask(self.gate_logits, expert_mlp.w_gate, deletion_alpha, deletion_hard)
+            w_up = expert_mlp.w_up
+            w_down = expert_mlp.w_down
+            if self.up_logits is not None:
+                w_up = deletion_mask(self.up_logits, expert_mlp.w_up, deletion_alpha, deletion_hard)
+            if self.down_logits is not None:
+                w_down = deletion_mask(self.down_logits, expert_mlp.w_down, deletion_alpha, deletion_hard)
+            expert_mlp = dataclasses.replace(expert_mlp, w_gate=w_gate, w_up=w_up, w_down=w_down)
+        result = expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
@@ -700,10 +772,10 @@ class SnowballMoEMLP(eqx.Module):
             routed_flat = cast(Array, result)
         out = jax.lax.reshape(routed_flat, (b, s, routed_flat.shape[-1]), out_sharding=_activation_spec())
         if not return_routes:
-            return MoeForwardOutput(out, None, counts)
+            return MoeForwardOutput(out, None, counts, wanda)
         # Replicated: a small int array, so the observer adds no sharding constraint to the forward.
         ids = reshard(selected_experts.astype(jnp.int32), P(None, None))
-        return MoeForwardOutput(out, jnp.reshape(ids, (b, s, ids.shape[-1])), counts)
+        return MoeForwardOutput(out, jnp.reshape(ids, (b, s, ids.shape[-1])), counts, wanda)
 
 
 class SnowballBlock(eqx.Module):
@@ -745,8 +817,19 @@ class SnowballBlock(eqx.Module):
         short_mask: AttentionMask,
         long_mask: AttentionMask,
         use_long: Bool[Array, ""],
+        *,
+        deletion_alpha: jax.Array | None = None,
+        deletion_hard: jax.Array | None = None,
     ) -> Float[Array, "B S D"]:
-        return self.forward(x, short_mask, long_mask, use_long, return_routes=False)[0]
+        return self.forward(
+            x,
+            short_mask,
+            long_mask,
+            use_long,
+            return_routes=False,
+            deletion_alpha=deletion_alpha,
+            deletion_hard=deletion_hard,
+        )[0]
 
     def forward(
         self,
@@ -755,9 +838,20 @@ class SnowballBlock(eqx.Module):
         long_mask: AttentionMask,
         use_long: Bool[Array, ""],
         return_routes: bool,
+        *,
+        deletion_alpha: jax.Array | None = None,
+        deletion_hard: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], Array | None]:
         """The block output and, with ``return_routes``, the MoE's selected expert ids [B, S, K] (an observer)."""
-        result = self._forward(x, short_mask, long_mask, use_long, return_routes)
+        result = self._forward(
+            x,
+            short_mask,
+            long_mask,
+            use_long,
+            return_routes,
+            deletion_alpha=deletion_alpha,
+            deletion_hard=deletion_hard,
+        )
         return result.output, result.routes
 
     def _forward(
@@ -768,6 +862,9 @@ class SnowballBlock(eqx.Module):
         use_long: Bool[Array, ""],
         return_routes: bool,
         token_valid: Array | None = None,
+        *,
+        deletion_alpha: jax.Array | None = None,
+        deletion_hard: jax.Array | None = None,
     ) -> MoeForwardOutput:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # ``lax.cond`` keeps a uniform per-layer body so the transformer can scan the layers:
@@ -781,8 +878,11 @@ class SnowballBlock(eqx.Module):
         )
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        routed = self.mlp._forward(mlp_in, return_routes, token_valid)
-        return MoeForwardOutput(x + (routed.output + self.shared(mlp_in)), routed.routes, routed.counts)
+        routed = self.mlp._forward(
+            mlp_in, return_routes, token_valid, deletion_alpha=deletion_alpha, deletion_hard=deletion_hard
+        )
+        shared = self.shared(mlp_in, deletion_alpha=deletion_alpha, deletion_hard=deletion_hard)
+        return MoeForwardOutput(x + (routed.output + shared), routed.routes, routed.counts, routed.wanda)
 
 
 def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
@@ -809,6 +909,10 @@ class SnowballTransformer(eqx.Module):
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: SnowballConfig = eqx.field(static=True)
+    deletion_alpha: Optional[jax.Array] = None
+    """Current alpha of the deletion-tuning ramp; None outside Deletion Tuning."""
+    deletion_hard: Optional[jax.Array] = None
+    """0.0 applies the soft mask, 1.0 the hard one (a float leaf: jax.grad rejects bools)."""
 
     @staticmethod
     def init(cfg: SnowballConfig, *, key: PRNGKeyArray) -> "SnowballTransformer":
@@ -888,16 +992,46 @@ class SnowballTransformer(eqx.Module):
         def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag):
             layer, use_long = layer_and_flag
             if token_valid is not None:
-                result = layer._forward(carry, short_mask, long_mask, use_long, return_routes, token_valid)
-                return result.output, (result.routes, result.counts)
+                result = layer._forward(
+                    carry,
+                    short_mask,
+                    long_mask,
+                    use_long,
+                    return_routes,
+                    token_valid,
+                    deletion_alpha=self.deletion_alpha,
+                    deletion_hard=self.deletion_hard,
+                )
+                return result.output, (result.routes, result.counts, result.wanda)
             if return_routes:
-                hidden, routes = layer.forward(carry, short_mask, long_mask, use_long, return_routes=True)
-                return hidden, (routes, None)
-            return layer(carry, short_mask, long_mask, use_long), (None, None)
+                hidden, routes = layer.forward(
+                    carry,
+                    short_mask,
+                    long_mask,
+                    use_long,
+                    return_routes=True,
+                    deletion_alpha=self.deletion_alpha,
+                    deletion_hard=self.deletion_hard,
+                )
+                return hidden, (routes, None, None)
+            return layer(
+                carry,
+                short_mask,
+                long_mask,
+                use_long,
+                deletion_alpha=self.deletion_alpha,
+                deletion_hard=self.deletion_hard,
+            ), (None, None, None)
 
         # Bound routed-expert activation memory during the backward pass as well as forward.
-        hidden, (routes, counts) = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
-        return MoeForwardOutput(self.final_gated_norm(self.final_norm(hidden)), routes, counts)
+        hidden, (routes, counts, wanda) = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
+        if wanda is not None:
+            # Sum the batch-shard partials (a sharded-axis sum is the cross-replica collective).
+            wanda = {
+                key: jnp.sum(value, axis=1) if value.ndim > 2 else jnp.sum(value, axis=1)
+                for key, value in wanda.items()
+            }
+        return MoeForwardOutput(self.final_gated_norm(self.final_norm(hidden)), routes, counts, wanda)
 
 
 # --- LmHeadModel adapter -----------------------------------------------------------------------
@@ -933,8 +1067,15 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         *,
         key=None,
         pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
-        return self._activations(input_ids, return_routes=False, attn_mask=attn_mask)[0]
+    ) -> NamedArray | tuple[NamedArray, NamedOrNumeric]:
+        hidden = self._activations(input_ids, return_routes=False, attn_mask=attn_mask)[0]
+        # The Deletion Tuning sparse-weight term rides Levanter's aux-loss hook
+        # during training only (the eval path passes key=None), so validation
+        # loss stays the pure task loss.
+        dt = self._config.deletion_tuning
+        if dt is not None and key is not None:
+            return hidden, deletion_regularizer(self.transformer, dt.lam)
+        return hidden
 
     def activations_with_routes(
         self, input_ids: NamedArray, attn_mask: LmHeadAttentionMask | NamedArray | None = None
