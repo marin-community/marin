@@ -12,12 +12,12 @@ from pathlib import Path
 from types import MappingProxyType
 
 import yaml
-from marin.evaluation.eval_policy import source_config_digest
+from evalrecords.eval_policy import source_config_digest
+from evalrecords.records import EvalRef, EvalTaskRef, EvaluationSelection, HarborRef, ModelConfigRef
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
 from marin.evaluation.harbor.driver_config import HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalRef, EvalTaskRef, EvaluationSelection, HarborRef, ModelConfigRef
 from marin.evaluation.runner import EvalExecutor
 from rigging.secrets import SecretSpec
 
@@ -28,10 +28,11 @@ logger = logging.getLogger(__name__)
 
 _DAYTONA_ENVIRONMENT_TYPE = "daytona"
 _HARBOR_CONFIG_DIR = Path(__file__).with_name("configs") / "harbor"
+# Evals run only in the Daytona eval org; RL and data keys never reach this launcher.
 _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
     {
         "DAYTONA_API_KEY": (
-            "env:DAYTONA_API_KEY",
+            "env:DAYTONA_EVAL_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         )
     }

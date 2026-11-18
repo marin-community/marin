@@ -615,6 +615,11 @@ class Checkpointer:
         # saves a checkpoint for the next step, etc. This leads to partial checkpoints, no good.
         # we fix by having process 0 make the decision
         requested_retention = self._consume_checkpoint_request()
+        if force and step == self._last_save_step and self._last_save_permanent:
+            # The final hook must still surface a failed pending save before later hooks run.
+            self._manager.wait_until_finished()
+            return
+
         my_should_save = force or requested_retention is not None
         my_save_permanent_ckpt = force or requested_retention == CheckpointRetention.PERMANENT
 
