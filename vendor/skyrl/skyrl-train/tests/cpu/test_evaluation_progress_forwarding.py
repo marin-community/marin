@@ -18,11 +18,17 @@ def test_existing_worker_progress_reaches_driver_before_results(monkeypatch, cap
             bar.update(1)
             bar.update(1)
     result = object()
-    ready = iter([([], [result]), ([result], [])])
-    monkeypatch.setattr("skyrl_train.entrypoints.evaluation_progress.ray.wait", lambda *args, **kwargs: next(ready))
+    waits = []
+
+    def wait(*args, **kwargs):
+        if waits:
+            # Observe delivery while the remote task is still unresolved.
+            assert "Evaluation Progress: 2/2" in capsys.readouterr().out
+            return [result], []
+        waits.append(True)
+        return [], [result]
+
+    monkeypatch.setattr("skyrl_train.entrypoints.evaluation_progress.ray.wait", wait)
     monkeypatch.setattr("skyrl_train.entrypoints.evaluation_progress.ray.get", lambda ref: {"scored": 2})
     assert wait_for_evaluation(result, progress) == {"scored": 2}
-    output = capsys.readouterr().out
-    assert "Evaluation Progress: 0/2" in output
-    assert "Evaluation Progress: 2/2" in output
     assert progress.empty()
