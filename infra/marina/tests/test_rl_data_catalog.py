@@ -3231,6 +3231,12 @@ def test_full_review_rows_load_typed_and_browseable(catalog_database, catalog_qu
     assert row["result_reviewed"] == policy.reviewed
     assert row["issue_count"] == policy.issue_count
     assert row["grade"] == "bad"
+    assert catalog_query(
+        "SELECT bool_and(s.summary=to_jsonb(v)-'load_id'-'pipeline_key'-'cohort') AS identical "
+        "FROM atlas_cohort_summaries s JOIN atlas_cohort_summary v USING(load_id,pipeline_key,cohort) "
+        "WHERE s.load_id=:load AND s.pipeline_key=:key",
+        {"load": load_result["load_id"], "key": full_key},
+    )["rows"] == [{"identical": True}]
     with catalog_database.connect() as connection:
         plan = connection.execute(
             text(

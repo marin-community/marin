@@ -3,6 +3,7 @@
 
 """Materialize immutable catalog review aggregates before serving a load."""
 
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -27,17 +28,47 @@ def materialize_cohort_summaries(query: SummaryQuery, load_id: str, *, pipeline_
         parameters,
     )
     for pipeline in pipelines:
+        summaries = {}
+        cohorts = None
+        projections = (
+            "population,sample_count,reviewed",
+            "missing_evidence,packets_with_omissions",
+            "verdict_counts",
+            "grade,good_fraction,result_reviewed,issue_count",
+            "grade_reason,issue_rate,uncertain_count,unavailable_count",
+            "defect_counts",
+            "confidence_counts",
+        )
+        for fields in projections:
+            rows = query(
+                f"SELECT cohort,{fields} FROM atlas_cohort_summary "
+                "WHERE load_id=:load_id AND pipeline_key=:pipeline_key ORDER BY cohort",
+                {**parameters, "pipeline_key": pipeline["pipeline_key"]},
+            )
+            current = {row["cohort"] for row in rows}
+            if not current or (cohorts is not None and current != cohorts):
+                raise ValueError("Cohort populations changed during canonical summary projection")
+            cohorts = current
+            for row in rows:
+                summaries.setdefault(row["cohort"], {}).update(
+                    {name: value for name, value in row.items() if name != "cohort"}
+                )
         query(
             """
                 INSERT INTO atlas_cohort_summaries (load_id,pipeline_key,cohort,version,summary)
-                SELECT load_id,pipeline_key,cohort,:version,
-                    to_jsonb(v)-'load_id'-'pipeline_key'-'cohort'
-                FROM atlas_cohort_summary v
-                WHERE v.load_id=:load_id AND v.pipeline_key=:pipeline_key
+                SELECT :load_id,:pipeline_key,cohort,:version,summary
+                FROM jsonb_to_recordset(CAST(:summaries AS JSONB)) AS r(cohort TEXT,summary JSONB)
                 ON CONFLICT (load_id,pipeline_key,cohort) DO UPDATE
                     SET version=EXCLUDED.version,summary=EXCLUDED.summary
                     WHERE atlas_cohort_summaries.version<>EXCLUDED.version
                 """,
-            {**parameters, "pipeline_key": pipeline["pipeline_key"]},
+            {
+                **parameters,
+                "pipeline_key": pipeline["pipeline_key"],
+                "summaries": json.dumps(
+                    [{"cohort": cohort, "summary": summary} for cohort, summary in sorted(summaries.items())],
+                    allow_nan=False,
+                ),
+            },
         )
     return len(pipelines)
