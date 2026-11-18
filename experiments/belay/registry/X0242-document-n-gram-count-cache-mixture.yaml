@@ -4,7 +4,7 @@ name: Document n-gram count cache mixture
 category: Output head and loss
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6972547895
@@ -26,3 +26,10 @@ trials:
     ngram_cache_mixture: 'true'
   commit: 6909b71dbb
   priority: batch
+  loss:
+  - 3.0248
+  delta:
+  - -0.0212
+  steps: 3030
+  baseline: belay-X0242-control 3.0460 (same commit, seed 0)
+  step_time_change: +1%
