@@ -926,9 +926,13 @@ def prepare_harbor_export(
         prepare(cohort, output, source_revision=source_revision, controls=recipe.controls)
         uploaded = 0
         for path in sorted(output.rglob("*")):
-            if not path.is_file():
+            relative = path.relative_to(output)
+            uri = f"{output_root}/{relative}"
+            if path.is_dir():
+                # Empty directories carry meaning in the export (for example a task's
+                # image-bound environment/); recreate them remotely.
+                StoragePath(uri).mkdirs()
                 continue
-            uri = f"{output_root}/{path.relative_to(output)}"
             with StoragePath(uri).open("wb", auto_mkdir=True) as stream:
                 stream.write(path.read_bytes())
             uploaded += 1
