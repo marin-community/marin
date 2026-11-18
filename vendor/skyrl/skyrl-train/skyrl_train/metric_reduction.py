@@ -100,6 +100,6 @@ class WorldReduction:
         )
         result = values.new_zeros(len(probabilities))
         if rank == 0:
-            logger.info(f"Batch mismatch quantile gather: {received.nbytes} bytes")
+            logger.debug(f"Batch mismatch quantile gather: {received.nbytes} bytes")
             result = result.new_tensor(linear_quantiles(received.cpu(), probabilities))
         return self.all_reduce(result, "sum").tolist()
