@@ -16,6 +16,10 @@ Example::
       --decode-stack fast \\
       --tokenizer marin-community/marin-tokenizer-tools --tokenizer-revision <commit> \\
       --secret PARALLEL_API_KEY env:PARALLEL_API_KEY
+
+To replace a running deployment without downtime, submit the new job under a new ``--name`` with
+``--endpoint /serve/<old name>``, wait until it is healthy, then cancel the old job. While both run,
+Iris sends each request to either job.
 """
 
 import json
@@ -447,7 +451,12 @@ _PRIORITIES = {
 @click.command()
 @click.option("--weights", required=True, help="Completed Hero BF16 export (contains export-manifest.json).")
 @click.option("--model-id", required=True, help="Served model name.")
-@click.option("--name", "job_name", required=True, help="Iris job name; the endpoint is /serve/<name>.")
+@click.option("--name", "job_name", required=True, help="Iris job name.")
+@click.option(
+    "--endpoint",
+    help="Endpoint name [default: /serve/<name>]. Name another running job's endpoint to replace that job "
+    "without downtime: both jobs serve the endpoint until the other one is cancelled.",
+)
 @click.option("--nodes", type=click.IntRange(min=1), required=True, help="GB200x4 hosts in one NVLink domain.")
 @click.option("--max-model-len", type=int, required=True)
 @click.option("--tokenizer", required=True, help="Hugging Face tokenizer repository.")
@@ -486,6 +495,7 @@ def main(
     weights: str,
     model_id: str,
     job_name: str,
+    endpoint: str | None,
     nodes: int,
     max_model_len: int,
     tokenizer: str,
@@ -507,7 +517,7 @@ def main(
     config = HeroDashboardConfig(
         weights=weights,
         model_id=model_id,
-        endpoint=f"/serve/{job_name}",
+        endpoint=endpoint or f"/serve/{job_name}",
         nodes=nodes,
         max_model_len=max_model_len,
         tokenizer=tokenizer,
@@ -540,7 +550,8 @@ def main(
         with IrisClient.remote(
             endpoint_info.url, workspace=find_project_root(), credentials=endpoint_info.credentials
         ) as client:
-            if client.list_endpoint_instances(config.endpoint):
+            # An explicit --endpoint may name a running job's endpoint on purpose; see the option's help.
+            if endpoint is None and client.list_endpoint_instances(config.endpoint):
                 raise click.ClickException(f"Endpoint {config.endpoint} is already registered.")
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(serve, config),
