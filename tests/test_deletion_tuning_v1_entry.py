@@ -302,7 +302,9 @@ def test_apply_deletion_init_matches_the_threshold_rule(mesh):
         rng = np.random.default_rng(11)
         routed = rng.uniform(0.5, 2.0, size=(2, 4, 8)).astype(np.float32)
         shared = rng.uniform(0.5, 2.0, size=(2, 8)).astype(np.float32)
-        threshold = 1.0  # inside the score spread |W| * ||x||
+        w0 = np.asarray(model.transformer.blocks[0].mlp.expert_mlp.w_gate)
+        scores0 = np.abs(w0) * routed[0][..., None]
+        threshold = float(np.median(scores0))  # inside the score spread |W| * ||x||
         initialized = levanter_train_module.apply_deletion_init(
             model, settings, routed, shared, threshold=threshold, num_layers=2
         )
@@ -311,8 +313,6 @@ def test_apply_deletion_init_matches_the_threshold_rule(mesh):
             assert block.mlp.gate_logits.shape == block.mlp.expert_mlp.w_gate.shape
         assert float(initialized.transformer.deletion_alpha) == 1e2
         assert float(initialized.transformer.deletion_hard) == 0.0
-        w0 = np.asarray(model.transformer.blocks[0].mlp.expert_mlp.w_gate)
-        scores0 = np.abs(w0) * routed[0][..., None]
         logits0 = np.asarray(initialized.transformer.blocks[0].mlp.gate_logits)
         delete = scores0 <= threshold
         assert delete.any() and not delete.all()
