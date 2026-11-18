@@ -53,7 +53,11 @@ function renderControls() {
   document.getElementById('dispatch-word').textContent = settings.dispatch_enabled ? 'on' : 'off'
   const cap = document.getElementById('node-cap')
   if (document.activeElement !== cap) cap.value = settings.node_cap
-  meter('nodes', state.nodes_requested, settings.node_cap, `${state.nodes_requested} / ${settings.node_cap}`)
+  const speedrunCap = document.getElementById('speedrun-cap')
+  if (document.activeElement !== speedrunCap) speedrunCap.value = settings.speedrun_node_cap
+  // Both pools together: speedrun runs count against the speedrun cap, the rest against the node cap.
+  const caps = settings.node_cap + settings.speedrun_node_cap
+  meter('nodes', state.nodes_requested, caps, `${state.nodes_requested} / ${caps}`)
   meter(
     'storage',
     watcher.storage_bytes ?? 0,
@@ -466,6 +470,11 @@ function wireControls() {
   document.getElementById('dispatch').addEventListener('change', (event) => {
     const on = event.target.checked
     act('settings', { dispatch_enabled: on }, on ? 'Dispatch on' : 'Dispatch off')
+  })
+  document.getElementById('speedrun-cap-form').addEventListener('submit', (event) => {
+    event.preventDefault()
+    const cap = Number(document.getElementById('speedrun-cap').value)
+    act('settings', { speedrun_node_cap: cap }, `Speedrun node cap ${cap}`)
   })
   document.getElementById('node-cap-form').addEventListener('submit', (event) => {
     event.preventDefault()

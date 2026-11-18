@@ -44,7 +44,10 @@ from sqlalchemy.engine import Connection, Engine
 DEFAULT_SETTINGS: dict[str, Any] = {
     "dispatch_enabled": False,
     "github_posting": False,
+    # Soft caps on nodes held by Belay runs, in two pools so speedruns never wait behind ladders: speedrun runs count
+    # against speedrun_node_cap, every other Track's runs against node_cap. Launches read both from the app.
     "node_cap": 8,
+    "speedrun_node_cap": 8,
     "storage_limit_bytes": 1_000_000_000_000,
     # Who may use the admin view: Marina identities, seeded with the marin-devs team's GitHub accounts; an entry
     # without an identity cannot sign in until a maintainer maps it.
@@ -307,6 +310,7 @@ class SettingsUpdate(BaseModel):
     dispatch_enabled: bool | None = None
     github_posting: bool | None = None
     node_cap: int | None = Field(default=None, ge=1)
+    speedrun_node_cap: int | None = Field(default=None, ge=1)
     """Soft cap on nodes held by Belay runs; launches read it from the app."""
     approvers: list[Approver] | None = None
     trusted_submitters: list[str] | None = None
@@ -1510,6 +1514,9 @@ def create_api(services: Services) -> RegisteredApi:
                     _activity(conn, ActivityPost(kind="control", title=f"{caller} turned dispatch {word}"))
                 if key == "node_cap" and value != before["node_cap"]:
                     _activity(conn, ActivityPost(kind="control", title=f"{caller} set the node cap to {value}"))
+                if key == "speedrun_node_cap" and value != before["speedrun_node_cap"]:
+                    title = f"{caller} set the speedrun node cap to {value}"
+                    _activity(conn, ActivityPost(kind="control", title=title))
             return {k: v for k, v in _settings(conn).items() if k not in SECRET_SETTINGS}
 
     @admin.get("/sessions/{session_id}/transcript", response_class=PlainTextResponse)
