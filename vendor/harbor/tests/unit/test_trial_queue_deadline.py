@@ -8,7 +8,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from harbor.agents.base import TurnCapExhaustedError
 from harbor.environments.base import SandboxDiskFullError
 from harbor.models.job.config import RetryConfig
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
@@ -756,26 +755,43 @@ async def test_cancelling_queued_trial_does_not_start_or_retry_it(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("verified", [False, True])
 async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, verified: bool
 ) -> None:
     never = asyncio.Event()
 
     async def hang(trial: FakeTrial) -> None:
+        if verified:
+            trial.result.verifier_result = VerifierResult(rewards={"reward": 0.0})
+            trial.first_phase_timeout = TimeoutError("Agent session cleanup timed out")
         await never.wait()
 
-    config = _config(tmp_path, "hung", attempt_timeout=0.01)
-    _install_factory(monkeypatch, {("hung", 0): FakeTrial(config, 0, hang)})
+    async def reverify(trial: FakeTrial) -> None:
+        trial.result.verifier_result = VerifierResult(rewards={"reward": 1.0})
+
+    config = _config(tmp_path, "hung", attempt_timeout=0.05, cleanup_grace=0.2)
+    _install_factory(
+        monkeypatch,
+        {("hung", 0): FakeTrial(config, 0, hang), ("hung", 1): FakeTrial(config, 1, reverify)},
+    )
+    retry = RetryConfig(
+        max_retries=1, include_exceptions={"TimeoutError"}, min_wait_sec=0, max_wait_sec=0
+    )
 
     async with asyncio.timeout(1):
-        result = await TrialQueue(n_concurrent=1).submit(config)
+        result = await TrialQueue(n_concurrent=1, retry_config=retry).submit(config)
 
-    assert result.exception_info is not None
-    assert result.exception_info.exception_type == "TrialTimeoutError"
-    selected = TrialResult.model_validate_json(
-        (tmp_path / "trials" / "hung" / "result.json").read_text()
-    )
-    assert selected.exception_info == result.exception_info
+    selected = TrialResult.model_validate_json((tmp_path / "trials" / "hung" / "result.json").read_text())
+    assert selected == result
+    assert selected.trial_relpath == "hung/attempts/000"
+    if verified:
+        assert selected.verifier_result is not None and selected.verifier_result.rewards == {"reward": 0.0}
+        assert selected.exception_info is None and selected.completion is None
+        assert [error.exception_type for error in selected.secondary_exception_info] == ["TimeoutError"]
+    else:
+        assert selected.verifier_result is None
+        assert selected.exception_info.exception_type == "TrialTimeoutError"
 
 
 @pytest.mark.unit
@@ -837,6 +853,7 @@ async def test_result_persistence_failure_is_primary_and_retryable(
 
     async def finish_with_prior_model_error(trial: FakeTrial) -> None:
         attempts.append(len(attempts))
+        trial.result.verifier_result = VerifierResult(rewards={"reward": 1.0})
         trial.result.exception_info = ExceptionInfo.from_exception(
             RuntimeError("model failed before persistence")
         )
@@ -869,6 +886,7 @@ async def test_result_persistence_failure_is_primary_and_retryable(
     assert attempts == [0, 1]
     assert result.exception_info is not None
     assert result.exception_info.exception_type == "ArtifactUploadTimeoutError"
+    assert result.verifier_result is None
     assert any(
         error.exception_type == "RuntimeError"
         for error in result.secondary_exception_info

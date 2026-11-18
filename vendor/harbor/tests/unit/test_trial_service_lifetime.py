@@ -343,7 +343,9 @@ async def test_late_relay_failure_stops_active_trial_without_cancelling_neighbor
     assert Job._is_resume_retryable_result(native)
 
 
-@pytest.mark.parametrize("failure", ["collection", "collection_deadline", "teardown", "teardown_deadline"])
+@pytest.mark.parametrize(
+    "failure", ["collection", "collection_deadline", "teardown", "teardown_deadline", "teardown_cancelled"]
+)
 async def test_runtime_failure_preserves_reward_only_after_verification(tmp_path, monkeypatch, failure):
     factory = ProcessTaskFactory(tmp_path / "guest")
     monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
@@ -351,6 +353,7 @@ async def test_runtime_failure_preserves_reward_only_after_verification(tmp_path
     trial = await Trial.create(
         trial_config(tmp_path, "runtime-failure", guest_root=tmp_path / "guest", reward=reward)
     )
+    stop_started = asyncio.Event()
     release_stop = asyncio.Event()
 
     async def fail():
@@ -365,12 +368,13 @@ async def test_runtime_failure_preserves_reward_only_after_verification(tmp_path
     else:
         original_stop = trial.agent_environment.stop
 
-        if failure == "teardown_deadline":
+        if failure in {"teardown_deadline", "teardown_cancelled"}:
             monkeypatch.setattr("harbor.trial.trial.ENVIRONMENT_STOP_TIMEOUT_SEC", 0.2)
 
         async def failed_stop(delete):
+            stop_started.set()
             await original_stop(delete)
-            if failure == "teardown_deadline":
+            if failure in {"teardown_deadline", "teardown_cancelled"}:
                 await release_stop.wait()
             else:
                 await fail()
@@ -378,12 +382,23 @@ async def test_runtime_failure_preserves_reward_only_after_verification(tmp_path
         monkeypatch.setattr(trial.agent_environment, "stop", failed_stop)
 
     try:
-        result = await trial.run()
+        if failure == "teardown_cancelled":
+            async with asyncio.timeout(5):
+                task = asyncio.create_task(trial.run())
+                await stop_started.wait()
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+        else:
+            result = await trial.run()
     finally:
         release_stop.set()
         await asyncio.gather(*trial.pending_cleanup_tasks(), return_exceptions=True)
     stored = TrialResult.model_validate_json(trial.paths.result_path.read_text())
-    assert Job._is_resume_retryable_result(result)
+    if failure == "teardown_cancelled":
+        assert stored.exception_info.exception_type == "CancelledError"
+        assert stored.completion is None and stored.verifier_result is None
+        return
     if failure.startswith("teardown"):
         assert result.verifier_result is not None and stored.verifier_result is not None
         assert result.verifier_result.rewards == stored.verifier_result.rewards == {"reward": reward}

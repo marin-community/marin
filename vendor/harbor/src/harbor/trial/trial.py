@@ -362,6 +362,7 @@ class Trial(ABC):
                         raise cleanup_failure
         except asyncio.CancelledError as exc:
             self.logger.debug(f"Trial {self.config.trial_name} cancelled")
+            self.result.verifier_result = None
             await self._record_exception(exc)
             await self._emit(TrialEvent.CANCEL)
             raise
@@ -1408,9 +1409,12 @@ class Trial(ABC):
                 self._environment_cleanup_failed = True
                 _log_abandoned_stop_failure(stop_task, self.logger, label)
                 self._track_cleanup_task(stop_task)
+                timeout = TimeoutError("Environment stop deadline exceeded")
+                if cancellation is not None:
+                    raise cancellation from timeout
                 raise EnvironmentStopError(
                     "Environment teardown did not complete before its deadline"
-                ) from TimeoutError("Environment stop deadline exceeded")
+                ) from timeout
             try:
                 await asyncio.wait({stop_task}, timeout=remaining)
             except asyncio.CancelledError as exc:

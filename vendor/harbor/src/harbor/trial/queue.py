@@ -30,6 +30,7 @@ from harbor.trial.hooks import (
     emit_trial_hooks,
 )
 from harbor.trial.trial import Trial
+from harbor.utils.artifact_writer import ArtifactPersistenceError
 from harbor.utils.logger import logger
 
 
@@ -353,6 +354,8 @@ class TrialQueue:
         else:
             publish_task.cancel()
             self._observe_task(publish_task)
+            if result.verifier_result is not None:
+                raise ArtifactPersistenceError("Timed-out trial result did not finish persisting")
         return result
 
     async def _cancel_admitted_attempt(
@@ -434,7 +437,7 @@ class TrialQueue:
             with bind_attempt(attempt_context):
                 result = await self._run_admitted_attempt(trial_config, attempt)
 
-            if result.exception_info is None:
+            if result.exception_info is None or result.verifier_result is not None:
                 break
             if not self._should_retry_exception(result.exception_info.exception_type):
                 break

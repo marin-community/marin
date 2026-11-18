@@ -163,6 +163,15 @@ def timeout_result(
     )
     secondary = list(result.secondary_exception_info)
     timeout_info = _exception_info(timeout_error)
+    if (
+        type(timeout_error) is TimeoutError
+        and result.verifier_result is not None
+        and result.verifier_result.rewards
+    ):
+        # A plain phase timeout after a verifier reward is a teardown failure.
+        result.completion = None
+        result.secondary_exception_info.append(timeout_info)
+        return result
     if result.exception_info is not None and (
         result.exception_info.exception_type != timeout_info.exception_type
         or result.exception_info.exception_message != timeout_info.exception_message
@@ -185,6 +194,7 @@ def exception_result(
 
     error_info = _exception_info(error)
     if isinstance(error, ArtifactPersistenceError):
+        result.verifier_result = None
         if result.exception_info is not None:
             result.secondary_exception_info = [
                 *result.secondary_exception_info,

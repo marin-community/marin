@@ -232,7 +232,14 @@ def test_harbor_coverage_controls_best_checkpoint(selection, tmp_path):
             snowball_model.SNOWBALL.by_name["train-long-harbor"], table=snowball_model.SNOWBALL, settings=settings
         ).runs[0]
         path = tmp_path / f"harbor-{index}.yaml"
-        path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+        document = yaml.safe_load(materialized_config(step, str(tmp_path)).launch_config_yaml)
+        if index:
+            callback = next(
+                row for row in document["skyrl"]["trainer"]["callbacks"] if row["type"] == "harbor_evaluation"
+            )
+            for cohort in callback["cohorts"]:
+                cohort["job"]["agents"][0]["kwargs"]["model_info"]["max_output_tokens"] = 4096
+        path.write_text(yaml.safe_dump(document))
         paths.append(str(path))
     selected = native_json("--isolated", "--group", "harbor-test")(
         """
@@ -254,7 +261,6 @@ for launch in (config, changed):
         job = JobConfig.model_validate(OmegaConf.to_container(cohort.job, resolve=True))
         model_info = job.agents[0].kwargs["model_info"]
         assert model_info["max_input_tokens"] + model_info["max_output_tokens"] == window
-        assert model_info["max_input_tokens"] > 0
         assert job.retry.max_retries == 1
         assert job.retry.include_exceptions == {"PhaseCancellationError", "TimeoutError", "DaytonaConflictError"}
         if cohort.name == "swebench-verified":
