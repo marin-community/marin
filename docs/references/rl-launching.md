@@ -284,7 +284,9 @@ family’s order. Omit the family counts to use the configured prompt order, inc
 Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
 data artifacts, a starting native checkpoint, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
-not fork artifact identity.
+not fork artifact identity. A versioned task mix (`RlCurriculum`) also belongs in `SkyRLSpec`; it
+renders the trainer's sampling settings and is named in the run record. See
+[RL curricula](rl-curricula.md).
 
 The `records` tracker requires a fresh attempt ID and `iris.max_retries=0`.
 Its Iris jobs also use zero preemption retries. After a preemption, start a fresh

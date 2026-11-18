@@ -37,6 +37,7 @@ GRADE_KEY = "grade"
 
 class SamplingKind(StrEnum):
     DOMAIN_WEIGHTED = "domain-weighted"
+    ORDERED = "ordered"
     NAIVE = "naive"
     THOMPSON = "thompson"
     LEARNABILITY = "learnability"
