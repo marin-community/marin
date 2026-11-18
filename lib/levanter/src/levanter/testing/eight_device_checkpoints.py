@@ -46,7 +46,7 @@ DISTRIBUTED_PROCESS_COUNT = 2
 DISTRIBUTED_ARRAY_SIZE = 4096
 _CHUNK_READ_METRIC = "/tensorstore/cache/chunk_cache/reads"
 _LOOPBACK_ADDRESS = "127.0.0.1"
-# Spawned children reach the loopback coordinator directly, not through a proxy.
+# Remove inherited proxy settings so children can reach the loopback coordinator.
 _PROXY_ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
 _PINNED_HOST_MEMORY_KIND = "pinned_host"
 _SHARED_ARRAY_NAMES = ("a", "b", "c")

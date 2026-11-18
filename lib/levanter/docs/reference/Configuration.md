@@ -178,7 +178,8 @@ rolls through it.
 When several processes save to a local or NFS path, each OCDBT manifest commit takes a lock
 file that every other writer waits on. One process publishes the array metadata before the
 others open the arrays, and the others open it without reading it back. Each chunk commits
-as soon as it is staged.
+as soon as it is staged. Set `checkpointer.write.file_io_locking` to `os`, `lockfile`, or
+`none` to override that default.
 
 | Parameter                                  | Description                                                                            | Default |
 |--------------------------------------------|----------------------------------------------------------------------------------------|---------|
@@ -188,6 +189,7 @@ as soon as it is staged.
 | `checkpointer.write.max_staged_host_bytes` | Cap on host memory one process stages at once during a save.                           | 16 GiB  |
 | `checkpointer.write.cache_pool_bytes`      | Soft limit for each TensorStore write cache.                                            | 1 GiB   |
 | `checkpointer.write.data_copy_concurrency` | Maximum CPU concurrency TensorStore uses to copy and encode checkpoint data.           | 16      |
+| `checkpointer.write.file_io_locking`       | File-driver lock while a key commits: `os`, `lockfile`, or `none`. Unset uses the default above. | lock file when several processes save to a local or NFS path |
 
 #### Checkpoint Telemetry
 
