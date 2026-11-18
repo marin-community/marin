@@ -160,20 +160,33 @@ def provenance_counts(fs, path: str) -> Counter:
     return counts
 
 
+@dataclass(frozen=True)
+class Adoption:
+    """The release verification this stage runs and where its receipt lands.
+
+    ``build_config`` returns this, so the artifact's fingerprint covers the pinned
+    release: a changed URL, digest, row count, or provenance count is a different
+    artifact, and an existing admission receipt cannot be reused for it.
+    """
+
+    output_path: str
+    config: AdoptedRelease
+
+
 def adopt_release(source: RlDataSource[AdoptedRelease], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     """Adopt the pinned release as the RL prompt pool: verify digests and provenance, convert nothing."""
     config = _release(source)
     if options.mode is SourceProcessingMode.QUICK:
         raise ValueError(f"an adopted release is admitted, not re-processed: {source.name}")
 
-    def run(output_path: str) -> CampaignArtifact:
-        composition = verify_release(config)
-        destination = StoragePath(output_path)
+    def run(adoption: Adoption) -> CampaignArtifact:
+        composition = verify_release(adoption.config)
+        destination = StoragePath(adoption.output_path)
         destination.mkdirs(exist_ok=True)
         manifest = {
             "status": "completed",
-            "release": config.url,
-            "manifest_sha256": config.manifest_sha256,
+            "release": adoption.config.url,
+            "manifest_sha256": adoption.config.manifest_sha256,
             "composition": {name: asdict(verified) for name, verified in composition.items()},
         }
         receipt = destination / "manifest.json"
@@ -182,7 +195,7 @@ def adopt_release(source: RlDataSource[AdoptedRelease], options: PipelineOptions
             status="completed",
             result=PipelineResult(
                 status=SourceStatus.COMPLETED,
-                outputs={"release": config.url},
+                outputs={"release": adoption.config.url},
                 evidence={"manifest": str(receipt)},
                 stages=("verify",),
             ),
@@ -193,7 +206,7 @@ def adopt_release(source: RlDataSource[AdoptedRelease], options: PipelineOptions
         version=config.version,
         artifact_type=CampaignArtifact,
         run=run,
-        build_config=lambda context: context.output_path,
+        build_config=lambda context: Adoption(context.output_path, config),
         deps=(),
     )
 
@@ -216,11 +229,6 @@ def agentic_release() -> RlDataSource[AdoptedRelease]:
                 "long-loop launch receipts, not on curation in this repository."
             ),
             task_format=TaskFormat.HARBOR,
-            dataset=SourceReference(
-                AGENTIC_RELEASE_URL,
-                AGENTIC_MANIFEST_SHA256,
-                AGENTIC_RELEASE_URL,
-            ),
         ),
         config=AdoptedRelease(
             name=AGENTIC_RELEASE_NAME,
@@ -260,11 +268,6 @@ def nonagentic_release() -> RlDataSource[AdoptedRelease]:
                 f"PRIME-RL/Eurus-2-RL-Data {EURUS_ROWS:,}. This release's own agentic parquet "
                 "(10,210 rows) was superseded by the swe-verified release and is not part of the "
                 "training pool. Qualification rests on the release seal and the long-loop launch receipts."
-            ),
-            dataset=SourceReference(
-                NONAGENTIC_RELEASE_URL,
-                NONAGENTIC_MANIFEST_SHA256,
-                NONAGENTIC_RELEASE_URL,
             ),
         ),
         config=AdoptedRelease(
