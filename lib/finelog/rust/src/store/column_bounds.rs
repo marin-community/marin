@@ -15,7 +15,6 @@ use std::collections::BTreeMap;
 
 use arrow::array::{Array, Int64Array, RecordBatch};
 use parquet::file::metadata::ParquetMetaData;
-use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::CatalogColumnBounds;
@@ -66,17 +65,6 @@ impl ColumnRange {
 
 /// Column name to the segment's recorded range for that column.
 pub type ColumnBounds = BTreeMap<String, ColumnRange>;
-
-/// One `object_segments.column_bounds` entry; an unknown range has neither
-/// `min` nor `max`.
-#[derive(Serialize, Deserialize)]
-struct StoredColumnBounds {
-    column: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    min: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    max: Option<i64>,
-}
 
 /// The inclusive range of the non-null values in `arrays`; `None` when every
 /// value is null.
@@ -146,41 +134,27 @@ pub fn missing_columns(bounds: &ColumnBounds, columns: &[String]) -> Vec<String>
         .collect()
 }
 
-/// Encode `bounds` for `object_segments.column_bounds`; `None` (NULL) when the
-/// segment records none.
+/// Encode `bounds` for `object_segments.column_bounds` as the JSON of its
+/// checkpoint entries; `None` (NULL) when the segment records none.
 pub fn to_column(bounds: &ColumnBounds) -> Result<Option<String>, StatsError> {
     if bounds.is_empty() {
         return Ok(None);
     }
-    let stored: Vec<_> = bounds
-        .iter()
-        .map(|(column, range)| {
-            let (min, max) = range.ends();
-            StoredColumnBounds {
-                column: column.clone(),
-                min,
-                max,
-            }
-        })
-        .collect();
-    serde_json::to_string(&stored)
+    serde_json::to_string(&to_proto(bounds))
         .map(Some)
         .map_err(|error| StatsError::Internal(format!("serialize column bounds: {error}")))
 }
 
-/// The bounds stored in `object_segments.column_bounds`; empty for NULL. An
-/// entry with only one end is dropped, so its column is backfilled again.
+/// The bounds stored in `object_segments.column_bounds`; empty for NULL. Entries
+/// are dropped as in `from_proto`.
 pub fn from_column(stored: Option<&str>) -> Result<ColumnBounds, StatsError> {
     let Some(json) = stored else {
         return Ok(ColumnBounds::new());
     };
-    let entries: Vec<StoredColumnBounds> = serde_json::from_str(json).map_err(|error| {
+    let entries: Vec<CatalogColumnBounds> = serde_json::from_str(json).map_err(|error| {
         StatsError::Internal(format!("decode object segment column bounds: {error}"))
     })?;
-    Ok(entries
-        .into_iter()
-        .filter_map(|entry| Some((entry.column, ColumnRange::from_ends(entry.min, entry.max)?)))
-        .collect())
+    Ok(from_proto(&entries))
 }
 
 /// The checkpoint form of `bounds`.
@@ -289,9 +263,9 @@ mod tests {
             ("empty".to_string(), ColumnRange::Unknown),
         ]);
         let json = to_column(&bounds).unwrap().unwrap();
-        assert!(
-            json.contains(r#"{"column":"empty"}"#),
-            "unknown has no ends: {json}"
+        assert_eq!(
+            json,
+            r#"[{"column":"empty"},{"column":"epoch_ms","min":"10","max":"20"}]"#
         );
         assert_eq!(from_column(Some(&json)).unwrap(), bounds);
 
@@ -313,7 +287,7 @@ mod tests {
         );
 
         let inverted =
-            r#"[{"column":"epoch_ms","min":9223372036854775807,"max":-9223372036854775808}]"#;
+            r#"[{"column":"epoch_ms","min":"9223372036854775807","max":"-9223372036854775808"}]"#;
         let unknown = ColumnBounds::from([("epoch_ms".to_string(), ColumnRange::Unknown)]);
         assert_eq!(from_column(Some(inverted)).unwrap(), unknown);
         let entry = CatalogColumnBounds {
@@ -333,7 +307,7 @@ mod tests {
             ..Default::default()
         };
         assert!(from_proto(&[entry]).is_empty());
-        let json = r#"[{"column":"epoch_ms","max":5}]"#;
+        let json = r#"[{"column":"epoch_ms","max":"5"}]"#;
         assert!(from_column(Some(json)).unwrap().is_empty());
     }
 }
