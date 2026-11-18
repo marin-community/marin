@@ -469,6 +469,7 @@ def worker_batch_refusal(cfg: DictConfig) -> str | None:
     ) or (
         algorithm.policy_loss_type == PolicyLossType.SFT and algorithm.advantage_estimator == AdvantageEstimator.UNIFORM
     )
+    train_rows = cfg.trainer.train_batch_size * int(cfg.generator.n_samples_per_prompt)
     restrictions = (
         ("DPO and reference-model objectives", reference_model_required(algorithm)),
         ("the configured loss and estimator", not supported_loss),
@@ -479,14 +480,12 @@ def worker_batch_refusal(cfg: DictConfig) -> str | None:
         ("advantage batch normalization", algorithm.advantage_batch_normalize),
         ("loop advantage credit", shaping.enabled and shaping.loop.advantage_penalty_per_token > 0),
         ("marker-target reasoning penalties", shaping.enabled and shaping.reasoning_span.charges_tokens),
+        ("dense batch dumping", cfg.trainer.dump_data_batch),
+        ("rows requiring DP padding", train_rows % _policy_dp_size(cfg)),
     )
     for reason, unsupported in restrictions:
         if unsupported:
             return reason
-    if cfg.trainer.dump_data_batch:
-        return "dense batch dumping"
-    if cfg.trainer.train_batch_size * optimization_samples_per_prompt(cfg) % _policy_dp_size(cfg):
-        return "rows requiring DP padding"
     megatron = cfg.trainer.policy.megatron_config
     etp = megatron.get("expert_tensor_parallel_size") or megatron.tensor_model_parallel_size
     auto = cfg.trainer.batch_builder == BatchBuilder.AUTO
@@ -499,9 +498,10 @@ def worker_batch_refusal(cfg: DictConfig) -> str | None:
         model = cfg.trainer.policy.model
         try:
             metadata = AutoConfig.from_pretrained(model.path, trust_remote_code=True, revision=model.get("revision"))
-        except Exception:
+        except Exception as error:
             if not auto:
                 raise
+            logger.warning("Could not read the policy model configuration for automatic batch assembly ({!r})", error)
             return "model configuration unreadable"
         experts = model_expert_count(metadata)
         if replay and experts is None:
