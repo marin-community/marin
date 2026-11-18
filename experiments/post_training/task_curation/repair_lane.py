@@ -127,6 +127,8 @@ class DryRunReport(BaseModel):
     usage: dict[str, int] = Field(default_factory=dict)
     review_wall_seconds: float | None = None
     gpu_hours: float | None = None
+    serving_cluster: str = ""
+    """The cluster the serving job targets; recorded because reviewer placement is cluster-dependent."""
     serving_jobs: tuple[str, ...] = ()
 
 
@@ -429,6 +431,7 @@ def dry_run(
     reviewer_version: ReviewerVersion,
     run: bool,
     license_cache: Path | None = None,
+    serving_cluster: str = "",
 ) -> DryRunReport:
     """Match one candidate folder against one tracked source and comparatively review it."""
     gate_receipt = license_gate(repo, candidate_revision, candidate_source_id=candidate_source_id, cache=license_cache)
@@ -498,6 +501,7 @@ def dry_run(
             "review_wall_seconds": evidence.wall_seconds,
             # The serving job holds the GPU for its whole lifetime; four GB200s per job.
             "gpu_hours": evidence.wall_seconds * 4 / 3600,
+            "serving_cluster": serving_cluster,
             "serving_jobs": evidence.serving_jobs,
         }
     )
@@ -533,6 +537,9 @@ def main() -> None:
         "--reviewer-version", type=ReviewerVersion, choices=list(ReviewerVersion), default=ReviewerVersion.V3
     )
     parser.add_argument(
+        "--serving-cluster", default="", help="Recorded in the report; the cluster the serving job targets"
+    )
+    parser.add_argument(
         "--license-cache",
         type=Path,
         help="Directory for the stage-0 license checker's evidence cache",
@@ -554,6 +561,7 @@ def main() -> None:
         reviewer_version=args.reviewer_version,
         run=args.run,
         license_cache=args.license_cache,
+        serving_cluster=args.serving_cluster,
     )
     write_report(report, args.report)
     logger.info("RESULT %s", report.model_dump_json())
