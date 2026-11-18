@@ -99,15 +99,15 @@ def _run_worker_batch_case(runs: BaseContext, cfg, target=experiment.run_tiny_tr
 
 
 @pytest.mark.parametrize(
-    ("case", "config_builder", "target"),
+    ("config_builder", "target"),
     [
-        ("grpo", _worker_batch_config, experiment.run_tiny_training),
-        ("sft", preference_config, run_preference_training),
+        (_worker_batch_config, experiment.run_tiny_training),
+        (preference_config, run_preference_training),
     ],
     ids=["grpo", "sft"],
 )
 def test_worker_batches_match_two_driver_updates(
-    forkserver_context: BaseContext, tmp_path: Path, tiny_policy: Path, case, config_builder, target
+    forkserver_context: BaseContext, tmp_path: Path, tiny_policy: Path, config_builder, target
 ):
     results = {}
     for builder in ("driver", "worker"):

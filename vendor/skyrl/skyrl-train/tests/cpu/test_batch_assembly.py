@@ -39,6 +39,8 @@ from skyrl_train.utils.advantage_estimators import (
     compute_advantages_and_returns,
 )
 
+from tests.batch_assertions import assert_metric_parity
+
 
 class RecordedRows:
     def set_trajectory_sink(self, sink):
@@ -438,8 +440,9 @@ def test_worker_ratio_statistics_match_driver_for_mixed_staleness():
     actual = mismatch_ratio_metrics(
         learner, sampler, mask, staleness, reduction=WorldReduction(lambda values, operation: values, True)
     )
-    assert actual == pytest.approx(expected, rel=1e-6, abs=1e-7)
-    for scope in ("pooled", "staleness0"):
-        for quantile in ("p95", "p99", "p999"):
-            key = f"policy/mismatch/{scope}/log_ratio_abs_{quantile}"
-            assert actual[key] == expected[key]
+    quantile_keys = {
+        f"policy/mismatch/{scope}/log_ratio_abs_{quantile}"
+        for scope in ("pooled", "staleness0")
+        for quantile in ("p95", "p99", "p999")
+    }
+    assert_metric_parity(actual, expected, required=quantile_keys)
