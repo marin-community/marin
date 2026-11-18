@@ -172,6 +172,13 @@ before enabling this mode. Explicit groups lose the default preference
 for nearby racks on InfiniBand. Cross-rack transport between trainer and
 inference still needs validation. Omitting the option keeps existing placement.
 
+When `trainer.policy.model.source_uri` is set and `generator.model_loading` is
+`stream`, SkyRL gives each vLLM worker an 8 GiB RunAI streamer memory limit.
+Set `generator.engine_init_kwargs.model_loader_extra_config.memory_limit` to a
+finite number of bytes to change it. Multiply the per-worker limit by the number
+of inference workers on each host when budgeting host RAM; `-1` is rejected for
+streamed policies.
+
 ## Expert-block weight sync placement
 
 Expert-block sync publishes each Grug expert from the Megatron rank that owns it to the
