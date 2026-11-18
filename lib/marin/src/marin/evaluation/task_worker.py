@@ -4,7 +4,6 @@
 """Connect published evaluation corpora to model transports and isolated graders."""
 
 import asyncio
-import contextlib
 import logging
 
 from levanter.compat.hf_checkpoints import load_tokenizer
@@ -15,7 +14,7 @@ from rigging.timing import retry_with_backoff
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
 from rolloutengine.likelihood import VllmLikelihood
-from rolloutengine.models import MachineRuntimeSpec, ModelRequest, ModelResponseError, ModelTurn
+from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend, NetworkPolicy
 from verifyit.modes.grade_judge import JudgeConnection
@@ -51,49 +50,37 @@ def execution_config(config: EvaluationRunConfig) -> EvaluationRunConfig:
     return config.model_copy(update={"verifier_machine": verifier})
 
 
-async def _no_endpoint(_request: ModelRequest) -> ModelTurn:
-    raise ModelResponseError("No endpoint was supplied, and no stored model response answers this request", response={})
-
-
 async def execute(
     datasets: tuple[str, ...],
     output: str,
     config: EvaluationRunConfig,
-    endpoint: str | None,
-    api_key: str | None,
+    endpoint: str,
+    api_key: str,
     judge_connection: JudgeConnection | None,
     *,
     responses_from: str | None = None,
 ) -> None:
     """Evaluate the supplied corpora and persist raw results, retaining completed attempts on resume.
 
-    Model responses stored in the result root ``responses_from`` answer identical requests. Without an endpoint,
-    the other generation attempts fail as retryable, and corpora scored by likelihood are refused.
+    Model responses stored in the result root ``responses_from`` answer identical requests.
     """
     configure_coreweave_s3()
     config = execution_config(config)
     tokenizer = load_tokenizer(config.model.tokenizer, revision=config.model.tokenizer_revision, trust_remote_code=False)
     prefix = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.eos_token_id
-    if endpoint is not None and prefix is None:
+    if prefix is None:
         raise ValueError("Likelihood scoring needs a tokenizer BOS or EOS prefix token")
     machines = {Backend.LOCAL: LocalMachineFactory()}
-    connection = (
-        AsyncOpenAI(base_url=endpoint, api_key=api_key, max_retries=0, timeout=config.limits.model_turn_timeout)
-        if endpoint is not None
-        else contextlib.nullcontext()
-    )
-    async with connection as client:
+    async with AsyncOpenAI(
+        base_url=endpoint, api_key=api_key, max_retries=0, timeout=config.limits.model_turn_timeout
+    ) as client:
         await run_evaluation(
             datasets,
             output,
             config,
-            ChatModel(client, config.model.name, config.max_tokens) if client is not None else _no_endpoint,
-            completion_model=CompletionModel(client, config.model.name) if client is not None else _no_endpoint,
-            likelihood=(
-                VllmLikelihood(client, config.model.name, tokenizer, config.model.context_window, prefix)
-                if client is not None
-                else None
-            ),
+            ChatModel(client, config.model.name, config.max_tokens),
+            completion_model=CompletionModel(client, config.model.name),
+            likelihood=VllmLikelihood(client, config.model.name, tokenizer, config.model.context_window, prefix),
             machine_factories=machines,
             tokenizer=tokenizer,
             judge_connection=judge_connection,
@@ -105,8 +92,8 @@ def execute_with_retries(
     datasets: tuple[str, ...],
     output: str,
     config: EvaluationRunConfig,
-    endpoint: str | None,
-    api_key: str | None,
+    endpoint: str,
+    api_key: str,
     judge_connection: JudgeConnection | None,
     *,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
@@ -139,13 +126,12 @@ def run_worker(
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     judge_endpoint = get_secret(JUDGE_ENDPOINT)
     judge = JudgeConnection(judge_endpoint, require_secret(JUDGE_API_KEY)) if judge_endpoint else None
-    endpoint = (get_secret(SOLVER_ENDPOINT) or None) if responses_from else require_secret(SOLVER_ENDPOINT)
     execute_with_retries(
         datasets,
         output,
         config,
-        endpoint,
-        require_secret(SOLVER_API_KEY) if endpoint else None,
+        require_secret(SOLVER_ENDPOINT),
+        require_secret(SOLVER_API_KEY),
         judge,
         max_attempts=max_attempts,
         responses_from=responses_from,

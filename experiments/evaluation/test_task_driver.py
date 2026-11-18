@@ -6,6 +6,7 @@
 import json
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from inspect import signature
 from types import SimpleNamespace
 
 import httpx
@@ -17,11 +18,10 @@ from finestore.reader import ReadView
 from fray.local_backend import LocalClient
 from iris.client.client import IrisClient, IrisContext, Job, iris_ctx_scope
 from iris.cluster.client import remote_client
-from iris.cluster.types import ResourceSpec
+from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation import task_worker
 from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, ModelIdentity
-from rigging.secrets import SecretResolutionError
 from rolloutengine.models import RolloutLimits
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.evaluation.corpus import chat_item
@@ -252,36 +252,54 @@ def test_submission_serializes_iris_timeout_and_separates_connection_secrets(iri
         assert value.encode() not in request.entrypoint.SerializeToString()
 
 
-def test_regrade_without_an_endpoint_submits_and_runs_with_no_solver_secrets(
-    tmp_path, iris_submission, driver_config, monkeypatch
+def test_worker_regrades_a_responses_root_without_asking_the_endpoint_again(
+    tmp_path, recovery_corpora, recovery_endpoint, driver_config, monkeypatch
 ):
+    recovery_endpoint.failures_remaining = 0
+    source, output = str(tmp_path / "results"), str(tmp_path / "regraded")
+    execute_with_retries(recovery_corpora, source, driver_config, "http://fixture.test/v1", "unused", None)
+    asked = len(recovery_endpoint.requests)
+    monkeypatch.setenv(SOLVER_ENDPOINT, "http://fixture.test/v1")
+    monkeypatch.setenv(SOLVER_API_KEY, "unused")
+
+    task_worker.run_worker(recovery_corpora, output, driver_config, 1, source)
+
+    assert len(recovery_endpoint.requests) == asked == 8
+    terminal = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert [(row["outcome"], row["completion_tokens"]) for row in terminal] == [("graded", 0)] * 8
+    assert sum(dict(row["metrics"]).get("accuracy", 0) for row in ReadView(output).iter_rows("samples")) == 6
+
+
+def test_cli_sends_the_responses_root_to_the_iris_worker(tmp_path, iris_submission, driver_config, monkeypatch):
     client, requests = iris_submission
     config_path = tmp_path / "run.json"
     config_path.write_text(driver_config.model_dump_json())
-    for name in ("OPENAI_API_KEY", SOLVER_ENDPOINT, SOLVER_API_KEY):
-        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-solver-key")
     monkeypatch.setattr(task_driver, "open_iris_client", lambda **_kwargs: nullcontext(client))
-    command = ["task_driver", "--config", str(config_path), "--dataset", "s3://fixture/corpus", "--no-wait"]
-    monkeypatch.setattr("sys.argv", [*command, "--output", "s3://fixture/regraded", "--responses-from", "local/run"])
-    with pytest.raises(ValueError, match="shared object-storage"):
-        task_driver.main()
     monkeypatch.setattr(
-        "sys.argv", [*command, "--output", "s3://fixture/regraded", "--responses-from", "s3://fixture/results"]
+        "sys.argv",
+        [
+            "task_driver",
+            "--config",
+            str(config_path),
+            "--endpoint",
+            "https://solver.invalid/v1",
+            "--dataset",
+            "s3://fixture/corpus",
+            "--output",
+            "s3://fixture/regraded",
+            "--responses-from",
+            "s3://fixture/results",
+            "--no-wait",
+        ],
     )
 
     task_driver.main()
 
     (request,) = requests
-    assert not {SOLVER_ENDPOINT, SOLVER_API_KEY} & set(request.environment.secrets)
-    assert b"s3://fixture/results" in request.entrypoint.SerializeToString()
-    runs = []
-    monkeypatch.setattr(task_worker, "execute_with_retries", lambda *args, **kwargs: runs.append((args, kwargs)))
-    task_worker.run_worker(("s3://fixture/corpus",), "s3://fixture/regraded", driver_config, 1, "s3://fixture/results")
-    ((arguments, options),) = runs
-    assert arguments[3:5] == (None, None)
-    assert options["responses_from"] == "s3://fixture/results"
-    with pytest.raises(SecretResolutionError):
-        task_worker.run_worker(("s3://fixture/corpus",), "s3://fixture/results", driver_config, 1)
+    worker, arguments, options = Entrypoint.from_proto(request.entrypoint).resolve()
+    assert worker is task_worker.run_worker
+    assert signature(worker).bind(*arguments, **options).arguments["responses_from"] == "s3://fixture/results"
 
 
 def test_served_cli_submits_through_task_client_with_private_judge_connection(

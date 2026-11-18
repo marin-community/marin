@@ -237,6 +237,7 @@ uv run --package marin-core --group test python \
   -m experiments.evaluation.task_driver --local \
   --responses-from scratch/eval-run \
   --dataset "$NEW_CORPUS_ROOT" \
+  --config run-config.json --endpoint-file endpoint.txt \
   --output scratch/eval-run-regraded
 ```
 
@@ -244,13 +245,10 @@ A generation attempt then takes the latest completed model response that the
 source run stored for the same benchmark, source row, and trial, provided the
 attempt sends the identical request: the same messages and sampling options,
 including the trial seed. The new corpus's response policy selects the graded
-text from the stored channels. Every other generation attempt asks the
-endpoint. With no endpoint those attempts fail as retryable infrastructure
-failures, and repeating the command with an endpoint generates only them;
-corpora scored by likelihood need an endpoint. The run settings default to the
-source run's. `--config` replaces them but must keep the source run's model
-identity. Judged tasks call the judge again, so judge variation also changes
-grades, and a source run with a recorded judge needs `--judge-endpoint`.
+text from the stored channels. Every other attempt asks the endpoint, so the
+command takes `--config` and an endpoint as any run does. The run
+configuration must keep the source run's model identity. Judged tasks call the
+judge again, so judge variation also changes grades.
 
 Raw evidence names the source root, its run identity, and the evidence blob in
 `reused_response_from_run`. A reused attempt records zero tokens, as an attempt
