@@ -128,12 +128,7 @@
     }
   ],
   "stages": {
-    "di-zhang-fdu:aime_1983_2024": "Lexical remediation queued",
-    "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2": "Lexical remediation queued",
-    "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2": "Lexical remediation queued",
-    "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2": "Lexical remediation queued",
-    "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2": "Lexical remediation queued",
-    "TaskTrove:laion__wizardlm-orca-v4": "Lexical remediation queued"
+    "di-zhang-fdu:aime_1983_2024": "Lexical remediation queued"
   },
   "remediation_queue": [
     {
@@ -154,131 +149,6 @@
           "evidence": {
             "kind": "check-output",
             "message": "Decontamination measurement and private-release admission receipt are missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
-      "id": "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
-      "name": "tasktrove-codereview",
-      "display_name": "laion__stackexchange-codereview-sandboxes-verified-v2",
-      "status": "Pending",
-      "origin": "TaskTrove",
-      "upstream_dataset": "laion__stackexchange-codereview-sandboxes-verified-v2",
-      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "notes": "Judge-only code review with a four-criterion rubric and no reference; the rubric ships under tests/, which the agent never sees. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
-      "id": "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
-      "name": "tasktrove-stack_overflow",
-      "display_name": "laion__stackexchange-overflow-sandboxes-verified-v2",
-      "status": "Pending",
-      "origin": "TaskTrove",
-      "upstream_dataset": "laion__stackexchange-overflow-sandboxes-verified-v2",
-      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "notes": "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
-      "id": "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2",
-      "name": "tasktrove-superuser",
-      "display_name": "laion__stackexchange-superuser-sandboxes-verified-v2",
-      "status": "Pending",
-      "origin": "TaskTrove",
-      "upstream_dataset": "laion__stackexchange-superuser-sandboxes-verified-v2",
-      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "notes": "Judge-only Super User answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
-      "id": "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2",
-      "name": "tasktrove-unix",
-      "display_name": "laion__stackexchange-unix-sandboxes-verified-v2",
-      "status": "Pending",
-      "origin": "TaskTrove",
-      "upstream_dataset": "laion__stackexchange-unix-sandboxes-verified-v2",
-      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "notes": "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
-      "id": "TaskTrove:laion__wizardlm-orca-v4",
-      "name": "tasktrove-wizard_orca",
-      "display_name": "laion__wizardlm-orca-v4",
-      "status": "Pending",
-      "origin": "TaskTrove",
-      "upstream_dataset": "laion__wizardlm-orca-v4",
-      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "notes": "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
             "uri": null,
             "sha256": null,
             "expected": null
