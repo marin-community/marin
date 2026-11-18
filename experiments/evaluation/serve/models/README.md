@@ -108,6 +108,17 @@ fails to build. For Hero BF16 on 16 GB200 GPUs with full decode graphs, it raise
 1,321 to 1,399 output tokens/s/GPU at 1,024 requests in flight
 ([issue #11430](https://github.com/marin-community/marin/issues/11430#issuecomment-6876476443)).
 
+## Hero serving settings
+
+Hero BF16 was measured on 16 GB200 GPUs at TP1/DP16/EP16; see
+[issue #11430](https://github.com/marin-community/marin/issues/11430) for the results. ShortConv
+models need `cudagraph_mode: PIECEWISE` with `vllm::unified_attention_with_output`,
+`vllm::unified_kv_cache_update` and `vllm::grug_moe_short_conv` in
+`compilation_config.splitting_ops`. On the pinned wheel, any other graph mode or a missing split op
+runs without CUDA graphs. Use `max_num_seqs: 128` for 1K outputs and about 96 for 4K outputs, which
+avoids KV-cache waiting. The catalog cannot launch this topology yet: it needs data parallelism
+across hosts.
+
 ## Multi-node GPU serving
 
 Set `serve.instances` to start independent model servers behind Marin's inference broker. Each
