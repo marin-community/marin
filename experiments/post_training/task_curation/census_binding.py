@@ -236,13 +236,22 @@ def main() -> None:
         default=[],
         help="Audit only these shard files (CI scopes to the diff); default audits the whole --shard-dir",
     )
+    parser.add_argument(
+        "--source-ids",
+        type=Path,
+        help="Audit only these sources (the fingerprint CI's changed.json), regardless of shard file",
+    )
     args = parser.parse_args()
     configure_coreweave_s3()
     if args.audit_receipt_evidence:
         if args.shard_dir is None:
             parser.error("--audit-receipt-evidence requires --shard-dir")
         load_json = read_registry_json
-        if args.shard_files:
+        if args.source_ids is not None:
+            wanted = {canonical_source_id(value) for value in json.loads(args.source_ids.read_text())}
+            receipts = read_receipt_shards(args.shard_dir, ActorCensusReceipt, "census", load_json=load_json)
+            receipts = {key: receipt for key, receipt in receipts.items() if key in wanted}
+        elif args.shard_files:
             documents = {path.name: load_json(path) for path in args.shard_files}
             receipts = receipts_from_documents(documents, ActorCensusReceipt, "census")
         else:
