@@ -113,6 +113,7 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     )
     config["generator"]["engine_init_kwargs"]["moe_backend"] = serving["moe_backend"]
     config["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"] = serving_recipe["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"]
+    config["extra_env"]["VLLM_USE_V2_MODEL_RUNNER"] = "0"
     config["generator"]["enforce_eager"] = False
     for role in ("policy", "ref"):
         config["trainer"][role]["megatron_config"]["expert_model_parallel_size"] = 4
