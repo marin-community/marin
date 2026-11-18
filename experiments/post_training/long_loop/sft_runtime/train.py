@@ -1497,7 +1497,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 first_rebind = config.first_step_host_rebind is not None and current_step == initial_step
                 if (config.first_checkpoint_restore_step is not None and current_step == 0) or first_rebind:
                     with timing.span("first_step_compile", step=current_step):
-                        train_step.lower(state, batch).compile()
+                        compiled_first_step = train_step.lower(state, batch).compile()
+                    if not first_rebind:
+                        del compiled_first_step
                 if first_rebind and config.first_step_host_rebind is not None:
                     with timing.span("first_step_host_rebind", step=current_step):
                         state = rebind_first_state(
@@ -1506,6 +1508,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             cgroup_path=Path(config.first_step_host_rebind.cgroup_path),
                             observe=lambda phase, sample: logger.info("Host rebind %s: %s", phase, sample),
                         )
+                    # Match the v7a2 diagnostic's AOT reference lifetime.
+                    del compiled_first_step
                 with timing.span("train_step", step=current_step):
                     state, metrics, inline_watch_stats = train_step(state, batch)
                     if inline_watch_stats is not None and watch_due:
