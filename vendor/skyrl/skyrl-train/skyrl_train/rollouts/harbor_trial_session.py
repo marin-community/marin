@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import math
+import shlex
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,7 +70,9 @@ async def run_task_setup(
     try:
         async with asyncio.timeout(timeout):
             for index, command in enumerate(commands):
-                result = await environment.exec(command, cwd=cwd, user="root", timeout_sec=math.ceil(timeout))
+                result = await environment.exec(
+                    f"exec /bin/sh -c {shlex.quote(command)}", cwd=cwd, user="root", timeout_sec=math.ceil(timeout)
+                )
                 (evidence_dir / f"{index}.stdout").write_text(result.stdout)
                 (evidence_dir / f"{index}.stderr").write_text(result.stderr)
                 if result.return_code != 0:

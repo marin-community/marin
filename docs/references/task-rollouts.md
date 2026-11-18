@@ -111,16 +111,19 @@ The default workdir is the image's workdir, or `/workspace` for the built-in fil
 An explicit `working_directory` overrides that selection.
 
 Machine setup commands run as trusted root before task operations.
-Original Harbor trials also run explicitly declared task setup commands after
-environment staging and before agent installation. They use the installed-agent
-setup timeout, retain setup outputs separately from model traces, and report a
-failed command as execution failure. Task setup also counts toward the trial's
-overall attempt deadline. Task-specific setup can invoke the task's
-declared agent user.
 `MachineRuntimeSpec.user` supplies the default user for harness commands.
 When the execution user is set, the task machine runs an execution-user probe after root setup and before model inference.
 An explicit command user overrides that default.
 The verifier machine uses its own configured default user.
+
+Original Harbor trials run each `setup_commands` entry as root with `sh`, after
+environment staging and before agent installation. An entry's nonzero exit status
+fails the trial; output stays separate from model traces, and setup uses the
+configured installed-agent `setup_timeout` while counting toward the whole
+trial's time limit.
+For these trials, the Harbor task package defines the image, environment variables
+and agent user. TaskSpec may add `setup_commands` and their setup-only
+`working_directory`; other TaskSpec machine-environment overrides are rejected.
 
 ## Harnesses
 

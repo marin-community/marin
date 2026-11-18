@@ -8,10 +8,14 @@ from contextlib import asynccontextmanager
 import daytona
 import pytest
 from harbor.host_capabilities import HostCapabilities
+from harbor.agents.factory import AgentFactory
+from harbor.agents.installed.pi import Pi
+from harbor.environments.factory import EnvironmentFactory
 from shellbox.backends.daytona.connection import DaytonaConnection
 from harbor.models.task.config import EnvironmentConfig
-from harbor.models.trial.config import AgentConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
+from harbor.trial.trial import Trial
 from omegaconf import OmegaConf
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRolloutInterrupted
@@ -24,7 +28,7 @@ from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 from skyrl_train.rollouts.agent_environment import BorrowedMachineEnvironment
 from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
-from skyrl_train.rollouts.harbor_trial_session import run_task_setup
+from skyrl_train.rollouts.harbor_trial_session import run_harbor_trial
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from tests.cpu.task_specs import lowered_task
@@ -63,9 +67,8 @@ class ProcessTransport:
         return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("phase", ["train", "eval"])
-async def test_original_trial_uses_captured_phase_connection_at_provider_startup(tmp_path, monkeypatch, phase):
+@pytest.fixture
+def harbor_package(tmp_path):
     package = tmp_path / "package"
     package.mkdir()
     (package / "environment").mkdir()
@@ -73,11 +76,23 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     (package / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
     (package / "instruction.md").write_text("Write an answer.")
     (package / "task.toml").write_text('[environment]\ndocker_image = "fixture/image:latest"\n')
+    return package
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("phase", "environment_overrides"),
+    [("train", {}), ("eval", {}), ("train", {"environment_variables": {"VISIBLE": "override"}})],
+)
+async def test_original_trial_preserves_phase_connection_and_rejects_environment_overrides(
+    tmp_path, monkeypatch, phase, environment_overrides, harbor_package
+):
+    package = harbor_package
     task = harbor_trial_task(package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
     task = task.model_copy(
         update={
             "environment_requirements": task.environment_requirements.model_copy(
-                update={"setup_commands": ("exit 23",)}
+                update={"setup_commands": ("exit 23",), "working_directory": "/workspace", **environment_overrides}
             )
         }
     )
@@ -112,6 +127,10 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         shutdown_timeout=5,
         installed_agents=runtime,
     )
+    if environment_overrides:
+        with pytest.raises(ValueError, match="Harbor package"):
+            worker._configured_task_and_harnesses(lowered, harbor, "session", phase)
+        return
     configured, harnesses = worker._configured_task_and_harnesses(lowered, harbor, "session", phase)
     monkeypatch.setenv("DAYTONA_API_KEY", "ambient-key")
     monkeypatch.setenv("DAYTONA_API_URL", "https://ambient.invalid/api")
@@ -184,35 +203,74 @@ async def test_borrowed_machine_commands_use_explicit_environment_and_reject_hos
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exit_code", [0, 23])
-async def test_declared_setup_preserves_order_and_rejects_execution_failure(tmp_path, exit_code):
+async def test_original_trial_runs_setup_before_installation_and_retains_failures(
+    tmp_path, monkeypatch, harbor_package, exit_code
+):
     machine = ProcessTransport()
-    environment = BorrowedMachineEnvironment(
+
+    class LocalEnvironment(BorrowedMachineEnvironment):
+        async def start(self, force_build, *, service_tasks):
+            pass
+
+        async def stop(self, delete):
+            pass
+
+        async def download_dir(self, source_dir, target_dir):
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+    class SetupCheckingAgent(Pi):
+        async def setup(self, environment):
+            assert (tmp_path / "prepared").read_text() == "task-value"
+            (tmp_path / "installed").touch()
+
+        async def run(self, instruction, environment, context):
+            (tmp_path / "agent-ran").touch()
+
+    environment = LocalEnvironment(
         machine,
         tmp_path,
         "declared-setup",
         EnvironmentConfig(env={"VISIBLE": "task-value"}),
         host_capabilities=HostCapabilities(),
     )
+    agent = SetupCheckingAgent(
+        logs_dir=tmp_path / "agent",
+        model_name="openai/fixture",
+        api_base="https://model.example.test/synthetic-only/v1",
+        thinking_format="chat-template",
+        collect_rollout_details=True,
+    )
+    monkeypatch.setattr(AgentFactory, "create_agent_from_config", lambda *args, **kwargs: agent)
+    monkeypatch.setattr(EnvironmentFactory, "create_environment_from_config", lambda **kwargs: environment)
+    trial = await Trial.create(
+        TrialConfig(
+            task=TaskConfig(path=harbor_package),
+            trials_dir=str(tmp_path / "trials"),
+            agent=AgentConfig(name="pi"),
+            verifier={"disable": True},
+        )
+    )
     commands = (
         f'printf "%s" "$VISIBLE" > prepared; printf first; printf diagnostic >&2; exit {exit_code}',
-        'test "$(< prepared)" = task-value && printf second',
+        'read value < prepared; test "$value" = task-value && printf second',
     )
     evidence = tmp_path / "setup-evidence"
-    with environment.with_default_user("agent-user"):
-        if exit_code:
-            with pytest.raises(RuntimeError):
-                await run_task_setup(environment, commands, cwd=str(tmp_path), timeout=5, evidence_dir=evidence)
-        else:
-            await run_task_setup(environment, commands, cwd=str(tmp_path), timeout=5, evidence_dir=evidence)
-        assert environment.default_user == "agent-user"
+    backend = AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder())
+    result = await run_harbor_trial(
+        trial, backend, unexpected_model_request, evidence,
+        setup_commands=commands, setup_cwd=str(tmp_path), setup_timeout=5,
+    )
     assert (tmp_path / "prepared").read_text() == "task-value"
+    evidence = evidence / "task-setup"
     assert (evidence / "0.stdout").read_text() == "first"
     assert (evidence / "0.stderr").read_text() == "diagnostic"
     receipt = json.loads((evidence / "receipt.json").read_text())
     assert receipt["completed"] is (exit_code == 0)
+    assert (tmp_path / "installed").exists() is (exit_code == 0)
+    assert (tmp_path / "agent-ran").exists() is (exit_code == 0)
+    assert set(machine.users) == {"root"}
     if exit_code:
+        assert result.exception_info.exception_type == "RuntimeError"
         assert not (evidence / "1.stdout").exists()
-        assert machine.users == ["root"]
     else:
         assert (evidence / "1.stdout").read_text() == "second"
-        assert machine.users == ["root", "root"]
