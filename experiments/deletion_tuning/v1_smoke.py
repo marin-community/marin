@@ -64,11 +64,12 @@ SMOKE_PREFIX = "s3://marin-us-east-02a/tmp/ttl=7d/benfeuer/snowball-deletion-tun
 SNOWBALL_EOS_TOKEN_IDS = (128001, 128009)
 SMOKE_STEPS = 3
 SEQ_LEN = 64
-# Scale override: the toy gate subsample (stride 64 over a few hundred weights)
-# cannot satisfy floor(eta * n) >= 1 at the production eta=1/2048, so the smoke
-# quantile uses 1/256. The threshold rule itself is unchanged; at production
-# scale the strided subsample is ~341M samples and eta=1/2048 applies.
-SMOKE_ETA = 1 / 256
+# Scale override: the toy Wanda subsample (stride 64 over a few hundred weights,
+# 128 samples here) cannot satisfy floor(eta * n) >= 1 at the production
+# eta=1/2048, so the smoke quantile uses 1/128. The threshold rule itself is
+# unchanged; at production scale the strided subsample is ~341M samples and
+# eta=1/2048 applies.
+SMOKE_ETA = 1 / 128
 
 
 def _tiny_corpus(corpus_uri: str) -> None:

@@ -300,8 +300,8 @@ def test_apply_deletion_init_matches_the_threshold_rule(mesh):
     with jax.set_mesh(mesh):
         model = _init_model(_tiny_snowball(), mesh)
         rng = np.random.default_rng(11)
-        routed = rng.uniform(0.5, 2.0, size=(2, 4, 16)).astype(np.float32)
-        shared = rng.uniform(0.5, 2.0, size=(2, 16)).astype(np.float32)
+        routed = rng.uniform(0.5, 2.0, size=(2, 4, 8)).astype(np.float32)
+        shared = rng.uniform(0.5, 2.0, size=(2, 8)).astype(np.float32)
         threshold = 1.0  # inside the score spread |W| * ||x||
         initialized = levanter_train_module.apply_deletion_init(
             model, settings, routed, shared, threshold=threshold, num_layers=2
