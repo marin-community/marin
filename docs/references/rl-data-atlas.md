@@ -2,7 +2,7 @@
 
 [RL Data Atlas](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
 reads a Postgres copy of the published [curation catalog](task-curation.md#run-catalog).
-This reference is synced to preview revision 21 (2026-11-16), including the
+This reference is synced to preview revision 28 (2026-11-17), including the
 stage-0 license gate; the
 admission rules are in [Current admission policy](task-curation.md#current-admission-policy).
 Every source passes the [stage-0 license gate](task-curation.md#stage-0-binding-license-gate)
@@ -203,6 +203,15 @@ current-reviewer output; old invalid or truncated rows still need review. The
 Quality label alone never makes Result provisional. These
 counts follow the selected Result's review panel, not the execution campaign's
 processing mode or the source's entire population when only a sample is required.
+
+A FULL or SAMPLE quality chip opens that source's per-task review list, with
+paging and filters by verdict, confidence, reference status and defect. A review
+row opens the raw reviewer input, output and provenance behind the stored
+judgment. Reviews joined from original reviewer batches keep archived lineage:
+the original reviewer identity appears as archived evidence, never as
+current-pin QA, and ambiguous or missing mappings stay explicitly not mapped
+with reasons. The QC defect types page defines the six typed defect categories
+and links each to its reviews.
 
 The default view hides QUICK, BAD, Excluded and Pending entries and folds measured duplicate/subset groups. Source cells contain only the source name and optional fold toggle. Origin/build information, dataset links and qualified overlap notes belong in Evidence/detail views.
 Expand a group to inspect matching members, or enable **Show QUICK-quality,
@@ -1155,7 +1164,10 @@ four bars in this order: Small, Large, Hosted, Snowball v0.1. Select a Difficult
 model to sort by its solve rate. Hover or focus a row for its solve count,
 denominator, Wilson 95% confidence interval, model revision, protocol and
 pre-oracle-filter status. Source details show the same bars; Evidence includes
-sample and attempt receipts and historical observations. Missing results have
+sample and attempt receipts and historical observations. The attempts browser
+lists a measurement's recorded attempt records with paging and opens each
+rollout: its transcript and tool calls, model input, verifier output, and hashed
+Filer links to the raw attempt receipt and rollout archive. Missing results have
 an explicit reason and no solve rate.
 Full credit (`reward == 1`) counts as solved. A scored partial-credit answer
 counts in the denominator without counting as solved. A missing or failed

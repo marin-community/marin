@@ -17,7 +17,7 @@ Run the [stage-0 license checker](../../../docs/references/task-curation.md#stag
 (`python -m experiments.post_training.task_curation.license_check`) before any
 conversion and pass its receipts to the driver with `--license-receipts`.
 
-Synced to preview revision 21 (2026-11-16).
+Synced to preview revision 28 (2026-11-17).
 
 Do not declare oversight levels, grader types or task-shape tags (agentic,
 multi-turn and similar) on a source. A late-stage ingestion step derives them from
@@ -170,6 +170,17 @@ SAMPLE and admission. The answer-graded source needs no no-operation (NoP)
 negative control. Preserve the frozen shared/native held-out scan inputs and
 bind final-pin evidence through the documented
 [lexical decontamination procedure](../../../docs/references/task-curation.md#lexical-decontamination-before-publication).
+
+The same typed, versioned deviation pattern covers actor-side limits.
+SWE-rebench V2.1 tasks declare 6 CPUs and 24 GB of memory, which the Daytona
+EVAL account cannot enforce (4 CPUs and 8 GB per sandbox). A versioned release
+with the Daytona-enforceable limits is allowed only when the fidelity gate
+records no task that is CPU- or memory-sensitive at the lowered limits. The
+release card records the original declared limits and the reason, the
+full-population oracle and nop runs under the new limits decide admission, and a
+task that fails or nears failure only under the lowered limits is held out with
+a typed reason, never silently dropped. If the gate shows sensitivity, the
+source keeps its declared limits and runs on a backend that allows them.
 
 ## Final task selection
 
@@ -691,8 +702,10 @@ admitting oracle-bearing tasks. Tasks without oracles need no executability proo
 
 Launch the batch coordinator on `cw-us-east-08a`. Its GB200 serving children
 inherit that regional controller, with batch priority and three-day timeouts.
-Compilation and CUDA graphs remain enabled. Panels and evidence stay in their
-original storage region.
+4xGB200 review/serving jobs do not place on `cw-us-east-02a` (Kueue flavor), so
+review serving runs on `cw-us-east-08a` with the same pinned reviewer identity;
+receipts record `serving_cluster`. Compilation and CUDA graphs remain enabled.
+Panels and evidence stay in their original storage region.
 
 ```bash
 uv run --no-sync iris --cluster marin job run \

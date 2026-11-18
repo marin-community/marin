@@ -35,7 +35,10 @@ then apply the dataset-level rules below without following that dataset's lineag
 Receipts preserve every wrapper declaration alongside the dataset's license evidence. Our generic upstream-terms boilerplate
 is not license evidence. New release cards must retain the upstream license ID,
 evidence URL, notices and attribution, and declare `license_source` with
-`dataset_id`, `revision` and `url`. Missing or ambiguous input pins escalate to the coordinator and user.
+`dataset_id`, `revision` and `url`. The card's license field states the
+checker-verified identifier, lowercased (`apache-2.0`, `cc0-1.0`), and a
+per-folder repackager receipt binds the resolved upstream pin. Missing or
+ambiguous input pins escalate to the coordinator and user.
 
 ```bash
 uv run python -m experiments.post_training.task_curation.license_check \
@@ -81,7 +84,11 @@ container card listing several licenses, or a revision-bookkeeping mismatch in
 our own metadata, is not doubt. A third-party repackager that collects other
 projects' data is checked per folder: each folder's license follows its original
 upstream, and the repackager's own empty or missing card never bans the whole
-dataset. A restrictive license that the repackager declares stays binding. Marin's own converted and structure datasets are
+dataset. A restrictive license that the repackager declares stays binding.
+A dataset whose tasks are each built from its own upstream repository, such as
+OpenSWE, is checked per task against that repository's license at its pin; only
+tasks whose repository passes the accepted permissive list are kept, and the
+per-repository decision is recorded with its receipts. Marin's own converted and structure datasets are
 released under OpenMDW 1.1. Dependency folders such as `node_modules`, `vendor`
 and virtual environments are not task-license roots.
 
@@ -109,8 +116,8 @@ remain intact.
 
 ## Current admission policy
 
-Synced to preview revision 21 (2026-11-16). These rules include the admission
-display policy for Atlas preview revision 21. When a later section of this
+Synced to preview revision 28 (2026-11-17). These rules include the admission
+display policy for Atlas preview revision 28. When a later section of this
 reference conflicts with them, this section is current.
 
 **Examples.** Atlas Examples is the admitted count after filtration. The Atlas
@@ -143,6 +150,15 @@ until its current-pin admission receipt exists.
   filtration. Total admission is TRAIN plus EVAL. EVAL tasks remain excluded from
   TRAIN selection; deduplication and lexical measurement still apply, with no
   lexical remediation of EVAL overlap.
+- *Re-pins.* A re-pin requires a fresh census at the new pin even when the task
+  count matches: a new revision can change content. A census receipt that its own
+  evidence contradicts is refused at bind time
+  (`census_binding.check_receipt_evidence`), and
+  `census_binding --audit-receipt-evidence` audits every staged receipt. A
+  content-changed source needs fresh deduplication, lexical measurement and a
+  SAMPLE panel drawn on the current pin (`SamplePanelCurrency.CURRENT_PIN`)
+  before its status is current; an archived-lineage panel cannot qualify a new
+  admission (`require_sample_pin_currency`).
 
 **Non-agentic tasks.** A TaskSpec with no actor role, agent harness or agent
 workspace is non-agentic: the model answers and the task's grader checks the
@@ -193,7 +209,11 @@ grading assessment are unchanged.
   source. Never delete or overwrite an artifact; publish a new version.
 - Prepared task images go in a new GHCR package per source, never shared across
   sources. Packages have INTERNAL (organization-only) visibility, recorded in the
-  receipt. Never make one public.
+  receipt. Never make one public. Every puller needs a read credential: the Iris
+  clusters rno2a, 02a and 08a and the Daytona RL and EVAL organizations. The
+  backend survey probes the internal-image pull live
+  (`experiments/post_training/task_curation/backend_live_probes.py`); a backend
+  that cannot pull is UNSUPPORTED for internal-image sources.
 - Strict exact-contract deduplication applies to every source, including EVAL
   sources and grandfathered blends.
 - Lexical 13-gram decontamination removes flagged TRAIN tasks. EVAL sources are
@@ -315,7 +335,10 @@ FWeindel BugsInPy folder is a repo-level re-derivation of the single-file-kata
 sides' identities, the method, similarity and class.
 
 **Comparative review (FULL).** Every `repaired` pair runs one judge call with the tracked
-original and the candidate side by side. The judge is the pinned FULL-QC reviewer (GLM-5.3,
+original and the candidate side by side. Review and serving run on
+`cw-us-east-08a`: 4xGB200 review/serving jobs do not place on `cw-us-east-02a`
+(Kueue flavor). The report records `serving_cluster`, and the pinned reviewer
+identity stays the same wherever the jobs place. The judge is the pinned FULL-QC reviewer (GLM-5.3,
 temperature 0.7, V3 budgets) under the `atlas-repair-comparative` rubric, returning a typed
 `ComparativeVerdict`: `BETTER`/`TIE`/`WORSE`/`INCOMPARABLE` plus the `Defect` members fixed
 and introduced. A candidate replaces its tracked counterpart only when the comparison is not
@@ -1322,8 +1345,13 @@ Measurement runs that production path rather than reimplementing it
 task's environment is materialized to a build context, the `MachineSpec` is
 built through Harbor's own task-config mapping
 (`harbor.environments.daytona.machine_spec`), and the name comes from
-`shellbox.backends.daytona.machine.snapshot_identity` — the same function the
-Daytona factory uses to name and create snapshots. A task the production
+`shellbox.backends.daytona.snapshot.snapshot_name` — the same function the
+Daytona factory uses to name and create snapshots. That identity covers the
+image source and the declared CPU, memory and storage profile
+(`snapshot_request_for_spec`), so grouped images are allocation-aware: they
+share one identity only when their allocations match, and distinct resource
+profiles count as separate identities against
+`DAYTONA_SAFE_SNAPSHOT_LIMIT` (10, `finestore.rl.curation`). A task the production
 validation rejects (for example a Dockerfile with `ADD`, which Daytona cannot
 build) counts as a failure and is reported, not treated as safe. No Daytona API
 calls are made. `oracle_validation` separately records how execution was
@@ -1720,7 +1748,12 @@ reward. The grader's environment supplies third-party dependencies only; scorer 
 always ships with the task.
 
 Conversion preserves the source's grading semantics. It does not repair
-comparators or rewrite tests to accept a reference.
+comparators or rewrite tests to accept a reference. A grader content-quality
+finding, such as math_gym-qa's LaTeX-wrapped expected-answer strings, is
+recorded as a typed finding on the source; the grader is never edited, and a
+private remediated version that normalizes only the defective field is optional
+data repair with its own SAMPLE QA and admission. The original release stays
+unchanged either way.
 
 Controls check a grader before its tasks are admitted. For each sampled task the
 pipeline grades exactly one submission: `golden(task)`, which must score 1, or,
@@ -2011,7 +2044,9 @@ default training selections.
 
 `experiments/post_training/task_curation/difficulty_rounds.py` is the operating
 layer for launches, polling, seal detection, coverage recomputes and qualified
-snapshot exports. Run it from a worktree on the rounds' code lineage with a clean
+snapshot exports. A long round is watched by the job watchdog over the round
+registry and the Iris lifecycle; agents do not poll live jobs by hand. Run it
+from a worktree on the rounds' code lineage with a clean
 tree, and source the credentials first — the S3 and serving probes read them from
 the environment and nothing is ever printed:
 
@@ -2458,6 +2493,21 @@ measured source-environment incompatibility, a scored non-resource failure is
 `resource_calibration:infrastructure`.
 Source-environment incompatibilities and [approved infrastructure replays](#replaying-our-infrastructure-failures)
 use the specific rules below.
+
+A backend that cannot enforce declared limits can host a typed, versioned limit
+deviation instead of a rebuild. The PDBThink grader moved from 512 MiB memory to
+the Daytona-expressible 1 GiB (`pdbthink_verifier_repair`), and the SWE-rebench
+V2.1 ruling allows a 4 CPU / 8 GB release when its fidelity gate records no task
+that is CPU- or memory-sensitive at the lowered limits. The release card records
+the original declared limits and the reason, the full-population oracle and nop
+runs under the new limits decide admission, and a task that fails or nears
+failure only because of the lowered limits is held out with a typed reason,
+never silently dropped. A grouped-image release consolidates snapshots the same
+allocation-aware way as FineEnvs: roughly one image per language family with
+each row's toolchain installed at setup, and faithfulness proven by the
+full-population oracle and nop runs; rows that do not reproduce go to a typed
+exclusion list.
+
 The receipt retains every attempt and the final per-task shape. It reports a
 uniform source shape only when every task passed at that shape. A failure in an
 explicitly fixed dimension is excluded at its declared limit.
@@ -4058,10 +4108,13 @@ protocol and robust SAMPLE/FULL qualification.
 
 The images live in the non-public `marin-community/task-curation-tasktrove` GHCR
 package, which predates the one-package-per-source rule. New prepared task images
-use a new INTERNAL package per source. Daytona needs an organization registry credential for `ghcr.io` before
-it can import them. Keep that credential in Daytona's registry settings, outside
-the TaskSpecs and qualification evidence. Image identity measurement alone does
-not establish pull access or grading liveness.
+use a new INTERNAL package per source. Every puller needs an organization read
+credential for `ghcr.io`: the Iris clusters keep theirs in the namespace service
+account's image pull secrets, and Daytona keeps its registry credential in the
+organization's registry settings. Keep credentials outside the TaskSpecs and
+qualification evidence. Image identity measurement alone does not establish
+pull access or grading liveness; the backend survey probes the internal-image
+pull live.
 
 ### Completed legacy role qualification
 
@@ -4180,7 +4233,11 @@ this Multi-SWE case before admission if more than about one percent is affected.
 
 New oracle admissions use oracle-filter wire version 4. Workspace-graded tasks
 require an unchanged-package production `nop` Trial after the original public
-setup. Answer-graded tasks record `answer_graded_not_applicable`; admission
+setup. The setup order follows the source's own pinned harness code: for
+FineEnvs the public setup runs before the agent, and the private
+`tests/setup.sh` runs inside the verifier before the checks
+(`experiments/post_training/task_curation/datasets/fineenvs/README.md`).
+Answer-graded tasks record `answer_graded_not_applicable`; admission
 recomputes this classification from the TaskSpec. Versions 2 and 3 remain
 readable as historical evidence.
 
