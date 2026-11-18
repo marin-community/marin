@@ -36,6 +36,7 @@ from marin.inference.config import (
 from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
 from marin.inference.iris import (
     InferenceBackendState,
+    PreparedInference,
     RemoteInferenceSession,
     RemoteInferenceStartupError,
     remote_inference,
@@ -307,7 +308,7 @@ def test_eval_inference_failed_cleanup_prevents_replacement(monkeypatch, failed_
     )
 
     with ExitStack() as stack, pytest.raises((RuntimeError, TimeoutError)):
-        _inference_session(stack, config)
+        _inference_session(stack, PreparedInference(config))
 
     assert len(jobs) == (1 if failed_cleanup == "direct_worker" else 2)
     assert len(groups) == (0 if failed_cleanup == "direct_worker" else 1)
