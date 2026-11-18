@@ -263,7 +263,7 @@ def forward_metrics(
         valid = batch["loss_mask"] > 0
         differences = (batch["rollout_logprobs"][valid] - batch["action_log_probs"][valid]).exp().abs()
         mean = reduction.mean(differences)
-        if isinstance(reduction, LocalReduction):
+        if reduction.local:
             std = differences.std().item()
         else:
             centered = differences.double() - mean

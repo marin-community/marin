@@ -13,7 +13,7 @@ from skyrl_train.utils.utils import resolve_batch_builder, validate_cfg
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
-from skyrl_train.batch_metrics import reward_metrics
+from skyrl_train.batch_metrics import forward_metrics, reward_metrics
 from skyrl_train.rollouts.buffer import RowFacts
 
 import torch
@@ -481,3 +481,19 @@ def test_worker_ratio_statistics_match_driver_for_mixed_staleness():
         for quantile in ("p95", "p99", "p999")
     }
     assert_metric_parity(actual, expected, required=quantile_keys)
+    for key, value in (
+        ("ess_fraction", 0.250620275328),
+        ("kl_k3", 747.915720782),
+        ("chi2", 2221528.63255),
+        ("log_ratio_abs_p95", 18.2),
+        ("log_ratio_abs_p99", 19.64),
+    ):
+        assert expected[f"policy/mismatch/pooled/{key}"] == pytest.approx(value)
+    prob_metrics = forward_metrics(
+        {"action_log_probs": learner, "rollout_logprobs": sampler, "loss_mask": learner.isfinite()},
+        staleness=staleness,
+        algorithm=get_default_config().trainer.algorithm,
+        training_metrics_enabled=False,
+        rollout_logprobs_enabled=True,
+    )
+    assert prob_metrics["policy/rollout_train_prob_diff_std"] == pytest.approx(242582597.48)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, fields
 import math
+from typing import cast
 
 import torch
 from loguru import logger
@@ -14,7 +15,6 @@ from skyrl_train.metric_reduction import LocalReduction, MetricReduction, WorldR
 
 # Absolute-position bucket width; the async RL dashboard reads pos_first256 and pos_last256 by name.
 POSITION_WINDOW = 256
-
 
 LOG_RATIO_TAIL_CAPACITY = 8192
 
@@ -64,23 +64,19 @@ def _distributed_ratio_quantiles(
     values: torch.Tensor, staleness_zero: torch.Tensor, reduction: WorldReduction
 ) -> list[list[float]]:
     finite = torch.isfinite(values)
+    # The sign marks subset membership, including zero.
     absolute = values[finite].abs()
-    # The sign marks subset membership, including zero. Two float32 words
-    # transport each float64 value without rounding the driver's log-ratio.
-    packed = torch.where(staleness_zero[finite], -absolute, absolute).view(torch.float32)
-    received = reduction.gather_to_rank_zero(packed)
+    received = reduction.gather_to_rank_zero(torch.where(staleness_zero[finite], -absolute, absolute))
     quantiles = values.new_zeros((2, len(_RATIO_QUANTILES)))
-    if received is not None:
+    if received is not None and received.numel():
         logger.info(f"Batch mismatch quantile gather: {received.nbytes} bytes")
-        if received.numel():
-            tagged = received.view(torch.float64)
-            absolute = tagged.abs()
-            quantiles[0] = absolute.new_tensor(linear_quantiles(absolute, _RATIO_QUANTILES))
-            subset = tagged.signbit()
-            if subset.all():
-                quantiles[1] = quantiles[0]
-            elif subset.any():
-                quantiles[1] = absolute.new_tensor(linear_quantiles(absolute[subset], _RATIO_QUANTILES))
+        absolute = received.abs()
+        quantiles[0] = absolute.new_tensor(linear_quantiles(absolute, _RATIO_QUANTILES))
+        subset = received.signbit()
+        if subset.all():
+            quantiles[1] = quantiles[0]
+        elif subset.any():
+            quantiles[1] = absolute.new_tensor(linear_quantiles(absolute[subset], _RATIO_QUANTILES))
     # Only world rank zero has a quantile, whether or not it owns a DP slice.
     return reduction.all_reduce(quantiles, "sum").tolist()
 
@@ -203,15 +199,15 @@ def mismatch_ratio_metrics(
     position_classes = {f"first{POSITION_WINDOW}": [1, 3], f"last{POSITION_WINDOW}": [2, 3], "middle": [0]}
     staleness0 = groups < 4
     quantiles = (None, None)
-    if isinstance(reduction, WorldReduction):
-        quantiles = _distributed_ratio_quantiles(values, staleness0, reduction)
+    if not reduction.local:
+        quantiles = _distributed_ratio_quantiles(values, staleness0, cast(WorldReduction, reduction))
     pooled = ratio_statistics(
         values, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high, reduction=reduction, quantiles=quantiles[0]
     )
     full_statistics = {
         "pooled": pooled,
         "staleness0": pooled
-        if isinstance(reduction, LocalReduction) and bool(staleness0.all())
+        if reduction.local and bool(staleness0.all())
         else ratio_statistics(
             values[staleness0],
             eps_clip_low=eps_clip_low,
