@@ -294,6 +294,8 @@ repository and full commit through `--tokenizer-uri` and `--tokenizer-revision`,
 and the run identity through `--name` and `--version`. The command prints the
 graph by default; `--run` submits it through Iris.
 
+The protocol lives in durable object storage. The code pins its URI, revision,
+SHA256 and byte size, and verifies those bytes before reading the policy.
 The model binding cannot set sampling, task subsets, sandbox resources, harness
 deadlines or the judge. The graph checks the prepared task bytes and model
 manifest before GPU allocation, then writes `canonical-evaluation.json` with the
