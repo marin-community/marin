@@ -21,7 +21,7 @@ from marinskyrl.runtime_options import PolicyLossType
 from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
 from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder, SamplingKind
 from skyrl_train.dataset import PromptDataset
-from skyrl_train.domain_sampling import DomainWeightedOrder
+from skyrl_train.domain_sampling import DomainWeightedOrder, OrderedStages
 from skyrl_train.dynamic_sampling import (
     DynamicSamplingType,
     GroupSelectionPolicy,
@@ -120,6 +120,8 @@ def prompt_order_from_config(config: DictConfig, dataset: PromptGroupDataset) ->
     batch_size = config.trainer.train_batch_size
     if SamplingKind(sampling.kind) is SamplingKind.DOMAIN_WEIGHTED:
         return DomainWeightedOrder(dataset.dataframe, sampling.domain_weights, seed=seed, window_size=batch_size)
+    if SamplingKind(sampling.kind) is SamplingKind.ORDERED:
+        return OrderedStages(dataset.dataframe, sampling.stages, seed=seed, window_size=batch_size)
     curriculum = CurriculumConfig.from_dict_config(sampling, group_size=config.generator.n_samples_per_prompt)
     return CurriculumOrder(dataset, curriculum, seed=seed, window_size=batch_size)
 
