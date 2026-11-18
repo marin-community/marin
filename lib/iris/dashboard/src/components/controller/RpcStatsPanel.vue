@@ -135,21 +135,25 @@ QUALIFY row_number() OVER (
 
 const { data, loading, error, refresh } = useLogServerStatsRpc<{ arrowIpc?: string }>('Query', () => ({ sql: statsSql() }))
 const { data: proxyData, refresh: refreshProxy } = useLogServerStatsRpc<{ arrowIpc?: string }>('Query', () => ({ sql: proxySql() }))
-function refreshAll() {
+// Until the name has been read, each refresh tries again first.
+let ownClusterRead = false
+async function refreshAll(): Promise<void> {
+  if (!ownClusterRead) {
+    try {
+      await loadOwnCluster()
+      ownClusterRead = true
+      ownClusterError.value = ''
+    } catch (e) {
+      // Without the name the panel shows only rows written before the finelog
+      // named its cluster, so the counts may be partial.
+      ownClusterError.value = `Could not read the finelog's cluster name (${e}); counts may be partial.`
+    }
+  }
   refresh()
   refreshProxy()
 }
 useAutoRefresh(refreshAll, DEFAULT_REFRESH_MS)
-onMounted(async () => {
-  try {
-    await loadOwnCluster()
-  } catch (e) {
-    // Without the name the panel shows only rows written before the finelog
-    // named its cluster, so the counts may be partial.
-    ownClusterError.value = `Could not read the finelog's cluster name (${e}); counts may be partial.`
-  }
-  refreshAll()
-})
+onMounted(refreshAll)
 
 type SortKey = 'method' | 'count' | 'errorCount' | 'inFlight' | 'p50' | 'p95' | 'p99' | 'last'
 const sortKey = ref<SortKey>('p95')
