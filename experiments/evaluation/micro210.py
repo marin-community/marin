@@ -42,11 +42,11 @@ from experiments.evaluation.micro210_policy import (
     Micro210Model,
     micro210_evaluation,
 )
+from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 PREPARED_INPUTS = (
     "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3/" "documents/mochi-exp3-final-eval-inputs/2026.11.18.61"
 )
-MODEL_MANIFEST = ".marinskyrl-model-manifest.json"
 
 
 @dataclass(frozen=True)
@@ -62,12 +62,13 @@ def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
     table = (StoragePath(inputs) / policy["evaluation"]["data_relative_path"]).read_bytes()
     if hashlib.sha256(table).hexdigest() != policy["prepared_rollouts_sha256"]:
         raise ValueError("Canonical Micro210 prepared task bytes changed")
-    manifest = (StoragePath(evaluation.model.uri) / MODEL_MANIFEST).read_bytes()
+    manifest = (StoragePath(evaluation.model.uri) / MODEL_MANIFEST_FILENAME).read_bytes()
     if MODEL_IDENTITY_PREFIX + hashlib.sha256(manifest).hexdigest() != evaluation.model.identity:
         raise ValueError("Micro210 model export manifest differs from the model binding")
 
 
 def run_micro210(config: Micro210Run) -> SkyRLRun:
+    counterpart_api_key = os.environ["TOGETHER_API_KEY"]
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
     validate_inputs(config.evaluation, PREPARED_INPUTS)
@@ -80,7 +81,10 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
     inference = inference_config_for_model(
         judge,
         AcceleratorChoice(
-            platform=Platform.GPU, gpu_type="H100", gpu_count=policy["judge_gpu_count"], target_cluster=None
+            platform=Platform.GPU,
+            gpu_type=policy["gpu_variant"],
+            gpu_count=policy["judge_gpu_count"],
+            target_cluster=None,
         ),
         env_vars={},
         priority=priority_band_value(launch["iris"]["priority"]),
@@ -95,7 +99,7 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
             replace(config.skyrl, launch_config_yaml=yaml.safe_dump(launch)),
             env_vars={
                 "JUDGE_API_KEY": served.model.endpoint.api_key or "EMPTY",
-                "OPENAI_API_KEY": os.environ["TOGETHER_API_KEY"],
+                "OPENAI_API_KEY": counterpart_api_key,
             },
         )
 

@@ -54,7 +54,7 @@ def test_micro210_record_contains_content_digest_of_protocol(policy_reference):
 
 def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch, policy_reference):
     changed = tmp_path / "protocol.json"
-    changed.write_text(StoragePath(policy_reference.uri).read_text().replace('"seed": 20261030', '"seed": 0'))
+    changed.write_text(StoragePath(policy_reference.uri).read_text().replace('"seed": 20261030', '"seed": 20261031'))
     monkeypatch.setattr(
         "experiments.evaluation.micro210_policy.POLICY_REFERENCE", replace(policy_reference, uri=str(changed))
     )

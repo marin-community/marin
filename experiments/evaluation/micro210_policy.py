@@ -12,6 +12,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 MODEL_IDENTITY_PREFIX = "sha256:"
 POLICY_DIGEST = "e0faa32c68994e8bf01d0ab7177893aa9c29f8c4309b9183de5c3dfcb6fa67aa"
+POLICY_REVISION = "2026.11.18"
 
 
 @dataclass(frozen=True)
@@ -25,9 +26,9 @@ class Micro210PolicyReference:
 POLICY_REFERENCE = Micro210PolicyReference(
     uri=(
         "s3://marin-us-east-08a/marin/users/benfeuer/evaluation-policies/micro210/"
-        f"2026.11.18/{POLICY_DIGEST}/policy.json"
+        f"{POLICY_REVISION}/{POLICY_DIGEST}/policy.json"
     ),
-    revision="2026.11.18",
+    revision=POLICY_REVISION,
     sha256=POLICY_DIGEST,
     byte_size=122243,
 )

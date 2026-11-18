@@ -39,3 +39,9 @@ def test_eval_only_retains_every_record_without_an_optimizer_step_or_byte_cap(tm
     assert records[0]["global_step"] is None
     assert records[0]["provenance"]["model_version_step"] == 20
     assert records[0]["response"]["token_ids"] == [2]
+    (tmp_path / "_retention_ledger.json").unlink()
+    recovered = TrajectorySink(config, None, InlineTrajectoryPublisher(execute_publication))
+    recovered.bind_runner("test")
+    recovered.retain(replace(request, trajectory_ids=(TrajectoryID("task", 1),)), output)
+    recovered.close()
+    assert len(json.loads((tmp_path / "_retention_ledger.json").read_text())["records"]) == 2

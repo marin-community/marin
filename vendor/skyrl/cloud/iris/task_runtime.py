@@ -90,7 +90,8 @@ from marinskyrl.hf_model import (
     immutable_model_cache_key,
     validate_hf_model_weights,
 )
-from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest
+from marinskyrl.model_files import MODEL_MANIFEST_FILENAME
+from marinskyrl.model_manifest import ModelManifest
 from cloud.iris.telemetry_env import telemetry_environment
 from marinskyrl.resource_locator import RolloutModelLoading, is_cloud_uri, is_hugging_face_repo_id, join_resource_path
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind, is_hugging_face_commit
