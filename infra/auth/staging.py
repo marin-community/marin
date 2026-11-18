@@ -40,7 +40,7 @@ from infra.auth.seed_secret import seed_canary
 CONTEXT = "marin_US-WEST-04A"
 DATABASE_NAMESPACE = "marin-auth-db-staging"
 DATABASE_HOST = f"auth-postgres-rw.{DATABASE_NAMESPACE}.svc"
-ISSUER = f"https://openbao.{NAMESPACE}.svc:8200/v1/identity/oidc"
+ISSUER = "https://auth-staging.oa.dev/v1/identity/oidc"
 CHECKOUT = Path(__file__).resolve().parents[2]
 
 
@@ -249,7 +249,8 @@ def install_database_ca(directory: Path) -> None:
     secret = json.loads(kubectl(["-n", DATABASE_NAMESPACE, "get", "secret", "auth-postgres-ca", "-o", "json"]))
     database_ca = base64.b64decode(secret["data"]["ca.crt"]).decode()
     install_secret(NAMESPACE, "postgres-ca", {"ca.crt": database_ca})
-    install_secret(NAMESPACE, "auth-ca", {"ca.crt": credential(directory, "ca.crt") + "\n" + database_ca})
+    bundle = credential(directory, "ca.crt") + "\n" + database_ca + "\n" + Path(requests.certs.where()).read_text()
+    install_secret(NAMESPACE, "auth-ca", {"ca.crt": bundle})
 
 
 def initialize(directory: Path, addresses: list[str]) -> dict:

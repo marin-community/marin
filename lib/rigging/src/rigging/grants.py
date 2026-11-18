@@ -118,6 +118,12 @@ class Grant:
     delegation_depth: int
     revoked_at: float | None
     policy_revision: str
+    lease_expires_at: float | None = None
+
+    @property
+    def credential_expires_at(self) -> float:
+        """Bound credential lifetime by both the absolute ceiling and live lease."""
+        return min(self.expires_at, self.lease_expires_at) if self.lease_expires_at is not None else self.expires_at
 
 
 class RuntimeGrants(Protocol):
@@ -133,6 +139,10 @@ class RuntimeGrants(Protocol):
 
     def allows(self, grant: Grant, *, service: str, action: str, resource: str, now: float) -> bool: ...
 
+    def renew(self, grant: Grant, *, expires_at: float) -> Grant:
+        """Append an overlapping lease without changing immutable grant bounds."""
+        ...
+
     def revoke(self, grant: Grant, now: float) -> None: ...
 
     def close(self) -> None: ...
@@ -143,10 +153,18 @@ def _request_id(principal: str, key: str) -> str:
 
 
 def _matches_request(
-    grant: Grant, *, actor: str, permissions: tuple[Permission, ...], expires_at: float, parent_id: str | None
+    grant: Grant,
+    *,
+    actor: str,
+    permissions: tuple[Permission, ...],
+    expires_at: float,
+    parent_id: str | None,
+    lease_expires_at: float | None,
 ) -> bool:
     return (
         grant.actor == actor
+        and (grant.lease_expires_at is None) == (lease_expires_at is None)
+        and (lease_expires_at is None or grant.credential_expires_at <= lease_expires_at)
         and grant.parent_id == parent_id
         and grant.expires_at <= expires_at
         and permissions_cover(grant.permissions, permissions)
@@ -229,6 +247,7 @@ class GrantStore:
         expires_at: float,
         parent_id: str | None = None,
         idempotency_key: str | None = None,
+        lease_expires_at: float | None = None,
     ) -> Grant:
         """Create a root from standing policy, or attenuate the caller's grant.
 
@@ -241,13 +260,22 @@ class GrantStore:
         if idempotency_key is not None and not 1 <= len(idempotency_key) <= 128:
             raise GrantDenied("Idempotency keys require 1-128 characters")
         now = self._now()
+        if lease_expires_at is not None and (
+            not math.isfinite(lease_expires_at) or not now < lease_expires_at <= expires_at
+        ):
+            raise GrantDenied("Lease deadline is outside the grant lifetime")
         if not math.isfinite(expires_at) or expires_at <= now:
             raise GrantDenied("Grant lifetime has ended")
         grant_id = uuid.uuid4().hex if idempotency_key is None else _request_id(principal, idempotency_key)
         existing = self.runtime.get(grant_id)
         if existing is not None:
             if not _matches_request(
-                existing, actor=actor, permissions=permissions, expires_at=expires_at, parent_id=parent_id
+                existing,
+                actor=actor,
+                permissions=permissions,
+                expires_at=expires_at,
+                parent_id=parent_id,
+                lease_expires_at=lease_expires_at,
             ):
                 raise GrantDenied("Idempotency key belongs to a different grant request")
             return self.active(existing.id)
@@ -270,7 +298,7 @@ class GrantStore:
                 raise GrantDenied("Only the parent grant's actor may delegate it")
             if parent.delegation_depth == 0:
                 raise GrantDenied("Grant does not allow further delegation")
-            if expires_at > parent.expires_at or not permissions_cover(parent.permissions, permissions):
+            if expires_at > parent.credential_expires_at or not permissions_cover(parent.permissions, permissions):
                 raise GrantDenied("Delegation would widen the parent grant")
             if not self._policy.allows_grant(root.created_by, permissions):
                 raise GrantDenied("Standing policy does not allow this delegation")
@@ -288,11 +316,42 @@ class GrantStore:
                 delegation_depth=depth,
                 revoked_at=None,
                 policy_revision=revision,
+                lease_expires_at=lease_expires_at,
             )
         )
-        if not _matches_request(grant, actor=actor, permissions=permissions, expires_at=expires_at, parent_id=parent_id):
+        if not _matches_request(
+            grant,
+            actor=actor,
+            permissions=permissions,
+            expires_at=expires_at,
+            parent_id=parent_id,
+            lease_expires_at=lease_expires_at,
+        ):
             raise GrantDenied("Idempotency key belongs to a different grant request")
         # Recheck after insertion so a concurrent ancestor revocation also denies issuance.
+        return self.active(grant.id)
+
+    def renew_delegated(self, grant_id: str, *, principal: str, expires_at: float) -> Grant:
+        """Extend a live child lease at a trusted deputy boundary.
+
+        This is absent from the public grant API. The caller authenticates
+        liveness and serializes renewal with retirement. Compute the absolute
+        deadline before remote work; never recompute it on retry.
+        """
+        grant = self.active(grant_id)
+        if grant.parent_id is None or grant.lease_expires_at is None:
+            raise GrantDenied("Only delegated leases can be renewed")
+        parent = self.active(grant.parent_id)
+        if (
+            principal != parent.actor
+            or not math.isfinite(expires_at)
+            or expires_at > min(parent.expires_at, grant.expires_at)
+        ):
+            raise GrantDenied("Renewal is outside the parent authority")
+        if expires_at <= self._now():
+            raise GrantDenied("Renewal deadline has ended")
+        if expires_at > grant.credential_expires_at:
+            self.runtime.renew(grant, expires_at=expires_at)
         return self.active(grant.id)
 
     def authorize(self, grant_id: str, *, actor: str, service: str, action: str, resource: str) -> Grant:

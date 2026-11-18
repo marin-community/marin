@@ -109,7 +109,11 @@ from iris.cluster.controller.scheduling.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.shared_attempts import retire_shared_attempts, with_shared_attempt_credentials
+from iris.cluster.controller.shared_attempts import (
+    renew_shared_attempts,
+    retire_shared_attempts,
+    with_shared_attempt_credentials,
+)
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.tasks import PendingKick
 from iris.cluster.controller.transition_reader import DbTransitionReader
@@ -1171,6 +1175,8 @@ class Controller:
         self._refresh_backend_observation()
         if self._config.auth is not None:
             retire_shared_attempts(self._db, self._config.auth.shared_attempts)
+            if run_reconcile:
+                renew_shared_attempts(self._db, self._config.auth.shared_attempts, observation.task_updates)
 
     def _task_credentials(self, request: job_pb2.RunTaskRequest) -> job_pb2.RunTaskRequest:
         auth = self._config.auth

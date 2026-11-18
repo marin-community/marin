@@ -96,15 +96,17 @@ def isolated_loom(
             "  if (message.method === 'session/prompt' && process.env.LOOM_SESSION_ID "
             "&& process.env.MARIN_GRANT_TOKEN) {\n"
             "    const response = await fetch(process.env.MARIN_AUTH_URL + "
-            f"{json.dumps('/v1/storage/' + quote(verify_storage_binding, safe='') + '/token')}, {{\n"
-            "      method:'POST', redirect:'error',\n"
+            f"{json.dumps('/v1/storage/' + quote(verify_storage_binding, safe='') + '/credentials')}, {{\n"
+            "      method:'GET', redirect:'error',\n"
             "      headers:{Authorization:'Bearer ' + process.env.MARIN_GRANT_TOKEN}\n"
             "    });\n"
             "    if (!response.ok) throw new Error('Storage authority request failed: ' + response.status);\n"
             "    const identity = await response.json();\n"
-            "    if (!identity.token || !identity.expires_at) throw new Error('Missing native identity');\n"
+            "    if (!identity.AccessKeyId || !identity.SecretAccessKey || !identity.Expiration || identity.token)\n"
+            "      throw new Error('Missing bounded S3 credentials');\n"
             f"    writeFileSync({json.dumps(str(marker))}, JSON.stringify({{\n"
-            "      status:response.status, expires_at:identity.expires_at, session_id:process.env.LOOM_SESSION_ID\n"
+            "      status:response.status, expires_at:Date.parse(identity.Expiration)/1000,\n"
+            "      session_id:process.env.LOOM_SESSION_ID\n"
             "    }), {mode:0o600});\n"
             "  }\n"
             "  child.stdin.write(line + '\\n');\n"
@@ -247,10 +249,10 @@ def run_loom_proof(
         while not loom.storage_marker.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         if not loom.storage_marker.exists():
-            raise RuntimeError("Loom session did not obtain a native storage identity")
+            raise RuntimeError("Loom session did not obtain bounded S3 credentials")
         consumed = json.loads(loom.storage_marker.read_text())
         if consumed["status"] != 200 or consumed["session_id"] != run["session_id"]:
-            raise RuntimeError("native identity was not obtained by the actual Loom session")
+            raise RuntimeError("bounded S3 credentials were not obtained by the actual Loom session")
     loom.post("sessions/archive", {"session": run["session_id"]})
     deadline = time.monotonic() + 10
     while grants.active(grant.id, grant.actor) and time.monotonic() < deadline:
@@ -265,5 +267,5 @@ def run_loom_proof(
         "profile": template_name,
         "result": "broker HTTP launch; native shared grant accepted; background observer revoked completed grant",
         "limit": "scripted ACP agent; restricted Loom has no CoreWeave storage tool",
-        "session_obtained_native_identity": loom.storage_marker is not None,
+        "session_obtained_bounded_s3_credentials": loom.storage_marker is not None,
     }

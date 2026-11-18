@@ -10,6 +10,7 @@ import logging
 import ssl
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
@@ -35,6 +36,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from infra.auth.coreweave import exchange_credentials
 from infra.auth.iris import IrisAttemptBroker, IrisBrokerConfig, mount_iris_attempts
 from infra.auth.loom import LoomLauncher
 from infra.auth.openfga import ACTIONS, AuthorizationUnavailable, OpenFGAPolicy, OpenFGARuntime, ProviderIdentity
@@ -85,6 +87,8 @@ class StorageConfig(BaseModel):
     role: str
     subject: str
     token_file: Path
+    organization: str
+    max_credential_ttl: int = Field(gt=0, le=43200)
     permissions: tuple[PermissionConfig, ...]
 
 
@@ -259,7 +263,7 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
             session=session,
         )
 
-    def storage_token(request: Request) -> JSONResponse:
+    def storage_credentials(request: Request) -> JSONResponse:
         token = extract_bearer_token(dict(request.headers))
         name = request.path_params["binding"]
         binding = bindings.get(name)
@@ -272,8 +276,22 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
         assert grant is not None
         if not policy.allows_provider(store.authority_principal(grant.id), name):
             raise GrantDenied("Standing policy does not allow this provider identity")
-        result = binding.issue(grant)
-        store.active(grant.id)
+        settings = next(item for item in config.storage if item.name == name)
+        try:
+            result = exchange_credentials(
+                binding, grant, organization=settings.organization, max_ttl=settings.max_credential_ttl
+            )
+        except GrantDenied:
+            raise
+        except (requests.RequestException, OSError, ValueError, KeyError, TypeError):
+            return JSONResponse({"error": "Storage provider is unavailable"}, status_code=503)
+        for permission in binding.permissions:
+            for action in permission.actions:
+                grant = authority.authorize(token, audience="cw_s3", action=action, resource=permission.resource)
+        if datetime.fromisoformat(result["Expiration"].replace("Z", "+00:00")).timestamp() > grant.credential_expires_at:
+            raise GrantDenied("CoreWeave credential lifetime exceeds the active grant")
+        if not policy.allows_provider(store.authority_principal(grant.id), name):
+            raise GrantDenied("Standing policy does not allow this provider identity")
         return JSONResponse(result, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
     def read_secret(request: Request) -> JSONResponse:
@@ -398,7 +416,7 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
 
     app.router.routes.extend(
         [
-            Route("/v1/storage/{binding}/token", storage_token, methods=["POST"]),
+            Route("/v1/storage/{binding}/credentials", storage_credentials, methods=["GET"]),
             Route("/v1/secrets/{binding}", read_secret, methods=["POST"]),
             Route("/.well-known/jwks.json", public_keys, methods=["GET"]),
             Route("/healthz", health, methods=["GET"]),

@@ -290,8 +290,7 @@ def test_storage_issuer_checks_native_policy_identity_and_lifetime(bao):
     with pytest.raises(GrantDenied):
         issuer.issue(narrow)
     bao.storage_expiry = int(grant.expires_at) + 60
-    with pytest.raises(GrantDenied):
-        issuer.issue(grant)
+    assert issuer.issue(grant)["expires_at"] > grant.expires_at
     bao.storage_expiry = int(now) + 60
     bao.storage_subject = "different-identity"
     with pytest.raises(ValueError):

@@ -106,7 +106,7 @@ class GrantAuthService:
         ):
             raise GrantDenied("Audience is outside the grant")
         # Floor the remaining lifetime so the signed token never outlives the grant.
-        ttl = min(self._max_token_ttl, math.floor(grant.expires_at - self._now()))
+        ttl = min(self._max_token_ttl, math.floor(grant.credential_expires_at - self._now()))
         if ttl <= 0:
             raise GrantDenied("Grant lifetime has ended")
         token = self._signer.mint(
@@ -125,7 +125,7 @@ class GrantAuthService:
         )
         self.store.active(grant.id)
         issued_expiry = jwt.decode(token, options={"verify_signature": False})["exp"]
-        if issued_expiry > grant.expires_at or issued_expiry <= self._now():
+        if issued_expiry > grant.credential_expires_at or issued_expiry <= self._now():
             raise GrantDenied("Issuer latency exceeded the remaining grant lifetime")
         return {
             "access_token": token,
@@ -265,7 +265,7 @@ def _verified_access_grant(
         access.actor != grant.actor
         or access.owner != grant.owner
         or access.policy_revision != grant.policy_revision
-        or access.expires_at > grant.expires_at
+        or access.expires_at > grant.credential_expires_at
         or not permissions_cover(grant.permissions, access.permissions)
     ):
         raise GrantDenied("Token does not match the current grant")

@@ -142,8 +142,11 @@ identities with only `marin-auth-identity`. Approved deployments can use the
 The broker token has a 24-hour renewable TTL. Leaf certificates expire after
 14 days, their CA after 30 days. Renew before expiry; `prepare` does not rotate
 them. Certificate reloads require replacing/unsealing one Bao replica at a time.
-The private issuer does not establish CoreWeave WIF: registration also needs
-publicly reachable OIDC discovery and JWKS.
+Public discovery and JWKS use `https://auth-staging.oa.dev/v1/identity/oidc`.
+The `auth-staging-public-tls` Certificate uses the cluster's `letsencrypt-http01-prod`
+issuer. Its ingress exposes only discovery and keys; OpenBao API access remains
+private. The external `auth-ca` Secret combines the staging CA and public roots
+so the broker verifies both listeners. CoreWeave WIF registration is a separate step.
 
 Before reusing staging after the broker token expires, keep the OpenBao tunnel
 running and rotate the credential:
@@ -471,3 +474,24 @@ The `Retain` storage class leaves PVs and backend data. Follow the recorded
 UID/Released-state reclamation procedure in [the database guide](../postgres/README.md)
 for only these disposable staging volumes. Retire the private credential
 directory after the deployment and required backup retention have ended.
+
+## Restricted S3 pilot prerequisites
+
+The long-running procedure is in [the auth README](README.md#sustained-loom--iris--s3-pilot).
+Its storage binding remains disabled until provider authorization is isolated.
+The November 18 audit found three unresolved prerequisites:
+
+- The approved operator credential can inspect object-storage policies but cannot
+  manage Workload Federation registrations.
+- An existing organization policy grants broad storage and management access to
+  every principal, including federated identities. A scoped allow on the pilot
+  prefix would inherit that authority. Use an isolated organization or review the
+  shared policy's consumers before narrowing it. A separate bucket is insufficient.
+- CoreWeave's documented anonymous POST exchange supports `durationSeconds`, but
+  a routing probe received 404. The documented GET exchange has no duration field.
+  Confirm the bounded POST with the provider before enabling this binding.
+
+The offline proof covers real OpenBao, OpenFGA and Loom with a synthetic CoreWeave
+HTTP exchange. It does not establish native S3 enforcement. The live proof must
+observe native renewal, out-of-prefix and disallowed-action denials, and residual
+access after revocation before this integration can be accepted.

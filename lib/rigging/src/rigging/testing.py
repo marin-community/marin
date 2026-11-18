@@ -55,7 +55,9 @@ class MemoryRuntimeGrants:
     def is_active(self, grant: Grant, now: float) -> bool:
         with self._lock:
             chain = self._chain(grant)
-            return bool(chain) and all(item.id not in self.revocations and item.expires_at > now for item in chain)
+            return bool(chain) and all(
+                item.id not in self.revocations and item.credential_expires_at > now for item in chain
+            )
 
     def allows(self, grant: Grant, *, service: str, action: str, resource: str, now: float) -> bool:
         with self._lock:
@@ -63,6 +65,12 @@ class MemoryRuntimeGrants:
                 permissions_allow(item.permissions, service=service, action=action, resource=resource)
                 for item in self._chain(grant)
             )
+
+    def renew(self, grant: Grant, *, expires_at: float) -> Grant:
+        with self._lock:
+            renewed = replace(self.grants[grant.id], lease_expires_at=expires_at)
+            self.grants[grant.id] = renewed
+            return renewed
 
     def revoke(self, grant: Grant, now: float) -> None:
         with self._lock:

@@ -116,6 +116,16 @@ class OpenFGARuntime:
                 Permission(item["service"], frozenset(item["actions"]), item["resource"]) for item in data["permissions"]
             )
             grant = Grant(**data)
+            if grant.lease_expires_at is not None:
+                prefix = f"lease:{grant.id}_"
+                deadlines = [
+                    float.fromhex(row["user"].removeprefix(prefix))
+                    for row in rows
+                    if row["relation"] == "lease" and row["user"].startswith(prefix)
+                ]
+                if not deadlines:
+                    raise ValueError("Leased grant has no persisted lease")
+                grant = replace(grant, lease_expires_at=min(grant.expires_at, max(deadlines)))
             revoked = next((row for row in rows if row["relation"] == "revoked"), None)
             return replace(grant, revoked_at=None if revoked is None else revoked["condition"]["context"]["revoked_at"])
         except (KeyError, TypeError, ValueError) as error:
@@ -154,6 +164,10 @@ class OpenFGARuntime:
                 "object": object_id,
             },
         ]
+        if grant.lease_expires_at is None:
+            tuples.append({"user": "principal:*", "relation": "unleased", "object": object_id})
+        else:
+            tuples.extend(self._lease_tuples(grant.id, grant.lease_expires_at))
         try:
             self._request("write", {"authorization_model_id": self._model_id, "writes": {"tuple_keys": tuples}})
         except AuthorizationUnavailable:
@@ -191,6 +205,33 @@ class OpenFGARuntime:
             "allowed",
             {"current_time": _timestamp(now), "service": service, "action": action, "resource": resource},
         )
+
+    def renew(self, grant: Grant, *, expires_at: float) -> Grant:
+        """Append an overlapping lease without changing immutable grant metadata.
+
+        A delayed write can only supply its original precomputed deadline.
+        Separate revocation tuples remain authoritative across concurrent writes.
+        """
+        self._request(
+            "write",
+            {
+                "authorization_model_id": self._model_id,
+                "writes": {"tuple_keys": self._lease_tuples(grant.id, expires_at)},
+            },
+        )
+        return replace(grant, lease_expires_at=expires_at)
+
+    def _lease_tuples(self, grant_id: str, expires_at: float) -> list[dict]:
+        lease_id = f"lease:{grant_id}_{float(expires_at).hex()}"
+        return [
+            {"user": lease_id, "relation": "lease", "object": f"grant:{grant_id}"},
+            {
+                "user": "principal:*",
+                "relation": "active",
+                "object": lease_id,
+                "condition": {"name": "live_lease", "context": {"expires_at": _timestamp(expires_at)}},
+            },
+        ]
 
     def revoke(self, grant: Grant, now: float) -> None:
         try:

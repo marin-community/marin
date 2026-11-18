@@ -86,10 +86,27 @@ does not revoke the enclosing Loom grant. Temporary credential issuance failures
 defer the same attempt while other
 reconciliation and real runtime observations continue. Explicit denial or an
 expired grant fails the affected attempt. If a controller or broker is down,
-retirement can be delayed; existing attempt authority expires within its fixed
-60-second maximum, and refresh cannot extend that deadline. This path supports
-short CPU tasks. Queueing time counts against the bound; long-running or delayed
-tasks need a separately designed renewable attempt lease before rollout.
+retirement can be delayed; existing attempt authority expires within 60 seconds
+of its last controller renewal. After committing a fresh backend BUILDING or
+RUNNING observation, the controller renews only its exact current live attempt.
+The broker authenticates the controller, checks its cluster and binding, and
+rechecks parent and standing policy before extending the child lease, capped by
+the parent deadline. Workload token refresh never extends the lease. A lease
+that has already expired cannot be renewed; a queue wait or outage longer than
+the lease requires a new attempt.
+
+Renewal appends an immutable lease object and its grant edge in one OpenFGA
+write. The old and new leases overlap; no enabled tuple is removed and no
+renewal creates an authorization gap. The grant's immutable absolute expiry is
+the parent deadline; its current lease deadline separately bounds token minting.
+FGA authorization requires a live lease and the complete unrevoked ancestry.
+A renewal already in flight can finish after the old lease ends, but its deadline
+is computed before remote work and never moved on internal retry. A concurrent
+revocation remains authoritative, and a durable retirement tombstone fences late
+broker responses. Expired lease edges remain inert; the pilot retains them for
+inspection. Production rollout needs bounded cleanup to avoid growing Check
+fanout. The new runtime model requires draining and reissuing earlier grants;
+existing model IDs are immutable.
 
 Marina resolves named routes to stable app UUIDs and filters its app directory
 through the same checks. Release grants can update a specified UUID, including
@@ -328,7 +345,8 @@ runtime authority and operational database references.
 | `broker_token_secrets` | Array of external Secret names, each with a `token` key |
 | `broker_client_namespace` | Namespace of isolated Loom sessions or other approved clients |
 | `broker_client_pod_labels` | Exact approved client pod labels |
-| `broker_https_egress_cidrs` | HTTPS egress destinations for public OpenBao discovery/JWKS |
+| `broker_https_egress_cidrs` | Explicit HTTPS IP destinations, or `[]` when using DNS policy |
+| `broker_https_egress_domains` | Exact HTTPS names for CoreWeave exchange and public issuer discovery; requires Cilium DNS proxy |
 | `broker_policy` | Standing policy and database configuration described below |
 
 `broker_policy` supplies `broker_token_file`, `subjects`, `openfga`, `runtime_grants`, `storage`
@@ -353,8 +371,11 @@ API token alongside the other external token files. `runtime_grants` contains
 its own `api_url`, `store_id`, `model_id` and `token_file`. It selects a distinct
 runtime store and credential on the same TLS gateway. Standing group membership
 and action/resource relationships are operator-owned OpenFGA tuples.
-Each storage binding still declares its complete native permissions and separate
-OpenBao identity token; permission to issue that identity is checked in OpenFGA.
+Each storage binding declares its complete native permissions, CoreWeave organization,
+maximum credential lifetime, and separate OpenBao identity token. The broker checks
+OpenFGA before exchanging that private identity for native S3 credentials. It also
+rechecks authorization before returning credentials. The native key expiry must fit
+within both the current attempt lease and the binding maximum.
 
 The auth stack exports `coreweave_identities`, keyed by storage binding name,
 with only `subject` and `permissions`. It excludes token-file references and
@@ -407,11 +428,11 @@ public request to `/v1/sys/health` receives no OpenBao route. Inspect readiness,
 [CoreWeave WIF](https://docs.coreweave.com/products/storage/object-storage/auth-access/workload-identity-federation/use-oidc-tokens)
 requires a registered issuer/audience pair and publicly reachable discovery and
 JWKS endpoints. Register the stack's `issuer` and audience
-`https://coreweave.com/iam` in the CoreWeave Console's Workload Federation page.
-Record the returned Config ID in the deployment review. Installed
-`pulumi-coreweave` 1.0.2 exposes organization policies and bucket policies, but
-has no WIF/OIDC registration resource. This program does not claim to register
-an issuer or export a fabricated registration ID.
+`https://coreweave.com/iam` using CoreWeave's Workload Federation API or Console.
+The official Terraform provider now exposes
+[`coreweave_workload_federation_oidc_config`](https://docs.coreweave.com/platform/terraform/resources/workload_federation_oidc_config).
+The installed Pulumi provider does not expose that resource; register the isolated
+issuer separately and retain its Config ID. This stack does not register it.
 
 The existing `infra/buckets` project owns provider storage authorization.
 Declare each complete mapping once under `broker_policy.storage` in the auth
@@ -421,6 +442,8 @@ stack, for example:
 - name: checkpoint-reader
   role: marin-coreweave
   subject: ENTITY-UUID-FROM-OPENBAO
+  organization: COREWEAVE-ORGANIZATION-ID
+  max_credential_ttl: 60
   token_file: /var/run/marin-auth/checkpoint-reader/token
   permissions:
     - service: cw_s3
@@ -552,8 +575,10 @@ The [runtime model](policy/runtime_model.json) binds each grant to its actor and
 conditional service/action/resource bounds. Expiry uses the broker's current
 server time. Recursive relations intersect every ancestor's bounds and expiry.
 A permanent revocation tuple excludes the revoked grant and every descendant,
-including a child written concurrently with revocation. Immutable metadata,
-actor, bounds and parent/root tuples are inserted in one atomic write.
+including a child written concurrently with revocation. Initial metadata,
+actor, bounds and parent/root tuples are inserted in one atomic write. Trusted
+Iris lease renewal appends separate conditioned lease objects; immutable grant
+metadata keeps its absolute ceiling.
 Idempotency keys derive one grant ID per authenticated principal. A fixed
 metadata tuple makes conflicting retries contend on that identity. The broker
 reads persisted state after an uncertain write response and rejects a different
@@ -697,7 +722,7 @@ and rotates a private OIDC token file for the native SDK provider:
 
 ```bash
 uv run --package marin-auth python -m infra.auth.client \
-  --auth-url "$AUTH_URL" --binding diagnostics --organization "$CW_ORG_ID" \
+  --auth-url "$AUTH_URL" --binding diagnostics --ca-bundle "$AUTH_CA_FILE" \
   --token-file "$PRIVATE_RUNTIME_DIR/cw.jwt" -- your-command
 ```
 
@@ -750,7 +775,7 @@ dedicated **test** bucket. Supply a valid scoped `MARIN_GRANT_TOKEN` and run:
 
 ```bash
 uv run --package marin-auth python -m infra.auth.verify_storage \
-  --auth-url "$AUTH_URL" --binding diagnostics --organization "$CW_ORG_ID" \
+  --auth-url "$AUTH_URL" --binding diagnostics --ca-bundle "$AUTH_CA_FILE" \
   --endpoint "$CW_S3_ENDPOINT" --region "$CW_REGION" \
   --test-bucket "$TEST_BUCKET" --prefix incidents/ \
   --allowed-key incidents/allowed --denied-key outside/denied
@@ -766,6 +791,45 @@ to require the same client to read after its first provider credential expires;
 the report includes observed expiration times and whether its key changed.
 Retain that report with the deployment review. Until this check passes on the
 deployed stack, live CoreWeave enforcement remains unverified.
+
+### Sustained Loom → Iris → S3 pilot
+
+Use an isolated task namespace and a unique prefix in the regional test bucket.
+Register the public issuer, then grant its dedicated storage identity only
+`GetObject` and `PutObject` under that prefix. Audit organization and bucket
+policies for broader overlapping grants. Create a nonempty sibling fixture with
+operator credentials; a missing object cannot prove denied reads.
+
+The storage configuration file supplies `binding`, `endpoint`, `region`, `bucket`,
+`prefix`, `denied_key`, `denied_write_prefix`, `duration` (1050 seconds), and
+`interval` (15 seconds). Run:
+
+```bash
+uv run --no-sync python -m infra.auth.prove_storage_execution \
+  --service-config "$SERVICE_CONFIG" --storage-config "$STORAGE_CONFIG" \
+  --identity-token-file "$PRIVATE_DIR/launcher.jwt" \
+  --controller-identity-token-file "$PRIVATE_DIR/controller.jwt" \
+  --controller-openbao-token-file "$PRIVATE_DIR/controller.token" \
+  --google-login-directory "$LOGIN_DIR" --bao-address "$BAO_ADDRESS" \
+  --authority-ca-file "$AUTH_CA_FILE" --public-key-file "$GRANT_PUBLIC_KEY" \
+  --loom-executable "$LOOM_EXECUTABLE" --loom-source "$LOOM_SOURCE" \
+  --task-image "$TASK_IMAGE_DIGEST" --output-dir "$PROOF_OUTPUT"
+```
+
+The pilot requires fifteen minutes of successful operations, multiple grant and
+native-key renewals, and continued operations beyond the first native key's expiry.
+It checks sibling reads/writes, object deletion, and bucket listing are denied.
+It then revokes the attempt and checks both grant refresh and native credential
+issuance are denied. A separate observer freezes a native key before revocation
+and measures its residual access until denial or a two-minute observation limit.
+Already-issued S3 keys remain usable until CoreWeave expires or revokes them;
+broker revocation alone does not instantly invalidate those keys.
+
+The controller renews attempt leases only after fresh observations of the running
+task. The operator's existing Google login is reauthenticated as needed; temporary
+Bao sessions are closed after issuing identity JWTs. No operator credential reaches
+the task. The proof terminates its job and archives its Loom session. Remove only
+its reported sentinel objects using the operator's storage credentials.
 
 ## Recovery and upgrades
 
@@ -846,8 +910,9 @@ synthetic clusters, and a Grafana alert launch with a fake Slack HTTP endpoint.
 Removing the group edge denies existing tokens at the receiving services. A failed
 OpenFGA credential produces 503, recovery restores access, and native local
 backends remain usable during the outage. No external messages are sent.
-The scripted ACP agent obtains a native OpenBao storage identity;
-CoreWeave S3/WIF enforcement still requires the separate live storage procedure.
+The scripted ACP agent obtains synthetic native S3 credentials through a local
+CoreWeave API fixture. OpenBao authentication and signing are real; provider
+policy enforcement requires the separate live storage procedure.
 
 Build the proof image with `trial/Dockerfile` and named BuildKit contexts:
 `proof-tools` contains reviewed, container-compatible `bao`, `openfga`, `loom`,

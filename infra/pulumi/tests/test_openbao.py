@@ -197,6 +197,8 @@ def broker_args():
         "storage": [
             {
                 "name": "checkpoint-reader",
+                "organization": "test-organization",
+                "max_credential_ttl": 60,
                 "subject": "ad14b571-2449-4fd5-974e-f525ed965370",
                 "role": "marin-coreweave",
                 "token_file": "/var/run/marin-auth/storage-token/token",
@@ -410,3 +412,27 @@ def test_openfga_gateway_separates_standing_and_runtime_store_operations(recordi
         ]
 
     return pulumi.Output.all(cluster.deployment.spec, cluster.network_policy.spec, cluster.address).apply(check)
+
+
+@pulumi.runtime.test
+def test_broker_federation_egress_uses_dns_proxy_without_broad_https(recording_mocks, broker_args):
+    pulumi.runtime.set_mocks(recording_mocks, project="marin-auth", stack="test", preview=False)
+    broker = GrantBroker(
+        "federation-broker",
+        replace(broker_args, https_egress_domains=("api.coreweave.com",)),
+        k8s_provider=k8s.Provider("federation-test", kubeconfig="", context="test"),
+    )
+
+    def check(values):
+        cilium, network = values
+        assert cilium["endpointSelector"] == {"matchLabels": {"app.kubernetes.io/name": "marin-auth"}}
+        dns_addresses, dns_pods, https = cilium["egress"]
+        for rule in (dns_addresses, dns_pods):
+            assert rule["toPorts"][0]["rules"] == {"dns": [{"matchPattern": "*"}]}
+        assert https == {
+            "toFQDNs": [{"matchName": "api.coreweave.com"}],
+            "toPorts": [{"ports": [{"port": "443", "protocol": "TCP"}]}],
+        }
+        assert not any(port["port"] in (53, 443) for rule in network["egress"] for port in rule["ports"])
+
+    return pulumi.Output.all(broker.https_egress_policy.spec, broker.network_policy.spec).apply(check)

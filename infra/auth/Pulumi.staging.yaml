@@ -7,14 +7,14 @@ config:
   marin-auth:namespace: marin-auth-staging
   marin-auth:replicas: '3'
   marin-auth:anti_affinity: preferred
-  marin-auth:discovery_mode: private
-  marin-auth:public_hostname: openbao.marin-auth-staging.svc
+  marin-auth:discovery_mode: ingress
+  marin-auth:public_hostname: auth-staging.oa.dev
   marin-auth:listener_tls_server_name: openbao.marin-auth-staging.svc
   marin-auth:listener_tls_secret: openbao-tls
-  marin-auth:ingress_tls_secret: openbao-tls
-  marin-auth:ingress_namespace: marin-auth-staging
+  marin-auth:ingress_tls_secret: auth-staging-public-tls
+  marin-auth:ingress_namespace: traefik
   marin-auth:ingress_pod_labels:
-    marin.dev/auth-client: 'true'
+    app.kubernetes.io/name: traefik
   marin-auth:operator_groups:
   - marin-auth-staging-operators
   marin-auth:dns_cidrs:
@@ -26,8 +26,8 @@ config:
   - 10.16.0.1/32
   marin-auth:https_egress_cidrs: []
   marin-auth:https_egress_domains:
-    - accounts.google.com
-    - www.googleapis.com
+  - accounts.google.com
+  - www.googleapis.com
   marin-auth:database_namespace: marin-auth-db-staging
   marin-auth:database_cluster: auth-postgres
   marin-auth:openbao_database_secret: openbao-database
@@ -113,4 +113,7 @@ config:
 
     '
   marin-auth:broker_image: ghcr.io/marin-community/iris-worker@sha256:558a8be35470fcc9d282d73b6c119d1cce8c83e12ec354767aa047288bfede30
+  marin-auth:broker_https_egress_domains:
+  - auth-staging.oa.dev
+  - api.coreweave.com
 encryptedkey: CiQAKk3j6e+rOX4XT9+gTXNtlIGecuXIpFiNF7M09p5/Lf6HTCwSSQCdtF6i+JMObDm1gq81PamkbidHXSbKdyoCKCf/XzQ7wsD7553BWvGvDv34gUMlgmd5cux8apzm+ORjQGcDlfPB6qjFbC593Zs=

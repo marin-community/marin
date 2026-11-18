@@ -198,8 +198,8 @@ class OpenBaoStorageIssuer:
         self.verifier.verify(token)
         # The signature has been checked above; these claims bound file refresh.
         claims = jwt.decode(token, options={"verify_signature": False})
-        if claims["exp"] > grant.expires_at:
-            raise GrantDenied("The fixed provider token lifetime would exceed this grant")
+        # This identity stays inside the broker. Only provider credentials whose
+        # expiration fits the active grant may cross the workload boundary.
         return {"token": token, "expires_at": claims["exp"]}
 
 

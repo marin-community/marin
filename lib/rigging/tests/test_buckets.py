@@ -41,7 +41,7 @@ data:
       key_id_env: R2_KEY_ID
       key_secret_env: R2_KEY_SECRET
 """
-CW_OIDC_URI = "https://api.coreweave.com/v1/cwobject/temporary-credentials/oidc/test-org"
+CW_CREDENTIALS_URI = "https://marin-auth.management.svc:8090/v1/storage/checkpoints/credentials"
 
 
 class _HTTPBody:
@@ -143,9 +143,10 @@ def test_credentials_come_from_the_variables_the_backend_declares(config, monkey
 
 @pytest.mark.parametrize("entrypoint", [filesystem_for, url_to_fs, unbudgeted_url_to_fs])
 def test_routed_coreweave_refreshes_credentials_from_rotated_token(config, tmp_path, monkeypatch, entrypoint):
-    token_file = tmp_path / "oidc.jwt"
-    token_file.write_text("oidc-one")
-    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", CW_OIDC_URI)
+    token_file = tmp_path / "grant.jwt"
+    token_file.write_text("Bearer grant-one")
+    monkeypatch.setenv("MARIN_AUTH_URL", "https://marin-auth.management.svc:8090")
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", CW_CREDENTIALS_URI)
     monkeypatch.setenv("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", str(token_file))
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "stale-aws-key")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "stale-aws-secret")
@@ -164,10 +165,10 @@ def test_routed_coreweave_refreshes_credentials_from_rotated_token(config, tmp_p
         authorization = request.headers.get("Authorization", "")
         if isinstance(authorization, bytes):
             authorization = authorization.decode()
-        if request.url == CW_OIDC_URI:
+        if request.url == CW_CREDENTIALS_URI:
             # The initial grant is in the SDK's advisory refresh window. Returning it
             # for the first JWT lets the same client refresh on the next operation.
-            access_key, minutes = {"oidc-one": ("cw-one", 10), "oidc-two": ("cw-two", 60)}[authorization]
+            access_key, minutes = {"Bearer grant-one": ("cw-one", 10), "Bearer grant-two": ("cw-two", 60)}[authorization]
             body = json.dumps(
                 {
                     "AccessKeyId": access_key,
@@ -199,8 +200,8 @@ def test_routed_coreweave_refreshes_credentials_from_rotated_token(config, tmp_p
     cw_fs, cw_path = entrypoint("s3://marin-cw/")
     assert cw_fs.ls(cw_path, detail=False, refresh=True) == ["marin-cw/cw-one"]
 
-    new_token_file = tmp_path / "oidc.next"
-    new_token_file.write_text("oidc-two")
+    new_token_file = tmp_path / "grant.next"
+    new_token_file.write_text("Bearer grant-two")
     new_token_file.replace(token_file)
     assert cw_fs.ls(cw_path, detail=False, refresh=True) == ["marin-cw/cw-two"]
     assert StoragePath("s3://marin-cw/checkpoint/metadata.json").exists()
@@ -221,8 +222,9 @@ def test_routed_coreweave_refreshes_credentials_from_rotated_token(config, tmp_p
 
 def test_polars_federation_never_falls_back_to_broader_static_keys(config, tmp_path, monkeypatch):
     token_file = tmp_path / "grant.jwt"
-    token_file.write_text("scoped-oidc")
-    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", CW_OIDC_URI)
+    token_file.write_text("Bearer scoped-grant")
+    monkeypatch.setenv("MARIN_AUTH_URL", "https://marin-auth.management.svc:8090")
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", CW_CREDENTIALS_URI)
     monkeypatch.setenv("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", str(token_file))
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "broader-static-key")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "broader-static-secret")
@@ -289,3 +291,21 @@ def test_gcs_is_not_an_s3_backend(config):
     """GCS uses application default credentials, so asking for its S3 settings is an error."""
     with pytest.raises(ValueError, match="stores"):
         cluster_config.store_config(StoreType.GCS)
+
+
+@pytest.mark.parametrize(
+    "destination",
+    [
+        "https://other.example/v1/storage/checkpoints/credentials",
+        "https://marin-auth.management.svc:8090/v1/storage/checkpoints/token",
+        "https://marin-auth.management.svc:8090/v1/storage/checkpoints/credentials?redirect=elsewhere",
+    ],
+)
+def test_routed_federation_rejects_credential_destinations_outside_broker(config, tmp_path, monkeypatch, destination):
+    token_file = tmp_path / "grant.token"
+    token_file.write_text("Bearer scoped-grant")
+    monkeypatch.setenv("MARIN_AUTH_URL", "https://marin-auth.management.svc:8090")
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", destination)
+    monkeypatch.setenv("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", str(token_file))
+    with pytest.raises(ValueError, match="configured Marin broker"):
+        filesystem_for("s3://marin-cw/checkpoint")

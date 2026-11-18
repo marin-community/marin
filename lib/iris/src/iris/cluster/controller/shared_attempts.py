@@ -5,6 +5,8 @@
 
 import logging
 import math
+import threading
+from collections import OrderedDict
 from typing import Protocol
 
 import requests
@@ -12,15 +14,24 @@ from pydantic import BaseModel, ConfigDict, Field
 from rigging.grants import GrantDenied
 from rigging.shared_grants import SHARED_GRANT_TOKEN_SECRET, SharedGrantConfig, SharedGrantUnavailable
 from rigging.timing import Timestamp
-from sqlalchemy import delete, insert, or_, select
+from sqlalchemy import and_, delete, insert, or_, select
 
 from iris.cluster.config import SharedAttemptConfig
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.schema import jobs_table, shared_attempt_grants_table, task_attempts_table
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.schema import (
+    jobs_table,
+    shared_attempt_grants_table,
+    task_attempts_table,
+    tasks_table,
+    workers_table,
+)
 from iris.cluster.types import TERMINAL_JOB_STATES, TERMINAL_TASK_STATES, JobName
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
+RENEWAL_INTERVAL = 20
+MAX_RENEWAL_CACHE_ENTRIES = 1024
 
 
 class AttemptCredentials(BaseModel):
@@ -37,6 +48,8 @@ class AttemptCredentials(BaseModel):
 class AttemptBroker(Protocol):
     def issue(self, *, grant_id: str, resource: str, task_id: str, attempt_uid: str) -> AttemptCredentials: ...
 
+    def renew(self, *, grant_id: str, resource: str, task_id: str, attempt_uid: str) -> AttemptCredentials | None: ...
+
     def retire(self, *, grant_id: str, resource: str, task_id: str, attempt_uid: str) -> None: ...
 
 
@@ -46,6 +59,8 @@ class SharedAttemptClient:
     def __init__(self, trust: SharedGrantConfig, config: SharedAttemptConfig):
         self.trust = trust
         self.config = config
+        self._renew_after: OrderedDict[tuple[str, str, str, str], float] = OrderedDict()
+        self._renew_lock = threading.Lock()
 
     def _post(self, endpoint: str, payload: dict) -> dict:
         try:
@@ -82,6 +97,32 @@ class SharedAttemptClient:
             "/v1/iris/attempts/credentials",
             {"grant_id": grant_id, "resource": resource, "task_id": task_id, "attempt_uid": attempt_uid},
         )
+        credentials = self._credentials(result, grant_id=grant_id, attempt_uid=attempt_uid)
+        self._remember_renewal((grant_id, resource, task_id, attempt_uid), credentials.expires_at)
+        return credentials
+
+    def renew(self, *, grant_id: str, resource: str, task_id: str, attempt_uid: str) -> AttemptCredentials | None:
+        key = (grant_id, resource, task_id, attempt_uid)
+        with self._renew_lock:
+            if Timestamp.now().epoch_ms() / 1000 < self._renew_after.get(key, 0):
+                return None
+        result = self._post(
+            "/v1/iris/attempts/renew",
+            {"grant_id": grant_id, "resource": resource, "task_id": task_id, "attempt_uid": attempt_uid},
+        )
+        credentials = self._credentials(result, grant_id=grant_id, attempt_uid=attempt_uid)
+        self._remember_renewal(key, credentials.expires_at)
+        return credentials
+
+    def _remember_renewal(self, key: tuple[str, str, str, str], expires_at: float) -> None:
+        with self._renew_lock:
+            now = Timestamp.now().epoch_ms() / 1000
+            self._renew_after[key] = now + min(RENEWAL_INTERVAL, (expires_at - now) / 3)
+            self._renew_after.move_to_end(key)
+            while len(self._renew_after) > MAX_RENEWAL_CACHE_ENTRIES:
+                self._renew_after.popitem(last=False)
+
+    def _credentials(self, result: dict, *, grant_id: str, attempt_uid: str) -> AttemptCredentials:
         try:
             credentials = AttemptCredentials.model_validate(result)
         except ValueError:
@@ -106,6 +147,8 @@ class SharedAttemptClient:
         )
         if result.get("retired") is not True:
             raise SharedGrantUnavailable("Shared attempt retirement was not confirmed")
+        with self._renew_lock:
+            self._renew_after.pop((grant_id, resource, task_id, attempt_uid), None)
 
 
 def with_shared_attempt_credentials(
@@ -186,3 +229,53 @@ def retire_shared_attempts(db: ControllerDB, broker: AttemptBroker | None) -> No
             continue
         with db.transaction() as tx:
             tx.execute(delete(bindings).where(bindings.c.attempt_uid == row.attempt_uid))
+
+
+def renew_shared_attempts(db: ControllerDB, broker: AttemptBroker | None, observations: list[TaskUpdate]) -> None:
+    """Renew exact current attempts only after a fresh live backend observation.
+
+    A cached RUNNING state supplies no liveness. The post-commit snapshot fences
+    cancellation, terminal transitions, retries and stale provider identities.
+    An authority outage leaves at most the existing minute-long lease.
+    """
+    if broker is None:
+        return
+    live = {
+        (update.task_id, update.attempt_id, update.attempt_uid): update
+        for update in observations
+        if update.attempt_uid and update.new_state in {job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_RUNNING}
+    }
+    if not live:
+        return
+    bindings = shared_attempt_grants_table
+    with db.read_snapshot() as tx:
+        rows = tx.execute(
+            select(bindings, task_attempts_table.c.attempt_id, task_attempts_table.c.worker_id)
+            .select_from(
+                bindings.join(jobs_table, bindings.c.job_id == jobs_table.c.job_id)
+                .join(task_attempts_table, bindings.c.attempt_uid == task_attempts_table.c.attempt_uid)
+                .join(
+                    tasks_table,
+                    and_(
+                        tasks_table.c.task_id == task_attempts_table.c.task_id,
+                        tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id,
+                    ),
+                )
+                .outerjoin(workers_table, task_attempts_table.c.worker_id == workers_table.c.worker_id)
+            )
+            .where(
+                or_(task_attempts_table.c.worker_id.is_(None), workers_table.c.worker_id.is_not(None)),
+                jobs_table.c.shared_grant_id == bindings.c.grant_id,
+                jobs_table.c.state.not_in(TERMINAL_JOB_STATES),
+                task_attempts_table.c.state.not_in(TERMINAL_TASK_STATES),
+                tasks_table.c.state.not_in(TERMINAL_TASK_STATES),
+            )
+        ).all()
+    for row in rows:
+        observed = live.get((JobName.from_wire(row.task_id), row.attempt_id, row.attempt_uid))
+        if observed is None or (observed.worker_id is not None and observed.worker_id != row.worker_id):
+            continue
+        try:
+            broker.renew(grant_id=row.grant_id, resource=row.resource, task_id=row.task_id, attempt_uid=row.attempt_uid)
+        except (GrantDenied, SharedGrantUnavailable):
+            logger.warning("Shared attempt lease renewal failed for %s", row.attempt_uid)

@@ -134,6 +134,8 @@ def execution_agent_command(
     runtime: ExecutionRuntime,
     config: ExecutionConfig,
     job_name: str,
+    task_argv: list[str] | None = None,
+    task_timeout: int = 55000,
 ) -> tuple[str, Path]:
     """Wrap Loom's deterministic ACP fixture with one real Iris submission."""
     if not job_name.startswith("/proof/"):
@@ -183,12 +185,12 @@ def execution_agent_command(
         "containerProfile": "CONTAINER_PROFILE_SANDBOX",
         "taskImage": config.task_image,
         "resources": {"cpuMillicores": 1000, "memoryBytes": "536870912"},
-        "entrypoint": {"runCommand": {"argv": [PROOF_PYTHON, "-c", task_script]}},
+        "entrypoint": {"runCommand": {"argv": task_argv or [PROOF_PYTHON, "-c", task_script]}},
         "environment": {"secrets": {"AUTH_PROOF_CA": config.authority_ca_file.read_text()}},
         "replicas": 1,
         "maxRetriesFailure": 0,
         "maxRetriesPreemption": 0,
-        "timeout": {"milliseconds": 55000},
+        "timeout": {"milliseconds": task_timeout},
         "existingJobPolicy": "EXISTING_JOB_POLICY_KEEP",
     }
     launch_url = runtime.controller_url + "/iris.cluster.ControllerService/LaunchJob"

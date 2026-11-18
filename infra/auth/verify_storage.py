@@ -18,19 +18,21 @@ from urllib.parse import urlsplit
 from botocore.config import Config
 from botocore.credentials import ContainerProvider, CredentialResolver
 from botocore.exceptions import BotoCoreError, ClientError
+from botocore.httpsession import URLLib3Session
 from botocore.session import Session
 from botocore.utils import ContainerMetadataFetcher
 from rigging.filesystem.s3_compat import CoreWeaveFederation, coreweave_federation
 from rigging.grants import Permission
+from rigging.secrets import require_secret
 
-from infra.auth.client import StorageCredentials
+from infra.auth.client import StorageCredentials, refreshing_storage_credentials
 
 
 class CredentialExpirations(ContainerMetadataFetcher):
     """Observe native provider expiry without exposing credentials in the report."""
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, ca_bundle: Path | None = None):
+        super().__init__(session=URLLib3Session(timeout=5, verify=str(ca_bundle) if ca_bundle else True))
         self.first: datetime | None = None
         self.latest: datetime | None = None
         self.rotated = False
@@ -64,7 +66,7 @@ def probe_access(s3, *, bucket: str, allowed_key: str, denied_key: str, prefix: 
     if not allowed_key.startswith(prefix) or denied_key.startswith(prefix):
         raise ValueError("The supplied fixtures must be inside and outside the approved prefix respectively")
     read_fixture(s3, bucket, allowed_key)
-    results = {"inside_read": True}
+    results: dict[str, bool | str] = {"inside_read": True}
     sentinel = prefix + "marin-auth-probe-" + uuid.uuid4().hex
     for name, operation in (
         ("outside_read_denied", lambda: read_fixture(s3, bucket, denied_key)),
@@ -109,7 +111,6 @@ def main() -> None:
     for name in (
         "auth-url",
         "binding",
-        "organization",
         "endpoint",
         "region",
         "test-bucket",
@@ -121,6 +122,7 @@ def main() -> None:
     parser.add_argument(
         "--wait-up-to", type=float, default=0, help="Explicit maximum seconds to cross the first native key expiry"
     )
+    parser.add_argument("--ca-bundle", type=Path)
     args = parser.parse_args()
     if not 0 <= args.wait_up_to <= 7200:
         parser.error("--wait-up-to must be between 0 and 7200 seconds")
@@ -144,31 +146,34 @@ def main() -> None:
         token_file = Path(directory) / "native.jwt"
         credentials = StorageCredentials(
             auth_url=args.auth_url,
-            grant_token=os.environ["MARIN_GRANT_TOKEN"],
+            grant_token=require_secret("MARIN_GRANT_TOKEN"),
             binding=args.binding,
             token_file=token_file,
+            ca_bundle=args.ca_bundle,
         )
-        os.environ["AWS_CONTAINER_CREDENTIALS_FULL_URI"] = (
-            "https://api.coreweave.com/v1/cwobject/temporary-credentials/oidc/" + args.organization
-        )
+        os.environ["AWS_CONTAINER_CREDENTIALS_FULL_URI"] = credentials.credentials_url
         os.environ["AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"] = str(token_file)
         federation = coreweave_federation()
         assert federation is not None
-        metadata = CredentialExpirations()
+        metadata = CredentialExpirations(args.ca_bundle)
         session = native_session(federation, metadata)
-        with closing(
-            session.create_client(
-                "s3",
-                endpoint_url=args.endpoint,
-                region_name=args.region,
-                config=Config(
-                    connect_timeout=5,
-                    read_timeout=10,
-                    retries={"total_max_attempts": 1},
-                    s3={"addressing_style": "virtual"},
-                ),
-            )
-        ) as s3:
+        with (
+            refreshing_storage_credentials(credentials) as check,
+            closing(
+                session.create_client(
+                    "s3",
+                    endpoint_url=args.endpoint,
+                    region_name=args.region,
+                    config=Config(
+                        connect_timeout=5,
+                        read_timeout=10,
+                        retries={"total_max_attempts": 1},
+                        s3={"addressing_style": "virtual"},
+                    ),
+                )
+            ) as s3,
+        ):
+            check()
             report = probe_access(
                 s3, bucket=args.test_bucket, allowed_key=args.allowed_key, denied_key=args.denied_key, prefix=args.prefix
             )
@@ -181,10 +186,10 @@ def main() -> None:
             if args.wait_up_to and report["passed"]:
                 deadline = time.monotonic() + args.wait_up_to
                 while datetime.now(UTC) <= metadata.first and time.monotonic() < deadline:
-                    credentials.refresh()
+                    check()
                     threading.Event().wait(min(1, max(0, deadline - time.monotonic())))
                 if datetime.now(UTC) > metadata.first:
-                    credentials.refresh()
+                    check()
                     read_fixture(s3, args.test_bucket, args.allowed_key)
                     assert metadata.latest is not None
                     report["crossed_initial_expiry"] = metadata.rotated and metadata.latest > metadata.first

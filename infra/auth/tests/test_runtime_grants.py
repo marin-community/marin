@@ -200,3 +200,70 @@ def test_store_idempotency_and_current_standing_membership_use_runtime_model(run
     policy.member = False
     with pytest.raises(GrantDenied):
         store.authorize(other.id, actor="session", service="iris", action="job.read", resource="/jobs/train")
+
+
+def test_lease_replacement_preserves_bounds_and_monotonic_revocation(runtime, root_grant):
+    runtime.put(root_grant)
+    child = replace(root_grant, id="leased-child", actor="attempt", parent_id=root_grant.id, lease_expires_at=1550)
+    runtime.put(child)
+    renewed = runtime.renew(child, expires_at=1700)
+    assert runtime.get(child.id) == replace(child, lease_expires_at=1700)
+    assert runtime.is_active(renewed, 1600)
+    assert not runtime.is_active(renewed, 1700)
+    assert runtime.allows(renewed, service="iris", action="job.read", resource="/jobs/train", now=1600)
+    assert not runtime.allows(renewed, service="iris", action="job.cancel", resource="/jobs/train", now=1600)
+    runtime.revoke(child, 1610)
+    runtime.renew(renewed, expires_at=1800)
+    assert runtime.get(child.id).revoked_at == 1610
+    assert not runtime.is_active(renewed, 1650)
+
+
+def test_concurrent_lease_replacement_cannot_erase_parent_revocation(runtime, root_grant):
+    runtime.put(root_grant)
+    child = replace(root_grant, id="leased-child", actor="attempt", parent_id=root_grant.id, lease_expires_at=1550)
+    runtime.put(child)
+    barrier = threading.Barrier(2)
+
+    def renew():
+        barrier.wait(timeout=5)
+        runtime.renew(child, expires_at=1800)
+
+    def revoke():
+        barrier.wait(timeout=5)
+        runtime.revoke(root_grant, 1510)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        operations = [executor.submit(renew), executor.submit(revoke)]
+        for operation in operations:
+            operation.result(timeout=15)
+    assert runtime.get(child.id).lease_expires_at == 1800
+    assert not runtime.is_active(child, 1600)
+
+
+def test_overlapping_lease_writes_keep_authorization_continuously_available(runtime, root_grant):
+    runtime.put(root_grant)
+    child = replace(root_grant, id="overlapping", actor="attempt", parent_id=root_grant.id, lease_expires_at=1550)
+    runtime.put(child)
+    barrier = threading.Barrier(2)
+
+    def renew():
+        barrier.wait(timeout=5)
+        for deadline in range(1600, 1800, 10):
+            runtime.renew(child, expires_at=deadline)
+
+    def authorize():
+        barrier.wait(timeout=5)
+        return [
+            runtime.allows(child, service="iris", action="job.read", resource="/jobs/train", now=1500) for _ in range(30)
+        ]
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        renewal = executor.submit(renew)
+        decisions = executor.submit(authorize)
+        renewal.result(timeout=15)
+        assert all(decisions.result(timeout=15))
+    current = runtime.get(child.id)
+    assert current.expires_at == root_grant.expires_at
+    assert current.lease_expires_at == 1790
+    assert runtime.is_active(current, 1789)
+    assert not runtime.is_active(current, 1790)

@@ -132,6 +132,7 @@ def main() -> None:
                 client_pod_labels=config.require_object("broker_client_pod_labels"),
                 dns_cidrs=tuple(config.require_object("dns_cidrs")),
                 https_egress_cidrs=tuple(config.require_object("broker_https_egress_cidrs")),
+                https_egress_domains=tuple(config.get_object("broker_https_egress_domains") or []),
                 database_secret=config.get("broker_database_secret"),
                 database_cidrs=tuple(config.get_object("broker_database_cidrs") or []),
                 replicas=config.get_int("broker_replicas") or 1,

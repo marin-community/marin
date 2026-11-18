@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import jwt
 import pytest
@@ -185,3 +185,102 @@ def test_attempt_retirement_before_issue_blocks_resurrection_and_hard_expiry_bou
     with pytest.raises(GrantDenied):
         environment.broker.issue("controller-identity", next_attempt)
     assert environment.authority.store.active(environment.request.grant_id).id == environment.request.grant_id
+
+
+def test_controller_renewal_preserves_identity_and_workload_refresh_cannot_extend_lease(iris_broker):
+    environment = iris_broker
+    initial = environment.broker.issue("controller-identity", environment.request)
+    for _ in range(5):
+        environment.clock[0] += 20
+        renewed = environment.broker.renew("controller-identity", environment.request)
+        assert renewed["grant_id"] == initial["grant_id"]
+        assert renewed["actor"] == initial["actor"]
+        assert renewed["expires_at"] == environment.clock[0] + 60
+        assert environment.broker.issue("controller-identity", environment.request)["grant_id"] == initial["grant_id"]
+    # The controller can sustain a lease across many original lease windows.
+    assert environment.authority.store.active(initial["grant_id"]).credential_expires_at == initial["expires_at"] + 100
+    with pytest.raises(GrantDenied):
+        environment.broker.renew("session-identity", environment.request)
+    # Workload refresh mints a token inside the lease; it never moves the deadline.
+    environment.authority.refresh(initial["access_token"], audience="cw_s3")
+    assert environment.authority.store.active(initial["grant_id"]).credential_expires_at == renewed["expires_at"]
+    environment.clock[0] = renewed["expires_at"] + 1
+    with pytest.raises(GrantDenied):
+        environment.authority.refresh(initial["access_token"], audience="cw_s3")
+    with pytest.raises(GrantDenied):
+        environment.broker.renew("controller-identity", environment.request)
+
+
+@pytest.mark.parametrize("withdrawal", ["parent", "child", "policy", "retire"])
+def test_controller_renewal_cannot_restore_withdrawn_authority(iris_broker, monkeypatch, withdrawal):
+    environment = iris_broker
+    issued = environment.broker.issue("controller-identity", environment.request)
+    environment.clock[0] += 20
+    if withdrawal == "parent":
+        environment.authority.store.revoke(environment.request.grant_id, principal="loom:session")
+    elif withdrawal == "child":
+        environment.authority.store.revoke(issued["grant_id"], principal=issued["actor"])
+    elif withdrawal == "policy":
+        monkeypatch.setattr(Policy, "allows_grant", lambda *args: False)
+    else:
+        environment.broker.retire("controller-identity", environment.request)
+    with pytest.raises(GrantDenied):
+        environment.broker.renew("controller-identity", environment.request)
+    with pytest.raises(GrantDenied):
+        environment.authority.refresh(issued["access_token"], audience="cw_s3")
+
+
+def test_controller_renewal_never_outlives_parent_deadline(iris_broker):
+    environment = iris_broker
+    issued = environment.broker.issue("controller-identity", environment.request)
+    parent = environment.authority.store.active(environment.request.grant_id)
+    while environment.clock[0] + 20 < parent.expires_at:
+        environment.clock[0] += 20
+        renewed = environment.broker.renew("controller-identity", environment.request)
+        assert renewed["expires_at"] <= parent.expires_at
+    assert renewed["expires_at"] == parent.expires_at
+    environment.clock[0] = parent.expires_at
+    with pytest.raises(GrantDenied):
+        environment.broker.renew("controller-identity", environment.request)
+    with pytest.raises(GrantDenied):
+        environment.authority.store.active(issued["grant_id"])
+
+
+@pytest.mark.parametrize("withdrawal", ["parent", "child", "policy", "retire", "delay"])
+def test_in_flight_renewal_cannot_escape_revocation_or_its_original_deadline(iris_broker, monkeypatch, withdrawal):
+    environment = iris_broker
+    issued = environment.broker.issue("controller-identity", environment.request)
+    environment.clock[0] += 20
+    deadline = environment.clock[0] + 60
+    runtime = environment.authority.store.runtime
+    renew = runtime.renew
+
+    def delayed_renew(grant, *, expires_at):
+        if withdrawal == "parent":
+            environment.authority.store.revoke(environment.request.grant_id, principal="loom:session")
+        elif withdrawal == "child":
+            environment.authority.store.revoke(grant.id, principal=grant.actor)
+        elif withdrawal == "policy":
+            monkeypatch.setattr(Policy, "allows_grant", lambda *args: False)
+        elif withdrawal == "retire":
+            environment.broker.retire("controller-identity", environment.request)
+        else:
+            environment.clock[0] += 80
+        return renew(grant, expires_at=expires_at)
+
+    monkeypatch.setattr(runtime, "renew", delayed_renew)
+    with pytest.raises(GrantDenied):
+        environment.broker.renew("controller-identity", environment.request)
+    assert runtime.get(issued["grant_id"]).lease_expires_at == deadline
+    with pytest.raises(GrantDenied):
+        environment.authority.store.active(issued["grant_id"])
+
+
+def test_attempt_idempotency_cannot_adopt_an_unleased_grant(iris_broker):
+    environment = iris_broker
+    issued = environment.broker.issue("controller-identity", environment.request)
+    child = environment.authority.store.active(issued["grant_id"])
+    # Model an independently issued grant using the same deterministic identity.
+    environment.authority.store.runtime.grants[child.id] = replace(child, lease_expires_at=None)
+    with pytest.raises(GrantDenied, match="different grant request"):
+        environment.broker.issue("controller-identity", environment.request)

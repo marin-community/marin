@@ -33,6 +33,7 @@ from __future__ import annotations
 import functools
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -43,15 +44,16 @@ import s3fs
 from aiobotocore.credentials import AioContainerProvider, AioCredentialResolver
 from aiobotocore.httpsession import AIOHTTPSession
 from aiobotocore.session import AioSession
+from aiobotocore.utils import AioContainerMetadataFetcher, _RefCountedSession
 from botocore.credentials import SharedCredentialProvider
 
 from rigging.filesystem.cluster_config import BucketSpec, StoreType, data_buckets, store_config
 from rigging.filesystem.listing_cache import DEFAULT_LISTINGS_EXPIRY_TIME, configured_listing_cache_options
 from rigging.secrets import get_secret
+from rigging.shared_grants import authority_origin
 
 # Endpoint domains that reject path-style requests outright.
 VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
-_COREWEAVE_API_HOST = "api.coreweave.com"
 _CONTAINER_CREDENTIALS_URI = "AWS_CONTAINER_CREDENTIALS_FULL_URI"
 _CONTAINER_AUTHORIZATION_FILE = "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"
 
@@ -213,26 +215,33 @@ def s3_credential_options() -> dict[str, str]:
 
 @dataclass(frozen=True)
 class CoreWeaveFederation:
-    """Settings for a native SDK to exchange a rotating OIDC token for S3 credentials."""
+    """Settings for a native SDK to retrieve refreshable CoreWeave credentials."""
 
     uri: str
     token_file: str
+    ca_bundle: str | None = None
 
 
 def coreweave_federation() -> CoreWeaveFederation | None:
-    """Read the provider configuration when the CoreWeave API origin is selected."""
+    """Read the container provider only for the explicitly configured Marin broker."""
     uri = os.environ.get(_CONTAINER_CREDENTIALS_URI)
     if uri is None:
         return None
     parsed = urlparse(uri)
-    if parsed.hostname != _COREWEAVE_API_HOST:
-        return None
-    if parsed.scheme != "https" or parsed.username is not None or parsed.port not in (None, 443):
-        raise ValueError(f"{_CONTAINER_CREDENTIALS_URI} must use the CoreWeave API HTTPS origin")
+    broker = os.environ.get("MARIN_AUTH_URL")
+    if (
+        broker is None
+        or parsed.scheme != "https"
+        or authority_origin(uri.rsplit("/v1/storage/", 1)[0]) != authority_origin(broker)
+        or re.fullmatch(r"/v1/storage/[a-z0-9-]+/credentials", parsed.path) is None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(f"{_CONTAINER_CREDENTIALS_URI} must name the configured Marin broker's storage endpoint")
     token_file = os.environ.get(_CONTAINER_AUTHORIZATION_FILE)
     if not token_file:
         raise ValueError(f"{_CONTAINER_AUTHORIZATION_FILE} is required for CoreWeave federation")
-    return CoreWeaveFederation(uri, os.path.abspath(token_file))
+    return CoreWeaveFederation(uri, os.path.abspath(token_file), os.environ.get("MARIN_AUTH_CA_BUNDLE"))
 
 
 def coreweave_federated_bucket(bucket: str) -> tuple[BucketSpec, CoreWeaveFederation] | None:
@@ -270,8 +279,12 @@ def _coreweave_federated_session(_pid: int, federation: CoreWeaveFederation) -> 
     # Keep fsspec's instance cache effective and never reuse SDK state across a fork.
     # The provider reopens the token file on refresh, so rotating its contents needs no new session.
     session = AioSession(session_vars={"profile": (None, None, None, None)})
+    # Metadata transport does not inherit the S3 client's AWS_CA_BUNDLE.
+    # It requires the SDK's reference-counted acquire lifecycle.
+    metadata = AioContainerMetadataFetcher(session=_RefCountedSession(verify=federation.ca_bundle or True, timeout=10))
     provider = AioContainerProvider(
-        environ={_CONTAINER_CREDENTIALS_URI: federation.uri, _CONTAINER_AUTHORIZATION_FILE: federation.token_file}
+        environ={_CONTAINER_CREDENTIALS_URI: federation.uri, _CONTAINER_AUTHORIZATION_FILE: federation.token_file},
+        fetcher=metadata,
     )
     session.register_component("credential_provider", AioCredentialResolver([provider]))
     return session

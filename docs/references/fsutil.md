@@ -60,17 +60,23 @@ export CW_KEY_SECRET=<key-secret>
 
 CoreWeave also accepts the generic `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` pair.
 
-For [CoreWeave workload identity federation](https://docs.coreweave.com/products/storage/object-storage/auth-access/workload-identity-federation/use-oidc-tokens),
-point the SDK at CoreWeave's credentials endpoint and the workload's current OIDC token file:
+For broker-scoped CoreWeave access, run the command through the auth client:
 
 ```bash
-export AWS_CONTAINER_CREDENTIALS_FULL_URI="https://api.coreweave.com/v1/cwobject/temporary-credentials/oidc/<org-id>"
-export AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE=/path/to/token.jwt
+uv run --no-sync python -m infra.auth.client \
+  --auth-url "$MARIN_AUTH_URL" --binding checkpoint-reader \
+  --token-file /path/to/private/storage-auth.token \
+  --ca-bundle /path/to/auth-ca.pem -- uv run fsutil ls s3://YOUR-BUCKET/YOUR-PREFIX/
 ```
 
-For buckets declared as CoreWeave in the cluster config, this endpoint takes
-precedence over static keys. The SDK rereads the token file when refreshing S3
-credentials. The token issuer must keep the file current for long-running commands.
+The client reads `MARIN_GRANT_TOKEN` from the task's secret file, renews it, and
+configures the native SDK's container credential provider. For declared CoreWeave
+buckets, this provider takes precedence over static keys. The broker keeps its
+provider identity private and returns S3 credentials bounded by the grant's lease.
+Credential requests are restricted to the configured broker's storage endpoint.
+Rigging uses `MARIN_AUTH_CA_BUNDLE` for broker TLS while preserving the object
+store's normal certificate trust. Generic AWS clients need a publicly trusted
+broker certificate; their default metadata fetcher does not use this private CA setting.
 
 Hugging Face uses `HF_TOKEN` or a token saved by `hf auth login`. For `cp` and `mv`
 with `--remote`, fsutil forwards that token to the Iris job through its environment;

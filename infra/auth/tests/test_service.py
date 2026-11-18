@@ -8,6 +8,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -17,6 +18,7 @@ import pytest
 import requests
 from rigging.grant_auth import ACCESS_TOKEN_TYPE, JWT_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT, GrantAuthService
 from rigging.grant_database import GrantDatabase
+from rigging.grants import GrantDenied
 from rigging.testing import MemoryRuntimeGrants
 from rigging.token_authority import generate_ed25519_keypair, public_jwk_from_pem
 from sqlalchemy import text
@@ -24,7 +26,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from infra.auth import service
+from infra.auth import coreweave, service
 from infra.auth.loom import LoomLauncher
 
 
@@ -110,6 +112,9 @@ class Environment:
     config: service.ServiceConfig
     loom: LoomHTTP
     database: GrantDatabase
+    provider_requests: list
+    provider_response: dict
+    provider_hook: list
 
 
 @dataclass
@@ -189,6 +194,8 @@ def environment(tmp_path, monkeypatch, openfga_http, secret_http):
             "storage": [
                 {
                     "name": name,
+                    "organization": "org-pilot",
+                    "max_credential_ttl": 30,
                     "role": "marin-coreweave",
                     "subject": name,
                     "token_file": tmp_path / f"{name}.token",
@@ -218,12 +225,36 @@ def environment(tmp_path, monkeypatch, openfga_http, secret_http):
     monkeypatch.setattr(service, "OpenBaoTransitSigner", TransitSigner)
     monkeypatch.setattr(service, "OpenBaoIdentityVerifier", IdentityVerifier)
     monkeypatch.setattr(service, "OpenBaoStorageIssuer", StorageIssuer)
+    provider_requests = []
+    provider_response = {}
+    provider_hook = []
+    original_post = requests.post
+
+    def provider_post(url, *, json, **kwargs):
+        if url != coreweave.OIDC_EXCHANGE_URL:
+            return original_post(url, json=json, **kwargs)
+        provider_requests.append(json)
+        if provider_hook:
+            provider_hook[0]()
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json_module.dumps(
+            {
+                "accessKeyId": "CW-pilot",
+                "secretKey": "private-s3-key",
+                "expiry": datetime.fromtimestamp(time.time() + json["durationSeconds"], UTC).isoformat(),
+                **provider_response,
+            }
+        ).encode()
+        return response
+
+    monkeypatch.setattr(coreweave.requests, "post", provider_post)
     runtime = MemoryRuntimeGrants()
     monkeypatch.setattr(service, "OpenFGARuntime", lambda **_kwargs: runtime)
     monkeypatch.setattr(service.requests, "Session", lambda: loom)
     app, authority = service.create_service(config)
     database = config.database.connect()
-    yield Environment(app, authority, config, loom, database)
+    yield Environment(app, authority, config, loom, database, provider_requests, provider_response, provider_hook)
     authority.store.close()
     database.close()
 
@@ -311,16 +342,16 @@ def test_service_denies_broader_provider_and_revoked_parent(environment):
         child = create_grant(client, parent_id=parent, ttl=1200)
         storage = exchange(client, child, "cw_s3")
         loom = exchange(client, child, "loom")
-        allowed = client.post("/v1/storage/diagnostics/token", headers=storage)
-        assert allowed.status_code == 200 and allowed.json()["token"] == "synthetic-native-token"
+        allowed = client.get("/v1/storage/diagnostics/credentials", headers=storage)
+        assert allowed.status_code == 200 and allowed.json()["AccessKeyId"] == "CW-pilot"
         assert allowed.headers["cache-control"] == "no-store"
-        assert client.post("/v1/storage/all-logs/token", headers=storage).status_code == 403
+        assert client.get("/v1/storage/all-logs/credentials", headers=storage).status_code == 403
         check = {"audience": "loom", "action": "session.create", "resource": "/diagnostics/"}
         assert client.post("/v1/authorize", headers=loom, json=check).status_code == 200
         revoked = client.post(f"/v1/grants/{parent}/revoke", headers={"Authorization": "Bearer grafana-identity"})
         assert revoked.status_code == 200
         assert client.post("/v1/authorize", headers=loom, json=check).status_code == 403
-        assert client.post("/v1/storage/diagnostics/token", headers=storage).status_code == 403
+        assert client.get("/v1/storage/diagnostics/credentials", headers=storage).status_code == 403
 
 
 def test_service_registers_credential_intent_and_forwards_only_the_shared_launch_token(environment):
@@ -569,3 +600,74 @@ def test_loom_bearer_alone_cannot_exchange_runtime_authority(environment):
             is None
         )
         assert runtime_credentials(client, environment, headers).status_code == 200
+
+
+def test_storage_credentials_bound_provider_key_without_exposing_identity(environment):
+    with TestClient(environment.app) as client:
+        grant_id = create_grant(client, ttl=20)
+        headers = exchange(client, grant_id, "cw_s3")
+        response = client.get("/v1/storage/diagnostics/credentials", headers=headers)
+        assert response.status_code == 200
+        assert set(response.json()) == {"AccessKeyId", "SecretAccessKey", "Expiration", "Token"}
+        assert "synthetic-native-token" not in response.text
+        request = environment.provider_requests[-1]
+        assert 0 < request["durationSeconds"] < 20
+        assert request["orgId"] == "org-pilot"
+        assert request["oidcToken"] == "synthetic-native-token"
+        environment.provider_response["expiry"] = datetime.fromtimestamp(time.time() + 120, UTC).isoformat()
+        rejected = client.get("/v1/storage/diagnostics/credentials", headers=headers)
+        assert rejected.status_code == 403
+        assert "private-s3-key" not in rejected.text
+
+
+def test_storage_credentials_revocation_during_provider_exchange_rejects_key(environment):
+    with TestClient(environment.app) as client:
+        grant_id = create_grant(client)
+        headers = exchange(client, grant_id, "cw_s3")
+        environment.provider_hook.append(
+            lambda: environment.authority.store.revoke(grant_id, principal="service:grafana")
+        )
+        response = client.get("/v1/storage/diagnostics/credentials", headers=headers)
+        assert response.status_code == 403
+        assert "private-s3-key" not in response.text
+
+
+def test_storage_credentials_malformed_provider_response_is_sanitized(environment):
+    environment.provider_response["expiry"] = "private-provider-material"
+    with TestClient(environment.app) as client:
+        headers = exchange(client, create_grant(client), "cw_s3")
+        response = client.get("/v1/storage/diagnostics/credentials", headers=headers)
+        assert response.status_code == 503
+        assert response.json() == {"error": "Storage provider is unavailable"}
+
+
+def test_delegated_storage_credentials_cannot_outlive_ancestor_lease(environment):
+    with TestClient(environment.app) as client:
+        initial = environment.authority.store.active(create_grant(client))
+        deadline = time.time() + 60
+        leased = environment.authority.store.create(
+            initial.actor,
+            actor=initial.actor,
+            permissions=initial.permissions,
+            expires_at=time.time() + 300,
+            lease_expires_at=deadline,
+        )
+        with pytest.raises(GrantDenied, match="widen the parent grant"):
+            environment.authority.store.create(
+                leased.actor,
+                actor=leased.actor,
+                permissions=leased.permissions,
+                expires_at=deadline + 1,
+                parent_id=leased.id,
+            )
+        child = environment.authority.store.create(
+            leased.actor,
+            actor=leased.actor,
+            permissions=leased.permissions,
+            expires_at=deadline,
+            parent_id=leased.id,
+        )
+        response = client.get("/v1/storage/diagnostics/credentials", headers=exchange(client, child.id, "cw_s3"))
+        assert response.status_code == 200, response.text
+        expires_at = datetime.fromisoformat(response.json()["Expiration"].replace("Z", "+00:00")).timestamp()
+        assert expires_at <= deadline

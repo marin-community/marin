@@ -19,6 +19,7 @@ import tempfile
 import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 import jwt
@@ -30,12 +31,40 @@ from cryptography.x509.oid import NameOID
 from rigging.grant_auth import ACCESS_TOKEN_TYPE, JWT_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT
 from rigging.openbao import OpenBaoClient, OpenBaoTransitSigner
 from rigging.timing import Duration, ExponentialBackoff
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 from infra.auth.bootstrap import OperatorClient, configure
 from infra.auth.proof_fga import configure_proof, configure_runtime, isolated_openfga
 from infra.auth.proof_http import serve
 from infra.auth.prove_loom import isolated_loom, run_loom_proof
 from infra.auth.service import ServiceConfig, create_service
+
+
+@contextmanager
+def synthetic_coreweave_exchange():
+    """Serve a synthetic CW HTTP boundary; this does not establish S3 enforcement."""
+    issued = []
+
+    async def exchange(request: Request):
+        body = await request.json()
+        claims = jwt.decode(body["oidcToken"], options={"verify_signature": False})
+        issued.append(claims)
+        expiry = min(claims["exp"], time.time() + body["durationSeconds"])
+        return JSONResponse(
+            {
+                "accessKeyId": "synthetic-cw-access-key",
+                "secretKey": "synthetic-cw-secret-key",
+                "expiry": datetime.datetime.fromtimestamp(expiry, datetime.UTC).isoformat(),
+            }
+        )
+
+    port = _free_port()
+    app = Starlette(routes=[Route("/exchange", exchange, methods=["POST"])])
+    with serve(app, port), patch("infra.auth.coreweave.OIDC_EXCHANGE_URL", f"http://127.0.0.1:{port}/exchange"):
+        yield issued
 
 
 def _free_port() -> int:
@@ -214,6 +243,7 @@ def prove(
                         verify_storage_binding="diagnostics",
                     )
                 )
+            provider_identities = resources.enter_context(synthetic_coreweave_exchange())
             config = ServiceConfig.model_validate(
                 {
                     "bao_address": operator.address,
@@ -229,6 +259,8 @@ def prove(
                     "storage": [
                         {
                             "name": "diagnostics",
+                            "organization": "synthetic-organization",
+                            "max_credential_ttl": 30,
                             "role": "marin-coreweave",
                             "subject": storage_subject,
                             "token_file": storage_file,
@@ -254,7 +286,7 @@ def prove(
             evidence = {
                 "openbao": "real TLS + Raft, non-dev",
                 "openfga": "real authenticated engine; disposable memory datastore",
-                "coreweave_storage": "not contacted",
+                "coreweave_storage": "synthetic loopback HTTP exchange only; provider S3 not contacted",
                 "checks": [],
             }
             with serve(app, auth_port), httpx.Client(base_url=auth_url, timeout=30) as client:
@@ -375,14 +407,18 @@ def prove(
                     "without changing the model revision"
                 )
                 native_grant = exchange(caller, "cw_s3").json()["access_token"]
-                response = client.post(
-                    "/v1/storage/diagnostics/token", headers={"Authorization": f"Bearer {native_grant}"}
+                response = client.get(
+                    "/v1/storage/diagnostics/credentials", headers={"Authorization": f"Bearer {native_grant}"}
                 )
                 assert response.status_code == 200, response.text
-                native = jwt.decode(response.json()["token"], options={"verify_signature": False})
+                native = provider_identities[-1]
+                assert "token" not in response.json()
+                assert response.json()["AccessKeyId"] == "synthetic-cw-access-key"
                 assert native["sub"] == storage_subject and native["aud"] == "https://coreweave.com/iam"
                 assert exchange(native_grant, "cw_s3", token_type=ACCESS_TOKEN_TYPE).status_code == 200
-                evidence["checks"].append("real Transit signing + real provider OIDC identity + bounded refresh")
+                evidence["checks"].append(
+                    "real Transit signing + broker-private provider OIDC identity + synthetic CW HTTP exchange"
+                )
 
                 narrower = client.post(
                     "/v1/grants",
@@ -405,17 +441,17 @@ def prove(
                         "ttl": "2s",
                     },
                 )
-                short_response = client.post(
-                    "/v1/storage/diagnostics/token", headers={"Authorization": f"Bearer {native_grant}"}
+                short_response = client.get(
+                    "/v1/storage/diagnostics/credentials", headers={"Authorization": f"Bearer {native_grant}"}
                 )
                 assert short_response.status_code == 200
-                short = jwt.decode(short_response.json()["token"], options={"verify_signature": False})
+                short = provider_identities[-1]
                 time.sleep(max(0, short["exp"] - time.time() + 0.1))
-                renewed_response = client.post(
-                    "/v1/storage/diagnostics/token", headers={"Authorization": f"Bearer {native_grant}"}
+                renewed_response = client.get(
+                    "/v1/storage/diagnostics/credentials", headers={"Authorization": f"Bearer {native_grant}"}
                 )
                 assert renewed_response.status_code == 200
-                renewed = jwt.decode(renewed_response.json()["token"], options={"verify_signature": False})
+                renewed = provider_identities[-1]
                 assert renewed["iat"] >= short["exp"]
                 evidence["checks"].append("native OpenBao OIDC issuance crosses an actual token expiry")
                 operator.request("POST", "transit/keys/marin-grants/rotate")
@@ -477,8 +513,8 @@ def prove(
                     )
                 assert exchange(native_grant, "cw_s3", token_type=ACCESS_TOKEN_TYPE).status_code == 403
                 assert (
-                    client.post(
-                        "/v1/storage/diagnostics/token", headers={"Authorization": f"Bearer {native_grant}"}
+                    client.get(
+                        "/v1/storage/diagnostics/credentials", headers={"Authorization": f"Bearer {native_grant}"}
                     ).status_code
                     == 403
                 )

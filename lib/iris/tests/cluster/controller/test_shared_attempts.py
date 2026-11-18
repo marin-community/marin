@@ -57,6 +57,11 @@ class AttemptAuthority:
             auth_url="https://auth.example",
         )
 
+    def renew(self, *, grant_id, resource, task_id, attempt_uid):
+        credentials = self.issue(grant_id=grant_id, resource=resource, task_id=task_id, attempt_uid=attempt_uid)
+        self.deadlines[attempt_uid] = self.now() + 30
+        return credentials.model_copy(update={"expires_at": self.deadlines[attempt_uid]})
+
     def retire(self, *, grant_id, resource, task_id, attempt_uid):
         if self.unavailable:
             raise SharedGrantUnavailable("Synthetic broker outage")
@@ -460,3 +465,96 @@ def test_malformed_attempt_credentials_never_expose_bearers_in_error_logs(tmp_pa
         auth_url="https://auth.example",
     )
     assert secret not in repr(credentials)
+
+
+def test_live_backend_observations_renew_attempt_and_outage_bounds_authority(
+    make_controller, log_client, tmp_path, shared_caller
+):
+    auth, token = shared_caller
+    clock = [time.time()]
+    broker = AttemptAuthority(now=lambda: clock[0])
+    auth.shared_attempts = broker
+    backend = CredentialExecutionBackend()
+    db = ControllerDB(db_dir=tmp_path / "renewal-db")
+    controller = make_controller(db=db, provider=backend, auth=auth)
+    dashboard = _dashboard(controller, db, auth, log_client, tmp_path)
+    request = make_job_request("/research/renewal", task_image="registry.invalid/proof:synthetic")
+    request.client_revision_date = client_revision_date()
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    with TestClient(dashboard.app) as client:
+        submitted = client.post(
+            "/iris.cluster.ControllerService/LaunchJob",
+            json=MessageToDict(request),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert submitted.status_code == 200, submitted.text
+    controller.run_control_tick()
+    uid = backend.launched_credentials[0].attempt_uid
+    for _ in range(4):
+        clock[0] += 20
+        backend.queue_observation("/research/renewal/0", ScriptedObservation(job_pb2.TASK_STATE_RUNNING))
+        controller.run_control_tick()
+        assert broker.deadlines[uid] == clock[0] + 30
+    assert len(backend.launched_credentials) == 1
+    previous_deadline = broker.deadlines[uid]
+    clock[0] += 10
+    controller.run_control_tick()
+    assert broker.deadlines[uid] == previous_deadline
+    backend.queue_observation("/research/renewal/0", ScriptedObservation(job_pb2.TASK_STATE_RUNNING, attempt_id=42))
+    controller.run_control_tick()
+    assert broker.deadlines[uid] == previous_deadline
+    broker.unavailable = True
+    clock[0] += 10
+    backend.queue_observation("/research/renewal/0", ScriptedObservation(job_pb2.TASK_STATE_RUNNING))
+    controller.run_control_tick()
+    assert broker.deadlines[uid] == clock[0] + 10
+    broker.unavailable = False
+    clock[0] += 11
+    controller.run_control_tick()
+    assert broker.deadlines[uid] < clock[0]
+    backend.queue_observation("/research/renewal/0", ScriptedObservation(job_pb2.TASK_STATE_SUCCEEDED))
+    controller.run_control_tick()
+    assert broker.active == {}
+
+
+def test_attempt_client_throttles_live_renewal_requests(tmp_path, monkeypatch):
+    identity = tmp_path / "controller.token"
+    identity.write_text("synthetic-controller")
+    trust = SharedGrantConfig(
+        issuer="https://auth.example", public_keys=("synthetic-public-key",), authority_url="https://auth.example"
+    )
+    client = SharedAttemptClient(trust, SharedAttemptConfig(identity_token_file=identity))
+    endpoints = []
+
+    def post(url, **kwargs):
+        endpoints.append(url)
+        if url.endswith("/retire"):
+            return httpx.Response(200, json={"retired": True})
+        return httpx.Response(
+            200,
+            json={
+                "grant_id": "child",
+                "parent_grant_id": "parent",
+                "actor": "attempt",
+                "attempt_uid": "0123456789abcdef",
+                "access_token": "synthetic-token",
+                "expires_at": time.time() + 59,
+                "auth_url": trust.authority_url,
+            },
+        )
+
+    monkeypatch.setattr("iris.cluster.controller.shared_attempts.requests.post", post)
+    binding = dict(
+        grant_id="parent",
+        resource="/clusters/staging/jobs/research/proof/",
+        task_id="/research/proof/0",
+        attempt_uid="0123456789abcdef",
+    )
+    client.issue(**binding)
+    for _ in range(5):
+        assert client.renew(**binding) is None
+    assert endpoints == [trust.authority_url + "/v1/iris/attempts/credentials"]
+    client.retire(**binding)
+    renewed = client.renew(**binding)
+    assert renewed is not None and renewed.grant_id == "child"
+    assert endpoints[-1] == trust.authority_url + "/v1/iris/attempts/renew"

@@ -185,7 +185,8 @@ class IrisAttemptBroker:
                 parent.actor,
                 actor=binding.actor,
                 permissions=tuple(item.permission() for item in self.config.permissions),
-                expires_at=min(parent.expires_at, self.now() + self.config.max_attempt_ttl),
+                expires_at=parent.expires_at,
+                lease_expires_at=min(parent.expires_at, self.now() + self.config.max_attempt_ttl),
                 parent_id=parent.id,
                 idempotency_key=binding.key,
             )
@@ -204,7 +205,44 @@ class IrisAttemptBroker:
                 "actor": child.actor,
                 "attempt_uid": request.attempt_uid,
                 "access_token": minted["access_token"],
-                "expires_at": child.expires_at,
+                "expires_at": child.credential_expires_at,
+                "auth_url": self.auth_url,
+            }
+
+    def renew(self, identity_token: str, request: IrisAttemptRequest) -> dict:
+        """Accept fresh liveness only from the trusted cluster controller."""
+        deadline = self.now() + self.config.max_attempt_ttl
+        binding = self._binding(identity_token, request)
+        with self.database.serialize(binding.key):
+            self._record(binding, retiring=False)
+            parent = self.authority.store.active(request.grant_id)
+            self.authority.store.authorize(
+                parent.id, actor=parent.actor, service="iris", action="job.submit", resource=request.resource
+            )
+            child = self.authority.store.grant_for_request(parent_id=parent.id, idempotency_key=binding.key)
+            if child is None or child.actor != binding.actor:
+                raise GrantDenied("No issued grant matches this attempt")
+            # Accept each liveness report, but replace the OpenFGA tuple only
+            # after a third of the lease has elapsed to avoid needless churn.
+            if child.credential_expires_at - self.now() <= self.config.max_attempt_ttl * 2 / 3:
+                child = self.authority.store.renew_delegated(
+                    child.id, principal=parent.actor, expires_at=min(parent.expires_at, deadline)
+                )
+            else:
+                child = self.authority.store.active(child.id)
+            minted = self.authority.mint_for(child, audience=self.config.audience)
+            try:
+                self._record(binding, retiring=False)
+            except GrantDenied:
+                self.authority.store.revoke(child.id, principal=child.actor)
+                raise
+            return {
+                "grant_id": child.id,
+                "parent_grant_id": parent.id,
+                "actor": child.actor,
+                "attempt_uid": request.attempt_uid,
+                "access_token": minted["access_token"],
+                "expires_at": child.credential_expires_at,
                 "auth_url": self.auth_url,
             }
 
@@ -226,7 +264,9 @@ def mount_iris_attempts(app: Starlette, broker: IrisAttemptBroker) -> None:
         if token is None:
             raise GrantDenied("Controller authentication is required")
         payload = IrisAttemptRequest.model_validate(await request.json())
-        operation = broker.retire if request.url.path.endswith("/retire") else broker.issue
+        operation = {"retire": broker.retire, "renew": broker.renew, "credentials": broker.issue}[
+            request.url.path.rsplit("/", 1)[1]
+        ]
         result = await run_in_threadpool(operation, token, payload)
         return JSONResponse(result, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
@@ -234,5 +274,6 @@ def mount_iris_attempts(app: Starlette, broker: IrisAttemptBroker) -> None:
         [
             Route("/v1/iris/attempts/credentials", operate, methods=["POST"]),
             Route("/v1/iris/attempts/retire", operate, methods=["POST"]),
+            Route("/v1/iris/attempts/renew", operate, methods=["POST"]),
         ]
     )

@@ -37,6 +37,45 @@ def dns_egress(cidrs: tuple[str, ...]) -> dict:
     }
 
 
+def https_egress_spec(labels: dict[str, str], dns_cidrs: tuple[str, ...], domains: tuple[str, ...]) -> dict:
+    """Route DNS through Cilium so HTTPS follows only the approved names."""
+    if any(
+        len(domain) > 253
+        or "." not in domain
+        or domain.rsplit(".", 1)[-1].isdigit()
+        or any(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) is None for label in domain.split("."))
+        for domain in domains
+    ):
+        raise ValueError("HTTPS egress requires exact lowercase DNS names")
+    dns_ports = [
+        {
+            "ports": [{"port": "53", "protocol": "UDP"}, {"port": "53", "protocol": "TCP"}],
+            "rules": {"dns": [{"matchPattern": "*"}]},
+        }
+    ]
+    return {
+        "endpointSelector": {"matchLabels": labels},
+        "egress": [
+            {"toCIDR": list(dns_cidrs), "toPorts": dns_ports},
+            {
+                "toEndpoints": [
+                    {
+                        "matchLabels": {
+                            "k8s:io.kubernetes.pod.namespace": "kube-system",
+                            "k8s:k8s-app": "node-local-dns",
+                        }
+                    }
+                ],
+                "toPorts": dns_ports,
+            },
+            {
+                "toFQDNs": [{"matchName": domain} for domain in domains],
+                "toPorts": [{"ports": [{"port": "443", "protocol": "TCP"}]}],
+            },
+        ],
+    }
+
+
 @dataclass(frozen=True)
 class OpenBaoArgs:
     namespace: str
@@ -118,15 +157,6 @@ class OpenBao(pulumi.ComponentResource):
             raise ValueError("OpenBao requires explicit operator groups and client/ingress pod selectors")
         if "@sha256:" not in args.image:
             raise ValueError("OpenBao image must be pinned by digest")
-        if any(
-            len(domain) > 253
-            or "." not in domain
-            or domain.rsplit(".", 1)[-1].isdigit()
-            or any(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) is None for label in domain.split("."))
-            for domain in args.https_egress_domains
-        ):
-            raise ValueError("OpenBao HTTPS egress requires exact lowercase DNS names")
-
         namespace = k8s.core.v1.Namespace(
             f"{name}-namespace",
             metadata={
@@ -389,38 +419,12 @@ class OpenBao(pulumi.ComponentResource):
         )
         if args.https_egress_domains:
             # An overlapping L4 DNS allow would bypass Cilium's DNS proxy.
-            dns_ports = [
-                {
-                    "ports": [{"port": "53", "protocol": "UDP"}, {"port": "53", "protocol": "TCP"}],
-                    "rules": {"dns": [{"matchPattern": "*"}]},
-                }
-            ]
             self.https_egress_policy = k8s.apiextensions.CustomResource(
                 f"{name}-https-egress",
                 api_version="cilium.io/v2",
                 kind="CiliumNetworkPolicy",
                 metadata={"name": "openbao-https-egress", "namespace": args.namespace},
-                spec={
-                    "endpointSelector": {"matchLabels": APP_LABELS},
-                    "egress": [
-                        {"toCIDR": list(args.dns_cidrs), "toPorts": dns_ports},
-                        {
-                            "toEndpoints": [
-                                {
-                                    "matchLabels": {
-                                        "k8s:io.kubernetes.pod.namespace": "kube-system",
-                                        "k8s:k8s-app": "node-local-dns",
-                                    }
-                                }
-                            ],
-                            "toPorts": dns_ports,
-                        },
-                        {
-                            "toFQDNs": [{"matchName": domain} for domain in args.https_egress_domains],
-                            "toPorts": [{"ports": [{"port": "443", "protocol": "TCP"}]}],
-                        },
-                    ],
-                },
+                spec=https_egress_spec(APP_LABELS, args.dns_cidrs, args.https_egress_domains),
                 opts=child,
             )
         if args.discovery_mode == "private":

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import pulumi
 import pulumi_kubernetes as k8s
 
-from iac.auth.openbao import APP_LABELS, dns_egress
+from iac.auth.openbao import APP_LABELS, dns_egress, https_egress_spec
 
 BROKER_LABELS = {"app.kubernetes.io/name": "marin-auth"}
 BROKER_PORT = 8090
@@ -50,6 +50,7 @@ class GrantBrokerArgs:
     database_cidrs: tuple[str, ...] = ()
     replicas: int = 1
     database_namespace: str | None = None
+    https_egress_domains: tuple[str, ...] = ()
 
 
 class GrantBroker(pulumi.ComponentResource):
@@ -274,7 +275,7 @@ class GrantBroker(pulumi.ComponentResource):
                         "to": [{"pod_selector": {"match_labels": {"app.kubernetes.io/name": "openfga"}}}],
                         "ports": [{"port": 8443}],
                     },
-                    dns_egress(args.dns_cidrs),
+                    *([] if args.https_egress_domains else [dns_egress(args.dns_cidrs)]),
                     *(
                         [
                             {
@@ -315,6 +316,15 @@ class GrantBroker(pulumi.ComponentResource):
             },
             opts=child,
         )
+        if args.https_egress_domains:
+            self.https_egress_policy = k8s.apiextensions.CustomResource(
+                f"{name}-https-egress",
+                api_version="cilium.io/v2",
+                kind="CiliumNetworkPolicy",
+                metadata={"name": "marin-auth-https-egress", "namespace": args.namespace},
+                spec=https_egress_spec(BROKER_LABELS, args.dns_cidrs, args.https_egress_domains),
+                opts=child,
+            )
         self.address = service.metadata.apply(
             lambda metadata: f"https://{metadata['name']}.{args.namespace}.svc:{BROKER_PORT}"
         )
