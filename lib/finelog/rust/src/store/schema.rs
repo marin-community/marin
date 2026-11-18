@@ -2209,7 +2209,10 @@ mod tests {
             .as_any()
             .downcast_ref::<StringArray>()
             .expect("cluster is a string column");
-        assert_eq!(filled.iter().collect::<Vec<_>>(), vec![Some("marin"), Some("marin")]);
+        assert_eq!(
+            filled.iter().collect::<Vec<_>>(),
+            vec![Some("marin"), Some("marin")]
+        );
     }
 
     #[test]

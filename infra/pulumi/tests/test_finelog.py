@@ -3,6 +3,8 @@
 
 """Finelog Kubernetes safety contracts."""
 
+import dataclasses
+
 from finelog.deploy.config import (
     CidrAuthLayer,
     Deployment,
@@ -75,6 +77,17 @@ def test_finelog_resource_args_reference_secret_without_secret_values() -> None:
         "FINELOG_REMOTE_DIR",
     }
     assert "gcp-secret://" not in str(resources.deployment)
+
+
+def test_finelog_passes_a_configured_cluster_name_to_the_server() -> None:
+    args = _args()
+    named = dataclasses.replace(args, config=dataclasses.replace(args.config, cluster="cw"))
+    resources = finelog_resource_args(named, "image@sha256:digest")
+    assert resources.deployment.spec is not None
+    assert resources.deployment.spec.template.spec is not None
+    env = resources.deployment.spec.template.spec.containers[0].env
+    assert env is not None
+    assert [entry.value for entry in env if entry.name == "FINELOG_CLUSTER"] == ["cw"]
 
 
 def test_finelog_retains_deployment_history_for_rollback() -> None:

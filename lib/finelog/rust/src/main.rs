@@ -504,6 +504,40 @@ mod tests {
     }
 
     #[test]
+    fn a_local_cluster_name_must_match_the_forwarding_cluster() {
+        let parsed = args(&[
+            "--log-dir",
+            "/tmp/x",
+            "--signing-key",
+            "unused",
+            "--forwarding",
+            r#"{"target":"https://hub","cluster":"cw-rno2a"}"#,
+            "--cluster",
+            "cw-us-east-02a",
+        ]);
+        let store = Arc::new(
+            Store::open(
+                None,
+                String::new(),
+                DEFAULT_INDEX_CACHE_MB,
+                ServeMode::Live,
+                TelemetryRootWriteMode::SemanticOnly,
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+
+        let error = build_forwarder(&parsed, store)
+            .err()
+            .expect("mismatch refused");
+        assert!(
+            error.contains("differs from the forwarding cluster"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn shadow_mode_needs_a_local_directory_to_rehearse() {
         let parsed = args(&["--mode", "shadow"]);
 

@@ -1569,7 +1569,10 @@ async fn a_store_that_names_its_cluster_stamps_its_own_rows_and_still_forwards_t
         Some(SOURCE_CLUSTER.to_string()),
     ];
     assert_eq!(hub_column(&fx.source, "events", "cluster").await, own);
-    assert_eq!(hub_column(fx.target_store(), "events", "cluster").await, own);
+    assert_eq!(
+        hub_column(fx.target_store(), "events", "cluster").await,
+        own
+    );
 
     fx.source_client
         .push_logs(
