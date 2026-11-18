@@ -21,7 +21,7 @@ datasets:
     sha256: 0064c4384975ab758a89d27533a32c958192ff4c06f12ffd91354aa6289934e0
 sft:
   path: sft.yaml
-  sha256: 266b1acb26f79ee921c59dbe9080f51f2cf3eae9bed381baf473c6c0f33338e5
+  sha256: 859428f82b1ff42598b7a2b9428bd2fd334374075bbb9b5bc13a06ab8babce6b
 initializer:
   path: initializer.yaml
   sha256: e08ba272421bac7fdc72750d89d46e938ed84f212677527cdddd686ca4240ca5
