@@ -52,6 +52,8 @@ _UUID_FIELD = "uuid"
 #   official_tests/failed_rows.parquet: the final program fails the official Codeforces tests of its problem in
 #     every run.
 #   failed_rows.parquet (text_to_sql): the final SQL fails on the database engine of its dialect.
+#   schema_not_loaded.parquet (text_to_sql): the schema script in the prompt does not load on the database engine
+#     of its dialect, so the final SQL cannot be run.
 COMPETITIVE_PROGRAMMING_EXCLUSION_REVISION = "d2cb335e55ed17de4278f2c402097938d03bcd4e"
 _COMPETITIVE_PROGRAMMING_AUDIT_FOLDER = f"pinned_{_COMPETITIVE_PROGRAMMING_REVISION[:8]}"
 COMPETITIVE_PROGRAMMING_EXCLUSION_FILES: Mapping[str, tuple[str, ...]] = MappingProxyType(
@@ -64,7 +66,10 @@ COMPETITIVE_PROGRAMMING_EXCLUSION_FILES: Mapping[str, tuple[str, ...]] = Mapping
             f"comp_prog_python/{_COMPETITIVE_PROGRAMMING_AUDIT_FOLDER}/exclusions.parquet",
             "comp_prog_python/official_tests/failed_rows.parquet",
         ),
-        _TEXT_TO_SQL_PARTITION: (f"comp_prog_text_to_sql/{_COMPETITIVE_PROGRAMMING_AUDIT_FOLDER}/failed_rows.parquet",),
+        _TEXT_TO_SQL_PARTITION: (
+            f"comp_prog_text_to_sql/{_COMPETITIVE_PROGRAMMING_AUDIT_FOLDER}/failed_rows.parquet",
+            f"comp_prog_text_to_sql/{_COMPETITIVE_PROGRAMMING_AUDIT_FOLDER}/schema_not_loaded.parquet",
+        ),
     }
 )
 # The source response uses separate reasoning_content, so this wire-format request conflicts with Marin's template.
