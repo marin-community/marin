@@ -8,7 +8,6 @@ job:
   - kwargs:
       max_turns: 32
       model_info:
-        max_input_tokens: 32768
         max_output_tokens: 8192
       temperature: 1.0
     name: terminus-2
@@ -23,11 +22,9 @@ job:
   n_concurrent_trials: 30
   retry:
     include_exceptions:
-    - APIConnectionError
-    - APITimeoutError
-    - SandboxBuildFailedError
-    - ContainerRegistryThrottledError
-    - DaytonaProcessError
+    - PhaseCancellationError
+    - TimeoutError
+    - DaytonaConflictError
     max_retries: 1
   trial_attempt_timeout_sec: 1800
   verifier:
@@ -68,6 +65,11 @@ cohorts:
   - datasets/bfcl_parity/bfcl-parallel-147
   - datasets/bfcl_parity/bfcl-simple-python-2
 - name: swebench-verified
+  job:
+    # The 30 pinned tasks declare a 3,000-second verifier timeout.
+    verifier:
+      override_timeout_sec: 3000
+    trial_attempt_timeout_sec: 4500
   git_url: https://github.com/laude-institute/harbor-datasets.git
   git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
   paths:

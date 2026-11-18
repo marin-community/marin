@@ -226,20 +226,48 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
 
 
 def test_harbor_coverage_controls_best_checkpoint(selection, tmp_path):
-    step = snowball.build_run(snowball_model.SNOWBALL.by_name["train-long-harbor"], table=snowball_model.SNOWBALL).runs[
-        0
-    ]
-    path = tmp_path / "harbor.yaml"
-    path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+    paths = []
+    for index, settings in enumerate(((), ("context_budget.serving_window_tokens=28672",))):
+        step = snowball.build_run(
+            snowball_model.SNOWBALL.by_name["train-long-harbor"], table=snowball_model.SNOWBALL, settings=settings
+        ).runs[0]
+        path = tmp_path / f"harbor-{index}.yaml"
+        path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+        paths.append(str(path))
     selected = native_json("--isolated", "--group", "harbor-test")(
         """
 import asyncio, json, sys
 from pathlib import Path
 from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
+from harbor.models.job.config import JobConfig
+from omegaconf import OmegaConf
 from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
 from skyrl_train.callbacks.builtin import HarborEvaluationCallback, create_callbacks_from_config
-config = load_launch_config(sys.argv[1])
+config, changed = (load_launch_config(path) for path in map(Path, sys.argv[1:]))
+windows = []
+for launch in (config, changed):
+    window = launch.skyrl.generator.engine_init_kwargs.max_model_len
+    windows.append(window)
+    harbor = next(row for row in launch.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
+    for cohort in harbor.cohorts:
+        job = JobConfig.model_validate(OmegaConf.to_container(cohort.job, resolve=True))
+        model_info = job.agents[0].kwargs["model_info"]
+        assert model_info["max_input_tokens"] + model_info["max_output_tokens"] == window
+        assert model_info["max_input_tokens"] > 0
+        assert job.retry.max_retries == 1
+        assert job.retry.include_exceptions == {"PhaseCancellationError", "TimeoutError", "DaytonaConflictError"}
+        if cohort.name == "swebench-verified":
+            assert job.verifier.override_timeout_sec == 3000
+            agent = job.agents[0]
+            assert agent.override_setup_timeout_sec + agent.override_timeout_sec + 3000 < job.trial_attempt_timeout_sec
+        else:
+            assert job.verifier.override_timeout_sec == 300
+            assert job.trial_attempt_timeout_sec == 1800
+        assert job.n_concurrent_trials == len(job.tasks)
+        attempt_budget = job.trial_attempt_timeout_sec + job.trial_cleanup_grace_sec
+        assert 2 * attempt_budget + job.retry.min_wait_sec < harbor.timeout
+assert windows[0] != windows[1]
 selected = []
 for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)), (100, (26, 30, 30)))):
     directory = Path(sys.argv[1]).parent / f"coverage-{index}"
@@ -361,7 +389,7 @@ os.environ["DAYTONA_EVAL_API_KEY"] = "test-eval-credential"
 asyncio.run(check_runtime_handoff())
 print(json.dumps(selected))
 """,
-        [str(path)],
+        paths,
     )
     assert selected == [True, False, False]
 
@@ -375,7 +403,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         "data-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2"},
         "speed-long": {"2026.11.11.1": "cd0a5f4e", "2026.11.17.1": "f29155cc"},
         "train-long": {"2026.11.11.1": "4945b701", "2026.11.17.1": "b411c765"},
-        "train-long-harbor": {"2026.11.17.2": "5a71e7e8"},
+        "train-long-harbor": {"2026.11.17.2": "5a71e7e8", "2026.11.18.1": "7c3c9478"},
     }
     configs = assert_revisioned_native_configs(
         snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch

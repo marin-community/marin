@@ -344,7 +344,7 @@ async def test_late_relay_failure_stops_active_trial_without_cancelling_neighbor
 
 
 @pytest.mark.parametrize("failure", ["collection", "collection_deadline", "teardown"])
-async def test_runtime_failure_cannot_publish_a_success(tmp_path, monkeypatch, failure):
+async def test_runtime_failure_preserves_reward_only_after_verification(tmp_path, monkeypatch, failure):
     factory = ProcessTaskFactory(tmp_path / "guest")
     monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
     trial = await Trial.create(
@@ -370,17 +370,17 @@ async def test_runtime_failure_cannot_publish_a_success(tmp_path, monkeypatch, f
         monkeypatch.setattr(trial.agent_environment, "stop", failed_stop)
 
     result = await trial.run()
-
-    assert result.verifier_result is None
-    assert (
-        error_category(result.exception_info.exception_type)
-        is ErrorCategory.INFRASTRUCTURE
-    )
+    stored = TrialResult.model_validate_json(trial.paths.result_path.read_text())
     assert Job._is_resume_retryable_result(result)
-    assert (
-        "TimeoutError" if failure == "collection_deadline" else "RuntimeError"
-    ) in result.exception_info.exception_traceback
     if failure == "teardown":
-        assert result.completion is None
+        assert result.verifier_result.rewards == stored.verifier_result.rewards == {"reward": 1.0}
+        assert result.exception_info.exception_type == stored.exception_info.exception_type == "AgentTimeoutError"
+        assert result.completion is None and stored.completion is None
+        assert [error.exception_type for error in stored.secondary_exception_info] == ["EnvironmentStopError"]
     else:
+        assert result.verifier_result is None and stored.verifier_result is None
+        assert error_category(result.exception_info.exception_type) is ErrorCategory.INFRASTRUCTURE
+        assert (
+            "TimeoutError" if failure == "collection_deadline" else "RuntimeError"
+        ) in result.exception_info.exception_traceback
         assert result.completion is not None

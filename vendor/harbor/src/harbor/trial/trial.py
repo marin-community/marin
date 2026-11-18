@@ -343,9 +343,18 @@ class Trial(ABC):
                         except BaseException as cleanup_error:
                             if not isinstance(cleanup_error, asyncio.CancelledError):
                                 self._environment_cleanup_failed = True
-                            if primary is None and cleanup_failure is None:
+                            verifier = self.result.verifier_result
+                            preserve_reward = (
+                                isinstance(cleanup_error, Exception)
+                                and not isinstance(cleanup_error, ArtifactPersistenceError)
+                                and verifier is not None
+                                and bool(verifier.rewards)
+                            )
+                            if primary is None and cleanup_failure is None and not preserve_reward:
                                 cleanup_failure = cleanup_error
                             else:
+                                if preserve_reward:
+                                    self.logger.warning("Cleanup failed after verification", exc_info=True)
                                 self.result.secondary_exception_info.append(
                                     ExceptionInfo.from_exception(cleanup_error)
                                 )
@@ -432,18 +441,25 @@ class Trial(ABC):
             or self._pending_cleanup_tasks
         ):
             self.result.completion = None
-            self.result.verifier_result = None
-            prior = self.result.exception_info
-            if prior is None or error_category(prior.exception_type) in (
-                ErrorCategory.AGENT,
-                ErrorCategory.PASSTHROUGH,
+            verifier = self.result.verifier_result
+            if (
+                self._artifact_persistence_failure is not None
+                or not self._environment_cleanup_failed
+                or verifier is None
+                or not verifier.rewards
             ):
-                await self._record_exception(
-                    self._artifact_persistence_failure
-                    or PhaseCancellationError(
-                        "A cancelled trial phase did not finish before finalization"
+                self.result.verifier_result = None
+                prior = self.result.exception_info
+                if prior is None or error_category(prior.exception_type) in (
+                    ErrorCategory.AGENT,
+                    ErrorCategory.PASSTHROUGH,
+                ):
+                    await self._record_exception(
+                        self._artifact_persistence_failure
+                        or PhaseCancellationError(
+                            "A cancelled trial phase did not finish before finalization"
+                        )
                     )
-                )
         elif (
             self._is_agent_environment_stopped and not self._environment_cleanup_failed
         ):

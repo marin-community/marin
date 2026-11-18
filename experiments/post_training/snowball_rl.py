@@ -404,7 +404,7 @@ def _harbor_evaluation() -> HarborEvaluationCallback:
     config = yaml.safe_load(Path(__file__).with_name("rl_harbor.yaml").read_text())
     cohorts = []
     for cohort in config["cohorts"]:
-        job = deepcopy(config["job"])
+        job = deepcopy({**config["job"], **cohort.get("job", {})})
         job["tasks"] = [
             {
                 "git_url": cohort["git_url"],
@@ -592,7 +592,7 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",
-        revision="2026.11.17.2",
+        revision="2026.11.18.1",
         harbor=_harbor_evaluation(),
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
         recipe=replace(
