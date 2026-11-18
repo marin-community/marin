@@ -111,7 +111,8 @@ A human then decides what happens. Never work around a refusal.
    - **If it refuses because of the priority grant** (a grant below the Track's band), or Iris refuses the band
      (`priority X not allowed for user Y`): run the escalate command it prints and stop. Never relaunch at a lower
      band yourself; a maintainer grants the band in Iris user budgets or re-queues without the grant.
-   - **If it prints `held:`:** the launch would pass the node cap (set on the admin page) or the idea's node grant.
+   - **If it prints `held:`:** the launch would pass its pool's node cap (speedrun, or every other Track; both set on
+     the admin page) or the idea's node grant.
      A ladder is checked as a whole, so its rungs launch together or not at all. Stop working on this idea; it stays
      approved, and a later session reruns this step. Running it again resumes where it stopped.
 
@@ -225,9 +226,9 @@ trials (`comment_url`). Nothing is posted on #9451.
         - Variant slower (Δt > +1%): stage 2 only after a stage-1 win, since fewer steps can't turn noise or a
           loss into a win. Otherwise final: "<verdict> at equal data; slower, equal time not run".
         - Variant faster (Δt < −1%): stage 2 always, since it gets more steps at equal time.
-     3. **Timing probe:** a 150-step variant run that measures its s/step.
-     4. **Equal time:** the variant at 480 s ÷ its s/step steps, against the equal-data control. This verdict is
-        final.
+     3. **Equal time:** the variant at 480 s ÷ its s/step steps, against the equal-data control, launched as soon as
+        stage 1 is recorded. Its s/step is the median the equal-data run measured over its ~3,000 steps (no separate
+        timing probe). This verdict is final.
    - Other Tracks have one stage: equal data.
    - **Expect**, at each recorded stage:
      - the registry entry and the trial's analysis report pushed together
@@ -435,8 +436,8 @@ ladder finished before this rule.
 
 **Sweep.** A sweep (`--sweep-model-set` / `--sweep-opt-set` on `new-idea`) runs one value per spec, with the value's
 number in its id (`runs/X0229v2.yaml`, `belay-X0229v2-seed0`), all on one Track. The first value launches the
-control and the rest reuse it. Each value goes through its Track's stages on its own (on `speedrun`, its own timing
-probe and equal-time run when its step time calls for one) and records its own trial on the one `X####` entry and
+control and the rest reuse it. Each value goes through its Track's stages on its own (on `speedrun`, its own equal-time
+run when its step time calls for one) and records its own trial on the one `X####` entry and
 thread. The idea stays running until no value has a live run or an unrecorded trial; the last value's `run-finished`
 judges the sweep by its best value (a win if any value won) and names that value in the status.
 
@@ -469,7 +470,7 @@ metric and rule. Nothing else spells out a launch.
 | Weekly base | Must contain `base_branch`. Production: `marin_belay_v1_recipe`. Demo: `marin_belay_v1_loomdemo` |
 | Registry branch | Demo: `marin_belay_v1_registry_demo`. The demo never touches `marin_belay_v1_registry` |
 | Runs | Seed 0; cluster, priority and nodes per Track (`B tracks`). An approver may grant an idea a higher Iris priority (`batch` < `interactive` < `production`); its runs then launch at that band in every stage and study run, and the band used is on each trial (`priority`) and in the spec's `launched:` commands. Analysis CPU jobs stay at `batch` |
-| Budget | A soft cap on nodes across all Belay runs, set on the admin page (default 8); a maintainer may grant one idea more nodes at approval. Sessions read both from the page and never change them |
+| Budget | Two soft caps on nodes held by Belay runs, set on the admin page (default 8 each): one for speedrun runs, one for every other Track's, so speedruns never wait behind ladders. A maintainer may grant one idea more nodes at approval. Sessions read these from the page and never change them |
 | Posts | The idea's thread on the Belay page's agent log. Nothing is posted on #9514: `sync` adds 👀 to a #9514 suggestion once a maintainer approves or declines it (only when an approver turns GitHub posting on); its result is on the public Status page |
 
 ## 10. Known limits

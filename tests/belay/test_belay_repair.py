@@ -6,7 +6,15 @@ from pathlib import Path
 import yaml
 
 from experiments.belay.code_change import config_changes
-from experiments.belay.submit import FAILED, parse_spec, repair_key, repairs_used, run_id, spec_with_repair
+from experiments.belay.submit import (
+    FAILED,
+    next_stage_runs,
+    parse_spec,
+    repair_key,
+    repairs_used,
+    run_id,
+    spec_with_repair,
+)
 
 SPEC = """experiment: X0236
 track: speedrun
@@ -61,3 +69,12 @@ def test_a_repair_may_not_touch_the_config_but_needs_no_new_flag() -> None:
     changed = {"GrugModelConfig": {**before["GrugModelConfig"], "qk_mult": "1.0"}}
     assert config_changes(before, added) == ["GrugModelConfig.extra"]
     assert config_changes(before, changed) == ["GrugModelConfig.qk_mult"]
+
+
+def test_the_equal_time_run_repeats_the_variants_settings_at_the_new_step_count() -> None:
+    spec = parse_spec(SPEC.replace("seed0-r1", "seed0"))
+    runs = next_stage_runs(spec, 2768, "")
+    assert list(runs) == ["seed0-t"]
+    timed = runs["seed0-t"]
+    assert timed["stage"] == "time" and timed["seed"] == 0
+    assert timed["flags"] == ["--model-set", "kda_local_attn_fused_window=64", "--num-steps", "2768"]
