@@ -45,12 +45,38 @@ const facets = computed<Facet[]>(() => [
   { key: 'reporter', label: 'Reporter', options: distinct(reports.value.map((r) => r.reporter)) },
 ])
 
-const shown = computed(() =>
-  reports.value.filter((r) =>
+// Search and sort order live in the URL too, replacing the history entry so typing is one step back.
+function replaceQuery(key: string, value: string) {
+  const query = { ...route.query }
+  if (value) query[key] = value
+  else delete query[key]
+  router.replace({ path: '/reports', query })
+}
+
+const search = computed({
+  get: () => queryValue('q'),
+  set: (value: string) => replaceQuery('q', value),
+})
+const oldestFirst = computed({
+  get: () => queryValue('order') === 'oldest',
+  set: (value: boolean) => replaceQuery('order', value ? 'oldest' : ''),
+})
+
+function matchesSearch(r: ReportSummary, terms: string[]): boolean {
+  const text = `${r.description}\n${r.model}\n${r.reporter}`.toLowerCase()
+  return terms.every((term) => text.includes(term))
+}
+
+const shown = computed(() => {
+  const terms = search.value.toLowerCase().split(/\s+/).filter(Boolean)
+  const matching = reports.value.filter((r) =>
     (!selected.value.model || r.model === selected.value.model) &&
-    (!selected.value.reporter || r.reporter === selected.value.reporter),
-  ),
-)
+    (!selected.value.reporter || r.reporter === selected.value.reporter) &&
+    matchesSearch(r, terms),
+  )
+  // The API returns newest first.
+  return oldestFirst.value ? [...matching].reverse() : matching
+})
 
 const resultLabel = computed(() => {
   if (loading.value && !data.value) return 'Loading…'
@@ -69,7 +95,20 @@ const resultLabel = computed(() => {
       appear after the next ingest pass, within about 10 minutes.
     </p>
 
-    <FilterBar v-model="selected" :facets="facets" :result-label="resultLabel" class="mb-4" />
+    <FilterBar v-model="selected" :facets="facets" :result-label="resultLabel" class="mb-4">
+      <template #trailing>
+        <label class="flex flex-col text-xs text-text-secondary gap-1 flex-1 basis-64">
+          Search
+          <input
+            :value="search"
+            type="search"
+            placeholder="Words in the description, model, or reporter"
+            class="rounded border border-surface-border bg-surface px-2 py-1 text-sm"
+            @input="search = ($event.target as HTMLInputElement).value"
+          />
+        </label>
+      </template>
+    </FilterBar>
 
     <div v-if="error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2 mb-4">
       {{ error }}
@@ -83,7 +122,13 @@ const resultLabel = computed(() => {
       <table class="w-full border-collapse text-sm">
         <thead>
           <tr class="border-b border-surface-border bg-surface-raised text-xs font-semibold uppercase tracking-wider text-text-secondary">
-            <th class="px-3 py-2 text-left">Reported</th>
+            <th class="px-3 py-2 text-left" :aria-sort="oldestFirst ? 'ascending' : 'descending'">
+              <button
+                class="inline-flex items-center gap-1 uppercase tracking-wider hover:text-text"
+                :title="oldestFirst ? 'Showing oldest first; click for newest first' : 'Showing newest first; click for oldest first'"
+                @click="oldestFirst = !oldestFirst"
+              >Reported {{ oldestFirst ? '↑' : '↓' }}</button>
+            </th>
             <th class="px-3 py-2 text-left">Model</th>
             <th class="px-3 py-2 text-left">Reporter</th>
             <th class="px-3 py-2 text-left">What went wrong</th>
