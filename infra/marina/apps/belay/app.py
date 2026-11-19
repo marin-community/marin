@@ -69,6 +69,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         {"github": "armorfaye", "since": "2026-11-17T02:30:00+00:00"},
         {"github": "WhenWen", "since": "2026-11-17T02:30:00+00:00"},
     ],
+    # The identity GitHub Actions uses to push each new or edited #9514 comment as it is posted (the belay-intake
+    # workflow): it may call only the intake endpoint.
+    "intake_identities": ["belay-intake@hai-gcp-models.iam.gserviceaccount.com"],
     # Marina identities of the Belay sessions (Loom's VM service account): they may call the agent endpoints.
     "session_identities": ["loom-vm@hai-gcp-models.iam.gserviceaccount.com"],
     # When set, approvers must also hold Marina's admin role.
@@ -693,6 +696,27 @@ DETAILS = re.compile(r"<details\b[^>]*>(.*?)</details>", re.DOTALL | re.IGNORECA
 INVISIBLE = re.compile("[\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
 
 
+# How many of #9514's newest suggestions the intake snapshot (the admin page's panel) keeps.
+INTAKE_SNAPSHOT_SIZE = 30
+# Accounts whose #9514 comments are not suggestions: Belay's own bot and Loom's (as the watch's relay skips them).
+INTAKE_BOTS = frozenset({"marin-belay-bot", "loom-oa-dev[bot]"})
+
+
+def record_pushed_comment(conn: Connection, comment: IntakeComment) -> list[int]:
+    """A #9514 comment GitHub Actions pushed as it was posted or edited: put it at the head of the intake snapshot
+    (replacing an earlier copy) and auto-approve it at once if a trusted submitter wrote it. Returns the approved idea
+    ids. The watch's relay still refreshes the whole snapshot, as a backstop."""
+    if comment.url != f"{INTAKE_URL_PREFIX}{comment.comment_id}":
+        raise HTTPException(422, f"{comment.url} is not #9514 comment {comment.comment_id}")
+    if comment.author in INTAKE_BOTS or comment.author.endswith("[bot]"):
+        return []
+    rows = _rows(conn, "SELECT comments FROM intake_snapshot WHERE id = 1")
+    kept = [IntakeComment(**c) for c in (rows[0]["comments"] if rows else []) if c["comment_id"] != comment.comment_id]
+    newest = sorted([comment, *kept], key=lambda c: c.posted_at, reverse=True)[:INTAKE_SNAPSHOT_SIZE]
+    store_intake_snapshot(conn, IntakeSnapshot(comments=newest))
+    return auto_approve_trusted(conn, [comment])
+
+
 def store_intake_snapshot(conn: Connection, snapshot: IntakeSnapshot) -> None:
     """Replace the watch's #9514 snapshot."""
     conn.execute(
@@ -1310,6 +1334,13 @@ def create_api(services: Services) -> RegisteredApi:
                 401, f"Belay agent endpoints need a Belay session identity, an approver, or {TOKEN_HEADER}."
             )
 
+    def intake_caller() -> None:
+        with engine.connect() as conn:
+            allowed = set(_settings(conn)["intake_identities"])
+        identity = get_verified_identity()
+        if identity is None or identity.user_id not in allowed:
+            raise HTTPException(401, "Only the belay-intake GitHub workflow's identity may push #9514 comments.")
+
     def session(
         x_belay_session: str | None = Header(default=None), x_belay_session_secret: str | None = Header(default=None)
     ) -> str:
@@ -1318,6 +1349,7 @@ def create_api(services: Services) -> RegisteredApi:
             return require_session(conn, x_belay_session, x_belay_session_secret)
 
     public = APIRouter(prefix="/public")
+    pushes = APIRouter(prefix="/intake", dependencies=[Depends(intake_caller)])
     admin = APIRouter(prefix="/admin", dependencies=[Depends(approver)])
     agent = APIRouter(prefix="/agent", dependencies=[Depends(service)])
 
@@ -1645,6 +1677,12 @@ def create_api(services: Services) -> RegisteredApi:
             raise HTTPException(404, f"no idea {idea_id}")
         return {"updated": ", ".join(fields)}
 
+    @pushes.post("/comments")
+    def push_comment(comment: IntakeComment) -> dict[str, list[int]]:
+        """One #9514 comment, pushed by the belay-intake workflow the moment it is posted or edited."""
+        with engine.begin() as conn:
+            return {"approved": record_pushed_comment(conn, comment)}
+
     @agent.post("/intake")
     def upload_intake(snapshot: IntakeSnapshot) -> dict[str, int]:
         with engine.begin() as conn:
@@ -1694,7 +1732,7 @@ def create_api(services: Services) -> RegisteredApi:
             expect_run(conn, expectation)
         return {"name": expectation.name}
 
-    for router in (public, admin, agent):
+    for router in (public, admin, agent, pushes):
         api.include_router(router)
 
     return registered_api(api)

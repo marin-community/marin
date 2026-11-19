@@ -9,6 +9,7 @@ import json
 from collections.abc import Iterator
 from unittest.mock import ANY
 
+import belay.app
 import pytest
 from belay.app import (
     DEFAULT_SETTINGS,
@@ -41,6 +42,7 @@ from belay.app import (
     offer_pending_work,
     reap_sessions,
     record_intake_comment,
+    record_pushed_comment,
     registered_comments,
     requeue_idea,
     requeueable,
@@ -670,3 +672,35 @@ def test_a_trusted_login_keeps_its_time_and_a_new_one_starts_now() -> None:
     assert [e["github"] for e in entries] == ["ArmorFaye", "WhenWen"]
     assert entries[0]["since"] == "2026-11-17T02:30:00+00:00"
     assert entries[1]["since"] > "2026-11-17"
+
+
+def test_a_pushed_trusted_comment_is_approved_at_once_and_heads_the_intake_panel(conn) -> None:
+    pushed = trusted_comment(1)
+    assert len(record_pushed_comment(conn, pushed)) == 1
+    assert intake_for_review(conn)["comments"][0]["comment_id"] == pushed.comment_id
+    assert record_pushed_comment(conn, pushed) == []  # GitHub's redelivery, or the edit event: nothing new
+    assert approved_events(conn) == 1
+
+
+def test_a_pushed_comment_from_a_bot_or_with_a_foreign_url_is_refused(conn) -> None:
+    assert record_pushed_comment(conn, trusted_comment(1, author="marin-belay-bot")) == []
+    moved = trusted_comment(2).model_copy(
+        update={"url": "https://github.com/marin-community/marin/issues/1#issuecomment-102"}
+    )
+    with pytest.raises(HTTPException):
+        record_pushed_comment(conn, moved)
+
+
+class _Identity:
+    def __init__(self, user_id: str) -> None:
+        self.user_id = user_id
+
+
+def test_only_the_intake_workflow_identity_may_push_comments(api: TestClient, monkeypatch) -> None:
+    body = json.loads(trusted_comment(1, author="someone").model_dump_json())
+    assert api.post("/intake/comments", json=body).status_code == 401
+    monkeypatch.setattr(belay.app, "get_verified_identity", lambda: _Identity("someone@example.com"))
+    assert api.post("/intake/comments", json=body).status_code == 401
+    workflow = _Identity("belay-intake@hai-gcp-models.iam.gserviceaccount.com")
+    monkeypatch.setattr(belay.app, "get_verified_identity", lambda: workflow)
+    assert api.post("/intake/comments", json=body).json() == {"approved": []}  # not a trusted submitter
