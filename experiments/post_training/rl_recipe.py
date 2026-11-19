@@ -20,7 +20,7 @@ from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact, is_mutable_version, read_record, result_type_name, validate_path_segment
 from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity
+from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
@@ -35,7 +35,6 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME, read_skyrl_launch_config
-from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -59,21 +58,6 @@ from experiments.post_training.task_curation.selection import (
 
 REPO_ROOT = find_project_root(Path(__file__))
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
-GATE_INPUTS_FILENAME = "gate_inputs.json"
-
-
-class GateInputs(BaseModel, frozen=True):
-    preset_name: str
-    settings: tuple[str, ...] = ()
-    tasks: str | None = None
-    init: StoredInitializer | None = None
-    resume: presets.StoredResume | None = None
-    requirements: tuple[str, ...] = ()
-
-
-def read_gate_inputs(run_output: str) -> GateInputs:
-    """Read the typed RL inputs saved beside a native launch receipt."""
-    return GateInputs.model_validate_json((StoragePath(run_output) / GATE_INPUTS_FILENAME).read_text())
 
 
 def override_document(settings: tuple[str, ...]) -> dict:
@@ -302,36 +286,12 @@ def published_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
             f"no committed native checkpoint for {name}@{version}. "
             "Checkpoint availability follows the source run's retention period."
         )
-    recorded = config.get("inputs", {}).get("model", {})
-    recorded_identity = recorded.get("identity")
-    try:
-        inputs = read_gate_inputs(output)
-    except FileNotFoundError:
-        inputs = GateInputs(preset_name=preset.name)
-    model = None
-    inherited = inputs.resume.model if inputs.resume is not None else None
-    if inputs.init is not None or inherited is not None:
-        model = ResolvedModelLocator(**{field.name: recorded[field.name] for field in fields(ResolvedModelLocator)})
-        if inherited is not None:
-            matches = inherited == model
-        else:
-            assert inputs.init is not None
-            fingerprint = fingerprint_hash(inputs.init.fingerprint_payload)
-            matches = model.identity == f"{inputs.init.artifact_name}@{inputs.init.artifact_version}:{fingerprint}"
-        if not matches:
-            raise click.BadParameter(f"{value} has a starting model that differs from its saved inputs")
-    elif recorded_identity is not None:
-        default = preset.model
-        expected = {
-            "identity": artifact_identity(default.step),
-            "tokenizer_uri": default.tokenizer_uri,
-            "tokenizer_revision": default.tokenizer_revision,
-        }
-        if default.relative_path is not None:
-            root = default.step.path(artifact_prefix(preset.recipe.layout.cluster))
-            expected["uri"] = prefix_join(root, default.relative_path)
-        if any(recorded.get(key) != value for key, value in expected.items()):
-            raise click.BadParameter(f"{value} has a starting model that differs from the preset's default")
+    recorded = config.get("inputs", {}).get("model")
+    model = (
+        ResolvedModelLocator(**{field.name: recorded[field.name] for field in fields(ResolvedModelLocator)})
+        if recorded
+        else None
+    )
     return presets.StoredResume(
         artifact_name=name, artifact_version=version, step=step, checkpoint=str(checkpoint), model=model
     )

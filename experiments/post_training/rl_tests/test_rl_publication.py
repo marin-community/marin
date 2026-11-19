@@ -37,7 +37,7 @@ from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_publication as publication
 from experiments.post_training import rl_recipe as recipe
 from experiments.post_training import snowball_rl as snowball_model
-from experiments.post_training.rl_recipe import GATE_INPUTS_FILENAME, GateInputs
+from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInputs
 from experiments.post_training.rl_tests.fixtures import (
     append_metrics,
     copy_evaluations,

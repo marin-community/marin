@@ -23,7 +23,7 @@ from skyrlrecipe.documents import set_path
 from experiments.post_training import rl, rl_gate, rl_recipe
 from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_presets import BatchMix
-from experiments.post_training.rl_recipe import GATE_INPUTS_FILENAME, GateInputs, read_gate_inputs
+from experiments.post_training.rl_scoring import read_gate_inputs
 from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY, write_published_artifact
 from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs
 from experiments.post_training.snowball_rl import SNOWBALL
@@ -250,26 +250,40 @@ def stored_checkpoint(tmp_path):
     return checkpoint
 
 
-def test_resume_pins_the_native_checkpoint(selection, tmp_path, stored_checkpoint):
+@pytest.mark.parametrize("recorded_model", (False, True), ids=("legacy", "changed-default"))
+def test_resume_pins_the_native_checkpoint(selection, tmp_path, stored_checkpoint, recorded_model):
+    table = SNOWBALL
     preset = SNOWBALL.by_name["train-long"]
+    original_model = preset.model.step
     checkpoint = stored_checkpoint
     with pytest.raises(click.BadParameter, match="source run's retention period"):
         rl_recipe.published_checkpoint("checkpoints/previous@2026.11.19.1", preset=preset)
     (checkpoint / "trainer_state.pt").write_bytes(b"trainer checkpoint")
+    if recorded_model:
+        (original,) = rl.build_run(preset, table=table).runs
+        source_config = materialized_config(original, str(tmp_path))
+        source_model = yaml.safe_load(source_config.launch_config_yaml)["inputs"]["model"]
+        launch = checkpoint.parent.parent / RESOLVED_LAUNCH_FILENAME
+        document = yaml.safe_load(launch.read_text())
+        document["config"]["inputs"] = {"model": source_model}
+        launch.write_text(yaml.safe_dump(document))
+        changed = ArtifactStep.adopt("models/changed-default", preset.revision, "gs://fixture-models/changed-default")
+        preset = replace(preset, model=replace(preset.model, step=changed))
+        table = replace(table, presets=(preset,))
     resume = rl_recipe.published_checkpoint("checkpoints/previous@2026.11.19.1", preset=preset)
-    resumed = rl.build_run(preset, table=SNOWBALL, resume=resume)
+    resumed = rl.build_run(preset, table=table, resume=resume)
     config = materialized_config(resumed.runs[0], str(tmp_path)).launch_config_yaml
     native_inputs = yaml.safe_load(config)["inputs"]
     source = native_inputs["starting_checkpoint"]
     assert source["uri"] == str(checkpoint)
     assert "step-4@2026.11.19.1" in source["identity"]
-    assert native_inputs["model"]["uri"] == preset.model.step.path(str(tmp_path))
+    assert native_inputs["model"]["uri"] == original_model.path(str(tmp_path))
     args = ("--preset", preset.name, "--version", preset.revision, "--resume", "checkpoints/previous@2026.11.19.1")
-    planned = CliRunner().invoke(rl.command(SNOWBALL, argv=args), args)
+    planned = CliRunner().invoke(rl.command(table, argv=args), args)
     assert planned.exit_code == 0 and "-resume-step-4" in planned.output, (planned.output, planned.exception)
-    assert f"  model: {artifact_identity(preset.model.step)}\n" in planned.output
+    assert f"  model: {artifact_identity(original_model)}\n" in planned.output
     with pytest.raises(click.BadParameter, match="cannot be combined with --init"):
-        rl.build_run(preset, table=SNOWBALL, resume=resume, init=preset.model)
+        rl.build_run(preset, table=table, resume=resume, init=preset.model)
 
 
 @pytest.fixture
@@ -341,29 +355,10 @@ def test_resume_inherits_the_source_runs_initializer(
         4,
     )
 
-    if table is SNOWBALL:
-        # Compare the run name for the same source and step with a default-model launch.
-        source_model["identity"] = artifact_identity(preset.model.step)
-        launch_file.write_text(yaml.safe_dump({"config": source_launch}))
-        refused = runner.invoke(rl.command(table, argv=resume_args), resume_args)
-        assert refused.exit_code == 4 and "differs from its saved inputs" in refused.output
-        (launch_file.parent / GATE_INPUTS_FILENAME).write_text(GateInputs(preset_name=preset.name).model_dump_json())
-        refused = runner.invoke(rl.command(table, argv=resume_args), resume_args)
-        assert refused.exit_code == 4 and "differs from the preset's default" in refused.output
-        source_model.update(
-            uri=preset.model.step.path(str(tmp_path)),
-            tokenizer_uri=preset.model.tokenizer_uri,
-            tokenizer_revision=preset.model.tokenizer_revision,
-        )
-        launch_file.write_text(yaml.safe_dump({"config": source_launch}))
-        default = runner.invoke(rl.command(table, argv=resume_args, then=collect), resume_args)
-        assert default.exit_code == 0, (default.output, default.exception)
-        assert runs[-1].name != resumed.name
-
 
 @pytest.mark.parametrize("resume", (False, True), ids=("fresh", "resume"))
 def test_mochi_plan_refuses_an_incomplete_default_export(
-    selection, tmp_path, stored_checkpoint, resume, mochi_with_incomplete_default
+    selection, stored_checkpoint, resume, mochi_with_incomplete_default
 ):
     table = mochi_with_incomplete_default
     preset = table.by_name["train-long"]
@@ -372,8 +367,6 @@ def test_mochi_plan_refuses_an_incomplete_default_export(
     args = ("--preset", preset.name, "--version", preset.revision, "--plan")
     if resume:
         (stored_checkpoint / "trainer_state.pt").write_bytes(b"trainer checkpoint")
-        source = tmp_path / "checkpoints" / "previous" / "2026.11.19.1"
-        (source / GATE_INPUTS_FILENAME).write_text(GateInputs(preset_name=preset.name).model_dump_json())
         args += ("--resume", "checkpoints/previous@2026.11.19.1")
     result = CliRunner().invoke(rl.command(table, argv=args), args)
     assert result.exit_code == 4, (result.output, result.exception)

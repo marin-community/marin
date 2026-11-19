@@ -44,7 +44,7 @@ from experiments.post_training import rl_recipe as recipe
 from experiments.post_training import rl_scoring as scoring
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_command import EXIT_CODES
-from experiments.post_training.rl_recipe import GATE_INPUTS_FILENAME, GateInputs, read_gate_inputs
+from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInputs, read_gate_inputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     controls,

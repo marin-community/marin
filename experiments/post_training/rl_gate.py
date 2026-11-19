@@ -43,13 +43,14 @@ from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_recipe as recipe
 from experiments.post_training.rl_command import EXIT_CODES, RLCommand
 from experiments.post_training.rl_presets import ControlPin, ModelPresets
-from experiments.post_training.rl_recipe import GateInputs, read_gate_inputs
 from experiments.post_training.rl_scoring import (
     AAII_WEIGHTS,
+    GateInputs,
     InvalidComparison,
     RunData,
     load_run,
     parse_requirement,
+    read_gate_inputs,
     read_recorded_launch,
     with_objectives,
     with_requirements,

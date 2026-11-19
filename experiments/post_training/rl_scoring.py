@@ -37,7 +37,6 @@ from taskcompendium.grading_result import Outcome
 
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_recipe as recipe
-from experiments.post_training.rl_recipe import GateInputs, read_gate_inputs
 from experiments.post_training.task_curation.selection import TASK_SPEC_COLUMN
 
 SLICE_COLUMNS = ("family", "aai_category", "source", "topic", "difficulty", "agentic")
@@ -332,7 +331,22 @@ def evaluation_statistics(scores: pa.Table) -> dict[str, float]:
     return result
 
 
+GATE_INPUTS_FILENAME = "gate_inputs.json"
 GRADER_ERROR_LIMIT = 0.01
+
+
+class GateInputs(BaseModel, frozen=True):
+    preset_name: str
+    settings: tuple[str, ...] = ()
+    tasks: str | None = None
+    init: presets.StoredInitializer | None = None
+    resume: presets.StoredResume | None = None
+    requirements: tuple[str, ...] = ()
+
+
+def read_gate_inputs(run_output: str) -> GateInputs:
+    """Read the typed RL inputs saved beside a native launch receipt."""
+    return GateInputs.model_validate_json((StoragePath(run_output) / GATE_INPUTS_FILENAME).read_text())
 
 
 @dataclass(frozen=True)
