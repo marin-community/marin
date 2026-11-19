@@ -1052,38 +1052,30 @@ def export_coreweave_s3_credentials() -> None:
 ACTOR_IMAGE_BASE_LABEL = "org.opencontainers.image.base.digest"
 """The OCI annotation under which the prepared actor image records its base digest."""
 
-ACTOR_IMAGE_KANIKO_PATHS = (Path("/kaniko/executor"), Path("/usr/local/bin/executor"))
-"""Where the kaniko executor lives in the task image; the tracked actor builds used it."""
-
 KANIKO_EXECUTOR_IMAGE = (
     "gcr.io/kaniko-project/executor@sha256:2562c4fe551399514277ffff7dcca9a3b1628c4ea38cb017d7286dc6ea52f4cd"
 )
 """The pinned kaniko executor image; the task image ships no kaniko, so the binary is extracted from it."""
 
 
-def resolve_kaniko_executor(scratch: Path) -> Path:
-    """The kaniko executor: the task image's own, or extracted from the pinned executor image.
+def extract_kaniko_image(scratch: Path) -> Path:
+    """The kaniko executor image's rootfs, extracted with the tools the task image carries.
 
-    The tracked actor builds ran inside the kaniko executor image itself; the Iris task image
-    ships no kaniko, so the pinned executor binary is pulled out of its image with the tools
-    the task image does carry (skopeo and umoci).
+    The task image ships no kaniko; skopeo and umoci pull the pinned executor image apart so
+    the build can run kaniko inside its own clean ephemeral root (the task image's filesystem
+    would leak its apt sources into the build).
     """
-    found = next((path for path in ACTOR_IMAGE_KANIKO_PATHS if path.exists()), None) or shutil.which("kaniko")
-    if found is not None:
-        return Path(found)
     layout = scratch / "kaniko-oci"
     bundle = scratch / "kaniko-bundle"
     subprocess.run(
-        ["skopeo", "copy", "--retry-times", "3", f"docker://{KANIKO_EXECUTOR_IMAGE}", f"oci:{layout}:kaniko"], check=True
+        ["skopeo", "copy", "--retry-times", "3", f"docker://{KANIKO_EXECUTOR_IMAGE}", f"oci:{layout}:kaniko"],
+        check=True,
     )
     subprocess.run(["umoci", "unpack", "--image", f"{layout}:kaniko", str(bundle)], check=True)
-    extracted = bundle / "rootfs" / "kaniko" / "executor"
-    if not extracted.is_file():
+    rootfs = bundle / "rootfs"
+    if not (rootfs / "kaniko" / "executor").is_file():
         raise RuntimeError(f"The pinned kaniko image carries no /kaniko/executor: {KANIKO_EXECUTOR_IMAGE}")
-    target = scratch / "executor"
-    shutil.copy(extracted, target)
-    target.chmod(0o755)
-    return target
+    return rootfs
 
 
 def actor_image_dockerfile(base_ref: str, setup_commands: tuple[str, ...]) -> str:
@@ -1119,37 +1111,92 @@ def cohort_actor_environment(rows: Mapping[str, Mapping[str, Any]]) -> Environme
 
 
 def build_and_push_actor_image(
-    environment: EnvironmentRequirements, repository: str, tag: str, authfile: Path | None = None
+    environment: EnvironmentRequirements,
+    repository: str,
+    tag: str,
+    authfile: Path | None = None,
+    *,
+    no_push: bool = False,
 ) -> str:
-    """Build the shared actor image with full capabilities and push it digest-pinned.
+    """Build the shared actor image in an ephemeral kaniko container and push it digest-pinned.
 
-    kaniko bakes the task contract's own setup commands (the Dockerfile from
-    :func:`actor_image_dockerfile`) and skopeo pushes the tar; the returned reference pins
-    the pushed digest. ``authfile`` authenticates the internal registry push.
+    kaniko's design unpacks the base over the executor's own filesystem, so the executor must
+    run inside a clean ephemeral container — on the worker's live filesystem the noble base
+    merges over the trixie task image (both apt source sets survive, and trixie's base-files
+    upgrade then clashes). The kaniko image's own rootfs (extracted with skopeo and umoci) is
+    therefore the sandbox root under bwrap: no apt sources leak into the build. kaniko bakes
+    the task contract's own setup commands (the Dockerfile from :func:`actor_image_dockerfile`)
+    and pushes to the internal registry; ``authfile`` holds the packages credential.
     """
     base_ref = environment.docker_image
     if base_ref is None:
         raise ValueError("The actor environment declares no base image to bake")
+    if shutil.which("bwrap") is None:
+        raise RuntimeError("bwrap is unavailable; the kaniko build needs its ephemeral sandbox")
     with tempfile.TemporaryDirectory() as scratch:
-        executor = resolve_kaniko_executor(Path(scratch))
-        directory = Path(scratch) / "context"
-        directory.mkdir()
-        (directory / "Dockerfile").write_text(actor_image_dockerfile(base_ref, environment.setup_commands))
-        tar = directory / "actor.tar"
+        scratch = Path(scratch)
+        executor_rootfs = extract_kaniko_image(scratch)
+        context = scratch / "context"
+        context.mkdir()
+        (context / "Dockerfile").write_text(actor_image_dockerfile(base_ref, environment.setup_commands))
+        out = scratch / "out"
+        out.mkdir()
+        # kaniko's unpack replaces the sandbox root, so the registry credential lives outside
+        # it and DOCKER_CONFIG points kaniko at the bound copy at push time.
+        docker_config = scratch / "docker-config"
+        docker_config.mkdir()
+        if authfile is not None:
+            (docker_config / "config.json").write_bytes(authfile.read_bytes())
+        arguments = [
+            "/kaniko/executor",
+            "--dockerfile=/context/Dockerfile",
+            "--context=dir:///context",
+            f"--destination={repository}:{tag}",
+            "--force",
+        ]
+        if no_push:
+            arguments += ["--no-push", "--tar-path=/out/actor.tar"]
         subprocess.run(
             [
-                str(executor),
-                f"--dockerfile={directory / 'Dockerfile'}",
-                f"--context=dir://{directory}",
-                f"--destination={repository}:{tag}",
-                "--no-push",
-                f"--tar-path={tar}",
-                "--compressed-caching=false",
-                "--use-new-run",
-                "--force",
+                shutil.which("bwrap"),
+                "--bind",
+                str(executor_rootfs),
+                "/",
+                "--dev",
+                "/dev",
+                "--proc",
+                "/proc",
+                "--tmpfs",
+                "/tmp",
+                "--tmpfs",
+                "/run",
+                "--ro-bind",
+                "/etc/resolv.conf",
+                "/etc/resolv.conf",
+                "--ro-bind",
+                "/etc/ssl/certs",
+                "/etc/ssl/certs",
+                "--bind",
+                str(context),
+                "/context",
+                "--bind",
+                str(out),
+                "/out",
+                "--ro-bind",
+                str(docker_config),
+                "/docker-config",
+                "--setenv",
+                "DOCKER_CONFIG",
+                "/docker-config",
+                *arguments,
             ],
             check=True,
         )
+        tar = out / "actor.tar"
+        if no_push:
+            if not tar.is_file():
+                raise RuntimeError("The kaniko build produced no image tar")
+            return ""
         push = ["skopeo", "copy", "--retry-times", "3", f"docker-archive:{tar}", f"docker://{repository}:{tag}"]
         if authfile is not None:
             push += ["--authfile", str(authfile)]

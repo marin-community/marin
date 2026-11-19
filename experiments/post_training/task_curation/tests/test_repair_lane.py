@@ -1708,32 +1708,33 @@ class TestPreparedActorImage:
         assert task["environment_requirements"]["docker_image"] == prepared
 
 
-def test_resolve_kaniko_executor_prefers_the_task_image_paths(tmp_path, monkeypatch):
-    """An executor already in the task image wins over the pinned-image extraction."""
-    bundled = tmp_path / "kaniko" / "executor"
-    bundled.parent.mkdir(parents=True)
-    bundled.write_bytes(b"executor")
-    monkeypatch.setattr(lane, "ACTOR_IMAGE_KANIKO_PATHS", (bundled,))
-    monkeypatch.setattr(lane.shutil, "which", lambda program: None)
-    assert lane.resolve_kaniko_executor(tmp_path / "scratch") == bundled
-
-
-def test_resolve_kaniko_executor_extracts_from_the_pinned_image(tmp_path, monkeypatch):
-    """The task image ships no kaniko; the pinned executor image's binary is extracted."""
+def test_extract_kaniko_image_unpacks_the_pinned_executor_image(tmp_path, monkeypatch):
+    """The task image ships no kaniko; the pinned executor image's rootfs is extracted."""
     calls = []
 
     def fake_run(argv, **kwargs):
         calls.append(argv)
         if argv[:2] == ["umoci", "unpack"]:
-            bundle = Path(argv[-1])
-            executor = bundle / "rootfs" / "kaniko" / "executor"
+            executor = Path(argv[-1]) / "rootfs" / "kaniko" / "executor"
             executor.parent.mkdir(parents=True, exist_ok=True)
             executor.write_bytes(b"executor")
 
-    monkeypatch.setattr(lane, "ACTOR_IMAGE_KANIKO_PATHS", ())
-    monkeypatch.setattr(lane.shutil, "which", lambda program: None)
     monkeypatch.setattr(lane.subprocess, "run", fake_run)
-    executor = lane.resolve_kaniko_executor(tmp_path / "scratch")
-    assert executor.name == "executor"
-    assert executor.read_bytes() == b"executor"
-    assert any(argv[:2] == ["skopeo", "copy"] and lane.KANIKO_EXECUTOR_IMAGE in " ".join(argv) for argv in calls)
+    rootfs = lane.extract_kaniko_image(tmp_path)
+    assert (rootfs / "kaniko" / "executor").read_bytes() == b"executor"
+    assert any(lane.KANIKO_EXECUTOR_IMAGE in " ".join(argv) for argv in calls)
+
+    """The task image ships no kaniko; the pinned executor image's rootfs is extracted."""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[:2] == ["umoci", "unpack"]:
+            executor = Path(argv[-1]) / "rootfs" / "kaniko" / "executor"
+            executor.parent.mkdir(parents=True, exist_ok=True)
+            executor.write_bytes(b"executor")
+
+    monkeypatch.setattr(lane.subprocess, "run", fake_run)
+    rootfs = lane.extract_kaniko_image(tmp_path)
+    assert (rootfs / "kaniko" / "executor").read_bytes() == b"executor"
+    assert any(lane.KANIKO_EXECUTOR_IMAGE in " ".join(argv) for argv in calls)
