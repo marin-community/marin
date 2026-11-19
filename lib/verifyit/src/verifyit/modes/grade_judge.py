@@ -128,7 +128,7 @@ class JudgeConnection:
     base_url: str
     api_key: str = field(repr=False)
     default_model: str | None = field(default=None, kw_only=True)
-    transport: httpx.BaseTransport | None = field(default=None, kw_only=True, repr=False, compare=False)
+    transport: Any = field(default=None, kw_only=True, repr=False, compare=False)
     """Optional in-process HTTP transport; runtime-only, like the endpoint credentials."""
 
 
