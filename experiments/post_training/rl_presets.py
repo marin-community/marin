@@ -230,7 +230,6 @@ class Training:
 @dataclass(frozen=True)
 class Generation:
     plan: SkyRLGenerationPlan
-    training_reference_plan: SkyRLRolePlan | None = None
     completion_metric: ClassVar[str] = GENERATE_WALL_SECONDS_METRIC
     outcome_prefix: ClassVar[str] = "eval/all/outcome/"
     named_schedule: ClassVar[Literal["every_evaluation"]] = "every_evaluation"
@@ -308,6 +307,7 @@ class Recipe:
     layout: Layout
     fixed_reply_tokens: int | None
     config: RecipePatch
+    training_plan: SkyRLRolePlan | None = None
 
 
 @dataclass(frozen=True)

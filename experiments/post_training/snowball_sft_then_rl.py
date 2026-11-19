@@ -8,6 +8,6 @@ from experiments.post_training.snowball_rl import SNOWBALL
 
 if __name__ == "__main__":
     # Spawned RL workers import this module without loading Levanter.
-    from experiments.post_training.snowball_sft import MIXTURE_SFT
+    from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
 
-    raise SystemExit(rl.main(SNOWBALL, init=MIXTURE_SFT.model()))
+    raise SystemExit(rl.main(SNOWBALL, init=MIXTURE_262K_32NODE.model()))

@@ -259,7 +259,6 @@ E8 = replace(
             inference_engine_expert_parallel_size=8,
             n_samples_per_prompt=4,
         ),
-        training_reference_plan=_P40_PLAN,
     ),
 )
 
@@ -276,7 +275,7 @@ _ASYNC_P40 = Recipe(
     ),
 )
 
-_GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH)
+_GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
 _GAPS = (
     "aaii-coverage",

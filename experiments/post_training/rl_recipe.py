@@ -399,10 +399,9 @@ def _training_config(
         trainer = trainer.replace(hf_export_checkpoint="best")
     if get_path(authored, "trainer.rollout_buffer.max_in_flight") is MISSING:
         trainer = trainer.replace(rollout_buffer=sections.RolloutBuffer(max_in_flight=in_flight))
-    workload = recipe.layout.workload
-    if isinstance(workload, presets.Generation) and workload.training_reference_plan is not None:
+    if recipe.training_plan is not None:
         training_geometry = {}
-        for key, value in workload.training_reference_plan.config_values().items():
+        for key, value in recipe.training_plan.config_values().items():
             if key.startswith("trainer."):
                 set_path(training_geometry, key, value)
         recipe_config = recipe.config.merge(RecipePatch.from_document(training_geometry))

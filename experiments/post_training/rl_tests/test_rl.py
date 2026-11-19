@@ -480,6 +480,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             trainer["rollout_buffer"]["batch_policy"],
         ) == ((None, 0, "none", "full_batch") if generating else ("async", 2, "tis", "full_batch"))
         if generating:
+            assert trainer["placement"]["policy_num_nodes"] == 4
             assert config["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
             assert config["iris"]["allocation"]["num_nodes"] == 1
             assert config["skyrl"]["trajectory_runner"]["max_concurrent_tasks"] == (

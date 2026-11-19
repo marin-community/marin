@@ -20,36 +20,64 @@ from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import set_path
 from skyrlrecipe.locality import RoleTopologyMode
 
-from experiments.post_training import rl, rl_gate, rl_recipe
-from experiments.post_training.mochi_rl import MOCHI
+from experiments.post_training import mochi_rl, rl, rl_gate, rl_recipe
 from experiments.post_training.rl_presets import BatchMix
 from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY
 from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs
 from experiments.post_training.snowball_rl import SNOWBALL
-from experiments.post_training.snowball_sft import MIXTURE_SFT
+from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
+
+
+@pytest.fixture
+def table(request, monkeypatch):
+    if request.param == "snowball":
+        return SNOWBALL
+
+    from experiments.post_training.mochi_sft import MIXTURE_262K_176NODE  # noqa: PLC0415
+
+    def export_model(path):
+        return Artifact(path=path)
+
+    model = ArtifactHfModel(
+        replace(
+            apply("fixture/mochi-sft-export", export_model, version="2026.11.10", path=OUT),
+            override_path="s3://fixture-models/mochi-sft-export",
+        ),
+        relative_path="hf",
+    )
+
+    def sft_model(preset):
+        assert preset is MIXTURE_262K_176NODE
+        return model
+
+    monkeypatch.setattr(type(MIXTURE_262K_176NODE), "model", sft_model)
+    model_table = mochi_rl._model_presets()
+    assert all(preset.model is model for preset in model_table.presets)
+    return model_table
 
 
 @pytest.mark.parametrize(
     ("table", "revisions"),
     [
         (
-            MOCHI,
+            "mochi",
             {
-                "train-medium": {"2026.11.19.1": "f5a97828"},
-                "train-long": {"2026.11.19.1": "4ce8b138"},
-                "train-long-3rack": {"2026.11.19.1": "349c287f"},
-                "train-long-agentic": {"2026.11.19.1": "ffd07b8d"},
-                "train-long-agentic-3rack": {"2026.11.19.1": "34ec44c4"},
+                "train-medium": {"2026.11.19.1": "d59b1881"},
+                "train-long": {"2026.11.19.1": "584b0726"},
+                "train-long-3rack": {"2026.11.19.1": "8dac7255"},
+                "train-long-agentic": {"2026.11.19.1": "ba6726dc"},
+                "train-long-agentic-3rack": {"2026.11.19.1": "aace9297"},
             },
         ),
         (
-            SNOWBALL,
+            "snowball",
             {
-                "train-medium-agentic": {"2026.11.19.1": "355e9079"},
-                "train-long-agentic": {"2026.11.19.1": "b0fba56c"},
+                "train-medium-agentic": {"2026.11.19.1": "a0074f2c"},
+                "train-long-agentic": {"2026.11.19.1": "6c50961b"},
             },
         ),
     ],
+    indirect=["table"],
     ids=("mochi", "snowball-agentic"),
 )
 def test_new_presets_match_revisioned_native_configs(table, revisions, selection, tmp_path, monkeypatch):
@@ -60,7 +88,7 @@ def test_new_presets_match_revisioned_native_configs(table, revisions, selection
     documents = dict(zip(revisions, configs, strict=True))
     agentic = documents["train-long-agentic"]["skyrl"]
     assert agentic["trainer"]["hf_export_checkpoint"] == "best"
-    if table is MOCHI:
+    if table.model == "mochi":
         for preset in table.presets:
             spec = rl_recipe.run_spec(
                 preset, name="layout-check", tasks=selection if preset.batch_mix else None, model_name=table.model
@@ -110,6 +138,12 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
         ("recipe", ("environment.task_sessions.daytona.ttl_minutes", 60), "ttl_minutes"),
         ("recipe", ("trainer.algorithm.group_admission.stall_timeout", 9000), "stall_timeout"),
         ("owner", ("trainer.hf_export_checkpoint", "best"), "derived by the runner"),
+        pytest.param(
+            "owner",
+            ("trainer.placement.policy_num_nodes", 4),
+            "derived by the runner",
+            id="authored-placement",
+        ),
         ("owner", ("trainer.rollout_buffer.groups_per_family", {"agentic": 32}), "derived by the runner"),
         ("mix", {"agentic": Fraction(1, 4), "nonagentic": Fraction(1, 4)}, "sum to 1"),
         ("mix", {"agentic": Fraction(1, 3), "nonagentic": Fraction(2, 3)}, "whole number of groups"),
@@ -157,7 +191,7 @@ def test_runner_refuses_incompatible_launches(selection, tmp_path, monkeypatch, 
     ("table", "name", "settings", "error"),
     [
         (
-            MOCHI,
+            "mochi",
             "train-medium",
             (
                 "trainer.policy.megatron_config.tensor_model_parallel_size=2",
@@ -166,8 +200,9 @@ def test_runner_refuses_incompatible_launches(selection, tmp_path, monkeypatch, 
             ),
             "MuonH fused-matrix updates require tensor parallel size 1",
         ),
-        (SNOWBALL, "train-medium-agentic", ("terminal_bench.installed_agent.agent.kwargs.unused=true",), "unused"),
+        ("snowball", "train-medium-agentic", ("terminal_bench.installed_agent.agent.kwargs.unused=true",), "unused"),
     ],
+    indirect=["table"],
     ids=("muonh", "installed-agent-kwargs"),
 )
 def test_plan_print_rejects_invalid_native_config(table, name, settings, error, selection):
@@ -221,7 +256,7 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch):
     def submit(entry_module, handles, _max_concurrent, _env, *, argv):
         assert entry_module == module
         (run,) = handles
-        initializer = MIXTURE_SFT.model()
+        initializer = MIXTURE_262K_32NODE.model()
         producer = next(step for step in run.deps if step.name == initializer.step.name)
         assert producer.fingerprint() == initializer.step.fingerprint()
         document = yaml.safe_load(materialized_config(run, prefix).launch_config_yaml)
@@ -240,7 +275,8 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch):
 
 @pytest.mark.parametrize(
     ("table", "name", "allowed"),
-    [(SNOWBALL, "train-long", True), (SNOWBALL, "learning-medium", False), (MOCHI, "train-medium", False)],
+    [("snowball", "train-long", True), ("snowball", "learning-medium", False), ("mochi", "train-medium", False)],
+    indirect=["table"],
     ids=("exporting", "gated", "no-export"),
 )
 def test_runner_composes_after_an_export(selection, table, name, allowed):
