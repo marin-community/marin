@@ -178,7 +178,109 @@ Iris admits the job together; Ray confines each role to its group. Deploy an Iri
 controller with [grouped coscheduling](https://github.com/marin-community/marin/pull/11449)
 before enabling this mode. Explicit groups lose the default preference
 for nearby racks on InfiniBand. Cross-rack transport between trainer and
-inference still needs validation. Omitting the option keeps existing placement.
+inference still needs validation on main. Omitting the option keeps existing placement.
+
+## Mochi inference on GB200
+
+Use a retained BF16 Mochi (535B-A23B) export with
+`grugmoe_artifact_schema_version: 3` in its `config.json`, retained data handles,
+and a recipe that already validates on main with a 64-GPU Megatron trainer
+at TP1/PP16/CP4/EP4. This configuration uses eight
+TP1/PP1/DP16/EP16 inference engines on another 128 GPUs. Required NVLink placement
+packs the trainer into one 16-host domain and four inference engines into each of
+two further domains: 48 four-GPU hosts in total.
+
+Keep the existing context limit, optimizer, n=8, staleness three, trainer batch,
+task setup, evaluation and recovery settings. The base recipe must use local
+vLLM engines, Triton MoE and NCCL expert-block weight sync. Commit the following
+fragment as `mochi-inference.yaml` beside your experiment:
+
+```yaml
+trainer:
+  rollout_buffer:
+    max_in_flight: 128
+generator:
+  num_inference_engines: 8
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_pipeline_parallel_size: 1
+  inference_engine_data_parallel_size: 16
+  inference_engine_expert_parallel_size: 16
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASHINFER
+  max_num_seqs: 128
+  max_num_batched_tokens: 2048
+  gpu_memory_utilization: 0.90
+  enable_prefix_caching: false
+  expert_block_sync:
+    verify: true
+    timeout_seconds: 1800
+  engine_init_kwargs:
+    enable_return_routed_experts: true
+    compilation_config:
+      mode: 3
+      cudagraph_mode: PIECEWISE
+      splitting_ops:
+        - vllm::unified_attention_with_output
+        - vllm::unified_kv_cache_update
+        - vllm::grug_moe_short_conv
+      inductor_compile_config:
+        enable_auto_functionalized_v2: false
+        combo_kernels: true
+        benchmark_combo_kernel: true
+```
+
+In your artifact main, apply it to the existing `SkyRLSpec` named `spec` and
+`IrisSkyRLExecution` named `execution` before calling `skyrl_step`. These public
+interfaces are described in [RL launching](../references/rl-launching.md).
+The role plan below reads its inference topology from the same patch that replaces
+the recipe's old declarations. The file stays in the submitted checkout so the
+coordinator reads the same recipe.
+
+```python
+from dataclasses import replace
+from pathlib import Path
+
+import yaml
+from skyrlrecipe import RecipePatch, SkyRLRecipe
+from skyrlrecipe.locality import RoleTopologyMode
+
+recipe = SkyRLRecipe.from_document(yaml.safe_load(spec.config_yaml))
+inference = RecipePatch.from_document(
+    yaml.safe_load(Path(__file__).with_name("mochi-inference.yaml").read_text())
+)
+role_plan = replace(
+    spec.topology.role_plan,
+    num_inference_engines=inference.generator.num_inference_engines,
+    inference_engine_tensor_parallel_size=inference.generator.inference_engine_tensor_parallel_size,
+    inference_engine_pipeline_parallel_size=inference.generator.inference_engine_pipeline_parallel_size,
+    inference_engine_data_parallel_size=inference.generator.inference_engine_data_parallel_size,
+    inference_engine_expert_parallel_size=inference.generator.inference_engine_expert_parallel_size,
+)
+spec = replace(
+    spec,
+    config_yaml=yaml.safe_dump(recipe.merge(inference).to_skyrl(), sort_keys=False),
+    topology=replace(spec.topology, num_nodes=role_plan.num_nodes, role_plan=role_plan),
+)
+execution = replace(execution, role_topology=RoleTopologyMode.NVLINK_DOMAIN)
+```
+
+The 128-group admission limit is separate from the trainer batch. The native
+buffer also bounds untrained groups by `(staleness + 1) * batch_size`: at
+staleness three, a six-group batch admits at most 24 groups. The 128-sequence
+limit applies to each vLLM DP worker, which uses one GPU in this layout. To keep a smoke
+run's admission cap at two groups, use
+`inference = inference.with_settings(("trainer.rollout_buffer.max_in_flight=2",))`
+before updating `spec`. Use a new artifact version for the changed
+inference layout and inspect the rendered launch document before submitting it.
+
+This example was composed for vLLM build `marin-vllm-gpu-20261113-0ac9dcb157ee`.
+CPU validation covers recipe composition,
+native launch loading, training configuration and three-domain placement, with
+and without existing inference topology declarations. It also checks the two-group
+admission override. These checks provide no GPU execution or performance evidence.
+GPU memory fit, updated-weight publication, long-context training and recovery
+need validation on your runtime. [Issue #11430](https://github.com/marin-community/marin/issues/11430)
+tracks serving work.
 
 ## Expert-block weight sync placement
 

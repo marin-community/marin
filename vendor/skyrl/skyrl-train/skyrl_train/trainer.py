@@ -6,13 +6,13 @@ import io as stdlib_io
 import json
 import math
 import os
+import pickle
 import shutil
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 from jaxtyping import Float
-from pathlib import Path
 import ray
 from ray import ObjectRef
 from finestore.rl.run_records import CheckpointReference
@@ -1734,7 +1734,6 @@ class RayPPOTrainer:
         if (
             use_ref_model
             and cfg.trainer.strategy == "megatron"
-            and (cfg.trainer.placement.colocate_all or cfg.trainer.placement.colocate_policy_ref)
             and cfg.trainer.ref.nccl_buffer_size_bytes is not None
         ):
             ref_actor_env_vars = {NCCL_BUFFER_SIZE_ENV_VAR: str(cfg.trainer.ref.nccl_buffer_size_bytes)}
@@ -2463,9 +2462,11 @@ class RayPPOTrainer:
         """
         Dump data to pickle file
         """
-        data_save_dir = Path(self.cfg.trainer.export_path) / "dumped_data"
-        data_save_dir.mkdir(parents=True, exist_ok=True)
-        data.save(data_save_dir / f"{file_name}.pkl")
+        data_save_dir = join_resource_path(self.cfg.trainer.export_path, "dumped_data")
+        io.makedirs(data_save_dir, exist_ok=True)
+        path = join_resource_path(data_save_dir, f"{file_name}.pkl")
+        with io.open_file(path, "wb") as destination:
+            pickle.dump(data, destination)
 
     def pad_batch(self, training_input: TrainingInputBatch) -> TrainingInputBatch:
         """Pad the batch to be divisible by dp size"""
