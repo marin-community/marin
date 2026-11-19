@@ -10,6 +10,8 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import MachineFactory
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskSpec, VerifyitGrader, grades_with_judge
 
+DEFAULT_WORKDIR = "/workspace"
+"""Shellbox's default machine working directory, used when a task names none."""
 SANDBOX_SCHEDULING_TIMEOUT = 1800
 """Iris dispatch (submit to pod creation) lags by minutes at fleet scale; a hold and replay costs more than waiting."""
 

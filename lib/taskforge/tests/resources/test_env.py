@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
+import shutil
+import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
@@ -9,6 +12,7 @@ from typing import override
 
 import pytest
 from rolloutengine.test_support import machine_runtime
+from shellbox.backends.iris.machine import IrisMachine
 from shellbox.machine import (
     Command,
     ExecSetupFailed,
@@ -337,28 +341,40 @@ async def test_read_ranges_flow_through_executor(create_env: Callable[[], Awaita
     assert await read_file(ReadFile(OUTPUT, limit=0), env, notify=Notes()) == b""
 
 
-class RangedMachine(MemoryMachine):
-    async def read_file(self, path: str, *, offset: int = 0, limit: int | None = None) -> bytes:
-        assert (path, offset, limit) == (str(OUTPUT), 2, 3)
-        if self.failure is not None:
-            raise self.failure
-        return b"234"
+class TimedIrisMachine(IrisMachine):
+    """An Iris machine whose wrapped command ends with ``exit_code`` after ``elapsed`` seconds."""
+
+    def __init__(self, exit_code: int, elapsed: float) -> None:
+        self.exit_code, self.elapsed = exit_code, elapsed
+        self.commands: list[Command] = []
 
     @override
-    async def download(self, source: str, target: Path) -> None:
-        raise AssertionError("FileReader must bypass downloads, including on directory errors")
+    async def run(self, command: Command) -> Result:
+        self.commands.append(command)
+        await asyncio.sleep(self.elapsed)
+        return Result(self.exit_code, b"partial", b"", False, False, ExitReason.EXITED)
 
 
-@pytest.mark.parametrize("directory", [False, True])
-async def test_native_read_preflight_and_range_bypass_download(directory: bool) -> None:
-    machine = RangedMachine()
+@pytest.mark.parametrize("exit_code,elapsed,reported", [(124, 0.2, 124), (137, 0.2, 124), (137, 0, 137), (7, 0, 7)])
+async def test_iris_command_is_bounded_inside_the_container(exit_code: int, elapsed: float, reported: int) -> None:
+    machine = TimedIrisMachine(exit_code, elapsed)
     env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
-    if directory:
-        machine.failure = IsADirectoryError(str(OUTPUT))
-        with pytest.raises(IsADirectoryError):
-            await read_file(ReadFile(OUTPUT, offset=2, limit=3), env, notify=Notes())
-    else:
-        assert await read_file(ReadFile(OUTPUT, offset=2, limit=3), env, notify=Notes()) == b"234"
+    result = await env.run(COMMAND, timeout=0.1)
+    assert (result.exit_code, result.stdout) == (reported, "partial")
+    (command,) = machine.commands
+    assert command.argv == ("sh", "-c", env_module.CONTAINED_TIMEOUT, "forge-timeout", "0.1s", COMMAND)
+    assert command.timeout == 0.1 + env_module.BACKSTOP
+
+
+@pytest.mark.parametrize(
+    "script,timeout,code,stdout", [('printf "a  b"; exit 3', "5s", 3, b"a  b"), ("sleep 5", "0.2s", 124, b"")]
+)
+def test_contained_timeout_preserves_the_command(script: str, timeout: str, code: int, stdout: bytes) -> None:
+    if code == 124 and shutil.which("timeout") is None:
+        pytest.skip("this host has no timeout command")
+    argv = ["sh", "-c", env_module.CONTAINED_TIMEOUT, "forge-timeout", timeout, script]
+    result = subprocess.run(argv, capture_output=True, timeout=10)
+    assert (result.returncode, result.stdout) == (code, stdout)
 
 
 @pytest.mark.parametrize(

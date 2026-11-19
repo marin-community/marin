@@ -18,11 +18,9 @@ from rolloutengine.machines import prepare_machine
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.iris.machine import IrisMachine
 from shellbox.machine import (
-    DEFAULT_WORKDIR,
     Command,
     ExecSetupFailed,
     ExitReason,
-    FileReader,
     Machine,
     MachineCancelled,
     MachineFactory,
@@ -37,6 +35,7 @@ from taskcompendium.runtime.staging import StagedFile, write_archive
 from taskforge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, digest
 from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient
 from taskforge.resources.execution import Notify, retry_effect
+from taskforge.resources.sandbox.factories import DEFAULT_WORKDIR
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +150,12 @@ class _RecordedEnv(Env):
         self.closed = True
 
 
+CONTAINED_TIMEOUT = 'if command -v timeout >/dev/null 2>&1; then exec timeout -k 5 "$1" sh -c "$2"; fi; exec sh -c "$2"'
+"""Run ``$2`` under an in-container ``timeout`` of ``$1`` where the image has one."""
+BACKSTOP = 30.0
+"""Machine deadline beyond the command timeout: the kill-after grace plus exec and capture latency."""
+
+
 def _machine_issue(error: RuntimeError) -> Hold | Restart | Transient:
     if isinstance(error, MachineOutputLimitExceeded):
         return OutputBudgetExhausted("output budget exhausted")
@@ -200,16 +205,27 @@ class ShellboxEnv(_RecordedEnv):
     @override
     async def run(self, cmd: str, *, timeout: float) -> CommandResult:
         started = time.monotonic()
+        # Iris closes the sandbox when a command outlives its machine deadline, so bound the command
+        # inside the container and keep the machine deadline as a backstop.
+        contained = isinstance(self.machine, IrisMachine) and timeout > 0
+        command = (
+            Command(("sh", "-c", CONTAINED_TIMEOUT, "forge-timeout", f"{timeout:g}s", cmd), timeout=timeout + BACKSTOP)
+            if contained
+            else Command(("sh", "-c", cmd), timeout=timeout)
+        )
         async with self._operation():
-            result = await self.machine.run(Command(("sh", "-c", cmd), timeout=timeout))
-        code = 124 if result.reason == ExitReason.TIMED_OUT else result.exit_code
+            result = await self.machine.run(command)
+        elapsed = time.monotonic() - started
+        # GNU timeout exits 124 at the limit, or 137 when its kill-after escalation was needed.
+        killed = contained and result.exit_code == 137 and elapsed >= timeout
+        code = 124 if result.reason == ExitReason.TIMED_OUT or killed else result.exit_code
         if code is None:
             raise Hold("environment terminated: command ended without an exit status")
         value = CommandResult(
             code,
             result.stdout.decode(errors="replace"),
             result.stderr.decode(errors="replace"),
-            time.monotonic() - started,
+            elapsed,
             result.stdout_truncated or result.stderr_truncated,
         )
         self._record_command(cmd, timeout, value)
@@ -220,8 +236,6 @@ class ShellboxEnv(_RecordedEnv):
         if offset < 0 or (limit is not None and limit < 0):
             raise ValueError("offset and limit must be nonnegative")
         async with self._operation(path):
-            if isinstance(self.machine, FileReader):
-                return await self.machine.read_file(str(self.workdir / path), offset=offset, limit=limit)
             with TemporaryDirectory() as directory:
                 target = Path(directory) / "file"
                 await self.machine.download(str(self.workdir / path), target)
