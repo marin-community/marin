@@ -43,8 +43,9 @@ under `experiments/`, `lib/` and `vendor/`. The full tracked working-tree hash f
 name, so even a documentation edit can change it. `--version dev` satisfies the standard launcher
 interface. Each preset's steps use its own `revision`.
 
-- **Plan and status.** The default mode and `--plan` print the graph and status, including the run
-  name, allocation and output path. Repeat the plan from the same source with the same inputs to look up an existing run.
+- **Plan and status.** The default mode and `--plan` run the SkyRL driver's configuration checks on CPU
+  before printing the graph and status, including the run name, allocation and output path. Repeat the
+  plan from the same source with the same inputs to look up an existing run.
   For a saved attempt, status can include its job ID, completed update, evaluations and verdict.
 - **Submit and wait.** Replace `--plan` with `--run` to submit an Iris coordinator. Add `--wait` for
   the terminal report. To link an experiment issue, pass `--issue ISSUE_NUMBER`. The issue number

@@ -148,6 +148,7 @@ def build_run(
     requirements: tuple[str, ...] = (),
     issue: int | None = None,
     forward_env: tuple[str, ...] = (),
+    _validate_plan: bool = False,
 ) -> RLRun:
     """Construct an RL experiment: one run step per replicate and, for a gated preset, its gate step."""
     wandb_entity = os.environ.get(_WANDB_ENTITY_ENV)
@@ -244,6 +245,8 @@ def build_run(
         if preset.gated and not control
         else None
     )
+    if _validate_plan:
+        rl_gate.validate_plan(preset, replace(spec, name=runs[0].name), runs[0])
     return RLRun(tuple(runs), gate, inputs)
 
 
@@ -626,11 +629,10 @@ def command(
             control=control,
             requirements=requirements,
             issue=issue,
+            _validate_plan=not do_run,
         )
         assert run.inputs is not None
-        if not do_run:
-            rl_gate.validate_plan(preset, run.inputs)
-        elif get_job_info() is None:
+        if do_run and get_job_info() is None:
             validated = rl_gate.validate_candidate(
                 preset,
                 run.inputs,

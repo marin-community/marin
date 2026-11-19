@@ -282,6 +282,18 @@ def test_resume_pins_the_native_checkpoint(selection, tmp_path, stored_checkpoin
     planned = CliRunner().invoke(rl.command(table, argv=args), args)
     assert planned.exit_code == 0 and "-resume-step-4" in planned.output, (planned.output, planned.exception)
     assert f"  model: {artifact_identity(original_model)}\n" in planned.output
+    if recorded_model:
+        invalid_batch = (
+            *args,
+            "--set",
+            "trainer.train_batch_size=2",
+            "--set",
+            "trainer.policy_mini_batch_size=2",
+            "--set",
+            "generator.n_samples_per_prompt=8",
+        )
+        refused = CliRunner().invoke(rl.command(table, argv=invalid_batch), invalid_batch)
+        assert refused.exit_code == 4 and "lcm_dp_size=16" in refused.output, (refused.output, refused.exception)
     with pytest.raises(click.BadParameter, match="cannot be combined with --init"):
         rl.build_run(preset, table=table, resume=resume, init=preset.model)
 

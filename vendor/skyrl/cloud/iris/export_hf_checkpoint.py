@@ -35,7 +35,6 @@ import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from cloud.iris.artifacts import terminal_checkpoint_step
 from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config, validate_launch_config
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
@@ -451,6 +450,8 @@ def export_terminal_policy(
     training_config_path: Path, *, forward_env: tuple[str, ...] = (), recover_best: bool = False
 ) -> None:
     """Derive and run the terminal policy export from one training launch document."""
+    from cloud.iris.artifacts import terminal_checkpoint_step  # noqa: PLC0415 - artifact IO belongs to execution
+
     training_config = load_launch_config(training_config_path)
     checkpoint_root = str(training_config.artifacts.checkpoint_root)
     step = selected_export_step(

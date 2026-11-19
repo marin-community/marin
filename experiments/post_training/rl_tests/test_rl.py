@@ -82,6 +82,42 @@ def test_all_presets_plan_with_their_declared_controls(selection):
     assert "--control --replicates" in result.output
 
 
+@pytest.mark.parametrize(
+    ("recipe_settings", "override", "reason"),
+    [
+        (
+            ("trainer.policy_mini_batch_size=2", "generator.n_samples_per_prompt=8"),
+            "trainer.train_batch_size=2",
+            "lcm_dp_size=16",
+        ),
+        (
+            ('terminal_bench={"harbor":{}}',),
+            "terminal_bench.harbor.eval_override_timeout_sec=180",
+            "Unknown Harbor task settings: ['eval_override_timeout_sec']",
+        ),
+    ],
+    ids=["batch-size", "harbor-setting"],
+)
+def test_plan_refuses_invalid_driver_settings(
+    selection, preset_table, monkeypatch, capsys, recipe_settings, override, reason
+):
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    preset = snowball_model.SNOWBALL.by_name["train-long"]
+    config = preset.recipe.config.with_settings(recipe_settings)
+    table = preset_table(replace(preset, recipe=replace(preset.recipe, config=config)))
+
+    exit_code = snowball.main(
+        table,
+        argv=["--preset", preset.name, "--version", preset.revision, "--plan", "--set", override],
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 4, output
+    result = json.loads(output)
+    assert result["verdict"] == "invalid"
+    assert reason in result["reason"]
+
+
 def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 

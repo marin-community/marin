@@ -29,6 +29,7 @@ from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.config.rollout_validation import (
+    EntrypointOperation,
     FAMILY_COLUMN,
     GROUPS_PER_FAMILY_KEY,
     validate_family_pools,
@@ -336,6 +337,31 @@ def load_launch_config(path: Path) -> DictConfig:
             inputs = OmegaConf.to_container(config.inputs, resolve=True)
             _validate_launch_family_pools(inputs, dict(buffer.groups_per_family), buffer.max_staleness_steps)
     return config
+
+
+def validate_launch_driver_config(config: DictConfig) -> None:
+    """Check a composed launch as its selected Ray driver would before startup."""
+    if config.run.mode == RunMode.CHECKPOINT_EXPORT:
+        return
+
+    from skyrl_train.config.driver_validation import (  # noqa: PLC0415
+        validate_driver_config,
+        validate_generation_driver_config,
+    )
+    from skyrl_train.config.worker_environment import configured_ray_worker_environment  # noqa: PLC0415
+
+    entrypoint = config.runtime.entrypoint
+    if entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
+        validate_generation_driver_config(config.skyrl, check_runtime_resources=False)
+    else:
+        operation = (
+            EntrypointOperation.GENERATE
+            if entrypoint == RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE]
+            else EntrypointOperation.TRAIN
+        )
+        validate_driver_config(config.skyrl, operation, check_runtime_resources=False)
+    # The local plan checks worker settings before the runtime probes GPU peer access.
+    configured_ray_worker_environment(config.skyrl)
 
 
 def hugging_face_models(config: DictConfig) -> tuple[TeacherModelSpec, ...]:
