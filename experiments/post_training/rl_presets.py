@@ -88,7 +88,7 @@ class Evaluation:
     name: str
     file: str
     profile: EvaluationSampling
-    source: Literal["default", "tasks", "eval_lite"] = "default"
+    source: Literal["default", "tasks", "held_out"] = "default"
     sample: int | None = None
     every: int | None = None
     at_start: bool = False
@@ -106,7 +106,7 @@ class Evaluation:
 
     @property
     def held_out(self) -> bool:
-        return self.source == "eval_lite"
+        return self.source == "held_out"
 
 
 @dataclass(frozen=True)
@@ -331,13 +331,13 @@ class Preset:
     data_settings: frozenset[str]
     tasks: str
     model: ArtifactHfModel
-    eval_lite: str
     evaluations: tuple[Evaluation, ...]
     seed: int
     sample_namespace: str
     wandb_entity: str
     retention: SkyRLRetentionPolicy
     export_hf: bool
+    held_out_tasks: str | None = None
     harbor: HarborEvaluationCallback | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
@@ -349,6 +349,8 @@ class Preset:
             raise ValueError("measured window must lie within the planned steps")
         if self.gated and not self.guards:
             raise ValueError("gated presets require guards")
+        if self.held_out is not None and not self.held_out_tasks:
+            raise ValueError("held-out evaluations require a held-out task selection")
         if self.checkpoint_every is not None and (self.checkpoint_every <= 0 or not self.evaluations):
             raise ValueError("checkpoint export requires a positive checkpoint interval and an evaluation")
         for evaluation in self.evaluations[1:]:

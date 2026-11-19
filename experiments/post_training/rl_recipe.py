@@ -240,21 +240,10 @@ def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
     if record is None:
         raise click.BadParameter(f"no published artifact record for {name}@{version}")
     config = record.config or {}
-    tokenizer = config.get("tokenizer_uri")
-    revision = config.get("tokenizer_revision")
-    if tokenizer is None:
-        tokenizer = config.get("train_config", {}).get("data", {}).get("tokenizer")
-    if tokenizer is not None and not revision:
-
-        from levanter.model_cache import resolve_hf_model_ref  # noqa: PLC0415 - optional SFT metadata resolver
-
-        pinned = resolve_hf_model_ref(tokenizer)
-        if pinned is not None:
-            tokenizer, _, revision = pinned.rpartition("@")
     return ArtifactHfModel(
         ArtifactStep.adopt(name, version, record.source or root, kind=Artifact, config=record.config),
-        tokenizer_uri=tokenizer,
-        tokenizer_revision=revision,
+        tokenizer_uri=config.get("tokenizer_uri"),
+        tokenizer_revision=config.get("tokenizer_revision"),
     )
 
 
@@ -396,7 +385,7 @@ def run_spec(
     profiles = {}
     expected_tasks = 0
     for index, evaluation in enumerate(chosen):
-        evaluation_tasks = evaluation_source(evaluation, selection, default, preset.eval_lite)
+        evaluation_tasks = evaluation_source(evaluation, selection, default, preset.held_out_tasks)
         _refuse_judged(selection_summary(evaluation_tasks), evaluation.file)
         profile_config, sources = configure_evaluation(
             evaluation,
@@ -484,10 +473,11 @@ def run_step(
 
 
 def evaluation_source(
-    evaluation: Evaluation, selection: ArtifactStep, default: ArtifactStep, eval_lite: str
+    evaluation: Evaluation, selection: ArtifactStep, default: ArtifactStep, held_out_tasks: str | None
 ) -> ArtifactStep:
     if evaluation.source == "default":
         return default
     if evaluation.source == "tasks":
         return selection
-    return selection_artifact(eval_lite)
+    assert held_out_tasks is not None
+    return selection_artifact(held_out_tasks)

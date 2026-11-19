@@ -922,11 +922,13 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
     assert report["verdict"] == "invalid" and "TaskSpec content differs" in report["reason"], report
 
 
-@pytest.mark.parametrize("preset_name", ["learning-medium", "data-medium"])
+@pytest.mark.parametrize(("preset_name", "gpu"), [("learning-medium", "gb200"), ("data-medium", "h100")])
 def test_python_run_saves_typed_inputs_for_rescoring(
-    preset_table, recorded_runs, selection, tmp_path, monkeypatch, preset_name
+    preset_table, recorded_runs, selection, tmp_path, monkeypatch, preset_name, gpu
 ):
     preset = snowball_model.SNOWBALL.by_name[preset_name]
+    gain_key = f"eval_lite/family_mean/gain_per_{gpu}_hour"
+    preset = replace(preset, objectives=(preset.objectives[0], replace(preset.objectives[1], key=gain_key)))
     model = tmp_path / "model"
     model.mkdir()
     model_uri = f"s3://marin-test/models/{tmp_path.name}"
@@ -1038,7 +1040,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(
     assert report["run"]["settings"] == list(recorded.settings)
     assert report["run"]["tasks"] == recorded.tasks
     assert report["run"]["attempt_ids"] == ["recorded-attempt"]
-    assert comparisons(report)["eval_lite/family_mean/gain_per_h100_hour"]["run"] == pytest.approx(0.005)
+    assert comparisons(report)[gain_key]["run"] == pytest.approx(0.005)
     if tasks is None:
         assert {"inputs.model.uri", "skyrl.trainer.policy.optimizer_config.lr", "skyrl.generator.max_num_seqs"} <= set(
             report["run"]["config_changes"]
