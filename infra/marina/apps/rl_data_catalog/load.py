@@ -74,11 +74,12 @@ MAX_BATCH_BYTES = 1_000_000
 # evidence exceed the byte budgets and keep the default.
 TABLE_BATCH_BYTES = {
     "items": 35_000,
-    "packets": 35_000,
 }
 TABLE_BATCH_ROWS = {
     "items": 5,
-    "packets": 5,
+    # A packet can contain a large evidence document. Keep its transport byte
+    # budget, but never combine it with other packets in the same statement.
+    "packets": 1,
 }
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
@@ -145,12 +146,12 @@ def batches(rows: Iterable[dict[str, Any]], budget: int = MAX_BATCH_BYTES, max_r
 
 def table_batch_bytes(table: str) -> int:
     """The SQL batch budget for one staging table."""
-    return TABLE_BATCH_BYTES.get(table, MAX_BATCH_BYTES)
+    return TABLE_BATCH_BYTES.get(table.removeprefix("atlas_"), MAX_BATCH_BYTES)
 
 
 def table_batch_rows(table: str) -> int | None:
     """The row-count cap for one staging table, when its statements need one."""
-    return TABLE_BATCH_ROWS.get(table)
+    return TABLE_BATCH_ROWS.get(table.removeprefix("atlas_"))
 
 
 def ensure_tables(query: AppletQuery, names: tuple[str, ...]) -> None:
