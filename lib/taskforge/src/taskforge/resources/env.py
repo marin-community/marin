@@ -32,7 +32,7 @@ from shellsim import SimulationError
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.staging import StagedFile, write_archive
 
-from taskforge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, digest
+from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, digest
 from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient
 from taskforge.resources.execution import Notify, retry_effect
 from taskforge.resources.sandbox.factories import DEFAULT_WORKDIR
@@ -71,22 +71,12 @@ class ReadFile(Event[bytes]):
     limit: int | None = None
 
 
-type Mutation = Resolved[CommandResult] | Resolved[None]
-
-
 class Env(Protocol):
     def fingerprint(self) -> Fingerprint: ...
     async def run(self, cmd: str, *, timeout: float) -> CommandResult: ...
     async def read(self, path: PurePosixPath, *, offset: int = 0, limit: int | None = None) -> bytes: ...
     async def write(self, path: PurePosixPath, data: bytes) -> None: ...
     async def write_many(self, files: Sequence[tuple[PurePosixPath, bytes]]) -> None: ...
-    async def restore(self, events: Sequence[Mutation]) -> None:
-        """Replay mutations, excluding ReadFile; mismatch Notes leave the log authoritative.
-
-        A fingerprint Hold requires human inspection of the inconsistent log and environment.
-        """
-        ...
-
     async def close(self) -> None: ...
 
 
@@ -113,28 +103,6 @@ class _RecordedEnv(Env):
 
     def _record_write(self, path: PurePosixPath, data: bytes) -> None:
         self.digest = digest((self.digest, "write", str(path), digest(data)))
-
-    @override
-    async def restore(self, events: Sequence[Mutation]) -> None:
-        for index, resolved in enumerate(events):
-            current = self.fingerprint()
-            expected = next((fp for fp in resolved.fingerprints if fp.resource == "env"), None)
-            if expected != current:
-                raise Hold(f"Restore step {index}: expected {expected}, found {current.digest}")
-            request = resolved.request
-            if isinstance(request, WriteFiles):
-                await self.write_many(request.files)
-            elif isinstance(request, WriteFile):
-                await self.write(request.path, request.data)
-            elif isinstance(request, RunCommand) and isinstance(resolved.value, CommandResult):
-                result = await self.run(request.cmd, timeout=request.timeout)
-                if _stable(result) != _stable(resolved.value):
-                    self.notify(Note(f"Restore step {index}: command result differs from the log"))
-                    # Keep the logical replay position despite the explicitly reported divergence.
-                    self.digest = current.digest
-                    self._record_command(request.cmd, request.timeout, resolved.value)
-            else:
-                raise Hold(f"Restore step {index} is not a resolved environment mutation")
 
     @override
     async def write_many(self, files: Sequence[tuple[PurePosixPath, bytes]]) -> None:

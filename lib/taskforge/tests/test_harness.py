@@ -5,9 +5,11 @@ import json
 from functools import partial
 from pathlib import Path, PurePosixPath
 from tarfile import AbsoluteLinkError, TarInfo
+from typing import override
 
 import httpx
 import pytest
+from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_limits
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -16,7 +18,7 @@ from verifyit.spec import NumericSpec
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved
-from taskforge.effects.issues import Hold, Transient
+from taskforge.effects.issues import ContextExceeded, Hold, Transient
 from taskforge.effects.log import EventLog, JsonlSink
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import (
@@ -53,7 +55,8 @@ from taskforge.resources.env import (
     write_file,
 )
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
-from taskforge.resources.inference import ContextExceeded, FakeInference
+from taskforge.resources.inference import FakeInference
+from taskforge.resources.rollouts import Engine
 from taskforge.resources.web import FakeWeb, ParallelWeb, WebFetch, WebSearch, fetch, search
 
 pytestmark = pytest.mark.asyncio
@@ -253,6 +256,25 @@ async def test_file_path_errors_return_feedback(write: bool, failure: Exception)
     result = await tool(ctx, {"path": "/bad", "content": "data"} if write else {"path": "/bad"})
     await ctx.drain()
     assert isinstance(result, ToolResult) and "/bad" in result.content
+
+
+async def test_grade_reports_a_missing_draft_but_propagates_grading_infrastructure_errors() -> None:
+    class Unreachable(Engine):
+        @override
+        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+            raise ConnectionError("iris controller unreachable")
+
+    ctx = Context(log=EventLog())
+    environment(ctx)
+    grading = GradingResource(Unreachable(), "fixture")
+    ctx.resource(grading, grading.fingerprint)
+    ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grading,))
+    tool = GradeTool("/workspace/task.json", {}, LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits()))
+    missing = await tool(ctx, {"reply": "12"})
+    assert isinstance(missing, ToolResult) and "/workspace/task.json" in missing.content
+    await ctx.emit(RunCommand("task", 30))
+    with pytest.raises(ConnectionError, match="unreachable"):
+        await tool(ctx, {"reply": "12"})
 
 
 @pytest.mark.parametrize("fails", [False, True])

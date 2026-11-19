@@ -28,12 +28,20 @@ class OutputBudgetExhausted(Restart):
 class Hold(EffectIssue):
     """Publish held until explicit resume; exhausted resources require human review.
 
-    Host lowering refusals hold; InvalidTaskSpec is authored evidence returned for repair, not an effect retry.
+    Refusals by the host hold; defects in authored work go back to the author for repair, not an effect retry.
     """
 
 
 class LogFailure(EffectIssue):
     """Event log encoding, decoding, or persistence failed."""
+
+
+class ContextExceeded(Exception):
+    """The provider rejected the conversation because its context window is full.
+
+    Not an effect decision: retrying or replacing the machine cannot shrink the conversation, so the
+    agent loop that owns it catches this and ends the session with a context-limit stop.
+    """
 
 
 def describe_exception(error: BaseException) -> str:

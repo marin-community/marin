@@ -11,7 +11,7 @@ from pathlib import PurePosixPath
 
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutInterrupted, TaskRolloutSpec, TraceMode
 from taskcompendium.grading_result import GradeResult, GradingFailure
-from taskcompendium.models import AssistantToolCalls, TextMessage
+from taskcompendium.models import AssistantToolCalls, TaskSpec, TextMessage
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, event_digest
 from taskforge.model.controls import Candidate
@@ -39,6 +39,11 @@ class ScriptedModel:
         return ModelTurn(dict(message), (), (), None, "tool_calls" if "tool_calls" in message else "stop")
 
 
+def candidate_root(task: TaskSpec) -> PurePosixPath:
+    """Where grading stages candidate files; their resource paths are relative to it."""
+    return PurePosixPath(task.environment_requirements.working_directory or "/workspace")
+
+
 def candidate_turns(candidate: Candidate, spec: TaskRolloutSpec) -> tuple[Mapping[str, object], ...]:
     turns: list[Mapping[str, object]] = []
     used = {
@@ -51,7 +56,7 @@ def candidate_turns(candidate: Candidate, spec: TaskRolloutSpec) -> tuple[Mappin
         call_id = f"file-{index}"
         while call_id in used:
             call_id += "-"
-        target = PurePosixPath(spec.task.environment_requirements.working_directory or "/workspace", file.path)
+        target = candidate_root(spec.task) / file.path
         path, parent = shlex.quote(str(target)), shlex.quote(str(target.parent))
         source = shlex.quote(f"/.forge-candidates/{index}")
         command = f"mkdir -p {parent} && cp {source} {path} && chmod {file.mode or '644'} {path}"

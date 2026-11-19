@@ -16,6 +16,9 @@ from taskforge.harness.protocol import FinishRequest, ReturnRequest, SubmitReque
 from taskforge.model.llm import ToolSchema
 
 type Outcome = ToolResult | SubmitRequest | ReturnRequest[object] | FinishRequest
+# A model-chosen path that is missing, a directory, unreadable or an unsafe archive member. Environments
+# turn connection and timeout failures into effect issues before they reach a tool.
+FILE_ERRORS: tuple[type[Exception], ...] = (OSError, TarError)
 
 
 class ValidatedTool[A](Tool[object]):
@@ -34,10 +37,7 @@ class ValidatedTool[A](Tool[object]):
             parsed = TypeAdapter(self.args_type).validate_json(json.dumps(dict(args)), strict=True)
         except ValidationError as error:
             return ToolResult(f"{self.name} arguments failed validation: {error}; call {self.name} again.")
-        try:
-            return await self.run(ctx, parsed)
-        except (OSError, TarError) as error:
-            return ToolResult(f"File operation failed: {error}")
+        return await self.run(ctx, parsed)
 
     @abstractmethod
     async def run(self, ctx: Context, args: A) -> Outcome: ...
