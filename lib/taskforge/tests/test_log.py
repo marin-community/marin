@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from lib.taskforge.tests.effect_fakes import Answer, Choices, FlakySink, PausedSink, Query, Timed
 
 from taskforge.effects.events import (
     Event,
@@ -27,8 +28,6 @@ from taskforge.model.llm import Completion, Message, Role
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
 from taskforge.resources.inference import InferenceRequest
-
-from .effect_fakes import Answer, Choices, FlakySink, PausedSink, Query, Timed
 
 pytestmark = pytest.mark.asyncio
 
