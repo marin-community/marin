@@ -204,6 +204,8 @@ Use `ConversationDatasetSourceConfig` if the records already contain turns. Each
 
 Both source configs accept JSON, JSONL, and Parquet files. Image references can be encoded bytes, local paths, or URLs.
 
+The image cache preserves the configured Hugging Face processor’s visual inputs and their dimensions. A processor without a chat template can encode single image-caption pairs directly. For conversations, assistant-only loss uses the chat template’s `{% generation %}` blocks.
+
 # API
 
 

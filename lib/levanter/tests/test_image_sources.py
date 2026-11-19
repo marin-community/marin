@@ -26,6 +26,8 @@ from transformers import (
     LlavaNextImageProcessor,
     LlavaNextProcessor,
     PreTrainedTokenizerFast,
+    Siglip2ImageProcessorPil,
+    Siglip2Processor,
 )
 
 from levanter.data.dataset import ListAsyncDataset, RepeatedDataset
@@ -122,7 +124,7 @@ def caption_processor():
     vocabulary = {
         token: index
         for index, token in enumerate(
-            ["[UNK]", "[PAD]", "<|im_start|>", "<|im_end|>", "user", "assistant", "<image>", "red", "square"]
+            ["[UNK]", "[PAD]", "<turn>", "</turn>", "user", "assistant", "<image>", "red", "square"]
         )
     }
     backend = Tokenizer(WordLevel(vocabulary, unk_token="[UNK]"))
@@ -131,16 +133,18 @@ def caption_processor():
         tokenizer_object=backend,
         unk_token="[UNK]",
         pad_token="[PAD]",
-        additional_special_tokens=["<|im_start|>", "<|im_end|>", "<image>"],
+        additional_special_tokens=["<turn>", "</turn>", "<image>"],
     )
     processor = CLIPProcessor(
         image_processor=CLIPImageProcessor(size={"shortest_edge": 4}, crop_size={"height": 4, "width": 4}),
         tokenizer=tokenizer,
     )
     processor.chat_template = (
-        "{% for message in messages %}<|im_start|> {{ message['role'] }} "
-        "{% for item in message['content'] %}{% if item['type'] == 'image' %}<image> "
-        "{% else %}{{ item['text'] }} {% endif %}{% endfor %}<|im_end|> {% endfor %}"
+        "{% for message in messages %}<turn> {{ message['role'] }} "
+        "{% macro content(items) %}{% for item in items %}{% if item['type'] == 'image' %}<image> "
+        "{% else %}{{ item['text'] }} {% endif %}{% endfor %}</turn>{% endmacro %}"
+        "{% if message.role == 'assistant' %}{% generation %}{{ content(message.content) }}{% endgeneration %}"
+        "{% else %}{{ content(message.content) }}{% endif %} {% endfor %}"
     )
     return processor
 
@@ -153,13 +157,12 @@ def test_caption_source_preserves_images_and_truncated_targets(tmp_path, caption
     records.write_text(json.dumps({"image": str(image), "text": "red square"}) + "\n")
     source = ImageDatasetSourceConfig(train_urls=[str(records)]).get_shard_source("train")
     batch = list(source.open_shard(source.shard_names[0]))
-    processed = BatchMultimodalProcessor(caption_processor, max_length=max_length, max_num_patches=3)(batch)[0]
+    processed = BatchMultimodalProcessor(caption_processor, max_length=max_length)(batch)[0]
     assert processed["pixel_values"] is not None
     expected_pixels = caption_processor.image_processor(images=Image.open(image), return_tensors="np")["pixel_values"][
         0
     ]
     np.testing.assert_allclose(processed["pixel_values"][0], expected_pixels)
-    np.testing.assert_array_equal(processed["pixel_values"][1:], 0)
     ids = processed["input_ids"]
     tokenizer = caption_processor.tokenizer
     expected_mask = np.isin(ids, tokenizer.convert_tokens_to_ids(["red", "square"]))
@@ -169,18 +172,34 @@ def test_caption_source_preserves_images_and_truncated_targets(tmp_path, caption
     np.testing.assert_array_equal(processed["loss_mask"], expected_mask)
 
 
-def test_any_resolution_patch_cap_rejects_incompatible_grid(caption_processor) -> None:
-    processor = BatchMultimodalProcessor(
-        caption_processor,
-        max_length=12,
-        max_num_patches=1,
-        grid_pinpoints=[[8, 8]],
-        tile_size=4,
-        vision_feature_height=1,
+def test_siglip2_caption_preserves_native_patch_inputs(caption_processor):
+    hf_processor = Siglip2Processor(
+        image_processor=Siglip2ImageProcessorPil(patch_size=4, max_num_patches=16),
+        tokenizer=caption_processor.tokenizer,
     )
-    record = image_caption_to_conversation({"image": Image.new("RGB", (8, 8)), "text": "red"})
-    with pytest.raises(ValueError, match="requires 4 any-resolution patches"):
-        processor([record])
+    image = Image.new("RGB", (12, 8), "blue")
+    record = image_caption_to_conversation({"image": image, "text": "red square"})
+    processor = BatchMultimodalProcessor(hf_processor, max_length=12)
+    result = processor([record])[0]
+    expected = hf_processor(
+        images=[image],
+        text=["red square"],
+        padding="max_length",
+        max_length=12,
+        return_attention_mask=True,
+        truncation=True,
+        return_tensors="np",
+    )
+    for field in ["pixel_values", "pixel_attention_mask", "spatial_shapes"]:
+        np.testing.assert_array_equal(result[field], expected[field])
+    np.testing.assert_array_equal(result["input_ids"], expected["input_ids"][0])
+    np.testing.assert_array_equal(result["loss_mask"], expected["attention_mask"][0])
+
+
+def test_assistant_mask_requires_generation_block(caption_processor):
+    caption_processor.chat_template = "{{ messages[0].role }}"
+    with pytest.raises(ValueError, match="generation block"):
+        BatchMultimodalProcessor(caption_processor, max_length=12)
 
 
 @pytest.mark.parametrize("tile_size", [4, 8])
@@ -188,20 +207,19 @@ def test_processor_dimensions_match_processed_pixels_and_cache_schema(caption_pr
     caption_processor.image_processor = CLIPImageProcessor(
         size={"shortest_edge": tile_size}, crop_size={"height": tile_size, "width": tile_size}
     )
-    processor = BatchMultimodalProcessor(caption_processor, max_length=12, max_num_patches=2)
+    processor = BatchMultimodalProcessor(caption_processor, max_length=12)
     record = image_caption_to_conversation({"image": Image.new("RGB", (16, 16), "red"), "text": "red"})
     output = processor([record])[0]
     pixels = output["pixel_values"]
     exemplar = processor.output_exemplar["pixel_values"]
     assert pixels is not None and exemplar is not None
-    assert pixels.shape == exemplar.shape == (3, 3, tile_size, tile_size)
+    assert pixels.shape == exemplar.shape == (1, 3, tile_size, tile_size)
     expected = caption_processor.image_processor(images=record["images"], return_tensors="np")["pixel_values"][0]
     np.testing.assert_allclose(pixels[0], expected)
-    np.testing.assert_array_equal(pixels[1:], 0)
 
 
 @pytest.mark.parametrize("source_kind", ["caption", "conversation"])
-def test_image_mixture_preserves_patch_limit_and_unpadded_targets(
+def test_image_mixture_caches_processor_pixels_and_unpadded_targets(
     tmp_path, caption_processor, source_kind, monkeypatch
 ):
     image = tmp_path / "red.png"
@@ -229,7 +247,7 @@ def test_image_mixture_preserves_patch_limit_and_unpadded_targets(
     )
     # The dataset must preserve different target lengths even when callers request them together.
     with set_current_client(LocalClient()):
-        dataset = config.train_set(options=CacheOptions(batch_size=1), max_num_patches=3)
+        dataset = config.train_set(options=CacheOptions(batch_size=1))
         first, second = asyncio.run(dataset.get_batch([0, 1]))
     expected_pixels = caption_processor.image_processor(images=Image.open(image), return_tensors="np")["pixel_values"][
         0
@@ -237,15 +255,14 @@ def test_image_mixture_preserves_patch_limit_and_unpadded_targets(
     for item, length in zip(sorted([first, second], key=lambda item: int(item["attention_mask"].sum())), [8, 9]):
         assert item["input_ids"].shape == (length,)
         assert item["pixel_values"] is not None
-        assert item["pixel_values"].shape == (4, 3, 4, 4)
+        assert item["pixel_values"].shape == (1, 3, 4, 4)
         np.testing.assert_allclose(item["pixel_values"][0], expected_pixels)
-        np.testing.assert_array_equal(item["grid_mask"], [True, False, False, False])
         np.testing.assert_array_equal(item["loss_mask"], [0] * 6 + [1] * (length - 6))
-    restored = config.train_set(options=CacheOptions(batch_size=1), max_num_patches=3)
+    restored = config.train_set(options=CacheOptions(batch_size=1))
     np.testing.assert_array_equal(asyncio.run(restored.get_batch([1]))[0]["input_ids"], second["input_ids"])
 
 
-def test_any_resolution_uses_processor_encoder_patch_size(caption_processor) -> None:
+def test_multi_image_expansion_preserves_processor_features_and_assistant_targets(caption_processor) -> None:
     hf_processor = LlavaNextProcessor(
         image_processor=LlavaNextImageProcessor(
             size={"shortest_edge": 4}, crop_size={"height": 4, "width": 4}, image_grid_pinpoints=[[8, 8]]
@@ -256,15 +273,20 @@ def test_any_resolution_uses_processor_encoder_patch_size(caption_processor) -> 
         num_additional_image_tokens=0,
         chat_template=caption_processor.chat_template,
     )
-    processor = BatchMultimodalProcessor(hf_processor, max_length=64)
-    record = image_caption_to_conversation({"image": Image.new("RGB", (8, 8), "red"), "text": "red"})
+    processor = BatchMultimodalProcessor(hf_processor, max_length=128)
+    images = [Image.new("RGB", (8, 8), color) for color in ("red", "blue")]
+    record = image_caption_to_conversation({"image": images[0], "text": "red"})
+    record["images"] = images
+    record["messages"][0]["content"].append({"type": "image"})
     output = processor([record])[0]
-    assert output["pixel_values"].shape == (5, 3, 4, 4)
-    np.testing.assert_array_equal(output["grid_mask"], [True] * 5)
-    # Four base tokens followed by the four 2x2 tile grids in spatial row order.
-    np.testing.assert_array_equal(
-        output["unpad_indices"], [0, 1, 2, 3, 4, 5, 8, 9, 6, 7, 10, 11, 12, 13, 16, 17, 14, 15, 18, 19]
-    )
+    prompt = hf_processor.apply_chat_template(record["messages"], tokenize=False)
+    expected = hf_processor(images=images, text=[prompt], return_tensors="np")
+    np.testing.assert_array_equal(output["pixel_values"], expected["pixel_values"])
+    np.testing.assert_array_equal(output["image_sizes"], expected["image_sizes"])
+    ids = output["input_ids"]
+    assert (ids == hf_processor.image_token_id).sum() > 2
+    selected = ids[output["loss_mask"].astype(bool)]
+    assert selected.tolist() == hf_processor.tokenizer.convert_tokens_to_ids(["red", "</turn>"])
 
 
 @pytest.mark.asyncio

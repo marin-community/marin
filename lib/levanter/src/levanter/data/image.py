@@ -8,14 +8,13 @@ import abc
 import logging
 from dataclasses import dataclass
 from functools import cached_property, partial
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Protocol, Sequence, Tuple, Union, cast
+from io import BytesIO
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Union, cast
 
 import datasets
-import equinox as eqx
 import jax
 import numpy as np
 from draccus import field
-from haliax import Axis, NamedArray
 
 from levanter.data.mixture import MixtureDataset, StopStrategy
 from jaxtyping import PRNGKeyArray
@@ -24,27 +23,23 @@ from typing_extensions import TypedDict
 from levanter.compat.hf_checkpoints import load_processor
 from levanter.data.dataset import AsyncDataset
 from levanter.data._preprocessor import BatchProcessor
-from levanter.data.dataset import MappedAsyncDataset, RepeatedDataset
+from levanter.data.dataset import RepeatedDataset
 from levanter.data.sharded_datasource import (
     ShardedDataSource,
     UrlDataSource,
     datasource_from_hf_or_none,
 )
 from levanter.store.cache import CacheOptions, TreeCache, build_or_load_cache
+from levanter.tokenizers import chat_template_has_generation_block
 from levanter.utils.jax_utils import key_iterator
 from levanter.utils.logging import silence_transformer_nag
 
 silence_transformer_nag()
 from transformers import (  # noqa: E402
-    BatchFeature,
-    LlavaOnevisionProcessor,
     PreTrainedTokenizerBase,
     ProcessorMixin,
 )
 
-from transformers.image_processing_utils import select_best_resolution  # noqa: E402
-
-from io import BytesIO  # noqa: E402
 
 import requests  # noqa: E402
 from PIL import Image  # noqa: E402
@@ -87,40 +82,7 @@ def conversation_fields(record: Mapping[str, Any], messages_key: str, images_key
     }
 
 
-# Pixel values are optional to support text-only examples.
-class ImageTextDict(TypedDict, total=False):
-    """Processed arrays consumed by the cache and image dataset.
-
-    Attributes:
-        pixel_values: Padded image tiles, shaped (tiles, channels, height, width).
-        input_ids: Integer text tokens, shaped (sequence,).
-        attention_mask: Valid text positions, shaped (sequence,).
-        image_sizes: Original (height, width) for each image; empty for text-only examples.
-        loss_mask: Positions contributing to the language loss, shaped (sequence,).
-        grid_mask: Valid image tiles, shaped (tiles,), or None.
-        unpad_indices: Feature indices in processor order, or None.
-    """
-
-    pixel_values: np.ndarray | None
-    input_ids: np.ndarray
-    attention_mask: np.ndarray
-    image_sizes: np.ndarray | None
-    loss_mask: np.ndarray
-    grid_mask: np.ndarray | None
-    unpad_indices: np.ndarray | None
-
-
-def _image_text_cache_exemplar(tile_size: int) -> ImageTextDict:
-    """Build the array schema TreeCache uses for processed image examples."""
-    return {
-        "pixel_values": np.zeros((1, 3, tile_size, tile_size), dtype=np.float32),
-        "input_ids": np.zeros((1,), dtype=np.int32),
-        "attention_mask": np.zeros((1,), dtype=np.int32),
-        "image_sizes": np.zeros((1, 2), dtype=np.int32),
-        "loss_mask": np.zeros((1,), dtype=np.float32),
-        "grid_mask": None,
-        "unpad_indices": None,
-    }
+ImageTextDict = dict[str, np.ndarray]
 
 
 def load_image_from_path_or_url(path_or_url: str) -> Image.Image:
@@ -157,64 +119,8 @@ def load_image(image_data: Any) -> Image.Image:
             raise ValueError(f"Unsupported image data: {type(image_data)}")
 
 
-@dataclass(frozen=True)
-class AnyResolutionParams:
-    grid_pinpoints: Optional[List[List[int]]]
-    tile_size: int
-    vision_feature_height: Optional[int]
-    max_num_patches: Optional[int]
-
-
-class MultimodalProcessorCallable(Protocol):
-    def __call__(
-        self,
-        *,
-        text: list[str],
-        return_tensors: str,
-        padding: str | bool,
-        max_length: int,
-        truncation: bool,
-        images: Optional[list[Image.Image]] = None,
-    ) -> BatchFeature: ...
-
-
-def _extract_anyres_params(processor: ProcessorMixin) -> AnyResolutionParams:
-    """Read tiling parameters from the processor's image configuration."""
-    image_processor = processor.image_processor
-    grid_pinpoints = getattr(image_processor, "image_grid_pinpoints", None)
-    size = getattr(image_processor, "crop_size", None) or image_processor.size
-    if not isinstance(size, int):
-        tile_size = size.get("height", size.get("shortest_edge"))
-        width = size.get("width", tile_size)
-        if width != tile_size:
-            raise ValueError("Image tiles must be square; configure a square crop in the image processor")
-    else:
-        tile_size = size
-    if not isinstance(tile_size, int):
-        raise ValueError("The image processor must specify a tile height or shortest_edge")
-    vision_feature_height = None
-    max_num_patches = None
-    if grid_pinpoints:
-        encoder_patch_size = processor.patch_size
-        if not isinstance(encoder_patch_size, int):
-            raise ValueError("Any-resolution processing requires the encoder patch size")
-        vision_feature_height = tile_size // encoder_patch_size
-        # Size the cache for raw image tiles. OneVision's aspect-ratio limit
-        # applies to features after vision encoding.
-        max_num_patches = max((h // tile_size) * (w // tile_size) for h, w in grid_pinpoints)
-
-    return AnyResolutionParams(grid_pinpoints, tile_size, vision_feature_height, max_num_patches)
-
-
-def _pad_or_trim_image_tiles(pixel_values: np.ndarray, num_tiles: int) -> np.ndarray:
-    if pixel_values.shape[0] >= num_tiles:
-        return pixel_values[:num_tiles]
-    padding = np.zeros((num_tiles - pixel_values.shape[0],) + pixel_values.shape[1:], dtype=pixel_values.dtype)
-    return np.concatenate([pixel_values, padding], axis=0)
-
-
 class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
-    """Apply a chat template and image processor to produce ImageTextDict training examples."""
+    """Cache native processor arrays and a loss mask aligned to the expanded token sequence."""
 
     def __init__(
         self,
@@ -226,12 +132,7 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
         images_key: str = "images",
         add_generation_prompt: bool = False,
         mask_prompt: bool = True,
-        max_num_patches: Optional[int] = None,
-        grid_pinpoints: Optional[List[List[int]]] = None,
-        tile_size: Optional[int] = None,
-        vision_feature_height: Optional[int] = None,
-    ) -> None:
-        """Initialize processing with the tokenizer bundled with the Hugging Face processor."""
+    ):
         self.processor = processor
         self.max_length = max_length
         self.padding = padding
@@ -239,273 +140,100 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
         self.images_key = images_key
         self.add_generation_prompt = add_generation_prompt
         self.mask_prompt = mask_prompt
+        self.template = processor.chat_template or processor.tokenizer.chat_template
+        if isinstance(self.template, dict):
+            self.template = self.template["default"]
+        if mask_prompt and self.template is not None and not chat_template_has_generation_block(self.template):
+            raise ValueError("Assistant masking requires a chat template with a generation block")
 
-        params = _extract_anyres_params(processor)
-        if grid_pinpoints is None:
-            grid_pinpoints = params.grid_pinpoints
-        self.grid_pinpoints = grid_pinpoints
-        self.tile_size = params.tile_size if tile_size is None else tile_size
-        self.vision_feature_height = (
-            params.vision_feature_height if vision_feature_height is None else vision_feature_height
-        )
-        self.max_num_patches = params.max_num_patches if max_num_patches is None else max_num_patches
-
-        self._padding_mode = "max_length" if self.padding else False
-
-        if self.mask_prompt:
-            tokenizer = self.processor.tokenizer
-            vocab = tokenizer.get_vocab()
-            if "<|im_start|>" not in vocab or "<|im_end|>" not in vocab:
-                raise ValueError("Prompt masking requires a ChatML tokenizer with <|im_start|> and <|im_end|> tokens")
-            assistant_ids = tokenizer.encode("assistant", add_special_tokens=False)
-            if not assistant_ids or tokenizer.unk_token_id in assistant_ids:
-                raise ValueError("Prompt masking requires the tokenizer to encode the assistant role")
-            self._cached_im_start_id = vocab["<|im_start|>"]
-            self._cached_im_end_id = vocab["<|im_end|>"]
-            self._cached_num_assistant_tokens = len(assistant_ids)
-            self._cached_assistant_token_ids_array = np.array(assistant_ids, dtype=np.int32)
-
-    def _compute_grid_shape(self, image_size: Tuple[int, int]) -> Tuple[int, int]:
-        if not self.grid_pinpoints:
-            return (1, 1)
-
-        height, width = select_best_resolution(image_size, self.grid_pinpoints)
-        return height // self.tile_size, width // self.tile_size
-
-    def _unpad_indices(self, height: int, width: int, tile_side: int) -> np.ndarray:
-        """Map spatially ordered features to tile-major indices, with the base tile first."""
-        grid_height, grid_width = self._compute_grid_shape((height, width))
-        rows, cols = grid_height * tile_side, grid_width * tile_side
-        row_pad = col_pad = 0
-        # Match Hugging Face's symmetric crop, including its rounding for odd dimensions.
-        if width / height > cols / rows:
-            row_pad = (rows - int(round(height * (cols / width), 7))) // 2
+    def _process(self, messages, images, *, truncate: bool) -> ImageTextDict:
+        tokenizer = self.processor.tokenizer
+        template_args = dict(chat_template=self.template, add_generation_prompt=self.add_generation_prompt)
+        if self.template is None:
+            match messages:
+                case [
+                    {"role": "user", "content": [{"type": "image"}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": str(prompt)}]},
+                ] if (
+                    len(images) == 1
+                ):
+                    pass
+                case _:
+                    raise ValueError(
+                        "A chat template is required for conversations beyond a single image-caption pair"
+                    )
         else:
-            col_pad = (cols - int(round(width * (rows / height), 7))) // 2
-
-        row = np.arange(row_pad, rows - row_pad, dtype=np.int32)[:, None]
-        col = np.arange(col_pad, cols - col_pad, dtype=np.int32)
-        tile_row, local_row = np.divmod(row, tile_side)
-        tile_col, local_col = np.divmod(col, tile_side)
-        tile_index = 1 + tile_row * grid_width + tile_col
-        features_per_tile = tile_side**2
-        grid_indices = tile_index * features_per_tile + local_row * tile_side + local_col
-        indices = np.concatenate([np.arange(features_per_tile, dtype=np.int32), grid_indices.ravel()])
-        if self.max_num_patches is None:
-            return indices
-        capacity = (self.max_num_patches + 1) * features_per_tile
-        return np.pad(indices, (0, capacity - indices.size))
-
-    def _pad_pixel_values(self, pixel_values: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        assert self.max_num_patches is not None
-        total_patches = self.max_num_patches + 1  # +1 for base patch
-        actual_patches = pixel_values.shape[0]
-
-        if actual_patches > total_patches:
-            raise ValueError(f"Example has {actual_patches} image tiles but the cache holds {total_patches}")
-
-        return _pad_or_trim_image_tiles(pixel_values, total_patches), np.arange(total_patches) < actual_patches
-
-    def _create_loss_mask(self, input_ids: np.ndarray) -> np.ndarray:
-        """Select assistant content and its terminator, including truncated responses."""
-        if not self.mask_prompt:
-            return np.ones(len(input_ids), dtype=np.float32)
-
-        n = len(input_ids)
-        num_assistant_tokens = self._cached_num_assistant_tokens
-        empty_mask = np.zeros(n, dtype=np.float32)
-
-        if n < 3:
-            return empty_mask
-
-        im_start_positions = np.where(input_ids == self._cached_im_start_id)[0]
-        valid_positions = im_start_positions[im_start_positions + 1 + num_assistant_tokens <= n]
-        if len(valid_positions) == 0:
-            return empty_mask
-
-        offsets = np.arange(1, num_assistant_tokens + 1)
-        check_indices = valid_positions[:, None] + offsets
-        check_tokens = input_ids[check_indices]
-        matches = np.all(check_tokens == self._cached_assistant_token_ids_array, axis=1)
-        pattern_starts = valid_positions[matches]
-        if len(pattern_starts) == 0:
-            return empty_mask
-
-        im_end_positions = np.where(input_ids == self._cached_im_end_id)[0]
-
-        # Content starts after: <|im_start|> + assistant_tokens
-        # Note: The \n after "assistant" is INCLUDED in loss (matches HF behavior)
-        content_starts = pattern_starts + 1 + num_assistant_tokens
-        valid_mask = content_starts < n
-        content_starts = content_starts[valid_mask]
-        if len(content_starts) == 0:
-            return empty_mask
-
-        end_indices = np.searchsorted(im_end_positions, content_starts, side="left")
-        # A truncated final response still supervises its visible prefix.
-        end_positions = np.append(im_end_positions + 1, n)[end_indices]
-
-        diff = np.zeros(n + 1, dtype=np.int8)
-        np.add.at(diff, content_starts, 1)
-        np.add.at(diff, end_positions, -1)
-        mask = np.cumsum(diff[:-1]) > 0
-
-        return mask.astype(np.float32)
-
-    def _prepare_conversations(
-        self, batch: Sequence[Mapping[str, Any]]
-    ) -> tuple[list[str], list[Image.Image], list[int]]:
-        all_images: list[Image.Image] = []
-        all_texts: list[str] = []
-        images_per_example: list[int] = []
-
-        for item in batch:
-            if item.get("audio") or item.get("videos"):
-                raise ValueError(
-                    "BatchMultimodalProcessor accepts images and text; use an audio/video processor for other modalities"
-                )
-            messages = item.get(self.messages_key, [])
-            images_data = item.get(self.images_key, [])
-
-            all_images.extend(load_image(img) for img in images_data)
-            images_per_example.append(len(images_data))
-
-            all_texts.append(
-                self.processor.apply_chat_template(
-                    messages,
-                    add_generation_prompt=self.add_generation_prompt,
-                )
+            prompt = self.processor.apply_chat_template(messages, tokenize=False, **template_args)
+        text_options: dict[str, Any] = dict(
+            return_tensors="np",
+            add_special_tokens=self.template is None,
+            return_attention_mask=True,
+            padding="max_length" if truncate and self.padding else False,
+            truncation=truncate,
+            max_length=self.max_length if truncate else None,
+        )
+        encoded = self.processor(text=[prompt], images=images or None, **text_options)
+        # Image tensors keep the processor's dimensions, including any image, tile, or patch axes.
+        sequence_keys = {*tokenizer.model_input_names, "input_ids", "attention_mask", "mm_token_type_ids"}
+        result = {key: np.asarray(value[0] if key in sequence_keys else value) for key, value in encoded.items()}
+        ids = result["input_ids"]
+        active = result["attention_mask"].astype(bool)
+        image_ids = self.processor.image_token_ids
+        text = active & ~np.isin(ids, image_ids)
+        loss = text.astype(np.float32)
+        if self.mask_prompt and self.template is not None:
+            # The template marks the original text. Image expansion may insert many tokens
+            # before an assistant turn, so align only the surviving text tokens.
+            original = tokenizer.apply_chat_template(
+                messages, tokenize=True, return_dict=True, return_assistant_tokens_mask=True, **template_args
             )
+            original_ids = np.asarray(original["input_ids"])
+            original_text = ~np.isin(original_ids, image_ids)
+            count = int(text.sum())
+            start = int(original_text.sum()) - count if tokenizer.truncation_side == "left" else 0
+            keep = slice(start, start + count)
+            if not np.array_equal(ids[text], original_ids[original_text][keep]):
+                raise ValueError("Cannot align the processor's text tokens with the chat template's assistant mask")
+            loss[text] = np.asarray(original["assistant_masks"])[original_text][keep]
+        result["loss_mask"] = loss
+        return result
 
-        return all_texts, all_images, images_per_example
+    @cached_property
+    def output_exemplar(self) -> ImageTextDict:
+        image = Image.new("RGB", (32, 32))
+        record = image_caption_to_conversation({"image": image, "text": "caption"})
+        return self._process(record["messages"], [image], truncate=False)
 
     def __call__(self, batch: Sequence[Mapping[str, Any]]) -> Sequence[ImageTextDict]:
-        """Process conversations into token targets and image inputs."""
-        all_texts, all_images, images_per_example = self._prepare_conversations(batch)
-
-        if self.grid_pinpoints and any(count > 1 for count in images_per_example):
-            if not isinstance(self.processor, LlavaOnevisionProcessor):
-                raise ValueError("Multi-image tiling currently requires a LLaVA OneVision processor")
-
-        if self.max_num_patches is not None and self.grid_pinpoints:
-            image_offset = 0
-            for num_images in images_per_example:
-                if num_images == 1:
-                    image = all_images[image_offset]
-                    grid_height, grid_width = self._compute_grid_shape((image.height, image.width))
-                    required_patches = grid_height * grid_width
-                    if required_patches > self.max_num_patches:
-                        raise ValueError(
-                            f"Image requires {required_patches} any-resolution patches, "
-                            f"but max_num_patches is {self.max_num_patches}"
-                        )
-                image_offset += num_images
-
-        if all_images:
-            processed: BatchFeature = cast(MultimodalProcessorCallable, self.processor)(
-                images=all_images,
-                text=all_texts,
-                return_tensors="np",
-                padding=self._padding_mode,
-                max_length=self.max_length,
-                truncation=True,
-            )
-        else:
-            processed: BatchFeature = cast(MultimodalProcessorCallable, self.processor)(
-                text=all_texts,
-                return_tensors="np",
-                padding=self._padding_mode,
-                max_length=self.max_length,
-                truncation=True,
-            )
-
-        input_ids_batch = processed["input_ids"].astype(np.int32)
-        attention_mask_batch = processed["attention_mask"].astype(np.int32)
-
-        has_image_sizes = "image_sizes" in processed
-        pixel_values_batch = processed.get("pixel_values")
-        if pixel_values_batch is not None and pixel_values_batch.ndim == 4:
-            # Single-crop processors return (images, channels, height, width).
-            pixel_values_batch = pixel_values_batch[:, None, ...]
-        img_sizes = (
-            processed["image_sizes"].astype(np.int32)
-            if has_image_sizes
-            else np.asarray([(image.height, image.width) for image in all_images], dtype=np.int32).reshape(-1, 2)
-        )
-
-        cum_images = np.cumsum(images_per_example)
-
-        out: list[ImageTextDict] = []
-        for i, num_images in enumerate(images_per_example):
-            input_ids = input_ids_batch[i]
-
-            pv_end = cum_images[i]
-            pv_start = pv_end - num_images
-
-            grid_mask = None
-            unpad_indices = None
-            pixel_values = None
-            if num_images and pixel_values_batch is not None:
-                if num_images == 1:
-                    pixel_values = pixel_values_batch[pv_start]
-                else:
-                    # Multi-image examples use the base tile of each image.
-                    pixel_values = pixel_values_batch[pv_start:pv_end, 0].copy()
-                if self.max_num_patches is not None:
-                    pixel_values, grid_mask = self._pad_pixel_values(pixel_values)
-
-            image_sizes = img_sizes[pv_start:pv_end].reshape(-1, 2)
-
-            if num_images == 1 and has_image_sizes and self.grid_pinpoints and self.vision_feature_height:
-                height, width = image_sizes[0]
-                unpad_indices = self._unpad_indices(int(height), int(width), self.vision_feature_height)
-
-            result: ImageTextDict = {
-                "pixel_values": pixel_values,
-                "input_ids": input_ids,
-                "attention_mask": attention_mask_batch[i],
-                "image_sizes": image_sizes,
-                "loss_mask": self._create_loss_mask(input_ids),
-                "grid_mask": grid_mask,
-                "unpad_indices": unpad_indices,
-            }
-            out.append(result)
-
-        return out
+        results = []
+        for item in batch:
+            if item.get("audio") or item.get("videos"):
+                raise ValueError("Image preprocessing accepts image and text content")
+            messages = item[self.messages_key]
+            images = [load_image(image) for image in item.get(self.images_key, [])]
+            fields = self._process(messages, images, truncate=True)
+            if not images:
+                # TreeCache requires the same fields and ranks for text-only rows.
+                for key, exemplar in self.output_exemplar.items():
+                    if key not in fields:
+                        fields[key] = exemplar[:0]
+            results.append(fields)
+        return results
 
     @property
-    def metadata(self) -> Dict[str, Any]:
+    def metadata(self) -> dict[str, Any]:
         return {
-            "processor": type(self.processor).__name__,
+            "processor": self.processor.to_dict(),
+            "template": self.template,
             "max_length": self.max_length,
             "padding": self.padding,
             "mask_prompt": self.mask_prompt,
-            "max_num_patches": self.max_num_patches,
-            "tile_size": self.tile_size,
-            "grid_pinpoints": self.grid_pinpoints,
-            "vision_feature_height": self.vision_feature_height,
+            "add_generation_prompt": self.add_generation_prompt,
         }
-
-    @property
-    def output_exemplar(self) -> ImageTextDict:
-        exemplar = _image_text_cache_exemplar(self.tile_size)
-        if self.max_num_patches is not None:
-            total_patches = self.max_num_patches + 1
-            exemplar["pixel_values"] = np.zeros((total_patches, 3, self.tile_size, self.tile_size), dtype=np.float32)
-            exemplar["grid_mask"] = np.zeros((total_patches,), dtype=np.bool_)
-            if self.grid_pinpoints and self.vision_feature_height:
-                features_per_patch = self.vision_feature_height * self.vision_feature_height
-                max_features = (self.max_num_patches + 1) * features_per_patch
-                exemplar["unpad_indices"] = np.zeros((max_features,), dtype=np.int32)
-        return exemplar
 
     @property
     def num_cpus(self) -> int:
         return 2
-
-    @property
-    def num_gpus(self) -> int:
-        return 0
 
 
 def image_caption_to_conversation(record: Dict[str, Any]) -> ConversationDict:
@@ -686,7 +414,6 @@ class ProcessedImageCache(AsyncDataset[ImageTextDict]):
         messages_key: str = "messages",
         images_key: str = "images",
         cache_options: CacheOptions = CacheOptions.default(),
-        max_num_patches: Optional[int] = None,
     ) -> "ProcessedImageCache":
         batch_processor = BatchMultimodalProcessor(
             processor,
@@ -694,9 +421,10 @@ class ProcessedImageCache(AsyncDataset[ImageTextDict]):
             padding=padding,
             messages_key=messages_key,
             images_key=images_key,
-            max_num_patches=max_num_patches,
         )
-        cache = build_or_load_cache(cache_dir, source, batch_processor, options=cache_options)
+        cache = build_or_load_cache(
+            prefix_join(cache_dir, "processor-inputs-v1"), source, batch_processor, options=cache_options
+        )
 
         if cache.is_finished:
             logger.info(f"Cache {cache_dir} is complete.")
@@ -730,7 +458,6 @@ class ImageIODatasetConfig(ImageTaskConfig):
         self,
         split: str,
         cache_options: CacheOptions = CacheOptions.default(),
-        max_num_patches: Optional[int] = None,
     ) -> Optional[ProcessedImageCache]:
         source = self.source.get_shard_source(split)
         if source is None:
@@ -742,119 +469,7 @@ class ImageIODatasetConfig(ImageTaskConfig):
             max_length=self.max_length,
             padding=self.padding,
             cache_options=cache_options,
-            max_num_patches=max_num_patches,
         )
-
-
-class ImageTextExample(eqx.Module):
-    """Named-array PyTree consumed by the trainer and its batch loader.
-
-    The loss mask selects text targets. Grid masks and unpadding indices describe
-    the processor's image tiles. These fields remain separate from attention masks.
-    """
-
-    pixel_values: NamedArray | None  # (TOTAL_PATCHES, channels, height, width) - FIXED shape, padded
-    input_ids: NamedArray  # (position,)
-    loss_mask: NamedArray | None = None  # (position,) - mask for loss computation (1.0 for valid, 0.0 for masked)
-    # Boolean mask indicating valid patches (True for actual, False for padding)
-    # Shape: (TOTAL_PATCHES,) where TOTAL_PATCHES = max_patches + 1
-    grid_mask: NamedArray | None = None
-    # Pre-computed indices to reorder features to HF's unpadded order
-    # Shape: (num_image_tokens,) - maps HF position to Levanter index
-    unpad_indices: NamedArray | None = None
-
-
-class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
-    """Dataset that converts ImageTextDict to ImageTextExample with proper axes."""
-
-    def __init__(
-        self,
-        dataset: AsyncDataset[ImageTextDict],
-        Position: Axis,
-        NumPatches: Axis,
-        Channels: Axis,
-        Height: Axis,
-        Width: Axis,
-        pixel_dtype: Optional[np.dtype] = None,
-        NumImageTokens: Optional[Axis] = None,
-    ) -> None:
-        """Wrap host arrays with named axes. NumImageTokens sets the length of the optional unpadding indices."""
-        self.dataset = dataset
-        self.Position = Position
-        self.NumPatches = NumPatches
-        self.Channels = Channels
-        self.Height = Height
-        self.Width = Width
-        self.pixel_dtype = pixel_dtype
-        self.NumImageTokens = NumImageTokens
-
-        # Process on CPU with numpy, avoid jnp.asarray() which would allocate on TPU
-        # Use NamedArray constructor directly instead of hax.named() to keep data as numpy
-        # DataLoader will handle the conversion to JAX arrays during batching
-        def _convert_example(inputs: ImageTextDict) -> ImageTextExample:
-            pixel_array = inputs.get("pixel_values")
-            pixel_dtype = np.dtype(self.pixel_dtype) if self.pixel_dtype is not None else np.float32
-
-            if pixel_array is None:
-                # Text-only: zero-padded pixel_values, grid_mask will be all-False
-                pixel_array = np.zeros(
-                    (self.NumPatches.size, self.Channels.size, self.Height.size, self.Width.size),
-                    dtype=pixel_dtype,
-                )
-            elif pixel_array.ndim == 4:
-                pixel_array = _pad_or_trim_image_tiles(pixel_array, self.NumPatches.size)
-
-                if self.pixel_dtype is not None:
-                    pixel_array = pixel_array.astype(pixel_dtype)
-            elif pixel_array.ndim == 3:
-                if self.pixel_dtype is not None:
-                    pixel_array = pixel_array.astype(pixel_dtype)
-            else:
-                raise ValueError(f"Unexpected pixel_values shape: {pixel_array.shape}")
-
-            if pixel_array.ndim == 4:
-                pixel_values = NamedArray(
-                    pixel_array,
-                    (self.NumPatches, self.Channels, self.Height, self.Width),
-                )
-            else:
-                pixel_values = NamedArray(pixel_array, (self.Channels, self.Height, self.Width))
-
-            input_ids = NamedArray(inputs["input_ids"], (self.Position,))
-
-            loss_mask = None
-            if "loss_mask" in inputs:
-                loss_mask = NamedArray(inputs["loss_mask"], (self.Position,)).astype(np.float32)
-
-            grid_mask_array = inputs.get("grid_mask")
-            if grid_mask_array is None:
-                grid_mask_array = np.full(self.NumPatches.size, inputs.get("pixel_values") is not None, dtype=np.bool_)
-            grid_mask = NamedArray(grid_mask_array, (self.NumPatches,))
-
-            unpad_indices = None
-            if self.NumImageTokens is not None:
-                unpad_indices_array = inputs.get("unpad_indices")
-                if unpad_indices_array is not None:
-                    target_size = self.NumImageTokens.size
-                    if len(unpad_indices_array) < target_size:
-                        padded = np.zeros(target_size, dtype=np.int32)
-                        padded[: len(unpad_indices_array)] = unpad_indices_array
-                        unpad_indices_array = padded
-                    else:
-                        unpad_indices_array = unpad_indices_array[:target_size]
-                else:
-                    unpad_indices_array = np.zeros(self.NumImageTokens.size, dtype=np.int32)
-                unpad_indices = NamedArray(unpad_indices_array, (self.NumImageTokens,))
-
-            return ImageTextExample(
-                pixel_values,
-                input_ids,
-                loss_mask=loss_mask,
-                grid_mask=grid_mask,
-                unpad_indices=unpad_indices,
-            )
-
-        super().__init__(self.dataset, _convert_example)
 
 
 @dataclass
@@ -890,9 +505,8 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
         *,
         key: Optional[PRNGKeyArray] = None,
         epochs: Optional[int] = None,
-        max_num_patches: Optional[int] = None,
     ) -> AsyncDataset[ImageTextDict]:
-        image_datasets = self.training_sets(max_num_patches=max_num_patches, options=options)
+        image_datasets = self.training_sets(options=options)
 
         if key is None:
             key = jax.random.PRNGKey(0)
@@ -932,18 +546,17 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
         return mixture
 
     def training_sets(
-        self, max_num_patches: Optional[int] = None, options: CacheOptions = CacheOptions.default()
+        self, options: CacheOptions = CacheOptions.default()
     ) -> Mapping[str, AsyncDataset[ImageTextDict]]:
-        return self.build_caches("train", options=options, max_num_patches=max_num_patches)
+        return self.build_caches("train", options=options)
 
-    def validation_sets(self, max_num_patches: Optional[int] = None) -> Mapping[str, AsyncDataset[ImageTextDict]]:
-        return self.build_caches("validation", max_num_patches=max_num_patches)
+    def validation_sets(self) -> Mapping[str, AsyncDataset[ImageTextDict]]:
+        return self.build_caches("validation")
 
     def build_caches(
         self,
         split: str,
         options: CacheOptions = CacheOptions.default(),
-        max_num_patches: Optional[int] = None,
     ) -> Dict[str, ProcessedImageCache]:
         caches = {}
         for name, source in self.configs.items():
@@ -964,7 +577,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
             source_split = (
                 source.train_split if split == "train" else source.validation_split if split == "validation" else split
             )
-            cache = dataset.build_or_load_cache(source_split, options, max_num_patches=max_num_patches)
+            cache = dataset.build_or_load_cache(source_split, options)
             if cache is not None:
                 caches[name] = cache
         return caches
