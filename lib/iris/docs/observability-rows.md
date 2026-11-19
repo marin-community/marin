@@ -13,6 +13,20 @@ empty, on its own store and on the hub. A CoreWeave cluster's Finelog
 forwards the rows named for its `forwarding.cluster`, and each cluster config
 sets that to the cluster's name, which a test checks.
 
+## How changes are captured
+
+SQLite triggers on the controller's write connection record the key of every
+job, task and attempt a transaction inserts or changes, in TEMP tables that
+exist only on that connection. Just before the transaction commits, the
+controller reads those rows back, empties the TEMP tables, and writes the rows
+to Finelog after the commit. A write path needs no capture code of its own, and
+a rolled-back transaction writes nothing. Deletes, such as pruning finished
+jobs, record nothing. The triggers fire only for writes on that one connection.
+Every controller write to these tables goes through it, and it gets the triggers
+again after a reopen or a checkpoint restore. The trigger conditions in
+`iris.cluster.controller.observability_rows` are the one statement of what
+counts as a change.
+
 ## Which columns are copied
 
 They copy a chosen set of columns, not a mirror. **The rule:** copy a column
@@ -212,6 +226,12 @@ transaction that rolls back after its snapshot emits no row event, though its
 lock time is counted. The wait is timed around `acquire()`; it is near zero for
 a re-entrant acquire by the thread already holding the lock.
 
+An event's `snapshot_seconds` includes the check for changed keys. Two costs
+are in `iris_controller_write_lock_held_seconds` and in no event: the capture
+triggers' own inserts, which run inside the controller's statements, and the
+check for changed keys on a transaction that changed nothing. Compare lock time
+with the copy on and off for the full cost.
+
 A transaction whose rows take over 100 ms also logs `observability rows: N rows
 took M ms under the write lock`, at most once a minute.
 
@@ -253,8 +273,8 @@ finelog:
   controller_rows: false
 ```
 
-The controller then attaches no row tables: write transactions mark, read and
-write no rows, and the controller logs `observability rows are off` at start.
+The controller then attaches no row tables: its write connection gets no capture
+triggers, write transactions read and write no rows, and the controller logs `observability rows are off` at start.
 It still emits the lock counters, so lock time before and after the switch can
 be compared. Rows for changes made while it is off are not
 written later.

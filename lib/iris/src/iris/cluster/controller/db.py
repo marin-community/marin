@@ -59,7 +59,7 @@ from sqlalchemy.engine.cursor import CursorResult
 
 from iris.cluster.controller import write_lock_cost
 from iris.cluster.controller.caches import CacheRegistry
-from iris.cluster.controller.observability_rows import ObservabilityRowTables
+from iris.cluster.controller.observability_rows import ObservabilityRowTables, capture_changes, install_capture
 from iris.cluster.controller.schema import metadata, schema_migrations_table
 from iris.cluster.controller.write_lock_cost import CostWindow
 
@@ -160,15 +160,12 @@ class Tx:
         caches: CacheRegistry,
         seq: int,
         task_event_table: Table | None = None,
-        observability_rows: ObservabilityRowTables | None = None,
         lock_cost: CostWindow | None = None,
     ):
         self.conn = conn
         self.task_event_table = task_event_table
-        self.observability_rows = observability_rows
         # The owning DB's write-lock cost window; None on a read snapshot.
         self.lock_cost = lock_cost
-        self._pre_commit_hooks: list[Callable[[], None]] = []
         self._hooks: list[Callable[[], None]] = []
         # The DB commit sequence sampled just BEFORE this cursor's snapshot was
         # established (``BEGIN``). It is a conservative lower bound on what the
@@ -209,18 +206,6 @@ class Tx:
         """
         self._hooks.append(hook)
 
-    def register_pre_commit(self, hook: Callable[[], None]) -> None:
-        """Register a hook that runs inside the transaction, just before ``COMMIT``.
-
-        Hooks run in registration order and may read and write through this
-        cursor. An exception rolls the transaction back.
-        """
-        self._pre_commit_hooks.append(hook)
-
-    def _fire_pre_commit_hooks(self) -> None:
-        for hook in self._pre_commit_hooks:
-            hook()
-
     def _fire_hooks(self) -> None:
         for hook in self._hooks:
             hook()
@@ -258,11 +243,14 @@ def write_transaction(
         conn = write_engine.connect()
         # Sample the commit sequence BEFORE opening the snapshot (conservative).
         seq = caches.commit_seq
+        if observability_rows is not None:
+            install_capture(conn)
         conn.execute(text("BEGIN IMMEDIATE"))
-        tx = Tx(conn, caches, seq, task_event_table, observability_rows, lock_cost)
+        tx = Tx(conn, caches, seq, task_event_table, lock_cost)
         try:
             yield tx
-            tx._fire_pre_commit_hooks()
+            if observability_rows is not None:
+                capture_changes(tx, observability_rows)
         except Exception:
             conn.execute(text("ROLLBACK"))
             raise

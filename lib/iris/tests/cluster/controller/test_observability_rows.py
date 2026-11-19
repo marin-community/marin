@@ -15,19 +15,20 @@ from pathlib import Path
 import pytest
 from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import load_config
+from iris.cluster.controller import db as db_module
 from iris.cluster.controller import observability_rows, ops, write_lock_cost, writes
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.observability_rows import ObservabilityRowTables
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.schema import jobs_table, tasks_table
 from iris.cluster.controller.write_lock_cost import PendingCost
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTask, IrisTaskAttempt
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
-from iris.testing import observability_rows_check
 from iris.testing.controller import (
     fail_worker,
     make_controller_state,
@@ -42,6 +43,8 @@ from iris.testing.controller import (
 from iris.testing.controller_state import ControllerTestState
 from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
 from rigging.timing import RateLimiter, Timestamp
+from sqlalchemy import text
+from sqlalchemy import update as sa_update
 
 
 @dataclass
@@ -218,11 +221,9 @@ def test_rolled_back_transaction_writes_no_rows(state):
 
 
 def test_failed_snapshot_drops_rows_but_commits_the_controller_change(state, monkeypatch):
-    observability_rows_check.uninstall(state._db)  # this test drops rows on purpose
     rows = _attach(state, "marin")
 
-    def broken_snapshot(cur, tables, marked):
-        marked.job_rows.append(object())  # a partial snapshot must be dropped too
+    def broken_snapshot(cur, tables):
         raise RuntimeError("snapshot bug")
 
     monkeypatch.setattr(observability_rows, "_snapshot", broken_snapshot)
@@ -238,7 +239,6 @@ class _ClosedTable(FakeStatsTable):
 
 
 def test_failed_write_commits_and_runs_later_post_commit_hooks(state):
-    observability_rows_check.uninstall(state._db)  # this test drops rows on purpose
     state._db.attach_observability_rows(
         ObservabilityRowTables(
             cluster="marin",
@@ -693,14 +693,17 @@ def test_removing_a_worker_writes_the_task_rows_that_pointed_at_it(state):
     ]
 
 
-def test_a_controller_with_observability_rows_off_attaches_no_row_tables(make_controller, tmp_path):
+def _capture_triggers(db: ControllerDB) -> int:
+    with db.transaction() as tx:
+        return tx.execute(text("SELECT count(*) FROM sqlite_temp_master WHERE type = 'trigger'")).scalar_one()
+
+
+def test_a_controller_with_observability_rows_off_installs_no_triggers(make_controller, tmp_path):
     on = make_controller(local_state_dir=tmp_path / "on")
     off = make_controller(observability_rows=False, local_state_dir=tmp_path / "off")
 
-    with on._db.transaction() as tx:
-        assert tx.observability_rows is not None
-    with off._db.transaction() as tx:
-        assert tx.observability_rows is None
+    assert _capture_triggers(on._db) > 0
+    assert _capture_triggers(off._db) == 0
 
 
 def test_slow_rows_are_logged_and_counted_in_the_dbs_lock_cost(state, monkeypatch, caplog):
@@ -758,10 +761,18 @@ def test_a_rolled_back_transaction_emits_no_row_record(state, monkeypatch):
     def fail_after_the_snapshot() -> None:
         raise RuntimeError("made-up failure after the snapshot")
 
+    capture = db_module.capture_changes
+
+    def capture_then_fail(cur, tables) -> None:
+        capture(cur, tables)
+        fail_after_the_snapshot()
+
+    monkeypatch.setattr(db_module, "capture_changes", capture_then_fail)
     with pytest.raises(RuntimeError, match="made-up failure"):
         with state._db.transaction() as cur:
-            observability_rows.record_job_changes(cur, [JobName.root("test-user", "train")])
-            cur.register_pre_commit(fail_after_the_snapshot)
+            cur.execute(
+                sa_update(jobs_table).where(jobs_table.c.job_id == JobName.root("test-user", "train")).values(error="x")
+            )
 
     assert [r for pending in emitted for r in pending.row_transactions] == []
     assert emitted, "the rolled-back transaction still reports its lock time"
@@ -802,3 +813,42 @@ def test_a_status_message_refresh_writes_no_attempt_row_and_no_row_event(state, 
     assert rows.attempts == []
     assert rows.tasks == []
     assert [r for pending in emitted for r in pending.row_transactions] == []
+
+
+def test_a_write_path_with_no_capture_code_is_captured(state):
+    rows = _attach(state, "marin")
+    task = submit_job(state, "train", make_job_request("train"))[0]
+    with state._db.transaction() as cur:
+        cur.execute(
+            sa_update(tasks_table)
+            .where(tasks_table.c.task_id == task.task_id)
+            .values(state=job_pb2.TASK_STATE_FAILED, error="made-up error")
+        )
+
+    assert [(t.state, t.error) for t in rows.tasks[-1:]] == [("TASK_STATE_FAILED", "made-up error")]
+
+
+def test_rows_are_captured_after_a_checkpoint_restore(state, tmp_path):
+    rows = _attach(state, "marin")
+    submit_job(state, "before", make_job_request("before"))
+    snapshot_dir = tmp_path / "checkpoint"
+    snapshot_dir.mkdir()
+    state._db.backup_to(snapshot_dir / ControllerDB.DB_FILENAME)
+
+    state._db.replace_from(snapshot_dir)
+    submit_job(state, "after", make_job_request("after"))
+
+    assert [j.name for j in rows.jobs] == ["/test-user/before", "/test-user/after"]
+    assert [c.job_id for c in rows.job_configs] == ["/test-user/before", "/test-user/after"]
+
+
+def test_pruning_a_job_writes_no_rows(state):
+    worker = register_worker(state, "w1", "host1:8080", make_worker_metadata())
+    task = submit_job(state, "train", make_job_request("train"))[0]
+    _run_on_node(state, task, worker, "node-a")
+    rows = _attach(state, "marin")
+
+    with state._db.transaction() as cur:
+        writes.delete_job(cur, task.task_id.parent)
+
+    assert (rows.jobs, rows.job_configs, rows.tasks, rows.attempts) == ([], [], [], [])
