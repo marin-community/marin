@@ -99,13 +99,6 @@ def _drop_absent_mesh_axes(mesh: Mesh | jax.sharding.AbstractMesh, spec: Partiti
     return P(*(keep(entry) for entry in spec))
 
 
-def _reshard_for_init(x: jax.Array, spec: PartitionSpec) -> jax.Array:
-    mesh = _current_mesh()
-    if mesh is None or mesh.empty:
-        return x
-    return reshard(x, NamedSharding(mesh, _drop_absent_mesh_axes(mesh, spec)))
-
-
 def _reshard_for_shard_map(
     x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None, spec: PartitionSpec
 ) -> jax.Array:

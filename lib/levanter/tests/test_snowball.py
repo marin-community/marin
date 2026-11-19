@@ -58,11 +58,12 @@ from levanter.models.snowball import (
     SnowballConfig,
     SnowballLMHeadModel,
     SnowballMoEMLP,
+    SnowballTransformer,
     _activation_spec,
     validate_single_name_config,
 )
 from levanter.optim.config import AdamConfig
-from levanter.testing.devices import use_test_devices
+from levanter.testing.devices import use_cpu_devices, use_test_devices
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import TrainerConfig
 from levanter.trainer_state import TrainerState
@@ -1034,3 +1035,110 @@ def test_snowball_capacity_preserves_imbalanced_outputs_and_gradients():
             np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
         assert not np.allclose(dropped[0], reference[0], rtol=1e-5, atol=1e-5)
         assert not np.allclose(dropped[2], reference[2], rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.multidevice
+def test_snowball_init_preserves_weights_and_shardings_with_sharded_temporaries():
+    with use_cpu_devices(8), jax.threefry_partitionable(True):
+        # Omit `replica_dcn` so Pembed_vocab/Plm_head also exercise absent-axis dropping.
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(2, 1, 2, 2),
+            ("data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        cfg = SnowballConfig(
+            vocab_size=1024,
+            hidden_dim=128,
+            intermediate_dim=32,
+            shared_expert_intermediate_dim=128,
+            num_experts=4,
+            num_experts_per_token=2,
+            num_layers=1,
+            num_heads=4,
+            num_kv_heads=2,
+            head_dim=32,
+            max_seq_len=32,
+            sliding_window=8,
+            initializer_std=0.02,
+            attention_implementation="reference",
+            moe_implementation="ring",
+        )
+        fsdp = ("data", "context")
+        gated_norm_rank = 128
+
+        def sample_then_reshard(key, shape, spec):
+            weight = cfg.initializer_std * jax.random.truncated_normal(key, -3, 3, shape)
+            return jax.sharding.reshard(weight, NamedSharding(mesh, spec))
+
+        def gated_norm_reference(key):
+            k_down, k_up = jax.random.split(key)
+            return (
+                sample_then_reshard(k_down, (cfg.hidden_dim, gated_norm_rank), P(None, None)),
+                sample_then_reshard(k_up, (gated_norm_rank, cfg.hidden_dim), P(None, None)),
+            )
+
+        def replicated_reference(key):
+            embed_key, out_key, embed_gn_key, final_gn_key, block_key = jax.random.split(key, 5)
+            attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = jax.random.split(block_key, 5)
+            k_q, k_k, k_v, k_o = jax.random.split(attn_key, 4)
+            k_router, k_expert = jax.random.split(mlp_key, 2)
+            k_egate, k_eup, k_edown = jax.random.split(k_expert, 3)
+            k_sgate, k_sup, k_sdown = jax.random.split(shared_key, 3)
+            d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+            e, im, ish = cfg.num_experts, cfg.intermediate_dim, cfg.shared_expert_intermediate_dim
+            return {
+                "token_embed": sample_then_reshard(embed_key, (cfg.vocab_size, d), P("model", "data")),
+                "output_proj": sample_then_reshard(out_key, (d, cfg.vocab_size), P("data", "model")),
+                "embed_gn": gated_norm_reference(embed_gn_key),
+                "final_gn": gated_norm_reference(final_gn_key),
+                "attn_gn": gated_norm_reference(gn_attn_key),
+                "mlp_gn": gated_norm_reference(gn_mlp_key),
+                "w_q": sample_then_reshard(k_q, (d, n * h), P(fsdp, "model")),
+                "w_k": sample_then_reshard(k_k, (d, m * h), P(fsdp, "model")),
+                "w_v": sample_then_reshard(k_v, (d, m * h), P(fsdp, "model")),
+                "w_o": sample_then_reshard(k_o, (n * h, d), P("model", fsdp)),
+                "router": sample_then_reshard(k_router, (d, e), P(None, None)),
+                "e_gate": sample_then_reshard(k_egate, (e, d, im), P("expert", fsdp, "model")),
+                "e_up": sample_then_reshard(k_eup, (e, d, im), P("expert", fsdp, "model")),
+                "e_down": sample_then_reshard(k_edown, (e, im, d), P("expert", "model", fsdp)),
+                "s_gate": sample_then_reshard(k_sgate, (d, ish), P(fsdp, "model")),
+                "s_up": sample_then_reshard(k_sup, (d, ish), P(fsdp, "model")),
+                "s_down": sample_then_reshard(k_sdown, (ish, d), P("model", fsdp)),
+            }
+
+        with jax.set_mesh(mesh):
+            key = jax.random.key(7)
+            initialized = jax.jit(lambda k: SnowballTransformer.init(cfg, key=k)).lower(key).compile()
+            reference = jax.jit(replicated_reference).lower(key).compile()
+            actual = initialized(key)
+            expected = reference(key)
+            block = actual.blocks[0]
+            pairs = (
+                ("token_embed", actual.token_embed, expected["token_embed"]),
+                ("output_proj", actual.output_proj, expected["output_proj"]),
+                ("embed_gn.w_down", actual.embed_gated_norm.w_down, expected["embed_gn"][0]),
+                ("embed_gn.w_up", actual.embed_gated_norm.w_up, expected["embed_gn"][1]),
+                ("final_gn.w_down", actual.final_gated_norm.w_down, expected["final_gn"][0]),
+                ("final_gn.w_up", actual.final_gated_norm.w_up, expected["final_gn"][1]),
+                ("attn_gn.w_down", block.attn_gated_norm.w_down, expected["attn_gn"][0]),
+                ("attn_gn.w_up", block.attn_gated_norm.w_up, expected["attn_gn"][1]),
+                ("mlp_gn.w_down", block.mlp_gated_norm.w_down, expected["mlp_gn"][0]),
+                ("mlp_gn.w_up", block.mlp_gated_norm.w_up, expected["mlp_gn"][1]),
+                ("w_q", block.attn.w_q, expected["w_q"]),
+                ("w_k", block.attn.w_k, expected["w_k"]),
+                ("w_v", block.attn.w_v, expected["w_v"]),
+                ("w_o", block.attn.w_o, expected["w_o"]),
+                ("router", block.mlp.router, expected["router"]),
+                ("e_gate", block.mlp.expert_mlp.w_gate, expected["e_gate"]),
+                ("e_up", block.mlp.expert_mlp.w_up, expected["e_up"]),
+                ("e_down", block.mlp.expert_mlp.w_down, expected["e_down"]),
+                ("s_gate", block.shared.w_gate, expected["s_gate"]),
+                ("s_up", block.shared.w_up, expected["s_up"]),
+                ("s_down", block.shared.w_down, expected["s_down"]),
+            )
+            for name, weight, previous_weight in pairs:
+                np.testing.assert_array_equal(weight, previous_weight, err_msg=name)
+                assert weight.sharding == previous_weight.sharding, (name, weight.sharding, previous_weight.sharding)
+            assert (
+                initialized.memory_analysis().temp_size_in_bytes < reference.memory_analysis().temp_size_in_bytes / 4
+            )
