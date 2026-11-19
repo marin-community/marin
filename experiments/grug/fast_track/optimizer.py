@@ -609,6 +609,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     takes AdamW at ``lr_max s(t)^2`` with decay ``MUONC_ANNEAL_ADAMW_DECAY``. Every Adam group keeps its LR and takes
     AdamW decay ``MUONC_ANNEAL_ADAMW_DECAY`` on its rank >= 2 leaves in place of the annealed
     ``gate_router_weight_decay``. 0: off."""
+    adamc_adam_decay: float | None = None
+    """``lambda`` of the ``adamc_adam`` group in place of ``ADAMC_ADAM_DECAY``; needs ``adamc_head_router_embed``.
+    None: off."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -773,10 +776,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if self.embed_lr_mult is not None:
                 transforms["embed_lr"] = adam_at(adam_lr * self.embed_lr_mult, decay=True)
             if self.adamc_head_router_embed:
-                # Before scale(-adam_lr): p <- p - adam_lr u - (adam_lr^2 / self.adam_lr) ADAMC_ADAM_DECAY p.
+                # Before scale(-adam_lr): p <- p - adam_lr u - (adam_lr^2 / self.adam_lr) lambda p.
+                adamc_adam_decay = ADAMC_ADAM_DECAY if self.adamc_adam_decay is None else self.adamc_adam_decay
                 transforms[ADAMC_ADAM_GROUP] = optax.chain(
                     adam_moments(self.beta1, self.beta2),
-                    _fixed_decoupled_decay(ADAMC_ADAM_DECAY * adam_lr / self.adam_lr),
+                    _fixed_decoupled_decay(adamc_adam_decay * adam_lr / self.adam_lr),
                     optax.scale(-adam_lr),
                 )
             if self.muonh_radial_softcap:
@@ -850,6 +854,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonc_anneal_decay must be non-negative and excludes muonh_radial_softcap, muonc_decay_mult, "
                 "muonh_nonsi_anneal, embed_lr_mult and embed_optimizer other than adam_group"
             )
+        if self.adamc_adam_decay is not None and (self.adamc_adam_decay < 0 or not self.adamc_head_router_embed):
+            raise ValueError("adamc_adam_decay must be non-negative and needs adamc_head_router_embed")
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
