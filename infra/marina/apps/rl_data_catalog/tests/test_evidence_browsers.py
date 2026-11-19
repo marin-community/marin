@@ -123,9 +123,9 @@ def test_private_review_and_rollout_staging_refuses_before_any_artifact_read(mon
 
     monkeypatch.setattr(StoragePath, "read_bytes", refused_read)
     source = {"id": "Fixture:private", "data_restriction": "private_always"}
-    with pytest.raises(ValueError, match="PRIVATE_ALWAYS"):
+    with pytest.raises(ValueError, match="Withheld reviews remain in their private store"):
         stage_content_reviews(ManifestReference(uri="s3://fixture/private.json", sha256="a" * 64), source, 1)
-    with pytest.raises(ValueError, match="PRIVATE_ALWAYS"):
+    with pytest.raises(ValueError, match="Restricted rollouts remain in their private store"):
         stage_rollouts({}, source, 1)
 
 
