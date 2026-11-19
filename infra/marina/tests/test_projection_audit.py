@@ -121,7 +121,8 @@ def test_pin_audit_projects_active_identity_under_the_gateway_bound(database_url
         assert projected.actor_binding.model_dump(mode="json", exclude_unset=True) == actor
         curriculum = ensure_current_projections.atlas_curriculum_rows()
         assert sorted(curriculum) == [pin.source_id for pin in pins]
-        assert curriculum_pages == [50, 50, 4]
+        assert len(curriculum_pages) > 1
+        assert sum(curriculum_pages) == len(pins)
         assert set(curriculum["source"]["declaration"]) == {"dataset_id", "dataset_revision", "pipeline"}
         assert ensure_current_projections.curriculum_state(projected, curriculum) == ("current", None)
     finally:

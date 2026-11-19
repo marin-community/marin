@@ -208,6 +208,27 @@ def _public_tasks(reference: ManifestReference) -> tuple[dict, dict[str, TaskSem
     return document, tasks
 
 
+def public_task_correspondence(old: dict[str, TaskSemanticInput], new: dict[str, TaskSemanticInput]) -> dict[str, str]:
+    """Match stable IDs first, then require a unique public-content bijection for changed IDs."""
+    matches = {identifier: identifier for identifier in old.keys() & new.keys()}
+    unmatched_old = old.keys() - matches.keys()
+    unmatched_new = new.keys() - matches.values()
+    by_content = {}
+    for identifier in unmatched_new:
+        content_hash = new[identifier].content_hash
+        if content_hash in by_content:
+            raise ValueError("Changed task IDs have ambiguous public inputs; existing scores cannot be reused")
+        by_content[content_hash] = identifier
+    for identifier in unmatched_old:
+        candidate = by_content.pop(old[identifier].content_hash, None)
+        if candidate is None:
+            raise ValueError("Changed task IDs lack a unique public-input bijection; existing scores cannot be reused")
+        matches[identifier] = candidate
+    if by_content:
+        raise ValueError("Changed task IDs leave unmatched public inputs; existing scores cannot be reused")
+    return matches
+
+
 def task_rebinding(archive: AlignmentSource, replacement: SourceReplacement) -> TaskRebinding:
     """Prove every public task input unchanged before adopting new TaskSpec provenance."""
     if archive.curation_root is None or archive.source_id != replacement.source_id:
@@ -228,22 +249,7 @@ def task_rebinding(archive: AlignmentSource, replacement: SourceReplacement) -> 
         or len(new) != manifest["converted_rows"]
     ):
         raise ValueError("Rebound public inputs do not match their frozen populations or scans")
-    matches = {identifier: identifier for identifier in old.keys() & new.keys()}
-    unmatched_old = old.keys() - matches.keys()
-    unmatched_new = new.keys() - matches.values()
-    by_content = {}
-    for identifier in unmatched_new:
-        content_hash = new[identifier].content_hash
-        if content_hash in by_content:
-            raise ValueError("Changed task IDs have ambiguous public inputs; existing scores cannot be reused")
-        by_content[content_hash] = identifier
-    for identifier in unmatched_old:
-        candidate = by_content.pop(old[identifier].content_hash, None)
-        if candidate is None:
-            raise ValueError("Changed task IDs lack a unique public-input bijection; existing scores cannot be reused")
-        matches[identifier] = candidate
-    if by_content:
-        raise ValueError("Changed task IDs leave unmatched public inputs; existing scores cannot be reused")
+    matches = public_task_correspondence(old, new)
     for identifier, before in old.items():
         after = new[matches[identifier]]
         fields = ("source_id", "content_hash", "intended_use", "population", "public_input")
@@ -375,6 +381,31 @@ def statistics_by_key(paths: list[str]) -> dict[tuple, int]:
     return values
 
 
+def write_task_identity_mappings(
+    root: StoragePath, rebindings: tuple[TaskRebinding, ...]
+) -> dict[str, ManifestReference]:
+    """Publish immutable old/new task identities with the shared public-content digest."""
+    task_mappings = {}
+    for row in rebindings:
+        path = root / "task-identity-mappings" / f"{canonical_sha256(row.source.source_id)}.parquet"
+        with path.open("wb", auto_mkdir=True) as stream:
+            pq.write_table(
+                pa.table(
+                    {
+                        "old_task_id": row.task_ids,
+                        "new_task_id": row.new_task_ids,
+                        "old_task_sha256": row.old_task_hashes,
+                        "new_task_sha256": row.new_task_hashes,
+                        "public_content_sha256": row.content_hashes,
+                    }
+                ),
+                stream,
+                compression="zstd",
+            )
+        task_mappings[row.source.source_id] = ManifestReference(uri=str(path), sha256=file_sha256(path))
+    return task_mappings
+
+
 def project_curriculum(
     runtime: CampaignRuntime, *, inputs: ProjectionInputs, inputs_reference: ManifestReference, output_root: str
 ) -> SemanticArtifact:
@@ -419,24 +450,7 @@ def project_curriculum(
     )
     old_sources = {row.source_id: row for row in archive.sources}
     rebindings = tuple(task_rebinding(old_sources[row.source_id], row) for row in inputs.replacements)
-    task_mappings = {}
-    for row in rebindings:
-        path = root / "task-identity-mappings" / f"{canonical_sha256(row.source.source_id)}.parquet"
-        with path.open("wb", auto_mkdir=True) as stream:
-            pq.write_table(
-                pa.table(
-                    {
-                        "old_task_id": row.task_ids,
-                        "new_task_id": row.new_task_ids,
-                        "old_task_sha256": row.old_task_hashes,
-                        "new_task_sha256": row.new_task_hashes,
-                        "public_content_sha256": row.content_hashes,
-                    }
-                ),
-                stream,
-                compression="zstd",
-            )
-        task_mappings[row.source.source_id] = {"uri": str(path), "sha256": file_sha256(path)}
+    task_mappings = write_task_identity_mappings(root, rebindings)
     source_uses = [LexicalInputUse.model_validate(row) for row in json.loads(manifest_bytes(inputs.source_uses))]
     selected = projection_selection(archive, inventory, retired, rebindings, source_uses=source_uses)
     files = runtime.context.execute(
@@ -567,8 +581,10 @@ def project_curriculum(
                 "source_key": row.source.source_key,
                 "task_count": len(row.task_ids),
                 "all_public_inputs_unchanged": True,
-                "changed_task_ids": sum(old != new for old, new in zip(row.task_ids, row.new_task_ids, strict=True)),
-                "task_identity_mapping": task_mappings[row.source.source_id],
+                "changed_task_id_count": sum(
+                    old != new for old, new in zip(row.task_ids, row.new_task_ids, strict=True)
+                ),
+                "task_identity_mapping": task_mappings[row.source.source_id].model_dump(mode="json"),
             }
             for row in rebindings
         ],
