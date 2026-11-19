@@ -15,7 +15,8 @@ jobs, and refuses a catalog publication while a current pin lacks either project
 import argparse
 import json
 import logging
-from collections import Counter
+from collections import Counter, defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -32,6 +33,7 @@ from experiments.post_training.task_curation.derived_contract_census import (
     DerivedContractReceipt,
 )
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from infra.marina.apps.rl_data_catalog.server.derived_contract import INPUT_FIELDS
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOGGER = logging.getLogger(__name__)
@@ -84,21 +86,33 @@ class ProjectionGap:
     last_computed_revision: str | None
 
 
-def contract_state(declaration: DeclarationPin, receipts: dict[str, Any]) -> tuple[str, str | None]:
-    """Whether a derived-contract census receipt matches this declaration's actor census input.
+def contract_receipt_map(receipts: Iterable[DerivedContractReceipt]) -> dict[str, list[DerivedContractReceipt]]:
+    grouped: dict[str, list[DerivedContractReceipt]] = defaultdict(list)
+    for receipt in receipts:
+        grouped[canonical_source_id(receipt.source_id)].append(receipt)
+    return dict(grouped)
 
-    The serving projection compares the six measured-input fields and ignores evidence
-    locations, so the audit replays exactly that comparison.
-    """
+
+def contract_state(
+    declaration: DeclarationPin, receipts: dict[str, list[DerivedContractReceipt]]
+) -> tuple[str, str | None]:
+    """Match any archived receipt against the six fields used by the serving projection."""
     if not declaration.measured:
         return "unmeasured", ""
-    receipt = receipts.get(canonical_source_id(declaration.source_id)) or receipts.get(declaration.source_id)
-    if receipt is None:
+    candidates = receipts.get(canonical_source_id(declaration.source_id), [])
+    if not candidates:
         return "missing", ""
     binding = declaration.actor_binding
-    if receipt.input.model_dump(exclude={"evidence_url"}) == binding.model_dump(exclude={"evidence_url"}):
+    matches = [
+        receipt
+        for receipt in candidates
+        if all(getattr(receipt.input, key) == getattr(binding, key) for key in INPUT_FIELDS)
+    ]
+    if matches:
+        if any(receipt.summary != matches[0].summary for receipt in matches):
+            raise ValueError(f"Conflicting derived contract summaries: {declaration.source_id}")
         return "current", ""
-    return "stale-pin", receipt.input.dataset_revision
+    return "stale-pin", candidates[-1].input.dataset_revision
 
 
 def curriculum_state(declaration: DeclarationPin, curriculum_rows: dict[str, dict]) -> tuple[str, str | None]:
@@ -109,18 +123,15 @@ def curriculum_state(declaration: DeclarationPin, curriculum_rows: dict[str, dic
     if row is None:
         return "missing", None
     stored = row.get("declaration") or {}
-    triple_equal = all(
-        stored.get(key) == getattr(declaration, key if key != "pipeline" else "pipeline")
-        for key in CURRICULUM_DECLARATION_FIELDS
-    )
-    if triple_equal and row.get("alignment") is not None:
+    triple_equal = all(stored.get(key) == getattr(declaration, key) for key in CURRICULUM_DECLARATION_FIELDS)
+    if triple_equal and row["has_alignment"]:
         return "current", None
     return "stale-pin", stored.get("dataset_revision")
 
 
 def projection_gaps(
     declarations: list[DeclarationPin],
-    contract_receipts: dict[str, Any],
+    contract_receipts: dict[str, list[DerivedContractReceipt]],
     curriculum_rows: dict[str, dict],
     served_pins: dict[str, DeclarationPin] | None = None,
 ) -> tuple[list[ProjectionGap], list[str]]:
@@ -138,10 +149,10 @@ def projection_gaps(
             served = served_pins.get(canonical_source_id(declaration.source_id))
             if (
                 served is None
+                or any(getattr(served, key) != getattr(declaration, key) for key in CURRICULUM_DECLARATION_FIELDS)
                 or served.actor_binding is None
-                or (
-                    served.actor_binding.model_dump(exclude={"evidence_url"})
-                    != declaration.actor_binding.model_dump(exclude={"evidence_url"})
+                or any(
+                    getattr(served.actor_binding, key) != getattr(declaration.actor_binding, key) for key in INPUT_FIELDS
                 )
             ):
                 gaps.append(
@@ -222,7 +233,7 @@ def census_input_rows(declarations: list[DeclarationPin], sources: dict[str, Any
     population that disagrees with its binding can never reach a job; the mismatched sources
     are returned for the report instead.
     """
-    receipts = derived_contract_receipts()
+    receipts = contract_receipt_map(derived_contract_receipts().values())
     rows = []
     unrunnable = []
     for declaration in declarations:
@@ -252,7 +263,7 @@ def census_input_rows(declarations: list[DeclarationPin], sources: dict[str, Any
 
 def publication_preflight(
     declarations: list[DeclarationPin],
-    contract_receipts: dict[str, Any],
+    contract_receipts: dict[str, list[DerivedContractReceipt]],
     curriculum_rows: dict[str, dict],
     waivers: frozenset[str] = frozenset(),
     served_pins: dict[str, DeclarationPin] | None = None,
@@ -293,24 +304,28 @@ def atlas_curriculum_rows() -> dict[str, dict]:
     return {row["source_id"]: row for row in result["rows"]}
 
 
-def atlas_contract_receipts() -> dict[str, Any]:
-    """The derived-contract receipts the served applet carries (the registry family before the first load)."""
-    try:
-        result = atlas_applet_query()("SELECT source_id, receipt FROM atlas_derived_contracts", {})
-    except Exception as error:
-        LOGGER.warning("atlas_derived_contracts is not loaded yet (%s); using the registry family", error)
-        return derived_contract_receipts()
-    return {
-        row["source_id"]: DerivedContractReceipt.model_validate(
+def atlas_contract_receipts() -> dict[str, list[DerivedContractReceipt]]:
+    """Read every archived receipt; publication requires evidence in the served applet."""
+    result = atlas_applet_query()("SELECT source_id, receipt FROM atlas_derived_contracts ORDER BY receipt_id", {})
+    return contract_receipt_map(
+        DerivedContractReceipt.model_validate(
             row["receipt"] if isinstance(row["receipt"], dict) else json.loads(row["receipt"])
         )
         for row in result["rows"]
-    }
+    )
 
 
 def served_declaration_pins() -> list[DeclarationPin]:
     """The served catalog's declaration pins (the live applet's atlas_sources rows)."""
-    result = atlas_applet_query()("SELECT id, declaration FROM atlas_sources", {})
+    result = atlas_applet_query()(
+        "SELECT id, jsonb_build_object("
+        "'dataset_id', declaration->'dataset_id', "
+        "'dataset_revision', declaration->'dataset_revision', "
+        "'pipeline', declaration->'pipeline', "
+        "'actor_census_input', declaration->'actor_census_input') AS declaration "
+        "FROM atlas_sources WHERE load_id=(SELECT load_id FROM atlas_current WHERE name='latest')",
+        {},
+    )
     pins = []
     for row in result["rows"]:
         served = row.get("declaration") or {}
@@ -368,7 +383,7 @@ def main() -> None:
 
     if args.plan is not None:
         pins, sources = assembled_declaration_pins()
-        gaps, notes = projection_gaps(pins, derived_contract_receipts(), {})
+        gaps, notes = projection_gaps(pins, contract_receipt_map(derived_contract_receipts().values()), {})
         rows, unrunnable = census_input_rows(pins, sources)
         args.plan.write_text(
             json.dumps({"report": summary(gaps, notes), "census_inputs": rows, "unrunnable": unrunnable}, indent=2)
@@ -389,7 +404,7 @@ def main() -> None:
     curriculum_rows = atlas_curriculum_rows()
     if args.assembled:
         pins, _ = assembled_declaration_pins()
-        contracts = derived_contract_receipts()
+        contracts = contract_receipt_map(derived_contract_receipts().values())
         served = None
     else:
         assembled_pins, _ = assembled_declaration_pins()

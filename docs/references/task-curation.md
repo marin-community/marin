@@ -287,6 +287,19 @@ until its current-pin admission receipt exists.
   for every task-curation landing and as `python -m
   experiments.post_training.task_curation.declaration_audit`.
 
+  The serving audit reads only the active `atlas_current.latest` load. Staged
+  and historical declarations cannot satisfy it. A derived-contract receipt
+  must match all six actor census input fields used by the serving projection;
+  evidence locations and carry-forward references do not change those inputs.
+  The contract archive is independent of catalog loads: every receipt for a
+  source remains a candidate. Receipts matching the same six input fields must
+  have identical summaries. Curriculum rows must match the dataset ID, revision,
+  and complete pipeline reference and carry a non-null alignment. Refresh stale
+  data through the `infra.marina.apps.rl_data_catalog.load`,
+  `infra.marina.apps.rl_data_catalog.load_derived_contract`, and
+  `infra.marina.apps.rl_data_catalog.load_curriculum` entry points. A registry
+  receipt alone cannot satisfy a served-data check.
+
 **Non-agentic tasks.** A TaskSpec with no actor role, agent harness or agent
 workspace is non-agentic: the model answers and the task's grader checks the
 answer. Decide this per TaskSpec from its contract, never from the source name.
