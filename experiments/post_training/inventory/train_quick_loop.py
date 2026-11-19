@@ -26,6 +26,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import RecipePatch, RLEntrypoint, SkyRLRecipe, sections
 from skyrlrecipe.sampling import EvalSamplingParams
@@ -242,7 +243,8 @@ def main(selection_uri: str, steps: int, export_hf: bool, reproducible_serving: 
     selection_name, selection_version = parts
     # SkyRL trains each task at most once per update, so a smaller selection fails only after GPU allocation.
     batch_size = training_recipe(steps).trainer.train_batch_size
-    with (StoragePath(selection_uri) / TRAIN_FILENAME).open("rb") as stream:
+    fs, train_path = filesystem_for(str(StoragePath(selection_uri) / TRAIN_FILENAME))
+    with fs.open(train_path, "rb") as stream:
         train_rows = pq.ParquetFile(stream).metadata.num_rows
     if train_rows < batch_size:
         raise click.BadParameter(
