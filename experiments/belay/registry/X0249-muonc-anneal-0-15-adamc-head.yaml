@@ -4,7 +4,7 @@ name: MuonC anneal 0.15 + AdamC head/router/embed
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7022075928
@@ -28,3 +28,10 @@ trials:
     adamc_adam_decay: '0.3'
   commit: 744f10495b
   priority: interactive
+  loss:
+  - 3.0317
+  delta:
+  - -0.0132
+  steps: 3030
+  baseline: belay-X0249-control 3.0449 (same commit, seed 0)
+  step_time_change: -1%
