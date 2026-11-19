@@ -68,7 +68,7 @@ from iris.testing.federation import (
     make_service as _make_service,
 )
 from rigging.server_auth import RequestAuthPolicy
-from rigging.timing import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -336,9 +336,9 @@ def test_federated_capability_url_stays_under_the_public_capability_route() -> N
     )
 
 
-def _child_capability_proxy(stack: ExitStack, upstream_url: str) -> tuple[str, str]:
+def _child_capability_proxy(stack: ExitStack, upstream_url: str) -> tuple[NativeProxy, str]:
     """A child native proxy that owns ``/serve/foo`` as a link endpoint and validates
-    its own capability token. Returns ``(proxy_url, capability_token)``.
+    its own capability token. Returns ``(proxy, capability_token)``.
 
     This is the child exactly as it serves a direct capability URL — the relay adds
     nothing to it; the parent forwards the same ``/proxy/t/<token>/<name>`` request.
@@ -367,16 +367,16 @@ def _child_capability_proxy(stack: ExitStack, upstream_url: str) -> tuple[str, s
                             address=upstream_url,
                             link_access=True,
                             peer_id=None,
-                            task_id=None,
+                            task_id="/job/serve/0",
                             timeout_seconds=None,
-                            lease_deadline_epoch_ms=None,
+                            lease_deadline_epoch_ms=Timestamp.now().add(Duration.from_minutes(5)).epoch_ms(),
                         ),
                     ),
                 )
             )
         )
     )
-    return proxy.address, auth.jwt_manager.create_endpoint_token(ENDPOINT_NAME, "iris_ket_relay")
+    return proxy, auth.jwt_manager.create_endpoint_token(ENDPOINT_NAME, "iris_ket_relay")
 
 
 def test_child_capability_url_relays_through_the_parent_end_to_end(tmp_path, log_client, threads):
@@ -385,7 +385,8 @@ def test_child_capability_url_relays_through_the_parent_end_to_end(tmp_path, log
         upstream_url = _serve(threads, _build_upstream_app(upstream), name="upstream")
 
         # The child owns the endpoint and mints its own capability token.
-        child_url, token = _child_capability_proxy(stack, upstream_url)
+        child_proxy, token = _child_capability_proxy(stack, upstream_url)
+        child_url = child_proxy.address
         # The token works against the child's own origin — the relay changes nothing here.
         with httpx.Client() as client:
             direct = client.get(f"{child_url}/proxy/t/{token}/{ENDPOINT_PROXY_NAME}/greet")
@@ -441,6 +442,34 @@ def test_child_capability_url_relays_through_the_parent_end_to_end(tmp_path, log
         assert served.get("authorization") != "Bearer browser-user-token"
         # A cluster tag the parent has no peer for is refused, not forwarded.
         assert unknown.status_code == 404
+
+        child_proxy.replace_registry(
+            json.dumps(
+                asdict(
+                    ProxyRegistrySnapshot(
+                        generation=2,
+                        endpoints=(
+                            ProxyEndpointMapping(
+                                endpoint_id="child-serve",
+                                name=ENDPOINT_NAME,
+                                address=upstream_url,
+                                link_access=True,
+                                peer_id=None,
+                                task_id="/job/serve/0",
+                                timeout_seconds=None,
+                                lease_deadline_epoch_ms=Timestamp.now().add(Duration.from_seconds(-1)).epoch_ms(),
+                            ),
+                        ),
+                    )
+                )
+            )
+        )
+        with httpx.Client() as client:
+            gap = client.get(
+                f"{parent_proxy.address}/proxy/t/cluster={CHILD_CLUSTER}/{token}/{ENDPOINT_PROXY_NAME}/greet"
+            )
+        assert gap.status_code == 503
+        assert gap.headers["retry-after"] == "5"
 
 
 def _relay_decision_payload(**overrides) -> dict:

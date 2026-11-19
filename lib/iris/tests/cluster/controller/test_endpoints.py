@@ -135,11 +135,15 @@ def test_expired_lease_hidden_from_reads(state):
 
 def test_sweep_expired_deletes_only_expired(state):
     task = submit_job(state, "j", make_job_request("j"))[0].task_id
+    live_task = submit_job(state, "live", make_job_request("live"))[0].task_id
     past = Timestamp.now().add(Duration.from_ms(-1000))
     future = Timestamp.now().add(Duration.from_hours(1))
     with state._db.transaction() as cur:
         state._endpoints.add(cur, _row("dead", "a", task, lease_deadline=past))
-        state._endpoints.add(cur, _row("live", "b", task, lease_deadline=future))
+        state._endpoints.add(cur, _row("live", "b", live_task, lease_deadline=future))
+        cur.execute(
+            sa_update(tasks_table).where(tasks_table.c.task_id == task).values(state=job_pb2.TASK_STATE_SUCCEEDED)
+        )
 
     result = prune_old_data(
         state._db,
@@ -154,6 +158,28 @@ def test_sweep_expired_deletes_only_expired(state):
     listed = service.list_endpoints(controller_pb2.Controller.ListEndpointsRequest(), None)
     assert result.endpoints_deleted == 1
     assert [endpoint.endpoint_id for endpoint in listed.endpoints] == ["live"]
+
+
+@pytest.mark.parametrize("unregister", [False, True])
+def test_retryable_task_keeps_unavailable_proxy_route_until_terminal(state, unregister):
+    task, attempt = _live_task(state)
+    service = _service(state, lease=Duration.from_ms(0) if not unregister else ENDPOINT_LEASE)
+    service.register_endpoint(_register_request("svc", task, attempt_id=attempt, endpoint_id="recovering"), None)
+    if unregister:
+        service.unregister_endpoint(controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id="recovering"), None)
+
+    listed = service.list_endpoints(controller_pb2.Controller.ListEndpointsRequest(prefix="svc", exact=True), None)
+    assert listed.endpoints == []
+    assert [row.endpoint_id for row in service.proxy_registry_snapshot().endpoints] == ["recovering"]
+
+    with state._db.transaction() as cur:
+        assert state._endpoints.sweep_expired(cur, Timestamp.now()) == []
+        cur.execute(
+            sa_update(tasks_table).where(tasks_table.c.task_id == task).values(state=job_pb2.TASK_STATE_SUCCEEDED)
+        )
+    with state._db.transaction() as cur:
+        assert state._endpoints.sweep_expired(cur, Timestamp.now()) == ["recovering"]
+    assert service.proxy_registry_snapshot().endpoints == ()
 
 
 # --- EndpointService: register-or-renew --------------------------------------
@@ -201,7 +227,8 @@ def test_proxy_registry_publishes_deltas_and_snapshots(state):
     )
     assert deltas[-1].base_generation == 2
     assert deltas[-1].next_generation == 3
-    assert deltas[-1].deletes == ("endpoint-1",)
+    assert [mapping.endpoint_id for mapping in deltas[-1].upserts] == ["endpoint-1"]
+    assert deltas[-1].upserts[0].lease_deadline_epoch_ms <= Timestamp.now().epoch_ms()
 
 
 def test_proxy_registry_omits_tcp_endpoint_without_hiding_it(state):
