@@ -20,10 +20,11 @@ function scoreCell(cell, column) {
     td.textContent = "–";
     return td;
   }
-  td.className = `scored ${cell.label}`;
+  td.className = `scored ${cell.label}${cell.suspect ? " suspect" : ""}`;
   const link = element("a", { href: cell.link.url, target: "_blank", rel: "noopener" });
   link.append(element("span", { class: "score" }, cell.score.toFixed(2)));
-  if (cell.note) link.append(element("span", { class: "note-mark" }, "*"));
+  if (cell.suspect) link.append(element("span", { class: "suspect-mark", "aria-label": "suspect" }, "!"));
+  else if (cell.note) link.append(element("span", { class: "note-mark" }, "*"));
   td.append(link);
   return td;
 }
@@ -36,6 +37,7 @@ function tooltipLines(model, evalName, cell) {
     return lines;
   }
   lines.push([cell.score.toFixed(2), "tip-score"], [LABEL_TEXT[cell.label]]);
+  if (cell.suspect) lines.push([`Suspect: ${cell.suspect}`, "tip-suspect"]);
   if (cell.note) lines.push([cell.note]);
   lines.push([LINK_TEXT[cell.link.kind]]);
   if (cell.run_id) lines.push([cell.run_id, "tip-id"]);
@@ -61,7 +63,7 @@ function renderBody(table, data) {
   data.models.forEach((model, row) => {
     const tr = body.appendChild(element("tr", { "data-row": row }));
     const name = element("th", { class: "model", scope: "row" });
-    name.append(element("a", { href: model.url, target: "_blank", rel: "noopener", title: model.hf_repo }, model.name));
+    name.append(element("a", { href: model.url, target: "_blank", rel: "noopener", title: model.source }, model.name));
     tr.append(name);
     data.evals.forEach((evalName, column) => tr.append(scoreCell(model.cells[evalName], column)));
   });

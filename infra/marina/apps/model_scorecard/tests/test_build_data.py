@@ -66,6 +66,7 @@ def test_run_cell_scores_on_0_100_scale_and_links_to_evaldash() -> None:
 
     model = scorecard["models"][0]
     assert model["url"] == "https://huggingface.co/org/model/tree/abc123"
+    assert model["source"] == "org/model"
     assert model["cells"]["math500"] == {
         "score": 97.86,
         "label": "unofficial",
@@ -115,3 +116,34 @@ def test_source_outside_a_run_directory_links_to_filer() -> None:
 def test_run_cell_rejects_failed_or_mismatched_runs(fetched: EvalRunRecord, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         build_scorecard(manifest({"math500": {"run_id": RUN_ID, "label": "official"}}), lambda _: fetched)
+
+
+CHECKPOINT = "s3://bucket/exports/model/step-1"
+
+
+def test_checkpoint_row_matches_runs_by_location_and_links_to_filer() -> None:
+    cells = {"math500": {"run_id": RUN_ID, "label": "unofficial", "suspect": "known grading problem"}}
+    scorecard = build_scorecard(
+        {"evals": ["math500"], "models": [{"name": "Model", "location": CHECKPOINT, "cells": cells}]},
+        lambda _: record(location=f"{CHECKPOINT}/", revision=None),
+    )
+
+    model = scorecard["models"][0]
+    assert unquote(model["url"].removeprefix("https://filer.marina.oa.dev/#")) == CHECKPOINT
+    assert model["source"] == CHECKPOINT
+    assert model["cells"]["math500"]["suspect"] == "known grading problem"
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"hf_repo": "org/model", "revision": "abc123", "location": CHECKPOINT},
+        {},
+        {"location": CHECKPOINT, "revision": "x"},
+    ],
+)
+def test_model_row_needs_one_identity(identity: dict) -> None:
+    with pytest.raises(ValueError, match="Model"):
+        build_scorecard(
+            {"evals": ["math500"], "models": [{"name": "Model", **identity, "cells": {}}]}, lambda _: record()
+        )

@@ -59,6 +59,8 @@ class ScoredCell:
     link: Link
     run_id: str | None = None
     note: str | None = None
+    suspect: str | None = None
+    """Why the score may not reflect the model, e.g. a known grading or protocol problem."""
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,23 @@ def headline_score(record: EvalRunRecord) -> float:
     return round(100 * measurement.value, SCORE_DECIMALS)
 
 
+def model_identity(model: Mapping[str, Any]) -> tuple[str, str | None]:
+    """The (location, revision) a model row's runs must evaluate: a Hugging Face revision or a checkpoint URI."""
+    if ("hf_repo" in model) == ("location" in model):
+        raise ValueError(f"{model['name']} needs exactly one of hf_repo or location")
+    if "location" in model:
+        if "revision" in model:
+            raise ValueError(f"{model['name']} location rows take no revision")
+        return model["location"], None
+    return model["hf_repo"], model["revision"]
+
+
+def model_link(model: Mapping[str, Any]) -> str:
+    if "location" in model:
+        return FILER_URL.format(encoded_uri=quote(model["location"], safe=""))
+    return HF_URL.format(repo=model["hf_repo"], revision=model["revision"])
+
+
 def resolve_cell(
     eval_name: str, spec: Mapping[str, Any] | None, model: Mapping[str, Any], fetch_record: FetchRecord
 ) -> Cell:
@@ -105,22 +124,25 @@ def resolve_cell(
         return MissingCell(spec["missing"])
     label = Label(spec["label"])
     note = spec.get("note")
+    suspect = spec.get("suspect")
     if "run_id" in spec:
         record = fetch_record(spec["run_id"])
         if record.evaluation.name != eval_name:
             raise ValueError(f"Run {record.run_id} evaluates {record.evaluation.name!r}, not {eval_name!r}")
         revision = record.model.config.revision if record.model.config is not None else None
-        if (record.model.location, revision) != (model["hf_repo"], model["revision"]):
+        location, expected_revision = model_identity(model)
+        # A checkpoint directory is recorded with or without its trailing slash depending on the serving config.
+        if (record.model.location.rstrip("/"), revision) != (location.rstrip("/"), expected_revision):
             raise ValueError(
                 f"Run {record.run_id} evaluates {record.model.location!r}@{revision!r}, "
-                f"not {model['hf_repo']!r}@{model['revision']!r}"
+                f"not {location!r}@{expected_revision!r}"
             )
-        return ScoredCell(headline_score(record), label, run_link(record.run_id), record.run_id, note)
+        return ScoredCell(headline_score(record), label, run_link(record.run_id), record.run_id, note, suspect)
     if "source" in spec:
         score = float(spec["score"])
         if not 0 <= score <= 100:
             raise ValueError(f"{eval_name} source score {score} is outside 0-100")
-        return ScoredCell(round(score, SCORE_DECIMALS), label, source_link(spec["source"]), note=note)
+        return ScoredCell(round(score, SCORE_DECIMALS), label, source_link(spec["source"]), note=note, suspect=suspect)
     raise ValueError(f"{eval_name} cell needs run_id, source, or missing: {dict(spec)}")
 
 
@@ -141,11 +163,12 @@ def build_scorecard(manifest: Mapping[str, Any], fetch_record: FetchRecord) -> d
         unknown = set(cells) - set(evals)
         if unknown:
             raise ValueError(f"{model['name']} has cells for unlisted evals: {sorted(unknown)}")
+        location, _ = model_identity(model)
         models.append(
             {
                 "name": model["name"],
-                "hf_repo": model["hf_repo"],
-                "url": HF_URL.format(repo=model["hf_repo"], revision=model["revision"]),
+                "source": location,
+                "url": model_link(model),
                 "cells": {name: cell_json(resolve_cell(name, cells.get(name), model, fetch_record)) for name in evals},
             }
         )
