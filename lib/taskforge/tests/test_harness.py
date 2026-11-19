@@ -16,7 +16,7 @@ from verifyit.spec import NumericSpec
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved
-from taskforge.effects.issues import Hold, Transient
+from taskforge.effects.issues import ContextExceeded, Hold, Transient
 from taskforge.effects.log import EventLog, JsonlSink
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import (
@@ -53,7 +53,7 @@ from taskforge.resources.env import (
     write_file,
 )
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
-from taskforge.resources.inference import ContextExceeded, FakeInference
+from taskforge.resources.inference import FakeInference
 from taskforge.resources.web import FakeWeb, ParallelWeb, WebFetch, WebSearch, fetch, search
 
 pytestmark = pytest.mark.asyncio

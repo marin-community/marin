@@ -11,7 +11,7 @@ from pathlib import PurePosixPath
 from typing import override
 
 from taskforge.effects.context import Context
-from taskforge.effects.issues import Hold
+from taskforge.effects.issues import ContextExceeded, Hold
 from taskforge.harness.events import ToolInvoked, ToolReturned
 from taskforge.harness.protocol import (
     FinishRequest,
@@ -32,7 +32,7 @@ from taskforge.model.llm import FinishReason, Message, Role
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Conversation
 from taskforge.resources.env import WriteFile
-from taskforge.resources.inference import ContextExceeded, InferenceClient, InferenceRequest, complete
+from taskforge.resources.inference import InferenceClient, InferenceRequest, complete
 
 # A session ends only through an exit tool, so an empty completion gets a nudge. This many empty
 # completions in a row mean the provider is failing.
