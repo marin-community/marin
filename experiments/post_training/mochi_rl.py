@@ -16,8 +16,15 @@ from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
 from experiments.post_training.rl_agentic_recipe import AGENTIC_BATCH_MIX, AGENTIC_RECIPE, agentic_limits
-from experiments.post_training.rl_presets import Evaluation, Layout, ModelPresets, Preset, Recipe, Training
-from experiments.post_training.snowball_rl import SNOWBALL
+from experiments.post_training.rl_presets import (
+    Evaluation,
+    Layout,
+    ModelPresets,
+    Preset,
+    Recipe,
+    Training,
+    harbor_evaluation,
+)
 from experiments.post_training.task_curation.selection import VALIDATION_FILENAME
 
 _MODEL = ArtifactHfModel(
@@ -271,7 +278,7 @@ def _agentic(preset: Preset, name: str) -> Preset:
         name=name,
         tasks_input="required",
         batch_mix=AGENTIC_BATCH_MIX,
-        harbor=SNOWBALL.by_name["train-long-harbor"].harbor,
+        harbor=harbor_evaluation(Path(__file__).with_name("rl_harbor.yaml")),
         recipe=replace(preset.recipe, config=config),
     )
 

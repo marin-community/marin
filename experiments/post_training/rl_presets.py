@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from fractions import Fraction
+from pathlib import Path
 from typing import Annotated, ClassVar, Literal
 
+import yaml
 from finestore.rl.rl_progress import Invariant
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import (
@@ -46,6 +49,32 @@ GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
 
 
 MINIMUM_SCORED_FRACTION = 0.99
+
+
+def harbor_evaluation(path: Path) -> HarborEvaluationCallback:
+    """Load the pinned cohorts and job settings for in-training Harbor evaluation."""
+    config = yaml.safe_load(path.read_text())
+    cohorts = []
+    for cohort in config["cohorts"]:
+        job = deepcopy({**config["job"], **cohort.get("job", {})})
+        job["tasks"] = [
+            {
+                "git_url": cohort["git_url"],
+                "git_commit_id": cohort["git_commit_id"],
+                "path": task_path,
+                "source": cohort["name"],
+            }
+            for task_path in cohort["paths"]
+        ]
+        cohorts.append({"name": cohort["name"], "job": job, "reward_key": "reward"})
+    return HarborEvaluationCallback(
+        type="harbor_evaluation",
+        cohorts=tuple(cohorts),
+        timeout=config["timeout"],
+        minimum_coverage=config["minimum_coverage"],
+        minimum_native_coverage=MINIMUM_SCORED_FRACTION,
+        daytona_api_key_env="DAYTONA_EVAL_API_KEY",
+    )
 
 
 class WindowStatistic(StrEnum):

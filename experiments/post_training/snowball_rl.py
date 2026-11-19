@@ -5,12 +5,10 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
 
-import yaml
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import (
     ArtifactHfModel,
@@ -21,16 +19,12 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 from skyrlrecipe import ContextBudget, RecipePatch, sections
-from skyrlrecipe.declared import (
-    EvaluationSampling,
-    HarborEvaluationCallback,
-)
+from skyrlrecipe.declared import EvaluationSampling
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
 from experiments.post_training.rl_agentic_recipe import AGENTIC_BATCH_MIX, AGENTIC_RECIPE, agentic_limits
 from experiments.post_training.rl_presets import (
-    MINIMUM_SCORED_FRACTION,
     UPDATE_SECONDS_METRIC,
     ControlPin,
     Evaluation,
@@ -42,6 +36,7 @@ from experiments.post_training.rl_presets import (
     Recipe,
     Training,
     WindowStatistic,
+    harbor_evaluation,
 )
 from experiments.post_training.rl_recipe import BATCH_SETTINGS
 from experiments.post_training.task_curation.selection import (
@@ -145,7 +140,6 @@ _DEFAULT_PATCH = RecipePatch(
         ),
         enable_chunked_prefill=True,
         enforce_eager=False,
-        enable_http_endpoint=False,
         chat_template=None,
         apply_overlong_filtering=False,
         engine_init_kwargs={"moe_backend": "triton", "enable_auto_tools": True, "tool_parser": "hermes"},
@@ -343,32 +337,6 @@ _LEARNING_MEDIUM = Preset(
 )
 
 
-def _harbor_evaluation() -> HarborEvaluationCallback:
-    """Build the pinned agentic evaluation callback."""
-    config = yaml.safe_load(Path(__file__).with_name("rl_harbor.yaml").read_text())
-    cohorts = []
-    for cohort in config["cohorts"]:
-        job = deepcopy({**config["job"], **cohort.get("job", {})})
-        job["tasks"] = [
-            {
-                "git_url": cohort["git_url"],
-                "git_commit_id": cohort["git_commit_id"],
-                "path": path,
-                "source": cohort["name"],
-            }
-            for path in cohort["paths"]
-        ]
-        cohorts.append({"name": cohort["name"], "job": job, "reward_key": "reward"})
-    return HarborEvaluationCallback(
-        type="harbor_evaluation",
-        cohorts=tuple(cohorts),
-        timeout=config["timeout"],
-        minimum_coverage=config["minimum_coverage"],
-        minimum_native_coverage=MINIMUM_SCORED_FRACTION,
-        daytona_api_key_env="DAYTONA_EVAL_API_KEY",
-    )
-
-
 _TRAIN_LONG = Preset(
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
@@ -427,6 +395,8 @@ _CAMPAIGN_PATCH = RecipePatch(
         algorithm=sections.Algorithm(tis_splice=True),
     ),
 )
+_HARBOR_EVALUATION = harbor_evaluation(Path(__file__).with_name("rl_harbor.yaml"))
+
 _TRAIN_LONG_AGENTIC = replace(
     _TRAIN_LONG.with_updates(10_000),
     name="train-long-agentic",
@@ -436,7 +406,7 @@ _TRAIN_LONG_AGENTIC = replace(
     evaluations=(replace(_TASK_SET, every=2),),
     checkpoint_every=2,
     batch_mix=AGENTIC_BATCH_MIX,
-    harbor=_harbor_evaluation(),
+    harbor=_HARBOR_EVALUATION,
     gaps=("harbor-on-daytona",),
     recipe=replace(
         _TRAIN_LONG.recipe,
@@ -606,12 +576,8 @@ _PRESETS = (
         _TRAIN_LONG,
         name="train-long-harbor",
         revision="2026.11.19.1",
-        harbor=_harbor_evaluation(),
+        harbor=_HARBOR_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
-        recipe=replace(
-            _TRAIN_LONG.recipe,
-            config=_TRAIN_LONG.recipe.config.merge(RecipePatch(generator=sections.Generator(enable_http_endpoint=True))),
-        ),
     ),
 )
 

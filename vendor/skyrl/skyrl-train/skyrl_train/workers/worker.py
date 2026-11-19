@@ -961,7 +961,7 @@ class PolicyWorkerBase(Worker):
                 batch,
                 reduction=reduction,
                 step_wise=False,
-                group_scores=(plan.uids, scores[:, None]),
+                group_scores=(plan.uids, scores),
             )
         )
         drop_advantage_inputs(apply_loop_advantages(batch))

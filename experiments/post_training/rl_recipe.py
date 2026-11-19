@@ -110,6 +110,7 @@ RUNNER_KEYS = frozenset(
         "trainer.hf_save_interval",
         "trainer.hf_export_checkpoint",
         "trainer.rollout_buffer.groups_per_family",
+        "generator.enable_http_endpoint",
         "generator.num_inference_engines",
         "generator.inference_engine_tensor_parallel_size",
         "generator.inference_engine_pipeline_parallel_size",
@@ -422,6 +423,8 @@ def _training_config(
             presets.validate_agentic_recipe(config)
         except ValueError as error:
             raise click.BadParameter(str(error)) from error
+    if preset.harbor is not None or get_path(config.to_skyrl(), "terminal_bench.installed_agent") is not MISSING:
+        config = config.merge(RecipePatch(generator=sections.Generator(enable_http_endpoint=True)))
     return config
 
 

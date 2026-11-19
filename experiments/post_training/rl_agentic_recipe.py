@@ -21,7 +21,6 @@ AGENTIC_RECIPE = RecipePatch(
     ),
     trainer=sections.Trainer(use_sample_packing=True),
     generator=sections.Generator(
-        enable_http_endpoint=True,
         chat_template_kwargs={"enable_thinking": True},
         engine_init_kwargs={"enable_auto_tools": True, "tool_parser": "hermes"},
     ),

@@ -46,7 +46,13 @@ from skyrl_train.env_vars import (
 from skyrl_train.group_admission import resolve_group_advantage_invariant
 from skyrl_train.trajectory_selection import optimization_samples_per_prompt, trajectory_selector_from_config
 from skyrl_train.dynamic_sampling import resolve_dynamic_sampling_criteria
-from marinskyrl.runtime_options import reference_model_required, AdvantageEstimator, PolicyLossType
+from marinskyrl.runtime_options import (
+    AdvantageEstimator,
+    BatchBuilder,
+    OUTCOME_ADVANTAGE_ESTIMATORS,
+    PolicyLossType,
+    reference_model_required,
+)
 from marinskyrl.rollout_grading import validate_nemotron_ultra_grading
 from marinskyrl.process_diagnostics import initialize_process_diagnostics
 from marinskyrl.distillation import (
@@ -54,7 +60,6 @@ from marinskyrl.distillation import (
     validate_distillation_runtime_support,
     validate_generation_logprobs,
 )
-from marinskyrl.runtime_options import BatchBuilder, OUTCOME_ADVANTAGE_ESTIMATORS
 
 from .constants import DEFAULT_RAY_PLACEMENT_GROUP_TIMEOUT_SECONDS
 from .algorithm_registry import (
@@ -465,9 +470,9 @@ def require_worker_batch_config(cfg: DictConfig) -> None:
 
 
 def validate_cfg(cfg: DictConfig):
-    validate_training_settings(cfg)
     if BatchBuilder(cfg.trainer.batch_builder) is BatchBuilder.WORKER:
         require_worker_batch_config(cfg)
+    validate_training_settings(cfg)
     validate_mismatch_probe_config(cfg)
     distillation_plan = compile_distillation_plan_from_config(cfg)
     validate_distillation_runtime_support(distillation_plan)

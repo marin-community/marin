@@ -1852,11 +1852,7 @@ class RayPPOTrainer:
         if cfg.trainer.strategy == "megatron" and cfg.trainer.policy.nccl_buffer_size_bytes is not None:
             policy_actor_env_vars = {NCCL_BUFFER_SIZE_ENV_VAR: str(cfg.trainer.policy.nccl_buffer_size_bytes)}
         ref_actor_env_vars = None
-        if (
-            use_ref_model
-            and cfg.trainer.strategy == "megatron"
-            and cfg.trainer.ref.nccl_buffer_size_bytes is not None
-        ):
+        if use_ref_model and cfg.trainer.strategy == "megatron" and cfg.trainer.ref.nccl_buffer_size_bytes is not None:
             ref_actor_env_vars = {NCCL_BUFFER_SIZE_ENV_VAR: str(cfg.trainer.ref.nccl_buffer_size_bytes)}
 
         if cfg.trainer.placement.colocate_all:
@@ -2529,9 +2525,7 @@ class RayPPOTrainer:
         data["advantages"] = advantages
 
         data = data.to("cpu")
-        self.all_metrics.update(
-            advantage_metrics(data, step_wise=self.cfg.trainer.step_wise_training)
-        )
+        self.all_metrics.update(advantage_metrics(data, step_wise=self.cfg.trainer.step_wise_training))
         avg_rewards = data.metadata["metrics"]["avg_final_rewards"]
         avg_response_length = data.metadata["avg_response_length"]
         logger.info(f"avg_final_rewards: {avg_rewards}, avg_response_length: {avg_response_length}")

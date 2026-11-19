@@ -270,8 +270,8 @@ def forward_metrics(
 def advantage_metrics(
     batch: TrainingInputBatch,
     *,
-    reduction: MetricReduction = LocalReduction(),
     step_wise: bool,
+    reduction: MetricReduction = LocalReduction(),
     group_scores: tuple[Sequence[str], Tensor] | None = None,
 ) -> dict[str, float]:
     """Report reward and advantage diagnostics for finalized training credit."""
@@ -282,7 +282,7 @@ def advantage_metrics(
         final_steps = batch["is_last_step"][:rows].bool()
         uids = [uid for uid, is_final in zip(uids, final_steps.tolist(), strict=True) if is_final]
         rewards = rewards[final_steps]
-    group_uids, group_rewards = (uids, rewards) if group_scores is None else (group_scores[0], group_scores[1].sum(-1))
+    group_uids, group_rewards = (uids, rewards) if group_scores is None else group_scores
     metrics = {"reward/zero_std_group_fraction": _zero_std_group_fraction(group_uids, group_rewards)}
     advantages = torch.masked_select(batch["advantages"][:rows], batch["response_mask"][:rows].bool())
     average_reward = reduction.mean(rewards)
