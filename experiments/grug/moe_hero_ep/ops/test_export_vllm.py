@@ -4,6 +4,7 @@
 import dataclasses
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from threading import Lock
@@ -17,6 +18,7 @@ import pytest
 from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.testing.tokenizer import llama3_style_chat_tokenizer
 from marin.execution.artifact import read_record
 from marin.execution.lazy import StepContext, materialized_config
 from rigging.filesystem.storage_path import StoragePath
@@ -28,6 +30,7 @@ import experiments.grug.moe_hero_ep.sft_recipe as sft_recipe
 from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, GrugModelConfig, Transformer
+from experiments.grug.moe_hero_ep.ops import upload_hf
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.post_training.mochi_sft import MIXTURE_262K_176NODE, MOCHI_SPEC
@@ -226,6 +229,17 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     checkpoints = Path(trained.path()) / f"expert-placement-{placement.fingerprint}" / "checkpoints"
     native, _ = native_fixture(str(checkpoints / "step-17"), master=True)
     native_fixture(str(checkpoints / "step-18"), master=True, step=18)
+    tokenizer_source = tmp_path / "tokenizer-snapshot"
+    tokenizer = llama3_style_chat_tokenizer()
+    tokenizer.add_tokens([f"token-{i}" for i in range(len(tokenizer), native.model.vocab_size)])
+    tokenizer.save_pretrained(tokenizer_source)
+
+    def download_tokenizer(repo_id, *, revision, local_dir, **kwargs):
+        assert repo_id == "marin-community/marin-tokenizer-tools"
+        assert revision == MOCHI_SPEC.tokenizer_revision
+        shutil.copytree(tokenizer_source, local_dir, dirs_exist_ok=True)
+
+    monkeypatch.setattr(upload_hf, "snapshot_download", download_tokenizer)
     newer_metadata = checkpoints / "step-18" / "metadata.json"
     newer_permanent = json.loads(newer_metadata.read_text())
     newer_metadata.write_text(json.dumps({**newer_permanent, "is_temporary": True}))
@@ -241,8 +255,8 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     assert record is not None and record.config is not None
     assert model.relative_path == "hf"
     assert record.config["relative_path"] == model.relative_path
-    assert record.config["tokenizer_uri"] == model.tokenizer_uri == "marin-community/marin-tokenizer-tools"
-    assert record.config["tokenizer_revision"] == model.tokenizer_revision == MOCHI_SPEC.tokenizer_revision
+    assert record.config["tokenizer_uri"] == "marin-community/marin-tokenizer-tools"
+    assert record.config["tokenizer_revision"] == MOCHI_SPEC.tokenizer_revision
     hf = output / model.relative_path
     assert (hf / "export-manifest.json").is_file()
     completed = (hf / "export-manifest.json").read_bytes()
@@ -272,9 +286,21 @@ import sys
 from pathlib import Path
 from cloud.iris.hf_model_cache import stage_artifact_model
 from skyrl_train.models.grug_moe import GRUG_SPLIT_EXPERT_SCHEMA_VERSION, GrugMoeConfig, select_routed_expert_schema
+from skyrl_train.tokenizer import create_tokenizer, validate_checkpoint_vocabulary
 
 root = Path(sys.argv[2])
 stage_artifact_model(sys.argv[1], "mochi-sft-test@dev", str(root))
+tokenizer = create_tokenizer(sys.argv[3], disable_fast_tokenizer=False)
+validate_checkpoint_vocabulary(
+    tokenizer,
+    checkpoint_path=str(root),
+    checkpoint_revision=None,
+    checkpoint_identity="mochi-sft-test@dev",
+    tokenizer_identity=sys.argv[3],
+    disable_fast_tokenizer=False,
+)
+generation = json.loads((root / "generation_config.json").read_text())
+assert generation["eos_token_id"] == [2, 3]
 config = GrugMoeConfig.from_pretrained(root)
 index = json.loads((root / "model.safetensors.index.json").read_text())
 assert config.grugmoe_artifact_schema_version == 3
@@ -284,12 +310,15 @@ assert layout == GRUG_SPLIT_EXPERT_SCHEMA_VERSION
 """,
             str(hf),
             str(tmp_path / "staged"),
+            str(tokenizer_source),
         ],
         cwd=skyrl,
         env=os.environ | {"PYTHONPATH": "skyrl-train:skyrl-gym"},
         check=True,
         timeout=180,
     )
+    assert model.tokenizer_uri is None
+    assert model.tokenizer_revision is None
 
 
 def test_cpu_export_resumes_completed_shards_after_lowering_execution_limits(tmp_path, monkeypatch):

@@ -4,6 +4,8 @@
 """Export the final permanent Mochi SFT checkpoint for policy initialization."""
 
 from dataclasses import dataclass, replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from fray.types import ResourceConfig
 from levanter.checkpoint import discover_checkpoint_candidates
@@ -11,7 +13,7 @@ from marin.execution.lazy import OUT, StepContext, apply
 from marin.execution.remote import remote
 from marin.rl.skyrl import ArtifactHfModel
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.hero_recipe import HERO_MODEL_CONFIG, with_transport_remat_mode
@@ -22,6 +24,7 @@ from experiments.grug.moe_hero_ep.launch_hero_sft import (
     sft_resources,
 )
 from experiments.grug.moe_hero_ep.ops.export_cpu import CpuExportConfig, export
+from experiments.grug.moe_hero_ep.ops.upload_hf import write_tokenizer_metadata
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.train import RouterBiasMode
 
@@ -83,12 +86,7 @@ class GrugHeroSFT:
             tokenizer_uri=self.tokenizer_uri,
             tokenizer_revision=self.tokenizer_revision,
         )
-        return ArtifactHfModel(
-            step=export_step,
-            tokenizer_uri=self.tokenizer_uri,
-            tokenizer_revision=self.tokenizer_revision,
-            relative_path=relative_path,
-        )
+        return ArtifactHfModel(step=export_step, relative_path=relative_path)
 
 
 def _export_final_sft(
@@ -114,7 +112,13 @@ def _export_final_sft(
     if final.step != expected_step:
         raise ValueError(f"Mochi SFT expected final step {expected_step}, found newest permanent step {final.step}")
     model = with_transport_remat_mode(replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor))
-    config = CpuExportConfig(
-        final.path, digest(final.metadata), model, prefix_join(output, relative_path), source_revision
-    )
-    export(config, accept_completed=True)
+    destination = StoragePath(output) / relative_path
+    config = CpuExportConfig(final.path, digest(final.metadata), model, str(destination), source_revision)
+    with TemporaryDirectory() as directory:
+        metadata = Path(directory)
+        write_tokenizer_metadata(metadata, repo_id=tokenizer_uri, revision=tokenizer_revision)
+        export(config, accept_completed=True)
+        for path in metadata.rglob("*"):
+            relative = path.relative_to(metadata)
+            if path.is_file() and ".cache" not in relative.parts:
+                (destination / relative.as_posix()).upload_from(str(path))
