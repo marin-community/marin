@@ -461,7 +461,7 @@ _OUTCOME_LOSSES = frozenset(
 
 
 def worker_batch_refusal(cfg: DictConfig) -> str | None:
-    """Return the first configuration setting unsupported by policy-worker assembly."""
+    """Return the first reason policy-worker assembly is unavailable, or None."""
     algorithm = cfg.trainer.algorithm
     shaping = parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
     supported_loss = (

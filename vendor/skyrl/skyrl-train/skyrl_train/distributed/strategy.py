@@ -107,7 +107,7 @@ class DistributedStrategy(ABC):
             return data.item() if not is_tensor else data
 
     def gather_to_first_rank(self, values: torch.Tensor) -> torch.Tensor:
-        """Return concatenated values on world rank zero and an empty tensor elsewhere."""
+        """Gather one-dimensional tensors on world rank zero and return an empty tensor elsewhere."""
         values = values.to(self.collective_device())
         world_size, rank = dist.get_world_size(), dist.get_rank()
         sizes = values.new_zeros(world_size, dtype=torch.int64)
