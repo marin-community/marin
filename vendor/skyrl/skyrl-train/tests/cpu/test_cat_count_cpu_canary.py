@@ -147,36 +147,31 @@ def scores(records):
 async def test_cpu_sampling_preserves_trajectory_rng_and_minimum_tokens(cat_count_policy):
     engine = CPUInferenceEngine(str(cat_count_policy), seed=0)
     tokenizer = engine.tokenizer
-    prompt = tokenizer.apply_chat_template(
-        [
-            {
-                "role": "user",
-                "content": PROMPT.format(N=7),
-            }
-        ],
-        tokenize=True,
-        return_dict=False,
-        add_generation_prompt=True,
-    )
+
+    def messages(n):
+        return [{"role": "user", "content": PROMPT.format(N=n)}]
+
+    def tokens(n):
+        return tokenizer.apply_chat_template(
+            messages(n), tokenize=True, return_dict=False, add_generation_prompt=True
+        )
+
+    prompt = tokens(7)
+    identities = ("a", "b", "c")
     sampling = {"temperature": 1.0, "max_tokens": 64, "min_tokens": 0, "logprobs": 0}
+
+    async def generate(prompts, sessions):
+        return await engine.generate({"prompt_token_ids": prompts, "session_ids": sessions, "sampling_params": sampling})
+
     try:
-        batch = await engine.generate(
-            {"prompt_token_ids": [prompt] * 3, "session_ids": ["a", "b", "c"], "sampling_params": sampling}
-        )
-        reordered = await asyncio.gather(
-            *(
-                engine.generate({"prompt_token_ids": [prompt], "session_ids": [identity], "sampling_params": sampling})
-                for identity in ("c", "b", "a")
-            )
-        )
+        batch = await generate([prompt] * 3, list(identities))
+        reordered = await asyncio.gather(*(generate([prompt], [identity]) for identity in reversed(identities)))
         for index, result in enumerate(reversed(reordered)):
             assert result["response_ids"][0] == batch["response_ids"][index]
             assert result["response_logprobs"][0] == pytest.approx(batch["response_logprobs"][index], abs=1e-5)
         assert len({tuple(ids) for ids in batch["response_ids"]}) > 1
-        for index, identity in enumerate(("a", "b", "c")):
-            singleton = await engine.generate(
-                {"prompt_token_ids": [prompt], "session_ids": [identity], "sampling_params": sampling}
-            )
+        for index, identity in enumerate(identities):
+            singleton = await generate([prompt], [identity])
             assert singleton["response_ids"][0] == batch["response_ids"][index]
 
         config = get_default_config()
@@ -185,29 +180,17 @@ async def test_cpu_sampling_preserves_trajectory_rng_and_minimum_tokens(cat_coun
         for index in (2, 0, 1):
             chat = await client.generate(
                 {
-                    "prompts": [[{"role": "user", "content": PROMPT.format(N=7)}]],
+                    "prompts": [messages(7)],
                     "chat_completion_params": [{}],
-                    "session_ids": [("a", "b", "c")[index]],
+                    "session_ids": [identities[index]],
                     "sampling_params": sampling,
                 }
             )
             assert chat["response_ids"][0] == batch["response_ids"][index]
             assert chat["response_logprobs"][0] == pytest.approx(batch["response_logprobs"][index], abs=1e-5)
 
-        eos_prompt = tokenizer.apply_chat_template(
-            [
-                {
-                    "role": "user",
-                    "content": PROMPT.format(N=1),
-                }
-            ],
-            tokenize=True,
-            return_dict=False,
-            add_generation_prompt=True,
-        ) + tokenizer.encode("cat", add_special_tokens=False)
-        mixed = await engine.generate(
-            {"prompt_token_ids": [eos_prompt, prompt], "session_ids": ["eos-short", "a"], "sampling_params": sampling}
-        )
+        eos_prompt = tokens(1) + tokenizer.encode("cat", add_special_tokens=False)
+        mixed = await generate([eos_prompt, prompt], ["eos-short", "a"])
         assert mixed["response_ids"][0] == [tokenizer.eos_token_id]
         assert mixed["response_ids"][1] == batch["response_ids"][0]
         for minimum in (0, None, 3):
