@@ -27,7 +27,7 @@ from skyrl_train.dynamic_sampling import (
     GroupSelectionPolicy,
     resolve_dynamic_sampling_criteria,
 )
-from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdmissionStalledError, GroupAdvantageInvariant
+from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import (
     BatchPolicy,
@@ -37,31 +37,23 @@ from skyrl_train.rollouts.buffer import (
     ReadyRollout,
     RolloutBuffer,
     RolloutBufferConfig,
+    RowFacts,
     RolloutContentPolicy,
     RolloutGroup,
     RolloutTask,
 )
 from skyrl_train.rollouts.loader import PromptLoader, PromptLoaderState, PromptGroupDataset, PromptOrder, SeededPasses
 from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads, PayloadStore
+from skyrl_train.rollouts.payloads import RolloutReader, PAYLOAD_IO_THREADS
 from skyrl_train.rollout_observability import dispatch_wait, observe_rollout_call, record_group_disposition
 from skyrl_train.rollouts.workers import RolloutWorkers
-from skyrl_train.telemetry import GeneratedWork, record_generated_work, record_rollout_buffer
+from skyrl_train.telemetry import record_generated_work, record_rollout_buffer
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
 from skyrl_train.trajectory_runners.types import TrajectoryRequestBatch
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
 
 _T = TypeVar("_T")
-_MASKED_DISPOSITION_LOG_INTERVAL = 60.0
-
-
-async def _log_masked_dispositions(
-    step: int, required: int, groups: list[AdmittedRollout], counts: collections.Counter[str]
-) -> None:
-    while True:
-        await asyncio.sleep(_MASKED_DISPOSITION_LOG_INTERVAL)
-        logger.info("Masked rollout dispositions: policy_step={} admitted={}/{} masked_trajectories={} reasons={}",
-                    step, len(groups), required, sum(counts.values()), dict(sorted(counts.items())))
 
 
 @dataclass(frozen=True)
@@ -196,24 +188,7 @@ class TrainingContext:
             batch_policy=BatchPolicy(config.trainer.rollout_buffer.batch_policy),
             dynamic_sampling=selection.sampling_type,
             max_candidate_groups=max_sample_batches * batch_size if max_sample_batches > 0 else None,
-            consumed_route_quotas=dict(config.trainer.rollout_buffer.consumed_route_quotas),
         )
-        routes = {}
-        if buffer_config.consumed_route_quotas:
-            if not isinstance(dataset, PromptDataset):
-                raise ValueError("Consumed route quotas require explicit source provenance in PromptDataset")
-            source_routes = dict(config.trainer.rollout_buffer.source_routes)
-            sources = dataset.dataframe["data_source"]
-            unknown = set(sources) - set(source_routes)
-            if unknown:
-                raise ValueError(f"Missing consumed-route classification for sources: {sorted(unknown)}")
-            routes = {dataset.uid(index): source_routes[source] for index, source in enumerate(sources)}
-            counts = collections.Counter(routes.values())
-            if set(counts) != set(buffer_config.consumed_route_quotas):
-                raise ValueError("Consumed route pools differ from configured quotas")
-            for name, quota in buffer_config.consumed_route_quotas.items():
-                if counts[name] < quota:
-                    raise ValueError(f"Consumed route {name} cannot fill a unique batch")
         plan = compile_distillation_plan_from_config(config)
         admission = GroupAdmissionPolicy(
             GroupAdvantageInvariant.from_config(algorithm.resolved_group_advantage),
@@ -235,7 +210,7 @@ class TrainingContext:
                 prompt_order_from_config(config, dataset),
                 batch_size=batch_size,
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
-                routes=routes,
+                max_unusable_groups=config.trainer.rollout_buffer.max_unusable_groups,
             ),
             buffer_config,
             start_rollout_buffer(buffer_config),
@@ -258,22 +233,18 @@ class TrainingContext:
         await asyncio.gather(*tasks, return_exceptions=True)
         ray.kill(self._buffer)
 
-    def pause(self) -> None:
-        """Stop new submissions while already submitted groups keep progressing."""
-        self._submission_allowed.clear()
-
     async def pause_and_drain(self) -> None:
         """Stop dispatching new generation and finish already submitted groups."""
-        self.pause()
+        self._submission_allowed.clear()
         if self._running:
-            await self._until_failure(asyncio.gather(*self._running))
+            await self.wait(asyncio.gather(*self._running))
 
     def resume(self) -> None:
         self._submission_allowed.set()
 
     async def publish(self, policy_step: int) -> None:
         """Acknowledge the previous batch and lease rollouts at ``policy_step``, whose weights are now live."""
-        await self._until_failure(self._buffer.publish.remote(policy_step))
+        await self.wait(self._buffer.publish.remote(policy_step))
         self._policy_step = policy_step
 
     async def next_batch(
@@ -281,7 +252,7 @@ class TrainingContext:
         *,
         stall_timeout: float,
         on_admitted: Callable[[list[RolloutGroup]], Awaitable[None]],
-    ) -> tuple[list[RolloutGroup], dict[str, float]]:
+    ) -> tuple[list[RolloutGroup], RolloutBatchMetadata]:
         """Wait for the current step's batch and return its groups with selection and prompt-order metrics.
 
         Groups reach ``on_admitted`` as they are admitted, before the batch is complete. Every group judged for
@@ -294,38 +265,17 @@ class TrainingContext:
         groups: list[RolloutGroup] = []
 
         async def fetch_admitted(admitted: tuple[AdmittedRollout, ...]) -> None:
-            fetched = await self._fetch_groups(self._policy_step, admitted, stall_timeout=stall_timeout)
+            reader = RolloutReader(self._buffer, self._payloads, admitted, stall_timeout)
+            fetched = await self.wait(reader.read(self._policy_step, tuple(group.index for group in admitted)))
             groups.extend(fetched)
             await on_admitted(fetched)
 
         metadata = await self.next_batch_metadata(stall_timeout=stall_timeout, on_admitted=fetch_admitted)
-        return groups, metadata.metrics
+        return groups, metadata
 
-    async def _fetch_groups(
-        self, batch_id: int, selected: tuple[AdmittedRollout, ...], *, stall_timeout: float
-    ) -> list[RolloutGroup]:
-        try:
-            async with asyncio.timeout(stall_timeout):
-                refs = await self._until_failure(
-                    self._buffer.payload_refs.remote(batch_id, tuple(group.index for group in selected))
-                )
-                groups = await self._until_failure(self._payloads.fetch(refs))
-        except TimeoutError as error:
-            raise GroupAdmissionStalledError(
-                f"{len(selected)} selected rollout payloads did not arrive within "
-                f"{stall_timeout:.0f}s: batch_id={batch_id} indices={[group.index for group in selected]}"
-            ) from error
-        if len(groups) != len(selected):
-            raise ValueError("payload store returned the wrong number of selected rollout groups")
-        for expected, group in zip(selected, groups, strict=True):
-            if group.uid != expected.uid or group.policy_step != expected.policy_step:
-                raise ValueError(f"selected rollout payload does not match batch metadata for {expected.uid}")
-            work = GeneratedWork.from_batch(
-                group.trajectory_batch["response_ids"], group.trajectory_batch.get("is_last_step")
-            )
-            if work.sample_count != expected.sample_count or work.generated_token_count != expected.response_tokens:
-                raise ValueError(f"selected rollout payload size does not match batch metadata for {expected.uid}")
-        return groups
+    def reader(self, metadata: RolloutBatchMetadata, *, stall_timeout: float) -> RolloutReader:
+        """Construct the bounded reader for an admitted batch's ordered groups."""
+        return RolloutReader(self._buffer, self._payloads, metadata.groups, stall_timeout)
 
     async def next_batch_metadata(
         self,
@@ -336,51 +286,38 @@ class TrainingContext:
         """Wait for a selected batch without reading its trajectory payloads."""
         loop = asyncio.get_running_loop()
         groups: list[AdmittedRollout] = []
-        masked_counts: collections.Counter[str] = collections.Counter()
-        reporter = asyncio.create_task(_log_masked_dispositions(
-            self._policy_step, self.config.batch_size, groups, masked_counts
-        ))
-        try:
-            deadline = loop.time() + stall_timeout
-            while True:
-                timeout = max(deadline - loop.time(), 0.0)
-                admission = await self._until_failure(self._buffer.admit.remote(timeout))
-                await self._release(admission)
-                for policy_step, work in admission.generated:
-                    record_generated_work(work, policy_step)
+        deadline = loop.time() + stall_timeout
+        while True:
+            timeout = max(deadline - loop.time(), 0.0)
+            admission = await self.wait(self._buffer.admit.remote(timeout))
+            await self._release(admission)
+            for policy_step, work in admission.generated:
+                record_generated_work(work, policy_step)
+            if self._rollout_spans:
                 for outcome in admission.dispositions:
-                    masked_counts.update(dict(outcome.masked_reasons))
-                if self._rollout_spans:
-                    for outcome in admission.dispositions:
-                        record_group_disposition(
-                            disposition=outcome.disposition,
-                            tokens=outcome.tokens,
-                            step=self._policy_step,
-                            dwell_seconds=outcome.dwell_seconds,
-                        )
-                record_rollout_buffer(admission.ready_count, self.config.max_untrained_groups)
-                if admission.admitted:
-                    admitted = tuple(admission.admitted)
-                    groups.extend(admitted)
-                    if on_admitted is not None:
-                        await on_admitted(admitted)
-                    deadline = loop.time() + stall_timeout
-                if admission.selection is not None:
-                    if len(groups) != self.config.batch_size:
-                        raise ValueError(f"selected batch has {len(groups)} groups, expected {self.config.batch_size}")
-                    if any(group.index != index for index, group in enumerate(groups)):
-                        raise ValueError("selected batch group indices are not ordered from zero")
-                    return RolloutBatchMetadata(
-                        self._policy_step,
-                        tuple(groups),
-                        {**admission.selection.metrics, **self.loader.observe(admission.selection.judged)},
+                    record_group_disposition(
+                        disposition=outcome.disposition,
+                        tokens=outcome.tokens,
+                        step=self._policy_step,
+                        dwell_seconds=outcome.dwell_seconds,
                     )
-        finally:
-            reporter.cancel()
-            results = await asyncio.gather(reporter, return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception):
-                    logger.warning("Masked-disposition logging stopped: {}", result)
+            record_rollout_buffer(admission.ready_count, self.config.max_untrained_groups)
+            if admission.admitted:
+                admitted = tuple(admission.admitted)
+                groups.extend(admitted)
+                if on_admitted is not None:
+                    await on_admitted(admitted)
+                deadline = loop.time() + stall_timeout
+            if admission.selection is not None:
+                if len(groups) != self.config.batch_size:
+                    raise ValueError(f"selected batch has {len(groups)} groups, expected {self.config.batch_size}")
+                if any(group.index != index for index, group in enumerate(groups)):
+                    raise ValueError("selected batch group indices are not ordered from zero")
+                return RolloutBatchMetadata(
+                    self._policy_step,
+                    tuple(groups),
+                    {**admission.selection.metrics, **self.loader.observe(admission.selection.judged)},
+                )
 
     async def state_dict(self) -> TrainingContextState:
         """Capture every dispatched group that no trained batch has consumed.
@@ -395,7 +332,12 @@ class TrainingContext:
         payloads = await asyncio.gather(*(self._payloads.checkpoint(rollout.payload) for rollout in snapshot.ready))
         ready = [
             # The buffer's clock does not carry across processes.
-            dataclasses.replace(rollout, payload=payload, committed_at=None)
+            dataclasses.replace(
+                rollout,
+                payload=payload,
+                committed_at=None,
+                verdict=dataclasses.replace(rollout.verdict, row_facts=None),
+            )
             for rollout, payload in zip(snapshot.ready, payloads, strict=True)
         ]
         retries = [*loader.retries, *snapshot.retries, *uncommitted]
@@ -419,6 +361,18 @@ class TrainingContext:
         ready = [
             dataclasses.replace(rollout, payload=self._payloads.restore(rollout.payload)) for rollout in state.ready
         ]
+        for start in range(0, len(ready), PAYLOAD_IO_THREADS):
+            indices = [
+                index
+                for index in range(start, min(start + PAYLOAD_IO_THREADS, len(ready)))
+                if ready[index].verdict.trainable
+            ]
+            groups = await self._payloads.fetch([ready[index].payload for index in indices])
+            for index, group in zip(indices, groups, strict=True):
+                verdict = dataclasses.replace(
+                    ready[index].verdict, row_facts=RowFacts.from_batch(group.trajectory_batch)
+                )
+                ready[index] = dataclasses.replace(ready[index], verdict=verdict)
         await self._buffer.restore.remote(BufferSnapshot(ready=ready, retries=[], leases=frozenset()))
         self._live_uids.update(rollout.verdict.uid for rollout in ready)
         logger.info(
@@ -435,7 +389,7 @@ class TrainingContext:
                     lease = await self._buffer.acquire_lease.remote()
                 with self._wait("prompt"):
                     async with self._uids_released:
-                        prompt = await self._uids_released.wait_for(lambda: self.loader.next_prompt(self._live_uids, lease.route))
+                        prompt = await self._uids_released.wait_for(lambda: self.loader.next_prompt(self._live_uids))
                         self._live_uids[prompt["uid"]] += 1
                 # A lease or prompt wait may span an evaluation boundary. Keep the
                 # single acquired lease, but do not submit its generation yet.
@@ -454,6 +408,8 @@ class TrainingContext:
             return
         async with self._uids_released:
             self._live_uids -= collections.Counter(outcome.uid for outcome in admission.dispositions)
+            for outcome in admission.dispositions:
+                self.loader.record_disposition(outcome.uid, outcome.disposition)
             for prompt in admission.retries:
                 self.loader.retry(prompt)
             self._uids_released.notify_all()
@@ -480,7 +436,7 @@ class TrainingContext:
         if not self._failure.done():
             self._failure.set_exception(error)
 
-    async def _until_failure(self, awaitable: Awaitable[_T]) -> _T:
+    async def wait(self, awaitable: Awaitable[_T]) -> _T:
         """Await ``awaitable`` unless a rollout task fails first, then raise that failure."""
         assert self._failure is not None, "start the training context before reading from it"
         work: asyncio.Future[Any] = asyncio.ensure_future(awaitable)

@@ -6,6 +6,7 @@
 from dataclasses import replace
 
 import click
+import pyarrow.parquet as pq
 import yaml
 from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact
@@ -25,6 +26,8 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import RecipePatch, RLEntrypoint, SkyRLRecipe, sections
 from skyrlrecipe.sampling import EvalSamplingParams
 
@@ -79,9 +82,10 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
         extra_env={
             **base.extra_env,
             "VERIFYIT_JUDGE_MODEL": "openai/gpt-oss-120b",
-            "NCCL_NET": "Socket",
-            "NCCL_IB_DISABLE": "1",
-            "NCCL_SOCKET_FAMILY": "AF_INET",
+            # The privileged profile below exposes the front-end Ethernet NIC's RoCE functions
+            # (mlx5_*) beside the InfiniBand rails. NCCL routes some channels over them, which fails
+            # with IBV_WC_RETRY_EXC_ERR(12). Pin NCCL to the rails (ibp0-ibp7).
+            "NCCL_IB_HCA": "ibp",
         },
     )
     config = config.merge(
@@ -237,6 +241,16 @@ def main(selection_uri: str, steps: int, export_hf: bool, reproducible_serving: 
             param_hint="--selection-uri",
         )
     selection_name, selection_version = parts
+    # SkyRL trains each task at most once per update, so a smaller selection fails only after GPU allocation.
+    batch_size = training_recipe(steps).trainer.train_batch_size
+    fs, train_path = filesystem_for(str(StoragePath(selection_uri) / TRAIN_FILENAME))
+    with fs.open(train_path, "rb") as stream:
+        train_rows = pq.ParquetFile(stream).metadata.num_rows
+    if train_rows < batch_size:
+        raise click.BadParameter(
+            f"{TRAIN_FILENAME} has {train_rows} tasks; one update needs {batch_size}",
+            param_hint="--selection-uri",
+        )
     selection = ArtifactStep.adopt(f"{SELECTION_PREFIX}/{selection_name}", selection_version, selection_uri)
     return build_run(
         resolve_version(name, None),

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 _PREPARE_TIMEOUT = Duration.from_hours(4)
 _PREPARE_CPU = 4
 _PREPARE_RAM = "8g"
-_PREPARE_DISK = "40g"
+_PREPARE_DISK = "64g"
 
 
 @dataclass(frozen=True)

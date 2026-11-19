@@ -13,6 +13,10 @@ from rigging.filesystem.storage_path import StoragePath
 
 from tests.evaluation.harbor_runtime import preflight
 
+# Each test spawns Harbor's isolated runtime environment, which costs tens of seconds
+# even from uv's cache; the guard must not fire under parallel workers.
+pytestmark = pytest.mark.timeout(180)
+
 
 @pytest.fixture
 def prepared_policy(tmp_path):

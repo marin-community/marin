@@ -19,7 +19,7 @@ import pytest
 import sqlalchemy
 from evaldash import app as evaldash_app
 from evaldash import fixtures, results_db
-from marin.evaluation.records import list_records, write_record
+from evalrecords.records import list_records, write_record
 from marina.db import UrlDatabase, engine_for
 from marina.testing import SourceServices
 from starlette.testclient import TestClient

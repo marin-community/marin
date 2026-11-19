@@ -31,6 +31,16 @@ from skyrl_train.telemetry import GeneratedWork
 from skyrl_train.trajectory_runners.trajectory_processing import get_outcome_rewards, get_trajectory_passes
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import NormalizedReward
 from skyrl_train.trajectory_runners.types import TrajectoryBatch, TrajectoryRequestBatch
+from math import fsum
+import numpy as np
+from skyrl_gym.verification import VerificationStatus
+from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
+from skyrl_train.trajectory_runners.trajectory_processing import (
+    graded_row_indices,
+    normalized_verifier_scores,
+    rollout_successes,
+)
+from skyrl_train.trajectory_runners.types import BatchFields, RewardShapingComponents
 
 
 class BatchPolicy(StrEnum):
@@ -54,14 +64,8 @@ class RolloutBufferConfig:
     batch_policy: BatchPolicy
     dynamic_sampling: DynamicSamplingType | None
     max_candidate_groups: int | None
-    consumed_route_quotas: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.consumed_route_quotas:
-            if self.batch_policy is not BatchPolicy.FULL_BATCH:
-                raise ValueError("Consumed route quotas require full_batch admission")
-            if sum(self.consumed_route_quotas.values()) != self.batch_size or any(value < 1 for value in self.consumed_route_quotas.values()):
-                raise ValueError("Consumed route quotas must be positive and sum to batch_size")
         if self.batch_size < 1:
             raise ValueError(f"rollout batch size must be positive, got {self.batch_size}")
         if self.max_in_flight is not None and self.max_in_flight < 1:
@@ -92,7 +96,6 @@ class RolloutLease:
     lease_id: str
     policy_step: int
     batch_id: int
-    route: str | None = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +138,122 @@ class GroupRewards:
 
 
 @dataclass(frozen=True)
+class RowFacts:
+    """Per-row summaries for batch assembly and metrics.
+
+    Separate reward totals and mask counts retain their consumers' original
+    reduction arithmetic so driver metrics preserve their exact values.
+    """
+
+    stamped_loss_tokens: tuple[int, ...]
+    spanning_policy_steps: tuple[bool, ...]
+    prompt_len: np.ndarray
+    response_len: np.ndarray
+    loss_tokens: np.ndarray
+    is_last_step: np.ndarray
+    exclude_from_baseline: np.ndarray
+    fields: BatchFields
+    rewards: GroupRewards
+    loop_credit: bool
+    shaping_components: tuple[RewardShapingComponents, ...] | None
+    shaping_response_tokens: tuple[int, ...]
+    loop_incidence: tuple[bool, ...]
+    reasoning_span_violations: tuple[int, ...]
+    reasoning_span_token_penalties: tuple[float, ...]
+    reward_sign_totals: tuple[float, ...]
+    metric_totals: tuple[float | np.floating, ...]
+    compensated_metric_totals: tuple[float, ...]
+    passes: tuple[bool, ...]
+    rollout_passes: tuple[bool, ...]
+    scalar_values: tuple[float | None, ...]
+    verifier_present: tuple[bool, ...]
+    verifier_task_pass: tuple[bool | None, ...]
+    graded: tuple[bool, ...]
+    verifier_scores: tuple[float | None, ...] | None
+    verifier_agents: tuple[str | None, ...] | None
+    data_sources: tuple[str | None, ...] | None
+    env_metrics: tuple[dict, ...] | None
+    env_classes: tuple[str, ...] | None
+    group_metrics: dict[str, float]
+    stop_reasons: tuple[str | None, ...] | None
+
+    @classmethod
+    def from_batch(cls, batch: TrajectoryBatch) -> RowFacts:
+        """Capture finalized row scalars without retaining token arrays or verifier records."""
+        responses = batch["response_ids"]
+        count = len(responses)
+        rewards = GroupRewards.from_batch(batch)
+        results = batch.get("verification_results")
+        reward_sign_totals = tuple(float(np.sum(reward)) for reward in batch["rewards"])
+        scores = normalized_verifier_scores(batch)
+        graded = frozenset(graded_row_indices(batch))
+        policy_steps = batch.get("rollout_policy_steps")
+        masks = [np.asarray(mask) for mask in batch["loss_masks"]]
+        stamped_steps = (
+            [
+                np.asarray(steps)[(np.asarray(steps) != UNSTAMPED_POLICY_STEP) & (mask > 0)]
+                for steps, mask in zip(policy_steps, masks, strict=True)
+            ]
+            if policy_steps is not None
+            else [np.empty(0, dtype=np.int32) for _ in responses]
+        )
+        return cls(
+            stamped_loss_tokens=tuple(len(steps) for steps in stamped_steps),
+            spanning_policy_steps=tuple(bool(steps.size and steps.min() != steps.max()) for steps in stamped_steps),
+            prompt_len=np.asarray([len(row) for row in batch["prompt_token_ids"]], dtype=np.int64),
+            response_len=np.asarray([len(row) for row in batch["response_ids"]], dtype=np.int64),
+            loss_tokens=np.asarray([mask.sum() for mask in masks], dtype=np.int64),
+            is_last_step=np.asarray(batch.get("is_last_step") or [True] * count, dtype=bool),
+            exclude_from_baseline=np.asarray(
+                batch.get("exclude_from_baseline") or [False] * len(batch["response_ids"]), dtype=bool
+            ),
+            fields=BatchFields.from_batch(batch),
+            rewards=rewards,
+            loop_credit=any(np.count_nonzero(row) for row in batch.get("loop_advantages") or ()),
+            shaping_components=tuple(dict(values) for values in batch["reward_shaping_components"])
+            if batch.get("reward_shaping_components") is not None
+            else None,
+            shaping_response_tokens=tuple(int(np.count_nonzero(mask)) for mask in masks),
+            loop_incidence=tuple(bool(spans) for spans in batch.get("reward_shaping_loop_spans") or [[]] * count),
+            reasoning_span_violations=tuple(batch.get("reasoning_span_violations") or [0] * count),
+            reasoning_span_token_penalties=tuple(batch.get("reasoning_span_token_penalties") or [0.0] * count),
+            reward_sign_totals=reward_sign_totals,
+            metric_totals=tuple(
+                sum(reward) if isinstance(reward, list) else float(reward) for reward in batch["rewards"]
+            ),
+            compensated_metric_totals=tuple(
+                (fsum(reward) if isinstance(reward, list) else float(reward)) if index in graded else 0.0
+                for index, reward in enumerate(batch["rewards"])
+            ),
+            passes=tuple(get_trajectory_passes(batch)),
+            rollout_passes=tuple(rollout_successes(batch["rewards"], results)),
+            scalar_values=tuple(None if isinstance(reward, list) else float(reward) for reward in batch["rewards"]),
+            verifier_present=tuple(result is not None for result in results)
+            if results is not None
+            else (False,) * count,
+            verifier_task_pass=tuple(
+                None if result is None else result.passed if result.status is VerificationStatus.VERIFIED else False
+                for result in results
+            )
+            if results is not None
+            else (None,) * count,
+            graded=tuple(index in graded for index in range(count)),
+            verifier_scores=tuple(scores) if scores is not None else None,
+            verifier_agents=tuple(
+                agent if result is not None and isinstance(agent := result.diagnostics.get("agent"), str) else None
+                for result in results
+            )
+            if results is not None
+            else None,
+            data_sources=tuple(batch["data_sources"]) if batch.get("data_sources") is not None else None,
+            env_metrics=tuple(batch["env_metrics"]) if "env_metrics" in batch else None,
+            env_classes=tuple(batch["env_classes"]) if "env_classes" in batch else None,
+            group_metrics=dict(batch.get("rollout_metrics") or {}),
+            stop_reasons=tuple(batch["stop_reasons"]) if batch.get("stop_reasons") is not None else None,
+        )
+
+
+@dataclass(frozen=True)
 class RolloutVerdict:
     """What the buffer needs to know about a group's content to select it.
 
@@ -146,7 +265,7 @@ class RolloutVerdict:
     selection: GroupSelectionResult | None
     rewards: GroupRewards | None
     work: GeneratedWork
-    masked_reasons: tuple[tuple[str, int], ...] = ()
+    row_facts: RowFacts | None = None
 
     @property
     def trainable(self) -> bool:
@@ -169,15 +288,10 @@ class RolloutContentPolicy:
             )
         batch = group.trajectory_batch
         work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"))
-        exceptions = batch.get("exception_types") or []
-        masked = collections.Counter(
-            str(exceptions[index]) if index < len(exceptions) and exceptions[index] else "no_loss_tokens"
-            for index, mask in enumerate(batch["loss_masks"]) if not any(mask)
-        )
-        masked_reasons = tuple(sorted(masked.items()))
         if not decision.accepted:
-            return RolloutVerdict(group.uid, decision.rejections, None, None, work, masked_reasons)
-        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), GroupRewards.from_batch(batch), work, masked_reasons)
+            return RolloutVerdict(group.uid, decision.rejections, None, None, work)
+        facts = RowFacts.from_batch(batch)
+        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), facts.rewards, work, facts)
 
 
 class RolloutWriter(Protocol):
@@ -227,7 +341,6 @@ class GroupDisposition:
     disposition: str
     tokens: int
     dwell_seconds: float | None
-    masked_reasons: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -256,6 +369,7 @@ class AdmittedRollout:
     policy_step: int
     sample_count: int
     response_tokens: int
+    row_facts: RowFacts | None = None
 
 
 @dataclass(frozen=True)
@@ -438,7 +552,6 @@ class RolloutBuffer:
         self.config = config
         self._policy = async_rollout_policy(config)
         self._policy_step = 0
-        self._route_order = collections.deque(config.consumed_route_quotas)
         self._leases: dict[str, RolloutLease] = {}
         # Committed groups not yet assigned to a batch; only groups restored before the first publish wait here.
         self._ready: list[ReadyRollout] = []
@@ -465,33 +578,14 @@ class RolloutBuffer:
         """Wait for generation capacity and lease it at the current policy step."""
         async with self._changed:
             await self._changed.wait_for(lambda: self._lease_batch() is not None)
-            batch_id = self._lease_batch()
-            route = None
-            if self.config.consumed_route_quotas:
-                occupied = collections.Counter(lease.route for lease in self._leases.values() if lease.batch_id == batch_id)
-                occupied.update(rollout.prompt["group_route"] for rollout in self._ready if rollout.batch_id == batch_id)
-                occupied.update(rollout.prompt["group_route"] for rollout in self._admitted[batch_id])
-                # Rotate even when a route repeatedly fails, so it cannot monopolize leases.
-                route = next(
-                    (name for name in self._route_order if occupied[name] < self.config.consumed_route_quotas[name]),
-                    None,
-                )
-                if route is None:
-                    raise RuntimeError("No route slot remains in an unfilled batch")
-                while self._route_order[0] != route:
-                    self._route_order.rotate(-1)
-                self._route_order.rotate(-1)
-            lease = RolloutLease(uuid.uuid4().hex, self._policy_step, batch_id, route)
+            lease = RolloutLease(uuid.uuid4().hex, self._policy_step, self._lease_batch())
             self._leases[lease.lease_id] = lease
             return lease
 
     async def commit(self, lease_id: str, prompt: dict, verdict: RolloutVerdict, payload: PayloadReference) -> None:
         """Record a written group and release its lease."""
         async with self._changed:
-            lease = self._leases[lease_id]
-            if lease.route is not None and prompt.get("group_route") != lease.route:
-                raise ValueError("Committed prompt does not match its consumed-route lease")
-            del self._leases[lease_id]
+            lease = self._leases.pop(lease_id)
             self._generated.append((lease.policy_step, verdict.work))
             self._ready.append(
                 ReadyRollout(
@@ -564,16 +658,10 @@ class RolloutBuffer:
                 ) from error
             selection = None
             if self._batch_complete():
-                route_counts = collections.Counter(rollout.prompt.get("group_route") for rollout in self._admitted[self._policy_step])
-                if self.config.consumed_route_quotas and route_counts != self.config.consumed_route_quotas:
-                    raise RuntimeError("Consumed batch does not meet exact route quotas")
                 for rollout in self._admitted[self._policy_step]:
                     self._dispose(rollout, "consumed")
                 stats = self._stats.pop(self._policy_step)
-                metrics = stats.metrics(self.config.dynamic_sampling)
-                if self.config.consumed_route_quotas:
-                    metrics.update({f"async/consumed_route/{name}": float(count) for name, count in route_counts.items()})
-                selection = BatchSelection(metrics, stats.judged)
+                selection = BatchSelection(stats.metrics(self.config.dynamic_sampling), stats.judged)
                 self._batch_taken = True
             elif (batch_id := self._over_budget_batch()) is not None:
                 raise RuntimeError(
@@ -590,6 +678,7 @@ class RolloutBuffer:
                         policy_step=rollout.policy_step,
                         sample_count=rollout.verdict.work.sample_count,
                         response_tokens=rollout.verdict.work.generated_token_count,
+                        row_facts=rollout.verdict.row_facts,
                     )
                     for index, rollout in enumerate(
                         self._unreported, start=len(self._admitted[self._policy_step]) - len(self._unreported)
@@ -634,8 +723,7 @@ class RolloutBuffer:
     def _dispose(self, rollout: ReadyRollout, disposition: str) -> None:
         dwell = None if rollout.committed_at is None else time.monotonic() - rollout.committed_at
         self._dispositions.append(
-            GroupDisposition(rollout.verdict.uid, disposition, rollout.verdict.work.generated_token_count, dwell,
-                             rollout.verdict.masked_reasons)
+            GroupDisposition(rollout.verdict.uid, disposition, rollout.verdict.work.generated_token_count, dwell)
         )
 
     def _batch_complete(self) -> bool:

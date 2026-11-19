@@ -442,6 +442,14 @@ class StepConfig(BaseModel):
     )
 
 
+    @field_validator("agent")
+    @classmethod
+    def reject_step_agent_env(cls, agent: AgentConfig) -> AgentConfig:
+        if agent.env:
+            raise ValueError("Per-step agent.env is unsupported; use top-level [agent.env].")
+        return agent
+
+
 class MultiStepRewardStrategy(str, Enum):
     """Strategy for deriving a trial-level reward from per-step verifier results."""
 

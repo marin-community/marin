@@ -43,9 +43,6 @@ import signal
 import subprocess
 import sys
 import threading
-from contextlib import nullcontext
-from dataclasses import dataclass, field
-from pathlib import Path
 from types import FrameType
 from typing import IO
 
@@ -84,23 +81,18 @@ def _child_rank_env(
     }
 
 
-def _pump_output(
-    tag: str, source: IO[str], sink: IO[str], write_lock: threading.Lock, archive: Path | None = None
-) -> None:
+def _pump_output(tag: str, source: IO[str], sink: IO[str], write_lock: threading.Lock) -> None:
     """Forward one of a child's streams to the matching supervisor stream, rank-tagged.
 
     stdout and stderr stay separate: iris classifies an unprefixed line by the
     stream it arrived on, so folding a child's stderr into stdout would demote
     its tracebacks to ``INFO``.
     """
-    with source, archive.open("w", buffering=1) if archive else nullcontext() as saved:
-        for line in iter(source.readline, ""):
-            if saved is not None:
-                saved.write(line)
-                saved.flush()
-            with write_lock:
-                sink.write(tag + line)
-                sink.flush()
+    for line in iter(source.readline, ""):
+        with write_lock:
+            sink.write(tag + line)
+            sink.flush()
+    source.close()
 
 
 def _signal_children(children: list[subprocess.Popen], ranks, sig: int) -> None:
@@ -111,28 +103,20 @@ def _signal_children(children: list[subprocess.Popen], ranks, sig: int) -> None:
             child.send_signal(sig)
 
 
-@dataclass
-class _ProcessGroup:
-    children: list[subprocess.Popen] = field(default_factory=list)
-    pumps: list[threading.Thread] = field(default_factory=list)
-    shutdown_signum: int | None = None
-
-
 def _spawn_children(
-    nproc: int, devices_per_proc: int, task_index: int, num_tasks: int, child_argv: list[str], group: _ProcessGroup
-) -> None:
+    nproc: int, devices_per_proc: int, task_index: int, num_tasks: int, child_argv: list[str]
+) -> tuple[list[subprocess.Popen], list[threading.Thread]]:
     """Spawn all children, or SIGKILL any that started and re-raise on failure.
 
     A partial spawn (rank 0 up, rank 3 fails on ``EAGAIN`` / a missing binary /
     thread-creation failure) would otherwise leave the started ranks orphaned,
     holding GPUs after the supervisor exits.
     """
-    children, pumps = group.children, group.pumps
+    children: list[subprocess.Popen] = []
+    pumps: list[threading.Thread] = []
     write_lock = threading.Lock()
     try:
         for local_rank in range(nproc):
-            if group.shutdown_signum is not None:
-                break
             rank_env = _child_rank_env(local_rank, nproc, devices_per_proc, task_index, num_tasks)
             child_env = {**os.environ, **rank_env}
             logger.info(
@@ -152,18 +136,9 @@ def _spawn_children(
                 bufsize=1,
             )
             children.append(child)
-            # A signal can arrive while Popen runs, before the handler can see this child.
-            if group.shutdown_signum is not None:
-                child.send_signal(group.shutdown_signum)
             tag = rank_log_tag(local_rank)
-            output_dir = os.environ.get("IRIS_OUTPUT_DIR")
-            for stream, source, sink in (("stdout", child.stdout, sys.stdout), ("stderr", child.stderr, sys.stderr)):
-                archive = (
-                    Path(output_dir) / f"rank-{task_index * nproc + local_rank}.{stream}.log" if output_dir else None
-                )
-                if archive is not None:
-                    archive.parent.mkdir(parents=True, exist_ok=True)
-                pump = threading.Thread(target=_pump_output, args=(tag, source, sink, write_lock, archive), daemon=True)
+            for source, sink in ((child.stdout, sys.stdout), (child.stderr, sys.stderr)):
+                pump = threading.Thread(target=_pump_output, args=(tag, source, sink, write_lock), daemon=True)
                 pump.start()
                 pumps.append(pump)
     except BaseException:
@@ -175,6 +150,7 @@ def _spawn_children(
             except subprocess.TimeoutExpired:
                 pass
         raise
+    return children, pumps
 
 
 def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
@@ -205,72 +181,82 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
         " ".join(child_argv),
     )
 
-    group = _ProcessGroup()
-    children, pumps = group.children, group.pumps
+    children: list[subprocess.Popen] = []
     terminate_grace = job_info.termination_grace if job_info is not None else DEFAULT_TERMINATION_GRACE
 
     terminating = threading.Event()
+    shutdown_signum: int | None = None
     # Deadline after which surviving children are SIGKILLed; ``None`` until a
     # teardown begins. Shared between the signal handler and the reap loop, both
     # of which run in the main thread (no lock needed).
     kill_deadline: Deadline | None = None
 
     def _forward_signal(signum: int, _frame: FrameType | None) -> None:
-        nonlocal kill_deadline
-        if group.shutdown_signum is None:
-            group.shutdown_signum = signum
+        nonlocal shutdown_signum, kill_deadline
+        if shutdown_signum is None:
+            shutdown_signum = signum
         terminating.set()
         logger.warning("received signal %d; forwarding to children", signum)
         _signal_children(children, range(len(children)), signum)
         if kill_deadline is None:
             kill_deadline = Deadline.from_now(terminate_grace)
 
-    for sig in _SHUTDOWN_SIGNALS:
-        signal.signal(sig, _forward_signal)
+    previous_handlers = {sig: signal.signal(sig, _forward_signal) for sig in _SHUTDOWN_SIGNALS}
 
-    _spawn_children(nproc, devices_per_proc, task_index, num_tasks, child_argv, group)
-    first_failure: int | None = None
-    pending = set(range(len(children)))
-    while pending:
-        # Escalate to SIGKILL if a requested teardown overran its grace period,
-        # so a child that traps or ignores SIGTERM cannot wedge the supervisor.
-        if kill_deadline is not None and kill_deadline.expired():
-            survivors = [r for r in pending if children[r].poll() is None]
-            if survivors:
-                logger.error("SIGTERM grace expired; SIGKILL %d straggler(s): %s", len(survivors), survivors)
-                _signal_children(children, survivors, signal.SIGKILL)
-            kill_deadline = None  # SIGKILL is final; do not re-fire each tick
-        for local_rank in list(pending):
-            child = children[local_rank]
-            try:
-                code = child.wait(timeout=_REAP_POLL_INTERVAL)
-            except subprocess.TimeoutExpired:
-                continue
-            pending.discard(local_rank)
-            logger.info("local rank %d exited with code %d", local_rank, code)
-            if code != 0 and first_failure is None:
-                first_failure = code
-            # A failure tears the whole group down: a collective job cannot make
-            # progress once one rank is gone. A clean exit does not — peers run to
-            # their own completion.
-            if code != 0 and not terminating.is_set():
-                terminating.set()
-                logger.error("local rank %d failed (code %d); terminating %d peer(s)", local_rank, code, len(pending))
-                _signal_children(children, pending, signal.SIGTERM)
-                kill_deadline = Deadline.from_now(terminate_grace)
+    try:
+        children, pumps = _spawn_children(nproc, devices_per_proc, task_index, num_tasks, child_argv)
+        # A signal received during spawn is recorded before the returned children are visible.
+        if shutdown_signum is not None:
+            _signal_children(children, range(len(children)), shutdown_signum)
 
-    for pump in pumps:
-        pump.join(timeout=5.0)
+        first_failure: int | None = None
+        pending = set(range(nproc))
+        while pending:
+            # Escalate to SIGKILL if a requested teardown overran its grace period,
+            # so a child that traps or ignores SIGTERM cannot wedge the supervisor.
+            if kill_deadline is not None and kill_deadline.expired():
+                survivors = [r for r in pending if children[r].poll() is None]
+                if survivors:
+                    logger.error("SIGTERM grace expired; SIGKILL %d straggler(s): %s", len(survivors), survivors)
+                    _signal_children(children, survivors, signal.SIGKILL)
+                kill_deadline = None  # SIGKILL is final; do not re-fire each tick
+            for local_rank in list(pending):
+                child = children[local_rank]
+                try:
+                    code = child.wait(timeout=_REAP_POLL_INTERVAL)
+                except subprocess.TimeoutExpired:
+                    continue
+                pending.discard(local_rank)
+                logger.info("local rank %d exited with code %d", local_rank, code)
+                if code != 0 and first_failure is None:
+                    first_failure = code
+                # A failure tears the whole group down: a collective job cannot make
+                # progress once one rank is gone. A clean exit does not — peers run to
+                # their own completion.
+                if code != 0 and not terminating.is_set():
+                    terminating.set()
+                    logger.error(
+                        "local rank %d failed (code %d); terminating %d peer(s)", local_rank, code, len(pending)
+                    )
+                    _signal_children(children, pending, signal.SIGTERM)
+                    kill_deadline = Deadline.from_now(terminate_grace)
 
-    # An external signal wins over child exit codes: the children we forwarded it
-    # to report negative (signal) codes that are an artifact of the teardown, not
-    # a task failure. A child failing on its own never sets shutdown_signum, so
-    # its genuine non-zero code surfaces.
-    if group.shutdown_signum is not None:
-        return 128 + group.shutdown_signum
-    if first_failure is not None:
-        return first_failure
-    return 0
+        for pump in pumps:
+            pump.join(timeout=5.0)
+
+        # An external signal wins over child exit codes: the children we forwarded it
+        # to report negative (signal) codes that are an artifact of the teardown, not
+        # a task failure. A child failing on its own never sets shutdown_signum, so
+        # its genuine non-zero code surfaces.
+        if shutdown_signum is not None:
+            return 128 + shutdown_signum
+        if first_failure is not None:
+            return first_failure
+        return 0
+
+    finally:
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
 
 
 def main(argv: list[str] | None = None) -> int:

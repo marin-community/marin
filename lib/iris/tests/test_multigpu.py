@@ -88,34 +88,45 @@ def test_spawn_failure_kills_already_started_children(monkeypatch: pytest.Monkey
     assert started[0].returncode is not None and started[0].returncode < 0
 
 
-@pytest.mark.parametrize("ready_count", [1, 2])
-def test_external_sigterm_returns_128_plus_signum_during_startup(ready_count: int) -> None:
+@pytest.mark.parametrize("termination_phase", ["spawning", "running"])
+def test_external_sigterm_returns_128_plus_signum(termination_phase) -> None:
     # The supervisor itself is SIGTERMed (preemption/task termination). It
     # forwards the signal to the children, which die reporting negative signal
     # codes (-15). The supervisor must surface 128+SIGTERM (143) — the killed
     # task — not map a child's -15 to an arbitrary failure code (241).
     supervisor_src = textwrap.dedent(
         """
-        import sys
-        from iris.jax.multigpu_main import run
+        import os, signal, sys
+        from iris.jax import multigpu_main
         child = [sys.executable, "-c", "print('READY', flush=True); import time; time.sleep(30)"]
-        sys.exit(run(nproc=2, devices_per_proc=1, child_argv=child))
         """
     )
+    if termination_phase == "spawning":
+        supervisor_src += textwrap.dedent(
+            """
+            spawn = multigpu_main.subprocess.Popen
+            def spawn_and_terminate(*args, **kwargs):
+                process = spawn(*args, **kwargs)
+                os.kill(os.getpid(), signal.SIGTERM)
+                return process
+            multigpu_main.subprocess.Popen = spawn_and_terminate
+            """
+        )
+    supervisor_src += "sys.exit(multigpu_main.run(nproc=2, devices_per_proc=1, child_argv=child))\n"
     proc = subprocess.Popen(
         [sys.executable, "-c", supervisor_src], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
     assert proc.stdout is not None
-    # The first READY can arrive while other ranks are still spawning. Both
-    # partial and complete startup must forward termination and return 143.
-    ready = 0
-    for line in proc.stdout:
-        if "READY" in line:
-            ready += 1
-            if ready == ready_count:
-                break
-    assert ready == ready_count, "children did not start"
-    proc.send_signal(signal.SIGTERM)
+    if termination_phase == "running":
+        # Child output can arrive before the supervisor finishes spawning both ranks.
+        ready = 0
+        for line in proc.stdout:
+            if "READY" in line:
+                ready += 1
+                if ready == 2:
+                    break
+        assert ready == 2, "children did not start"
+        proc.send_signal(signal.SIGTERM)
     proc.communicate(timeout=30)
     assert proc.returncode == 128 + signal.SIGTERM
 
@@ -202,14 +213,3 @@ def test_build_multigpu_hook_requires_gpu() -> None:
 def test_build_multigpu_hook_requires_divisible_gpu_count() -> None:
     with pytest.raises(ValueError, match="must divide the GPU count"):
         build_multigpu_hook(_gpu_resources(8), 3)
-
-
-def test_rank_streams_preserved_on_failure(tmp_path, monkeypatch):
-    monkeypatch.setenv("IRIS_OUTPUT_DIR", str(tmp_path))
-    code = (
-        "import os,sys; r=os.environ['IRIS_MULTIGPU_PROCESS_INDEX']; "
-        "print('out-'+r,flush=True); print('err-'+r,file=sys.stderr,flush=True); sys.exit(7)"
-    )
-    assert run(nproc=1, devices_per_proc=1, child_argv=_py(code)) == 7
-    assert (tmp_path / "rank-0.stdout.log").read_text() == "out-0\n"
-    assert (tmp_path / "rank-0.stderr.log").read_text() == "err-0\n"

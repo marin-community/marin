@@ -37,6 +37,8 @@ class SessionAPI:
         self.delete_release = asyncio.Event()
         self.delete_release.set()
         self.corrupt_output = None
+        self.withheld_tail = 0
+        self.leaked_marker = b""
 
     async def create_session(self, name, request_timeout):
         self.sessions[name] = None
@@ -68,8 +70,17 @@ class SessionAPI:
             return
 
         async def pump(pipe, callback):
+            # Daytona's SDK may withhold the last bytes of output until more
+            # arrives, and may pass a stream-marker byte through after a line.
+            pending = b""
             while data := await pipe.read(337):
-                await callback(data.decode("ascii"))
+                pending += data.replace(b"\n", b"\n" + self.leaked_marker)
+                cut = max(len(pending) - self.withheld_tail, 0)
+                if cut:
+                    await callback(pending[:cut].decode("ascii"))
+                    pending = pending[cut:]
+            if pending:
+                await callback(pending.decode("ascii"))
 
         await asyncio.gather(pump(process.stdout, stdout), pump(process.stderr, stderr))
         await process.wait()
@@ -145,6 +156,7 @@ async def output(session):
     return bytes(result)
 
 
+@pytest.mark.requires_linux_process_api
 def test_daytona_process_preserves_binary_pipes_defaults_and_bounded_stderr(session_machine, tmp_path, monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "host-only-canary")
     directory = tmp_path / "command-directory"
@@ -187,6 +199,31 @@ sys.exit(7)
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_linux_process_api
+def test_daytona_process_survives_withheld_tails_and_leaked_stream_markers(session_machine):
+    script = "import sys; print('request', flush=True); print(sys.stdin.readline().upper(), end='', flush=True)"
+
+    async def scenario():
+        machine, api = session_machine
+        api.withheld_tail = 2
+        api.leaked_marker = b"\x01"
+        try:
+            session = await machine.open_process(Command((sys.executable, "-c", script)))
+            line = b""
+            while not line.endswith(b"\n"):
+                line += await asyncio.wait_for(session.read(), 5)
+            assert line == b"request\n"
+            await session.write(b"reply\n")
+            assert await asyncio.wait_for(output(session), 5) == b"REPLY\n"
+            assert await session.wait() == 0
+            await session.close()
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_linux_process_api
 def test_daytona_http_capability_uses_one_persistent_provider_session(session_machine, unused_tcp_port):
     async def scenario():
         machine, api = session_machine
@@ -229,6 +266,7 @@ def test_daytona_http_capability_uses_one_persistent_provider_session(session_ma
 
 
 @pytest.mark.parametrize("stage", ["create", "execute"])
+@pytest.mark.requires_linux_process_api
 def test_daytona_process_cancelled_acquisition_reclaims_accepted_session(session_machine, stage):
     async def scenario():
         machine, api = session_machine
@@ -257,6 +295,7 @@ def test_daytona_process_cancelled_acquisition_reclaims_accepted_session(session
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_linux_process_api
 def test_daytona_process_cancelled_close_still_terminates_real_child(session_machine):
     async def scenario():
         machine, api = session_machine
@@ -278,6 +317,7 @@ def test_daytona_process_cancelled_close_still_terminates_real_child(session_mac
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_linux_process_api
 def test_daytona_machine_close_reclaims_active_process_and_releases_reader(session_machine):
     async def scenario():
         machine, api = session_machine
@@ -295,6 +335,7 @@ def test_daytona_machine_close_reclaims_active_process_and_releases_reader(sessi
 
 
 @pytest.mark.parametrize("wire", ["D!\n", "D" + "A" * 200000, ""])
+@pytest.mark.requires_linux_process_api
 def test_daytona_process_rejects_corrupt_or_truncated_provider_stream_and_stops_child(session_machine, wire):
     async def scenario():
         machine, api = session_machine

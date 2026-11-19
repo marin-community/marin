@@ -135,6 +135,23 @@ class EnginePlacementMode(StrEnum):
     SHARED = "shared"
 
 
+def should_verify_inference_workers(
+    *,
+    tensor_parallel_size: int,
+    data_parallel_size: int,
+    use_mp_backend: bool,
+    inference_engine_enable_sleep: bool,
+    require_verified_placements: bool,
+) -> bool:
+    """Check worker placement when TP1 workers remain awake or verification is required."""
+    return (
+        tensor_parallel_size == 1
+        and (data_parallel_size > 1 or require_verified_placements)
+        and not use_mp_backend
+        and (not inference_engine_enable_sleep or require_verified_placements)
+    )
+
+
 def _dp_rank_bundle_indices(
     *,
     engine_index: int,
@@ -601,11 +618,12 @@ def create_ray_wrapped_inference_engines(
             "the ray backend for shared-GPU resource management."
         )
     # Expert-block publication needs checked receivers even for a single serving rank.
-    verify_workers = (
-        tensor_parallel_size == 1
-        and (data_parallel_size > 1 or require_verified_placements)
-        and not use_mp_backend
-        and (not (use_hybrid_engine or inference_engine_enable_sleep) or require_verified_placements)
+    verify_workers = should_verify_inference_workers(
+        tensor_parallel_size=tensor_parallel_size,
+        data_parallel_size=data_parallel_size,
+        use_mp_backend=use_mp_backend,
+        inference_engine_enable_sleep=inference_engine_enable_sleep,
+        require_verified_placements=require_verified_placements,
     )
     if require_verified_placements and not verify_workers:
         raise ValueError("Verified expert-block placements require local TP=1 vLLM workers")

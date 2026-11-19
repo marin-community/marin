@@ -265,6 +265,7 @@ def _column_record(column: Column) -> dict[str, object]:
         "trigram_index": column.trigram_index,
         "exact_values": list(column.exact_values),
         "value_counts": column.value_counts,
+        "catalog_bounds": column.catalog_bounds,
     }
 
 

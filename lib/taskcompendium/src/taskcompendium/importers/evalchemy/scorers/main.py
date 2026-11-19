@@ -58,12 +58,20 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
 
         grade = grade_gpqa_answer if scorer == "gpqa" else grade_mmlu_answer
         return grade(config["expected"], response)
+    if scorer == "zeroeval_mcqa":
+        from .zeroeval import grade_zeroeval_mcqa
+
+        return grade_zeroeval_mcqa(config["expected"], response)
     if scorer in {"mrcr", "graphwalks"}:
         from .long_context import grade_graphwalks, grade_nonce_similarity
 
         if scorer == "mrcr":
             return grade_nonce_similarity(config["expected"], config["nonce"], response)
         return grade_graphwalks(tuple(config["expected"]), response)
+    if scorer == "longbench_v2":
+        from .longbench_v2 import grade_longbench_v2
+
+        return grade_longbench_v2(config["expected"], response)
     if scorer == "nupa":
         from .nupa import grade_nupa_candidate
 

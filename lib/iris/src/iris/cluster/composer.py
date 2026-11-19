@@ -119,6 +119,7 @@ def make_task_backend(
                 default_image=config.defaults.worker.default_task_image,
                 logship_image=config.controller.image,
                 service_account=kp.service_account or "",
+                sandbox_runtime_class=kp.sandbox_runtime_class,
                 host_network=kp.host_network,
                 cache_dir=kp.cache_dir or DEFAULT_TASK_CACHE_DIR,
                 controller_address=kp.controller_address or None,

@@ -4,6 +4,7 @@
 """Hostname validation and the one-time import of revision-configured applet hosts."""
 
 import re
+from enum import StrEnum
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -18,6 +19,46 @@ def normalize_hostname(hostname: str) -> str:
     if HOSTNAME_PATTERN.fullmatch(hostname) is None:
         raise ValueError("hostname must be a DNS name without a scheme, port, or path")
     return hostname
+
+
+class AppletHostAccess(StrEnum):
+    """The Cloud Run surface that serves a named applet host."""
+
+    AUTHENTICATED = "authenticated"
+    PUBLIC = "public"
+
+
+def applet_host_access(applet_domains: list[str], public_applet_domains: list[str]) -> dict[str, AppletHostAccess]:
+    """Map each configured applet host to the surface that serves it; a host may be in only one list."""
+    if overlap := set(applet_domains) & set(public_applet_domains):
+        raise ValueError(f"applet hosts {sorted(overlap)} are in both applet_domains and public_applet_domains")
+    return {
+        **{host: AppletHostAccess.AUTHENTICATED for host in applet_domains},
+        **{host: AppletHostAccess.PUBLIC for host in public_applet_domains},
+    }
+
+
+def applet_domains_env(hosts: dict[str, AppletHostAccess]) -> dict[AppletHostAccess, str]:
+    """``MARINA_APPLET_DOMAINS`` per surface.
+
+    The authenticated service lists every host so that operators can bind public hosts through it;
+    the public reader lists only the hosts it serves.
+    """
+    return {
+        AppletHostAccess.AUTHENTICATED: ",".join(hosts),
+        AppletHostAccess.PUBLIC: ",".join(host for host, access in hosts.items() if access is AppletHostAccess.PUBLIC),
+    }
+
+
+def domain_mapping_name(host: str, access: AppletHostAccess) -> str:
+    """Pulumi logical name of a host's Cloud Run domain mapping.
+
+    The name carries the surface. Moving a host between surfaces in one deploy therefore creates a
+    second mapping for the same hostname, which Cloud Run rejects, instead of silently keeping the
+    old route (the route itself is ignored on update).
+    """
+    slug = host.split(".")[0]
+    return f"{slug}-domain" if access is AppletHostAccess.AUTHENTICATED else f"{slug}-public-domain"
 
 
 def migrate_host_bindings(connection: Connection) -> None:

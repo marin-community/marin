@@ -7,10 +7,10 @@ import statistics
 
 import fsspec
 import pytest
+from evalrecords.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor.driver_config import HarborErrorTaxonomy
 from marin.evaluation.harbor.runner import HarborTrial, _aggregate
-from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind
 from rigging.filesystem import factory
 
 from . import review_terminal_bench as reviewer

@@ -98,7 +98,15 @@ allocatable capacity, scheduling, and Pod state; hardware history remains in
 Capacity and task state come from Kubernetes nodes, Pods, and Kueue workloads.
 
 GPU Pods request `nvidia.com/gpu`. On clusters with `host_network: true`, they
-also request `rdma/ib` and use `ClusterFirstWithHostNet`. Coscheduled jobs add
+also request `rdma/ib` and use `ClusterFirstWithHostNet`. H100 nodes on
+`cw-us-east-02a` and `cw-rno2a` also carry a front-end Ethernet NIC whose RoCE
+functions (`mlx5_0`–`mlx5_8`) a pod sees beside the eight InfiniBand rails
+(`ibp0`–`ibp7`) when it runs under the privileged container profile. NCCL then
+merges the RoCE functions into virtual NICs and routes channels over them, and
+those transfers fail with `IBV_WC_RETRY_EXC_ERR(12)`, so these clusters' `task_env`
+sets `NCCL_IB_HCA=ibp`. Check a new cluster's `NET/IB : Using` line under
+`NCCL_DEBUG=INFO` before reusing that setting: a value that matches no device
+makes NCCL fall back to TCP. Coscheduled jobs add
 Kueue topology annotations derived from
 `kubernetes_provider.kueue.topologies`, or from the CoreWeave defaults when the
 map is empty.
@@ -183,7 +191,7 @@ annotations to keep those groups separate.
 
 #### TAS preemption and CPU spillover
 
-All Iris Pods use the topology-aware `cw-tas` ResourceFlavor. Its
+Iris Pods use topology-aware flavors. The shared `cw-tas` ResourceFlavor's
 `iris.kueue=true` selector covers every Iris-managed NodePool. Accelerator-free
 Pods request unconstrained TAS, so Kueue records their per-node CPU reservations
 in the same flavor as GPU gangs. The ClusterQueue's binding GPU and RDMA quotas
@@ -246,25 +254,45 @@ flowchart TD
     admit --> schedule[Kubernetes schedules Pods]
 ```
 
-Accelerator-free jobs use any compatible node by default. Iris does not expose
-a CPU-only placement constraint; rare jobs that require hard CPU-node placement
-must use Kubernetes-native scheduling outside Iris. GPU and RDMA resource
-requests exclude CPU nodes without an additional selector.
+Accelerator-free jobs prefer the physical CPU pool through the `iris-cpu`
+ResourceFlavor and may spill onto accelerator nodes through `cw-tas`. The 02a
+sandbox RuntimeClass adds a `cpu-genoa` selector, so those pods cannot spill
+onto H100 nodes. Iris does not expose a general CPU-only placement constraint
+for other jobs. GPU and RDMA resource requests exclude CPU nodes without an
+additional selector.
 
-Kueue requires every node in a TAS flavor to carry every level in the referenced
-Topology. CoreWeave supplies the physical hierarchy on accelerator nodes. Iris
-labels CPU NodePools with a synthetic `iris-cpu-only` fabric, superpod,
-leafgroup, and NVLink domain so unconstrained TAS can assign them at the hostname
-level. The synthetic values do not advertise GPU or RDMA resources.
+Kueue requires every topology label key to exist on a Node; an empty value is
+valid in Kueue v0.18.3. CoreWeave supplies physical fabric, superpod, leafgroup
+and NVLink-domain labels on accelerator Nodes. Its node metadata controller
+owns the `backend.coreweave.cloud/*` labels and can overwrite synthetic values.
+Do not repair CPU placement by patching those provider-owned labels.
 
-This layout replaces the selectorless, non-TAS `cw-cpu` flavor that caused
-[#7916](https://github.com/marin-community/marin/issues/7916). Kueue v0.18 could
-not reclaim those Pods during `cw-ib` topology fit; the general upstream case is
-tracked by
-[kubernetes-sigs/kueue#9992](https://github.com/kubernetes-sigs/kueue/issues/9992).
-When migrating from the split flavors, apply the NodePool labels before
-switching the ClusterQueue to `cw-tas`, then verify CPU nodes appear in Kueue's
-topology cache.
+`provisioning.coreweave.kueue.cpu_scale_group` selects the physical CPU pool for
+the `iris-cpu` ResourceFlavor: `cpu-erapids` on `cw-us-east-08a`, `cpu-genoa` on
+`cw-us-east-02a` and `cpu-turin` on `cw-rno2a`. That flavor uses the existing
+Iris scale-group selector and a separate `iris-cpu-hostname` Topology containing
+only `kubernetes.io/hostname`. Its GPU and RDMA quotas are zero. It is first in
+`iris-cq`'s resource group, so CPU-only work uses the physical CPU pool;
+requests that do not fit can still use `cw-tas`. All resources of a PodSet stay
+in one resource group and use one flavor. GPU and RDMA work retains the shared
+flavor and its binding quotas. CPU pool declarations on these clusters no
+longer set synthetic physical-topology labels.
+
+The CPU flavor is TAS and selects only the CPU pool. CPU spillover onto GPU
+Nodes stays in `cw-tas` so GPU TAS fit can reclaim it
+([#7916](https://github.com/marin-community/marin/issues/7916)). Both topologies
+end at hostname. Kueue v0.18.3's default-enabled `TASHandleOverlappingFlavors`
+accounts for any Node temporarily selected by both flavors; keep that gate
+enabled during rollout.
+
+See [CPU topology admission](../OPS.md#cpu-topology-admission) for the staged
+per-cluster apply procedure. No controller deployment is required for this
+Kueue admission change.
+
+Iris `region` constraints match the backend's advertised region. They do not
+become a Node selector: CoreWeave's `US-EAST-08A` backend has Nodes labelled
+`topology.kubernetes.io/region=US-EAST-08`. A required region mismatch is
+rejected before Pod creation; preferred regions do not restrict placement.
 
 TAS admission pins each Pod to a hostname from Kueue's capacity snapshot. The
 same-cycle recomputation gate prevents two newly admitted Workloads from keeping
@@ -277,13 +305,14 @@ resource failure and Iris returns the attempt to `PENDING` for fresh admission.
 | Resource | Owner |
 | --- | --- |
 | CKS cluster and operator kubeconfig | CoreWeave and the cluster operator |
-| Namespace, RBAC, NodePools, Kueue operator, ClusterQueue, ResourceFlavor, ingress, and DNS | `infra/pulumi` |
+| Namespace, RBAC, NodePools, configured sandbox RuntimeClass, Kueue operator, ClusterQueue, ResourceFlavor, ingress, and DNS | `infra/pulumi` |
 | Pod and Workload priority classes, Kueue LocalQueue, controller ConfigMap, Deployment, Service, PDB, state volume, and Secrets | `K8sControllerProvider` |
 | Task Pods and their lifecycle | `K8sTaskProvider` |
 | Node scheduling and provisioning | Kubernetes and CoreWeave |
 
-`K8sControllerProvider.verify_prerequisites()` only checks that the
-Pulumi-owned resources exist. It does not create or repair them. Read the
+`K8sControllerProvider.verify_prerequisites()` checks selected controller
+prerequisites, including the configured sandbox RuntimeClass. It does not create
+or repair them. Read the
 [Pulumi guide](../../../infra/pulumi/README.md) before changing that substrate;
 a destructive NodePool plan can deprovision reserved hardware.
 
@@ -583,6 +612,41 @@ Use this page for CoreWeave architecture and config, the [federation
 reference](federation.md) for cross-cluster job semantics, the [Pulumi
 guide](../../../infra/pulumi/README.md) for infrastructure, and
 [`OPS.md`](../OPS.md) for live diagnosis.
+
+### cw-us-east-02a sandbox runtime
+
+The default CoreWeave `gvisor` RuntimeClass selects nodes marked
+`node.coreweave.cloud/gvisor=true`. On cw-us-east-02a it admits H100 nodes where
+the NVIDIA gVisor wrapper fails during sandbox creation. A CPU-pool probe also
+failed through that wrapper, and an independent CPU probe reported the same
+`cannot read client sync file: waiting for sandbox to start: EOF` as the H100
+failure. The wrapper's underlying cause is unknown. The 02a config selects the
+Pulumi-owned `iris-gvisor-cpu` RuntimeClass, which requests the direct
+`cw-gvisor-cpu` handler and restricts placement to `cpu-genoa` nodes marked
+gVisor-capable and labelled for that handler. The direct CPU handler started a
+bounded probe on cw-us-west-04a, but it has not been verified on 02a. See
+[incidents 631](https://marina.oa.dev/echo/wiki/631) and
+[976](https://marina.oa.dev/echo/wiki/976).
+
+```mermaid
+flowchart TD
+    request[CPU SANDBOX request] --> pod[Iris sets runtimeClassName<br/>iris-gvisor-cpu]
+    pod --> selector[RuntimeClass selects cpu-genoa<br/>gVisor and cw-gvisor-cpu nodes]
+    selector --> admission[Kueue prefers iris-cpu<br/>hostname-only flavor]
+    admission --> fit{CPU node fits?}
+    fit -- No --> spill[Check cw-tas spill admission]
+    fit -- Yes --> node[Kubernetes assigns cpu-genoa node]
+    node --> handler[kubelet invokes cw-gvisor-cpu]
+    handler --> runsc{runsc starts sandbox?}
+    runsc -- Yes --> running[Pod reaches Running]
+    runsc -- No --> diagnose[Capture node runtime logs<br/>repair CoreWeave handler]
+```
+
+The RuntimeClass is a placement and handler request. It does not install or
+repair a containerd handler on the node. Follow
+[02a sandbox runtime rollout](../OPS.md#02a-sandbox-runtime-rollout) before
+deploying a controller that selects this class. The 02a RuntimeClass selects
+only CPU nodes; a sandbox task that requests a GPU cannot run there.
 
 ## Source map
 

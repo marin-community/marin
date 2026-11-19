@@ -4,6 +4,7 @@
 """Regression guards for the Kueue manifests Iris renders."""
 
 from iris.cluster.platforms.k8s.kueue_manifests import (
+    CPU_NOMINAL_QUOTAS,
     build_cks_values,
     build_cluster_queue,
     build_resource_flavor,
@@ -59,3 +60,27 @@ def test_resource_flavor_and_cluster_queue_use_one_all_node_tas_flavor():
     }
     assert resources["nvidia.com/gpu"] == "512"
     assert resources["rdma/ib"] == "512"
+
+
+def test_cpu_flavor_is_preferred_without_splitting_accelerator_resources_or_changing_gpu_quota():
+    gpu_quotas = {"nvidia.com/gpu": "864", "rdma/ib": "864"}
+    original = build_cluster_queue("iris-cq", nominal_quotas=gpu_quotas)
+    queue = build_cluster_queue("iris-cq", nominal_quotas=gpu_quotas, cpu_nominal_quotas=CPU_NOMINAL_QUOTAS)
+    group = queue["spec"]["resourceGroups"][0]
+    assert len(queue["spec"]["resourceGroups"]) == 1
+    assert [flavor["name"] for flavor in group["flavors"]] == ["iris-cpu", "cw-tas"]
+    assert group["flavors"][1] == original["spec"]["resourceGroups"][0]["flavors"][0]
+    quotas = {entry["name"]: entry["nominalQuota"] for entry in group["flavors"][0]["resources"]}
+    assert set(quotas) == set(group["coveredResources"])
+    assert quotas["nvidia.com/gpu"] == "0" and quotas["rdma/ib"] == "0"
+    assert queue["spec"]["preemption"] == original["spec"]["preemption"]
+
+
+def test_cpu_flavor_lists_covered_resources_in_queue_order_regardless_of_mapping_order():
+    """Kueue validates every flavor's resources against one coveredResources order."""
+    scrambled = {"rdma/ib": "0", "memory": "1Pi", "nvidia.com/gpu": "0", "cpu": "1G", "ephemeral-storage": "1Pi"}
+    queue = build_cluster_queue("iris-cq", cpu_nominal_quotas=scrambled)
+    group = queue["spec"]["resourceGroups"][0]
+    covered = group["coveredResources"]
+    for flavor in group["flavors"]:
+        assert [entry["name"] for entry in flavor["resources"]] == covered
