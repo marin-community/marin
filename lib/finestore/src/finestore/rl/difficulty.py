@@ -70,7 +70,29 @@ PROTOCOLS = MappingProxyType(
             ),
             0.7,
             (65536, 49152, 16384, 0.95, 20, 0.0, 1.0, 0.0, 0.0),
-        )
+        ),
+        # Legacy and read-only: the v2 protocol's recorded contract, kept so historical
+        # measurements stay readable now that unknown protocols fail closed (ruling
+        # 2026-11-19). PROTOCOL_ID stays v3; nothing writes new measurements under this id.
+        # Snowball postdates v2, so the entry carries only the three documented arms.
+        "atlas-difficulty-v2-65k16k": DifficultyProtocol(
+            MappingProxyType(
+                {
+                    Solver.SMALL: "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+                    Solver.LARGE: "Qwen/Qwen3.5-122B-A10B",
+                    Solver.HOSTED: "zai-org/GLM-5.3",
+                }
+            ),
+            MappingProxyType(
+                {
+                    Solver.SMALL: ThinkingPolicy.OFF,
+                    Solver.LARGE: ThinkingPolicy.ON,
+                    Solver.HOSTED: ThinkingPolicy.LOW,
+                }
+            ),
+            0.7,
+            (65536, 49152, 16384, 0.95, 20, 0.0, 1.0, 0.0, 0.0),
+        ),
     }
 )
 SOLVER_MODELS = PROTOCOLS[PROTOCOL_ID].models

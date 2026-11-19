@@ -2354,8 +2354,16 @@ def test_historical_protocol_retains_its_original_sampling_contract():
     payload["settings"]["temperature"] = 0.6
     with pytest.raises(ValueError, match="temperature differs"):
         DifficultyMeasurement.model_validate(payload)
+    # The recorded legacy v2 contract reads: same pinned sample, model and sampling, so
+    # historical measurements stay readable without reopening fail-open validation
+    # (ruling 2026-11-19).
+    payload["settings"]["temperature"] = 0.7
     payload["protocol_id"] = "atlas-difficulty-v2-65k16k"
-    assert DifficultyMeasurement.model_validate(payload).settings.temperature == 0.6
+    assert DifficultyMeasurement.model_validate(payload).settings.temperature == 0.7
+    # Unknown protocols still fail closed.
+    payload["protocol_id"] = "atlas-difficulty-v9-unknown"
+    with pytest.raises(ValueError, match="Unknown difficulty protocol"):
+        DifficultyMeasurement.model_validate(payload)
 
 
 def test_frozen_backend_survey_digest_survives_canonical_source_projection(tmp_path):
