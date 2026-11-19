@@ -20,6 +20,9 @@ from pathlib import Path
 import pytest
 import yaml
 from click.testing import CliRunner
+from rigging.filesystem.cluster_config import StoreType
+from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop import __main__ as loop_main
 from experiments.post_training.long_loop import exp4, round_runner
@@ -36,12 +39,21 @@ from experiments.post_training.long_loop.round_runner import (
 )
 from experiments.post_training.long_loop.tests.test_exp3_production import (
     preview_release as preview_release,
+)
+from experiments.post_training.long_loop.tests.test_exp3_production import (
     production_recipe as production_recipe,
 )
 from experiments.post_training.long_loop.tests.test_initializer_stage import (
     prepared_sources as prepared_sources,
+)
+from experiments.post_training.long_loop.tests.test_initializer_stage import (
     staged_initializer as staged_initializer,
 )
+
+# pytest resolves these fixtures through the imported module-level names; the tuple
+# keeps the re-exports used so the test parameters below are not treated as
+# redefinitions.
+_REEXPORTED_FIXTURES = (preview_release, production_recipe, prepared_sources, staged_initializer)
 
 ROUND_DIR = Path(__file__).parents[1] / "rounds"
 MIRROR_URI = (
@@ -116,10 +128,6 @@ def _structural_diff(left: dict, right: dict, *, bound: int = 140) -> dict[str, 
 @pytest.fixture
 def mirror_storage(monkeypatch, tmp_path):
     """Route the construction's small storage reads to the pinned object-storage mirror."""
-    from rigging.filesystem.cluster_config import StoreType
-    from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
-    from rigging.filesystem.storage_path import StoragePath
-
     if s3_credentials(StoreType.COREWEAVE) is None:
         pytest.skip("CoreWeave credentials are required for the round construction proofs")
     configure_coreweave_s3()
@@ -231,7 +239,7 @@ def test_round_exp4_reproduces_exp4_construction_byte_for_byte(tmp_path, mirror_
     if left != right:
         left_lines = left.splitlines()
         right_lines = right.splitlines()
-        detail = [f"{x!r} != {y!r}" for x, y in zip(left_lines, right_lines) if x != y][:10]
+        detail = [f"{x!r} != {y!r}" for x, y in zip(left_lines, right_lines, strict=False) if x != y][:10]
         pytest.fail(f"printed plan differs ({len(left_lines)} vs {len(right_lines)} lines): {detail}")
     assert _launch_fingerprints(mirror_storage[len(exp4_launches) :]) == exp4_launches
     for name in ("resolved-plan.json", "optimizer-groups.json", "sft-lr-schedule.json", "graph.json"):
@@ -277,12 +285,12 @@ def test_round_schema_rejects_unknown_and_mistyped_fields(tmp_path):
     document["unknown_knob"] = True
     path = tmp_path / "unknown.yaml"
     path.write_text(yaml.safe_dump(document, sort_keys=False))
-    with pytest.raises(ValueError, match="unknown fields.*unknown_knob"):
+    with pytest.raises(ValueError, match=r"unknown fields.*unknown_knob"):
         load_round(path)
     document = yaml.safe_load((ROUND_DIR / "exp4.yaml").read_text())
     document["sft"]["updates"] = "360"
     path.write_text(yaml.safe_dump(document, sort_keys=False))
-    with pytest.raises(ValueError, match="sft.updates must be int"):
+    with pytest.raises(ValueError, match=r"sft\.updates must be int"):
         load_round(path)
 
 
@@ -351,7 +359,7 @@ def test_round_sft_spec_holds_the_ruled_multiplier_by_construction(production_re
 def test_round_sft_spec_rejects_disagreeing_multipliers(production_recipe):
     recipe = _annealed_recipe(production_recipe)
     recipe["special_token_lr_multiplier"] = 1.0
-    with pytest.raises(ValueError, match="two different special-token LR multipliers"):
+    with pytest.raises(ValueError, match=r"two different special-token LR multipliers"):
         round_sft_spec(_round_spec(production_recipe), "round-test/sft", "2026.11.18.76", recipe)
 
 
@@ -369,17 +377,15 @@ def test_round_sft_spec_applies_the_learning_rate_knobs(production_recipe):
 
 def test_round_sft_spec_carries_the_min_lr_ratio_knob(production_recipe):
     recipe = _annealed_recipe(production_recipe, min_lr_ratio=0.2)
-    spec = round_sft_spec(
-        _round_spec(production_recipe, min_lr_ratio=0.2), "round-test/sft", "2026.11.18.76", recipe
-    )
+    spec = round_sft_spec(_round_spec(production_recipe, min_lr_ratio=0.2), "round-test/sft", "2026.11.18.76", recipe)
     assert spec.optimizer.min_lr_ratio == 0.2
-    with pytest.raises(ValueError, match="min_lr_ratio=0.1"):
+    with pytest.raises(ValueError, match=r"min_lr_ratio=0\.1"):
         round_sft_spec(_round_spec(production_recipe), "round-test/sft", "2026.11.18.76", recipe)
 
 
 def test_round_sft_spec_rejects_a_horizon_that_differs_from_the_updates_run(production_recipe):
     recipe = _annealed_recipe(production_recipe, horizon=4750, decay=4750)
-    with pytest.raises(ValueError, match="horizon must equal num_train_steps"):
+    with pytest.raises(ValueError, match=r"horizon must equal num_train_steps"):
         round_sft_spec(_round_spec(production_recipe), "round-test/sft", "2026.11.18.76", recipe)
 
 
@@ -397,7 +403,7 @@ def test_round_storage_invariant_rejects_scratch_output_prefix():
 
 def test_round_retention_invariant_requires_the_sft_selection_binding():
     resolved = {"archive": {"stage_files": {"sft": [{"path": "consumed-config.json", "category": "config"}]}}}
-    with pytest.raises(ValueError, match="selected.json"):
+    with pytest.raises(ValueError, match=r"selected\.json"):
         require_archive_binds_final_sft_checkpoint(resolved)
     resolved = {"archive": {"stage_files": {"sft": [{"path": "selected.json", "category": "config"}]}}}
     require_archive_binds_final_sft_checkpoint(resolved)

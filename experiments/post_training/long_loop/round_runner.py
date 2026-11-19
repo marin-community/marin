@@ -36,6 +36,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
 from experiments.post_training.long_loop.__main__ import validate_graph
+from experiments.post_training.long_loop.archive import PERMANENT_TMP_SEGMENT
 from experiments.post_training.long_loop.exp3_production import (
     INITIALIZER_RECEIPT,
     INITIALIZER_SHA256,
@@ -67,8 +68,6 @@ MICRO210_OUTPUT_PLACEHOLDER = "<resolved-at-build>"
 RL_WALL_CLOCK_BUDGET = {"seconds": 43200, "drain_margin": 1800}
 EVALUATION_EXPECTED_ROLLOUTS = 440
 NCCL_BUFFSIZE = "4194304"
-
-PERMANENT_TMP_SEGMENT = "tmp"
 
 
 @dataclass(frozen=True)
@@ -165,9 +164,7 @@ def _decode_strict(section: dict, target: type, label: str):
     missing = sorted(
         name
         for name, field in fields.items()
-        if name not in section
-        and field.default is dataclasses.MISSING
-        and field.default_factory is dataclasses.MISSING
+        if name not in section and field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING
     )
     if missing:
         raise ValueError(f"{label} is missing fields: {missing}")
@@ -253,9 +250,7 @@ def round_plan(round_spec: RoundSpec, release, source_revision: str, version: st
     # round departs from the qualified natural rate; a round at the natural rate keeps
     # the plan identical to the qualified recipe.
     multiplier = (
-        round_spec.sft.special_token_lr_multiplier
-        if round_spec.sft.special_token_lr_multiplier is not None
-        else 1.0
+        round_spec.sft.special_token_lr_multiplier if round_spec.sft.special_token_lr_multiplier is not None else 1.0
     )
     if multiplier != exp3_controls().special_token_lr_multiplier:
         sft["special_token_lr_multiplier"] = multiplier
