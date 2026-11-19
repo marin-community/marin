@@ -33,7 +33,7 @@
     },
     "timeout_seconds": 18000
   },
-  "fingerprint": "942db825",
+  "fingerprint": "bd818f0f",
   "initial_eval_match": null,
   "job_shape": {
     "calibration_batches": 64,

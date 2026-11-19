@@ -132,6 +132,7 @@ def test_v1_recipe_overlays_the_fixed_decisions():
     assert recipe["trainer"]["num_train_steps"] == 75
     assert recipe["task_timeout_seconds"] == 5 * 3600
     assert recipe["trainer"]["training_budget"]["duration"] == "5h"
+    assert recipe["trainer"]["progress_watchdog"]["startup_timeout"] == "2h"
     assert recipe["trainer"]["training_budget"]["finalization_reserve"] == "40m"
     assert recipe["target_positions"] == 75 * 256 * 262144
     assert recipe["stage_guard"]["h100_hour_limit"] == V1_H100_HOUR_LIMIT == 1280
