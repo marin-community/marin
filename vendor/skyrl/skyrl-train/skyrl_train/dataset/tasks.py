@@ -70,6 +70,10 @@ class TaskDataset(PromptDataset):
     ) -> int:
         return task_prompt_token_count(tokenizer, row, prompt_key, chat_template_kwargs=chat_template_kwargs)
 
+    def label(self, index: int) -> str:
+        """The task id, which unlike the default row-number uid survives prompt-length filtering."""
+        return TaskRolloutSpec.model_validate_json(self.dataframe[index][TASK_ROLLOUT_COLUMN]).task.id
+
     def collate_fn(self, rows) -> list[dict]:
         inputs = []
         for _, environment, extras, uid in rows:

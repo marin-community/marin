@@ -500,6 +500,10 @@ class RolloutBuffer(Section):
     max_stale_retries: int = field(1)
     """How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
     prompt waits until the prompt order offers it again."""
+    max_unusable_groups: PositiveInt = field(3)
+    """How many unusable groups in a row (every sample masked, or too few graded samples for the group baseline) a
+    prompt may produce before it sits out 10 training steps. A prompt stays in rotation when one batch needs every
+    prompt still offered."""
     max_in_flight: PositiveInt | None = field(None)
     """Cap on prompt groups generating at once. An Iris launch replaces null with 1.5 training batches, rounded up;
     in a run with a terminal_bench_config, at most its Harbor n_concurrent_trials (16 when unset) divided by

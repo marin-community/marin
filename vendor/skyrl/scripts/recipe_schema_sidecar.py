@@ -109,6 +109,7 @@ TYPES = MappingProxyType(
         "trainer.step_phase_budgets.checkpoint_work": "Annotated[int | float, Field(ge=0)]",
         "trainer.step_phase_budgets.evaluation": "Annotated[int | float, Field(ge=0)]",
         "trainer.step_phase_budgets.unaccounted": "Annotated[int | float, Field(ge=0)]",
+        "trainer.rollout_buffer.max_unusable_groups": "PositiveInt",
         "trainer.train_batch_size": "PositiveInt",
         "trainer.policy_mini_batch_size": "PositiveInt",
         "trainer.critic_mini_batch_size": "PositiveInt",
