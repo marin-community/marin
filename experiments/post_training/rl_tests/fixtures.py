@@ -4,12 +4,14 @@ import json
 import shutil
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
+from urllib.parse import urlencode
 
 import marin.rl.skyrl as adapter
 import pyarrow as pa
@@ -41,7 +43,9 @@ from finestore.rl.strata import (
 )
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
+from iris.client.client import IrisClient
 from iris.cluster.client.job_info import set_job_info
+from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import StepContext
@@ -54,6 +58,7 @@ from taskcompendium.models import Source
 from taskcompendium.pipeline.models import RawRow
 from verifyit.spec import ExactSpec
 
+from experiments.post_training import rl as runner
 from experiments.post_training import rl_command as command
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
@@ -70,6 +75,11 @@ NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_t
 def write_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))
+
+
+def fake_s3(monkeypatch, *paths: str) -> None:
+    allowed = set(paths)
+    monkeypatch.setattr("s3fs.S3FileSystem.exists", lambda _, path, **kw: str(path).removeprefix("s3://") in allowed)
 
 
 def fake_s3_checkpoint(monkeypatch, uri: str, root: Path) -> None:
@@ -98,13 +108,46 @@ def fake_s3_checkpoint(monkeypatch, uri: str, root: Path) -> None:
     )
 
 
+def write_artifact_record(root: Path, name: str, version: str, kind: type, **fields) -> None:
+    record = ArtifactRecord(name=name, version=version, result_type=result_type_name(kind), **fields)
+    write_json(root / RECORD_FILENAME, record.model_dump(mode="json"))
+
+
 def write_published_artifact(root: Path, name: str, version: str, kind: type, *, source: str, config=None) -> None:
-    write_json(
-        root / name / version / RECORD_FILENAME,
-        ArtifactRecord(
-            name=name, version=version, result_type=result_type_name(kind), config=config, source=source
-        ).model_dump(mode="json"),
+    write_artifact_record(root / name / version, name, version, kind, config=config, source=source)
+
+
+def write_skyrl_run_record(root: Path, name: str, version: str, *, fingerprint: str, **fields) -> None:
+    values = dict(
+        path=str(root),
+        hf_model_uri=None,
+        global_step=0,
+        tokenizer_uri="tests/tokenizer",
+        tokenizer_revision="test-revision",
+        checkpoint_root=str(root / "checkpoints"),
+        draft_checkpoint_root=None,
+        terminal_manifest_uri=str(root / "terminal.json"),
+        iris_job_id="/tests/native-run",
     )
+    run = SkyRLRun(**(values | fields))
+    write_artifact_record(root, name, version, SkyRLRun, fingerprint=fingerprint, result=run.result_payload())
+
+
+def fake_iris(monkeypatch, name):
+    client = MagicMock(spec=IrisClient)
+    job = JobName.from_wire(f"/test-user/{name}")
+    client.submit.return_value.job_id = job
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kw: nullcontext(client))
+    monkeypatch.setattr(runner, "open_iris_client", lambda **kw: nullcontext(client))
+    return client, job
+
+
+def fake_publication(monkeypatch, capture, origin):
+    def publish(record, service_url=None):
+        capture(record)
+        return (service_url or origin) + "/#" + urlencode({"run": record.run_id, "attempt": record.attempt_id})
+
+    monkeypatch.setattr("experiments.post_training.rl_publication.publish_result", publish)
 
 
 def write_receipt(root: Path, receipt: dict) -> None:
@@ -436,25 +479,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         )
         write_receipt(root, native)
         write_json(root / GATE_INPUTS_FILENAME, inputs.model_dump(mode="json"))
-        write_json(
-            root / RECORD_FILENAME,
-            ArtifactRecord(
-                name=name,
-                version=preset.revision,
-                fingerprint=fingerprint,
-                result_type=result_type_name(SkyRLRun),
-                result=SkyRLRun(
-                    path=str(root),
-                    hf_model_uri=None,
-                    global_step=0 if generating else max_steps,
-                    tokenizer_uri="tests/tokenizer",
-                    tokenizer_revision="test-revision",
-                    checkpoint_root=str(root / "checkpoints"),
-                    draft_checkpoint_root=None,
-                    terminal_manifest_uri=str(root / "terminal.json"),
-                    iris_job_id="/tests/native-run",
-                ).result_payload(),
-            ).model_dump(mode="json"),
+        write_skyrl_run_record(
+            root, name, preset.revision, fingerprint=fingerprint, global_step=0 if generating else max_steps
         )
         (root / ".executor_status").write_text("SUCCESS")
         stored_metrics = {}

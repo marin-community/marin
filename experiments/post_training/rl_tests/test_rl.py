@@ -6,12 +6,10 @@ import runpy
 import shutil
 import subprocess
 import sys
-from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
-from urllib.parse import parse_qs, urlencode, urlparse, urlsplit
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 import click
 import pyarrow as pa
@@ -20,7 +18,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 from finestore.rl.run_records import AttemptRecord, read_attempt, read_evaluations, write_attempt
-from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.client.client import IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
@@ -44,6 +42,9 @@ from experiments.post_training.rl_tests.fixtures import (
     controls,
     copy_evaluations,
     edit_receipt,
+    fake_iris,
+    fake_publication,
+    fake_s3,
     fake_s3_checkpoint,
     replace_evaluations,
     write_published_artifact,
@@ -455,11 +456,7 @@ def test_submission_exit_codes_and_publication_retries(
         )
     preset_table(preset)
     if case == "child":
-        monkeypatch.setattr(
-            "s3fs.S3FileSystem.exists",
-            lambda self, path, **kwargs: str(path).removeprefix("s3://")
-            in {"marin-test/models/python-init", "marin-test/models/child-model"},
-        )
+        fake_s3(monkeypatch, "marin-test/models/python-init", "marin-test/models/child-model")
     roots = controls(recorded_runs, preset.name) if preset.gated else []
     replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
     control = case == "control-missing-receipt"
@@ -579,28 +576,19 @@ def test_submission_exit_codes_and_publication_retries(
             )
         return SimpleNamespace(state=JobState.FAILED if case in {"native-failed"} else JobState.SUCCEEDED)
 
-    client = MagicMock(spec=IrisClient)
-    job = JobName.from_wire("/test-user/dashboard-coordinator")
-    client.submit.return_value.job_id = job
+    client, job = fake_iris(monkeypatch, "dashboard-coordinator")
     client.job.return_value.wait.side_effect = finish
     if case in {"malformed-control", "stale-control", "candidate-compose"}:
         client.submit.side_effect = AssertionError("invalid stored inputs reached the coordinator RPC")
-    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
-    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
     published = []
     unavailable = {"value": case in {"partial-retry"}}
 
-    def publish(record, service_url=None):
+    def capture_publication(record):
         if unavailable["value"] and record.attempt_id == "native-1":
             raise RuntimeError("Credential unavailable; run iris login")
         published.append(record.model_dump(mode="json"))
-        return (
-            (service_url or "https://progress.test")
-            + "/#"
-            + urlencode({"run": record.run_id, "attempt": record.attempt_id})
-        )
 
-    monkeypatch.setattr("experiments.post_training.rl_publication.publish_result", publish)
+    fake_publication(monkeypatch, capture_publication, "https://progress.test")
     if case == "child":
         finish()
         monkeypatch.setattr(
@@ -799,10 +787,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.setenv("HF_TEST_KEY", "test-initializer-credential")
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
-    monkeypatch.setattr(
-        "s3fs.S3FileSystem.exists",
-        lambda self, path, **kwargs: str(path).removeprefix("s3://") == "marin-test/models/python-init",
-    )
+    fake_s3(monkeypatch, "marin-test/models/python-init")
     built = snowball.build_run(
         preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=12",)
     )
@@ -827,8 +812,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             "3TB",
             "tests/python-tokenizer",
         )
-        launched = read_attempt(inspection["export"], inspection["attempt"])
-        assert launched is not None and launched.issue is None
+        assert read_attempt(inspection["export"], inspection["attempt"]) is None
         native_calls.append(command)
         shutil.copytree(staged, source, dirs_exist_ok=True)
         stored = json.loads((source / "terminal.json").read_text())
@@ -839,7 +823,6 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             AttemptRecord(
                 run_id=stored["config"]["run"]["id"],
                 attempt_id=stored["config"]["run"]["attempt_id"],
-                issue=launched.issue,
             ),
         )
         response = stored["result"]
@@ -856,15 +839,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.setattr(skyrl_api, "_run_launcher", native)
     published = []
 
-    def publish(record, service_url=None):
-        published.append(record)
-        return (
-            (service_url or "http://progress.test")
-            + "/#"
-            + urlencode({"run": record.run_id, "attempt": record.attempt_id})
-        )
-
-    monkeypatch.setattr("experiments.post_training.rl_publication.publish_result", publish)
+    fake_publication(monkeypatch, published.append, "http://progress.test")
     arguments = [
         "--preset",
         preset.name,
@@ -879,10 +854,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         "--set",
         "trainer.max_steps=12",
     ]
-    job = JobName.from_wire("/test-user/train-coordinator")
-    client = MagicMock(spec=IrisClient)
-    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
-    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
+    client, job = fake_iris(monkeypatch, "train-coordinator")
     mode, coordinator_module = "valid", "first_model_entry"
 
     def submit(**kwargs):
@@ -1008,10 +980,3 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         receipt["result"]["state"] = "failed"
     result = CliRunner().invoke(entry)
     assert result.exit_code == 3 and published[-1].status == "failed", (result.output, result.exception)
-    with edit_receipt(source) as receipt:
-        receipt["result"]["state"] = "succeeded"
-        receipt["config"]["skyrl"]["trainer"]["seed"] = None
-    with monkeypatch.context() as refused:
-        refused.setattr(client, "submit", lambda **kwargs: pytest.fail("Malformed status reached submission"))
-        result = CliRunner().invoke(entry)
-        assert result.exit_code == 4 and "seed" in result.output, (result.output, result.exception)

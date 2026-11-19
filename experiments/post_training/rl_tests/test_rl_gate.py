@@ -27,14 +27,14 @@ from finestore.rl.strata import (
     read_selection_strata,
 )
 from finestore.schema import arrow_schema
-from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
+from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl import skyrl as skyrl_api
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
 from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
 from rigging.provenance import Provenance
 from scipy.stats import t
-from skyrlrecipe.documents import set_path
+from skyrlrecipe.documents import get_path, set_path
 from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 
@@ -50,9 +50,11 @@ from experiments.post_training.rl_tests.fixtures import (
     controls,
     edit_receipt,
     evaluation_task_rows,
+    fake_s3,
     fake_s3_checkpoint,
     write_metrics,
     write_receipt,
+    write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import answer as _answer
 from experiments.post_training.rl_tests.fixtures import write_json as _json
@@ -261,6 +263,34 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
         }
         assert not facts["eval_lite/scored_fraction"].holds and facts["eval_lite/grader_error_fraction"].holds
         write_evaluations(str(root / "exports"), evaluations)
+        export = str(root / "exports")
+        profile = snowball_model.SNOWBALL.by_name[preset]
+        primary = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/")
+
+        def counts(row, value):
+            return row.model_copy(
+                update={"answers": [answer.model_copy(update={"response_token_count": value}) for answer in row.answers]}
+            )
+
+        def fixed_reply_holds():
+            return next(
+                fact.holds
+                for fact in scoring.load_run(str(root), profile).invariants
+                if fact.name == "fixed_reply_tokens"
+            )
+
+        write_evaluations(export, [counts(primary[0], 4095)])
+        assert not fixed_reply_holds()
+        write_evaluations(export, [counts(row, None) for row in primary])
+        legacy_metrics = read_skyrl_metrics(str(root))
+        tokens = 4096 * sum(len(row.answers) for row in primary)
+        legacy_metrics[0].update({"eval/all/response_tokens_max": 4096, "eval/all/response_tokens": tokens - 1})
+        write_metrics(root, legacy_metrics)
+        assert not fixed_reply_holds()
+        legacy_metrics[0]["eval/all/response_tokens"] = tokens
+        write_metrics(root, legacy_metrics)
+        assert fixed_reply_holds()
+        write_evaluations(export, primary)
     metrics = read_skyrl_metrics(str(root))
     step = snowball_model.SNOWBALL.by_name[preset].updates
     report = rescore(preset, "--candidate", "users/test/current-generation")
@@ -488,7 +518,6 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         "stale-default",
         "control-commit",
         "unbound-data",
-        "batch",
         "allocation",
         "cached-default",
         "zero-spread",
@@ -520,13 +549,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         )
         else (setting,)
     )
-    if case == "batch":
-        settings = (
-            "trainer.train_batch_size=64",
-            "trainer.policy_mini_batch_size=64",
-            "generator.n_samples_per_prompt=8",
-            "trainer.micro_train_batch_size_per_gpu=2",
-        )
     inputs = GateInputs(preset_name=preset.name, settings=settings)
     if case.startswith("initializer"):
         name, version = "tests/custom-init", "2026.11.07"
@@ -537,32 +559,18 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 preset.model.tokenizer_uri,
                 preset.model.tokenizer_revision,
             )
-            monkeypatch.setattr(
-                "s3fs.S3FileSystem.exists",
-                lambda self, path, **kwargs: str(path).removeprefix("s3://")
-                in {"fixture-initializer", "fixture-initializer/policy/tokenizer_config.json"},
-            )
+            fake_s3(monkeypatch, "fixture-initializer", "fixture-initializer/policy/tokenizer_config.json")
         else:
-            model = SkyRLRun(
-                path=str(root),
+            write_skyrl_run_record(
+                root,
+                name,
+                version,
+                fingerprint="initializer",
                 hf_model_uri="s3://fixture-initializer/policy",
                 global_step=25,
                 tokenizer_uri=preset.model.tokenizer_uri,
                 tokenizer_revision=preset.model.tokenizer_revision,
-                checkpoint_root=str(root / "checkpoints"),
-                draft_checkpoint_root=None,
-                terminal_manifest_uri=str(root / "terminal.json"),
                 iris_job_id="/test-user/initializer",
-            )
-            _json(
-                root / RECORD_FILENAME,
-                ArtifactRecord(
-                    name=name,
-                    version=version,
-                    fingerprint="initializer",
-                    result_type=result_type_name(SkyRLRun),
-                    result=model.result_payload(),
-                ).model_dump(mode="json"),
             )
             initializer = SkyRLPolicyModel(ArtifactStep.adopt(name, version, str(root), kind=SkyRLRun))
         inputs = inputs.model_copy(update={"init": recipe.stored_initializer(initializer, preset=preset)})
@@ -589,31 +597,24 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             assert planned["inputs"]["model"]["uri"].endswith("/<terminal-hf-export>")
         return
     candidate = recorded_runs(preset.name, name, inputs=inputs)
-    fault = {
-        "stale-default": "control config differs",
-        "control-commit": "does not match its pin",
-        "unbound-data": "skyrl.data.train_data",
-        "allocation": "iris.allocation.num_nodes",
-        "zero-spread": "variation is zero",
-        "missing-guard": "missing or non-finite guard metric",
-        "omitted-current-nondefault": "control config differs",
-        "omitted-schema-nondefault": "control config differs",
-        "omitted-candidate-default": "skyrl.generator.chat_template_kwargs",
-        "schema-timeout": "timed out after 120 s",
-        "protocol-temperature": "temperature",
-        "malformed-seed": "malformed recorded configuration",
-    }.get(case)
-    if case.startswith(("omitted-", "schema-")):
+    omissions = {
+        "omitted-default": {
+            "config.skyrl.generator.chat_template_kwargs": {},
+            "config.inputs.starting_checkpoint": None,
+            "config.iris.role_topology": None,
+        },
+        "omitted-current-nondefault": {"config.skyrl.generator.chat_template_kwargs": {}},
+        "omitted-schema-nondefault": {"config.skyrl.trainer.policy.optimizer_config.weight_decay": 0.0},
+        "omitted-candidate-default": {"config.skyrl.generator.chat_template_kwargs": {}},
+        "schema-timeout": {"config.skyrl.generator.chat_template_kwargs": {}},
+    }.get(case, {})
+    if omissions:
         omitted = [candidate] if case == "omitted-candidate-default" else control_roots
         for old in omitted:
             with edit_receipt(old) as receipt:
-                if case == "omitted-schema-nondefault":
-                    assert receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"].pop("weight_decay") == 0.0
-                else:
-                    assert receipt["config"]["skyrl"]["generator"].pop("chat_template_kwargs") == {}
-                if case == "omitted-default":
-                    assert receipt["config"]["inputs"].pop("starting_checkpoint") is None
-                    assert receipt["config"]["iris"].pop("role_topology") is None
+                for path, original in omissions.items():
+                    parent, key = path.rsplit(".", 1)
+                    assert get_path(receipt, parent).pop(key) == original
     if case == "schema-timeout":
         original_subprocess = subprocess.run
         for diagnostic in ("timeout", "empty", "whitespace", "oserror"):
@@ -641,32 +642,44 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 if diagnostic == "timeout":
                     assert "timed out after 120 s" in report["reason"]
         return
+    reasons = {
+        "stale-default": ("control config differs",),
+        "zero-spread": ("variation is zero",),
+        "missing-guard": ("missing or non-finite guard metric",),
+        "omitted-current-nondefault": ("control config differs",),
+        "omitted-schema-nondefault": ("control config differs",),
+        "omitted-candidate-default": ("skyrl.generator.chat_template_kwargs",),
+    }.get(case, ())
     mutation = {
-        "control-commit": (control_roots[0], "result.provenance.base_commit", "wrong-commit"),
-        "unbound-data": (candidate, "config.skyrl.data.train_data", ["/unbound/train.parquet"]),
-        "allocation": (candidate, "config.iris.allocation.num_nodes", preset.recipe.layout.workload.plan.num_nodes + 1),
-        "protocol-temperature": (candidate, "config.skyrl.generator.eval_sampling_params.temperature", 0.5),
-        "malformed-seed": (candidate, "config.skyrl.trainer.seed", None),
+        "control-commit": (control_roots[0], "result.provenance.base_commit", "wrong-commit", "does not match its pin"),
+        "unbound-data": (candidate, "config.skyrl.data.train_data", ["/unbound/train.parquet"], "skyrl.data.train_data"),
+        "allocation": (
+            candidate,
+            "config.iris.allocation.num_nodes",
+            preset.recipe.layout.workload.plan.num_nodes + 1,
+            "iris.allocation.num_nodes",
+        ),
+        "protocol-temperature": (
+            candidate,
+            "config.skyrl.generator.eval_sampling_params.temperature",
+            0.5,
+            "evaluation protocol",
+        ),
+        "malformed-seed": (candidate, "config.skyrl.trainer.seed", None, "malformed recorded configuration", "seed"),
     }.get(case)
     if mutation is not None:
-        root, path, value = mutation
+        root, path, value, *reasons = mutation
         with edit_receipt(root) as receipt:
             set_path(receipt, path, value)
     if case == "missing-guard":
         edit_metrics(candidate, lambda row: row.update({"policy/mismatch/staleness0/selected_tokens": 0}))
     report = rescore(preset.name, "--candidate", name)
-    if case == "protocol-temperature":
-        assert report["verdict"] == "invalid" and "evaluation protocol" in report["reason"], report
-    elif fault:
-        assert report["verdict"] == "invalid" and fault in report["reason"], report
-        if case == "malformed-seed":
-            assert "seed" in report["reason"]
+    if reasons:
+        assert report["verdict"] == "invalid" and all(reason in report["reason"] for reason in reasons), report
     else:
         assert (report["verdict"], report["label"]) == ("pass", "no change"), report
-        if case.startswith("initializer") or case == "batch":
-            assert (
-                "inputs.model.uri" if case.startswith("initializer") else "skyrl.trainer.train_batch_size"
-            ) in report["run"]["config_changes"]
+        if case.startswith("initializer"):
+            assert "inputs.model.uri" in report["run"]["config_changes"]
     if case == "cached-default":
         promoted = replace(
             preset,
@@ -772,12 +785,19 @@ def test_python_run_saves_typed_inputs_for_rescoring(
     preset_table(preset)
     controls(recorded_runs, preset_name)
     tasks = selection if preset_name == "data-medium" else None
-    setting_text = (
-        ("trainer.policy.optimizer_config.lr=2.0e-6", 'extra_env.VLLM_PROBE="1"', "generator.max_num_seqs=1024")
+    settings = (
+        (
+            "trainer.policy.optimizer_config.lr=2.0e-6",
+            "trainer.train_batch_size=64",
+            "trainer.policy_mini_batch_size=64",
+            "trainer.micro_train_batch_size_per_gpu=2",
+            "generator.n_samples_per_prompt=8",
+            'extra_env.VLLM_PROBE="1"',
+            "generator.max_num_seqs=1024",
+        )
         if tasks is None
         else ()
     )
-    settings = setting_text
     export = model / "selected-hf"
     export.mkdir()
     for filename in ("config.json", "tokenizer_config.json"):
@@ -830,9 +850,14 @@ def test_python_run_saves_typed_inputs_for_rescoring(
         {}
         if tasks
         else {
-            "trainer": {"policy": {"optimizer_config": {"lr": 2e-6}}},
+            "trainer": {
+                "policy": {"optimizer_config": {"lr": 2e-6}},
+                "train_batch_size": 64,
+                "policy_mini_batch_size": 64,
+                "micro_train_batch_size_per_gpu": 2,
+            },
             "extra_env": {"VLLM_PROBE": "1"},
-            "generator": {"max_num_seqs": 1024},
+            "generator": {"max_num_seqs": 1024, "n_samples_per_prompt": 8},
         }
     )
     assert recorded.tasks == task_name
@@ -856,6 +881,13 @@ def test_python_run_saves_typed_inputs_for_rescoring(
     assert report["run"]["attempt_ids"] == ["recorded-attempt"]
     assert comparisons(report)[gain_key]["run"] == pytest.approx(0.005)
     if tasks is None:
-        assert {"inputs.model.uri", "skyrl.trainer.policy.optimizer_config.lr", "skyrl.generator.max_num_seqs"} <= set(
-            report["run"]["config_changes"]
-        )
+        assert {
+            "inputs.model.uri",
+            "skyrl.trainer.policy.optimizer_config.lr",
+            "skyrl.generator.max_num_seqs",
+            "skyrl.trainer.train_batch_size",
+            "skyrl.trainer.micro_forward_batch_size_per_gpu",
+            "skyrl.trainer.rollout_buffer.max_in_flight",
+        } <= set(report["run"]["config_changes"])
+        trainer = read_attempt(str(source / "exports"), "recorded-attempt").native.config["skyrl"]["trainer"]
+        assert (trainer["micro_forward_batch_size_per_gpu"], trainer["rollout_buffer"]["max_in_flight"]) == (2, 64)

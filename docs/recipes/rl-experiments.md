@@ -223,10 +223,11 @@ for root in version_roots:
     panel = read_selection_strata(root)
     if panel is None:
         raise ValueError(f"Missing selection manifest: {root}")
-    print(panel.definition.version, score_eval_lite_version(rows, panel))
+    print(panel.definition.version, score_eval_lite_version(rows, panel, expected_answers=answers_per_task))
 ```
 
-Use the evaluation name stored on the rows. A primary evaluation uses `eval/`. The result reports
+Use the evaluation name stored on the rows and its recorded `n_samples_per_prompt` as `answers_per_task`.
+A primary evaluation uses `eval/`. The result reports
 how many active tasks scored, which are missing verified answers, and which have missing or different
 content digests. A version has a score only when every active task has verified answers with matching
 content. To compare earlier versions whose active tasks have since retired, evaluate the retained

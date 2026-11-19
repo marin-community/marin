@@ -7,8 +7,8 @@ import pytest
 from finestore.layout import OnConflict
 from finestore.reader import ReadView
 from finestore.rl.run_records import (
-    EVALUATIONS_TABLE,
     ATTEMPTS_TABLE,
+    EVALUATIONS_TABLE,
     METRICS_TABLE,
     AttemptRecord,
     AttemptRow,
@@ -43,6 +43,20 @@ def _write(export_root, attempt_id, metrics=None, **fields):
 
 def test_evaluations_read_legacy_strata_alongside_current_rows(tmp_path):
     export = str(tmp_path)
+    answer = {
+        "ordinal": 0,
+        "native_uid": "answer",
+        "optimization_reward": 0.0,
+        "verifier_score": None,
+        "raw_verifier_score": None,
+        "score_min": None,
+        "score_max": None,
+        "verification_status": None,
+        "passed": False,
+        "outcome": "unavailable",
+        "error_type": None,
+        "error_treatment": None,
+    }
     legacy = {
         "attempt_id": "attempt",
         "step": 1,
@@ -56,11 +70,13 @@ def test_evaluations_read_legacy_strata_alongside_current_rows(tmp_path):
         "score": None,
         "outcome": "unavailable",
         "error_type": None,
-        "answers": [],
+        "answers": [answer],
     }
     with DataStore.open(run_records_root(export)) as store:
         store.table(
-            EVALUATIONS_TABLE, primary_key=("attempt_id", "step", "evaluation", "task_id"), on_conflict=OnConflict.SUPERSEDE
+            EVALUATIONS_TABLE,
+            primary_key=("attempt_id", "step", "evaluation", "task_id"),
+            on_conflict=OnConflict.SUPERSEDE,
         ).extend([legacy, {**legacy, "task_id": "unknown", "agentic": None}])
     current = EvaluationTaskRow.model_validate(
         {
@@ -68,11 +84,13 @@ def test_evaluations_read_legacy_strata_alongside_current_rows(tmp_path):
             "task_id": "current",
             "task_digest": "digest",
             "strata": {"family": "agents", "agentic": False},
+            "answers": [answer | {"response_token_count": 12}],
         }
     )
     write_evaluations(export, [current])
     rows = {row.task_id: row for row in read_evaluations(export, attempt_id="attempt", evaluation="eval/")}
     assert rows["legacy"].strata.agentic is True and rows["legacy"].task_digest is None
+    assert rows["legacy"].answers[0].response_token_count is None
     assert rows["unknown"].strata.agentic is False and rows["unknown"].task_digest is None
     assert rows["current"] == current and rows["current"].strata.agentic is False
 

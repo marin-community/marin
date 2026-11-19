@@ -25,7 +25,7 @@ from finestore.rl.run_records import (
 )
 from finestore.store import DataStore
 from fsspec.core import url_to_fs
-from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
+from marin.execution.artifact import RECORD_FILENAME, Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from marin.rl.skyrl_records import read_skyrl_metrics, read_stored_skyrl_attempts
@@ -46,6 +46,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_json,
     write_metrics,
     write_receipt,
+    write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import controls as write_controls
 
@@ -86,26 +87,16 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     )
     table = preset_table(preset)
     weights = Path(recipe.artifact_prefix(preset.recipe.layout.cluster)) / "weights" / "2026.11.10"
-    initializer = SkyRLRun(
-        path=str(weights),
+    write_skyrl_run_record(
+        weights,
+        "weights",
+        "2026.11.10",
+        fingerprint="fixture-initializer",
         hf_model_uri="s3://marin-test/models/weights/policy",
         global_step=1,
         tokenizer_uri=preset.model.tokenizer_uri,
         tokenizer_revision=preset.model.tokenizer_revision,
-        checkpoint_root=str(weights / "checkpoints"),
-        draft_checkpoint_root=None,
-        terminal_manifest_uri=str(weights / "terminal.json"),
         iris_job_id="/tests/initializer",
-    )
-    write_json(
-        weights / RECORD_FILENAME,
-        ArtifactRecord(
-            name="weights",
-            version="2026.11.10",
-            fingerprint="fixture-initializer",
-            result_type=result_type_name(SkyRLRun),
-            result=initializer.result_payload(),
-        ).model_dump(mode="json"),
     )
     inputs = GateInputs(
         preset_name=name,

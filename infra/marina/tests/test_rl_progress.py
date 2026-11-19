@@ -64,7 +64,11 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         query_path,
         json_body={
             "sql": insert_sql,
-            "parameters": {"run_id": legacy["run_id"], "attempt_id": "unknown", "record": json.dumps(legacy)},
+            "parameters": {
+                "run_id": legacy["run_id"],
+                "attempt_id": "unknown",
+                "record": json.dumps(legacy | {"issue": "opted_out"}),
+            },
         },
     )
     for run_id, invalid in (
@@ -117,7 +121,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     rows = {row["attempt_id"]: row for row in payload["runs"]}
     assert rows["native-first"] == changed
     assert rows["native-second"] == failed
-    assert rows["unknown"] == legacy
+    assert rows["unknown"] == legacy | {"issue": None}
     assert len(rows) == 3
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]
@@ -145,6 +149,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         changed | {"elapsed_seconds": float("nan")},
         changed | {"engine": {"value": float("inf")}},
         changed | {"label": "\x00"},
+        changed | {"issue": "opted_out"},
         changed | {"gate_result": {"comparisons": "invalid"}},
     ):
         response = client.post(api_path, content=json.dumps(invalid), headers={"Content-Type": "application/json"})

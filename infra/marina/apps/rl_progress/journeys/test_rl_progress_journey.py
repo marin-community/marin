@@ -43,6 +43,7 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
         "completed_at": "2026-11-03T01:00:00Z",
         "failed_facts": ["eval_lite_100@25/scored_fraction"],
     }
+    second.pop("issue")
     publish(second)
     route = urlencode({"run": record["run_id"], "attempt": record["attempt_id"]})
     journey.page.goto(f"{journey.origin}/a/{APPLET_ID}/#{route}", wait_until="domcontentloaded")
