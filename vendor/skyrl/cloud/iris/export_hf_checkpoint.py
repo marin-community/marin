@@ -431,14 +431,11 @@ def _export_job_spec(training_config: DictConfig, request: HFExportRequest) -> E
 def validate_checkpoint_export(training_config: DictConfig) -> None:
     """Validate the derived policy export without reading a checkpoint or submitting a job."""
     trainer = training_config.skyrl.trainer
-    step = trainer.max_steps if trainer.max_steps is not None else 0
-    checkpoint_root = str(training_config.artifacts.checkpoint_root)
     request = HFExportRequest.from_trainer(
         trainer,
-        step=step,
-        checkpoint_base_path=checkpoint_root,
-        checkpoint_path=join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}"),
-        export_path=str(training_config.artifacts.export_root),
+        step=trainer.max_steps if trainer.max_steps is not None else 0,
+        checkpoint_root=str(training_config.artifacts.checkpoint_root),
+        export_root=str(training_config.artifacts.export_root),
     )
     export = checkpoint_export_launch_config(training_config, request, _export_job_spec(training_config, request))
     validate_launch_config(export)

@@ -12,8 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial, wraps
@@ -21,10 +20,9 @@ from pathlib import Path
 
 import click
 import yaml
-from finestore.rl.rl_progress import RunIssue, Verdict
+from finestore.rl.rl_progress import Verdict
 from finestore.rl.run_records import AttemptRecord, write_attempt
 from iris.cli.connect import open_iris_client
-from iris.client.client import IrisClient, get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
@@ -38,20 +36,18 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import submit_or_run, validate_coordinator_graph
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
-    IrisSkyRLExecution,
     SkyRLModelSource,
     SkyRLReceiptLookupError,
     SkyRLRun,
     SkyRLRunConfig,
     read_skyrl_attempt,
     run_skyrl,
+    skyrl_execution,
 )
 from marin.rl.skyrl_records import (
-    RecordedLaunch,
     attempt_tracking,
     read_skyrl_metrics,
     read_stored_skyrl_attempt,
-    recorded_launch,
 )
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output
@@ -59,16 +55,20 @@ from rigging.provenance import Provenance, git_output
 from experiments.post_training import rl_gate, rl_publication
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_recipe as recipe
-from experiments.post_training.rl_command import EXIT_CODES, REFUSAL_EXIT_CODE, RLCommand, grafana_url
+from experiments.post_training.rl_command import (
+    EXIT_CODES,
+    REFUSAL_EXIT_CODE,
+    RLCommand,
+    attempt_grafana_url,
+    grafana_url,
+)
 from experiments.post_training.rl_scoring import (
     GATE_INPUTS_FILENAME,
     GateInputs,
-    InvalidComparison,
     evaluation_status,
+    read_recorded_launch,
 )
-from experiments.post_training.task_curation.selection import (
-    FULL_VALIDATION_FILENAME,
-)
+from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
 
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
 _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
@@ -96,7 +96,7 @@ def _provenance(*, control: bool) -> Provenance:
 
 
 def _run_rl(
-    config: SkyRLRunConfig, *, inputs: GateInputs, issue: RunIssue | None, forward_env: tuple[str, ...] = ()
+    config: SkyRLRunConfig, *, inputs: GateInputs, issue: int | None, forward_env: tuple[str, ...] = ()
 ) -> SkyRLRun:
     path = StoragePath(config.output.resolved_config_uri).parent / GATE_INPUTS_FILENAME
     if not path.exists():
@@ -134,7 +134,7 @@ def build_run(
     replicates: int = 1,
     control: bool = False,
     requirements: tuple[str, ...] = (),
-    issue: RunIssue | None = None,
+    issue: int | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> RLRun:
     """Construct an RL experiment: one run step per replicate and, for a gated preset, its gate step."""
@@ -166,18 +166,18 @@ def build_run(
         raise click.BadParameter(
             "candidate tasks use a different heldout input; curate against the default task selection"
         )
-    if tasks is not None:
-        task_set = recipe.selection_artifact(preset.eval_lite)
+    if tasks is not None and preset.held_out_tasks is not None:
+        task_set = recipe.selection_artifact(preset.held_out_tasks)
         excluded = summary["recipe"].get("exclusions", ())
         expected = str(StoragePath(task_set.path()) / FULL_VALIDATION_FILENAME)
         if not any(row["uri"] == expected and row["version"] == task_set.version for row in excluded):
-            raise click.BadParameter("candidate tasks must record the full EvalLite in recipe.exclusions")
+            raise click.BadParameter("candidate tasks must record the full held-out selection in recipe.exclusions")
     initializer = recipe.stored_initializer(init, preset=preset) if init is not None else None
     spec = recipe.run_spec(preset, name="rl-config", tasks=tasks, init=init, settings=settings, model_name=table.model)
     evaluation_inputs = [
         (evaluation.name, source.name, source.version)
         for evaluation in preset.evaluations
-        for source in (recipe.evaluation_source(evaluation, selection, default, preset.eval_lite),)
+        for source in (recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks),)
     ]
     changes = {
         "tasks": (selection.name, selection.version),
@@ -214,13 +214,6 @@ def build_run(
     return RLRun(tuple(runs), gate, inputs)
 
 
-def _grafana_links(receipt: AttemptRecord | None, cluster: str, launch: RecordedLaunch | None) -> dict[str, str]:
-    if receipt is None or launch is None or not receipt.native.result.started_at:
-        return {}
-    result = receipt.native.result
-    return {"run": grafana_url(receipt.run_id, cluster, launch.training_type, result.started_at, result.finished_at)}
-
-
 def _evaluation_failed(snapshot: dict, preset: presets.Preset) -> bool:
     return bool(preset.checkpoint_every) and any(
         not fact["holds"] for row in snapshot["runs"] for fact in row.get("evaluation_invariants", ())
@@ -244,13 +237,14 @@ def _status(
     preset: presets.Preset,
     *,
     stored_only: bool = False,
-    issue: RunIssue | None = None,
+    issue: int | None = None,
     publication_urls: dict[str, str] | None = None,
 ) -> dict:
     rows = []
     planned = []
     for step in run.runs:
-        execution = next(value for value in step.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
+        execution = skyrl_execution(step)
+        assert execution is not None
         path = step.path(recipe.artifact_prefix(execution.cluster))
         config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
         planned.append(yaml.safe_load(config.launch_config_yaml))
@@ -259,22 +253,20 @@ def _status(
         except SkyRLReceiptLookupError as error:
             raise click.BadParameter(str(error)) from error
         result = receipt.native.result if receipt is not None else None
-        try:
-            launch = recorded_launch(receipt) if receipt is not None else None
-        except ValueError as error:
-            raise InvalidComparison(str(error)) from error
+        launch = read_recorded_launch(receipt) if receipt is not None else None
         tracking = attempt_tracking(receipt, launch) if receipt is not None else {}
         team = launch.wandb_entity if launch else execution.wandb_entity
-        grafana = _grafana_links(receipt, execution.cluster, launch)
+        grafana = attempt_grafana_url(receipt, launch) if receipt is not None and launch is not None else None
+        status_path = StoragePath(get_status_path(path))
         state = (
-            result.state.value
-            if result
-            else (
-                StoragePath(get_status_path(path)).read_text().strip()
-                if StoragePath(get_status_path(path)).exists()
-                else "not built"
-            )
+            result.state.value if result else status_path.read_text().strip() if status_path.exists() else "not built"
         )
+        best = {}
+        if preset.checkpoint_every and launch is not None:
+            best_path = StoragePath(launch.export_root) / "best_checkpoint.json"
+            best["best_checkpoint_step"] = (
+                json.loads(best_path.read_text())["step"] if best_path.exists() else "none eligible"
+            )
         rows.append(
             {
                 "name": step.name,
@@ -287,7 +279,7 @@ def _status(
                     for key in ("attempt_id", "wandb_url", "started_at", "engine")
                     if tracking.get(key) is not None
                 },
-                **({"grafana_links": grafana} if grafana else {}),
+                **({"grafana_links": {"run": grafana}} if grafana else {}),
                 **(
                     evaluation_status(path, preset, receipt, launch).model_dump(
                         mode="json", exclude_unset=True, exclude_none=True
@@ -295,17 +287,7 @@ def _status(
                     if receipt is not None and launch is not None
                     else {}
                 ),
-                **(
-                    {
-                        "best_checkpoint_step": (
-                            json.loads((StoragePath(launch.export_root) / "best_checkpoint.json").read_text())["step"]
-                            if (StoragePath(launch.export_root) / "best_checkpoint.json").exists()
-                            else "none eligible"
-                        )
-                    }
-                    if preset.checkpoint_every and launch is not None
-                    else {}
-                ),
+                **best,
                 "latest_completed_update": _completed_update(path, preset.recipe.layout.workload),
                 "cluster": execution.cluster,
                 "allocation": {
@@ -373,27 +355,6 @@ def _from_handles(handles: list[ArtifactStep]) -> RLRun:
     )
 
 
-@contextmanager
-def _iris_client() -> Iterator[IrisClient]:
-    context = get_iris_ctx()
-    if context is not None and context.client is not None:
-        yield context.client
-    else:
-        with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=recipe.REPO_ROOT) as client:
-            yield client
-
-
-def _publish_records(
-    run: RLRun, preset: presets.Preset, *, table: presets.ModelPresets, service_url: str | None
-) -> rl_publication.PublicationOutcome | None:
-    if not preset.publishes:
-        return None
-    prefix = recipe.artifact_prefix(preset.recipe.layout.cluster)
-    gate_path = run.gate.path(prefix) if run.gate is not None else None
-    outputs = [training.path(prefix) for training in run.runs]
-    return rl_publication.publish_runs(outputs, preset, table=table, gate_path=gate_path, service_url=service_url)
-
-
 def _wait_for_run(
     job: JobName,
     handles: list[ArtifactStep],
@@ -402,7 +363,7 @@ def _wait_for_run(
     table: presets.ModelPresets,
     service_url: str | None,
 ) -> None:
-    with _iris_client() as client:
+    with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=recipe.REPO_ROOT) as client:
         parent = client.job(job).wait(
             preset.recipe.layout.coordinator_timeout_hours * 3600, poll_interval=60, raise_on_failure=False
         )
@@ -413,12 +374,21 @@ def _wait_for_run(
     )
     run = _from_handles(handles)
     run = replace(run, gate=rl_gate.completed_gate(run.gate))
-    try:
-        publication = _publish_records(run, preset, table=table, service_url=service_url)
-    except Exception as error:
-        publication = rl_publication.PublicationOutcome(
-            errors=[str(error)], retry="Repeat the original command with --wait."
-        )
+    publication = None
+    if preset.publishes:
+        try:
+            prefix = recipe.artifact_prefix(preset.recipe.layout.cluster)
+            publication = rl_publication.publish_runs(
+                [step.path(prefix) for step in run.runs],
+                preset,
+                table=table,
+                gate_path=run.gate.path(prefix) if run.gate is not None else None,
+                service_url=service_url,
+            )
+        except Exception as error:
+            publication = rl_publication.PublicationOutcome(
+                errors=[str(error)], retry="Repeat the original command with --wait."
+            )
     snapshot = _status(
         run,
         preset,
@@ -462,23 +432,22 @@ def _run_command(
                 raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
             submitted_at = datetime.now(UTC).isoformat()
             job = submit_or_run(module, handles, max_concurrent, os.environ, argv=argv)
-            submitted = []
-            for step in _from_handles(handles).runs:
-                config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-                execution = next(value for value in step.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
-                submitted.append(
-                    {
-                        "name": step.name,
-                        "grafana_links": {
-                            "run": grafana_url(
-                                config.run_id,
-                                execution.cluster,
-                                click.get_current_context().meta["rl_training_type"],
-                                submitted_at,
-                            )
-                        },
-                    }
-                )
+            training_type = click.get_current_context().meta["rl_training_type"]
+            submitted = [
+                {
+                    "name": step.name,
+                    "grafana_links": {
+                        "run": grafana_url(
+                            step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).run_id,
+                            execution.cluster,
+                            training_type,
+                            submitted_at,
+                        )
+                    },
+                }
+                for step in _from_handles(handles).runs
+                if (execution := skyrl_execution(step)) is not None
+            ]
             _print_status({"coordinator_job_id": str(job), "submitted_at": submitted_at, "runs": submitted})
         else:
             validate_coordinator_graph(handles)
@@ -502,7 +471,6 @@ def command(
 ) -> click.Command:
     @partial(_run_command, table, argv, entry_module)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
-    @click.option("--no-issue", is_flag=True, help="Record an explicit opt-out of the experiment issue.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
     @click.option("--url", help="Marina origin for run publication (defaults to the Marina service).")
     @click.option(
@@ -579,17 +547,11 @@ def command(
         control: bool,
         requirements: tuple[str, ...],
         issue: int | None,
-        no_issue: bool,
         plan: bool,
     ) -> tuple[ArtifactStep, ...]:
         do_run = click.get_current_context().params["do_run"]
         if plan and do_run:
             raise click.UsageError("Choose either --plan or --run")
-        if issue is not None and no_issue:
-            raise click.UsageError("Choose either --issue or --no-issue")
-        if do_run and issue is None and not no_issue:
-            raise click.UsageError("--run requires --issue N or --no-issue")
-        recorded_issue: RunIssue | None = "opted_out" if no_issue else issue
         preset = table.by_name[preset_name]
         if init is not None and init_name is not None:
             raise click.UsageError("Python init and --init cannot be used together")
@@ -606,7 +568,7 @@ def command(
             replicates=replicates,
             control=control,
             requirements=requirements,
-            issue=recorded_issue,
+            issue=issue,
         )
         if do_run and get_job_info() is None:
             assert run.inputs is not None
@@ -617,9 +579,7 @@ def command(
                 table=table,
             )
             click.get_current_context().meta["rl_training_type"] = validated["runtime"]["training_type"]
-        snapshot = _status(
-            replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=recorded_issue
-        )
+        snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
         _print_status(snapshot)
         if not do_run and _evaluation_failed(snapshot, preset):
             raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])

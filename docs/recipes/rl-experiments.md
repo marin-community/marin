@@ -41,7 +41,7 @@ after merge; `--control` and `train-long` need no pin.
 
 The default command and `--plan` print the graph and saved status. Add `--run` to submit an Iris
 coordinator, or `--run --wait` to poll every 60 seconds and print the final report. Submission
-requires `--issue ISSUE_NUMBER` or `--no-issue` and records that choice on the native attempt.
+accepts an optional `--issue ISSUE_NUMBER` and records the issue number on the native attempt when supplied.
 Repeating the same command reuses completed artifacts. Track or stage source files under
 `experiments/`, `lib/` and `vendor/`: their working-tree hash forms part of the run name.
 `--version dev` satisfies the standard launcher interface; each preset's steps use its `revision`.
@@ -223,10 +223,11 @@ for root in version_roots:
     panel = read_selection_strata(root)
     if panel is None:
         raise ValueError(f"Missing selection manifest: {root}")
-    print(panel.definition.version, score_eval_lite_version(rows, panel))
+    print(panel.definition.version, score_eval_lite_version(rows, panel, expected_answers=answers_per_task))
 ```
 
-Use the evaluation name stored on the rows. A primary evaluation uses `eval/`. The result reports
+Use the evaluation name stored on the rows and its recorded `n_samples_per_prompt` as `answers_per_task`.
+A primary evaluation uses `eval/`. The result reports
 how many active tasks scored, which are missing verified answers, and which have missing or different
 content digests. A version has a score only when every active task has verified answers with matching
 content. To compare earlier versions whose active tasks have since retired, evaluate the retained
@@ -284,7 +285,7 @@ supply the GPU width. Presets declare seed, W&B entity, checkpoint retention and
 independently of dashboard publication. Its `__main__` calls `rl.main(SNOWBALL)`.
 
 To add a model, create its own entry file with explicit `Preset.model`, `Preset.tasks`,
-`Preset.eval_lite`, evaluations and recipe configuration, then pass its `ModelPresets` value to
+`Preset.held_out_tasks`, evaluations and recipe configuration, then pass its `ModelPresets` value to
 `rl.main`. The table's namespace owns run and control paths. The shared runner imports no other
 model entries. The native launch-document census counts `rl_recipe.py`, where `SkyRLSpec` is
 constructed; add the new table's builders to `tests/rl/launch_document_census.py` the same way

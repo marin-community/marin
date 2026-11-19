@@ -38,9 +38,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
-from skyrlrecipe.declared import (
-    EvaluationSampling,
-)
+from skyrlrecipe.declared import EvaluationSampling
 from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
 from skyrlrecipe.settings import parse_setting as typed_setting_value
 from taskcompendium.identity import canonical_sha256
@@ -58,8 +56,6 @@ from experiments.post_training.task_curation.selection import (
 )
 
 REPO_ROOT = find_project_root(Path(__file__))
-
-
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
 
 
@@ -74,29 +70,37 @@ def override_document(settings: tuple[str, ...]) -> dict:
     return document
 
 
-def configure_evaluation(
-    evaluation: Evaluation, config: RecipePatch, tasks: ArtifactStep, *, revision: str, seed: int, namespace: str
-) -> tuple[RecipePatch, tuple[ArtifactDataSource, ...]]:
-    if evaluation.sample is not None:
-        tasks = sampled_tasks_step(
-            tasks, evaluation.file, evaluation.sample, seed, revision=revision, namespace=namespace
-        )
-    sampling = evaluation.profile.sampling_params
-    configured = config.merge(
-        RecipePatch(
-            trainer=sections.Trainer(eval_num_prompts=None, dump_eval_results=True),
-            generator=sections.Generator(eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling),
-        )
-    )
-    return configured, (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
-
-
 BATCH_SETTINGS = {
     "trainer.train_batch_size": "train_batch_size",
     "trainer.policy_mini_batch_size": "policy_mini_batch_size",
     "generator.n_samples_per_prompt": "n_samples_per_prompt",
     "trainer.micro_train_batch_size_per_gpu": "micro_train_batch_size_per_gpu",
 }
+
+RUNNER_KEYS = frozenset(
+    {
+        "entrypoint",
+        "trainer.resume_mode",
+        "trainer.dump_eval_results",
+        "trainer.placement",
+        "trainer.callbacks",
+        "trainer.ckpt_interval",
+        "trainer.hf_save_interval",
+        "generator.trajectory_retention",
+        "generator.run_engines_locally",
+    }
+)
+_GATED_KEYS = frozenset(
+    {
+        "trainer.max_steps",
+        "trainer.hf_hub_repo_id",
+        "trainer.logger",
+        "trainer.project_name",
+        "context_budget",
+        "generator.sampling_params.ignore_eos",
+        "generator.sampling_params.min_tokens",
+    }
+)
 
 
 def selection_summary(selection: ArtifactStep) -> dict:
@@ -130,10 +134,9 @@ def _write_sample(selection: str, filename: str, count: int, seed: int, output: 
         for row in rows:
             document = json.loads(row[TASK_SPEC_COLUMN])
             task_id = document["id"]
-            annotation = panel.tasks.get(task_id)
-            if annotation is None:
-                identity = panel.identity(task_id)
-                annotation = SelectionTaskRow(task_id=task_id, **identity.strata.model_dump())
+            annotation = panel.tasks.get(task_id) or SelectionTaskRow(
+                task_id=task_id, **panel.identity(task_id).strata.model_dump()
+            )
             annotations.append(
                 annotation.model_copy(
                     update={"task_digest": canonical_sha256(document), "state": MembershipState.ACTIVE}
@@ -187,9 +190,14 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
 
     trainer = values.get("trainer", {})
     generator = values.get("generator", {})
-    setting_sections = preset.recipe.layout.workload.setting_sections
+    workload = preset.recipe.layout.workload
+    setting_sections = workload.setting_sections
+    derived = workload.plan.config_values().keys() - BATCH_SETTINGS.keys()
+    owned_keys = RUNNER_KEYS | derived | preset.owned_keys
+    if preset.gated:
+        owned_keys |= _GATED_KEYS
     owners = {
-        "use the preset's declared owned keys": any(has(path) for path in preset.owned_keys),
+        "use the preset's declared owned keys": any(has(path) for path in owned_keys),
         "choose network transport in Layout": any(key.startswith("NCCL_") for key in values.get("extra_env", {})),
         "evaluation requests are fixed by the preset": any(key.startswith("eval_") for key in (*trainer, *generator)),
         "select curated data with --tasks": has("data") and bool(values["data"].keys() - preset.data_settings),
@@ -240,21 +248,10 @@ def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
     if record is None:
         raise click.BadParameter(f"no published artifact record for {name}@{version}")
     config = record.config or {}
-    tokenizer = config.get("tokenizer_uri")
-    revision = config.get("tokenizer_revision")
-    if tokenizer is None:
-        tokenizer = config.get("train_config", {}).get("data", {}).get("tokenizer")
-    if tokenizer is not None and not revision:
-
-        from levanter.model_cache import resolve_hf_model_ref  # noqa: PLC0415 - optional SFT metadata resolver
-
-        pinned = resolve_hf_model_ref(tokenizer)
-        if pinned is not None:
-            tokenizer, _, revision = pinned.rpartition("@")
     return ArtifactHfModel(
         ArtifactStep.adopt(name, version, record.source or root, kind=Artifact, config=record.config),
-        tokenizer_uri=tokenizer,
-        tokenizer_revision=revision,
+        tokenizer_uri=config.get("tokenizer_uri"),
+        tokenizer_revision=config.get("tokenizer_revision"),
     )
 
 
@@ -393,27 +390,37 @@ def run_spec(
     profiles = {}
     expected_tasks = 0
     for index, evaluation in enumerate(chosen):
-        evaluation_tasks = evaluation_source(evaluation, selection, default, preset.eval_lite)
+        evaluation_tasks = evaluation_source(evaluation, selection, default, preset.held_out_tasks)
         _refuse_judged(selection_summary(evaluation_tasks), evaluation.file)
-        profile_config, sources = configure_evaluation(
-            evaluation,
-            config,
-            evaluation_tasks,
-            revision=preset.revision,
-            seed=preset.seed,
-            namespace=preset.sample_namespace,
-        )
+        tasks_for_evaluation = evaluation_tasks
+        if evaluation.sample is not None:
+            tasks_for_evaluation = sampled_tasks_step(
+                evaluation_tasks,
+                evaluation.file,
+                evaluation.sample,
+                preset.seed,
+                revision=preset.revision,
+                namespace=preset.sample_namespace,
+            )
+        sources = (ArtifactDataSource(tasks_for_evaluation, relative_path=f"{evaluation.file}.parquet"),)
+        sampling = evaluation.profile.sampling_params
         if index == 0:
-            config = profile_config
             validation_data = sources
             answer_count = evaluation_answer_count(evaluation, evaluation_tasks)
             expected_tasks = answer_count // evaluation.answers
-            config = config.merge(workload.evaluation_patch(answer_count))
+            config = config.merge(
+                RecipePatch(
+                    trainer=sections.Trainer(eval_num_prompts=None, dump_eval_results=True),
+                    generator=sections.Generator(
+                        eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling
+                    ),
+                )
+            ).merge(workload.evaluation_patch(answer_count))
         else:
             evaluation_data.append((evaluation.name, sources))
             profiles[evaluation.name] = EvaluationSampling(
-                sampling_params=profile_config.generator.eval_sampling_params,
-                n_samples_per_prompt=profile_config.generator.eval_n_samples_per_prompt,
+                sampling_params=sampling,
+                n_samples_per_prompt=evaluation.answers,
                 schedule=workload.named_schedule,
             )
     config = config.merge(
@@ -479,10 +486,11 @@ def run_step(
 
 
 def evaluation_source(
-    evaluation: Evaluation, selection: ArtifactStep, default: ArtifactStep, eval_lite: str
+    evaluation: Evaluation, selection: ArtifactStep, default: ArtifactStep, held_out_tasks: str | None
 ) -> ArtifactStep:
     if evaluation.source == "default":
         return default
     if evaluation.source == "tasks":
         return selection
-    return selection_artifact(eval_lite)
+    assert held_out_tasks is not None
+    return selection_artifact(held_out_tasks)

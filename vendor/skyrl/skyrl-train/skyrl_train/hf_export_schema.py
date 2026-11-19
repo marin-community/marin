@@ -1,7 +1,8 @@
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-from marinskyrl.resource_locator import validate_replayable_model_reference
+from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX
+from marinskyrl.resource_locator import join_resource_path, validate_replayable_model_reference
 from omegaconf import DictConfig
 
 HF_EXPORT_REQUEST_SCHEMA_VERSION = 1
@@ -51,21 +52,15 @@ class HFExportRequest:
 
     @classmethod
     def from_trainer(
-        cls,
-        trainer: DictConfig,
-        *,
-        step: int,
-        checkpoint_base_path: str,
-        checkpoint_path: str,
-        export_path: str,
+        cls, trainer: DictConfig, *, step: int, checkpoint_root: str, export_root: str
     ) -> "HFExportRequest":
-        """Build a policy export request from the training document."""
+        """Describe an export at the trainer's policy geometry."""
         model, placement = trainer.policy.model, trainer.placement
         return cls(
             step=step,
-            checkpoint_base_path=checkpoint_base_path,
-            checkpoint_path=checkpoint_path,
-            export_path=export_path,
+            checkpoint_base_path=checkpoint_root,
+            checkpoint_path=join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}"),
+            export_path=export_root,
             model_path=model.path,
             num_nodes=placement.policy_num_nodes,
             gpus_per_node=placement.policy_num_gpus_per_node,

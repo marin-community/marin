@@ -3202,9 +3202,8 @@ class RayPPOTrainer:
         request = HFExportRequest.from_trainer(
             self.cfg.trainer,
             step=export_step,
-            checkpoint_base_path=self.cfg.trainer.ckpt_path,
-            checkpoint_path=checkpoint_path,
-            export_path=self.cfg.trainer.export_path,
+            checkpoint_root=self.cfg.trainer.ckpt_path,
+            export_root=self.cfg.trainer.export_path,
         )
         existing = read_hf_export_request(checkpoint_path)
         if existing is not None:
