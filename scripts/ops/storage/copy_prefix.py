@@ -4,9 +4,10 @@
 
 """Copy every object below one CoreWeave prefix to another, as an Iris job.
 
-The operator's machine submits a coordinator job to the CoreWeave Iris cluster in the
-source's region, or in the destination's with ``--run-near destination``, and streams
-its logs. The coordinator lists both prefixes, plans each source file whose
+The operator's machine submits a coordinator job through the ``marin`` federation hub,
+which hands it off to the CoreWeave peer cluster in the source's region, or in the
+destination's with ``--run-near destination``. The script streams the job's logs.
+The coordinator lists both prefixes, plans each source file whose
 destination copy is missing or has a different size, packs the plan into shards of
 about ``TARGET_SHARD_BYTES``, and runs a Zephyr pipeline whose workers stream each
 shard's files. It then lists the destination again and fails if any source file is
@@ -31,8 +32,7 @@ Usage:
 
 Iris refuses CoreWeave jobs without the submitter's object-storage key, so export
 ``CW_KEY_ID`` and ``CW_KEY_SECRET`` before running. If the connection drops, the job keeps
-running; follow it with ``uv run iris --cluster=<cluster> job logs -f <job id>``, using
-the cluster and job ID the script prints.
+running; follow it with ``uv run iris --cluster=marin job logs -f <job id>``.
 """
 
 import logging
@@ -47,6 +47,8 @@ from pathlib import Path
 import click
 from fray.types import ResourceConfig
 from iris.cli.connect import open_iris_client
+from iris.cluster.config import load_config
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
@@ -60,7 +62,9 @@ from zephyr.dataset import Dataset
 REPO_ROOT = Path(__file__).resolve().parents[3]
 # CoreWeave Iris clusters are named after their region: US-EAST-02A runs as cw-us-east-02a.
 COREWEAVE_CLUSTER_PREFIX = "cw-"
-IRIS_CONFIG_DIR = REPO_ROOT / "lib" / "iris" / "config"
+# Jobs go through the federation hub, which hands them off to the named CoreWeave peer.
+HUB_CLUSTER = "marin"
+HUB_CONFIG = REPO_ROOT / "lib" / "iris" / "config" / f"{HUB_CLUSTER}.yaml"
 DEFAULT_MAX_WORKERS = 100
 # One shard is the unit Zephyr retries; at about 40 MB per file this is ~800 files.
 TARGET_SHARD_BYTES = 32 * 1024**3
@@ -113,11 +117,11 @@ def prefixes_overlap(left: str, right: str) -> bool:
 
 
 def cluster_for(url: str) -> str:
-    """Return the CoreWeave Iris cluster in the region of *url*'s bucket."""
+    """Return the hub peer cluster in the region of *url*'s bucket."""
     spec = data_buckets()[StoragePath(url).bucket]
     cluster = COREWEAVE_CLUSTER_PREFIX + spec.signing_region.lower()
-    if not (IRIS_CONFIG_DIR / f"{cluster}.yaml").exists():
-        raise click.ClickException(f"no Iris cluster {cluster} runs in the region of {url}")
+    if cluster not in load_config(HUB_CONFIG).peers:
+        raise click.ClickException(f"the {HUB_CLUSTER} hub has no peer {cluster} in the region of {url}")
     return cluster
 
 
@@ -249,14 +253,15 @@ def main(source_url: str, destination_url: str, run_near: str, max_workers: int,
         return
     cluster = cluster_for(source if RunNear(run_near) == RunNear.SOURCE else destination)
 
-    with open_iris_client(cluster_name=cluster, workspace=REPO_ROOT) as client:
+    with open_iris_client(cluster_name=HUB_CLUSTER, workspace=REPO_ROOT) as client:
         job = client.submit(
             entrypoint=Entrypoint.from_callable(_copy_job, source, destination, max_workers),
             name=f"copy-prefix-{datetime.now(UTC):%Y%m%d-%H%M%S}",
             resources=COORDINATOR_RESOURCES,
             environment=EnvironmentSpec(env_vars={}),
+            constraints=[Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=cluster)],
         )
-        print(f"Submitted {job.job_id} on {cluster}", file=sys.stderr)
+        print(f"Submitted {job.job_id} through {HUB_CLUSTER} to {cluster}", file=sys.stderr)
         job.wait(stream_logs=True, timeout=float("inf"))
 
 

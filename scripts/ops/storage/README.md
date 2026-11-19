@@ -56,9 +56,9 @@ reachable `marin` controller, and the channel webhook for `--discord`.
 ## Bulk copy between CoreWeave prefixes
 
 `copy_prefix.py` copies every object below one CoreWeave prefix to another. It
-runs as an Iris job on the CoreWeave cluster in the source's region
-(`--run-near destination` picks the destination's), and Zephyr workers stream
-the files:
+submits an Iris job through the `marin` hub, which hands it off to the
+CoreWeave cluster in the source's region (`--run-near destination` picks the
+destination's). Zephyr workers stream the files:
 
 ```bash
 export CW_KEY_ID=<key-id> CW_KEY_SECRET=<key-secret>
