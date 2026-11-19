@@ -202,6 +202,15 @@ def frozen_source(tmp_path):
     return source, tasks
 
 
+def test_frozen_input_roundtrip_preserves_the_complete_qualified_declaration(frozen_source):
+    source, _ = frozen_source
+    expected = source.declaration.model_dump(mode="json")
+    payload = source.model_dump(mode="json")
+    assert payload["declaration"] == expected
+    restored = FrozenCoverageSource.model_validate(payload)
+    assert restored.declaration.model_dump(mode="json") == expected
+
+
 @pytest.mark.parametrize("source_identity", ["current", "historical"])
 def test_preparation_preserves_retained_identities_roles_and_reuses_completed_sources(
     tmp_path, frozen_source, source_identity
