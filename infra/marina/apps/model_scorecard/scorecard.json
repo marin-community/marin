@@ -22,7 +22,7 @@
   "models": [
     {
       "name": "Nemotron 3.5 Super VL 120B-A12B",
-      "source": "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16",
+      "location": "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16",
       "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16/tree/fb0ee0bc6b3f70342afd8d84cb80dbadbaa8a1fe",
       "cells": {
         "math500": {
@@ -186,7 +186,7 @@
     },
     {
       "name": "DeepSeek V4 Flash",
-      "source": "deepseek-ai/DeepSeek-V4-Flash",
+      "location": "deepseek-ai/DeepSeek-V4-Flash",
       "url": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/tree/60d8d70770c6776ff598c94bb586a859a38244f1",
       "cells": {
         "math500": {
@@ -346,7 +346,7 @@
     },
     {
       "name": "Muse Glimmer 30B",
-      "source": "meta-models/Muse-Glimmer-30B",
+      "location": "meta-models/Muse-Glimmer-30B",
       "url": "https://huggingface.co/meta-models/Muse-Glimmer-30B/tree/cec94fcfd6512f2cfe708138c32533b346ea4f69",
       "cells": {
         "math500": {
@@ -480,7 +480,7 @@
     },
     {
       "name": "Qwen 3.6 35B-A3B",
-      "source": "Qwen/Qwen3.6-35B-A3B",
+      "location": "Qwen/Qwen3.6-35B-A3B",
       "url": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B/tree/995ad96eacd98c81ed38be0c5b274b04031597b0",
       "cells": {
         "math500": {
@@ -645,7 +645,7 @@
     },
     {
       "name": "Mochi SFT step 400407",
-      "source": "s3://marin-us-east-02a/marin/exports/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1",
+      "location": "s3://marin-us-east-02a/marin/exports/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1",
       "url": "https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fexports%2Fmochi-sft%2Fhero-sft-fullab-step393k-v2%2Fstep-400407%2F2af3f828aa-cpu-a1",
       "cells": {
         "math500": {

@@ -167,7 +167,7 @@ def build_scorecard(manifest: Mapping[str, Any], fetch_record: FetchRecord) -> d
         models.append(
             {
                 "name": model["name"],
-                "source": location,
+                "location": location,
                 "url": model_link(model),
                 "cells": {name: cell_json(resolve_cell(name, cells.get(name), model, fetch_record)) for name in evals},
             }

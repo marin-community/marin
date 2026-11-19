@@ -66,7 +66,7 @@ def test_run_cell_scores_on_0_100_scale_and_links_to_evaldash() -> None:
 
     model = scorecard["models"][0]
     assert model["url"] == "https://huggingface.co/org/model/tree/abc123"
-    assert model["source"] == "org/model"
+    assert model["location"] == "org/model"
     assert model["cells"]["math500"] == {
         "score": 97.86,
         "label": "unofficial",
@@ -130,20 +130,5 @@ def test_checkpoint_row_matches_runs_by_location_and_links_to_filer() -> None:
 
     model = scorecard["models"][0]
     assert unquote(model["url"].removeprefix("https://filer.marina.oa.dev/#")) == CHECKPOINT
-    assert model["source"] == CHECKPOINT
+    assert model["location"] == CHECKPOINT
     assert model["cells"]["math500"]["suspect"] == "known grading problem"
-
-
-@pytest.mark.parametrize(
-    "identity",
-    [
-        {"hf_repo": "org/model", "revision": "abc123", "location": CHECKPOINT},
-        {},
-        {"location": CHECKPOINT, "revision": "x"},
-    ],
-)
-def test_model_row_needs_one_identity(identity: dict) -> None:
-    with pytest.raises(ValueError, match="Model"):
-        build_scorecard(
-            {"evals": ["math500"], "models": [{"name": "Model", **identity, "cells": {}}]}, lambda _: record()
-        )

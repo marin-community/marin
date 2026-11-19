@@ -63,7 +63,7 @@ function renderBody(table, data) {
   data.models.forEach((model, row) => {
     const tr = body.appendChild(element("tr", { "data-row": row }));
     const name = element("th", { class: "model", scope: "row" });
-    name.append(element("a", { href: model.url, target: "_blank", rel: "noopener", title: model.source }, model.name));
+    name.append(element("a", { href: model.url, target: "_blank", rel: "noopener", title: model.location }, model.name));
     tr.append(name);
     data.evals.forEach((evalName, column) => tr.append(scoreCell(model.cells[evalName], column)));
   });
