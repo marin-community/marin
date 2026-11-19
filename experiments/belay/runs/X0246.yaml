@@ -1,0 +1,13 @@
+experiment: X0246
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: learned-radius MuonH + s(t)^2 head and late-matrix anneal
+    flags:
+    - --opt-set
+    - muonh_nonsi_anneal=true
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
