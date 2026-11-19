@@ -73,7 +73,7 @@ class DeclarationPin:
     dataset_id: str | None
     dataset_revision: str | None
     pipeline: dict | None
-    actor_binding: Any  # the ActorCensusInput the declaration binds, or None
+    actor_binding: ActorCensusInput | None
 
     @property
     def measured(self) -> bool:
