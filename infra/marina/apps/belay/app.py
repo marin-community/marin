@@ -705,7 +705,7 @@ def store_intake_snapshot(conn: Connection, snapshot: IntakeSnapshot) -> None:
 
 
 # The most ideas a trusted submitter may have approved, planned or running at once; past it, an approver decides.
-TRUSTED_ACTIVE_CAP = 5
+TRUSTED_ACTIVE_CAP = 25
 
 
 def auto_approve_trusted(conn: Connection, comments: list[IntakeComment]) -> list[int]:

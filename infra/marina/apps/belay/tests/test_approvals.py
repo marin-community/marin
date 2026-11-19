@@ -13,6 +13,7 @@ import pytest
 from belay.app import (
     DEFAULT_SETTINGS,
     INTAKE_URL_PREFIX,
+    TRUSTED_ACTIVE_CAP,
     Approval,
     IdeaReport,
     IntakeApproval,
@@ -655,11 +656,12 @@ def test_comments_an_approver_must_still_review(conn) -> None:
     assert approved_events(conn) == 0
 
 
-def test_a_trusted_submitter_has_at_most_five_ideas_in_play(conn) -> None:
-    assert len(auto_approve_trusted(conn, [trusted_comment(n, hours=n) for n in range(1, 8)])) == 5
+def test_a_trusted_submitter_has_a_capped_number_of_ideas_in_play(conn) -> None:
+    comments = [trusted_comment(n, hours=n) for n in range(1, TRUSTED_ACTIVE_CAP + 3)]
+    assert len(auto_approve_trusted(conn, comments)) == TRUSTED_ACTIVE_CAP
     conn.execute(text("UPDATE ideas SET state = 'recorded' WHERE comment_id = '101'"))
-    assert len(auto_approve_trusted(conn, [trusted_comment(n, hours=n) for n in range(1, 8)])) == 1  # one slot freed
-    assert approved_events(conn) == 6
+    assert len(auto_approve_trusted(conn, comments)) == 1  # one slot freed
+    assert approved_events(conn) == TRUSTED_ACTIVE_CAP + 1
 
 
 def test_a_trusted_login_keeps_its_time_and_a_new_one_starts_now() -> None:
