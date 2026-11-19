@@ -139,12 +139,40 @@ def redact_submit_argv(argv: list[str]) -> list[str]:
     return out
 
 
+# Each launch provenance field and the JSON types it may hold. The first three
+# are required.
+_PROVENANCE_FIELD_TYPES: dict[str, tuple[type, ...]] = {
+    "tree_hash": (str,),
+    "base_commit": (str,),
+    "dirty": (bool,),
+    "branch": (str, type(None)),
+    "built_by": (str, type(None)),
+    "git_remote": (str, type(None)),
+    "created_at": (str,),
+    "command_line": (list,),
+}
+_REQUIRED_PROVENANCE_FIELDS = ("tree_hash", "base_commit", "dirty")
+
+
+def _is_provenance_object(decoded: object) -> bool:
+    """Whether *decoded* has the shape ``Provenance.to_json`` writes, so redacting it cannot raise."""
+    if not isinstance(decoded, dict) or not all(field in decoded for field in _REQUIRED_PROVENANCE_FIELDS):
+        return False
+    for field, types in _PROVENANCE_FIELD_TYPES.items():
+        if field in decoded and not isinstance(decoded[field], types):
+            return False
+    return all(isinstance(arg, str) for arg in decoded.get("command_line", ()))
+
+
 def _redacted_provenance(raw: str) -> dict[str, object] | None:
-    """The launch provenance's fields, each redacted; ``None`` if *raw* does not parse."""
+    """The launch provenance's fields, each redacted; ``None`` if *raw* is not a well-formed provenance."""
     try:
-        provenance = Provenance.from_json(raw)
-    except (ValueError, KeyError, TypeError):
+        decoded = json.loads(raw)
+    except ValueError:
         return None
+    if not _is_provenance_object(decoded):
+        return None
+    provenance = Provenance.from_json(raw)
     fields = dataclasses.asdict(provenance)
     if provenance.git_remote is not None:
         fields["git_remote"] = strip_url_userinfo(provenance.git_remote)
@@ -166,7 +194,8 @@ def redact_controller_row_env_vars(env_vars: Mapping[str, str]) -> str | None:
     ``MARIN_PROVENANCE`` is stored parsed, as its ``Provenance`` fields: the
     remote URL loses its userinfo, the command line is redacted like a submit
     argv, and every value then goes through the shared value redactor. A value
-    that does not parse is dropped. ``None`` when no allowed key is set.
+    that does not parse or is not shaped like a ``Provenance`` is dropped. ``None``
+    when no allowed key is set.
     """
     inputs: dict[str, object] = {}
     for key, redact in CONTROLLER_ROW_ENV_VARS.items():

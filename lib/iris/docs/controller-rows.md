@@ -74,8 +74,9 @@ none. The allowlist is `CONTROLLER_ROW_ENV_VARS` in
 other variable, and every secret, is dropped. It holds one variable,
 `MARIN_PROVENANCE`, the launch's git provenance, which is stored as its parsed
 fields: `tree_hash`, `base_commit`, `dirty`, `branch`, `built_by`,
-`git_remote`, `created_at` and `command_line`. A value that does not parse is
-dropped. `git_remote` loses any `user:password@` part, `command_line` is
+`git_remote`, `created_at` and `command_line`. A value that does not parse, or
+whose fields do not have the types `Provenance` writes, is dropped; the job's
+rows are still written. `git_remote` loses any `user:password@` part, `command_line` is
 redacted like a submitted argv (the value after a flag named like a secret,
 such as `--api-key`, is masked), and every field then goes through the shared
 value redactor, so a token-like value under an allowed key is still masked. Like

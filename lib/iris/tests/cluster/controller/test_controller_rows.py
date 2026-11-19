@@ -459,14 +459,30 @@ def test_job_config_row_is_written_despite_a_malformed_git_remote(state):
     assert provenance["git_remote"] == "https://example.com:abc/repo.git"
 
 
-def test_job_config_drops_an_unparseable_launch_provenance(state):
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "made-up-not-json",
+        "null",
+        "[]",
+        json.dumps({"tree_hash": "1a2b3c4d5e"}),
+        _provenance_json(git_remote=42),
+        _provenance_json(branch=["made-up-branch"]),
+        _provenance_json(command_line=["python", 42]),
+        _provenance_json(command_line="python train.py"),
+    ],
+    ids=["not-json", "null", "list", "missing-fields", "int-remote", "list-branch", "int-arg", "string-command-line"],
+)
+def test_job_config_drops_a_malformed_launch_provenance_and_keeps_the_rows(state, raw):
     rows = _attach(state, "marin")
     request = make_job_request("train")
-    request.environment.env_vars["MARIN_PROVENANCE"] = "made-up-not-json"
+    request.environment.env_vars["MARIN_PROVENANCE"] = raw
 
     submit_job(state, "train", request)
 
     assert rows.job_configs[0].env_vars is None
+    assert len(rows.jobs) == 1
+    assert rows.tasks
 
 
 @dataclass(frozen=True)
