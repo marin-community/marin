@@ -302,9 +302,7 @@ class PartialRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
 
     @classmethod
     def make_from_hf_config(cls, rope_theta: float, config: dict) -> "RotaryEmbeddingsConfig":
-        return PartialRotaryEmbeddingsConfig(
-            theta=rope_theta, partial_rotary_factor=config.get("partial_rotary_factor", 1.0)
-        )
+        return PartialRotaryEmbeddingsConfig(theta=rope_theta, partial_rotary_factor=config["partial_rotary_factor"])
 
     def to_hf_config(self) -> tuple[float, dict | None]:
         return self.theta, {"rope_type": "default", "partial_rotary_factor": self.partial_rotary_factor}

@@ -56,6 +56,8 @@ from transformers import Qwen3_5MoeTextConfig as HfQwen3_5MoeTextConfig  # noqa:
 
 LINEAR_ATTENTION = "linear_attention"
 FULL_ATTENTION = "full_attention"
+# Multimodal RoPE sections of the released checkpoints; text-only positions do not use them.
+DEFAULT_MROPE_SECTION = (11, 11, 10)
 
 # Key layout of the released vision-language checkpoints.
 _LANGUAGE_MODEL_PREFIX = "model.language_model."
@@ -179,7 +181,7 @@ class Qwen35MoeConfig(Qwen3MoeConfig):
     rope: RotaryEmbeddingsConfig = dataclasses.field(
         default_factory=lambda: PartialRotaryEmbeddingsConfig(theta=10_000_000.0, partial_rotary_factor=0.25)
     )
-    mrope_section: tuple[int, ...] = (11, 11, 10)
+    mrope_section: tuple[int, ...] = DEFAULT_MROPE_SECTION
 
     reference_checkpoint: str = "Qwen/Qwen3.6-35B-A3B"
 
@@ -289,7 +291,7 @@ class Qwen35MoeConfig(Qwen3MoeConfig):
                 theta=float(rope_parameters["rope_theta"]),
                 partial_rotary_factor=rope_parameters["partial_rotary_factor"],
             ),
-            mrope_section=tuple(rope_parameters.get("mrope_section", (11, 11, 10))),
+            mrope_section=tuple(rope_parameters.get("mrope_section", DEFAULT_MROPE_SECTION)),
         )
 
     def to_hf_config(  # pyrefly: ignore[bad-override]
