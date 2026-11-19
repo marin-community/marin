@@ -635,13 +635,13 @@ def load_run(
     default, selection = recipe.task_selections(
         preset, recipe.selection_artifact(inputs.tasks) if inputs.tasks else None
     )
-    task_set = preset.eval_lite if preset.held_out is not None else None
+    task_set = preset.held_out_tasks if preset.held_out is not None else None
     scores, initial_scores = [EVAL_SCORE_SCHEMA.empty_table()], []
     evaluations = []
     for evaluation in preset.evaluations:
         quality = evaluation.held_out and (evaluation == preset.guarded or bool(preset.checkpoint_every))
         expected = recipe.evaluation_answer_count(
-            evaluation, recipe.evaluation_source(evaluation, selection, default, preset.eval_lite)
+            evaluation, recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks)
         )
         all_scores = evaluation_scores(evaluation, path, launch=launch, receipt=terminal)
         table = all_scores
@@ -735,7 +735,7 @@ def with_objectives(candidate: RunData, preset: presets.Preset) -> RunData:
     values = dict(candidate.values)
     for metric in preset.objectives:
         if metric.window == presets.WindowStatistic.GAIN_PER_GPU_HOUR:
-            gain = values.get(metric.key.removesuffix("_per_h100_hour"))
+            gain = values.get(re.sub(r"_per_[^/]+_hour$", "", metric.key))
             if gain is not None and candidate.gpu_hours:
                 values[metric.key] = gain / candidate.gpu_hours
     return replace(candidate, values=values)

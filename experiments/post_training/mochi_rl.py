@@ -224,7 +224,7 @@ _THREE_RACK_PATCH = RecipePatch(
 _EVALUATION = Evaluation(
     name="eval_lite",
     file=Path(VALIDATION_FILENAME).stem,
-    source="eval_lite",
+    source="held_out",
     profile=EvaluationSampling(
         sampling_params=EvalSamplingParams(
             temperature=0.7, top_p=1.0, stop_token_ids=_STOP_TOKEN_IDS, skip_special_tokens=False
@@ -260,7 +260,7 @@ _TRAIN_LONG = Preset(
     data_settings=frozenset({"shuffle"}),
     tasks="snowball-100k@2026.11.19.1",
     model=_MODEL,
-    eval_lite="eval-lite@2026.11.17.1",
+    held_out_tasks="eval-lite@2026.11.17.1",
     evaluations=(_EVALUATION,),
     seed=20261020,
     sample_namespace="datasets/mochi-rl",

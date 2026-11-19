@@ -180,12 +180,12 @@ def build_run(
         raise click.BadParameter(
             "candidate tasks use a different heldout input; curate against the default task selection"
         )
-    if tasks is not None:
-        task_set = recipe.selection_artifact(preset.eval_lite)
+    if tasks is not None and preset.held_out_tasks is not None:
+        task_set = recipe.selection_artifact(preset.held_out_tasks)
         excluded = summary["recipe"].get("exclusions", ())
         expected = str(StoragePath(task_set.path()) / FULL_VALIDATION_FILENAME)
         if not any(row["uri"] == expected and row["version"] == task_set.version for row in excluded):
-            raise click.BadParameter("candidate tasks must record the full EvalLite in recipe.exclusions")
+            raise click.BadParameter("candidate tasks must record the full held-out selection in recipe.exclusions")
     initializer = recipe.stored_initializer(init, preset=preset) if init is not None else None
     if init is not None and init.step.adopt_source is None:
         prefix = recipe.artifact_prefix(preset.recipe.layout.cluster)
@@ -199,7 +199,7 @@ def build_run(
     evaluation_inputs = [
         (evaluation.name, source.name, source.version)
         for evaluation in preset.evaluations
-        for source in (recipe.evaluation_source(evaluation, selection, default, preset.eval_lite),)
+        for source in (recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks),)
     ]
     changes = {
         "tasks": (selection.name, selection.version),

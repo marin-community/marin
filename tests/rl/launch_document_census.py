@@ -52,16 +52,19 @@ def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
 def _preset_step(
     table: rl_presets.ModelPresets, preset: rl_presets.Preset, settings: tuple[str, ...] = ()
 ) -> ArtifactStep[SkyRLRun]:
-    eval_lite = recipe.selection_artifact(preset.eval_lite)
     selection = recipe.selection_artifact(preset.tasks)
-    for source, full_rows in ((selection, 910), (eval_lite, 20)):
-        summary = selection_summary(full_rows)
+    summary = selection_summary(910)
+    sources = [(selection, summary)]
+    if preset.held_out_tasks is not None:
+        held_out = recipe.selection_artifact(preset.held_out_tasks)
         summary["recipe"]["exclusions"] = [
             {
-                "uri": str(StoragePath(eval_lite.path()) / FULL_VALIDATION_FILENAME),
-                "version": eval_lite.version,
+                "uri": str(StoragePath(held_out.path()) / FULL_VALIDATION_FILENAME),
+                "version": held_out.version,
             }
         ]
+        sources.append((held_out, selection_summary(20)))
+    for source, summary in sources:
         path = StoragePath(source.path()) / SUMMARY_FILENAME
         path.parent.mkdirs()
         if source is selection and preset.batch_mix is not None:
