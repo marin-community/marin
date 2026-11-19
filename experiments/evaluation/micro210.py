@@ -192,7 +192,8 @@ def micro210_artifact_step(model: ArtifactModel, *, name: str, version: str) -> 
             ("env:TOGETHER_API_KEY",),
         )
 
-    return replace(step, run=run_micro210, build_config=build)
+    configured = replace(step, run=run_micro210, build_config=build, expected_fingerprint=None)
+    return replace(configured, expected_fingerprint=configured.fingerprint())
 
 
 @click.command(help=__doc__)
