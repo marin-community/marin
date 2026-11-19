@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
-from marin.execution.lazy import StepContext
+from marin.execution.lazy import StepContext, lower
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.micro210 import micro210_step, run_micro210
@@ -157,3 +157,10 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     with pytest.raises(ValueError, match="task bytes changed"):
         run_micro210(config)
     assert submitted == []
+
+
+def test_canonical_evaluation_graph_lowers_with_its_final_run_binding():
+    model = Micro210Model("s3://fixture/export", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40)
+    step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.74")
+    plan = lower(step)
+    assert "fixture/final-eval@2026.11.18.74" in plan.fingerprint_payload
