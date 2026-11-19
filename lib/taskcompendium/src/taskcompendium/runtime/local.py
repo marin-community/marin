@@ -37,6 +37,10 @@ from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, Mo
 
 from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements, require_resolved_environment
 
+# Compiled extension modules are host-platform artifacts of optimized wheels. Staging ships the
+# pure-Python sources, so the runtime identity, image, and exports stay platform-neutral.
+COMPILED_EXTENSIONS = frozenset({".so", ".pyd"})
+
 # The grader machine installs nothing, so staging ships every package directory the verifyit
 # runtime imports: verifyit itself, the tomllib backport, and the spec writer.
 RUNTIME_PACKAGES = (
@@ -91,8 +95,12 @@ class ContextFile(BaseModel):
 
 
 def context_paths(root: Path) -> list[Path]:
-    """Every file below ``root`` in path order, skipping bytecode caches."""
-    return sorted(path for path in root.rglob("*") if path.is_file() and "__pycache__" not in path.parts)
+    """Every file below ``root`` in path order, skipping bytecode caches and compiled extensions."""
+    return sorted(
+        path
+        for path in root.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix not in COMPILED_EXTENSIONS
+    )
 
 
 def _file_mode(path: Path) -> str:
@@ -216,7 +224,11 @@ class LocalRuntime:
         # A built image copies each runtime package into its runtime directory and puts that on sys.path.
         runtime = self.root / RUNTIME_DIRECTORY
         for package in RUNTIME_PACKAGES:
-            shutil.copytree(package, runtime / package.name, ignore=shutil.ignore_patterns("__pycache__"))
+            shutil.copytree(
+                package,
+                runtime / package.name,
+                ignore=shutil.ignore_patterns("__pycache__", "*.so", "*.pyd"),
+            )
         purelib = subprocess.run(
             [python, "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
             check=True,

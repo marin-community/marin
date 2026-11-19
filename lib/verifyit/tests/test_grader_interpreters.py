@@ -78,7 +78,8 @@ def staged_runtime(tmp_path_factory, request):
         shutil.copytree(
             Path(package.__file__).parent,
             runtime / package.__name__,
-            ignore=shutil.ignore_patterns("__pycache__"),
+            # LocalRuntime._build stages the same pure-Python sources on every consumer.
+            ignore=shutil.ignore_patterns("__pycache__", "*.so", "*.pyd"),
         )
     return runtime, venv
 
@@ -98,6 +99,9 @@ def _run_on_grader(staged_runtime, script, *arguments, cwd="/"):
 
 @pytest.mark.timeout(TIMEOUT_SECONDS)
 def test_staged_imports_survive_the_grader_interpreter(staged_runtime):
+    runtime, _ = staged_runtime
+    # The runtime identity must stay platform-neutral, so staging ships pure-Python sources only.
+    assert not [path for path in runtime.rglob("*") if path.suffix in (".so", ".pyd")]
     result = _run_on_grader(staged_runtime, SWEEP_SCRIPT)
     assert result.returncode == 0, result.stderr
 
