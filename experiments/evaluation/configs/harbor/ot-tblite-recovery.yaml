@@ -18,7 +18,6 @@ retry:
     - TmuxBatchProtocolError
     - TmuxSessionEndedError
     - TmuxExecTimeoutError
-    - TmuxCommandError
     - DaytonaOutputUnavailable
     - MachineTerminated
   wait_multiplier: 2.0
