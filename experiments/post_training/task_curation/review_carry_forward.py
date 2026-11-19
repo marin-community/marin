@@ -67,6 +67,15 @@ NORMALIZATION_EVIDENCE_SCHEMA = pa.schema(
     ]
 )
 
+GRADER_ENVIRONMENT_EVIDENCE_SCHEMA = pa.schema(
+    [
+        ("task_id", pa.string()),
+        ("original_sha256", pa.string()),
+        ("reissued_sha256", pa.string()),
+        ("differing_paths", pa.large_string()),
+    ]
+)
+
 
 def contract_identity(document: dict, *, normalized_fields: frozenset[str] = frozenset()) -> str:
     """Hash a stored TaskSpec document exactly like ``task_identity``.
@@ -122,6 +131,151 @@ def population_identities(
 
 class NormalizationRefused(ValueError):
     """The absent-versus-null normalization does not hold for this population pair."""
+
+
+class GraderEnvironmentRefused(ValueError):
+    """The grading-environment-only equivalence does not hold for this population pair."""
+
+
+def _differing_paths(left: dict, right: dict, *, prefix: str = "") -> list[str]:
+    """Every JSON path where two task documents differ, recursively.
+
+    Records one path per differing leaf, list, or key presence. Excluded
+    provenance fields are dropped by the caller before the walk.
+    """
+    if isinstance(left, dict) and isinstance(right, dict):
+        paths = []
+        for key in sorted(set(left) | set(right)):
+            if key not in left or key not in right:
+                paths.append(f"{prefix}{key}")
+            else:
+                paths.extend(_differing_paths(left[key], right[key], prefix=f"{prefix}{key}."))
+        return [path.rstrip(".") for path in paths]
+    if isinstance(left, list) and isinstance(right, list) and len(left) == len(right):
+        paths = []
+        for index, (left_item, right_item) in enumerate(zip(left, right, strict=True)):
+            paths.extend(_differing_paths(left_item, right_item, prefix=f"{prefix}{index}."))
+        return [path.rstrip(".") for path in paths]
+    if json.dumps(left, sort_keys=True) != json.dumps(right, sort_keys=True):
+        return [prefix.rstrip(".")]
+    return []
+
+
+GRADER_ENVIRONMENT_PREFIX = "grader.environment"
+"""The only contract region a grading-environment equivalence may touch."""
+
+
+class GraderEnvironmentReceipt(BaseModel):
+    """Typed grading-environment-only equivalence between two contract pins.
+
+    Ruling 54: a re-converted population whose tasks changed only inside
+    ``grader.environment`` (for example a packages-lock exchange for the
+    task's own workspace image) keeps its prior SAMPLE reviews. This record
+    binds the two population digests after verifying, per shared task, that
+    every differing contract path lies inside ``grader.environment`` and
+    everything outside it is byte-identical. The evidence parquet records
+    both task digests and the exact differing paths; ``identity_sha256``
+    digests the per-task identity pairs, so a plan re-derives it from its own
+    identity maps and cannot drift from the evidence. ``task_identity`` is
+    never changed.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_id: SourceId
+    original: PopulationDigest
+    reissued: PopulationDigest
+    shared_tasks: int = Field(gt=0)
+    identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_url: str
+
+    def binds(self, source_id: str, original: PopulationDigest, reissued: PopulationDigest) -> bool:
+        """Whether this record binds exactly this source's population pair."""
+        if source_id != self.source_id:
+            return False
+        return (original.task_specs_sha256, reissued.task_specs_sha256) == (
+            self.original.task_specs_sha256,
+            self.reissued.task_specs_sha256,
+        )
+
+
+def build_grader_environment_receipt(
+    source_id: str,
+    original_artifact: str,
+    reissued_artifact: str,
+    evidence_url: str,
+) -> GraderEnvironmentReceipt:
+    """Verify a grading-environment-only change and record the equivalence.
+
+    For every task the two populations share, every differing contract path
+    must lie inside ``grader.environment``; anything else, on either side,
+    refuses the record for the whole pair. The evidence parquet records each
+    shared task's two contract digests and its exact differing paths.
+    ``identity_sha256`` digests the per-task identity pairs, so a plan can
+    recompute it from its own identity maps.
+    """
+    original = SourceTextPopulation.raw_load(original_artifact)
+    reissued = SourceTextPopulation.raw_load(reissued_artifact)
+    original_documents = {document["id"]: document for document in _population_documents(original)}
+    reissued_documents = {document["id"]: document for document in _population_documents(reissued)}
+    if len(original_documents) != original.task_count or len(reissued_documents) != reissued.task_count:
+        raise ValueError(f"Equivalence populations do not match their declared counts: {source_id}")
+    shared = sorted(set(original_documents) & set(reissued_documents))
+    if not shared:
+        raise GraderEnvironmentRefused(f"Equivalence refused: the populations share no tasks: {source_id}")
+    identity_pairs: dict[str, list[str]] = {}
+    evidence_rows = []
+    for task_id in shared:
+        earlier_document, current_document = original_documents[task_id], reissued_documents[task_id]
+        earlier_payload = {
+            key: value for key, value in earlier_document.items() if key not in TASK_IDENTITY_EXCLUDED_FIELDS
+        }
+        current_payload = {
+            key: value for key, value in current_document.items() if key not in TASK_IDENTITY_EXCLUDED_FIELDS
+        }
+        paths = _differing_paths(earlier_payload, current_payload)
+        outside = [
+            path
+            for path in paths
+            if path != GRADER_ENVIRONMENT_PREFIX and not path.startswith(f"{GRADER_ENVIRONMENT_PREFIX}.")
+        ]
+        if outside:
+            raise GraderEnvironmentRefused(
+                f"Equivalence refused for {task_id}: contract changes outside {GRADER_ENVIRONMENT_PREFIX}: {outside[:3]}"
+            )
+        original_digest = contract_identity(earlier_document)
+        reissued_digest = contract_identity(current_document)
+        identity_pairs[task_id] = [original_digest, reissued_digest]
+        evidence_rows.append(
+            {
+                "task_id": task_id,
+                "original_sha256": original_digest,
+                "reissued_sha256": reissued_digest,
+                "differing_paths": json.dumps(paths),
+            }
+        )
+    table = pa.Table.from_pylist(evidence_rows, schema=GRADER_ENVIRONMENT_EVIDENCE_SCHEMA)
+    with StoragePath(evidence_url).open("wb", auto_mkdir=True) as stream:
+        pq.write_table(table, stream, compression="zstd")
+    logger.info(
+        "Grading-environment equivalence %s: %d shared tasks verified across %s and %s",
+        source_id,
+        len(shared),
+        original.task_specs_sha256[:12],
+        reissued.task_specs_sha256[:12],
+    )
+    return GraderEnvironmentReceipt(
+        source_id=source_id,
+        original=PopulationDigest(
+            artifact=original_artifact, task_specs_sha256=original.task_specs_sha256, task_count=original.task_count
+        ),
+        reissued=PopulationDigest(
+            artifact=reissued_artifact, task_specs_sha256=reissued.task_specs_sha256, task_count=reissued.task_count
+        ),
+        shared_tasks=len(shared),
+        identity_sha256=canonical_sha256(identity_pairs),
+        evidence_url=evidence_url,
+    )
 
 
 class ContractNormalization(BaseModel):
@@ -377,6 +531,7 @@ def _verify_carry_forward_inputs(
     current_identities: dict[str, str],
     reviewer: dict | None,
     normalization: ContractNormalization | None,
+    grader_environment: GraderEnvironmentReceipt | None,
 ) -> None:
     """Refuse evidence that does not describe exactly these two populations."""
     if earlier.source_id != source_id or current_population.source_id != source_id:
@@ -406,6 +561,8 @@ def _verify_carry_forward_inputs(
             f"{canonical_sha256(earlier.reviewer)[:12]} as {canonical_sha256(reviewer)[:12]}: {source_id}"
         )
     if normalization is not None:
+        if grader_environment is not None:
+            raise ValueError(f"Carry-forward takes one equivalence per pair, not both: {source_id}")
         if not normalization.binds(
             source_id,
             PopulationDigest(
@@ -427,6 +584,27 @@ def _verify_carry_forward_inputs(
                 f"Identity maps are not the normalized ones the receipt verified: {source_id}; build them with "
                 f"population_identities(normalized_fields={{{normalization.field!r}}})"
             )
+    if grader_environment is not None:
+        if not grader_environment.binds(
+            source_id,
+            PopulationDigest(
+                artifact=earlier_population.path,
+                task_specs_sha256=earlier_population.task_specs_sha256,
+                task_count=earlier_population.task_count,
+            ),
+            PopulationDigest(
+                artifact=current_population.path,
+                task_specs_sha256=current_population.task_specs_sha256,
+                task_count=current_population.task_count,
+            ),
+        ):
+            raise ValueError(f"Equivalence binds another population pair: {source_id}")
+        shared = sorted(set(earlier_identities) & set(current_identities))
+        verified = canonical_sha256(
+            {task_id: [earlier_identities[task_id], current_identities[task_id]] for task_id in shared}
+        )
+        if verified != grader_environment.identity_sha256 or len(shared) != grader_environment.shared_tasks:
+            raise ValueError(f"Identity maps do not match the verified grading-environment pairs: {source_id}")
 
 
 @dataclass(frozen=True)
@@ -511,6 +689,7 @@ def plan_review_carry_forward(
     seed: int = SAMPLE_SEED,
     max_panel_size: int = SAMPLE_SIZE,
     normalization: ContractNormalization | None = None,
+    grader_environment: GraderEnvironmentReceipt | None = None,
 ) -> ReviewCarryForwardPlan:
     """Compute the typed carry-forward delta plan for a re-pinned population.
 
@@ -518,11 +697,12 @@ def plan_review_carry_forward(
     identity for the earlier and current populations; build them with
     ``population_identities``. ``reviewer``, when supplied, must be the earlier
     receipt's recorded reviewer identity: carried reviews are never relabeled.
-    ``normalization``, when supplied, must be the verified absent-versus-null
-    record for this population pair, and the identity maps must be built with
-    its field excluded. Kept panel members are the unchanged ones; replaced
-    slots are redrawn with the fixed seed, and members without a conclusive
-    review keep their slot but need a fresh review.
+    ``normalization`` and ``grader_environment``, when supplied, are the
+    verified equivalence records for this population pair, and the identity
+    maps must match what each one verified. Kept panel members are the
+    unchanged ones; replaced slots are redrawn with the fixed seed, and
+    members without a conclusive review keep their slot but need a fresh
+    review.
     """
     _verify_carry_forward_inputs(
         source_id,
@@ -533,7 +713,14 @@ def plan_review_carry_forward(
         current_identities,
         reviewer,
         normalization,
+        grader_environment,
     )
+    if grader_environment is not None:
+        # The verified equivalence pairs each shared task with its prior
+        # contract: the prior identity is the same task ID's earlier identity.
+        current_identities = {
+            task_id: earlier_identities.get(task_id, identity) for task_id, identity in current_identities.items()
+        }
     classification = _classify_population(earlier, earlier_identities, current_identities)
     replaced, replacements = _replacement_draw(
         current_identities, classification.kept_members, seed=seed, max_panel_size=max_panel_size, source_id=source_id

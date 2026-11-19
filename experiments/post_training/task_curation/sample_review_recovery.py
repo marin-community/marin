@@ -40,8 +40,11 @@ from experiments.post_training.task_curation.lexical_artifacts import SourceText
 from experiments.post_training.task_curation.registry import RegistryReference, read_registry_document
 from experiments.post_training.task_curation.review_carry_forward import (
     ContractNormalization,
+    GraderEnvironmentReceipt,
+    GraderEnvironmentRefused,
     NormalizationRefused,
     SampleRecovery,
+    build_grader_environment_receipt,
     build_normalization_receipt,
     earlier_panel_evidence,
     panel_observations,
@@ -180,6 +183,7 @@ class PriorOutcome:
     reviewer_sha256: str
     carried: int
     normalization: ContractNormalization | None
+    grader_environment: GraderEnvironmentReceipt | None = None
     carried_reviews: tuple = ()
     reviewer: dict | None = None
     refusal: str | None = None
@@ -246,10 +250,16 @@ def _recover_prior(
     current_population: SourceTextPopulation,
     current_identities,
 ) -> PriorOutcome:
-    """Carry one prior receipt's conclusive reviews onto the current pin."""
+    """Carry one prior receipt's conclusive reviews onto the current pin.
+
+    Tries the absent-versus-null normalization for each requested field, then
+    the grading-environment-only equivalence; the first verified record binds
+    the pair and the identity maps follow its terms.
+    """
     prior_receipt = read_receipt_reference(reference, target.source_id)
     prior_population = SourceTextPopulation.raw_load(prior_receipt.review.panel.input_artifact)
     normalization = None
+    grader_environment = None
     normalized_fields: frozenset[str] = frozenset()
     for field in normalization_fields:
         try:
@@ -265,6 +275,21 @@ def _recover_prior(
             continue
         normalized_fields = frozenset({field})
         break
+    if normalization is None:
+        try:
+            grader_environment = build_grader_environment_receipt(
+                target.source_id,
+                prior_population.path,
+                current_population.path,
+                _grader_environment_evidence_url(output_root, target, reference),
+            )
+        except GraderEnvironmentRefused as error:
+            logger.info(
+                "Grading-environment equivalence refused for %s from %s: %s",
+                target.source_id,
+                reference.revision[:12],
+                error,
+            )
     evidence = earlier_panel_evidence(prior_receipt, _evidence_reference(reference), normalized_fields=normalized_fields)
     plan = plan_review_carry_forward(
         target.source_id,
@@ -274,12 +299,14 @@ def _recover_prior(
         population_identities(prior_population, normalized_fields=normalized_fields),
         current_identities(normalized_fields),
         normalization=normalization,
+        grader_environment=grader_environment,
     )
     return PriorOutcome(
         reference=reference,
         reviewer_sha256=canonical_sha256(evidence.reviewer),
         carried=len(plan.carried_reviews),
         normalization=normalization,
+        grader_environment=grader_environment,
         carried_reviews=plan.carried_reviews,
         reviewer=evidence.reviewer,
     )
@@ -296,6 +323,12 @@ def _normalization_evidence_url(
 ) -> str:
     key = canonical_sha256({"source": target.source_id, "revision": reference.revision, "field": field})[:20]
     return prefix_join(output_root, f"normalization/{key}.parquet")
+
+
+def _grader_environment_evidence_url(output_root: str, target: RecoveryTarget, reference: ReceiptReference) -> str:
+    seed = {"kind": "grader-environment", "revision": reference.revision, "source": target.source_id}
+    key = canonical_sha256(seed)[:20]
+    return prefix_join(output_root, f"grader-environment/{key}.parquet")
 
 
 def recover_queue(queue: RecoveryQueue, output_root: str, normalization_fields: tuple[str, ...]) -> list[dict]:
@@ -326,6 +359,7 @@ def recover_queue(queue: RecoveryQueue, output_root: str, normalization_fields: 
                     "reviewer_sha256": outcome.reviewer_sha256,
                     "carried": outcome.carried,
                     "normalization_field": outcome.normalization.field if outcome.normalization else None,
+                    "grader_environment": outcome.grader_environment is not None,
                     "refusal": outcome.refusal,
                 }
                 for outcome in priors

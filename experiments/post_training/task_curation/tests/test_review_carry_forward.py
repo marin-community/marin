@@ -36,6 +36,8 @@ from experiments.post_training.task_curation.full_qc_review import RECORD_SCHEMA
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.review_carry_forward import (
     CarriedReview,
+    GraderEnvironmentRefused,
+    build_grader_environment_receipt,
     build_normalization_receipt,
     contract_identity,
     earlier_panel_evidence,
@@ -331,6 +333,154 @@ def test_plan_refuses_normalization_for_another_pair(tmp_path):
             population_identities(earlier_population, normalized_fields={field}),
             population_identities(other_current, normalized_fields={field}),
             normalization=normalization,
+        )
+
+
+def grader_tasks(environment_image: str) -> dict[str, dict]:
+    """Tasks whose contracts differ only inside grader.environment."""
+    tasks = {}
+    for index in range(6):
+        task_id = f"task-{index:03d}"
+        tasks[task_id] = {
+            "id": task_id,
+            "prompt": "x" * index,
+            "grader": {
+                "kind": "verifyit",
+                "mode": "math",
+                "parameters": {"expected": str(index)},
+                "environment": {
+                    "command_semantics": "linux_process",
+                    "docker_image": environment_image,
+                    "setup_commands": [f"uv pip install pytest=={index}.0.0"],
+                },
+            },
+        }
+    return tasks
+
+
+def test_grader_environment_change_carries_reviews(tmp_path):
+    earlier_population = write_population(tmp_path, "earlier", grader_tasks("registry.example/old-image:1"))
+    current_population = write_population(
+        tmp_path,
+        "current",
+        grader_tasks("registry.example/workspace-image:2"),
+        dataset_id=CURRENT_PIN,
+        dataset_revision=CURRENT_REVISION,
+    )
+    reviews = {task_id: good_review(task_id) for task_id in grader_tasks("registry.example/old-image:1")}
+    receipt = write_receipt(tmp_path, earlier_population, grader_tasks("registry.example/old-image:1"), reviews)
+    evidence = earlier_panel_evidence(
+        receipt, ContentEvidenceReference(uri=str(tmp_path / "receipt-document.json"), sha256="d" * 64)
+    )
+    equivalence = build_grader_environment_receipt(
+        SOURCE_ID,
+        earlier_population.path,
+        current_population.path,
+        str(tmp_path / "grader-evidence.parquet"),
+    )
+    plan = plan_review_carry_forward(
+        SOURCE_ID,
+        evidence,
+        earlier_population,
+        current_population,
+        population_identities(earlier_population),
+        population_identities(current_population),
+        grader_environment=equivalence,
+    )
+    assert plan.population.model_dump() == {"carried": 6, "changed": 0, "new": 0, "dropped": 0}
+    assert len(plan.carried_reviews) == 6
+    assert plan.replaced_members == 0
+    assert plan.needs_review == ()
+    # The receipt records both digests and the exact differing paths.
+    with StoragePath(equivalence.evidence_url).open("rb") as stream:
+        rows = pq.read_table(stream).to_pylist()
+    assert len(rows) == 6
+    assert rows[0]["original_sha256"] != rows[0]["reissued_sha256"]
+    assert json.loads(rows[0]["differing_paths"]) == ["grader.environment.docker_image"]
+
+
+def test_grader_environment_refuses_any_other_change(tmp_path):
+    earlier_population = write_population(tmp_path, "earlier", grader_tasks("registry.example/old-image:1"))
+    current_tasks = grader_tasks("registry.example/workspace-image:2")
+    current_tasks["task-002"]["context"] = {"events": [{"role": "user", "content": "changed"}]}
+    current_population = write_population(
+        tmp_path, "current", current_tasks, dataset_id=CURRENT_PIN, dataset_revision=CURRENT_REVISION
+    )
+    with pytest.raises(GraderEnvironmentRefused, match=r"outside grader\.environment"):
+        build_grader_environment_receipt(
+            SOURCE_ID, earlier_population.path, current_population.path, str(tmp_path / "grader-evidence.parquet")
+        )
+    # Without a verified equivalence a grader-environment change is a real
+    # identity change: every retained task counts as changed.
+    reviews = {task_id: good_review(task_id) for task_id in grader_tasks("registry.example/old-image:1")}
+    receipt = write_receipt(tmp_path, earlier_population, grader_tasks("registry.example/old-image:1"), reviews)
+    evidence = earlier_panel_evidence(
+        receipt, ContentEvidenceReference(uri=str(tmp_path / "receipt-document.json"), sha256="d" * 64)
+    )
+    plan = plan_review_carry_forward(
+        SOURCE_ID,
+        evidence,
+        earlier_population,
+        current_population,
+        population_identities(earlier_population),
+        population_identities(current_population),
+    )
+    assert plan.population.model_dump() == {"carried": 0, "changed": 6, "new": 0, "dropped": 0}
+
+
+def test_grader_environment_mixed_exact_and_differing_tasks(tmp_path):
+    earlier_tasks = grader_tasks("registry.example/old-image:1")
+    current_tasks = grader_tasks("registry.example/workspace-image:2")
+    # task-003 is byte-identical across the pins; the equivalence covers it too.
+    current_tasks["task-003"] = json.loads(json.dumps(earlier_tasks["task-003"]))
+    earlier_population = write_population(tmp_path, "earlier", earlier_tasks)
+    current_population = write_population(
+        tmp_path, "current", current_tasks, dataset_id=CURRENT_PIN, dataset_revision=CURRENT_REVISION
+    )
+    equivalence = build_grader_environment_receipt(
+        SOURCE_ID, earlier_population.path, current_population.path, str(tmp_path / "grader-evidence.parquet")
+    )
+    assert equivalence.shared_tasks == 6
+    with StoragePath(equivalence.evidence_url).open("rb") as stream:
+        rows = pq.read_table(stream).to_pylist()
+    identical = next(row for row in rows if row["task_id"] == "task-003")
+    assert identical["original_sha256"] == identical["reissued_sha256"]
+    assert json.loads(identical["differing_paths"]) == []
+
+
+def test_plan_refuses_grader_environment_for_another_pair(tmp_path):
+    earlier_population = write_population(tmp_path, "earlier", grader_tasks("registry.example/old-image:1"))
+    current_population = write_population(
+        tmp_path,
+        "current",
+        grader_tasks("registry.example/workspace-image:2"),
+        dataset_id=CURRENT_PIN,
+        dataset_revision=CURRENT_REVISION,
+    )
+    equivalence = build_grader_environment_receipt(
+        SOURCE_ID, earlier_population.path, current_population.path, str(tmp_path / "grader-evidence.parquet")
+    )
+    other_current = write_population(
+        tmp_path,
+        "other-current",
+        grader_tasks("registry.example/old-image:1"),
+        dataset_id=CURRENT_PIN,
+        dataset_revision=CURRENT_REVISION,
+    )
+    reviews = {task_id: good_review(task_id) for task_id in grader_tasks("registry.example/old-image:1")}
+    receipt = write_receipt(tmp_path, earlier_population, grader_tasks("registry.example/old-image:1"), reviews)
+    evidence = earlier_panel_evidence(
+        receipt, ContentEvidenceReference(uri=str(tmp_path / "receipt-document.json"), sha256="d" * 64)
+    )
+    with pytest.raises(ValueError, match="another population pair"):
+        plan_review_carry_forward(
+            SOURCE_ID,
+            evidence,
+            earlier_population,
+            other_current,
+            population_identities(earlier_population),
+            population_identities(other_current),
+            grader_environment=equivalence,
         )
 
 

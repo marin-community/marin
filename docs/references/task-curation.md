@@ -223,6 +223,17 @@ until its current-pin admission receipt exists.
   identity maps built through `population_identities(normalized_fields=...)`:
   the plan re-derives the record's verified digest from those maps, so they
   cannot drift from the evidence.
+- *Grading-environment equivalence.* A re-conversion may change only how
+  each task's grader runs (for example a packages-lock exchange for the
+  task's own workspace image). `build_grader_environment_receipt` verifies,
+  per shared task, that every differing contract path lies inside
+  `grader.environment` and everything outside it is byte-identical; the
+  evidence parquet records both task digests and the exact differing paths.
+  The verified record lets the prior SAMPLE reviews carry under ruling 54:
+  pass it to `plan_review_carry_forward` with the plain identity maps, and
+  the plan re-derives the verified pairs from them. Any change outside
+  `grader.environment` refuses the record for the whole pair, and
+  `task_identity` is never changed.
 - *Recovered SAMPLE evidence.* `sample_recovery_outcome` joins carried prior
   reviews onto one source's fixed panel under the augmented rules. The Result
   stays computed from the fixed panel alone, so carried reviews cannot bias
