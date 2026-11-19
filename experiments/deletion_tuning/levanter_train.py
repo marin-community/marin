@@ -21,6 +21,7 @@ import dataclasses
 import itertools
 import json
 import logging
+import os
 from collections.abc import Callable
 from contextlib import contextmanager
 from functools import partial
@@ -47,6 +48,7 @@ from levanter.models.snowball_deletion import (
 from levanter.trainer import Trainer
 from marin.rl.deletion_tuning import MASK_MANIFEST_NAME, build_mask_artifact
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.sft.launcher import HFModel, _levanter_train_job
@@ -54,6 +56,28 @@ from experiments.sft.launcher import HFModel, _levanter_train_job
 _original_save_hf_checkpoint_callback = adaptor_module.save_hf_checkpoint_callback
 
 logger = logging.getLogger(__name__)
+
+
+def _dt_progress(label: str) -> None:
+    """Append a phase marker with the device memory budget to the diagnostics prefix.
+
+    The prefix comes from ``DT_DIAGNOSTICS_PREFIX`` (set by the smoke's pod
+    env); without it this is a no-op.
+    """
+    prefix = os.environ.get("DT_DIAGNOSTICS_PREFIX")
+    if not prefix:
+        return
+    stats = jax.devices()[0].memory_stats()
+    line = json.dumps({"label": label, "peak_device_mem_bytes": stats.get("peak_device_mem_bytes")})
+    logger.info("dt progress: %s", line)
+    configure_coreweave_s3()
+    progress_uri = f"{prefix}/progress.txt"
+    previous = ""
+    try:
+        previous = StoragePath(progress_uri).read_text()
+    except FileNotFoundError:
+        pass
+    StoragePath(progress_uri).write_text(previous + line + "\n")
 
 
 @dataclasses.dataclass
@@ -286,7 +310,9 @@ def _initialize_deletion(model, *, config, trainer, settings: DeletionTrainSetti
     train_dataset = config.data.train_set(pos, config.trainer.batch_schedule, key=data_key)
     loader = trainer.data_loader(train_dataset)
     batches = itertools.islice(loader.iter_from_step(0), max(1, settings.calibration_sequences))
+    _dt_progress("calibration-start")
     routed_norms, shared_norms = capture_wanda_norms(model, batches, num_layers=num_layers, mp=trainer.mp)
+    _dt_progress("calibration-complete")
     scores = None
     logger.info("calibrated Wanda norms over %d batches", settings.calibration_sequences)
 
@@ -301,7 +327,12 @@ def _initialize_deletion(model, *, config, trainer, settings: DeletionTrainSetti
     pooled = np.concatenate([np.asarray(part).reshape(-1) for part in sample_parts])
     threshold = wanda_delete_threshold(pooled, settings.eta)
     levanter.tracker.log_summary({"deletion/wanda_threshold": threshold, "deletion/wanda_samples": int(pooled.size)})
-    return apply_deletion_init(model, settings, routed_norms, shared_norms, threshold=threshold, num_layers=num_layers)
+    _dt_progress("threshold-fixed")
+    initialized = apply_deletion_init(
+        model, settings, routed_norms, shared_norms, threshold=threshold, num_layers=num_layers
+    )
+    _dt_progress("deletion-init-complete")
+    return initialized
 
 
 def deletion_settings_from_config(config) -> DeletionTrainSettings:

@@ -172,10 +172,33 @@ def _smoke_spec(release, output_path: Path, base: str) -> SFTSpec:
     )
 
 
+def _progress(label: str) -> None:
+    """Append a phase marker with the device memory budget to the diagnostics prefix."""
+    stats = jax.devices()[0].memory_stats()
+    line = json.dumps(
+        {
+            "label": label,
+            "peak_device_mem_bytes": stats.get("peak_device_mem_bytes"),
+            "current_device_mem_bytes": stats.get("bytes_in_use"),
+            "limit_device_mem_bytes": stats.get("bytes_limit"),
+        }
+    )
+    logger.info("smoke progress: %s", line)
+    progress_uri = f"{DIAGNOSTICS_PREFIX}/progress.txt"
+    previous = ""
+    try:
+        previous = StoragePath(progress_uri).read_text()
+    except FileNotFoundError:
+        pass
+    StoragePath(progress_uri).write_text(previous + line + "\n")
+
+
 def run_production_smoke(output_root: Path | None = None, base: str = DEFAULT_BASE) -> dict:
     """Run the real-model V1 smoke on this node and report what ran."""
     configure_coreweave_s3()
+    _progress("start")
     release = v1_data_release(require_ready=False)
+    _progress("release-verified")
     with tempfile.TemporaryDirectory(prefix="v1-production-smoke-") as tmp:
         output_path = Path(tmp) / "run"
         spec = _smoke_spec(release, output_path, base)
@@ -185,6 +208,7 @@ def run_production_smoke(output_root: Path | None = None, base: str = DEFAULT_BA
             env_vars={"WANDB_MODE": "disabled", "JAX_TRACEBACK_FILTERING": "off"},
             train_config=_pod_train_config(spec),
         )
+        _progress("pod-config-built")
         try:
             run_deletion_train_lm(pod_config)
         except Exception:
@@ -192,6 +216,7 @@ def run_production_smoke(output_root: Path | None = None, base: str = DEFAULT_BA
             # lands in storage either way
             StoragePath(f"{DIAGNOSTICS_PREFIX}/last-error.txt").write_text(traceback.format_exc())
             raise
+        _progress("training-complete")
 
         exports = sorted(str(path) for path in output_path.rglob("*.safetensors"))
         assert exports, "the production smoke must produce the end-of-run HF export"
