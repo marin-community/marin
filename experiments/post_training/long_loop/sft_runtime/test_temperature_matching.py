@@ -777,3 +777,39 @@ def test_first_step_host_rebind_threads_teacher_and_row_mask(tmp_path):
                 if isinstance(got, jax.Array):
                     np.testing.assert_allclose(np.asarray(got), np.asarray(wanted), rtol=1e-6, atol=1e-6)
 
+
+def test_source_names_for_mixture_indices_under_explicit_mesh():
+    """Cold-cache MixtureDataset block lookup must work while an Explicit training mesh is active."""
+    from experiments.post_training.long_loop.sft_runtime.temperature_matching import (
+        source_names_for_mixture_indices,
+    )
+
+    tm_cfg = TemperatureMatchingConfig(
+        enabled=True,
+        weight=1.0 / 3.0,
+        temperature=2.5,
+        microbatch_count=1,
+        disabled_sources=("e12",),
+    )
+    with use_cpu_devices(2):
+        mix = MixtureDataset(
+            datasets={"general": ListAsyncDataset(list(range(64))), "e12": ListAsyncDataset(list(range(64)))},
+            weights={"general": 0.75, "e12": 0.25},
+            key=120012,
+            block_size=16,
+            stop_strategy="restart",
+        )
+        expected = source_names_for_mixture_indices(mix, range(32, 48))
+        mix._get_block.cache_clear()
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 2, 1, 1, 1),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        with jax.set_mesh(mesh):
+            got = source_names_for_mixture_indices(mix, range(32, 48))
+            mask = tm_row_mask_for_mixture_indices(mix, range(32, 48), tm_cfg)
+    assert got == expected
+    np.testing.assert_array_equal(mask, np.array([0.0 if n == "e12" else 1.0 for n in expected], dtype=np.float32))
+
