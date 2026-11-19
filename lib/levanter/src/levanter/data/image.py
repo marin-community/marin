@@ -297,7 +297,6 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
         return np.pad(indices, (0, capacity - indices.size))
 
     def _pad_pixel_values(self, pixel_values: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Pad to the configured tile budget and mark the occupied slots."""
         assert self.max_num_patches is not None
         total_patches = self.max_num_patches + 1  # +1 for base patch
         actual_patches = pixel_values.shape[0]
@@ -764,27 +763,6 @@ class ImageTextExample(eqx.Module):
     # Shape: (num_image_tokens,) - maps HF position to Levanter index
     unpad_indices: NamedArray | None = None
 
-    @staticmethod
-    def init(
-        pixel_values: NamedArray | None,
-        input_ids: NamedArray,
-        loss_mask: NamedArray | None = None,
-        grid_mask: NamedArray | None = None,
-        unpad_indices: NamedArray | None = None,
-    ) -> "ImageTextExample":
-        """Build a training example with float32 loss weights."""
-        result_loss_mask = None
-        if loss_mask is not None:
-            result_loss_mask = loss_mask.astype(np.float32)
-
-        return ImageTextExample(
-            pixel_values=pixel_values,
-            input_ids=input_ids,
-            loss_mask=result_loss_mask,
-            grid_mask=grid_mask,
-            unpad_indices=unpad_indices,
-        )
-
 
 class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
     """Dataset that converts ImageTextDict to ImageTextExample with proper axes."""
@@ -846,7 +824,7 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
 
             loss_mask = None
             if "loss_mask" in inputs:
-                loss_mask = NamedArray(inputs["loss_mask"], (self.Position,))
+                loss_mask = NamedArray(inputs["loss_mask"], (self.Position,)).astype(np.float32)
 
             grid_mask_array = inputs.get("grid_mask")
             if grid_mask_array is None:
@@ -868,7 +846,7 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
                     unpad_indices_array = np.zeros(self.NumImageTokens.size, dtype=np.int32)
                 unpad_indices = NamedArray(unpad_indices_array, (self.NumImageTokens,))
 
-            return ImageTextExample.init(
+            return ImageTextExample(
                 pixel_values,
                 input_ids,
                 loss_mask=loss_mask,
