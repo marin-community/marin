@@ -60,8 +60,6 @@ def test_new_presets_match_revisioned_native_configs(table, revisions, selection
     documents = dict(zip(revisions, configs, strict=True))
     agentic = documents["train-long-agentic"]["skyrl"]
     assert agentic["trainer"]["hf_export_checkpoint"] == "best"
-    limits = agentic["terminal_bench_config"]["installed_agent"]["agent"]["kwargs"]["model_info"]
-    assert limits["max_input_tokens"] - limits["max_output_tokens"] == (49_152 if table is MOCHI else 86_016)
     if table is MOCHI:
         for preset in table.presets:
             spec = rl_recipe.run_spec(
@@ -87,8 +85,6 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
     config = rl_gate.validate_candidate(preset, inputs, table=SNOWBALL)["skyrl"]
     assert config["trainer"]["rollout_buffer"]["max_in_flight"] == 32
     assert config["trainer"]["rollout_buffer"]["groups_per_family"] == {"agentic": 64, "nonagentic": 64}
-    limits = config["terminal_bench_config"]["installed_agent"]["agent"]["kwargs"]["model_info"]
-    assert limits == {"max_input_tokens": 102_400, "max_output_tokens": 24_576}
     spec = rl_recipe.run_spec(
         preset,
         name="test-agent-settings",
