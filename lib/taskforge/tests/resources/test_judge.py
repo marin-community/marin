@@ -8,7 +8,6 @@ import pytest
 from lib.taskforge.tests.fake_resources import resources
 from rolloutengine.models import TraceMode
 from rolloutengine.test_support import arithmetic_task
-from rolloutengine.validation import InvalidTaskSpec
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ScriptGrader
@@ -18,7 +17,7 @@ from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved
 from taskforge.effects.issues import Restart
 from taskforge.effects.log import EventLog
-from taskforge.lowering import lower_with_settings, lowering_settings, requirements, rollout_engine
+from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings, requirements, rollout_engine
 from taskforge.model.controls import Candidate
 from taskforge.model.llm import Completion
 from taskforge.policy import load_policy

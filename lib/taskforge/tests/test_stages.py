@@ -330,7 +330,6 @@ async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_
                 1 if status is Outcome.GRADED else None,
                 failure=failure,
                 detail={"checks": {"total": True}} if cause is Cause.GRADER_INVALID_CHECKS else None,
-                diagnostics={"grader_elapsed_seconds": 300.0, "grader_timeout_seconds": 300.0},
             )
         ),
         "broken",
@@ -595,7 +594,6 @@ def test_grader_failure_classification_and_repair(workpiece: Workpiece, failure:
         failure=failure,
         diagnostics={
             "exit_code": 1,
-            "grader_elapsed_seconds": 1.6779,
             "stderr": "OverflowError: int too large to convert to float",
         },
     )

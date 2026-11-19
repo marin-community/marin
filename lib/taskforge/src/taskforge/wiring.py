@@ -20,7 +20,6 @@ from iris.cluster.types import JobName
 from iris.rpc.errors import DEFAULT_RETRY_MAX_ELAPSED
 from pydantic import TypeAdapter
 from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn
-from rolloutengine.validation import InvalidTaskSpec
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradeResult
@@ -38,6 +37,7 @@ from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, G
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.wire import model_turn
 from taskforge.lowering import (
+    InvalidTaskSpec,
     LoweringSettings,
     host_requirements,
     lower_with_settings,

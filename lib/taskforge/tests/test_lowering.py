@@ -7,10 +7,8 @@ from pathlib import Path
 from typing import override
 
 import pytest
-from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.machines import _machine_spec
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
-from rolloutengine.validation import InvalidTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec
 from taskcompendium.grading_result import Outcome
@@ -34,6 +32,7 @@ from taskforge.harness.tools.submit import SubmitTool
 from taskforge.harness.tools.validate import ValidateTool
 from taskforge.lowering import (
     GRADING_MACHINE,
+    InvalidTaskSpec,
     LoweringSettings,
     lower_with_settings,
     lowering_settings,
@@ -167,8 +166,6 @@ async def test_authored_interface_errors_return_tool_feedback(
         message = "needs non-empty criteria" if defect == "checklist" else "needs non-empty reference answers"
     settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     factories = {"shellsim": AvailableFactory(Backend.SHELLSIM)}
-    with pytest.raises(InvalidTaskSpec, match=message):
-        ShellHarness(command_timeout=None).check(task, settings.limits)
     with pytest.raises(InvalidTaskSpec, match=message):
         lower_with_settings(task, settings, factories)
     controls = (Control(Candidate("12"), RewardBand(Outcome.GRADED, 1), ControlKind.POSITIVE),)
