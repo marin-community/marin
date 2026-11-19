@@ -89,6 +89,7 @@ class AttemptRecord(BaseModel):
     parent: CheckpointReference | None = None
     config: dict[str, Any] | None = None
     result: LaunchResult | None = None
+    issue: int | Literal["opted_out"] | None = None
 
     @property
     def native(self) -> LaunchReceipt:
@@ -147,6 +148,7 @@ class EvaluationTaskRow(BaseModel):
     outcome: str
     error_type: str | None
     answers: list[EvaluationAnswerRow]
+    model: str | None = None
 
 
 ROW_MODELS: dict[str, type[BaseModel]] = {

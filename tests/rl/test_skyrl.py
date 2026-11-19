@@ -1247,6 +1247,10 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert run.hf_model_uri is None
     assert run.global_step is None
     assert run.iris_job_id == "01KNOEXPORT"
+    retained = SkyRLRun.model_validate_json(run.model_dump_json())
+    assert (retained.run_id, retained.attempt_id) == (config.run_id, config.attempt_id)
+    earlier = SkyRLRun.model_validate_json(run.model_dump_json(exclude={"run_id", "attempt_id"}))
+    assert earlier.run_id is None and earlier.attempt_id is None
 
 
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:

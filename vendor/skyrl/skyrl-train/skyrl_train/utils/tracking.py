@@ -121,6 +121,10 @@ class Tracking:
             coordinator_iris_job_id=runtime.get("coordinator_iris_job_id"),
         )
 
+        model = runtime.get("model")
+        if model is not None:
+            tracking_config["model"] = model
+
         if config is not None:
             with open_dict(config):
                 config.runtime = {
@@ -158,6 +162,7 @@ class Tracking:
                 id=tracking_config["attempt_id"],
                 config=tracking_config,
                 group=tracking_config["run_id"],
+                tags=[model] if model is not None else None,
                 resume="allow",
                 settings=wandb.Settings(
                     api_key=require_secret("WANDB_API_KEY"),

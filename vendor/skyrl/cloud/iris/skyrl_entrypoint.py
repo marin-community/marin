@@ -53,6 +53,7 @@ def run_config(config_path: Path) -> None:
         config.skyrl.runtime = {
             **config.skyrl.get("runtime", {}),
             "run_id": str(config.run.id),
+            **({"model": config.run.model} if config.run.get("model") is not None else {}),
             "attempt_id": str(config.run.attempt_id),
             "coordinator_iris_job_id": config.run.coordinator_iris_job_id,
             "iris_job_id": str(job_info.job_id) if job_info is not None else None,
