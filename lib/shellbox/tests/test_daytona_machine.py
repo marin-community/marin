@@ -599,12 +599,15 @@ def test_daytona_output_count_ignores_provider_diagnostics(tmp_path: Path) -> No
 @pytest.mark.requires_host_setsid
 def test_daytona_output_removed_by_the_guest_is_reported_as_lost(tmp_path: Path) -> None:
     class ClearedTmpProcess(LocalProcess):
+        cleared = False
+
         async def exec(self, command, **kwargs):
-            if "wc -c" in command:
-                # Stands in for a guest process (e.g. systemd starting) that clears /tmp.
+            if "wc -c" in command and not self.cleared:
+                # Stands in for a guest process (e.g. systemd starting) that clears /tmp once.
                 prefix = re.search(r"/tmp/\.shellbox-[0-9a-f]+", command)
                 assert prefix is not None
                 shutil.rmtree(prefix.group(0), ignore_errors=True)
+                self.cleared = True
             return await super().exec(command, **kwargs)
 
     async def scenario():
