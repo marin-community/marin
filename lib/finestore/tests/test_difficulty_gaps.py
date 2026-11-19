@@ -5,8 +5,10 @@
 
 import pytest
 from finestore.rl.difficulty import (
+    DifficultyAttempt,
     DifficultyGap,
     DifficultyMeasurement,
+    DifficultyObservation,
     MeasurementStatus,
     difficulty_gap_evidence,
     difficulty_gap_reason,
@@ -209,3 +211,62 @@ def test_composed_reasons_never_drift_from_the_parser():
 def test_free_text_after_a_gap_fails_validation():
     with pytest.raises(ValueError, match="Unmapped difficulty gap reason"):
         require_difficulty_gaps("invalid_reference:the snapshot is broken; whatever")
+
+
+def test_not_measured_observation_rejects_untyped_reasons():
+    release = {
+        "repo": "open-athena/marin-eval-data",
+        "revision": "a" * 40,
+        "url": "https://huggingface.co/datasets/open-athena/marin-eval-data/tree/" + "a" * 40,
+    }
+    base = {
+        "measurement_id": "m-1",
+        "protocol_id": "atlas-difficulty-v3",
+        "created_at": "2026-11-19T12:00:00+00:00",
+        "source_id": "nemotron_sft_v3/math_v2/medium",
+        "release": release,
+        "converter_version": "v1",
+        "solver": "small",
+        "status": "not_measured",
+        "reason": None,
+        "sample": None,
+        "sample_receipt": None,
+        "model": None,
+        "settings": None,
+        "wilson_95": None,
+        "attempts_receipt": None,
+        "n": 0,
+        "solved": 0,
+        "infrastructure_attempts": 0,
+        "pending_tasks": 0,
+        "blocked_tasks": 0,
+        "gpu_hours": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
+    # The observation constructor must apply the same typed-gap contract as the
+    # parser: arbitrary prose and evidence-only reasons are rejected on build.
+    prose = {**base, "reason": "the snapshot is broken beyond repair"}
+    with pytest.raises(ValueError, match="Unmapped difficulty gap reason"):
+        DifficultyObservation.model_validate(prose)
+    evidence_only = {**base, "reason": "qualification receipt: jobs/oracle/result.json"}
+    with pytest.raises(ValueError, match="Unmapped difficulty gap reason"):
+        DifficultyObservation.model_validate(evidence_only)
+    typed = {**base, "reason": DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING.value}
+    assert DifficultyObservation.model_validate(typed).reason == DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING.value
+
+
+def test_blocked_attempt_rejects_untyped_reasons():
+    with pytest.raises(ValueError, match="Unmapped difficulty gap reason"):
+        DifficultyAttempt.model_validate(
+            {"task_id": "task-1", "status": "blocked", "reward": None, "reason": "gave up for unclear reasons"}
+        )
+    typed = DifficultyAttempt.model_validate(
+        {
+            "task_id": "task-1",
+            "status": "blocked",
+            "reward": None,
+            "reason": difficulty_gap_reason(DifficultyGap.INVALID_REFERENCE, "no expected target"),
+        }
+    )
+    assert typed.reason == "invalid_reference:no expected target"
