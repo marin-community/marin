@@ -13,7 +13,12 @@ from harbor.environments.base import SandboxDiskFullError
 from harbor.models.job.config import RetryConfig
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
-from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
+from harbor.models.trial.result import (
+    AgentInfo,
+    ExceptionInfo,
+    TrialCompletion,
+    TrialResult,
+)
 from harbor.models.verifier.result import VerifierResult
 from harbor.trial.errors import (
     AgentCommandOutputLostError,
@@ -689,6 +694,45 @@ async def test_attempt_failure_returns_terminal_result_and_does_not_cancel_batch
     assert completed_result.exception_info is None
     persisted = TrialPaths(failed.trials_dir / failed.trial_name).result_path
     assert persisted.exists()
+
+
+@pytest.mark.unit
+async def test_unconfirmed_teardown_retries_outside_include_list(
+    tmp_path: Path, monkeypatch
+) -> None:
+    async def lose_sandbox(trial: FakeTrial) -> None:
+        raise PhaseCancellationError("Trial phase failed while stopping its commands")
+
+    async def time_out_after_teardown(trial: FakeTrial) -> None:
+        trial.result.completion = TrialCompletion(trajectory_present=True)
+        raise AgentTimeoutError("Agent execution timed out")
+
+    config = _config(tmp_path, "lost", attempt_timeout=None)
+    _install_factory(
+        monkeypatch,
+        {
+            ("lost", 0): FakeTrial(config, 0, lose_sandbox),
+            ("lost", 1): FakeTrial(config, 1, time_out_after_teardown),
+        },
+    )
+    queue = TrialQueue(
+        n_concurrent=1,
+        retry_config=RetryConfig(
+            max_retries=3,
+            include_exceptions={"APIConnectionError"},
+            min_wait_sec=0,
+            max_wait_sec=0,
+        ),
+    )
+
+    result = await queue.submit(config)
+
+    assert result.exception_info.exception_type == "AgentTimeoutError"
+    selected = TrialResult.model_validate_json(
+        (tmp_path / "trials" / "lost" / "result.json").read_text()
+    )
+    assert selected.trial_relpath == "lost/attempts/001"
+    assert selected.completion is not None
 
 
 @pytest.mark.unit
