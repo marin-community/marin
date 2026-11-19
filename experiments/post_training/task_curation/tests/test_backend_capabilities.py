@@ -838,6 +838,32 @@ def _delivery_document(contract_id: str | None, *, grader_build: bool = True, ag
     }
 
 
+@pytest.mark.parametrize("contract_id", ["root-delivery", "multi-swe-delivery"])
+@pytest.mark.parametrize("agent_user", [None, "root", "0", "agent"])
+def test_delivery_fit_requires_another_user_only_for_a_demoted_actor(contract_id, agent_user):
+    document = _delivery_document(contract_id, grader_build=False)
+    document["task"]["integrity_contract"]["agent_user"] = agent_user
+    checkers = _unit_checkers()
+    mapped = source_map(
+        "delivered-root",
+        [document],
+        production_matrix(checkers),
+        checkers,
+        {},
+        {"agent": RUNTIME, "grader": RUNTIME},
+    )
+    fit = mapped.backends["docker"]
+    assert Requirement.USER not in mapped.demands["grader"]
+    assert fit.blockers.get("grader:non_root_user", 0) == 0
+    if agent_user == "agent":
+        assert fit.blockers["agent:non_root_user"] == 1
+        assert fit.roles["agent"] == {FitSupport.PARTIAL: 1}
+    else:
+        assert Requirement.USER not in mapped.demands["agent"]
+        assert fit.blockers.get("agent:non_root_user", 0) == 0
+        assert fit.support is not FitSupport.PARTIAL
+
+
 def test_multi_shaped_contract_rows_resolve_through_the_shipped_build():
     """A complete multi-swe delivery contract resolves the grader's shipped build."""
     checkers = _unit_checkers()

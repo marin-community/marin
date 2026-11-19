@@ -29,6 +29,8 @@ from taskcompendium.backend_fields import (
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements
 
+ORIGINAL_ROOT_DELIVERY_CONTRACTS = frozenset({"root-delivery", "multi-swe-delivery"})
+
 
 class UnclassifiedCapability(ValueError):
     """Declared capabilities name no requirement in the survey vocabulary."""
@@ -274,8 +276,15 @@ def task_demands(document: Mapping) -> tuple[dict[str, set[Requirement]], dict[s
         except UnclassifiedCapability as error:
             failures[role] = UnclassifiedCapability(role, error.capabilities, error.demands)
             demands = set(error.demands)
-        if task.get("integrity_contract") is not None:
-            demands.update(TASK_FIELDS["integrity_contract"])
+        contract = task.get("integrity_contract")
+        if contract is not None:
+            contract_demands = set(TASK_FIELDS["integrity_contract"])
+            if contract.get("id") in ORIGINAL_ROOT_DELIVERY_CONTRACTS and (
+                role == "grader" or contract.get("agent_user") in (None, "0", "root")
+            ):
+                # Delivery graders run as root; only an explicit actor demotion needs another account.
+                contract_demands.discard(Requirement.USER)
+            demands.update(contract_demands)
         if role == "agent":
             if task.get("output_paths") or task.get("answer_type") in {"file", "state", "workspace_state"}:
                 demands.add(Requirement.FILESYSTEM)
