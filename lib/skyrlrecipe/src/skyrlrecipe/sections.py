@@ -194,6 +194,7 @@ class PolicyMegatronConfig(Section):
     transformer_config_kwargs: OpenMap = unset_field()
     empty_cuda_cache: bool = field(True)
     logprob_chunk_size: int = field(1024)
+    fp32_lm_head: bool = field(False)
     optimizer_checkpoint_sharding_type: Literal["fully_reshardable", "dp_reshardable"] = field("fully_reshardable")
     """dp_reshardable avoids a CPU optimizer gather when the checkpoint keeps the same tensor/pipeline/context/expert
     geometry. Loading reads the format from the checkpoint."""
@@ -259,6 +260,7 @@ class RefMegatronConfig(Section):
     model_config_kwargs: OpenMap = field({})
     transformer_config_kwargs: OpenMap = field({})
     logprob_chunk_size: int = field(1024)
+    fp32_lm_head: bool = field(False)
     moe_router_replay: bool = field(False)
     "Replay expert choices captured during rollout."
     nccl_max_channels: int | None = unset_field()
