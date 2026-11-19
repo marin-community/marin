@@ -795,10 +795,13 @@ def plan_and_launch(
         text = existing.read_text()  # resuming: the committed spec decides
     else:  # a new idea, or one held at the node cap: plan its runs now, so a shared control is one still running
         jobs = iris_jobs()
-        shared = TRACKS[plan.track].baseline_run or shareable_control(repo, plan.track, jobs)
-        if shared == TRACKS[plan.track].baseline_run:
+        baseline_run = TRACKS[plan.track].baseline_run
+        shared = baseline_run or shareable_control(repo, plan.track, jobs)
+        if shared is None:
+            print("control: a new same-commit control, launched with the variant")
+        elif shared == baseline_run:
             print(f"control: the recipe's finished {plan.track} run {shared}; no new control")
-        elif shared is not None:
+        else:
             print(f"reusing the running control {shared} (same code and seed)")
         steps = None if hero is None else hero_mfu_steps(plan.track, hero)
         text = new_spec_text(experiment, plan.track, variant, settings, run_suffix(experiment, jobs), shared, steps)
