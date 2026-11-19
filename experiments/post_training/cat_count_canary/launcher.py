@@ -342,7 +342,7 @@ def training_config(
 
 
 def run_canary(config: SkyRLRunConfig) -> SkyRLRun:
-    result = run_skyrl(config)
+    result = run_skyrl(config, env_vars={})
     write_artifact(result.result_payload(), str(StoragePath(config.output.terminal_manifest_uri).parent))
     return result
 

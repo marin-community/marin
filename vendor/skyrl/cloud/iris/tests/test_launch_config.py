@@ -16,6 +16,8 @@ import pytest
 import yaml
 from omegaconf import OmegaConf, open_dict
 from skyrlrecipe import SkyRLRecipe
+from tokenizers import Tokenizer, models
+from transformers import PreTrainedTokenizerFast
 from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
@@ -244,13 +246,16 @@ def test_colocated_expert_block_rejects_unverified_launch_entrypoint(tmp_path: P
 def test_worker_verification_handles_generation_and_sleeping_training(
     engine_sleep: bool, require_verified_placements: bool, expected: bool
 ) -> None:
-    assert should_verify_inference_workers(
-        tensor_parallel_size=1,
-        data_parallel_size=16,
-        use_mp_backend=False,
-        inference_engine_enable_sleep=engine_sleep,
-        require_verified_placements=require_verified_placements,
-    ) is expected
+    assert (
+        should_verify_inference_workers(
+            tensor_parallel_size=1,
+            data_parallel_size=16,
+            use_mp_backend=False,
+            inference_engine_enable_sleep=engine_sleep,
+            require_verified_placements=require_verified_placements,
+        )
+        is expected
+    )
 
 
 def test_shared_bundle_reports_reject_duplicate_or_misrouted_receivers(monkeypatch) -> None:
@@ -1070,9 +1075,58 @@ def test_source_launch_rejects_conflicting_author_values(tmp_path):
             load_launch_config(path)
 
 
-@pytest.mark.parametrize(
-    ("colocate_all", "colocate_policy_ref"), [(True, False), (False, True), (False, False)]
-)
+def test_loaded_launch_revision_selects_downloaded_tokenizer_bytes(tmp_path, monkeypatch):
+    revision = "68c46c4b3498877f3ef123c856ecfde50c39f404"
+    raw = raw_launch_config()
+    raw["inputs"]["model"] = {
+        "uri": "org/policy",
+        "identity": "a" * 40,
+        "local_path": "org/policy",
+        "tokenizer_uri": "org/tokenizer",
+        "tokenizer_revision": revision,
+    }
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path)
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+
+    def download(model_id, *, revision, destination, allow_patterns):
+        tokenizer = Tokenizer(models.WordLevel({"[UNK]": 0, model_id: 1, str(revision): 2}, unk_token="[UNK]"))
+        PreTrainedTokenizerFast(tokenizer_object=tokenizer, unk_token="[UNK]").save_pretrained(destination)
+
+    monkeypatch.setattr(task_runtime, "download_hugging_face_snapshot", download)
+    tokenizer = task_runtime.prepare_policy_tokenizer(task_runtime._runtime_namespace(config))
+
+    assert json.loads((Path(tokenizer.local_path) / "tokenizer.json").read_text())["model"]["vocab"] == {
+        "[UNK]": 0,
+        "org/tokenizer": 1,
+        revision: 2,
+    }
+
+
+def test_loaded_launch_policy_revision_reaches_trainer_config(tmp_path, monkeypatch):
+    revision = "b" * 40
+    raw = raw_launch_config()
+    raw["inputs"]["model"] = {
+        "uri": "org/policy",
+        "identity": revision,
+        "local_path": "org/policy",
+        "tokenizer_uri": "org/tokenizer",
+        "tokenizer_revision": "c" * 40,
+    }
+    raw["runtime"]["task_env"] = {"HF_HUB_OFFLINE": "1"}
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path)
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+    trainer_config = task_runtime._write_final_config(
+        config, policy_model=None, policy_tokenizer=None, draft_model=None
+    )
+
+    assert OmegaConf.load(trainer_config).skyrl.trainer.policy.model.revision == revision
+
+
+@pytest.mark.parametrize(("colocate_all", "colocate_policy_ref"), [(True, False), (False, True), (False, False)])
 def test_resolved_nccl_buffers_override_inherited_small_buffer(
     tmp_path, monkeypatch, colocate_all, colocate_policy_ref
 ):
@@ -1080,9 +1134,7 @@ def test_resolved_nccl_buffers_override_inherited_small_buffer(
     monkeypatch.setenv("NCCL_BUFFSIZE", "262144")
     raw = raw_launch_config()
     raw["skyrl"]["trainer"]["algorithm"]["use_kl_loss"] = True
-    raw["skyrl"]["trainer"]["placement"].update(
-        colocate_all=colocate_all, colocate_policy_ref=colocate_policy_ref
-    )
+    raw["skyrl"]["trainer"]["placement"].update(colocate_all=colocate_all, colocate_policy_ref=colocate_policy_ref)
     raw["iris"]["allocation"]["num_nodes"] = 1 if colocate_all else 2 if colocate_policy_ref else 3
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
@@ -1099,7 +1151,7 @@ def test_resolved_nccl_buffers_override_inherited_small_buffer(
     trainer.cfg = config
     trainer.colocate_pg = None
     monkeypatch.setattr(trainer, "_initialize_model_actors", lambda *_args: None)
-    trainer.build_models("policy", "critic", "ref", policy_pg=object())
+    trainer.build_models("policy", "ref", policy_pg=object())
     assert actor_environments == {
         "policy": {"NCCL_BUFFSIZE": "4194304"},
         "ref": {"NCCL_BUFFSIZE": "4194304"},

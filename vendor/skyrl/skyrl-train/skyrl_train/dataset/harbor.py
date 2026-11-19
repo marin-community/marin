@@ -302,4 +302,4 @@ class HarborTaskDataset(TaskDataset):
         )
 
     def uid(self, index: int) -> str:
-        return TaskRolloutSpec.model_validate_json(self.dataframe[index][TASK_ROLLOUT_COLUMN]).task.id
+        return self.label(index)

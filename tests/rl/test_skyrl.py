@@ -58,6 +58,7 @@ from marin.rl.skyrl import (
     TaskTroveSelection,
     TaskTroveTagMatch,
     read_skyrl_attempt,
+    reject_forced_socket_transport,
     run_skyrl,
     skyrl_cpu_command,
     skyrl_step,
@@ -87,6 +88,18 @@ def _model_step() -> ArtifactStep[LevanterCheckpoint]:
         "s3://test/iceball-sft",
         kind=LevanterCheckpoint,
     )
+
+
+def test_launcher_credentials_are_scoped_to_its_subprocess(monkeypatch):
+    key = "MICRO210_TEST_JUDGE_KEY"
+    monkeypatch.setenv(key, "parent")
+    completed = run_launcher_for_test(
+        [sys.executable, "-c", "import os,sys; print(os.environ[sys.argv[1]])", key],
+        env_vars={key: "per-evaluation"},
+    )
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == "per-evaluation"
+    assert os.environ[key] == "parent"
 
 
 @pytest.mark.parametrize("relative_path", [".", "hf/.", "hf/../policy"])
@@ -854,7 +867,7 @@ def test_run_skyrl_returns_exported_policy_and_records_catalog(monkeypatch: pyte
     catalog_rows = []
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", catalog_rows.append)
 
-    model = run_skyrl(config)
+    model = run_skyrl(config, env_vars={})
 
     assert model.hf_model_uri is not None and model.hf_model_uri.endswith("global_step_8/policy")
     assert model.global_step == 8
@@ -1211,7 +1224,7 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
     )
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", lambda _record: None)
 
-    run = run_skyrl(config)
+    run = run_skyrl(config, env_vars={})
 
     assert run.hf_model_uri is None
     assert run.global_step is None
@@ -1289,7 +1302,7 @@ def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.Monkey
     )
 
     with pytest.raises(RuntimeError, match="entrypoint must be a registered name"):
-        run_skyrl(config)
+        run_skyrl(config, env_vars={})
 
     assert len(catalog_rows) == 1
     assert catalog_rows[0].status == "failed"
@@ -1448,3 +1461,22 @@ def test_finished_policy_resolves_terminal_export_as_model_input(tmp_path, token
     other_model = resolve_skyrl_model(StepContext.for_fingerprint({}, (other,)), other, evaluation)
     assert other_model.identity == f"tests/other-policy@2026.10.27:{other.fingerprint()}"
     assert other_model.location == f"tests/other-policy@2026.10.27:{other.fingerprint()}/policy"
+
+
+def test_reject_forced_socket_transport_blocks_multi_node_overrides() -> None:
+    # Multi-node jobs must keep NCCL on InfiniBand; the audit in #11619 measured
+    # 12-24x lower socket bandwidth and bootstrap hangs for partial overrides.
+    with pytest.raises(ValueError, match=r"NCCL_NET=Socket"):
+        reject_forced_socket_transport({"NCCL_NET": "Socket"}, num_nodes=32)
+    with pytest.raises(ValueError, match=r"NCCL_IB_DISABLE=1"):
+        reject_forced_socket_transport({"NCCL_IB_DISABLE": "1"}, num_nodes=5)
+    with pytest.raises(ValueError, match=r"NCCL_NET=Socket, NCCL_IB_DISABLE=1"):
+        reject_forced_socket_transport({"NCCL_NET": "Socket", "NCCL_IB_DISABLE": "1"}, num_nodes=2)
+
+
+def test_reject_forced_socket_transport_allows_non_forcing_env() -> None:
+    # AF_INET alone does not force sockets, single-node jobs have no
+    # cross-node transport to protect, and an empty env passes.
+    reject_forced_socket_transport({"NCCL_SOCKET_FAMILY": "AF_INET"}, num_nodes=32)
+    reject_forced_socket_transport({"NCCL_NET": "Socket"}, num_nodes=1)
+    reject_forced_socket_transport({}, num_nodes=32)

@@ -22,6 +22,7 @@ from marinskyrl.model_manifest import write_local_model_manifest
 from cloud.iris.launch_config import derive_launch_topology, load_launch_config, validate_launch_config
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
+from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, RuntimeProfile
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import HFModelSaveCallback
 from skyrl_train.config.utils import get_default_config
@@ -125,20 +126,6 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     assert config.skyrl.checkpoint_export.export_root == request.export_path
 
 
-def test_checkpoint_export_config_preserves_federated_routing() -> None:
-    request = _request()
-    spec = replace(
-        _spec(request),
-        target_cluster="cw-rno2a",
-        parent_cluster_config="/tmp/marin.yaml",
-    )
-
-    config = checkpoint_export_launch_config(_training_config(), request, spec)
-
-    assert config.iris.target_cluster == "cw-rno2a"
-    assert config.iris.parent_cluster_config == "/tmp/marin.yaml"
-
-
 def test_checkpoint_export_config_preserves_saved_policy_geometry_on_whole_nodes() -> None:
     request = _request()
     spec = replace(_spec(request), allocation_gpus_per_node=8)
@@ -147,6 +134,8 @@ def test_checkpoint_export_config_preserves_saved_policy_geometry_on_whole_nodes
 
     assert config.iris.allocation.gpus_per_node == 8
     assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
+    assert config.runtime.entrypoint == CHECKPOINT_EXPORT_ENTRYPOINT
+    assert config.runtime.profile == RuntimeProfile.MEGATRON_EXPORT.value
 
 
 @pytest.mark.parametrize("policy_loss_type", ["dpo", "ftpo"])

@@ -24,11 +24,8 @@ from skyrl_train.metric_names import (
     TIS_ALIGNED_TOKENS_METRIC,
     TIS_ALIGNMENT_ALERT_METRIC,
     TIS_EXACT_MATCH_FRACTION_METRIC,
-    TIS_LCS_FALLBACK_FRACTION_METRIC,
     TIS_UNALIGNED_FRACTION_METRIC,
     TIS_ALIGNMENT_FAIL_COUNT_METRIC,
-    TIS_LCS_FALLBACK_MESSAGES_METRIC,
-    TIS_LCS_FALLBACK_ALERT_METRIC,
     TIS_TITO_FULL_ATTEMPTS_METRIC,
     TIS_TITO_FULL_SUCCESS_FRACTION_METRIC,
     TIS_TITO_FULL_DECLINE_COUNT_METRIC,
@@ -445,7 +442,6 @@ def concatenate_trajectory_batches(
     trajectory_batches: List[TrajectoryBatch],
     *,
     require_rollout_logprobs: bool = False,
-    tis_lcs_alert_threshold: float,
     metrics: dict[str, float] | None = None,
 ) -> TrajectoryBatch:
     """Concatenate and validate rollout rows using whole-batch channel presence."""
@@ -464,8 +460,7 @@ def concatenate_trajectory_batches(
         )
         metrics.update(
             rollout_counter_metrics(
-                [batch.get("rollout_metrics") or {} for batch in trajectory_batches],
-                tis_lcs_alert_threshold=tis_lcs_alert_threshold,
+                [batch.get("rollout_metrics") or {} for batch in trajectory_batches]
             )
         )
         result["rollout_metrics"] = metrics
@@ -479,15 +474,12 @@ def concatenate_trajectory_batches(
     return result
 
 
-def rollout_counter_metrics(
-    group_metrics: Sequence[dict[str, float]], *, tis_lcs_alert_threshold: float
-) -> dict[str, float]:
+def rollout_counter_metrics(group_metrics: Sequence[dict[str, float]]) -> dict[str, float]:
     """Aggregate token-weighted alignment and per-group failure and retention counters."""
     rollout_metrics = {}
     # TIS alignment metrics use token-weighted fractions across batches.
     total_aligned = 0.0
-    sum_exact = sum_lcs = sum_unaligned = 0.0
-    sum_fail = sum_lcs_msgs = 0.0
+    sum_exact = sum_unaligned = sum_fail = 0.0
     saw_tis = False
     for rm in group_metrics:
         n = rm.get(TIS_ALIGNED_TOKENS_METRIC)
@@ -496,20 +488,14 @@ def rollout_counter_metrics(
         saw_tis = True
         total_aligned += n
         sum_exact += rm.get(TIS_EXACT_MATCH_FRACTION_METRIC, 0.0) * n
-        sum_lcs += rm.get(TIS_LCS_FALLBACK_FRACTION_METRIC, 0.0) * n
         sum_unaligned += rm.get(TIS_UNALIGNED_FRACTION_METRIC, 0.0) * n
         sum_fail += rm.get(TIS_ALIGNMENT_FAIL_COUNT_METRIC, 0.0)
-        sum_lcs_msgs += rm.get(TIS_LCS_FALLBACK_MESSAGES_METRIC, 0.0)
     if saw_tis:
         denom = max(total_aligned, 1.0)
         rollout_metrics[TIS_ALIGNED_TOKENS_METRIC] = total_aligned
         rollout_metrics[TIS_EXACT_MATCH_FRACTION_METRIC] = sum_exact / denom
-        rollout_metrics[TIS_LCS_FALLBACK_FRACTION_METRIC] = sum_lcs / denom
         rollout_metrics[TIS_UNALIGNED_FRACTION_METRIC] = sum_unaligned / denom
         rollout_metrics[TIS_ALIGNMENT_FAIL_COUNT_METRIC] = sum_fail
-        rollout_metrics[TIS_LCS_FALLBACK_MESSAGES_METRIC] = sum_lcs_msgs
-        lcs_alert = 1.0 if (sum_lcs / denom) > tis_lcs_alert_threshold else 0.0
-        rollout_metrics[TIS_LCS_FALLBACK_ALERT_METRIC] = lcs_alert
         total_tito_attempts = sum(output.get(TIS_TITO_FULL_ATTEMPTS_METRIC, 0.0) for output in group_metrics)
         total_tito_successes = sum(
             output.get(TIS_TITO_FULL_SUCCESS_FRACTION_METRIC, 0.0) * output.get(TIS_TITO_FULL_ATTEMPTS_METRIC, 0.0)
@@ -522,7 +508,7 @@ def rollout_counter_metrics(
         total_tito_declines = sum(output.get(TIS_TITO_FULL_DECLINE_COUNT_METRIC, 0.0) for output in group_metrics)
         rollout_metrics[TIS_TITO_FULL_DECLINE_COUNT_METRIC] = total_tito_declines
         rollout_metrics[TIS_ALIGNMENT_ALERT_METRIC] = (
-            1.0 if sum_unaligned > 0 or lcs_alert or total_tito_declines > 0 else 0.0
+            1.0 if sum_unaligned > 0 or total_tito_declines > 0 else 0.0
         )
         for reason in TitoFullDeclineReason:
             name = f"{TIS_TITO_FULL_DECLINE_METRIC_PREFIX}{reason.value}"
