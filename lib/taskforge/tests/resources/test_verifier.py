@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import time
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -108,8 +107,6 @@ class CountedFactory(MachineFactory):
 
     @override
     async def create(self, spec: MachineSpec) -> Machine:
-        # A controlled startup cost makes the avoided factory call measurable without cluster traffic.
-        await asyncio.sleep(0.05)
         machine = CountedMachine(await self.factory.create(spec), self.die and not self.machines, self.failure)
         self.machines.append(machine)
         return machine
@@ -163,22 +160,15 @@ async def twelve(request: ModelRequest) -> ModelTurn:
 async def test_grades_and_solver_share_clean_machine_and_rehydrate_resources() -> None:
     factory = CountedFactory()
     pool, resource = setup(factory)
-    durations = []
     try:
         for expected, candidate in [(1, event()), (1, event()), (0, event(SCRIPT.replace(b"== '12'", b"== '9'")))]:
-            started = time.perf_counter()
             result = await resource.grade(candidate)
-            durations.append(time.perf_counter() - started)
             assert result.reward == expected, result
         solver = RolloutResource(resource.engine, twelve, "test")
         result = await solver.run(SolverRollout(event().spec, 0, 0))
         assert result.grade.reward == 1
         assert result.grade.diagnostics["verifier_lease"] == 4
         assert len(factory.machines) == 1 and not factory.machines[0].closed
-        print(
-            f"grade seconds: cold={durations[0]:.6f}, warm={durations[1]:.6f}, "
-            f"rehydrated={durations[2]:.6f}; startup=0.050"
-        )
     finally:
         await pool.close()
     assert factory.machines[0].closed
