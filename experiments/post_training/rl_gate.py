@@ -482,6 +482,9 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
         runtime.pop(field, None)
     if not runtime:
         config["skyrl"].pop("runtime", None)
+    buffer = config["skyrl"]["trainer"].get("rollout_buffer", {})
+    if buffer.get("groups_per_family") == {}:
+        del buffer["groups_per_family"]
     return _config_values(config)
 
 

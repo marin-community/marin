@@ -62,6 +62,9 @@ def test_model_presets_compose_with_their_role_plans(selection, tmp_path):
         if "agentic" in identity[1]:
             half = trainer["train_batch_size"] // 2
             assert trainer["rollout_buffer"]["groups_per_family"] == {"agentic": half, "nonagentic": half}
+            normalized = rl_gate.comparison_config(config)
+            for family in ("agentic", "nonagentic"):
+                assert normalized[f"skyrl.trainer.rollout_buffer.groups_per_family.{family}"] == half
 
     medium = documents["mochi", "train-medium"]
     assert not medium["run"]["export_hf"]
