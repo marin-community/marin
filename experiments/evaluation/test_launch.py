@@ -19,7 +19,7 @@ from iris.client.client import IrisClient
 from iris.cluster.client import remote_client
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation.hardware import Platform
-from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.model_config import ModelConfig, ResourceHint
 from marin.evaluation.runner import (
     EvaluationBatch,
     EvaluationError,
@@ -38,7 +38,7 @@ import experiments.evaluation.pipeline as pipeline_module
 import experiments.evaluation.policy_finalization as policy_module
 from experiments.evaluation.cli import cli
 from experiments.evaluation.curated import load_evaluations
-from experiments.evaluation.evals import resolve_evaluations
+from experiments.evaluation.evals import HarborDefinition, resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
 from experiments.evaluation.models import models
 from experiments.post_training.skyrl_evaluation import evaluate
@@ -157,6 +157,29 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
     assert config.verifier_env_keys == ()
     assert json.loads(config.stable_policy_json)["environment"]["kwargs"] == {"judge_access": "runtime"}
     assert batch.judge.api_model == "qwen3-0.6b"
+
+    def launch_for_artifact(batch, _client, **_kwargs):
+        submitted_batches.append(batch)
+        return SubmittedEvaluationBatch(
+            group_id=batch.group_id,
+            job=SimpleNamespace(wait=lambda **_kwargs: None),
+            records_prefix=batch.records_prefix,
+            model_name=batch.model.name,
+            evaluations=(),
+        )
+
+    monkeypatch.setattr(pipeline_module, "launch_group", launch_for_artifact)
+    monkeypatch.setattr(pipeline_module, "iris_ctx", lambda: SimpleNamespace(client=None))
+    monkeypatch.setattr(launch_module, "CW_RECORDS_PREFIX", str(tmp_path / "artifact-records"))
+    source = ArtifactHfModel(ArtifactStep.adopt("tests/model", "2026.10.26", str(root)), relative_path="")
+    kwargs = dict(version="2026.10.26", accelerator="H100x1", submission_cluster="marin", federated_cluster="cw-rno2a")
+    serving = models()["qwen3-8b"]
+    evals = (HarborDefinition(name="test", config_path=policy),)
+    judge = replace(models()["qwen3-0.6b"], resource_hint=ResourceHint(gpu={"H100": 1}))
+    step = evaluate(source, serving, evals, judge=judge, **kwargs)
+    assert step.fingerprint() != evaluate(source, serving, evals, **kwargs).fingerprint()
+    step.run(materialized_config(step, str(tmp_path)))
+    assert submitted_batches[-1].judge.api_model == "qwen3-0.6b"
 
 
 @pytest.mark.parametrize("dry_run", [True, False])
@@ -443,13 +466,17 @@ def _pipeline_spec(tmp_path):
 
 
 @pytest.mark.parametrize("source_kind", ["rl", "legacy-rl", "hf"])
-def test_evaluate_records_producing_rl_attempt(tmp_path, monkeypatch, source_kind):
+def test_evaluate_records_model_and_producing_rl_attempt(tmp_path, monkeypatch, source_kind):
     root = tmp_path / "model"
     export = root / "policy"
     export.mkdir(parents=True)
     version = "2026.10.26"
     ids = {"run_id": "training-run", "attempt_id": "training-attempt"}
     task_timeout = 180 if source_kind == "rl" else None
+    tokenizer = str(root / "pinned-tokenizer") if source_kind == "rl" else None
+    if tokenizer is not None:
+        Path(tokenizer).mkdir()
+    tokenizer_revision = "tokenizer-commit" if tokenizer is not None else None
     if source_kind == "hf":
         source = ArtifactHfModel(ArtifactStep.adopt("tests/model", version, str(export)), relative_path="")
     else:
@@ -457,8 +484,8 @@ def test_evaluate_records_producing_rl_attempt(tmp_path, monkeypatch, source_kin
             path=str(root),
             hf_model_uri=str(export),
             global_step=100,
-            tokenizer_uri=None,
-            tokenizer_revision=None,
+            tokenizer_uri=tokenizer,
+            tokenizer_revision=tokenizer_revision,
             checkpoint_root=str(root / "checkpoints"),
             draft_checkpoint_root=None,
             terminal_manifest_uri=str(root / "terminal.json"),
@@ -482,7 +509,7 @@ def test_evaluate_records_producing_rl_attempt(tmp_path, monkeypatch, source_kin
     monkeypatch.setattr(launch_module, "CW_RECORDS_PREFIX", str(tmp_path / "records"))
     evaluation = evaluate(
         source,
-        ModelConfig(name="candidate", location=str(root)),
+        ModelConfig(name="candidate", location=str(root), revision="starter-commit"),
         resolve_evaluations("smoke"),
         version=version,
         accelerator="H100x1",
@@ -495,6 +522,13 @@ def test_evaluate_records_producing_rl_attempt(tmp_path, monkeypatch, source_kin
     assert len(result.run_ids) == 2
     for run_id in result.run_ids:
         record_json = json.loads(Path(record_path(result.records_prefix, run_id)).read_text())
+        model = record_json["model"]
+        assert model["location"] == str(export)
+        config = model["config"]
+        assert config["identity"] == f"tests/model@{version}:{source.step.fingerprint()}"
+        assert config["revision"] is None
+        assert config["tokenizer"] == (tokenizer or str(export))
+        assert config["tokenizer_revision"] == (tokenizer_revision or config["identity"])
         if source_kind == "rl":
             assert record_json["rl_run"] == ids
         else:

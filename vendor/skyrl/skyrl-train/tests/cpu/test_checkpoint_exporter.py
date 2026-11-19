@@ -7,13 +7,13 @@ from types import SimpleNamespace
 import pytest
 import torch
 from huggingface_hub import RepoFile
+from omegaconf import OmegaConf
 from safetensors.torch import save_file
 
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, write_local_model_manifest
-from skyrl_train.checkpoint_exporter import CheckpointExportPlan, CheckpointExporter, RayPolicyExportWorkers
+from skyrl_train.checkpoint_exporter import CheckpointExportPlan, CheckpointExporter, RayPolicyExportWorkers, hub_publisher
 from skyrl_train.hf_export_schema import HFUploadMode
 from skyrl_train.hf_model_io import verify_hf_model_export
-from skyrl_train.hf_publisher import HuggingFacePublisher
 
 
 class FakePolicyExportWorkers:
@@ -239,7 +239,7 @@ def test_ray_policy_export_workers_loads_model_state_without_training_state():
     ("visibility", "requested", "corrupt", "error"),
     [
         (None, None, None, None),
-        (False, False, None, None),
+        (None, False, None, None),
         (False, None, None, "visibility differs"),
         (True, False, None, "visibility differs"),
         (True, None, "config.json", "differs from the model manifest"),
@@ -255,14 +255,13 @@ def test_hf_publisher_checks_visibility_and_uploaded_files(tmp_path, monkeypatch
     manifest = write_local_model_manifest(export_path)
     (export_path / "worker.log").write_text("worker log")
     api = FakeHubApi(tmp_path / "downloads", visibility, corrupt)
-    publisher = HuggingFacePublisher(
-        repo_id="org/model",
-        revision="main",
-        upload_mode=HFUploadMode.ALL,
-        api=api,
-        **({"private": requested} if requested is not None else {}),
-    )
+    monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", lambda: api)
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    settings = {"hf_hub_repo_id": "org/model", "hf_upload_mode": HFUploadMode.ALL.value}
+    if requested is not None:
+        settings["hf_hub_private"] = requested
+    publisher = hub_publisher(OmegaConf.create({"checkpoint_export": settings}))
+    assert publisher is not None
 
     if error:
         with pytest.raises(ValueError, match=error):

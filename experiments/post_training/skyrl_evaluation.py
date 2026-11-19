@@ -27,41 +27,38 @@ def evaluate(
     instances: int = 1,
     task_timeout_seconds: int | None = None,
 ) -> ArtifactStep[EvaluationResult]:
-    """Evaluate the HF export and tokenizer identified by a trained model artifact."""
+    """Evaluate a trained model artifact, with an optional hosted judge for Harbor verifiers."""
 
     def resolve_model(ctx: StepContext) -> ModelConfig:
         resolved = model.resolve(ctx)
         return replace(
             serving,
             location=resolved.uri,
+            revision=None,
             identity=resolved.identity,
             tokenizer=resolved.tokenizer_uri or resolved.uri,
             tokenizer_revision=resolved.tokenizer_revision,
         )
 
-    step = eval_step(
+    def resolve_rl_run(ctx: StepContext) -> RLRunRef | None:
+        if not isinstance(model, SkyRLPolicyModel):
+            return None
+        run = ctx.resolved(model.step)
+        if run.run_id is None or run.attempt_id is None:
+            return None
+        return RLRunRef(run_id=run.run_id, attempt_id=run.attempt_id)
+
+    return eval_step(
         serving,
         evals,
         version=version,
         deps=model.deps(),
         resolve_model=resolve_model,
+        resolve_rl_run=resolve_rl_run,
         accelerator=accelerator,
         submission_cluster=submission_cluster,
         federated_cluster=federated_cluster,
-        judge=judge,
+        judge_model=judge,
         instances=instances,
         task_timeout_seconds=task_timeout_seconds,
     )
-    if not isinstance(model, SkyRLPolicyModel):
-        return step
-
-    def with_run_ref(ctx: StepContext):
-        config = step.build_config(ctx)
-        if ctx.is_fingerprint:
-            return config
-        run = ctx.resolved(model.step)
-        if run.run_id is None or run.attempt_id is None:
-            return config
-        return replace(config, rl_run=RLRunRef(run_id=run.run_id, attempt_id=run.attempt_id))
-
-    return replace(step, build_config=with_run_ref)

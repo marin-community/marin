@@ -108,9 +108,18 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     )
     path = tmp_path / "training.yaml"
     OmegaConf.save(OmegaConf.create(raw), path)
-    training = load_launch_config(path)
-    request = _request()
-    config = checkpoint_export_launch_config(training, request, _spec(request))
+    parser = export_hf_checkpoint.argument_parser()
+    args = [
+        "--launch-config", str(path), "--ckpt_path", "s3://run/checkpoints", "--step", "7",
+        "--model_path", "Qwen/Qwen3-8B", "--num-nodes", "1", "--gpus-per-node", "4",
+        "--gpu-variant", "H100", "--hf-hub-repo-id", "org/model",
+    ]
+    private = transport == "broadcast"
+    if not private:
+        args.append("--no-hf-hub-private")
+    spec = export_hf_checkpoint.manual_spec(parser.parse_args(args), parser)
+    request = spec.request
+    config = load_launch_config(spec.launch_config_path)
     topology = validate_launch_config(config)
     assert (topology.num_nodes, topology.gpus_per_node) == (request.num_nodes, request.gpus_per_node)
 
@@ -123,6 +132,7 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
     assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
     assert config.skyrl.checkpoint_export.export_root == request.export_path
+    assert config.skyrl.checkpoint_export.hf_hub_private is private
 
 
 def test_checkpoint_export_config_preserves_federated_routing() -> None:

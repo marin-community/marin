@@ -257,7 +257,6 @@ class EvaluationBatch:
     """Egress rules the orchestrator job and its children need beyond the cluster allowlist."""
     source_model_config: ModelConfigRef | None = None
     rl_run: RLRunRef | None = None
-    task_timeout_seconds: int | None = None
 
 
 @dataclass(frozen=True)

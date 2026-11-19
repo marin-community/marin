@@ -1457,23 +1457,7 @@ def test_finished_policy_resolves_terminal_export_as_model_input(tmp_path, token
         tokenizer,
         "tokenizer-commit" if tokenizer else None,
     )
-    serving = ModelConfig(name="finished", location=str(root), tokenizer="declared/tokenizer")
-    evaluation = evaluate(
-        model,
-        serving,
-        resolve_evaluations("gsm8k-smoke"),
-        version="2026.10.26",
-        accelerator=None,
-        submission_cluster="test",
-        federated_cluster=None,
-    )
-    evaluated = materialized_config(evaluation, str(tmp_path)).model
-    assert (evaluated.location, evaluated.tokenizer, evaluated.tokenizer_revision) == (
-        str(root / "policy"),
-        tokenizer or str(root / "policy"),
-        "tokenizer-commit" if tokenizer else None,
-    )
-    assert evaluated.identity == f"tests/finished@2026.10.26:{source.fingerprint()}"
+    assert resolved.identity == f"tests/finished@2026.10.26:{source.fingerprint()}"
 
 
 def test_evaluate_uses_the_discovered_hf_export(tmp_path):
@@ -1485,7 +1469,7 @@ def test_evaluate_uses_the_discovered_hf_export(tmp_path):
 
     evaluation = evaluate(
         ArtifactHfModel(source),
-        ModelConfig(name="sft", location=str(tmp_path / "sft")),
+        ModelConfig(name="sft", location=str(tmp_path / "sft"), revision="starter-commit"),
         resolve_evaluations("gsm8k-smoke"),
         version="2026.10.26",
         accelerator=None,
@@ -1495,3 +1479,4 @@ def test_evaluate_uses_the_discovered_hf_export(tmp_path):
 
     evaluated = materialized_config(evaluation, str(tmp_path)).model
     assert (evaluated.location, evaluated.tokenizer) == (str(export), str(export))
+    assert evaluated.revision is None
