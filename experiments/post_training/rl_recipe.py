@@ -579,10 +579,13 @@ def run_step(
 ) -> ArtifactStep[SkyRLRun]:
     """Bind an RL specification to its declared execution resources."""
     layout = preset.recipe.layout
+    config = yaml.safe_load(spec.config_yaml)
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
     if preset.harbor is not None:
-        required_env += (preset.harbor.daytona_api_key_env, "DAYTONA_TARGET")
-    required_env += (*_recipe_env(yaml.safe_load(spec.config_yaml)), *preset.runtime_env)
+        required_env += (preset.harbor.daytona_api_key_env,)
+    if preset.harbor is not None or get_path(config, "terminal_bench.installed_agent") is not MISSING:
+        required_env += ("DAYTONA_TARGET",)
+    required_env += tuple(_recipe_env(config))
     return skyrl_step(
         spec,
         IrisSkyRLExecution(

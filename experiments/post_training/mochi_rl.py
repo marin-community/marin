@@ -159,7 +159,7 @@ _ONE_TURN = RecipePatch(
             "enable_auto_tools": True,
             "tool_parser": "hermes",
             "model_loader_extra_config": {"distributed": False, "concurrency": 4, "memory_limit": 8 * 1024**3},
-            "compilation_config": {"mode": 3, "cudagraph_mode": "NONE", "splitting_ops": _SPLITTING_OPS},
+            "compilation_config": {"mode": 3, "cudagraph_mode": "PIECEWISE", "splitting_ops": _SPLITTING_OPS},
             "enable_return_routed_experts": True,
         },
     ),
@@ -271,7 +271,6 @@ def _agentic(preset: Preset, name: str) -> Preset:
         name=name,
         tasks_input="required",
         batch_mix=AGENTIC_BATCH_MIX,
-        runtime_env=("DAYTONA_TARGET",),
         harbor=SNOWBALL.by_name["train-long-harbor"].harbor,
         recipe=replace(preset.recipe, config=config),
     )

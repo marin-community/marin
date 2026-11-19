@@ -367,7 +367,6 @@ class Preset:
     retention: SkyRLRetentionPolicy
     export: Literal["none", "latest", "best"]
     batch_mix: BatchMix | None = None
-    runtime_env: tuple[str, ...] = ()
     harbor: HarborEvaluationCallback | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()

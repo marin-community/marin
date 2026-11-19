@@ -56,6 +56,9 @@ def test_model_presets_compose_with_their_role_plans(selection, tmp_path):
             assert trainer["epochs"] == trainer["max_steps"]
             assert config["inputs"]["model"]["uri"].endswith("/step-400407/2af3f828aa-cpu-a1")
             assert config["skyrl"]["generator"]["sampling_params"]["stop_token_ids"] == [128001, 128009]
+            assert config["skyrl"]["generator"]["engine_init_kwargs"]["compilation_config"]["cudagraph_mode"] == (
+                "PIECEWISE"
+            )
         if "agentic" in identity[1]:
             half = trainer["train_batch_size"] // 2
             assert trainer["rollout_buffer"]["groups_per_family"] == {"agentic": half, "nonagentic": half}
@@ -181,7 +184,8 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch):
         producer = next(step for step in run.deps if step.name == initializer.step.name)
         assert producer.fingerprint() == initializer.step.fingerprint()
         document = yaml.safe_load(materialized_config(run, prefix).launch_config_yaml)
-        assert document["inputs"]["model"]["tokenizer_uri"] == initializer.tokenizer_uri
+        assert document["inputs"]["model"]["uri"] == f"{producer.path(prefix)}/{initializer.relative_path}"
+        assert document["inputs"]["model"]["tokenizer_uri"] is None
         submitted.append((run.name, argv))
         return JobName.from_wire("/fixture/sft-then-rl")
 

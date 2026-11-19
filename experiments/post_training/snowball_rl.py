@@ -436,7 +436,6 @@ _TRAIN_LONG_AGENTIC = replace(
     evaluations=(replace(_TASK_SET, every=2),),
     checkpoint_every=2,
     batch_mix=AGENTIC_BATCH_MIX,
-    runtime_env=("DAYTONA_TARGET",),
     harbor=_harbor_evaluation(),
     gaps=("harbor-on-daytona",),
     recipe=replace(
