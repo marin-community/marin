@@ -48,7 +48,7 @@ from levanter.compat.hf_checkpoints import (
     ModelWithHfSerializationMixin,
     VisionModelWithHfSerializationMixin,
     HfLmCheckpointConverter,
-    VisionLanguageCheckpointConverter,
+    HfVisionLanguageCheckpointConverter,
     RepoRef,
     _causal_lm_architecture_name,
     _convert_to_jnp,
@@ -806,7 +806,7 @@ def test_vision_converter_restores_weights_and_missing_buffers(tmp_path, prefix)
     config.to_hf_config().save_pretrained(tmp_path)
     weights = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
     safetensors.numpy.save_file({with_prefix(prefix, "weight"): weights}, str(tmp_path / SAFE_TENSORS_MODEL))
-    converter = VisionLanguageCheckpointConverter(
+    converter = HfVisionLanguageCheckpointConverter(
         TinyVisionConfig, reference_checkpoint=RepoRef(str(tmp_path)), HfConfigClass=HfViTConfig, ignore_prefix=prefix
     )
     pixels = jnp.array([2, 3, 4], dtype=jnp.float32)
