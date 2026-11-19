@@ -11,7 +11,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from jinja2 import TemplateError
-from daytona import DaytonaError
+from daytona import DaytonaConnectionError, DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.redaction import redact_string
@@ -108,6 +108,8 @@ DAYTONA_DIAGNOSTIC_CALLS = frozenset(
         ("daytona_api_client_async.api.sandbox_api", "get_sandbox"),
     }
 )
+# A connection lost while the task machine starts leaves nothing the model has seen, so the rollout restarts.
+MACHINE_START_RETRIES = 2
 DAYTONA_RATE_LIMIT_HEADERS = frozenset(
     f"{prefix}-{throttler}"
     for prefix in ("x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "retry-after")
@@ -219,6 +221,15 @@ async def _model_turn(
             REASONING_VIOLATION_TOKEN_METADATA_KEY: (output.get(REASONING_VIOLATION_TOKENS_KEY) or [None])[0],
         },
         reasoning_violation=(output.get(REASONING_VIOLATIONS_KEY) or [None])[0],
+    )
+
+
+def _lost_machine_start(interruption: GradedRolloutInterrupted) -> bool:
+    error = interruption.__cause__
+    return (
+        interruption.operation == RolloutOperation.START
+        and isinstance(error, TaskMachineError)
+        and isinstance(error.__cause__, DaytonaConnectionError)
     )
 
 
@@ -533,11 +544,21 @@ class TaskRolloutWorker:
             engine = engines[index]
             harbor_slots = nullcontext() if harbor is None else self.harbor_task_slots
             retries = 0
+            start_retries = 0
             while True:
                 try:
                     async with harbor_slots, self.task_slots:
                         result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
                 except GradedRolloutInterrupted as interruption:
+                    if _lost_machine_start(interruption) and start_retries < MACHINE_START_RETRIES:
+                        start_retries += 1
+                        logger.warning(
+                            "Task {} restart {} after losing its machine at start: {}",
+                            task.id,
+                            start_retries,
+                            interruption.__cause__.__cause__,
+                        )
+                        continue
                     result = _failed_rollout(interruption, lowered)
                 if task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
                     # Before group grading, so a malformed rollout never enters a GenRM comparison.
