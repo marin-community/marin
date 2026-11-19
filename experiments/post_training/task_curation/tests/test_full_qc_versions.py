@@ -31,7 +31,7 @@ def test_v3_historical_payload_keeps_its_exact_qualified_identity():
         assert {**historical.identity, "payload_revision": "6"} == current.identity
 
 
-def test_v3_generates_separately_from_v2_and_reuses_its_own_valid_cache(review_server, tmp_path):
+def test_reviewer_versions_generate_separately_and_reuse_their_own_valid_cache(review_server, tmp_path):
     task = TaskSpec.model_validate(json.loads(prebuilt_task("versioned")["lowered_task_spec"])["task"])
     client = OpenAIChatClient(f"http://127.0.0.1:{review_server.server_port}/v1", "unused", timeout=2)
     reviewers = [
@@ -41,13 +41,13 @@ def test_v3_generates_separately_from_v2_and_reuses_its_own_valid_cache(review_s
     for reviewer in reviewers:
         result = reviewer.review([task], REVIEW_RUBRIC)
         assert result.reviews[0].status is ReviewStatus.REVIEWED
-    assert [body["max_tokens"] for body in review_server.requests] == [4096, 8192]
+    assert [body["max_tokens"] for body in review_server.requests] == [4096, 8192, 16384]
     assert "top_p" not in review_server.requests[0] and "top_k" not in review_server.requests[0]
     assert review_server.requests[1]["top_p"] == 0.95
     assert review_server.requests[1]["top_k"] == 0
     for reviewer in reviewers:
         reviewer.review([task], REVIEW_RUBRIC)
-    assert len(review_server.requests) == 2
+    assert len(review_server.requests) == 3
 
 
 def test_v3_retries_truncation_with_the_doubled_generation_budget(review_server):
