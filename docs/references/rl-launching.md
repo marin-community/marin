@@ -59,8 +59,10 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_trai
 ```
 
 The Snowball and Mochi preset commands use `--resume NAME@VERSION` to start from
-another run's latest committed native checkpoint. Use a checkpointing preset and
-an immutable version. The source checkpoint stays in temporary storage for the
+the latest committed native checkpoint of a finished run. Use a checkpointing
+preset and an immutable version. If the source checkpoint advances between
+submission and coordinator startup, the command refuses the launch and shows
+both step numbers. The source checkpoint stays in temporary storage for the
 retention period recorded by its run.
 
 Use `export-best` to export a stored run's best committed native checkpoint,

@@ -123,10 +123,13 @@ def _run_name(
     *,
     table: presets.ModelPresets,
     control: bool,
+    resume_step: int | None,
 ) -> str:
     if control:
         return rl_gate.control_name(preset.name, provenance.base_commit, replicate, table=table)
     name = f"checkpoints/{table.namespace}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
+    if resume_step is not None:
+        name += f"-resume-step-{resume_step}"
     return user_owned_name(name + (f"-r{replicate}" if preset.gated else ""))
 
 
@@ -218,7 +221,15 @@ def build_run(
     )
     runs = []
     for replicate in range(replicates):
-        name = _run_name(preset, provenance, inputs_hash, replicate, table=table, control=control)
+        name = _run_name(
+            preset,
+            provenance,
+            inputs_hash,
+            replicate,
+            table=table,
+            control=control,
+            resume_step=resume.step if resume is not None else None,
+        )
         run = recipe.run_step(preset, replace(spec, name=name), wandb_entity=wandb_entity, forward_env=forward_env)
         runs.append(replace(run, run=partial(_run_rl, inputs=inputs, issue=issue, forward_env=forward_env)))
     gate = (
@@ -592,7 +603,7 @@ def command(
         "--resume",
         "resume_name",
         metavar="NAME@VERSION",
-        help="Continue from a stored run's native checkpoint. Temporary checkpoints usually expire after 14 days.",
+        help="Continue from a finished run's native checkpoint. Temporary checkpoints usually expire after 14 days.",
     )
     @click.option(
         "--control",

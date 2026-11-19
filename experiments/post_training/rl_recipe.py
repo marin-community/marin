@@ -294,7 +294,7 @@ def run_reference(value: str) -> tuple[str, str]:
 
 
 def published_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
-    """Pin the committed native checkpoint of a stored run."""
+    """Pin the latest committed native checkpoint of a finished run."""
     name, version = run_reference(value)
     try:
         config = read_skyrl_launch_config(run_path(preset.recipe.layout.cluster, name, version))

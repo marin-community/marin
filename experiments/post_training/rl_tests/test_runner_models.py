@@ -3,13 +3,17 @@
 
 import runpy
 import sys
+from contextlib import nullcontext
 from dataclasses import replace
 from fractions import Fraction
+from types import SimpleNamespace
 
 import click
 import pytest
 import yaml
 from click.testing import CliRunner
+from iris.client.client import IrisContext, iris_ctx_scope
+from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import apply, materialized_config
@@ -167,6 +171,61 @@ def test_resume_pins_the_native_checkpoint(selection, tmp_path):
     assert "step-4@2026.11.19.1" in source["identity"]
     with pytest.raises(click.BadParameter, match="cannot be combined with --init"):
         rl.build_run(preset, table=SNOWBALL, resume=resume, init=preset.model)
+
+
+@pytest.mark.usefixtures("source_provenance")
+def test_resume_refuses_a_checkpoint_that_advanced_after_submission(selection, tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    root = tmp_path / "checkpoints" / "previous" / "2026.11.19.1"
+    scratch = root / "scratch"
+    for step in (4, 8):
+        checkpoint = scratch / f"global_step_{step}"
+        checkpoint.mkdir(parents=True)
+        (checkpoint / "trainer_state.pt").touch()
+    (root / RESOLVED_LAUNCH_FILENAME).write_text(
+        yaml.safe_dump({"config": {"artifacts": {"checkpoint_root": str(scratch)}}})
+    )
+    latest = scratch / "latest_ckpt_global_step.txt"
+    latest.write_text("4")
+    job = JobName.from_wire("/fixture/resume-coordinator")
+    submitted = {}
+
+    def submit(**request):
+        submitted.update(request)
+        return SimpleNamespace(job_id=job)
+
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(SimpleNamespace(submit=submit)))
+    monkeypatch.setattr(
+        "marin.rl.skyrl._run_launcher", lambda *args: pytest.fail("Coordinator launched with a different checkpoint")
+    )
+    args = (
+        "--preset",
+        "train-long",
+        "--version",
+        "2026.11.19.1",
+        "--run",
+        "--no-issue",
+        "--resume",
+        "checkpoints/previous@2026.11.19.1",
+    )
+    command = rl.command(SNOWBALL, argv=args, entry_module="experiments.post_training.snowball_rl")
+    result = CliRunner().invoke(command, args)
+    assert result.exit_code == 0, (result.output, result.exception)
+
+    latest.write_text("8")
+    for name, value in submitted["environment"].env_vars.items():
+        monkeypatch.setenv(name, value)
+    task_id = JobName.from_wire(f"{job}/0")
+    monkeypatch.setenv("IRIS_TASK_ID", str(task_id))
+    try:
+        with iris_ctx_scope(IrisContext.from_job_info(JobInfo(task_id=task_id))):
+            result = CliRunner().invoke(command, submitted["entrypoint"].command[3:])
+    finally:
+        set_job_info(None)
+    assert result.exit_code == 4, (result.output, result.exception)
+    _, _, error = result.output.partition("coordinator rebuilt a different RL graph: submitted=")
+    original, _, rebuilt = error.partition(", rebuilt=")
+    assert "-resume-step-4" in original and "-resume-step-8" in rebuilt, result.output
 
 
 @pytest.mark.usefixtures("source_provenance")
