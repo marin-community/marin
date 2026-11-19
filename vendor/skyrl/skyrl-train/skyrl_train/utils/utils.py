@@ -470,9 +470,9 @@ def require_worker_batch_config(cfg: DictConfig) -> None:
 
 
 def validate_cfg(cfg: DictConfig):
-    validate_training_settings(cfg)
     if BatchBuilder(cfg.trainer.batch_builder) is BatchBuilder.WORKER:
         require_worker_batch_config(cfg)
+    validate_training_settings(cfg)
     validate_mismatch_probe_config(cfg)
     distillation_plan = compile_distillation_plan_from_config(cfg)
     validate_distillation_runtime_support(distillation_plan)
