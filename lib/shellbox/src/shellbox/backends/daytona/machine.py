@@ -116,7 +116,7 @@ async def _create_sandbox(
 
 
 async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
-    """Delete the sandbox, retrying transient gateway errors until the interrupt deadline."""
+    """Delete the sandbox, retrying gateway errors and state changes until the interrupt deadline."""
     backoff = ExponentialBackoff(initial=1, maximum=4, factor=2, jitter=0)
     async with asyncio.timeout(INTERRUPT_TIMEOUT):
         while True:
@@ -126,6 +126,9 @@ async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
                 return
             except DaytonaNotFoundError:
                 return
+            except DaytonaConflictError as error:
+                # Daytona refuses deletion while the sandbox is still starting or stopping.
+                logger.warning("Retrying Daytona sandbox deletion during a state change: %s: %s", name, error)
             except DaytonaError as error:
                 if error.status_code not in TRANSIENT_DAYTONA_STATUS:
                     raise

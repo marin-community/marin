@@ -1520,19 +1520,26 @@ def test_snapshot_request_interchange_rejects_a_mismatched_name(tmp_path) -> Non
     assert SnapshotRequest.from_dict(spec) == request
 
 
-def test_sandbox_deletion_retries_a_gateway_error(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "transient",
+    [
+        DaytonaError("Failed to get sandbox: 502 Bad Gateway", status_code=502),
+        DaytonaConflictError("Failed to remove sandbox: Sandbox state change in progress", status_code=409),
+    ],
+)
+def test_sandbox_deletion_retries_a_transient_error(monkeypatch, transient) -> None:
     class FlakyGateway:
         def __init__(self):
-            self.gets = 0
+            self.attempts = 0
             self.deleted = []
 
         async def get(self, name):
-            self.gets += 1
-            if self.gets == 1:
-                raise DaytonaError("Failed to get sandbox: 502 Bad Gateway", status_code=502)
             return SimpleNamespace(name=name)
 
         async def delete(self, sandbox):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise transient
             self.deleted.append(sandbox.name)
 
     async def no_wait(delay):
