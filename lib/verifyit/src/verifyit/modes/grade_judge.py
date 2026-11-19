@@ -33,6 +33,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
+import httpx
 import openai
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 
@@ -127,6 +128,8 @@ class JudgeConnection:
     base_url: str
     api_key: str = field(repr=False)
     default_model: str | None = field(default=None, kw_only=True)
+    transport: Any = field(default=None, kw_only=True, repr=False, compare=False)
+    """Optional in-process HTTP transport; runtime-only, like the endpoint credentials."""
 
 
 @dataclass(frozen=True)
@@ -628,6 +631,8 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
         raise InvalidTask(f"no judge model: set {MODEL_ENV} or the spec's model field")
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
     options: dict[str, Any] = {"max_retries": 0} if spec.rubric == RUBRIC_LABELS else {}
+    if connection is not None and connection.transport is not None:
+        options["http_client"] = httpx.Client(transport=connection.transport)
     return (
         openai.OpenAI(
             base_url=base_url,
