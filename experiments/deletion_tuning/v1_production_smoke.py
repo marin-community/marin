@@ -72,10 +72,13 @@ _SCALE_NOTE = (
 )
 
 
-def _smoke_spec(release) -> SFTSpec:
+def _smoke_spec(release, output_path: Path) -> SFTSpec:
     """The V1 production recipe with the one-node scale overrides applied."""
     recipe = production_sft_recipe(release)
     trainer = recipe["trainer"]
+    # the shared S3 compilation cache is not writable by XLA in-process; the
+    # smoke compiles against a local cache under its output directory
+    trainer["jax_compilation_cache_dir"] = str(Path(output_path) / "jax-cache")
     trainer["num_train_steps"] = SMOKE_STEPS
     trainer["train_batch_size"] = SMOKE_BATCH
     trainer["training_budget"] = None
@@ -163,9 +166,9 @@ def run_production_smoke(output_root: Path | None = None) -> dict:
     """Run the real-model V1 smoke on this node and report what ran."""
     configure_coreweave_s3()
     release = v1_data_release(require_ready=False)
-    spec = _smoke_spec(release)
     with tempfile.TemporaryDirectory(prefix="v1-production-smoke-") as tmp:
         output_path = Path(tmp) / "run"
+        spec = _smoke_spec(release, output_path)
         pod_config = TrainLmOnPodConfig(
             output_path=str(output_path),
             resources=_gpu_resources(),
