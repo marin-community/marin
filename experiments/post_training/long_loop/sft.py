@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -33,11 +34,30 @@ TOKENIZER_URI = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
 SMOKE_CONFIG = Path(__file__).with_name("sft-smoke.yaml")
 
 
+DEFAULT_TEMP_CHECKPOINT_COUNT = 1
+DEFAULT_TEMP_SAVE_INTERVAL = "30m"
+
+
 def read_json(uri: str) -> dict:
     return json.loads(StoragePath(uri).read_bytes())
 
 
-def fresh_sft_config(*, output: str, initializer: str, recipe: dict, run_id: str) -> GrugRunConfig:
+def permanent_checkpoint_intervals(steps: Sequence[int]) -> list[dict[str, int]]:
+    """Encode named permanent checkpoint steps for Levanter CheckpointerConfig.keep."""
+    normalized = sorted({int(step) for step in steps})
+    if any(step <= 0 for step in normalized):
+        raise ValueError(f"Permanent checkpoint steps must be positive: {normalized}")
+    return [{"every": step, "until": step} for step in normalized]
+
+
+def fresh_sft_config(
+    *,
+    output: str,
+    initializer: str,
+    recipe: dict,
+    run_id: str,
+    permanent_steps: Sequence[int] | None = None,
+) -> GrugRunConfig:
     """Build a fresh weights-only start; this entrypoint never implicitly resumes."""
     # A fresh decoded copy preserves the identity-bearing template supplied by the artifact.
     config = json.loads(json.dumps(recipe))
@@ -46,14 +66,20 @@ def fresh_sft_config(*, output: str, initializer: str, recipe: dict, run_id: str
     watchdog = trainer.setdefault("progress_watchdog", {})
     for field in ("process_timeout", "startup_timeout", "step_timeout"):
         watchdog.setdefault(field, f"{DEFAULT_TASK_TIMEOUT_SECONDS}s")
-    trainer["checkpointer"].setdefault("async_timeout_seconds", DEFAULT_TASK_TIMEOUT_SECONDS)
+    checkpointer = trainer["checkpointer"]
+    checkpointer.setdefault("async_timeout_seconds", DEFAULT_TASK_TIMEOUT_SECONDS)
+    checkpointer.setdefault("save_interval", DEFAULT_TEMP_SAVE_INTERVAL)
+    checkpointer.setdefault("delete_old_temp_checkpoints", True)
+    checkpointer.setdefault("keep_last_temporary_checkpoints", DEFAULT_TEMP_CHECKPOINT_COUNT)
+    if permanent_steps is not None:
+        checkpointer["keep"] = permanent_checkpoint_intervals(permanent_steps) or None
     trainer["id"] = run_id
     config["native_timing_root"] = prefix_join(output, "timing/native-sft")
     trainer["initialize_from"] = prefix_join(initializer, "native/step-0")
     trainer["load_checkpoint"] = False
     trainer["load_checkpoint_path"] = []
-    trainer["checkpointer"]["base_path"] = prefix_join(output, "checkpoints")
-    trainer["checkpointer"]["temporary_base_path"] = prefix_join(output, "temporary-checkpoints")
+    checkpointer["base_path"] = prefix_join(output, "checkpoints")
+    checkpointer["temporary_base_path"] = prefix_join(output, "temporary-checkpoints")
     trainer["tracker"].update(id=run_id, name=run_id)
     return draccus.decode(GrugRunConfig, config)
 

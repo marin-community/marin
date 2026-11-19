@@ -8082,9 +8082,8 @@ trainer:
         top_allocations: 8
         tracemalloc_frames: 25
       delete_old_temp_checkpoints: true
-      keep:
-      - every: 15
-      keep_last_temporary_checkpoints: 2
+      keep: null
+      keep_last_temporary_checkpoints: 1
       save_interval: 30m
       temporary_base_path: UNBOUND
       write:

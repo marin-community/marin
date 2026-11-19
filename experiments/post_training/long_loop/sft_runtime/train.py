@@ -34,6 +34,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import CheckpointRetention
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset
@@ -201,15 +202,30 @@ def checkpoint_samples(state) -> tuple:
     return tuple(samples)
 
 
+def _is_permanent_step(step_policies, step: int) -> bool:
+    policy = next((p for p in step_policies if p.until is None or p.until >= step), None)
+    return policy is not None and step % policy.every == 0
+
+
 def restore_first_checkpoint(state, checkpointer, mesh):
-    """Commit and reload the first full state before continuing optimization."""
+    """Commit and reload the first full state before continuing optimization.
+
+    Requests a temporary checkpoint so an unlisted restore-gate step rolls away
+    under the checkpointer's retention policy while preserving any explicitly
+    scheduled permanent milestone at that step.
+    """
     step = int(state.step)
     expected = checkpoint_samples(state)
-    checkpointer.on_step(tree=state, step=step, force=True)
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    checkpointer.on_step(tree=state, step=step)
     checkpointer.wait_until_finished()
+    use_temporary_root = checkpointer.temporary_base_path is not None and not _is_permanent_step(
+        checkpointer.step_policies, step
+    )
+    save_root = checkpointer.temporary_base_path if use_temporary_root else checkpointer.base_path
     template = restore_template_from(state)
     restored = load_grug_checkpoint(
-        state=template, candidate=prefix_join(checkpointer.base_path, f"step-{step}"), mesh=mesh, allow_partial=False
+        state=template, candidate=prefix_join(save_root, f"step-{step}"), mesh=mesh, allow_partial=False
     )
     jax.block_until_ready(restored)
     if int(restored.step) != step or checkpoint_samples(restored) != expected:
@@ -1567,7 +1583,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                     ),
                 ):
-                    checkpointer.on_step(tree=state, step=int(state.step), force=True)
+                    checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
                     checkpointer.wait_until_finished()
         finally:
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)

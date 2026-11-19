@@ -1,15 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import yaml
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
-from levanter.checkpoint import Checkpointer
+from levanter.checkpoint import Checkpointer, CheckpointInterval, CheckpointRetention
 
+from experiments.post_training.long_loop.sft import SMOKE_CONFIG, fresh_sft_config, permanent_checkpoint_intervals
 from experiments.post_training.long_loop.sft_runtime.train import checkpoint_samples, restore_first_checkpoint
 
 
@@ -69,3 +72,93 @@ def test_sharded_checkpoint_gate_samples_locally_and_restores_full_state(tmp_pat
         assert int(restored.step) == 1
         assert all(leaf.is_deleted() for leaf in state)
         assert (tmp_path / "step-1" / "metadata.json").is_file()
+
+
+def test_first_step_restore_gate_uses_temporary_root_and_prunes_on_later_commit(tmp_path):
+    mesh = Mesh(np.asarray(jax.devices("cpu")[:1]), ("data",))
+    perm = tmp_path / "checkpoints"
+    temp = tmp_path / "temporary-checkpoints"
+    with jax.set_mesh(mesh):
+        state1 = State(jnp.array(1), jnp.arange(32, dtype=jnp.float32), jnp.full(32, 0.125))
+        expected = [np.asarray(x).copy() for x in state1]
+        checkpointer = Checkpointer(
+            perm,
+            save_interval=None,
+            step_policies=[CheckpointInterval(every=3, until=3)],
+            temporary_base_path=temp,
+            keep_last_temporary_checkpoints=1,
+        )
+        restored = restore_first_checkpoint(state1, checkpointer, mesh)
+        for actual, wanted in zip(restored, expected, strict=True):
+            np.testing.assert_array_equal(actual, wanted)
+        assert not (perm / "step-1").exists()
+        assert json.loads((temp / "step-1" / "metadata.json").read_text())["is_temporary"] is True
+
+        state2 = State(jnp.array(2), jnp.arange(32, dtype=jnp.float32) + 1.0, jnp.full(32, 0.25))
+        checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+        checkpointer.on_step(tree=state2, step=2)
+        checkpointer.wait_until_finished()
+        assert not (temp / "step-1").exists()
+        assert (temp / "step-2" / "metadata.json").is_file()
+
+        state3 = State(jnp.array(3), jnp.arange(32, dtype=jnp.float32) + 2.0, jnp.full(32, 0.5))
+        checkpointer.on_step(tree=state3, step=3)
+        checkpointer.wait_until_finished()
+        assert not (temp / "step-2").exists()
+        assert json.loads((perm / "step-3" / "metadata.json").read_text())["is_temporary"] is False
+
+
+def test_first_step_restore_gate_preserves_named_permanent_step_one(tmp_path):
+    mesh = Mesh(np.asarray(jax.devices("cpu")[:1]), ("data",))
+    perm = tmp_path / "checkpoints"
+    temp = tmp_path / "temporary-checkpoints"
+    with jax.set_mesh(mesh):
+        state1 = State(jnp.array(1), jnp.arange(16, dtype=jnp.float32), jnp.full(16, 0.25))
+        checkpointer = Checkpointer(
+            perm,
+            save_interval=None,
+            step_policies=[CheckpointInterval(every=1, until=1)],
+            temporary_base_path=temp,
+            keep_last_temporary_checkpoints=1,
+        )
+        restored = restore_first_checkpoint(state1, checkpointer, mesh)
+        assert int(restored.step) == 1
+        assert json.loads((perm / "step-1" / "metadata.json").read_text())["is_temporary"] is False
+        assert not (temp / "step-1").exists()
+
+
+def test_named_permanent_steps_and_final_checkpoint_write_once(tmp_path):
+    recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
+    default_cfg = fresh_sft_config(
+        output=str(tmp_path / "default"), initializer=str(tmp_path / "base"), recipe=recipe, run_id="default-rolling"
+    )
+    assert default_cfg.trainer.trainer.checkpointer.keep is None
+    assert default_cfg.trainer.trainer.checkpointer.keep_last_temporary_checkpoints == 1
+
+    named_cfg = fresh_sft_config(
+        output=str(tmp_path / "named"),
+        initializer=str(tmp_path / "base"),
+        recipe=recipe,
+        run_id="named-milestones",
+        permanent_steps=[5, 3, 5],
+    )
+    assert named_cfg.trainer.trainer.checkpointer.keep == permanent_checkpoint_intervals([3, 5])
+
+    checkpointer = named_cfg.trainer.trainer.checkpointer.create("named-milestones")
+    mesh = Mesh(np.asarray(jax.devices("cpu")[:1]), ("data",))
+    with jax.set_mesh(mesh):
+        for step in range(1, 6):
+            tree = {"w": jnp.arange(1024, dtype=jnp.float32) + step}
+            checkpointer.on_step(tree=tree, step=step)
+        checkpointer.wait_until_finished()
+        perm_root = tmp_path / "named" / "checkpoints"
+        assert sorted(p.name for p in perm_root.iterdir()) == ["step-3", "step-5"]
+        size_after_scheduled = sum(f.stat().st_size for f in (perm_root / "step-5").rglob("*") if f.is_file())
+
+        # Final checkpoint reuse avoids a second OCDBT write into step-5.
+        final_tree = {"w": jnp.arange(1024, dtype=jnp.float32) + 5}
+        checkpointer.save_final_checkpoint(tree=final_tree, step=5)
+        checkpointer.on_step(tree=final_tree, step=5, force=True)
+        checkpointer.wait_until_finished()
+        size_after_final = sum(f.stat().st_size for f in (perm_root / "step-5").rglob("*") if f.is_file())
+        assert size_after_final == size_after_scheduled
