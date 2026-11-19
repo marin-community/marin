@@ -20,6 +20,7 @@ from omegaconf import DictConfig, OmegaConf
 from ray.util.placement_group import PlacementGroup, placement_group
 from skyrl_train.utils.progress import tqdm
 from transformers import AutoTokenizer
+from skyrl_train.config.utils import model_expert_count
 from collections import defaultdict, deque
 
 import numpy as np
@@ -154,7 +155,8 @@ from skyrl_train.hf_export_schema import (
     TRAINER_STATE_FILENAME,
 )
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import refresh_trajectory_reward_shaping_metrics
-from skyrl_train.batch_assembly import BatchPlan, assemble_slice, forward_input
+from marinskyrl.runtime_options import BatchBuilder
+from skyrl_train.batch_assembly import BatchPlan, assemble_slice, forward_input, plan_worker_batch
 from skyrl_train.batch_metrics import (
     install_correction,
     advantage_metrics,
@@ -208,6 +210,26 @@ def consumed_work(training_input: TrainingInputBatch) -> ConsumedWork:
     )
 
 
+@dataclass(frozen=True)
+class BatchSummary:
+    work: ConsumedWork
+    stop_metrics: dict[str, float]
+    batch_size: int
+
+
+def batch_summary(plan: BatchPlan) -> BatchSummary:
+    """Summarize consumed rows and stop metrics from the batch plan."""
+    return BatchSummary(
+        ConsumedWork(
+            len(plan.uids),
+            sum(int(value) for group in plan.facts for value in group.response_len),
+            sum(int(value) for group in plan.facts for value in group.loss_tokens),
+        ),
+        plan.stop_metrics,
+        len(plan.uids),
+    )
+
+
 class RayPPOTrainer:
     """The rollout-buffer training loop.
 
@@ -240,6 +262,7 @@ class RayPPOTrainer:
         callbacks: Optional[List[TrainerCallback]] = None,
     ):
         self.cfg = cfg
+        self.batch_builder = BatchBuilder(cfg.trainer.batch_builder)
         self.distillation_plan = compile_distillation_plan_from_config(cfg)
         self.context = context
         self._training_metrics_enabled: bool = cfg.trainer.training_metrics
@@ -1182,17 +1205,17 @@ class RayPPOTrainer:
         self,
         *,
         epoch: int,
-        training_input: TrainingInputBatch,
+        summary: BatchSummary,
         duration_seconds: float,
     ) -> None:
-        self.all_metrics.update(training_input.metadata["consumed_stop_metrics"])
+        self.all_metrics.update(summary.stop_metrics)
         if self._training_metrics_enabled:
-            record_consumed_work(consumed_work(training_input), step=self.global_step)
+            record_consumed_work(summary.work, step=self.global_step)
         logger.info(
             "Optimizer step completed: step={} epoch={} sequences={} duration_seconds={:.3f}",
             self.global_step,
             epoch,
-            len(training_input["sequences"]),
+            summary.batch_size,
             duration_seconds,
         )
 
@@ -1275,7 +1298,7 @@ class RayPPOTrainer:
             cycle_started = time.perf_counter()
             step_wall = StepWallTime(OmegaConf.to_container(self.cfg.trainer.step_phase_budgets))
             with Timer("step", self.all_timings) as step_timer:
-                training_input = await self._train_step(epoch, step_wall)
+                summary = await self._train_step(epoch, step_wall)
                 # The core wall excludes the step-end callbacks below.
                 core_seconds = time.perf_counter() - cycle_started
                 step_wall.start("step_end_bookkeeping")
@@ -1284,9 +1307,7 @@ class RayPPOTrainer:
             self.all_metrics.update(
                 step_wall.finish(step_timer.duration, ended_at=step_timer.start_time + step_timer.duration)
             )
-            self._update_step_performance_metrics(
-                training_input, core_seconds=core_seconds, cycle_started=cycle_started
-            )
+            self._update_step_performance_metrics(summary, core_seconds=core_seconds, cycle_started=cycle_started)
 
             if self._control.should_log:
                 log_payload = {
@@ -1375,13 +1396,13 @@ class RayPPOTrainer:
         )
 
     def _update_step_performance_metrics(
-        self, training_input: TrainingInputBatch, *, core_seconds: float, cycle_started: float
+        self, summary: BatchSummary, *, core_seconds: float, cycle_started: float
     ) -> None:
         if not self._training_metrics_enabled:
             return
         placement = self.cfg.trainer.placement
         generator = self.cfg.generator
-        consumed = consumed_work(training_input)
+        consumed = summary.work
         self.all_metrics.update(
             async_step_metrics(
                 core_seconds=core_seconds,
@@ -1406,27 +1427,42 @@ class RayPPOTrainer:
         await self._begin_speculator_capture(step)
         await self.context.publish(step)
 
-    async def _train_step(self, epoch: int, step_wall: StepWallTime) -> TrainingInputBatch:
-        """Read this step's batch from the rollout buffer, train on it, sync the new weights, and return the batch."""
+    @asynccontextmanager
+    async def _admission_window(self, step_wall: StepWallTime):
         step_wall.start("group_admission")
         logger.info(
             "Rollout batch started: step={} required_groups={}", self.global_step, self.context.config.batch_size
         )
         with (
-            Timer("wait_for_generation_buffer", self.all_timings) as rollout_wait_timer,
+            Timer("wait_for_generation_buffer", self.all_timings),
             critical_phase("rollout_or_inference_wait", self.global_step),
             async_phase_window("rollout_wait", step=self.global_step, enabled=self._rollout_spans_enabled),
         ):
+            yield
+        await self._seal_speculator_capture()
+        await self._start_speculator_update()
+
+    @asynccontextmanager
+    async def _training_window(self, step_wall: StepWallTime):
+        step_wall.start("training_preparation")
+        with (
+            Timer("run_training", self.all_timings),
+            async_phase_window("training", step=self.global_step, enabled=self._rollout_spans_enabled),
+        ):
+            yield
+
+    async def _train_step(self, epoch: int, step_wall: StepWallTime) -> BatchSummary:
+        """Read this step's batch from the rollout buffer, train on it, sync the new weights, and return its work summary."""
+        if self.batch_builder is BatchBuilder.WORKER:
+            return await self._train_loaded_step(epoch, step_wall)
+        async with self._admission_window(step_wall):
             groups, metadata = await self.context.next_batch(
                 stall_timeout=admission_stall_timeout(
-                    recent_step_times=self._step_time_history,
-                    timeout_override=self.group_admission_stall_timeout,
+                    recent_step_times=self._step_time_history, timeout_override=self.group_admission_stall_timeout
                 ),
                 on_admitted=self._submit_admitted_groups_for_teacher_scoring,
             )
-        self.all_metrics.update(metadata.metrics)
-        await self._seal_speculator_capture()
-        await self._start_speculator_update()
+            self.all_metrics.update(metadata.metrics)
         if self.colocate_all:
             # Colocation runs at staleness 0, where no rollout is in flight once the batch is complete.
             if self._expert_block_sync is not None:
@@ -1439,25 +1475,109 @@ class RayPPOTrainer:
                 scored_distillation = await self._await_admitted_teacher_evidence(groups)
 
         step_wall.start("batch_assembly")
-        facts = tuple(
-            admitted.row_facts if admitted.row_facts is not None else RowFacts.from_batch(group.trajectory_batch)
-            for admitted, group in zip(metadata.groups, groups, strict=True)
-        )
+        facts = tuple(admitted.row_facts for admitted in metadata.groups)
         training_input = await asyncio.to_thread(self.convert_rollout_groups_to_training_input, groups, facts=facts)
         if scored_distillation is not None:
             self._attach_teacher_evidence(training_input, scored_distillation)
-        self._log_rollout_batch_completed(groups, duration_seconds=rollout_wait_timer.duration)
+        responses = [response for group in groups for response in group.trajectory_batch["response_ids"]]
+        self._log_rollout_batch_completed(
+            groups=len(groups),
+            sequences=len(responses),
+            response_tokens=sum(map(len, responses)),
+            duration_seconds=self.all_timings["wait_for_generation_buffer"],
+        )
 
-        step_wall.start("training_preparation")
-        with (
-            Timer("run_training", self.all_timings),
-            async_phase_window("training", step=self.global_step, enabled=self._rollout_spans_enabled),
-        ):
+        async with self._training_window(step_wall):
             status = await self._run_training(training_input, step_wall=step_wall)
+        summary = BatchSummary(
+            consumed_work(training_input),
+            training_input.metadata["consumed_stop_metrics"],
+            training_input.batch_size,
+        )
+        return await self._finish_train_step(epoch, step_wall, status, summary)
+
+    async def _train_loaded_step(self, epoch: int, step_wall: StepWallTime) -> BatchSummary:
+        context, policy = self.context, self.policy_model
+        num_experts = self._resolve_num_experts() if moe_router_replay_requested(self.cfg) else None
+        stall_timeout = admission_stall_timeout(
+            recent_step_times=self._step_time_history, timeout_override=self.group_admission_stall_timeout
+        )
+        async with self._admission_window(step_wall):
+            metadata = await context.next_batch_metadata(stall_timeout=stall_timeout)
+            reader = context.reader(metadata, stall_timeout=stall_timeout)
+            self.all_metrics.update(metadata.metrics)
+        step_wall.start("batch_assembly")
+        plan, metrics = plan_worker_batch(
+            self.cfg,
+            metadata.groups,
+            global_step=self.global_step,
+            dp_size=policy.actor_infos[0].rank.dp_size,
+            max_staleness_steps=context.config.max_staleness_steps,
+            num_experts=num_experts,
+        )
+        self.all_metrics.update(metrics)
+        if self.cfg.trainer.training_metrics:
+            record_consumed_staleness(
+                plan.uids,
+                plan.rollout_staleness,
+                [int(value) for group in plan.facts for value in group.response_len],
+                step=self.global_step,
+            )
+        reader_ref = ray.put(reader)
+        references = list(await context.wait(asyncio.gather(*policy.share_batch_groups(plan, reader_ref))))
+        loaded = await context.wait(
+            asyncio.gather(*policy.load_batch(plan, reader_ref, references, self.tokenizer.pad_token_id))
+        )
+        self.all_timings["load_worker_batch"] = max(loaded)
+        del references, reader_ref
+        self._log_rollout_batch_completed(
+            groups=len(plan.facts),
+            sequences=len(plan.uids),
+            response_tokens=sum(int(group.response_len.sum()) for group in plan.facts),
+            duration_seconds=self.all_timings["wait_for_generation_buffer"],
+        )
+        async with self._training_window(step_wall):
+            await self._drain_policy_event_loops()
+            with Timer("fwd_logprobs_values_reward", self.all_timings):
+                outputs = await context.wait(
+                    asyncio.gather(*policy.async_run_ray_method("pass_through", "prepare_loaded", plan.global_step))
+                )
+                await context.wait(asyncio.gather(*policy.async_run_ray_method("pass_through", "empty_cache")))
+                self.all_metrics.update(outputs[0].metadata["batch_metrics"])
+            step_wall.start("policy_training")
+            with Timer("train_critic_and_policy", self.all_timings), critical_phase("train_step", self.global_step):
+                if self.cfg.trainer.offload_optimizer_during_rollouts:
+                    with Timer("backload_policy_optimizer_to_gpu", self.all_timings):
+                        await asyncio.to_thread(policy.backload_to_gpu, backload_optimizer=True, backload_model=False)
+                with Timer("policy_train", self.all_timings):
+                    outputs = await asyncio.to_thread(
+                        collect_actor_results,
+                        policy.actor_infos,
+                        policy.async_run_ray_method("pass_through", "train_loaded", plan.global_step),
+                        operation="policy training",
+                    )
+                status = outputs[0].metadata["train_status"]
+                self.all_metrics.update({f"policy/{key}": value for key, value in status.items()})
+                await context.wait(asyncio.gather(*policy.async_run_ray_method("pass_through", "empty_cache")))
+            self._policy_version_step = self.global_step
+            await context.wait(
+                asyncio.gather(*policy.async_run_ray_method("pass_through", "unload_batch", plan.global_step))
+            )
+        summary = batch_summary(plan)
+        self._current_step_rewards = (
+            [float(value) for group in plan.facts for value in group.scalar_values]
+            if not plan.fields.token_rewards
+            else []
+        )
+        return await self._finish_train_step(epoch, step_wall, status, summary)
+
+    async def _finish_train_step(
+        self, epoch: int, step_wall: StepWallTime, status: dict, summary: BatchSummary
+    ) -> BatchSummary:
         step_wall.start("group_bookkeeping")
         self._log_optimizer_step_completed(
             epoch=epoch,
-            training_input=training_input,
+            summary=summary,
             duration_seconds=self.all_timings["train_critic_and_policy"],
         )
 
@@ -1468,7 +1588,7 @@ class RayPPOTrainer:
 
         logger.info(status)
         self.all_metrics.update({"trainer/epoch": epoch, "trainer/global_step": self.global_step})
-        return training_input
+        return summary
 
     def _attach_teacher_evidence(
         self, training_input: TrainingInputBatch, scored_distillation: tuple[RoutedScoredDistillationBatch, ...]
@@ -1488,15 +1608,16 @@ class RayPPOTrainer:
             }
         )
 
-    def _log_rollout_batch_completed(self, groups: List[RolloutGroup], *, duration_seconds: float) -> None:
-        response_ids = [response for group in groups for response in group.trajectory_batch["response_ids"]]
+    def _log_rollout_batch_completed(
+        self, *, groups: int, sequences: int, response_tokens: int, duration_seconds: float
+    ) -> None:
         logger.info(
             "Rollout batch completed: step={} groups={} trajectories={} response_tokens={} staleness_mean={:.3f} "
             "staleness_max={} duration_seconds={:.3f}",
             self.global_step,
-            len(groups),
-            len(response_ids),
-            sum(len(response) for response in response_ids),
+            groups,
+            sequences,
+            response_tokens,
             self.all_metrics["async/staleness_mean"],
             self.all_metrics["async/staleness_max"],
             duration_seconds,
@@ -2021,18 +2142,7 @@ class RayPPOTrainer:
                 trust_remote_code=True,
                 revision=self.cfg.trainer.policy.model.get("revision"),
             )
-            # Some families nest the expert count under a text/decoder sub-config.
-            candidates = [hf_config, getattr(hf_config, "text_config", None)]
-            for cfg_obj in candidates:
-                if cfg_obj is None:
-                    continue
-                for attr in ("num_experts", "num_local_experts", "n_routed_experts"):
-                    val = getattr(cfg_obj, attr, None)
-                    if isinstance(val, int) and val > 0:
-                        num_experts = val
-                        break
-                if num_experts is not None:
-                    break
+            num_experts = model_expert_count(hf_config)
         except Exception as e:  # noqa: BLE001 — config load is best-effort; fallback is safe
             logger.warning(
                 f"Could not resolve num_experts from policy model config for the "

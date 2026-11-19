@@ -79,6 +79,12 @@ from skyrl_train.utils.utils import (
 )
 from omegaconf import DictConfig
 from pathlib import Path
+import time
+from skyrl_train.batch_assembly import BatchPlan, assemble_rank_slice, forward_input, install_plan_advantages
+from skyrl_train.batch_metrics import advantage_metrics, forward_metrics, install_correction, token_staleness_metrics
+from skyrl_train.rollouts.payloads import RolloutReader
+from skyrl_train.utils.advantage_estimators import apply_loop_advantages, drop_advantage_inputs
+from skyrl_train.metric_reduction import WorldReduction
 
 
 def _grug_query_bias_updater(
@@ -720,6 +726,37 @@ class PPORayActorGroup:
         )
         return dispatch_class.dispatch(self.actor_infos, method_name, *args, settings=settings, **kwargs)
 
+    def share_batch_groups(self, plan: BatchPlan, reader: ObjectRef) -> list[ObjectRef]:
+        """Share each group through its first intersecting DP collection actor."""
+        dp_size = self.actor_infos[0].rank.dp_size
+        owners = {actor.rank.dp: actor for actor in self.actor_infos if actor.rank.is_collection_dp_rank()}
+        group_owners = {}
+        for dp in range(dp_size):
+            for index in plan.group_indices(dp, dp_size):
+                group_owners.setdefault(index, dp)
+        return [
+            owners[dp].handle.share_batch_groups.remote(
+                plan.global_step, reader, tuple(index for index, owner in group_owners.items() if owner == dp)
+            )
+            for dp in range(dp_size)
+        ]
+
+    def load_batch(
+        self, plan: BatchPlan, reader: ObjectRef, shared: list[tuple[tuple[int, ObjectRef], ...]], pad_token_id: int
+    ) -> list[ObjectRef]:
+        """Load each rank's intersecting shared groups on all of its mesh replicas."""
+        references = {index: ref for result in shared for index, ref in result}
+        plan_ref = ray.put(plan)
+        tasks = []
+        for actor in self.actor_infos:
+            indices = plan.group_indices(actor.rank.dp, actor.rank.dp_size)
+            tasks.append(
+                actor.handle.load_batch.remote(
+                    plan_ref, reader, indices, tuple(references[index] for index in indices), pad_token_id
+                )
+            )
+        return tasks
+
     def async_init_model(
         self,
         *args,
@@ -858,6 +895,89 @@ class PolicyWorkerBase(Worker):
         self._policy_train_spans: bool = self.cfg.trainer.policy_train_spans
         self._memory = LearnerCudaMetrics(enabled=self._policy_train_spans, rank=self._rank)
         self._model_version_step: int | None = None
+        self._loaded_batch: tuple[BatchPlan, TrainingInputBatch] | None = None
+
+    async def share_batch_groups(
+        self, batch_id: int, reader: RolloutReader, indices: tuple[int, ...]
+    ) -> tuple[tuple[int, ObjectRef], ...]:
+        references = await reader.share(batch_id, indices)
+        return tuple(zip(indices, references, strict=True))
+
+    async def load_batch(
+        self,
+        plan: BatchPlan,
+        reader: RolloutReader,
+        indices: tuple[int, ...],
+        references: tuple[ObjectRef, ...],
+        pad_token_id: int,
+    ) -> float:
+        """Assemble and retain the rank's rows using the complete batch's normalization rules."""
+        if self._loaded_batch is not None:
+            raise ValueError(f"worker batch {plan.global_step} is already loaded")
+        started = time.perf_counter()
+        groups = await reader.read_shared(plan.global_step, indices, references)
+        rows = plan.rank_rows(self.mesh_rank.dp, self.mesh_rank.dp_size)
+        data = await asyncio.to_thread(
+            assemble_rank_slice,
+            plan,
+            indices,
+            [group.trajectory_batch for group in groups],
+            rows,
+            pad_token_id=pad_token_id,
+            algorithm=self.cfg.trainer.algorithm,
+        )
+        self._loaded_batch = plan, data
+        return time.perf_counter() - started
+
+    def _forward_loaded_logprobs(self, data: TrainingInputBatch) -> torch.Tensor:
+        return self.forward(data)["output"]
+
+    def prepare_loaded(self, batch_id: int) -> TrainingOutputBatch:
+        """Retain policy scores and finalized training tensors with globally reduced metrics."""
+        plan, batch = self._loaded_batch
+        assert plan.global_step == batch_id
+        batch["action_log_probs"] = self._forward_loaded_logprobs(forward_input(batch))
+        batch["base_action_log_probs"] = None
+        reduction = WorldReduction(self.strategy.all_reduce, self.mesh_rank.is_collection_dp_rank())
+        metrics = (
+            token_staleness_metrics(batch, plan.facts, reduction=reduction) if self.cfg.trainer.training_metrics else {}
+        )
+        metrics.update(
+            forward_metrics(
+                batch,
+                staleness=batch.pop("rollout_staleness"),
+                algorithm=self.cfg.trainer.algorithm,
+                reduction=reduction,
+                training_metrics_enabled=self.cfg.trainer.training_metrics,
+                rollout_logprobs_enabled=self.cfg.generator.sampling_params.logprobs is not None,
+            )
+        )
+        algorithm = self.cfg.trainer.algorithm
+        metrics.update(install_correction(batch, algorithm, reduction=reduction))
+        rows = plan.rank_rows(self.mesh_rank.dp, self.mesh_rank.dp_size)
+        scores = install_plan_advantages(batch, plan, rows, algorithm, reduction=reduction)
+        metrics.update(
+            advantage_metrics(
+                batch,
+                algorithm=algorithm,
+                reduction=reduction,
+                step_wise=False,
+                group_scores=(plan.uids, scores[:, None]),
+            )
+        )
+        drop_advantage_inputs(apply_loop_advantages(batch))
+        output = TrainingOutputBatch({})
+        output.metadata = {"batch_metrics": metrics}
+        return output
+
+    def train_loaded(self, batch_id: int) -> TrainingOutputBatch:
+        plan, batch = self._loaded_batch
+        assert plan.global_step == batch_id
+        return self.ppo_train(batch)
+
+    def unload_batch(self, batch_id: int) -> None:
+        if self._loaded_batch is not None and self._loaded_batch[0].global_step == batch_id:
+            self._loaded_batch = None
 
     async def _begin_vllm_layerwise_weight_reload(self, inference_engine_client, *, enabled: bool) -> None:
         """Open a rank-synchronized vLLM reload around a streamed weight update."""
