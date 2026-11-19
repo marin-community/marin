@@ -524,10 +524,6 @@ class GrugRunConfig:
     max_task_failures: int = 10
 
     def __post_init__(self):
-        require_fp32_param_policy(self.trainer.trainer.mp)
-        mu_dtype = getattr(self.optimizer, "mu_dtype", None)
-        if mu_dtype is not None and jnp.dtype(mu_dtype) != jnp.float32:
-            raise ValueError(f"Long-loop SFT requires float32 optimizer moments; got optimizer.mu_dtype={mu_dtype}")
         checkpointer = self.trainer.trainer.checkpointer
         if self.first_checkpoint_restore_step is not None and checkpointer.keep_last_temporary_checkpoints < 1:
             # The restore gate saves a temporary checkpoint and reloads it after commit-time pruning.
@@ -837,7 +833,6 @@ def initialize_snowball_sft(
     state: GrugTrainState, checkpoint: str, mesh: Mesh, config: GrugTrainerConfig
 ) -> GrugTrainState:
     """Load the legacy single-shared-expert base, upcast BF16 HF starts to FP32, and seed LM-head rows."""
-    require_fp32_param_policy(config.trainer.mp)
     shared = state.params.stacked_blocks.stacked.shared
     if shared is None or len(shared) != 1:
         raise ValueError("The Snowball base has exactly one shared expert")
@@ -916,7 +911,6 @@ def initial_state(
     ema_beta: float | None,
     offload_opt_state: bool = False,
 ) -> GrugTrainState:
-    require_fp32_param_policy(mp)
     initialized_params = Transformer.init(model_config, key=key)
     num_moe_layers = model_config.num_layers
     params = mp.cast_to_param(initialized_params)
@@ -1231,7 +1225,6 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
-    require_fp32_param_policy(config.trainer.trainer.mp)
     if config.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION:
         verify_ragged_pjrt()
     if config.tensorstore_cache_bytes is not None:
@@ -1677,7 +1670,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
 def run_grug(config: GrugRunConfig) -> None:
     """Dispatch grug training through Fray jobs."""
-    require_fp32_param_policy(config.trainer.trainer.mp)
     trainer = config.trainer.trainer
     if trainer.id is None:
         raise ValueError("trainer.id must be set before dispatching grug training.")

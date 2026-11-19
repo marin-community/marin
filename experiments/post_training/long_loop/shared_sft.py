@@ -18,7 +18,6 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.sft import fresh_sft_config, read_json, sft_run
-from experiments.post_training.long_loop.sft_runtime.train import require_fp32_param_policy
 from experiments.sft.configs.snowball_h100 import SPEC as SNOWBALL_SFT
 from experiments.sft.launcher import DeprecatedSFTSpec, SFTSpec, sft_step
 
@@ -126,20 +125,13 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
 def native_sft_step(name: str, version: str, recipe: dict) -> ArtifactStep:
     spec = shared_sft_spec(name, version, recipe)
     trained = sft_step(spec, draccus.decode(ResourceConfig, recipe["resources"]))
-    build_config = trained.build_config
     run = trained.run
 
-    def checked_build_config(ctx: StepContext):
-        pod = build_config(ctx)
-        require_fp32_param_policy(pod.train_config.trainer.mp)
-        return pod
-
     def execute(config):
-        require_fp32_param_policy(config.train_config.trainer.mp)
         run(config)
         select_shared_sft(output=config.output_path, completed_updates=spec.num_train_steps)
 
-    return replace(trained, build_config=checked_build_config, run=execute)
+    return replace(trained, run=execute)
 
 
 def select_shared_sft(*, output: str, completed_updates: int) -> None:
