@@ -1,3 +1,15 @@
+# Shared run settings, referenced by the evaluations below.
+judges:
+  together: &together_judge
+    judge:
+      deployment: together
+      models:
+        openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
+      default_model: openai/gpt-oss-120b
+    judge_endpoint: https://api.together.xyz/v1
+    judge_api_key:
+    - env:TOGETHER_API_KEY
+    - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
 evaluations:
   aime24-smoke:
     benchmark: aime24
@@ -5,16 +17,7 @@ evaluations:
       limit: 2
   financebench:
     benchmark: financebench
-    run: &together_judge
-      judge:
-        deployment: together
-        models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
-      judge_endpoint: https://api.together.xyz/v1
-      judge_api_key:
-      - env:TOGETHER_API_KEY
-      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+    run: *together_judge
   simpleqa-verified:
     benchmark: simpleqa-verified
     run: *together_judge
