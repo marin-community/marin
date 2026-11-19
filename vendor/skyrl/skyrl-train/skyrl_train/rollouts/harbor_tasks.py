@@ -110,7 +110,6 @@ class HarborTaskSettings:
                 return DaytonaMachineFactory(
                     client_factory=client_factory,
                     ttl_minutes=self.environment.kwargs.get("ttl_minutes", 360),
-                    command_polling=self.environment.kwargs.get("command_polling", False),
                     network_policy=None
                     if policy is None
                     else DaytonaNetworkPolicy(

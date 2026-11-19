@@ -287,8 +287,7 @@ class LocalSnapshots:
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux execve per-argument limit regression")
 @pytest.mark.parametrize("shell", ["/bin/bash", "/bin/sh"])
-@pytest.mark.parametrize("command_polling", [False, True])
-def test_daytona_large_argument_preserves_process_contract(tmp_path: Path, shell: str, command_polling: bool) -> None:
+def test_daytona_large_argument_preserves_process_contract(tmp_path: Path, shell: str) -> None:
     class RecordedFiles(LocalFiles):
         def __init__(self):
             self.staging = set()
@@ -302,7 +301,7 @@ def test_daytona_large_argument_preserves_process_contract(tmp_path: Path, shell
         client.sandbox.fs = RecordedFiles()
         workdir = tmp_path / "work with spaces"
         workdir.mkdir()
-        machine = await DaytonaMachineFactory(lambda: client, command_polling=command_polling).create(
+        machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(source=RegistryImage("fixture@sha256:" + "a" * 64), workdir=str(workdir))
         )
         body = '/bin/cat; printf "|%s|%s|%s|%s" "$VALUE" "$PWD" "$PATH" "$0"; printf "error" >&2; exit 23'
@@ -412,14 +411,11 @@ def test_snapshot_preflight_builds_without_starting_sandbox_and_reuses_image():
 
 @pytest.mark.parametrize("policy", [None, DaytonaNetworkPolicy(DaytonaNetworkMode.DOMAIN_ALLOW_LIST, "example.org")])
 @pytest.mark.requires_host_setsid
-@pytest.mark.parametrize("command_polling", [False, True])
-def test_daytona_binary_command_and_files(tmp_path: Path, policy, command_polling) -> None:
+def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     async def scenario() -> None:
         client = LocalDaytona()
         workdir = tmp_path / "work"
-        machine = await DaytonaMachineFactory(
-            lambda: client, network_policy=policy, command_polling=command_polling
-        ).create(
+        machine = await DaytonaMachineFactory(lambda: client, network_policy=policy).create(
             MachineSpec(
                 source=RegistryImage("ubuntu:24.04"),
                 workdir=str(workdir),
@@ -473,10 +469,7 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy, command_pollin
 
 @pytest.mark.requires_host_setsid
 @pytest.mark.parametrize("inherit_image_workdir", [False, True])
-@pytest.mark.parametrize("command_polling", [False, True])
-def test_daytona_recreated_workdir_reopens_path_for_next_command(
-    tmp_path: Path, inherit_image_workdir: bool, command_polling: bool
-) -> None:
+def test_daytona_recreated_workdir_reopens_path_for_next_command(tmp_path: Path, inherit_image_workdir: bool) -> None:
     workdir = tmp_path / "work"
     workdir.mkdir()
     original_inode = workdir.stat().st_ino
@@ -498,7 +491,7 @@ def test_daytona_recreated_workdir_reopens_path_for_next_command(
     async def scenario():
         client = LocalDaytona()
         client.sandbox.process = StaleWorkdirProcess()
-        machine = await DaytonaMachineFactory(lambda: client, command_polling=command_polling).create(
+        machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir="" if inherit_image_workdir else str(workdir))
         )
         try:
@@ -538,10 +531,7 @@ def test_daytona_output_count_ignores_provider_diagnostics(tmp_path: Path) -> No
 
 @pytest.mark.skipif(shutil.which("setsid") is None, reason="Daytona command execution needs setsid")
 @pytest.mark.parametrize("collection_timeout, succeeds", [(0.01, False), (1.0, True)])
-@pytest.mark.parametrize("command_polling", [False, True])
-def test_daytona_output_collection_uses_its_own_deadline(
-    collection_timeout: float, succeeds: bool, command_polling: bool
-):
+def test_daytona_output_collection_uses_its_own_deadline(collection_timeout: float, succeeds: bool):
     class SlowFiles(LocalFiles):
         async def download_file(self, source: str) -> bytes:
             await asyncio.sleep(0.1)
@@ -550,9 +540,9 @@ def test_daytona_output_collection_uses_its_own_deadline(
     async def scenario():
         client = LocalDaytona()
         client.sandbox.fs = SlowFiles()
-        machine = await DaytonaMachineFactory(
-            lambda: client, output_collection_timeout=collection_timeout, command_polling=command_polling
-        ).create(MachineSpec(RegistryImage("ubuntu:24.04"), workdir=""))
+        machine = await DaytonaMachineFactory(lambda: client, output_collection_timeout=collection_timeout).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
+        )
         try:
             command = Command(("sh", "-c", "printf out; printf err >&2"))
             if succeeds:
@@ -568,20 +558,12 @@ def test_daytona_output_collection_uses_its_own_deadline(
 
 
 @pytest.mark.parametrize("oversized", [False, True])
-@pytest.mark.parametrize("command_polling", [False, True])
-def test_daytona_output_capture_preserves_provider_startup_failure(
-    tmp_path: Path, oversized: bool, command_polling: bool
-) -> None:
+def test_daytona_output_capture_preserves_provider_startup_failure(tmp_path: Path, oversized: bool) -> None:
     diagnostic = "Provider rejected the command before opening its output files"
     if oversized:
         diagnostic += "x" * (2 * PROVIDER_DIAGNOSTIC_CHAR_LIMIT)
 
     class RejectedCommandProcess(LocalProcess):
-        async def exec(self, command, cwd=None, env=None, timeout=None):
-            if env is not None:
-                return SimpleNamespace(exit_code=126, result=diagnostic)
-            return await super().exec(command, cwd=cwd, env=env, timeout=timeout)
-
         async def execute_session_command(self, name, request, timeout=None):
             response = asyncio.get_running_loop().create_future()
             response.set_result(SimpleNamespace(exit_code=126, result=diagnostic))
@@ -595,7 +577,6 @@ def test_daytona_output_capture_preserves_provider_startup_failure(
             client.sandbox,
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path)),
             AsyncExitStack(),
-            command_polling=command_polling,
         )
         try:
             with pytest.raises(RuntimeError, match="Failed to measure command output") as caught:
@@ -616,31 +597,20 @@ def test_daytona_output_capture_preserves_provider_startup_failure(
 
 @pytest.mark.requires_host_setsid
 @pytest.mark.parametrize("interruption", ["timeout", "cancel", "cancel_twice", "cancel_during_timeout_stop"])
-@pytest.mark.parametrize("command_polling", [False, True])
-def test_daytona_command_interruption_stops_descendants_and_preserves_next_command(
-    tmp_path, interruption, command_polling
-):
+def test_daytona_command_interruption_stops_descendants_and_preserves_next_command(tmp_path, interruption):
     async def scenario():
         stopping, release_stop = asyncio.Event(), asyncio.Event()
 
         class HeldStop(LocalProcess):
-            def __init__(self):
-                super().__init__()
-                self.cancellations = []
-
             async def exec(self, command, **kwargs):
-                try:
-                    if "stop-command" in command and interruption in {"cancel_twice", "cancel_during_timeout_stop"}:
-                        stopping.set()
-                        await release_stop.wait()
-                    return await super().exec(command, **kwargs)
-                except asyncio.CancelledError as cancellation:
-                    self.cancellations.append(cancellation)
-                    raise
+                if "stop-command" in command and interruption in {"cancel_twice", "cancel_during_timeout_stop"}:
+                    stopping.set()
+                    await release_stop.wait()
+                return await super().exec(command, **kwargs)
 
         client = LocalDaytona()
         client.sandbox.process = HeldStop()
-        machine = await DaytonaMachineFactory(lambda: client, command_polling=command_polling).create(
+        machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
         child = None
@@ -673,8 +643,6 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
                 with pytest.raises(asyncio.CancelledError) as caught:
                     await pending
                 assert caught.value.args == ("agent deadline",)
-                if not command_polling:
-                    assert caught.value is client.sandbox.process.cancellations[-1]
             await assert_child_stopped(machine, child)
             graded = await machine.run(Command(("sh", "-c", 'test "$(cat answer)" = 12 && printf 1.0')))
             assert (graded.exit_code, graded.stdout) == (0, b"1.0")
@@ -787,17 +755,11 @@ def test_daytona_user_probe_is_bounded_and_cancellation_closes_the_machine(tmp_p
 
 
 @pytest.mark.parametrize("command_timeout", [None, 30])
-@pytest.mark.parametrize("command_polling", [False, True])
 @pytest.mark.requires_host_setsid
-def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, command_timeout, command_polling):
+def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, command_timeout):
     provider_error = TimeoutError("Provider request timed out")
 
     class FailedRequest(LocalProcess):
-        async def exec(self, command, **kwargs):
-            if "candidate-request" in command_script(command):
-                raise provider_error
-            return await super().exec(command, **kwargs)
-
         async def execute_session_command(self, name, request, timeout=None):
             if "candidate-request" in command_script(request.command):
                 raise provider_error
@@ -806,7 +768,7 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
     async def scenario():
         client = LocalDaytona()
         client.sandbox.process = FailedRequest()
-        machine = await DaytonaMachineFactory(lambda: client, command_polling=command_polling).create(
+        machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
         try:
@@ -837,7 +799,7 @@ def test_daytona_session_creation_failure_preserves_machine_files(tmp_path, acce
     async def scenario():
         client = LocalDaytona()
         process = client.sandbox.process = FailedCreation()
-        machine = await DaytonaMachineFactory(lambda: client, command_polling=True).create(
+        machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
         try:
@@ -875,7 +837,7 @@ def test_daytona_submission_timeout_stops_accepted_command(tmp_path):
     async def scenario():
         client = LocalDaytona()
         process = client.sandbox.process = FailedSubmission()
-        machine = await DaytonaMachineFactory(lambda: client, command_polling=True).create(
+        machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
         try:
@@ -928,7 +890,7 @@ def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_
     async def scenario():
         client = LocalDaytona()
         process = client.sandbox.process = FailedStatus()
-        machine = await DaytonaMachineFactory(lambda: client, command_polling=True).create(
+        machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
         before = process.executions
@@ -999,7 +961,7 @@ def test_daytona_polling_recovers_status_and_deletion_without_replaying(tmp_path
     async def scenario():
         client = LocalDaytona()
         process = client.sandbox.process = TransientStatus()
-        machine = await DaytonaMachineFactory(lambda: client, command_polling=True).create(
+        machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
         delays.clear()
@@ -1026,7 +988,7 @@ def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation
 
     class BlockedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
-            if "candidate-fail" in command_script(command):
+            if "wc -c" in command:
                 raise OSError("Provider command failed")
             if "rm -rf /tmp/.shellbox-" in command:
                 entered.set()
@@ -1039,7 +1001,7 @@ def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation
         machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
         )
-        pending = asyncio.create_task(machine.run(Command(("candidate-fail",))))
+        pending = asyncio.create_task(machine.run(Command(("printf", "ready"))))
         await asyncio.wait_for(entered.wait(), timeout=5)
         pending.cancel("grading deadline")
         with pytest.raises(asyncio.CancelledError) as caught:
@@ -1053,8 +1015,7 @@ def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation
 
 
 @pytest.mark.requires_host_setsid
-@pytest.mark.parametrize("command_polling", [False, True])
-def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error(command_polling):
+def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error():
     output_error = TimeoutError("Provider output request timed out")
 
     class FailedOutputAndCleanup(LocalProcess):
@@ -1068,7 +1029,7 @@ def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error(comman
     async def scenario():
         client = LocalDaytona()
         client.sandbox.process = FailedOutputAndCleanup()
-        machine = await DaytonaMachineFactory(lambda: client, command_polling=command_polling).create(
+        machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
         )
         with pytest.raises(RuntimeError) as caught:
@@ -1082,8 +1043,7 @@ def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error(comman
 
 @pytest.mark.parametrize("path_source", ["image", "task"])
 @pytest.mark.requires_host_setsid
-@pytest.mark.parametrize("command_polling", [False, True])
-def test_daytona_root_cleanup_does_not_execute_candidate_path_programs(tmp_path, path_source, command_polling):
+def test_daytona_root_cleanup_does_not_execute_candidate_path_programs(tmp_path, path_source):
     binary = tmp_path / "bin"
     binary.mkdir()
     marker = tmp_path / "root-cleanup-executed"
@@ -1105,7 +1065,7 @@ def test_daytona_root_cleanup_does_not_execute_candidate_path_programs(tmp_path,
     async def scenario():
         client = LocalDaytona()
         client.sandbox.process = ImageProcess()
-        machine = await DaytonaMachineFactory(lambda: client, command_polling=command_polling).create(
+        machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(
                 RegistryImage("ubuntu:24.04"),
                 workdir=str(tmp_path),
@@ -1168,10 +1128,9 @@ def test_daytona_completion_between_probe_and_stop_preserves_the_machine(tmp_pat
 @pytest.mark.parametrize("primary_failure", [False, True])
 @pytest.mark.parametrize("cleanup_failure", ["timeout", "exit"])
 @pytest.mark.parametrize("deletion_failure", [False, True])
-@pytest.mark.parametrize("command_polling", [False, True])
 @pytest.mark.requires_host_setsid
 def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error(
-    primary_failure, cleanup_failure, deletion_failure, command_polling
+    primary_failure, cleanup_failure, deletion_failure
 ):
     provider_error = OSError("Provider command failed")
     deletion_error = DaytonaConflictError("Sandbox state change in progress", status_code=409)
@@ -1189,7 +1148,7 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
     async def scenario():
         client = FailedDeletion(deletion_error) if deletion_failure else LocalDaytona()
         client.sandbox.process = FailedCleanup()
-        machine = await DaytonaMachineFactory(lambda: client, command_polling=command_polling).create(
+        machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
         )
         error_type = OSError if primary_failure else RuntimeError
@@ -1214,7 +1173,7 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
     async def scenario():
         guest = await DockerMachineFactory().create(MachineSpec(DockerImage("ubuntu:24.04"), workdir="/tmp"))
 
-        class GuestProcess:
+        class GuestProcess(LocalProcess):
             async def exec(self, command, cwd=None, env=None, timeout=None):
                 args = ["exec", "--user", "0"]
                 if cwd:

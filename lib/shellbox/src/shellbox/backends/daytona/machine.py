@@ -6,7 +6,6 @@
 import asyncio
 import json
 import logging
-import math
 import re
 import shlex
 import stat
@@ -201,7 +200,6 @@ class DaytonaMachine:
         resources: AsyncExitStack,
         *,
         output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
-        command_polling: bool = False,
     ):
         self.sandbox = sandbox
         self.spec = spec
@@ -211,7 +209,6 @@ class DaytonaMachine:
         self._sessions: set[DaytonaProcessSession] = set()
         self._acquisitions: set[asyncio.Task[None]] = set()
         self._closing: asyncio.Task[None] | None = None
-        self.command_polling = command_polling
 
     async def _user_argv(self, argv: tuple[str, ...], user: str | None) -> tuple[str, ...]:
         if user in (None, "root", "0"):
@@ -326,13 +323,15 @@ class DaytonaMachine:
         except Exception as cleanup_error:
             failure.add_note(f"Daytona machine cleanup failed: {cleanup_error!r}")
 
-    async def _cleanup_failed_command(
-        self, prefix: str, pidfile: str, completed_path: str, started: bool, failure: BaseException
-    ) -> None:
+    async def _abort_command(self, prefix: str, started: bool, failure: BaseException) -> None:
+        """Stop possibly submitted work, or close after interrupted preparation.
+
+        Finish despite repeated cancellation. If stopping fails, close the machine
+        and attach cleanup errors to the original failure. Files belong to run().
+        """
         try:
             if started:
-                await finish_owned(own_cleanup(self._stop_command(pidfile, completed_path)))
-                await finish_owned(own_cleanup(self._remove_command_files(prefix)))
+                await finish_owned(own_cleanup(self._stop_command(f"{prefix}/pid", f"{prefix}/completed")))
             else:
                 await finish_owned(own_cleanup(self.close()))
         except BaseException as cleanup_error:
@@ -368,7 +367,11 @@ class DaytonaMachine:
 
     @asynccontextmanager
     async def _command_session(self) -> AsyncIterator[str]:
-        """Keep the session available until output and diagnostics have been read."""
+        """Own session acquisition and deletion through output/diagnostic collection.
+
+        A cancelled or failed acquisition still deletes any late session. Cleanup
+        finishes despite cancellation; its errors do not replace a primary failure.
+        """
         name = f"shellbox-run-{uuid.uuid4().hex}"
         creation = asyncio.create_task(self.sandbox.process.create_session(name, request_timeout=INTERRUPT_TIMEOUT))
         primary_error = None
@@ -395,6 +398,7 @@ class DaytonaMachine:
                     primary_error.add_note(f"Daytona command session cleanup failed: {error!r}")
 
     async def _poll_command(self, path: str, name: str) -> _CompletedCommand:
+        """Submit once, then poll bounded status reads, retrying transient read failures."""
         process = self.sandbox.process
         polling = ExponentialBackoff(initial=0.2, maximum=MAX_COMMAND_POLL_DELAY, factor=1.5)
         retry = ExponentialBackoff(initial=0.5, maximum=MAX_COMMAND_POLL_DELAY, factor=2)
@@ -434,11 +438,135 @@ class DaytonaMachine:
                 time.monotonic() - started,
             )
 
-    async def run(self, command: Command) -> Result:
-        async with AsyncExitStack() as sessions:
-            return await self._run_command(command, sessions)
+    async def _prepare_command(self, command: Command, prefix: str) -> str:
+        """Stage one command, returning its script path without submitting it."""
+        environment = {**self.spec.env, **command.env}
+        stdin_path, stdout_path, stderr_path = (f"{prefix}/{part}" for part in ("in", "out", "err"))
+        script_path = f"{prefix}/command.sh"
+        pidfile, completed_path = f"{prefix}/pid", f"{prefix}/completed"
+        argv = (
+            "/bin/sh",
+            "-c",
+            'PATH=$_SHELLBOX_COMMAND_PATH; unset _SHELLBOX_COMMAND_PATH; export PATH; exec "$@"',
+            "shellbox-agent",
+            *command.argv,
+        )
+        argv = await self._user_argv(argv, command.user)
+        argv = (
+            "/bin/sh",
+            "-c",
+            START_COMMAND,
+            "shellbox-start",
+            "/bin/sh",
+            "-c",
+            RUN_COMMAND,
+            "shellbox-command",
+            pidfile,
+            completed_path,
+            *argv,
+        )
+        script = (
+            f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
+            f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
+        )
+        prepared = await self.sandbox.process.exec(
+            _control_command(f"umask 077; mkdir {shlex.quote(prefix)}"), cwd=CONTROL_CWD
+        )
+        if prepared.exit_code:
+            raise RuntimeError(f"Cannot create private command directory: {prepared.result}")
+        if command.stdin:
+            await self.sandbox.fs.upload_file_stream(command.stdin, stdin_path)
+        lines = []
+        for key, value in environment.items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                raise ValueError("Invalid command environment variable name")
+            lines.append(f"export {shlex.quote(key + '=' + value)}")
+        if cwd := command.cwd or self.spec.workdir:
+            lines.append(f"cd {shlex.quote(cwd)} || exit $?")
+        lines.append(_control_script(script))
+        script = "\n".join(lines) + "\n"
+        await self.sandbox.fs.upload_file_stream(script.encode(), script_path)
+        return script_path
 
-    async def _run_command(self, command: Command, sessions: AsyncExitStack) -> Result:
+    async def _execute_command(
+        self, command: Command, prefix: str, sessions: AsyncExitStack
+    ) -> _CompletedCommand | None:
+        """Prepare and wait under the caller's deadline; None means it expired.
+
+        The session stays in sessions until output and diagnostics are read.
+        Submission/status failures abort possibly accepted work without replay.
+        Failed session acquisition has not submitted work. Caller expiry stops
+        submitted work before returning None; cancellation finishes abort before
+        propagating. Provider failures remain exceptions.
+        """
+        started = False
+        try:
+            async with asyncio.timeout(command.timeout) as deadline:
+                script_path = await self._prepare_command(command, prefix)
+                session_id = await sessions.enter_async_context(self._command_session())
+                # The provider may accept the command before the submission request fails.
+                started = True
+                return await self._poll_command(script_path, session_id)
+        except TimeoutError as error:
+            if not deadline.expired():
+                if started and not self._closed:
+                    await self._abort_command(prefix, started, error)
+                raise
+            if started:
+                try:
+                    await self._stop_command(f"{prefix}/pid", f"{prefix}/completed")
+                except asyncio.CancelledError as cancellation:
+                    await self._abort_command(prefix, started, cancellation)
+                    raise
+                except Exception as error:
+                    failure = RuntimeError("Cannot stop the Daytona command process group")
+                    await self._close_preserving_failure(failure)
+                    raise failure from error
+            return None
+        except asyncio.CancelledError as cancellation:
+            await self._abort_command(prefix, started, cancellation)
+            raise
+        except BaseException as error:
+            if started and not self._closed:
+                await self._abort_command(prefix, started, error)
+            raise
+
+    async def _collect_command_output(self, command: Command, prefix: str, response: _CompletedCommand) -> Result:
+        """Read bounded outputs under a separate deadline, retaining provider diagnostics.
+
+        Sessions must remain open here. A collection timeout is an infrastructure
+        failure even when the command itself has already completed successfully.
+        """
+        try:
+            async with asyncio.timeout(self.output_collection_timeout):
+                try:
+                    stdout, stdout_truncated = await self._read_output(f"{prefix}/out", command.output_limit_bytes)
+                    stderr, stderr_truncated = await self._read_output(f"{prefix}/err", command.output_limit_bytes)
+                except Exception as error:
+                    diagnostic = ""
+                    try:
+                        logs = await self.sandbox.process.get_session_command_logs(
+                            response.session_id, response.command_id, request_timeout=INTERRUPT_TIMEOUT
+                        )
+                        diagnostic = logs.output or (logs.stdout or "") + (logs.stderr or "")
+                    except Exception as diagnostic_error:
+                        error.add_note(f"Daytona session diagnostic collection failed: {diagnostic_error!r}")
+                    error.add_note(
+                        "Daytona exec response: "
+                        + json.dumps(
+                            {
+                                "exit_code": response.exit_code,
+                                "diagnostic": diagnostic[:PROVIDER_DIAGNOSTIC_CHAR_LIMIT],
+                                "diagnostic_truncated": len(diagnostic) > PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
+                            }
+                        )
+                    )
+                    raise
+        except TimeoutError as error:
+            raise RuntimeError("Cannot collect Daytona command output") from error
+        return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
+
+    async def run(self, command: Command) -> Result:
         if self._closed:
             raise RuntimeError("Machine is closed")
         if not command.argv:
@@ -446,163 +574,33 @@ class DaytonaMachine:
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
         prefix = f"/tmp/.shellbox-{uuid.uuid4().hex}"
-        stdin_path, stdout_path, stderr_path = (f"{prefix}/{part}" for part in ("in", "out", "err"))
-        script_path = f"{prefix}/command.sh"
-        pidfile, completed_path = f"{prefix}/pid", f"{prefix}/completed"
-        started = False
         primary_error = None
-        completed = False
-        command_files_removed = False
-        response = None
-        command_session = None
-        environment = {**self.spec.env, **command.env}
-        try:
-            async with asyncio.timeout(command.timeout) as deadline:
-                argv = (
-                    "/bin/sh",
-                    "-c",
-                    'PATH=$_SHELLBOX_COMMAND_PATH; unset _SHELLBOX_COMMAND_PATH; export PATH; exec "$@"',
-                    "shellbox-agent",
-                    *command.argv,
-                )
-                argv = await self._user_argv(argv, command.user)
-                argv = (
-                    "/bin/sh",
-                    "-c",
-                    START_COMMAND,
-                    "shellbox-start",
-                    "/bin/sh",
-                    "-c",
-                    RUN_COMMAND,
-                    "shellbox-command",
-                    pidfile,
-                    completed_path,
-                    *argv,
-                )
-                script = (
-                    f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
-                    f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
-                )
-                prepared = await self.sandbox.process.exec(
-                    _control_command(f"umask 077; mkdir {shlex.quote(prefix)}"), cwd=CONTROL_CWD
-                )
-                if prepared.exit_code:
-                    raise RuntimeError(f"Cannot create private command directory: {prepared.result}")
-                if command.stdin:
-                    await self.sandbox.fs.upload_file_stream(command.stdin, stdin_path)
-                if self.command_polling:
-                    lines = []
-                    for key, value in environment.items():
-                        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-                            raise ValueError("Invalid command environment variable name")
-                        lines.append(f"export {shlex.quote(key + '=' + value)}")
-                    if cwd := command.cwd or self.spec.workdir:
-                        lines.append(f"cd {shlex.quote(cwd)} || exit $?")
-                    lines.append(_control_script(script))
-                    script = "\n".join(lines) + "\n"
-                await self.sandbox.fs.upload_file_stream(script.encode(), script_path)
-                if self.command_polling:
-                    session_id = await sessions.enter_async_context(self._command_session())
-                    # The provider may accept the command before the submission request fails.
-                    started = True
-                    command_session = await self._poll_command(script_path, session_id)
-                    exit_code = command_session.exit_code
-                else:
-                    started = True
-                    response = await self.sandbox.process.exec(
-                        _control_command(shlex.join(("/bin/sh", script_path))),
-                        cwd=command.cwd or self.spec.workdir or None,
-                        env=environment,
-                        timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,
-                    )
-                    exit_code = response.exit_code
-                completed = True
-            async with asyncio.timeout(self.output_collection_timeout):
-                limit = command.output_limit_bytes
-                try:
-                    stdout, stdout_truncated = await self._read_output(stdout_path, limit)
-                    stderr, stderr_truncated = await self._read_output(stderr_path, limit)
-                except Exception as error:
-                    diagnostic = ""
-                    if command_session is not None:
-                        try:
-                            logs = await self.sandbox.process.get_session_command_logs(
-                                command_session.session_id,
-                                command_session.command_id,
-                                request_timeout=INTERRUPT_TIMEOUT,
-                            )
-                            diagnostic = logs.output or (logs.stdout or "") + (logs.stderr or "")
-                        except Exception as diagnostic_error:
-                            error.add_note(f"Daytona session diagnostic collection failed: {diagnostic_error!r}")
-                    else:
-                        assert response is not None
-                        diagnostic = response.result or ""
-                    error.add_note(
-                        "Daytona exec response: "
-                        + json.dumps(
-                            {
-                                "exit_code": exit_code,
-                                "diagnostic": diagnostic[:PROVIDER_DIAGNOSTIC_CHAR_LIMIT],
-                                "diagnostic_truncated": len(diagnostic) > PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
-                            }
-                        )
-                    )
-                    raise
-            return Result(
-                exit_code,
-                stdout,
-                stderr,
-                stdout_truncated,
-                stderr_truncated,
-                ExitReason.EXITED,
-            )
-        except TimeoutError as error:
-            if completed:
-                primary_error = RuntimeError("Cannot collect Daytona command output")
-                raise primary_error from error
-            if not deadline.expired():
-                primary_error = error
-                if self.command_polling and started and not self._closed:
-                    await self._cleanup_failed_command(prefix, pidfile, completed_path, started, error)
-                    command_files_removed = True
-                raise
-            if not started:
-                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+        async with AsyncExitStack() as sessions:
             try:
-                await self._stop_command(pidfile, completed_path)
-            except asyncio.CancelledError as cancellation:
-                primary_error = cancellation
-                await self._cleanup_failed_command(prefix, pidfile, completed_path, started, cancellation)
+                response = await self._execute_command(command, prefix, sessions)
+                if response is None:
+                    return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+                return await self._collect_command_output(command, prefix, response)
+            except BaseException as error:
+                primary_error = error
                 raise
-            except Exception as error:
-                primary_error = RuntimeError("Cannot stop the Daytona command process group")
-                await self._close_preserving_failure(primary_error)
-                raise primary_error from error
-            return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
-        except asyncio.CancelledError as cancellation:
-            primary_error = cancellation
-            await self._cleanup_failed_command(prefix, pidfile, completed_path, started, cancellation)
-            raise
-        except BaseException as error:
-            primary_error = error
-            if self.command_polling and started and not completed and not self._closed:
-                await self._cleanup_failed_command(prefix, pidfile, completed_path, started, error)
-                command_files_removed = True
-            raise
-        finally:
-            if not self._closed and not command_files_removed and not isinstance(primary_error, asyncio.CancelledError):
-                try:
-                    await self._remove_command_files(prefix)
-                except asyncio.CancelledError as cancellation:
-                    await self._close_preserving_failure(cancellation)
-                    raise
-                except Exception as error:
-                    if primary_error is None:
-                        primary_error = RuntimeError("Cannot remove Daytona command files")
+            finally:
+                if not self._closed:
+                    try:
+                        if isinstance(primary_error, asyncio.CancelledError):
+                            await finish_owned(own_cleanup(self._remove_command_files(prefix)))
+                        else:
+                            await self._remove_command_files(prefix)
+                    except asyncio.CancelledError as cancellation:
+                        await self._close_preserving_failure(cancellation)
+                        raise
+                    except Exception as error:
+                        if primary_error is None:
+                            failure = RuntimeError("Cannot remove Daytona command files")
+                            await self._close_preserving_failure(failure)
+                            raise failure from error
+                        primary_error.add_note(f"Daytona command cleanup failed: {error}")
                         await self._close_preserving_failure(primary_error)
-                        raise primary_error from error
-                    primary_error.add_note(f"Daytona command cleanup failed: {error}")
-                    await self._close_preserving_failure(primary_error)
 
     async def upload(self, source: Path, target: str) -> None:
         if self._closed:
@@ -704,7 +702,6 @@ class DaytonaMachineFactory:
         output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
         network_policy: DaytonaNetworkPolicy | None = None,
         image_build: DaytonaImageBuild = DaytonaImageBuild.SNAPSHOT,
-        command_polling: bool = False,
     ):
         self.client_factory = client_factory
         self.ttl_minutes = ttl_minutes
@@ -712,7 +709,6 @@ class DaytonaMachineFactory:
         self.output_collection_timeout = output_collection_timeout
         self.network_policy = network_policy
         self.image_build = image_build
-        self.command_polling = command_polling
 
     def _clients(self) -> Callable[[], AsyncDaytona]:
         """Resolve the configured client factory for one provider session."""
@@ -805,7 +801,6 @@ class DaytonaMachineFactory:
                 effective_spec,
                 lifetime,
                 output_collection_timeout=self.output_collection_timeout,
-                command_polling=self.command_polling,
             )
             if spec.workdir:
                 result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/", env={"PATH": CONTROL_PATH}))

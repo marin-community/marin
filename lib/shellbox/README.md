@@ -53,21 +53,19 @@ If command execution fails or is cancelled, later sandbox-deletion failures are
 attached as exception notes. Cleanup failure after a successful command still
 raises an error.
 
-Set `command_polling=True` on `DaytonaMachineFactory` to execute commands in
-provider sessions with short status requests. This opt-in mode keeps `run`'s
+Daytona runs each command in a provider session and waits using short status
+requests. Commands can outlast the synchronous gateway limit while keeping their
 caller deadline, separate bounded output files and process cleanup.
-Use this mode for commands that exceed the synchronous provider gateway limit.
 Status polling backs off from 0.2 to about 5 seconds and retries transient
 request failures without resubmitting the command. Logs report status-request
 and failure counts. Five consecutive transient status errors stop the command.
-Each polled command creates and deletes a provider session.
-In Harbor, set `environment.kwargs.command_polling`;
-SkyRL exposes it as `terminal_bench_config.harbor.daytona_command_polling`.
+Each command creates and deletes a provider session.
+Command environment names must be valid shell variable names.
 
 The session stays open through output collection, so a failure to read the output
 files can still include provider diagnostics, limited to 4,096 characters.
-If neither the command nor the machine specifies a working directory, commands
-use the image's working directory. Each command enters its working directory
+If the command has no working directory and the machine's `workdir` is empty,
+commands use the image's working directory. Each command enters its working directory
 anew, including after a command deletes and recreates it.
 After cleaning up a failed session creation, the sandbox can run another command.
 A failed submission can have started the command. Cleanup must then stop that

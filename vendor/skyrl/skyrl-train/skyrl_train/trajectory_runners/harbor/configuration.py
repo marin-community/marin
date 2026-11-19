@@ -58,7 +58,6 @@ ENVIRONMENT_SCHEMA = SectionSchema(
         "ttl_minutes": FieldMapping("ttl_minutes", field_type="kwargs"),
         "daytona_api_key_env": FieldMapping("api_key_env", field_type="kwargs"),
         "eval_daytona_api_key_env": FieldMapping("eval_api_key_env", field_type="kwargs"),
-        "daytona_command_polling": FieldMapping("command_polling", field_type="kwargs"),
     }
 )
 

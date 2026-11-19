@@ -103,7 +103,6 @@ class DaytonaEnvironment(BaseEnvironment):
         create_timeout: float = 600,
         image_build: str = DaytonaImageBuild.SNAPSHOT,
         output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
-        command_polling: bool = False,
         model_endpoint: str | None = None,
         model_name: str | None = None,
         judge_access: JudgeAccess = JudgeAccess.VERIFIER,
@@ -137,7 +136,6 @@ class DaytonaEnvironment(BaseEnvironment):
             output_collection_timeout=output_collection_timeout,
             network_policy=policy,
             image_build=DaytonaImageBuild(image_build),
-            command_polling=command_polling,
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
         self.judge_access = JudgeAccess(judge_access)
