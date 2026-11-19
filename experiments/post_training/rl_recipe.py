@@ -78,7 +78,7 @@ BATCH_SETTINGS = {
     "trainer.micro_train_batch_size_per_gpu": "micro_train_batch_size_per_gpu",
 }
 
-RUNNER_KEYS = frozenset(
+_DERIVED_RECIPE_KEYS = frozenset(
     {
         "entrypoint",
         "trainer.resume_mode",
@@ -90,10 +90,14 @@ RUNNER_KEYS = frozenset(
         "trainer.hf_export_checkpoint",
         "trainer.rollout_buffer.groups_per_family",
         "generator.enable_http_endpoint",
-        "generator.trajectory_retention",
-        "generator.run_engines_locally",
+        "generator.num_inference_engines",
+        "generator.inference_engine_tensor_parallel_size",
+        "generator.inference_engine_pipeline_parallel_size",
+        "generator.inference_engine_data_parallel_size",
+        "generator.inference_engine_expert_parallel_size",
     }
 )
+RUNNER_KEYS = _DERIVED_RECIPE_KEYS | {"generator.trajectory_retention", "generator.run_engines_locally"}
 _GATED_KEYS = frozenset(
     {
         "trainer.max_steps",
@@ -350,7 +354,7 @@ def _training_config(
 ) -> RecipePatch:
     recipe = preset.recipe
     authored = recipe.config.to_skyrl()
-    if owned := sorted(key for key in RUNNER_KEYS if get_path(authored, key) is not MISSING):
+    if owned := sorted(key for key in _DERIVED_RECIPE_KEYS if get_path(authored, key) is not MISSING):
         raise ValueError(f"recipe settings are derived by the runner: {', '.join(owned)}")
     micro_batch, _ = recipe.layout.workload.batch_parameters(recipe.config)
     geometry = asdict(recipe.layout.megatron)
