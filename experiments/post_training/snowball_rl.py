@@ -530,7 +530,16 @@ _PRESETS = (
 
 SNOWBALL = ModelPresets(
     model="snowball",
-    presets=_PRESETS,
+    presets=(
+        *_PRESETS,
+        replace(
+            next(preset for preset in _PRESETS if preset.name == "speed-short"),
+            name="eval-short",
+            accepts_init=True,
+            controls=None,
+            evaluations=(EVALUATIONS["eval_lite"],),
+        ),
+    ),
     namespace="snowball-rl",
     controls={
         name: ControlPin(name, "648b5687f0", "2026.11.06.1", count)

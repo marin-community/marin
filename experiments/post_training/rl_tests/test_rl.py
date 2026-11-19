@@ -61,7 +61,7 @@ def printed_status(output):
     return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
 
 
-def test_all_presets_plan_with_their_declared_controls(selection):
+def test_all_presets_plan_with_their_declared_controls(selection, tmp_path):
     table = snowball_model.SNOWBALL
     for preset in table.presets:
         arguments = ["--preset", preset.name, "--version", preset.revision, "--plan"]
@@ -78,6 +78,28 @@ def test_all_presets_plan_with_their_declared_controls(selection):
     result = CliRunner().invoke(snowball.command(unpinned, argv=tuple(arguments)), arguments)
     assert result.exit_code == 4 and "no control pin" in result.output, (result.output, result.exception)
     assert "--issue ISSUE_NUMBER --run" in result.output
+
+    name, version = "tests/evaluation-init", "2026.11.17"
+    root = tmp_path / name / version
+    _json(
+        root / RECORD_FILENAME,
+        ArtifactRecord(name=name, version=version, result_type=result_type_name(Artifact), source=str(root)).model_dump(
+            mode="json"
+        ),
+    )
+    for preset_name in ("eval-short", "speed-short", "data-short"):
+        preset = table.by_name[preset_name]
+        arguments = ["--preset", preset_name, "--version", preset.revision, "--init", f"{name}@{version}", "--plan"]
+        if preset.tasks_input == "required":
+            arguments += ["--tasks", SELECTION_IDENTITY]
+        result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
+        if preset_name == "eval-short":
+            assert result.exit_code == 0, (result.output, result.exception)
+            status = printed_status(result.stdout.partition("\nStepSpec(")[0])
+            assert status["inputs"]["model"].partition(":")[0] == f"{name}@{version}"
+            assert status["updates"] == 0
+        else:
+            assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
 
 def test_preset_variants_compose(selection, tmp_path, monkeypatch):
@@ -280,6 +302,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         "data-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2", "2026.11.19.1": "4aa3aed9"},
         "speed-long": {"2026.11.11.1": "cd0a5f4e", "2026.11.17.1": "f29155cc", "2026.11.19.1": "9edc7b70"},
         "train-long": {"2026.11.11.1": "4945b701", "2026.11.17.1": "b411c765", "2026.11.19.1": "e56a62fa"},
+        "eval-short": {"2026.11.19.1": "226272d0"},
     }
     configs = assert_revisioned_native_configs(
         snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch
@@ -288,7 +311,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
         assert config["iris"]["wandb_entity"] == "marin-community"
         assert config["iris"]["allocation"]["num_nodes"] * config["iris"]["allocation"]["gpus_per_node"] <= 40
-        generating = name in ("speed-short", "data-short")
+        generating = name in ("speed-short", "data-short", "eval-short")
         assert (
             config["runtime"]["training_type"],
             trainer["rollout_buffer"]["max_staleness_steps"],
@@ -298,16 +321,27 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         if generating:
             assert config["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
             assert config["iris"]["allocation"]["num_nodes"] == 1
-            assert config["skyrl"]["trajectory_runner"]["max_concurrent_tasks"] == (
-                2048 if name == "speed-short" else 1024
-            )
+            expected_concurrency = {"speed-short": 2048, "data-short": 1024, "eval-short": 20}
+            assert config["skyrl"]["trajectory_runner"]["max_concurrent_tasks"] == expected_concurrency[name]
             assert trainer["eval_interval"] > 0 and config["inputs"]["validation_data"]
             sampling = generator["eval_sampling_params"]
-            assert (sampling["temperature"], sampling["max_generate_length"], sampling["ignore_eos"]) == (
-                1,
-                4096 if name == "speed-short" else 8192,
-                name == "speed-short",
-            )
+            expected_sampling = {
+                "speed-short": (1, 4096, True),
+                "data-short": (1, 8192, False),
+                "eval-short": (0, 8192, False),
+            }
+            assert (
+                sampling["temperature"],
+                sampling["max_generate_length"],
+                sampling["ignore_eos"],
+            ) == expected_sampling[name]
+            if name == "eval-short":
+                (source,) = config["inputs"]["validation_data"]
+                assert source["identity"].partition(":")[0] == f"{SELECTION_PREFIX}/eval-lite@2026.11.17.1"
+                assert source["relative_path"] == "full_validation.parquet"
+                assert not config["inputs"].get("evaluation_data")
+                assert not config["inputs"]["train_data"]
+                assert generator["eval_n_samples_per_prompt"] == 1
         else:
             assert generator["apply_overlong_filtering"] is False
         assert (trainer["bf16"], generator["model_dtype"], trainer["algorithm"]["batch_invariant"]) == (
