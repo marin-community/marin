@@ -13,7 +13,7 @@ from taskcompendium.runtime.resources import inline_resource
 
 from taskforge.effects.context import Context
 from taskforge.harness.protocol import ToolResult
-from taskforge.harness.tools.base import ValidatedTool
+from taskforge.harness.tools.base import FILE_ERRORS, ValidatedTool
 from taskforge.lowering import LoweringSettings, check_candidates, lower_with_settings
 from taskforge.model.content_hash import pretty_json
 from taskforge.model.controls import Candidate
@@ -68,7 +68,7 @@ class GradeTool(ValidatedTool[CandidateArgs]):
             candidate = await read_candidate(ctx, args, task)
             check_candidates(task, (candidate,))
             spec = lower_with_settings(task, self.settings, self.factories)
-        except (ValueError, NotImplementedError) as error:
+        except (ValueError, NotImplementedError, *FILE_ERRORS) as error:
             return ToolResult(f"Cannot grade draft: {error}")
         result = await ctx.emit(GradeCandidate(spec, candidate))
         try:

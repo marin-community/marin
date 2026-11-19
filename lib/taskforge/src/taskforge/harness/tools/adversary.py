@@ -8,7 +8,7 @@ from taskcompendium.models import TaskSpec
 
 from taskforge.effects.context import Context
 from taskforge.harness.protocol import ReturnRequest, ToolResult
-from taskforge.harness.tools.base import ValidatedTool
+from taskforge.harness.tools.base import FILE_ERRORS, ValidatedTool
 from taskforge.harness.tools.grade import CandidateArgs, read_candidate
 from taskforge.lowering import check_candidates
 from taskforge.model.controls import Candidate, RewardBand
@@ -62,6 +62,6 @@ class ReportTool(ValidatedTool[ReportArgs]):
                 ]
             )
             check_candidates(self.task, tuple(finding.candidate for finding in findings))
-        except ValueError as error:
+        except (ValueError, *FILE_ERRORS) as error:
             return ToolResult(f"Invalid report: {error}")
         return ReturnRequest("report", AdversaryReport(findings))

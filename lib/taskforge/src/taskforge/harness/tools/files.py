@@ -8,7 +8,7 @@ from typing import override
 
 from taskforge.effects.context import Context
 from taskforge.harness.protocol import ToolResult
-from taskforge.harness.tools.base import ValidatedTool
+from taskforge.harness.tools.base import FILE_ERRORS, ValidatedTool
 from taskforge.resources.env import ReadFile, WriteFile
 
 
@@ -40,7 +40,10 @@ class ReadFileTool(ValidatedTool[ReadArgs]):
     async def run(self, ctx: Context, args: ReadArgs) -> ToolResult:
         if args.offset < 0 or (args.limit is not None and args.limit < 0):
             return ToolResult("offset and limit must be nonnegative")
-        data = await ctx.emit(ReadFile(PurePosixPath(args.path), offset=args.offset, limit=args.limit))
+        try:
+            data = await ctx.emit(ReadFile(PurePosixPath(args.path), offset=args.offset, limit=args.limit))
+        except FILE_ERRORS as error:
+            return ToolResult(f"File operation failed: {error}")
         return ToolResult(base64.b64encode(data).decode() if args.base64 else data.decode(errors="replace"))
 
 
@@ -56,5 +59,8 @@ class WriteFileTool(ValidatedTool[WriteArgs]):
             data = base64.b64decode(args.content, validate=True) if args.base64 else args.content.encode()
         except ValueError as error:
             return ToolResult(f"Invalid base64: {error}")
-        await ctx.emit(WriteFile(PurePosixPath(args.path), data))
+        try:
+            await ctx.emit(WriteFile(PurePosixPath(args.path), data))
+        except FILE_ERRORS as error:
+            return ToolResult(f"File operation failed: {error}")
         return ToolResult("File written")
