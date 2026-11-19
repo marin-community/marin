@@ -154,10 +154,13 @@ MARIN_INFERENCE_CHAT_TEMPLATE = _replace_once(
     _TRAINING_GENERATION_PROMPT,
     _INFERENCE_GENERATION_PROMPT,
 )
-"""Template served with released Grug SFT exports.
+"""Template for serving Grug SFT models.
 
-Omitting ``enable_thinking`` selects ``/think``. In ``/think`` mode the
+Exports embed ``MARIN_CHAT_TEMPLATE``, so a server uses this one only when it is
+passed explicitly (``--chat-template``). Omitting ``enable_thinking`` selects
+``/think``, as the 10.05 release template does. In ``/think`` mode the
 generation prompt ends with ``<|start_think|>``, so the completion begins inside
 the reasoning span: everything before the first ``<|end_think|>`` is reasoning.
-Rendered conversations match ``MARIN_CHAT_TEMPLATE``, which training data uses.
+For an explicit reasoning mode, prompt plus completion equals the
+``MARIN_CHAT_TEMPLATE`` render of that conversation.
 """
