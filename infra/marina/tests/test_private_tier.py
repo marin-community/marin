@@ -60,12 +60,13 @@ from taskcompendium.backend_requirements import (
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
-from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
+from infra.marina.apps.rl_data_catalog.load_curriculum import atlas_source_restrictions, load_curriculum
 from infra.marina.apps.rl_data_catalog.load_rollouts import stage_rollouts
 from infra.marina.apps.rl_data_catalog.server import licensing, restriction_registry
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
 from infra.marina.apps.rl_data_catalog.server.restrictions import (
+    declaration_restriction,
     require_public_data,
     restriction_overrides,
 )
@@ -901,3 +902,32 @@ def test_explicit_license_ruling_withholds_attempts(catalog_database, catalog_qu
 def reject_content_read(connection, cursor, statement, parameters, context, executemany):
     if "atlas_rollout" in statement or "FROM atlas_difficulty" in statement:
         raise AssertionError("Withheld rollout route read task-level content")
+
+
+@pytest.mark.parametrize("tag", ["absent", None, "private_always"])
+def test_curriculum_policy_read_is_compact_and_preserves_fail_closed_tags(catalog_query, tmp_path, tag):
+    root = str(tmp_path / "compact-curriculum-policy")
+    stage_private_catalog(root)
+    load_tier_catalog(CurationCatalog(root), catalog_query)
+    load_id = catalog_query("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"][0]["load_id"]
+    catalog_query(
+        "UPDATE atlas_sources SET declaration=jsonb_set(declaration,'{notes}',to_jsonb(repeat('x',6000000))) "
+        "WHERE load_id=:load AND id=:source",
+        {"load": load_id, "source": OPEN_SOURCE_ID},
+    )
+    if tag == "absent":
+        catalog_query(
+            "UPDATE atlas_sources SET declaration=declaration-'data_restriction' WHERE load_id=:load AND id=:source",
+            {"load": load_id, "source": OPEN_SOURCE_ID},
+        )
+    else:
+        catalog_query(
+            "UPDATE atlas_sources SET declaration=jsonb_set(declaration,'{data_restriction}',CAST(:tag AS JSONB)) "
+            "WHERE load_id=:load AND id=:source",
+            {"load": load_id, "source": OPEN_SOURCE_ID, "tag": json.dumps(tag)},
+        )
+    policies = atlas_source_restrictions(catalog_query, load_id)
+    assert len(json.dumps(policies).encode()) < 1024
+    expected = DataRestriction.OPEN if tag == "absent" else DataRestriction.PRIVATE_ALWAYS
+    assert declaration_restriction(policies[OPEN_SOURCE_ID]) is expected
+    assert ("data_restriction" in policies[OPEN_SOURCE_ID]) is (tag != "absent")

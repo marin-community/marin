@@ -110,6 +110,17 @@ def release_tasks(paths: list[str]) -> Iterator[dict]:
                     }
 
 
+def atlas_source_restrictions(query: AppletQuery, load_id: str) -> dict[str, dict[str, Any]]:
+    """Read only policy inputs, preserving absent tags separately from explicit nulls."""
+    rows = query(
+        "SELECT id,jsonb_build_object('id',id) || CASE WHEN declaration ? 'data_restriction' "
+        "THEN jsonb_build_object('data_restriction',declaration->'data_restriction') "
+        "ELSE '{}'::jsonb END AS declaration FROM atlas_sources WHERE load_id=:load_id",
+        {"load_id": load_id},
+    )["rows"]
+    return {row["id"]: row["declaration"] for row in rows}
+
+
 def load_curriculum(
     release_uri: str,
     coverage_uri: str,
@@ -136,13 +147,7 @@ def load_curriculum(
     atlas_current = query("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"]
     atlas_declarations: dict[str, dict[str, Any]] = {}
     if atlas_current:
-        atlas_declarations = {
-            row["id"]: row["declaration"]
-            for row in query(
-                "SELECT id, declaration FROM atlas_sources WHERE load_id=:load_id",
-                {"load_id": atlas_current[0]["load_id"]},
-            )["rows"]
-        }
+        atlas_declarations = atlas_source_restrictions(query, atlas_current[0]["load_id"])
     private = sorted(
         {
             row.id
