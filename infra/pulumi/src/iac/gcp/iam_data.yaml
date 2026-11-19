@@ -893,6 +893,8 @@ custom_roles:
 owned_service_accounts:
 - account_id: pulumi-ci
   display_name: Pulumi CI preview (read-only)
+- account_id: belay-intake
+  display_name: Belay intake from main-branch GitHub Actions
 project_grants:
 - role: projects/hai-gcp-models/roles/RayWorker
   members:
@@ -1676,6 +1678,14 @@ service_accounts:
     - principalSet://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/attribute.repository/marin-community/tpu-inference
     - principalSet://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/attribute.repository/marin-community/vllm
     - principalSet://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/attribute.repository/marin-community/xla
+- email: belay-intake@hai-gcp-models.iam.gserviceaccount.com
+  grants:
+  - role: roles/iam.serviceAccountTokenCreator
+    members:
+    - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:ref:refs/heads/main
+  - role: roles/iam.workloadIdentityUser
+    members:
+    - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:ref:refs/heads/main
 - email: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
   grants:
   - role: roles/iam.serviceAccountTokenCreator
