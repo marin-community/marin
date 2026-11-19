@@ -46,7 +46,7 @@ def declaration_license_ban(declaration: dict[str, Any]) -> LicenseBan | None:
 
 
 def license_projection(declaration: dict[str, Any]) -> dict[str, Any]:
-    """Apply the selected ban version without altering archived declarations or task bytes."""
+    """Project current bans and publication approvals without changing archived declarations."""
     if ban := declaration_license_ban(declaration):
         return {**declaration, "status": "Excluded", "license_ban": ban.model_dump(mode="json")}
     if decision := publication_scope_decision(declaration):
