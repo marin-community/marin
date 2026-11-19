@@ -110,16 +110,20 @@ fails to build. For Hero BF16 on 16 GB200 GPUs with full decode graphs, it raise
 
 ## Hero serving settings
 
-Use the measured Hero BF16 recipes for the launch topology and serving settings. Check whether
-full decode graphs were qualified for your vLLM wheel. Confirm the resolved CUDA graph mode in
-the worker startup logs. [Hero recipes](https://github.com/marin-community/marin/issues/11430) ·
+Use the measured Hero BF16 recipes to choose serving settings. The multi-host data-parallel
+setup uses the benchmark launcher. The catalog keeps data-parallel ranks on one host. Check
+whether full decode graphs were qualified for your vLLM wheel and confirm the resolved graph
+mode in the worker startup logs. A mode of `NONE` leaves CUDA graphs off.
+[Benchmark setup](https://github.com/marin-community/marin/issues/11430) ·
+[Measured full-decode recipe](https://github.com/marin-community/marin/issues/11430#issuecomment-6877151630) ·
 [Full decode graph qualification](https://github.com/marin-community/vllm/pull/130) ·
 [Marin wheel adoption](https://github.com/marin-community/marin/pull/11635).
 
-Leave prefix caching unset for normal eval and chat serving so vLLM uses its model-specific
-default. Keep the explicit cache-off setting when reproducing the BFCL parity baseline.
+Omit any cache-off override for normal eval and chat serving so vLLM can use its model-specific
+default. The Hero measurements and BFCL parity preset use cache-off. Keep that setting when
+reproducing those runs.
 [vLLM default selection](https://github.com/marin-community/vllm/blob/47a8e415bff17b9376f02d9b92edcc67e962eaee/vllm/engine/arg_utils.py#L2858) ·
-[BFCL parity preset](https://github.com/marin-community/marin/pull/11528).
+[BFCL parity preset](https://github.com/marin-community/marin/blob/b3611d8a8ab480d263a7e7bf2cc62c33e0f5da27/experiments/evaluation/mochi/model-mochi-sft-step400407.yaml#L35).
 
 ## Multi-node GPU serving
 
