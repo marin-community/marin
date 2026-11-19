@@ -9,28 +9,18 @@ from marina.client import AppletQuery
 
 # Copy evidence before its assessment header; each query selects missing headers.
 ASSESSMENT_TABLES = ("populations", "items", "packets", "assessments")
-# The per-task tables copy in task-identity hash buckets: their rows dominate the
-# retained volume and the gateway's per-statement timeout bounds the copy size.
-# The bucket count stays a power of two so the mask avoids a literal modulo, which
-# the SQL gateway's parameter parser would read as a placeholder; 128 buckets keep the
-# biggest retained pipeline's per-statement row count near a thousand.
-RETAIN_BUCKETED_TABLES = ("items", "packets")
-RETAIN_COPY_BUCKETS = 128
+# Copy only a small page of missing task IDs at a time. The primary key supports
+# these lookups without scanning a whole pipeline once per hash bucket.
+RETAIN_COPY_BATCH_ROWS = {"items": 32, "packets": 8}
 
 
 def retain_prior_assessments(
     query: AppletQuery, columns: Mapping[str, str], prior_load_id: str, load_id: str
 ) -> dict[str, int]:
-    """Copy complete prior assessment units absent from a fully staged catalog load.
+    """Preserve prior assessment units using bounded, restartable task-ID pages.
 
-    Each missing pipeline copies in bounded statements: one INSERT..SELECT over every
-    missing pipeline exceeded the SQL gateway's per-statement timeout once the retained
-    packet history grew past the r22 volume, and per-pipeline bounds overtook the biggest
-    retained populations as well. The per-task tables (items, packets) copy in
-    deterministic hash buckets of the task identity; the per-pipeline header tables
-    (populations, assessments) are small and copy whole. The missing-pipeline probe reads
-    the prior load's materialized cohort summaries instead of scanning the retained item
-    volume, for the same reason.
+    Existing task rows and complete target assessment headers are left unchanged.
+    Copy headers last, after every missing item and packet has been staged.
     """
     copied = {}
     for table in ASSESSMENT_TABLES:
@@ -53,21 +43,38 @@ def retain_prior_assessments(
                 "prior_load_id": prior_load_id,
                 "pipeline_key": row["pipeline_key"],
             }
-            if table in RETAIN_BUCKETED_TABLES:
-                for bucket in range(RETAIN_COPY_BUCKETS):
+            if table in RETAIN_COPY_BATCH_ROWS:
+                after_task_id = None
+                while True:
+                    cursor_clause = "AND previous.task_id > :after_task_id " if after_task_id is not None else ""
+                    page = query(
+                        f"SELECT previous.task_id FROM atlas_{table} previous "
+                        "WHERE previous.load_id = :prior_load_id AND previous.pipeline_key = :pipeline_key "
+                        + cursor_clause
+                        + f"AND NOT EXISTS (SELECT 1 FROM atlas_{table} target "
+                        "WHERE target.load_id = :load_id AND target.pipeline_key = previous.pipeline_key "
+                        "AND target.task_id = previous.task_id) "
+                        "ORDER BY previous.task_id LIMIT :batch_rows",
+                        {**parameters, "after_task_id": after_task_id, "batch_rows": RETAIN_COPY_BATCH_ROWS[table]},
+                    )["rows"]
+                    if not page:
+                        break
+                    identities = {f"task_id_{index}": item["task_id"] for index, item in enumerate(page)}
+                    placeholders = ", ".join(":" + name for name in identities)
                     result = query(
                         f"INSERT INTO atlas_{table} (load_id, {', '.join(names)}) "
                         f"SELECT :load_id, {', '.join('previous.' + name for name in names)} "
                         f"FROM atlas_{table} previous WHERE previous.load_id = :prior_load_id "
                         "AND previous.pipeline_key = :pipeline_key "
-                        f"AND hashtext(previous.task_id) & {RETAIN_COPY_BUCKETS - 1} = :bucket "
+                        f"AND previous.task_id IN ({placeholders}) "
                         "AND NOT EXISTS (SELECT 1 FROM atlas_assessments current_assessment "
                         "WHERE current_assessment.load_id = :load_id "
                         "AND current_assessment.pipeline_key = previous.pipeline_key) "
                         "ON CONFLICT DO NOTHING",
-                        {**parameters, "bucket": bucket},
+                        {**parameters, **identities},
                     )
                     total += result["row_count"]
+                    after_task_id = page[-1]["task_id"]
             else:
                 result = query(
                     f"INSERT INTO atlas_{table} (load_id, {', '.join(names)}) "

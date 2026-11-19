@@ -9,19 +9,24 @@ from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prio
 
 
 def test_refresh_retains_prior_evidence_without_overwriting_current_assessments():
-    columns = {table: "pipeline_key TEXT, payload TEXT" for table in ("assessments", "populations", "items", "packets")}
+    columns = {
+        table: "pipeline_key TEXT, task_id TEXT, payload TEXT"
+        for table in ("assessments", "populations", "items", "packets")
+    }
     with sqlite3.connect(":memory:") as database:
+        database.execute("CREATE TABLE atlas_cohort_summaries (load_id TEXT, pipeline_key TEXT)")
         for table in columns:
-            database.execute(f"CREATE TABLE atlas_{table} (load_id TEXT, pipeline_key TEXT, payload TEXT)")
+            database.execute(f"CREATE TABLE atlas_{table} (load_id TEXT, {columns[table]})")
             database.executemany(
-                f"INSERT INTO atlas_{table} VALUES (?, ?, ?)",
+                f"INSERT INTO atlas_{table} VALUES (?, ?, ?, ?)",
                 [
-                    ("prior", "retired-source", f"archived-{table}"),
-                    ("prior", "active-source", "previous"),
-                    ("new", "active-source", "current"),
+                    ("prior", "retired-source", "retired-task", f"archived-{table}"),
+                    ("prior", "active-source", "active-task", "previous"),
+                    ("new", "active-source", "active-task", "current"),
                 ],
             )
 
+        database.execute("INSERT INTO atlas_cohort_summaries SELECT load_id,pipeline_key FROM atlas_assessments")
         statements = []
 
         def query(sql, parameters):
@@ -40,8 +45,7 @@ def test_refresh_retains_prior_evidence_without_overwriting_current_assessments(
                 "retired-source": f"archived-{table}",
                 "active-source": "current",
             }
-        # each missing pipeline copies in its own bounded statement (the r23
-        # gateway fix): one distinct-key read plus one copy per pipeline
+        # This small fixture needs one copy per missing pipeline in each table.
         copies = [statement for statement in statements if statement.startswith("INSERT")]
         assert len(copies) == len(columns) * 1  # one missing pipeline per table
         assert retain_prior_assessments(query, columns, "prior", "new") == dict.fromkeys(columns, 0)
@@ -49,14 +53,19 @@ def test_refresh_retains_prior_evidence_without_overwriting_current_assessments(
 
 def test_refresh_copies_each_missing_pipeline_in_its_own_statement():
     """The gateway bound: N missing pipelines cost N bounded copy statements."""
-    columns = {table: "pipeline_key TEXT, payload TEXT" for table in ("assessments", "populations", "items", "packets")}
+    columns = {
+        table: "pipeline_key TEXT, task_id TEXT, payload TEXT"
+        for table in ("assessments", "populations", "items", "packets")
+    }
     with sqlite3.connect(":memory:") as database:
+        database.execute("CREATE TABLE atlas_cohort_summaries (load_id TEXT, pipeline_key TEXT)")
         for table in columns:
-            database.execute(f"CREATE TABLE atlas_{table} (load_id TEXT, pipeline_key TEXT, payload TEXT)")
+            database.execute(f"CREATE TABLE atlas_{table} (load_id TEXT, {columns[table]})")
             database.executemany(
-                f"INSERT INTO atlas_{table} VALUES (?, ?, ?)",
-                [("prior", f"retired-{index}", f"archived-{table}-{index}") for index in range(5)],
+                f"INSERT INTO atlas_{table} VALUES (?, ?, ?, ?)",
+                [("prior", f"retired-{index}", f"task-{index}", f"archived-{table}-{index}") for index in range(5)],
             )
+        database.execute("INSERT INTO atlas_cohort_summaries SELECT load_id,pipeline_key FROM atlas_assessments")
         statements = []
 
         def query(sql, parameters):

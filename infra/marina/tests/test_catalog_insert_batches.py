@@ -7,8 +7,10 @@ import json
 import time
 
 import pytest
+from marina.applets import validate_query
 from sqlalchemy import create_engine, text
 
+from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.load import TABLE_COLUMNS, insert_rows
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
@@ -16,10 +18,12 @@ COMMITTED_PREFIX_ROWS = 13
 
 
 def execute_batch(engine, sql, parameters):
+    validate_query(sql)
     with engine.begin() as connection:
         connection.execute(text("SET LOCAL statement_timeout = '2s'"))
         result = connection.execute(text(sql), parameters)
-    return {"rows": [], "row_count": result.rowcount}
+        rows = [dict(row) for row in result.mappings()] if result.returns_rows else []
+    return {"rows": rows, "row_count": result.rowcount}
 
 
 @pytest.fixture
@@ -111,3 +115,93 @@ def test_large_packets_stay_intact_in_single_row_statements(batch_database):
     with batch_database.begin() as connection:
         stored = dict(connection.execute(text("SELECT task_id,packet FROM atlas_packets WHERE load_id='large'")).all())
     assert stored == {row["task_id"]: row["packet"] for row in packets}
+
+
+def test_retained_history_copies_only_bounded_missing_rows(batch_database, record_property):
+    items = [
+        {
+            "pipeline_key": "retired",
+            "task_id": f"task-{index:06d}",
+            "cohort": "admitted",
+            "status": "reviewed",
+            "verdict": "good",
+            "explanation": "Original archived judgment",
+            "evidence_ids": ["task"],
+            "packet_uri": "s3://example/original",
+            "has_task": True,
+            "omissions": [],
+            "exclusion_reason": None,
+            "defects": [],
+        }
+        for index in range(503)
+    ]
+    packets = [
+        {"pipeline_key": "retired", "task_id": item["task_id"], "packet": "archived evidence " * 7000}
+        for item in items[:25]
+    ]
+
+    def seed(sql, parameters):
+        return execute_batch(batch_database, sql, parameters)
+
+    assessment = {
+        "pipeline_key": "retired",
+        "source_id": "source",
+        "scope": "full",
+        "model": {},
+        "rubric": "Archived",
+        "curation": {},
+        "curation_uri": "s3://example/curation",
+        "traces": [],
+    }
+    insert_rows(seed, "atlas_assessments", TABLE_COLUMNS["assessments"], "old", [assessment])
+    insert_rows(
+        seed,
+        "atlas_populations",
+        TABLE_COLUMNS["populations"],
+        "old",
+        [{"pipeline_key": "retired", "cohort": "admitted", "population": len(items), "sample_count": len(items)}],
+    )
+    with batch_database.begin() as connection:
+        connection.execute(text("INSERT INTO atlas_cohort_summaries VALUES ('old','retired','admitted',1,'{}'::jsonb)"))
+    insert_rows(seed, "atlas_items", TABLE_COLUMNS["items"], "old", items)
+    insert_rows(seed, "atlas_packets", TABLE_COLUMNS["packets"], "old", packets)
+    # Previous hash-bucket attempts can leave holes rather than a sorted prefix.
+    committed = [{**item} for item in items[::3]]
+    committed[0]["explanation"] = "Already staged judgment stays unchanged"
+    insert_rows(seed, "atlas_items", TABLE_COLUMNS["items"], "new", committed)
+    insert_rows(seed, "atlas_packets", TABLE_COLUMNS["packets"], "new", packets[::3])
+    maximum = {"items": 0, "packets": 0}
+    elapsed = []
+
+    def query(sql, parameters):
+        started = time.monotonic()
+        result = execute_batch(batch_database, sql, parameters)
+        elapsed.append(time.monotonic() - started)
+        for table, limit in (("items", 32), ("packets", 8)):
+            if sql.startswith(f"INSERT INTO atlas_{table}"):
+                assert result["row_count"] <= limit
+                maximum[table] = max(maximum[table], result["row_count"])
+        return result
+
+    copied = retain_prior_assessments(query, TABLE_COLUMNS, "old", "new")
+    assert copied == {
+        "populations": 1,
+        "items": len(items) - len(committed),
+        "packets": len(packets) - len(packets[::3]),
+        "assessments": 1,
+    }
+    assert retain_prior_assessments(query, TABLE_COLUMNS, "old", "new") == dict.fromkeys(copied, 0)
+    with batch_database.begin() as connection:
+        restored = dict(
+            connection.execute(text("SELECT task_id,explanation FROM atlas_items WHERE load_id='new'")).all()
+        )
+        restored_packets = dict(
+            connection.execute(text("SELECT task_id,packet FROM atlas_packets WHERE load_id='new'")).all()
+        )
+    expected = {item["task_id"]: item["explanation"] for item in items}
+    expected.update({item["task_id"]: item["explanation"] for item in committed})
+    assert restored == expected
+    assert restored_packets == {item["task_id"]: item["packet"] for item in packets}
+    record_property("retained_max_item_rows", maximum["items"])
+    record_property("retained_max_packet_rows", maximum["packets"])
+    record_property("retained_max_statement_seconds", max(elapsed))
