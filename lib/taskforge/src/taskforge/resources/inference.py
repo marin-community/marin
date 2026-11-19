@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Protocol, override
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest
-from taskforge.effects.issues import Hold, Restart, Transient
+from taskforge.effects.issues import ContextExceeded, Hold, Restart, Transient
 from taskforge.llm.client import (
     RETRYABLE_STATUSES,
     Attempt,
@@ -22,10 +22,6 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.wire import replay_arguments
 from taskforge.model.llm import TOOL_SCHEMA, Completion, FinishReason, Message, ToolCall, ToolSchema, Usage
 from taskforge.resources.execution import Notify, retry_effect
-
-
-class ContextExceeded(Exception):
-    """The provider rejected the conversation because its context window is full."""
 
 
 @dataclass(frozen=True, slots=True)

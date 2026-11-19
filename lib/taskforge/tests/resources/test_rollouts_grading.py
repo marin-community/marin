@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import json
 from functools import partial
+from pathlib import PurePosixPath
 
 import pytest
 from lib.taskforge.tests.resources.rollout_fakes import FakeEngine, twelve
@@ -15,7 +17,7 @@ from rolloutengine.models import (
     RolloutOperation,
     TraceMode,
 )
-from rolloutengine.test_support import arithmetic_task, rollout_spec
+from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits, rollout_spec
 from shellbox.machine import (
     ExecSetupFailed,
     MachineCancelled,
@@ -30,6 +32,9 @@ from taskcompendium.models import (
     ConversationInput,
     ConversationToolCall,
     ConversationTrace,
+    ResourceGroups,
+    ScriptGrader,
+    StdoutReward,
     TextMessage,
     ToolResult,
 )
@@ -40,9 +45,15 @@ from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Retrying
 from taskforge.effects.issues import OutputBudgetExhausted, Restart, Transient
 from taskforge.effects.log import EventLog
+from taskforge.harness.protocol import ToolResult as ToolReply
+from taskforge.harness.tools.grade import GradeTool
+from taskforge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine
 from taskforge.model.controls import Candidate
+from taskforge.resources.env import ShellboxEnvFactory, WriteFile
 from taskforge.resources.grading import GradeCandidate, GradingResource, candidate_turns, grade
 from taskforge.resources.rollouts import RolloutResource, SolverRollout, interruption, run_rollout
+from taskforge.resources.sandbox.factories import shellsim_factory
+from taskforge.stages.author import install_env
 
 
 def test_candidate_file_calls_do_not_collide_with_conversation_history() -> None:
@@ -206,3 +217,48 @@ def test_machine_failure_policy(operation: RolloutOperation, failure: RuntimeErr
     )
     decision = interruption(error)
     assert type(decision) is expected and str(failure) in str(decision)
+
+
+@pytest.mark.parametrize("path", ["answer.py", "/workspace/answer.py", "/elsewhere/answer.py"])
+async def test_grade_tool_stages_candidate_file_at_its_workspace_path(path: str) -> None:
+    script = b"""
+from pathlib import Path
+staged = Path('/workspace/answer.py')
+print(int(staged.exists() and staged.read_text() == 'print(12)' and not Path('/workspace/workspace').exists()))
+"""
+    grader = ScriptGrader(
+        argv=("python3", "/tests/grade.py"),
+        reward=StdoutReward(),
+        environment=requirements(image=None),
+        answer_path="/app/answer.txt",
+        timeout=120,
+    )
+    task = arithmetic_task(
+        grader=grader,
+        resources=ResourceGroups(verifier=(inline_resource("grade.py", script),)),
+        environment_requirements=requirements(image=None),
+        output_paths=("/workspace/answer.py",),
+    )
+    resource = GradingResource(rollout_engine({"shellsim": shellsim_factory()}, command_timeout=None), "test")
+    ctx = Context(log=EventLog())
+    env = await ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5, ctx.emit).create(
+        requirements(image=None)
+    )
+    try:
+        install_env(ctx, env)
+        ctx.resource(resource, resource.fingerprint)
+        ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(resource,))
+        await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), task.model_dump_json().encode()))
+        await ctx.emit(WriteFile(PurePosixPath("/workspace/answer.py"), b"print(12)"))
+        await ctx.emit(WriteFile(PurePosixPath("/elsewhere/answer.py"), b"print(12)"))
+        settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+        tool = GradeTool("/workspace/task.json", {"shellsim": shellsim_factory()}, settings)
+        result = await tool(ctx, {"reply": "12", "files": [path]})
+        await ctx.drain()
+    finally:
+        await env.close()
+    assert isinstance(result, ToolReply)
+    if path.startswith("/elsewhere"):
+        assert "pass a path relative to /workspace" in result.content
+    else:
+        assert json.loads(result.content)["reward"] == 1

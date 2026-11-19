@@ -10,7 +10,7 @@ from taskcompendium.models import TaskSpec
 
 from taskforge.effects.context import Context
 from taskforge.harness.protocol import SubmitRequest, ToolResult
-from taskforge.harness.tools.base import ValidatedTool
+from taskforge.harness.tools.base import FILE_ERRORS, ValidatedTool
 from taskforge.lowering import check_candidates
 from taskforge.model.controls import CONTROLS
 from taskforge.model.workpiece import Submission
@@ -26,7 +26,7 @@ async def read_submission(
         task = TaskSpec.model_validate_json(await ctx.emit(ReadFile(PurePosixPath(task_path))))
         controls = CONTROLS.validate_json(await ctx.emit(ReadFile(PurePosixPath(controls_path))))
         check_candidates(task, tuple(control.candidate for control in controls))
-    except ValueError as error:
+    except (ValueError, *FILE_ERRORS) as error:
         return ToolResult(f"Invalid draft: {error}")
     submission = Submission(task, controls, notes)
     findings = gate(submission)

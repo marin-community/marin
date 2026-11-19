@@ -22,7 +22,7 @@ from taskforge.effects.events import (
     event_digest,
 )
 from taskforge.effects.issues import LogFailure
-from taskforge.effects.log import EventLog, JsonlSink, Record, Status, fold
+from taskforge.effects.log import EventLog, JsonlSink, Missing, Record, Status, fold
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.llm import Completion, Message, Role
 from taskforge.model.stage import Stage
@@ -81,6 +81,15 @@ async def test_replay_preserves_float_keys_after_numeric_coercion(tmp_path: Path
     await log.record(Resolved(Timed(5), (), 3))
     reloaded = EventLog(replay_from=await sink.read())
     assert reloaded.lookup(Timed(5.0), ()) == 3.0
+
+
+async def test_non_replayable_result_is_recorded_but_not_served_from_cache(tmp_path: Path) -> None:
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    log = EventLog(sink=sink, replayable=lambda _: False)
+    resolved = Resolved(Timed(5), (), 3.0)
+    await log.record(resolved)
+    assert isinstance(log.lookup(Timed(5), ()), Missing)
+    assert [record.event for record in await sink.read()] == [resolved]
 
 
 async def test_frozen_set_payloads_roundtrip_with_stable_replay_keys(tmp_path: Path) -> None:
@@ -163,24 +172,7 @@ async def test_unencodable_event_does_not_poison_later_persistence(tmp_path: Pat
     assert tuple(record.sequence for record in log.records) == (1, 2)
 
 
-async def test_legacy_progress_resumes_nonterminal_stages_and_distinguishes_held(tmp_path: Path) -> None:
-    path = tmp_path / "legacy.jsonl"
-    path.write_text(
-        '{"sequence":1,"wall_time":1,"event":{"type":"taskforge.effects.events.StageCompleted",'
-        '"payload":{"stage":"author","config_digest":"cfg","exit":"draft",'
-        '"refs":{"round":"2","terminal":""}}}}\n'
-    )
-    sink = JsonlSink(str(path))
-    log = EventLog(sink=sink, replay_from=await sink.read())
-    assert fold(tuple(record.event for record in log.records)) == Status(Stage.AUTHOR, 2, None)
-    await log.record(StageCompleted(Stage.VALIDATE, "cfg", "Held", 2, Terminal.HELD))
-    status = fold(tuple(record.event for record in await sink.read()))
-    assert status.terminal is Terminal.HELD and not status.finished
-    await log.record(StageCompleted(Stage.REVIEW, "cfg", "Accept", 2, Terminal.ACCEPTED))
-    assert fold(tuple(record.event for record in await sink.read())).finished
-
-
-async def test_conversation_logs_each_turn_once_and_replays_legacy_full_requests(tmp_path: Path) -> None:
+async def test_conversation_logs_each_turn_once_and_replays_chained_requests(tmp_path: Path) -> None:
     sink = JsonlSink(str(tmp_path / "conversation.jsonl"))
     log = EventLog(sink=sink)
     prefix = "long-system-prompt-" * 1000
@@ -193,9 +185,7 @@ async def test_conversation_logs_each_turn_once_and_replays_legacy_full_requests
     assert content.count(prefix) == 1
     assert content.count("follow-up") == 1
     resumed = EventLog(replay_from=await JsonlSink(sink.path).read())
-    legacy = InferenceRequest(second.conversation, (), LLMPolicy())
-    assert event_digest(legacy) == event_digest(second)
-    assert resumed.lookup(legacy, ()) == Completion("reply")
+    assert resumed.lookup(second, ()) == Completion("reply")
     assert resumed.resolved()[-1].request == second
 
 

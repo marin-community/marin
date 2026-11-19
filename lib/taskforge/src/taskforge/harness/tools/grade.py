@@ -13,13 +13,13 @@ from taskcompendium.runtime.resources import inline_resource
 
 from taskforge.effects.context import Context
 from taskforge.harness.protocol import ToolResult
-from taskforge.harness.tools.base import ValidatedTool
+from taskforge.harness.tools.base import FILE_ERRORS, ValidatedTool
 from taskforge.lowering import LoweringSettings, check_candidates, lower_with_settings
 from taskforge.model.content_hash import pretty_json
 from taskforge.model.controls import Candidate
 from taskforge.model.verdict import grader_checks
 from taskforge.resources.env import ReadFile
-from taskforge.resources.grading import GradeCandidate
+from taskforge.resources.grading import GradeCandidate, candidate_root
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,9 +28,23 @@ class CandidateArgs:
     files: tuple[str, ...] = ()
 
 
-async def read_candidate(ctx: Context, args: CandidateArgs) -> Candidate:
+def resource_path(path: str, root: PurePosixPath) -> str:
+    """``path`` relative to ``root``, the directory grading stages candidate files under."""
+    absolute = PurePosixPath(path)
+    if not absolute.is_absolute():
+        return path
+    if not absolute.is_relative_to(root):
+        raise ValueError(f"candidate file {path} is outside the workspace {root}; pass a path relative to {root}")
+    return str(absolute.relative_to(root))
+
+
+async def read_candidate(ctx: Context, args: CandidateArgs, task: TaskSpec) -> Candidate:
+    root = candidate_root(task)
     files = tuple(
-        [inline_resource(path.lstrip("/"), await ctx.emit(ReadFile(PurePosixPath(path)))) for path in args.files]
+        [
+            inline_resource(resource_path(path, root), await ctx.emit(ReadFile(PurePosixPath(path))))
+            for path in args.files
+        ]
     )
     return Candidate(args.reply, files)
 
@@ -51,10 +65,10 @@ class GradeTool(ValidatedTool[CandidateArgs]):
     async def run(self, ctx: Context, args: CandidateArgs) -> ToolResult:
         try:
             task = TaskSpec.model_validate_json(await ctx.emit(ReadFile(PurePosixPath(self.task_path))))
-            candidate = await read_candidate(ctx, args)
+            candidate = await read_candidate(ctx, args, task)
             check_candidates(task, (candidate,))
             spec = lower_with_settings(task, self.settings, self.factories)
-        except (ValueError, NotImplementedError) as error:
+        except (ValueError, NotImplementedError, *FILE_ERRORS) as error:
             return ToolResult(f"Cannot grade draft: {error}")
         result = await ctx.emit(GradeCandidate(spec, candidate))
         try:
