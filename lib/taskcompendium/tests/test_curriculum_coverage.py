@@ -59,6 +59,10 @@ def test_curriculum_release_retains_qualified_pins_and_private_tier():
         status="Pending",
         pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": converter_revision, "files": []},
         daytona_safety="not_applicable",
+        daytona_snapshot_count=0,
+        daytona_machine_slots=0,
+        daytona_execution_failures=0,
+        daytona_count_basis="Fixture contains no actor environment.",
     )
     release = {
         "release_id": "fixture-release",
