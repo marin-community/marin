@@ -1,0 +1,15 @@
+experiment: X0245
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: MuonC 12.5 + AdamC on head, router and embed
+    flags:
+    - --opt-set
+    - muonc_decay_mult=12.5
+    - --opt-set
+    - adamc_head_router_embed=true
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
