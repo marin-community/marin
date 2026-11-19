@@ -147,11 +147,13 @@ def main():
     parser.add_argument("--template", type=Path, required=True, help="the one-hour FP32 treatment packet directory")
     parser.add_argument("--arm", choices=sorted(ARMS), required=True)
     parser.add_argument("--date", default="20261119")
+    parser.add_argument("--scheduling-hours", type=float, default=3.0)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     os.chdir(ROOT)
     configure_coreweave_s3()
     kwargs, plan = build(args.template, args.arm, args.date)
+    kwargs["scheduling_timeout"] = Duration.from_seconds(args.scheduling_hours * 3600)
     print(json.dumps(plan, indent=2))
     if args.dry_run:
         return
