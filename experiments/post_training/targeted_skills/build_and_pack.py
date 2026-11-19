@@ -42,7 +42,10 @@ from .common import (
 from .decon_audit import extract_bfcl_names_and_payloads, run_disjointness_audit
 from .skill_a_ordinal import generate_skill_a_example
 from .skill_a_ordinal import to_parquet_row as skill_a_to_row
-from .skill_b_abstention import generate_skill_b_example
+from .skill_b_abstention import (
+    SKILL_B_CUE_PARAPHRASES,
+    generate_skill_b_example,
+)
 from .skill_b_abstention import to_parquet_row as skill_b_to_row
 
 # Module-level worker globals for multiprocessing speed (load tokenizer once per worker process)
@@ -187,6 +190,88 @@ def audit_parquet_splits(skill: str, out_dir: Path, tokenizer_path: Path) -> dic
 
         seq_lens.sort()
         tgt_lens.sort()
+        cue_audit: dict[str, Any] | None = None
+        if skill == "skill_b":
+            # Independently detect cue presence directly in user turn 1 & turn 2 text (do not trust flag alone).
+            fam_counts: dict[str, list[int]] = collections.defaultdict(lambda: [0, 0])  # [with_cue, total]
+            stratum_cue: dict[str, list[int]] = collections.defaultdict(lambda: [0, 0])
+            abstain_cue = call_cue = abstain_nocue = call_nocue = 0
+            miss_cue = pos_cue = miss_nocue = pos_nocue = 0
+            t2_cue = t2_total = 0
+            for r in rows:
+                msgs = json.loads(r["messages_json"])
+                u1 = msgs[0]["content"]
+                text_has_cue = any(p in u1 for p in SKILL_B_CUE_PARAPHRASES)
+                if text_has_cue != bool(r["has_cue"]):
+                    raise ValueError(f"{r['id']}: has_cue flag disagrees with user turn 1 cue text")
+                st = r["stratum"]
+                stratum_cue[st][0] += int(text_has_cue)
+                stratum_cue[st][1] += 1
+                if st.startswith("missing_required_arg"):
+                    fam = "missing_required_arg"
+                    is_abstain = True
+                    miss_cue += int(text_has_cue)
+                    miss_nocue += int(not text_has_cue)
+                elif st == "domain_mismatch_abstain":
+                    fam = "domain_mismatch_abstain"
+                    is_abstain = True
+                else:
+                    fam = "positive_controls"
+                    is_abstain = False
+                    pos_cue += int(text_has_cue)
+                    pos_nocue += int(not text_has_cue)
+                fam_counts[fam][0] += int(text_has_cue)
+                fam_counts[fam][1] += 1
+                if text_has_cue:
+                    abstain_cue += int(is_abstain)
+                    call_cue += int(not is_abstain)
+                else:
+                    abstain_nocue += int(is_abstain)
+                    call_nocue += int(not is_abstain)
+                if st == "missing_required_arg_twoturn":
+                    u2 = msgs[2]["content"]
+                    u2_cue = any(p in u2 for p in SKILL_B_CUE_PARAPHRASES)
+                    if u2_cue != bool(r["has_turn2_cue"]):
+                        raise ValueError(f"{r['id']}: has_turn2_cue flag disagrees with user turn 2 text")
+                    t2_cue += int(u2_cue)
+                    t2_total += 1
+            p_abs_cue = abstain_cue / max(1, abstain_cue + call_cue)
+            p_abs_nocue = abstain_nocue / max(1, abstain_nocue + call_nocue)
+            p_miss_cue = miss_cue / max(1, miss_cue + pos_cue)
+            p_miss_nocue = miss_nocue / max(1, miss_nocue + pos_nocue)
+            if abs(p_abs_cue - p_abs_nocue) > 0.02 or abs(p_miss_cue - p_miss_nocue) > 0.02:
+                raise ValueError(
+                    f"{split}: Skill B cue shortcut detected: P(abstain|cue)={p_abs_cue:.4f} vs "
+                    f"P(abstain|no_cue)={p_abs_nocue:.4f}; missing_vs_pos {p_miss_cue:.4f} vs {p_miss_nocue:.4f}"
+                )
+            cue_audit = {
+                "p_abstain_given_cue": round(p_abs_cue, 4),
+                "p_abstain_given_no_cue": round(p_abs_nocue, 4),
+                "abs_diff_overall": round(abs(p_abs_cue - p_abs_nocue), 4),
+                "counts_overall": {
+                    "abstain_cue": abstain_cue,
+                    "call_cue": call_cue,
+                    "abstain_no_cue": abstain_nocue,
+                    "call_no_cue": call_nocue,
+                },
+                "p_missing_abstain_given_cue_vs_positive": round(p_miss_cue, 4),
+                "p_missing_abstain_given_no_cue_vs_positive": round(p_miss_nocue, 4),
+                "abs_diff_missing_vs_positive": round(abs(p_miss_cue - p_miss_nocue), 4),
+                "by_stratum_family": {
+                    k: {"with_cue": v[0], "total": v[1], "p_cue": round(v[0] / v[1], 4)}
+                    for k, v in sorted(fam_counts.items())
+                },
+                "by_stratum": {
+                    k: {"with_cue": v[0], "total": v[1], "p_cue": round(v[0] / v[1], 4)}
+                    for k, v in sorted(stratum_cue.items())
+                },
+                "turn2_completion": {
+                    "with_cue": t2_cue,
+                    "total": t2_total,
+                    "p_turn2_cue": round(t2_cue / max(1, t2_total), 4),
+                    "p_call_given_turn2_cue": 1.0,
+                },
+            }
         summary[split] = {
             "parquet_sha256": sha256_file(ppath),
             "rows": len(rows),
@@ -201,6 +286,7 @@ def audit_parquet_splits(skill: str, out_dir: Path, tokenizer_path: Path) -> dic
             "max_target_tokens": tgt_lens[-1],
             "modes": dict(mode_ctr),
             **({"strata": dict(stratum_ctr)} if stratum_ctr else {}),
+            **({"cue_balance_audit": cue_audit} if cue_audit is not None else {}),
             **({"by_needles": dict(needle_ctr)} if needle_ctr else {}),
             **({"by_band": dict(band_ctr)} if band_ctr else {}),
         }
@@ -351,11 +437,16 @@ def main() -> None:
     parser.add_argument("--probe1", type=Path, required=True)
     parser.add_argument("--probe2", type=Path, required=True)
     parser.add_argument("--probe3", type=Path, required=True)
+    parser.add_argument("--probe3-v2", type=Path, default=None)
     parser.add_argument("--micro210", type=Path, default=None)
     parser.add_argument("--bfcl-root", type=Path, default=None)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--upload-dest", type=str, default=None)
     args = parser.parse_args()
+
+    probe_paths = {"probe1": args.probe1, "probe2": args.probe2, "probe3": args.probe3}
+    if args.probe3_v2 is not None:
+        probe_paths["probe3_v2"] = args.probe3_v2
 
     build_skill_dataset(
         skill=args.skill,
@@ -365,7 +456,7 @@ def main() -> None:
         train_packs=args.train_packs,
         val_packs=args.val_packs,
         test_packs=args.test_packs,
-        probe_paths={"probe1": args.probe1, "probe2": args.probe2, "probe3": args.probe3},
+        probe_paths=probe_paths,
         micro210_path=args.micro210,
         bfcl_root=args.bfcl_root,
         workers=args.workers,

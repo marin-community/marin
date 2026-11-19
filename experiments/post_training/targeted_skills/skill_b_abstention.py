@@ -733,6 +733,17 @@ DOMAIN_MISMATCH_PROMPTS: list[tuple[str, str]] = [
     ),
 ]
 
+# Balanced anti-guessing cue paraphrases applied to ~50% of EVERY stratum (missing-arg, domain-mismatch,
+# positive controls, and turn-2 completions) so cue presence has zero correlation with the abstain label.
+SKILL_B_CUE_PARAPHRASES: tuple[str, ...] = (
+    "Avoid guessing or making up unprovided mandatory fields.",
+    "Verify every required input is present before submitting a tool call.",
+    "Ask me first rather than assuming values for omitted fields.",
+    "Never fill in unmentioned required parameters on your own.",
+    "Refrain from fabricating arguments that were left out.",
+    "Confirm all necessary parameter values appear above before calling any function.",
+)
+
 # 20-item cycle: 9 missing_arg (45%: 6 single-turn + 3 two-turn), 4 mismatch (20%), 7 positive (35%)
 STRATUM_SCHEDULE = (
     ["missing_single"] * 6
@@ -909,11 +920,17 @@ def _pick_tool_palette(r: random.Random, primary_specs: list[dict[str, Any]]) ->
     return chosen
 
 
+def _maybe_append_cue(r: random.Random, prompt: str, has_cue: bool) -> str:
+    if not has_cue:
+        return prompt
+    return f"{prompt} {r.choice(SKILL_B_CUE_PARAPHRASES)}"
+
+
 def _missing_arg_user_prompt(
     r: random.Random,
     spec: dict[str, Any],
     provided_args: dict[str, Any],
-    explicit_cue: bool,
+    has_cue: bool,
 ) -> str:
     clause = _describe_args_clause(provided_args) if provided_args else "the details noted below"
     templates = [
@@ -922,10 +939,7 @@ def _missing_arg_user_prompt(
         f"I need you to invoke `{spec['name']}` for this request ({clause}).",
         f"Handle this task via `{spec['name']}` using {clause}.",
     ]
-    prompt = r.choice(templates)
-    if explicit_cue:
-        prompt += " Do not guess or fabricate any missing required parameters."
-    return prompt
+    return _maybe_append_cue(r, r.choice(templates), has_cue)
 
 
 def _missing_arg_assistant_reply(r: random.Random, spec: dict[str, Any], missing_keys: list[str]) -> str:
@@ -951,7 +965,7 @@ def _missing_arg_assistant_reply(r: random.Random, spec: dict[str, Any], missing
     return r.choice(templates)
 
 
-def _positive_user_prompt(r: random.Random, spec: dict[str, Any], full_args: dict[str, Any]) -> str:
+def _positive_user_prompt(r: random.Random, spec: dict[str, Any], full_args: dict[str, Any], has_cue: bool) -> str:
     clause = _describe_args_clause(full_args)
     templates = [
         f"Please run `{spec['name']}` using {clause}.",
@@ -959,7 +973,7 @@ def _positive_user_prompt(r: random.Random, spec: dict[str, Any], full_args: dic
         f"I need you to invoke `{spec['name']}` for this request ({clause}).",
         f"Handle this task via `{spec['name']}` using {clause}.",
     ]
-    return r.choice(templates)
+    return _maybe_append_cue(r, r.choice(templates), has_cue)
 
 
 def _extract_ground_truth_strings(val: Any) -> list[str]:
@@ -1020,7 +1034,12 @@ def generate_skill_b_example(
     validate_skill_b_catalog(extra_blocked_tools)
     item_id = f"skillB-{split}-{index:05d}"
     r = _rng_for(f"{split}:{index}")
-    stratum = STRATUM_SCHEDULE[index % len(STRATUM_SCHEDULE)]
+    cycle = index // len(STRATUM_SCHEDULE)
+    pos = index % len(STRATUM_SCHEDULE)
+    stratum = STRATUM_SCHEDULE[pos]
+    # Balanced 50% cue / 50% no-cue within every stratum across cycles so P(abstain | cue) == P(abstain | no_cue).
+    has_cue = ((cycle + pos) % 2) == 0
+    has_turn2_cue = ((cycle + (pos // 2)) % 2) == 0 if stratum == "missing_twoturn" else False
 
     # Split-disjoint tool-domain assignment for validation/test vs train is NOT required because
     # tool schemas are shared across splits, while exact fixture seeds/IDs are strictly split-disjoint.
@@ -1038,7 +1057,6 @@ def generate_skill_b_example(
         n_miss = 2 if (len(non_bool_req) >= 3 and r.random() < 0.35) else 1
         missing_keys = sorted(r.sample(non_bool_req, n_miss))
         provided_args = {k: v for k, v in full_args.items() if k not in missing_keys}
-        explicit_cue = (index % 2) == 0
 
         # Ensure none of the withheld values collide at token/word boundaries with provided args
         provided_text = _describe_args_clause(provided_args)
@@ -1052,7 +1070,7 @@ def generate_skill_b_example(
                 full_args[mk] = _sample_value(r, spec["samples"][mk])
 
         tools_specs = _pick_tool_palette(r, [spec])
-        user_t1 = _missing_arg_user_prompt(r, spec, provided_args, explicit_cue)
+        user_t1 = _missing_arg_user_prompt(r, spec, provided_args, has_cue)
         asst_t1 = _missing_arg_assistant_reply(r, spec, missing_keys)
 
         if stratum == "missing_single":
@@ -1062,7 +1080,8 @@ def generate_skill_b_example(
             ]
             fixture = {
                 "stratum": "missing_required_arg_single",
-                "explicit_cue": explicit_cue,
+                "has_cue": has_cue,
+                "has_turn2_cue": False,
                 "target_tool": spec["name"],
                 "missing_keys": missing_keys,
                 "withheld_values": {k: full_args[k] for k in missing_keys},
@@ -1071,7 +1090,8 @@ def generate_skill_b_example(
             }
         else:
             supplied_clause = _describe_args_clause({k: full_args[k] for k in missing_keys})
-            user_t2 = f"Sure — use {supplied_clause} and go ahead with `{spec['name']}`."
+            user_t2_base = f"Sure — use {supplied_clause} and go ahead with `{spec['name']}`."
+            user_t2 = _maybe_append_cue(r, user_t2_base, has_turn2_cue)
             messages = [
                 {"role": "user", "content": user_t1},
                 {"role": "assistant", "content": asst_t1},
@@ -1090,7 +1110,8 @@ def generate_skill_b_example(
             ]
             fixture = {
                 "stratum": "missing_required_arg_twoturn",
-                "explicit_cue": explicit_cue,
+                "has_cue": has_cue,
+                "has_turn2_cue": has_turn2_cue,
                 "target_tool": spec["name"],
                 "missing_keys": missing_keys,
                 "withheld_values": {k: full_args[k] for k in missing_keys},
@@ -1105,14 +1126,15 @@ def generate_skill_b_example(
         ]
         # Add mild deterministic context framing variation so prompts across 32 packs are diverse
         prefixes = ["", "Quick question: ", "Before we check those systems, ", "Unrelated question — "]
-        u_full = prefixes[index % len(prefixes)] + u_txt
+        u_full = _maybe_append_cue(r, prefixes[index % len(prefixes)] + u_txt, has_cue)
         messages = [
             {"role": "user", "content": u_full},
             {"role": "assistant", "content": a_txt},
         ]
         fixture = {
             "stratum": "domain_mismatch_abstain",
-            "explicit_cue": False,
+            "has_cue": has_cue,
+            "has_turn2_cue": False,
             "target_tool": None,
             "missing_keys": [],
             "withheld_values": {},
@@ -1124,7 +1146,7 @@ def generate_skill_b_example(
         # Minimal-pair-compatible positive control using the exact same prompt surface as missing_arg
         full_args = _sample_full_args(r, spec, include_optional=(index % 2 == 0))
         tools_specs = _pick_tool_palette(r, [spec])
-        user_txt = _positive_user_prompt(r, spec, full_args)
+        user_txt = _positive_user_prompt(r, spec, full_args, has_cue)
         messages = [
             {"role": "user", "content": user_txt},
             {
@@ -1141,7 +1163,8 @@ def generate_skill_b_example(
         ]
         fixture = {
             "stratum": "positive_single",
-            "explicit_cue": False,
+            "has_cue": has_cue,
+            "has_turn2_cue": False,
             "target_tool": spec["name"],
             "missing_keys": [],
             "withheld_values": {},
@@ -1167,14 +1190,16 @@ def generate_skill_b_example(
                     "function": {"name": sp["name"], "arguments": c_args},
                 }
             )
-        user_txt = "Please execute all of the following tool calls in parallel: " + "; ".join(prompt_parts) + "."
+        user_base = "Please execute all of the following tool calls in parallel: " + "; ".join(prompt_parts) + "."
+        user_txt = _maybe_append_cue(r, user_base, has_cue)
         messages = [
             {"role": "user", "content": user_txt},
             {"role": "assistant", "content": "", "tool_calls": tool_calls_msg},
         ]
         fixture = {
             "stratum": "positive_parallel",
-            "explicit_cue": False,
+            "has_cue": has_cue,
+            "has_turn2_cue": False,
             "target_tool": ",".join(s["name"] for s in chosen_specs),
             "missing_keys": [],
             "withheld_values": {},
@@ -1337,6 +1362,8 @@ def to_parquet_row(example: dict[str, Any]) -> dict[str, Any]:
         "split": example["split"],
         "seed_namespace": example["seed_namespace"],
         "stratum": example["stratum"],
+        "has_cue": bool(example["fixture"]["has_cue"]),
+        "has_turn2_cue": bool(example["fixture"]["has_turn2_cue"]),
         "domain": example["domain"],
         "mode": example["mode"],
         "declared_tools_json": json.dumps(example["declared_tools"]),

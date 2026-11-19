@@ -96,7 +96,7 @@ def test_skill_b_strata_verify_and_mutations(tokenizer):
     pos = sum(1 for s in STRATUM_SCHEDULE if s.startswith("positive_"))
     assert (missing, mismatch, pos) == (9, 4, 7)
 
-    examples = [generate_skill_b_example(tokenizer, split="test", index=i) for i in range(20)]
+    examples = [generate_skill_b_example(tokenizer, split="test", index=i) for i in range(40)]
     strata = {e["stratum"] for e in examples}
     assert strata == {
         "missing_required_arg_single",
@@ -105,6 +105,18 @@ def test_skill_b_strata_verify_and_mutations(tokenizer):
         "positive_single",
         "positive_parallel",
     }
+
+    # Verify exact cue balance across abstain vs positive strata (no cue shortcut)
+    abstain_cue = sum(1 for e in examples if e["fixture"]["has_cue"] and not e["stratum"].startswith("positive_"))
+    call_cue = sum(1 for e in examples if e["fixture"]["has_cue"] and e["stratum"].startswith("positive_"))
+    abstain_nocue = sum(1 for e in examples if not e["fixture"]["has_cue"] and not e["stratum"].startswith("positive_"))
+    call_nocue = sum(1 for e in examples if not e["fixture"]["has_cue"] and e["stratum"].startswith("positive_"))
+    assert abstain_cue / (abstain_cue + call_cue) == pytest.approx(
+        abstain_nocue / (abstain_nocue + call_nocue), abs=1e-9
+    )
+    assert call_cue == call_nocue == 7
+    t2_rows = [e for e in examples if e["stratum"] == "missing_required_arg_twoturn"]
+    assert sum(1 for e in t2_rows if e["fixture"]["has_turn2_cue"]) == len(t2_rows) // 2
 
     # Two-turn follow-up supervises BOTH assistant turns
     twoturn = next(e for e in examples if e["stratum"] == "missing_required_arg_twoturn")
