@@ -556,7 +556,7 @@ class TaskRolloutWorker:
                             "Task {} restart {} after losing its machine at start: {}",
                             task.id,
                             start_retries,
-                            interruption.__cause__.__cause__,
+                            redact_string(str(interruption.__cause__.__cause__)),
                         )
                         continue
                     result = _failed_rollout(interruption, lowered)
