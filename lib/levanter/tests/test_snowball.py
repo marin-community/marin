@@ -333,6 +333,31 @@ def test_snowball_moe_capacity_is_a_runtime_setting():
     assert preserve_hf_runtime_settings(reloaded, cfg).moe_capacity_factor == 4.0
 
 
+def test_snowball_training_reports_capacity_drops():
+    cfg = _tiny_config(num_layers=2, num_experts_per_token=1, moe_implementation="ring")
+    with use_test_devices(2) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 1, 2, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        with jax.set_mesh(mesh):
+            model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+            biases = tuple(jnp.arange(cfg.num_experts, dtype=jnp.float32) * 100 for _ in range(cfg.num_layers))
+            model = eqx.tree_at(
+                lambda m: tuple(block.mlp.router_bias for block in m.transformer.blocks), model, biases
+            )
+            axes = (Axis("batch", 2), Axis("position", 8))
+            tokens = hax.named(jnp.arange(16, dtype=jnp.int32).reshape(2, 8), axes)
+            example = LmExample(tokens, hax.ones(axes))
+            loss_kwargs = dict(reduction=None, logsumexp_weight=1e-4, logit_soft_cap=2.0)
+            loss, metrics = hax.named_jit(lambda m, e: m.next_token_loss_and_metrics(e, **loss_kwargs))(model, example)
+            plain = hax.named_jit(lambda m, e: m.compute_next_token_loss(e, **loss_kwargs))(model, example)
+            np.testing.assert_allclose(loss.array, plain.array, rtol=1e-6)
+            # All assignments target the same shard. It has half of the configured capacity.
+            assert float(metrics["moe/dropped_assignment_fraction"]) == 0.5
+
+
 def test_snowball_fp32_activations_is_a_runtime_setting():
     """The runtime flag stays out of HF metadata and rejects the BF16-only fused backend."""
     cfg = _tiny_config(fp32_activations=True)
@@ -888,6 +913,7 @@ def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
         )
         metrics = json.loads((tmp_path / "eval_results.json").read_text())
         assert math.isfinite(metrics["train/loss"])
+        assert 0.0 <= metrics["train/moe/dropped_assignment_fraction"] <= 1.0
         assert math.isfinite(metrics["eval/loss"])
 
 

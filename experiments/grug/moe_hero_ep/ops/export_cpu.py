@@ -3,6 +3,7 @@
 
 """Export native Hero weights on one CPU host using chunk-aligned TensorStore reads."""
 
+import json
 import logging
 import math
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ from experiments.grug.moe_hero_ep.model import (
 )
 from experiments.grug.moe_hero_ep.ops.export_metadata import (
     EXPORT_VERSION,
+    MANIFEST_FILENAME,
     artifact_config,
     bf16_hf_config,
     execution_config,
@@ -38,6 +40,7 @@ from experiments.grug.moe_hero_ep.ops.export_metadata import (
     split_expert_names,
     write_export_metadata,
 )
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.weights import (
     PENDING_QB_BETAS_KEY,
     checkpoint_weight_path,
@@ -223,7 +226,8 @@ class CpuCheckpointWeights:
         return min((spec.path, int(spec.layer_index)) for spec in experts)
 
 
-def export(config: CpuExportConfig) -> None:
+def export(config: CpuExportConfig, *, accept_completed: bool = False) -> None:
+    """Export the checkpoint or accept a matching committed manifest on retry."""
     hf_config = bf16_hf_config(config.model)
     encoded = draccus.encode(config)
     request = {
@@ -232,7 +236,15 @@ def export(config: CpuExportConfig) -> None:
         "config": artifact_config(encoded),
         "hf_config": hf_config,
     }
-    resume = prepare_export(config.destination, request)
+    try:
+        resume = prepare_export(config.destination, request)
+    except FileExistsError:
+        manifest = StoragePath(config.destination) / MANIFEST_FILENAME
+        if not accept_completed or not manifest.exists():
+            raise
+        if json.loads(manifest.read_text()).get("export_id") != digest(request):
+            raise FileExistsError(f"Completed Mochi export differs from the selected checkpoint: {manifest}") from None
+        return
     reader = CpuCheckpointWeights(config)
     shapes = reader.shapes()
     shards, _ = _shard_hf_checkpoint(shapes, max_shard_size=DEFAULT_MAX_SHARD_SIZE)
