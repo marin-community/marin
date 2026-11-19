@@ -23,7 +23,7 @@ from skyrlrecipe.declared import EvaluationSampling
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
-from experiments.post_training.rl_agentic_recipe import agentic, agentic_limits
+from experiments.post_training.rl_agentic_recipe import HARBOR_EVALUATION, agentic, agentic_limits
 from experiments.post_training.rl_presets import (
     UPDATE_SECONDS_METRIC,
     ControlPin,
@@ -36,7 +36,6 @@ from experiments.post_training.rl_presets import (
     Recipe,
     Training,
     WindowStatistic,
-    harbor_evaluation,
 )
 from experiments.post_training.rl_recipe import BATCH_SETTINGS
 from experiments.post_training.task_curation.selection import (
@@ -411,7 +410,6 @@ _CAMPAIGN_PATCH = RecipePatch(
         ),
     ),
 )
-_HARBOR_EVALUATION = harbor_evaluation(Path(__file__).with_name("rl_harbor.yaml"))
 
 _TRAIN_LONG_AGENTIC = agentic(
     replace(
@@ -591,7 +589,7 @@ _PRESETS = (
         _TRAIN_LONG,
         name="train-long-harbor",
         revision="2026.11.19.1",
-        harbor=_HARBOR_EVALUATION,
+        harbor=HARBOR_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
     ),
 )

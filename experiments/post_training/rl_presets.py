@@ -340,20 +340,15 @@ class BatchMix:
 
 def validate_agentic_recipe(config: RecipePatch) -> None:
     document = config.to_skyrl()
-    terminal = document.get("terminal_bench")
-    if terminal is None:
-        return
-    harbor = terminal.get("harbor", {})
-    daytona = document.get("environment", {}).get("task_sessions", {}).get("daytona", {})
+    harbor = (document.get("terminal_bench") or {}).get("harbor", {})
     attempt_timeout = harbor.get("trial_attempt_timeout_sec")
-    if attempt_timeout is not None and "ttl_minutes" in daytona and daytona["ttl_minutes"] * 60 < attempt_timeout:
+    if attempt_timeout is None:
+        return
+    daytona = document.get("environment", {}).get("task_sessions", {}).get("daytona", {})
+    if "ttl_minutes" in daytona and daytona["ttl_minutes"] * 60 < attempt_timeout:
         raise ValueError("Daytona ttl_minutes must cover trial_attempt_timeout_sec")
     stall = config.trainer.algorithm.group_admission.stall_timeout
-    if (
-        stall is not None
-        and attempt_timeout is not None
-        and stall < (1 + harbor.get("max_retries", 0)) * attempt_timeout
-    ):
+    if stall is not None and stall < (1 + harbor.get("max_retries", 0)) * attempt_timeout:
         raise ValueError("group_admission.stall_timeout must cover the Harbor attempt and configured retries")
 
 

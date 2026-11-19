@@ -89,16 +89,7 @@ def test_new_presets_match_revisioned_native_configs(table, revisions, selection
     agentic = documents["train-long-agentic"]["skyrl"]
     assert agentic["trainer"]["hf_export_checkpoint"] == "best"
     if table.model == "mochi":
-        for preset in table.presets:
-            spec = rl_recipe.run_spec(
-                preset, name="layout-check", tasks=selection if preset.batch_mix else None, model_name=table.model
-            )
-            execution = next(
-                value
-                for value in rl_recipe.run_step(preset, spec).runtime_args.values()
-                if isinstance(value, IrisSkyRLExecution)
-            )
-            assert execution.role_topology == RoleTopologyMode.NVLINK_DOMAIN
+        assert all(config["iris"]["role_topology"] == RoleTopologyMode.NVLINK_DOMAIN.value for config in configs)
         docs = (rl_recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
         fragment = docs.split("## Mochi inference on GB200", 1)[1].split("```yaml", 1)[1].split("```", 1)[0]
         served = rl_gate._config_values(documents["train-long-3rack"]["skyrl"])
@@ -106,24 +97,16 @@ def test_new_presets_match_revisioned_native_configs(table, revisions, selection
             assert served[path] == value, path
 
 
-def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurrency(selection):
+def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurrency(selection, monkeypatch):
+    monkeypatch.delenv("WANDB_ENTITY", raising=False)
     preset = SNOWBALL.by_name["train-medium-agentic"]
     settings = ("context_budget.max_new_tokens_per_turn=24576", "trainer.train_batch_size=128")
-    inputs = rl_gate.gate_inputs(preset.name, settings, SELECTION_IDENTITY)
-    config = rl_gate.validate_candidate(preset, inputs, table=SNOWBALL)["skyrl"]
+    run = rl.build_run(preset, table=SNOWBALL, tasks=selection, settings=settings)
+    assert run.inputs is not None
+    config = rl_gate.validate_candidate(preset, run.inputs, table=SNOWBALL)["skyrl"]
     assert config["trainer"]["rollout_buffer"]["max_in_flight"] == 32
     assert config["trainer"]["rollout_buffer"]["groups_per_family"] == {"agentic": 64, "nonagentic": 64}
-    spec = rl_recipe.run_spec(
-        preset,
-        name="test-agent-settings",
-        tasks=selection,
-        settings=settings,
-    )
-    execution = next(
-        value
-        for value in rl_recipe.run_step(preset, spec).runtime_args.values()
-        if isinstance(value, IrisSkyRLExecution)
-    )
+    execution = next(value for value in run.runs[0].runtime_args.values() if isinstance(value, IrisSkyRLExecution))
     assert set(execution.required_env_vars) == {
         "DAYTONA_RL_API_KEY",
         "DAYTONA_EVAL_API_KEY",
@@ -140,7 +123,7 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
         ("owner", ("trainer.hf_export_checkpoint", "best"), "derived by the runner"),
         pytest.param(
             "owner",
-            ("trainer.placement.policy_num_nodes", 4),
+            ("trainer.placement.policy_num_nodes", 10),
             "derived by the runner",
             id="authored-placement",
         ),

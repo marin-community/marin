@@ -379,7 +379,7 @@ def _training_config(
     authored = recipe.config.to_skyrl()
     if owned := sorted(key for key in RUNNER_KEYS if get_path(authored, key) is not MISSING):
         raise ValueError(f"recipe settings are derived by the runner: {', '.join(owned)}")
-    micro_batch, in_flight = recipe.layout.workload.batch_parameters(recipe.config)
+    micro_batch, _ = recipe.layout.workload.batch_parameters(recipe.config)
     geometry = asdict(recipe.layout.megatron)
     budget = recipe.config.context_budget
     assert budget is not None
@@ -397,8 +397,6 @@ def _training_config(
     )
     if preset.export == "best":
         trainer = trainer.replace(hf_export_checkpoint="best")
-    if get_path(authored, "trainer.rollout_buffer.max_in_flight") is MISSING:
-        trainer = trainer.replace(rollout_buffer=sections.RolloutBuffer(max_in_flight=in_flight))
     if recipe.training_plan is not None:
         training_geometry = {}
         for key, value in recipe.training_plan.config_values().items():
@@ -449,19 +447,17 @@ def run_spec(
     batch_changes = {
         field: value for key, field in BATCH_SETTINGS.items() if (value := get_path(authored, key)) is not MISSING
     }
+    workload = preset.recipe.layout.workload
     if batch_changes:
-        workload = preset.recipe.layout.workload.with_batches(batch_changes)
+        workload = workload.with_batches(batch_changes)
         preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, workload=workload)))
-        micro_batch, in_flight = workload.batch_parameters(config)
-        derived = {}
-        if get_path(explicit, "trainer.micro_forward_batch_size_per_gpu") is MISSING:
-            derived["micro_forward_batch_size_per_gpu"] = micro_batch
-        if all(
-            get_path(document, "trainer.rollout_buffer.max_in_flight") is MISSING
-            for document in (explicit, preset.recipe.config.to_skyrl())
-        ):
-            derived["rollout_buffer"] = {"max_in_flight": in_flight}
-        config = config.merge(RecipePatch.from_document({"trainer": derived}))
+    micro_batch, in_flight = workload.batch_parameters(config)
+    derived = {}
+    if batch_changes and get_path(explicit, "trainer.micro_forward_batch_size_per_gpu") is MISSING:
+        derived["micro_forward_batch_size_per_gpu"] = micro_batch
+    if get_path(authored, "trainer.rollout_buffer.max_in_flight") is MISSING:
+        derived["rollout_buffer"] = {"max_in_flight": in_flight}
+    config = config.merge(RecipePatch.from_document({"trainer": derived}))
     default, selection = task_selections(preset, tasks)
     summary = selection_summary(selection)
     _refuse_judged(summary, "train")

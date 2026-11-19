@@ -12,7 +12,7 @@ from skyrlrecipe.declared import DEFAULT_RETRY_EXCLUSIONS
 
 from experiments.post_training.rl_presets import BatchMix, Layout, Preset, harbor_evaluation
 
-_HARBOR_EVALUATION = harbor_evaluation(Path(__file__).with_name("rl_harbor.yaml"))
+HARBOR_EVALUATION = harbor_evaluation(Path(__file__).with_name("rl_harbor.yaml"))
 _BATCH_MIX = BatchMix({"agentic": Fraction(1, 2), "nonagentic": Fraction(1, 2)})
 
 _AGENTIC_RECIPE = RecipePatch(
@@ -104,7 +104,7 @@ def agentic(preset: Preset, *, name: str, limits: RecipePatch, layout: Layout | 
         name=name,
         tasks_input="required",
         batch_mix=_BATCH_MIX,
-        harbor=_HARBOR_EVALUATION,
+        harbor=HARBOR_EVALUATION,
         recipe=replace(
             preset.recipe,
             layout=preset.recipe.layout if layout is None else layout,
