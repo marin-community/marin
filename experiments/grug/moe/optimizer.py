@@ -76,14 +76,18 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
             update_norm = jnp.linalg.norm(update)
             new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
             new_param_norm = jnp.linalg.norm(new_param)
-            return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
-
-        axes = tuple(range(1, param.ndim))
-        param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
-        update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
-        new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
-        new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
-        return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+        else:
+            axes = tuple(range(1, param.ndim))
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
+            new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
+        projected_update = new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+        # With a zero learning rate the raw step is exactly zero, but the re-projection
+        # divides and multiplies back by norms computed at different precisions (the
+        # parameter dtype versus the promoted new_param), which is not a bit-exact
+        # identity. Clamp to an exact zero update so parameters stay bit-identical.
+        return jnp.where(learning_rate == 0.0, jnp.zeros_like(projected_update), projected_update)
 
     return jax.tree.map(
         scale_invariant_update,

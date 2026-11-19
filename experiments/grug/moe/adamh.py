@@ -53,7 +53,11 @@ def scale_by_adamh(
             p_norm = jnp.linalg.norm(p)
             u_norm = jnp.linalg.norm(u)
             new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
-            return new_p / jnp.linalg.norm(new_p) * p_norm - p
+            projected_update = new_p / jnp.linalg.norm(new_p) * p_norm - p
+            # Clamp a zero learning rate to an exact zero update, mirroring the MuonH
+            # hyperball path: the re-projection is the identity when the raw step is
+            # zero, but its norms round at different precisions.
+            return jnp.where(learning_rate == 0.0, jnp.zeros_like(projected_update), projected_update)
 
         def scale_invariant_update(p, u):
             if p is None:
