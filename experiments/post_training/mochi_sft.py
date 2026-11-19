@@ -1,7 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reproduce the production Mochi SFT run ``hero-sft-fullab-step393k-v2`` from issue #8089."""
+"""Reproduce the production Mochi SFT run ``hero-sft-fullab-step393k-v2`` from issue #8089.
+
+The production launch in comment 6771184334 pins step 393491, 11 racks, both
+learning rates, clipping, replay share, expert placement, evaluation cadence, and
+capacity factor. The launcher's frozen router bias and full mixture schedule
+produce the permanent step 400407 reported in comment 6841382920.
+"""
 
 from dataclasses import replace
 from pathlib import Path

@@ -17,6 +17,7 @@ import pytest
 from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
+from marin.execution.artifact import read_record
 from marin.execution.lazy import StepContext
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import load_file
@@ -51,7 +52,7 @@ def test_hf_config_round_trips_log_scaling_at_schema_3(log_scaling):
     assert {name: getattr(loaded, name) for name in log_scaling} == log_scaling
 
 
-def native_fixture(root: str, *, master: bool = False) -> tuple[ExportConfig, Transformer]:
+def native_fixture(root: str, *, master: bool = False, step: int = 17) -> tuple[ExportConfig, Transformer]:
     config = GrugModelConfig(
         vocab_size=32,
         hidden_dim=16,
@@ -87,7 +88,7 @@ def native_fixture(root: str, *, master: bool = False) -> tuple[ExportConfig, Tr
             state["master_params"] = model
             state["params"] = jax.tree.map(lambda x: jnp.zeros_like(x, dtype=jnp.bfloat16), model)
             state = {"train_state": state}
-        save_checkpoint(state, step=17, checkpoint_path=root, is_temporary=False)
+        save_checkpoint(state, step=step, checkpoint_path=root, is_temporary=False)
     metadata = json.loads((StoragePath(root) / "metadata.json").read_text())
     return (
         ExportConfig(root, digest(metadata), config, root + "-export", "44a4188c197a4b5a314e40cc653f150fa9687dcf"),
@@ -186,7 +187,7 @@ def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path
 
 @pytest.mark.timeout(240)
 def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monkeypatch):
-    root = tmp_path / "override"
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     initializer = tmp_path / "pretraining" / "step-16"
     initializer.mkdir(parents=True)
     initializer_metadata = initializer / "metadata.json"
@@ -195,15 +196,7 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     placement = dataclasses.replace(
         ExpertPlacement.from_json(placement_file.read_text()), source_checkpoint=str(initializer)
     )
-    checkpoints = root / f"expert-placement-{placement.fingerprint}" / "checkpoints"
-    native, _ = native_fixture(str(checkpoints / "step-17"), master=True)
-    metadata = json.loads((checkpoints / "step-17" / "metadata.json").read_text())
-    for step, temporary in [(16, False), (18, True)]:
-        candidate = checkpoints / f"step-{step}"
-        candidate.mkdir()
-        (candidate / "metadata.json").write_text(json.dumps({**metadata, "step": step, "is_temporary": temporary}))
     monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
-    monkeypatch.setattr(sft_recipe, "HERO_MODEL_CONFIG", native.model)
     monkeypatch.setattr(sft_recipe, "configure_coreweave_s3", lambda: None)
     recipe = dataclasses.replace(
         PRODUCTION_SFT.recipe,
@@ -211,7 +204,6 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
         dp_racks=1,
         stop_after_steps=1,
         eval_every=0,
-        checkpoint_root=str(root),
         expert_placement=placement,
     )
     resources = launch_hero_sft.sft_resources(recipe.dp_racks)
@@ -223,13 +215,27 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
         preset.model()
     initializer_metadata.write_text(json.dumps({"step": 16, "is_temporary": False}))
     model = preset.model()
-    output = tmp_path / "output"
+    [trained] = model.step.deps
+    checkpoints = Path(trained.path()) / f"expert-placement-{placement.fingerprint}" / "checkpoints"
+    native, _ = native_fixture(str(checkpoints / "step-17"), master=True)
+    native_fixture(str(checkpoints / "step-18"), master=True, step=18)
+    newer_metadata = checkpoints / "step-18" / "metadata.json"
+    newer_permanent = json.loads(newer_metadata.read_text())
+    newer_metadata.write_text(json.dumps({**newer_permanent, "is_temporary": True}))
+    monkeypatch.setattr(sft_recipe, "HERO_MODEL_CONFIG", native.model)
+    output = Path(model.step.path())
     ctx = StepContext.for_run(str(output), str(tmp_path), deps=model.step.deps)
     config = model.step.build_config(ctx)
-    sft_recipe._export_final_sft(**config)
+    local_export = dataclasses.replace(model.step, run=lambda args: sft_recipe._export_final_sft(**args)).lower()
+    assert local_export.fn is not None
+    local_export.fn(str(output))
 
+    record = read_record(str(output))
+    assert record is not None and record.config is not None
     assert model.relative_path == "hf"
-    assert model.tokenizer_revision == PRODUCTION_SFT.recipe.tokenizer_revision
+    assert record.config["relative_path"] == model.relative_path
+    assert record.config["tokenizer_uri"] == model.tokenizer_uri == "marin-community/marin-tokenizer-tools"
+    assert record.config["tokenizer_revision"] == model.tokenizer_revision == PRODUCTION_SFT.recipe.tokenizer_revision
     hf = output / model.relative_path
     assert (hf / "export-manifest.json").is_file()
     completed = (hf / "export-manifest.json").read_bytes()
@@ -237,9 +243,11 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     assert (hf / "export-manifest.json").read_bytes() == completed
     with pytest.raises(FileExistsError, match="differs from the selected checkpoint"):
         sft_recipe._export_final_sft(**{**config, "source_revision": "0" * 40})
-    (checkpoints / "step-18" / "metadata.json").write_text(json.dumps({**metadata, "step": 18, "is_temporary": False}))
+    newer_metadata.write_text(json.dumps(newer_permanent))
+    wrong_export = tmp_path / "wrong-step-export"
     with pytest.raises(ValueError, match="expected final step 17, found newest permanent step 18"):
-        sft_recipe._export_final_sft(**config)
+        sft_recipe._export_final_sft(**{**config, "output": str(wrong_export)})
+    assert not (wrong_export / "hf" / "export-manifest.json").exists()
     skyrl = Path(__file__).resolve().parents[4] / "vendor" / "skyrl"
     subprocess.run(
         [

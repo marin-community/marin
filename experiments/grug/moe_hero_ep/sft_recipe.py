@@ -44,7 +44,6 @@ class GrugHeroSFT:
     tokenizer_revision: str
     stop_after_steps: int | None = None
     eval_every: int = 0
-    checkpoint_root: str | None = None
     expert_placement: ExpertPlacement | None = None
 
     def trained(self, resources: ResourceConfig) -> ArtifactHfModel:
@@ -64,7 +63,6 @@ class GrugHeroSFT:
             capacity_factor=self.capacity_factor,
             stop_after_steps=self.stop_after_steps,
             eval_every=self.eval_every,
-            checkpoint_root=self.checkpoint_root,
             expert_placement=self.expert_placement,
             version=self.version,
         )
@@ -78,7 +76,6 @@ class GrugHeroSFT:
             output=OUT,
             trained=step,
             expected_step=training.stop_step,
-            checkpoint_root=self.checkpoint_root,
             placement=self.expert_placement,
             capacity_factor=self.capacity_factor,
             source_revision=self.source_revision,
@@ -99,7 +96,6 @@ def _export_final_sft(
     output: str,
     trained: str,
     expected_step: int,
-    checkpoint_root: str | None,
     placement: ExpertPlacement | None,
     capacity_factor: float,
     source_revision: str,
@@ -110,7 +106,7 @@ def _export_final_sft(
     if not tokenizer_uri or not tokenizer_revision:
         raise ValueError("Grug Hero SFT exports require a pinned tokenizer")
     configure_coreweave_s3()
-    directory = permanent_checkpoint_dir(trained, checkpoint_root, placement)
+    directory = permanent_checkpoint_dir(trained, None, placement)
     candidates = discover_checkpoint_candidates(directory)
     final = next(
         (candidate for candidate in reversed(candidates) if candidate.metadata.get("is_temporary") is False), None

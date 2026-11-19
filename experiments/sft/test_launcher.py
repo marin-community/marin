@@ -37,14 +37,6 @@ def test_levanter_sft_refuses_grug_without_hf_export():
         preset.model()
 
 
-def test_fixed_sft_recipe_cli_explains_accelerator_refusal(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["snowball_sft", "--preset", OPENTHOUGHTS_SFT.name, "--accelerator", "4xH100"])
-    with pytest.raises(SystemExit) as exit_info:
-        launcher.run_sft_cli(SNOWBALL_SFT)
-    assert exit_info.value.code == 2
-    assert "preset fixes its own allocation" in capsys.readouterr().err
-
-
 @pytest.mark.parametrize(
     ("overrides", "error"),
     [({"xla_flags": ("--flag",)}, "xla_flags"), ({"per_device_parallelism": 1}, "per_device_parallelism")],
@@ -91,13 +83,35 @@ def test_prepared_data_requires_matching_tokenizers_and_fixed_steps(tmp_path, sc
         step.build_config(ctx)
 
 
-def test_snowball_round1_binds_the_published_mixture(tmp_path, monkeypatch):
+def test_snowball_round1_binds_the_published_mixture(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     model = MIXTURE_SFT.model()
     training = model.step
     [manifest] = training.deps
+    submitted = {}
+
+    def fake_remote(_fn, **kwargs):
+        submitted.update(kwargs)
+        return lambda _config: None
+
+    monkeypatch.setattr(launcher, "remote", fake_remote)
+    args = ["snowball_sft", "--preset", MIXTURE_SFT.name]
+    for flags, exit_code in [(("--accelerator", "4xH100"), 2), ((), 0)]:
+        monkeypatch.setattr(sys, "argv", [*args, *flags])
+        with pytest.raises(SystemExit) as exit_info:
+            launcher.run_sft_cli(SNOWBALL_SFT)
+        assert exit_info.value.code == exit_code
+    assert "preset fixes its own allocation" in capsys.readouterr().err
+    assert not list(tmp_path.iterdir())
+    assert not submitted
+
+    monkeypatch.setattr(sys, "argv", [*args, "--run"])
+    with pytest.raises(SystemExit) as exit_info:
+        launcher.run_sft_cli(SNOWBALL_SFT)
+    assert exit_info.value.code == 0
+
     output = manifest.path(str(tmp_path))
     manifest_config = manifest.build_config(StepContext.for_run(output, str(tmp_path)))
-    manifest.run(manifest_config)
     with pytest.raises(ValueError, match="SHA-256 pin"):
         manifest.run({**manifest_config, "sha256": "0" * 64})
     context = StepContext.for_run(
@@ -116,25 +130,12 @@ def test_snowball_round1_binds_the_published_mixture(tmp_path, monkeypatch):
     assert config.trainer.train_batch_size == 256
     assert model.relative_path == f"{DEFAULT_HF_CHECKPOINTS_PATH}/step-203"
 
-    submitted = {}
-
-    def fake_remote(_fn, **kwargs):
-        submitted.update(kwargs)
-        return lambda _config: None
-
-    monkeypatch.setattr(launcher, "remote", fake_remote)
-    training.run(pod_config)
     assert submitted["timeout"] == Duration.from_seconds(72_000)
     flags = submitted["env_vars"]["XLA_FLAGS"].split()
     assert "--xla_gpu_shard_autotuning=false" in flags
     assert any(flag.startswith(f"--{GPU_NCCL_TERMINATION_TIMEOUT_FLAG}=") for flag in flags)
 
-
-def test_snowball_round1_refuses_a_mesh_that_does_not_fit_resources(tmp_path):
     step = replace(MIXTURE_SFT, resources=OPENTHOUGHTS_SFT.resources).model().step
-    [manifest] = step.deps
-    output = manifest.path(str(tmp_path))
-    manifest.run(manifest.build_config(StepContext.for_run(output, str(tmp_path))))
     with pytest.raises(ValueError, match="mesh does not fit SFT resources"):
         materialized_config(step, str(tmp_path))
     with pytest.raises(ValueError, match="must be divisible by the mesh microbatch"):
