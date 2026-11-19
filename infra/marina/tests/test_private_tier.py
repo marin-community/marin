@@ -59,11 +59,21 @@ from taskcompendium.backend_requirements import (
 )
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
+from infra.marina.apps.rl_data_catalog.load import insert_rows
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
-from infra.marina.apps.rl_data_catalog.load_curriculum import atlas_source_restrictions, load_curriculum
+from infra.marina.apps.rl_data_catalog.load_curriculum import (
+    atlas_source_restrictions,
+    load_curriculum,
+    preflight_task_text,
+)
 from infra.marina.apps.rl_data_catalog.load_rollouts import stage_rollouts
 from infra.marina.apps.rl_data_catalog.server import licensing, restriction_registry
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
+from infra.marina.apps.rl_data_catalog.server.catalog_text import (
+    BINARY_TEXT_MARKER,
+    decode_catalog_value,
+    encode_catalog_value,
+)
 from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
 from infra.marina.apps.rl_data_catalog.server.restrictions import (
     declaration_restriction,
@@ -949,3 +959,83 @@ def test_curriculum_policy_read_is_compact_and_preserves_fail_closed_tags(catalo
     else:
         with pytest.raises(ValueError, match="PRIVATE_ALWAYS"):
             load_curriculum(str(release), str(coverage), bounded_query)
+
+
+def test_binary_curriculum_text_roundtrips_through_real_postgres(catalog_query):
+    original = {
+        "source_id": "Marin:fixture",
+        "task_id": "binary-task",
+        "description": "res_1vs99.rds\n\x1f\x8b\x08\x00payload",
+        "detail": {"task_preview": "raw\x00data", "instruction_characters": 8},
+    }
+    catalog_query(
+        "CREATE TABLE binary_curriculum_probe (load_id TEXT,source_id TEXT,task_id TEXT,description TEXT,detail JSONB,"
+        "PRIMARY KEY(load_id,source_id,task_id))",
+        {},
+    )
+    count = insert_rows(
+        catalog_query,
+        "binary_curriculum_probe",
+        "source_id TEXT,task_id TEXT,description TEXT,detail JSONB",
+        "fixture-load",
+        [encode_catalog_value(original)],
+    )
+    stored = catalog_query("SELECT source_id,task_id,description,detail FROM binary_curriculum_probe", {})["rows"]
+    assert count == 1
+    assert decode_catalog_value(stored[0]) == original
+
+    # An already-staged C1-bearing row must be migrated, while sibling loads stay intact.
+    catalog_query("UPDATE binary_curriculum_probe SET description=:text", {"text": "old\x85text"})
+    catalog_query(
+        "INSERT INTO binary_curriculum_probe SELECT 'sibling',source_id,task_id,description,detail "
+        "FROM binary_curriculum_probe",
+        {},
+    )
+    count = insert_rows(
+        catalog_query,
+        "binary_curriculum_probe",
+        "source_id TEXT,task_id TEXT,description TEXT,detail JSONB",
+        "fixture-load",
+        [encode_catalog_value(original)],
+        conflict_updates=("description", "detail"),
+    )
+    stored = catalog_query(
+        "SELECT source_id,task_id,description,detail FROM binary_curriculum_probe WHERE load_id='fixture-load'",
+        {},
+    )["rows"]
+    assert count == 1 and decode_catalog_value(stored[0]) == original
+    assert catalog_query("SELECT description FROM binary_curriculum_probe WHERE load_id='sibling'", {})["rows"] == [
+        {"description": "old\x85text"}
+    ]
+
+
+def test_binary_curriculum_resume_and_content_marker(catalog_query, tmp_path, catalog_database):
+    declaration = restricted_declaration(OPEN_SOURCE_ID, DataRestriction.OPEN)
+    release, coverage, tasks, _ = curriculum_release_fixture(
+        tmp_path / "binary-release",
+        [declaration],
+        instructions="res_1vs99.rds\n\x1f\x8b\x08\x00binary",
+    )
+    assert preflight_task_text([str(tasks)]) == 3
+
+    def interrupted(sql, parameters):
+        if sql.startswith("INSERT INTO curriculum_matches"):
+            raise RuntimeError("simulated interrupted staging")
+        return catalog_query(sql, parameters)
+
+    with pytest.raises(RuntimeError, match="interrupted staging"):
+        load_curriculum(str(release), str(coverage), interrupted)
+    cursor = catalog_query("SELECT load_id FROM curriculum_loads", {})["rows"][0]["load_id"]
+    assert catalog_query("SELECT load_id FROM curriculum_current WHERE name='latest'", {})["rows"][0]["load_id"] is None
+    assert catalog_query("SELECT count(*) AS n FROM curriculum_tasks WHERE load_id=:load", {"load": cursor})["rows"] == [
+        {"n": 3}
+    ]
+    result = load_curriculum(str(release), str(coverage), catalog_query, resume_load_id=cursor)
+    assert result["counts"]["tasks"] == 3
+    assert catalog_query("SELECT count(*) AS n FROM curriculum_tasks", {})["rows"] == [{"n": 3}]
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        rows = client.get("/curriculum/tasks").json()["tasks"]
+        assert all(row["task_preview"].startswith(BINARY_TEXT_MARKER) for row in rows)
+        detail = client.get("/curriculum/task", params={"source_id": OPEN_SOURCE_ID, "task_id": "one"}).json()
+        assert detail["task"]["task_preview"].startswith(BINARY_TEXT_MARKER)
+        assert "@atlas-text-v1:" not in json.dumps(detail)

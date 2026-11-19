@@ -408,6 +408,8 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     ).to_have_text("0")
     page.get_by_role("link", name="Getting started", exact=True).click()
     expect(page.locator("#contamination")).to_contain_text("NOT MEASURED")
+    catalog = page.request.get(f"{journey.origin}/a/{CATALOG_APP}/api/sources").json()
+    expect(page.locator("#snapshot-info")).to_contain_text(catalog["snapshot_id"])
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 

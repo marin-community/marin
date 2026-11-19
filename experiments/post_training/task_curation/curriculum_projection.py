@@ -44,7 +44,11 @@ from infra.marina.apps.rl_data_catalog.role_projection import (
     manifest_documents,
 )
 from infra.marina.apps.rl_data_catalog.server.restrictions import declaration_restriction
-from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
+from infra.marina.apps.rl_data_catalog.server.source_identity import (
+    canonical_source_id,
+    canonical_source_map,
+    original_source_id,
+)
 
 LOGGER = logging.getLogger(__name__)
 ASSIGNMENT_BATCH_SIZE = 65536
@@ -101,6 +105,31 @@ class ProjectionSelection:
     sources: list[AlignmentSource]
     inventory: list[SourceDeclaration]
     metadata_changes: dict[str, list[str]]
+
+
+class ProjectionSourceMissing(ValueError):
+    """An archived population has no declaration in the selected catalog."""
+
+    code = "projection_source_missing"
+
+    def __init__(self, source_id: str):
+        self.source_id = source_id
+        super().__init__(f"{self.code}: {source_id}")
+
+
+def projection_inventory(source_ids: list[str], inventory: list[SourceDeclaration]) -> list[SourceDeclaration]:
+    """Select current declarations by canonical ID without dropping archived populations."""
+    raw = {row.id: row for row in inventory}
+    if len(raw) != len(inventory):
+        raise ValueError("Projection catalog contains duplicate source IDs")
+    current = canonical_source_map(raw)
+    selected = []
+    for source_id in source_ids:
+        identifier = canonical_source_id(source_id)
+        if identifier not in current:
+            raise ProjectionSourceMissing(identifier)
+        selected.append(canonical_declaration(current[identifier]))
+    return selected
 
 
 def projection_selection(

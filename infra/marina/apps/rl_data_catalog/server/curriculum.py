@@ -17,6 +17,7 @@ from finestore.rl.status_taxonomy import DataRestriction
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
+from .catalog_text import display_catalog_value
 from .content_access import content_is_withheld, content_marker
 from .restrictions import (
     PRIVATE_TEXT_MARKER,
@@ -339,6 +340,8 @@ def task_response(
                 if row.get("source_declaration") is not None
                 else PRIVATE_TEXT_MARKER
             )
+        else:
+            served = display_catalog_value(served)
         tasks.append({**served, "source_id": source})
     return {
         "release_id": metadata["release_id"],
@@ -679,7 +682,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
         return {
             "release_id": metadata["release_id"],
             "task": {
-                **detail["detail"],
+                **display_catalog_value(detail["detail"]),
                 "source_id": canonical_source_id(detail["detail"]["source_id"]),
                 "recorded_intended_use": detail["detail"]["intended_use"],
                 "intended_use": detail["intended_use"],

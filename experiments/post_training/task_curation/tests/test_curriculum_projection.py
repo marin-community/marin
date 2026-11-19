@@ -7,7 +7,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import LexicalUse, SourceDeclaration, SourceOrigin, SourceUse, source_identifier
+from finestore.rl.curation import LexicalUse, QualifiedSourceDeclaration, SourceOrigin, SourceUse, source_identifier
 from finestore.rl.licenses import LicenseReceipt
 from finestore.schema import arrow_schema
 from marin.execution.lazy import run
@@ -24,9 +24,11 @@ from zephyr.readers import load_parquet
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.curriculum_projection import (
     ProjectionInputs,
+    ProjectionSourceMissing,
     SourceReplacement,
     curriculum_projection_step,
     filter_assignment_file,
+    projection_inventory,
     projection_selection,
     task_rebinding,
 )
@@ -38,7 +40,7 @@ from lib.taskcompendium.tests.deduplication_fixtures import deduplication_eviden
 
 
 def declaration(identifier, revision="1"):
-    return SourceDeclaration(
+    return QualifiedSourceDeclaration(
         id=source_identifier(SourceOrigin.MARIN, identifier, None, None),
         name=identifier,
         display_name=identifier,
@@ -80,6 +82,19 @@ def use_bindings(declarations):
         )
         for row in declarations
     ]
+
+
+def test_projection_inventory_resolves_live_alias_and_names_missing_source():
+    current = declaration("gpqa").model_copy(update={"origin": "GPQA", "id": "MarinSkyRL:gpqa"})
+    selected = projection_inventory(["GPQA:gpqa"], [current])
+    assert len(selected) == 1
+    assert selected[0].id == "GPQA:gpqa"
+    assert selected[0].dataset_revision == current.dataset_revision
+    assert selected[0].task_count == current.task_count
+    with pytest.raises(ProjectionSourceMissing) as failure:
+        projection_inventory(["GPQA:gpqa"], [])
+    assert failure.value.source_id == "GPQA:gpqa"
+    assert failure.value.code == "projection_source_missing"
 
 
 def reference(path):

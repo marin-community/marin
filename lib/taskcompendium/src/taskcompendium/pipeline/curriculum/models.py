@@ -6,7 +6,7 @@
 from enum import StrEnum
 from typing import Literal
 
-from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curation import QualifiedSourceDeclaration
 from pydantic import BaseModel, ConfigDict, Field
 
 LEGACY_COVERAGE_VERSION = "2026.10.15.1"
@@ -69,7 +69,7 @@ class AlignmentRelease(_Record):
     ready_count: int
     insufficient_context_count: int
     sources: list[AlignmentSource]
-    inventory: list[SourceDeclaration]
+    inventory: list[QualifiedSourceDeclaration]
     nodes: list[CurriculumNode]
     paths: list[str]
     lineage: dict[str, str]

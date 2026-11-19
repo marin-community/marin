@@ -13,6 +13,15 @@ function licenseEvidence(declaration) {
     line.append(' · ', pointer(ban.issue_url, 'Decision ↗'));
     return line;
   }
+  if (declaration.publication_scope) {
+    const grant = declaration.publication_scope;
+    const line = node('span', `${grant.license_id.toUpperCase()} · `);
+    line.append(pointer(grant.upstream_url, `${grant.upstream_name} ↗`));
+    if (grant.license_id === 'cc-by-4.0') {
+      line.append(' · ', pointer('https://creativecommons.org/licenses/by/4.0/', 'CC BY 4.0 ↗'));
+    }
+    return line;
+  }
   const receipt = declaration.license_receipt;
   if (!receipt) return 'Unresolved';
   const ids = [...new Set(receipt.evidence.flatMap(item => item.license_ids)

@@ -17,7 +17,7 @@
 body.guide { background: var(--bg); }
 .guide a { color: var(--green); }
 .guide .atlas-tabs { border-color: var(--line); }
-.guide-body { max-width: 1080px; }
+.guide-body { max-width: 1080px; overflow-wrap: anywhere; }
 .guide h2 { margin: 40px 0 10px; font-size: max(var(--type-min), 20px); }
 .guide h3 { font-size: max(var(--type-min), 16px); margin: 0 0 8px; }
 .guide h4 { font-size: max(var(--type-min), 14px); margin: 22px 0 6px; }
@@ -34,6 +34,7 @@ body.guide { background: var(--bg); }
 .flow { display: block; width: 100%; min-width: 760px; height: auto; font-family: inherit; }
 .flow .node rect { fill: var(--node-fill); stroke: var(--node-stroke); stroke-width: 1.2; }
 .flow .node.start rect { fill: var(--start-fill); }
+.flow .node rect.flow-link-target { width: 100px; height: 32px; rx: 4px; fill: var(--node-fill); stroke: var(--line); }
 .flow .nt { fill: var(--ink); font-size: max(var(--type-min), 15px); font-weight: 650; }
 .flow .ns { fill: var(--ink); font-size: max(var(--type-min), 12.5px); }
 .flow .muted-text { fill: var(--muted); }
