@@ -26,7 +26,10 @@ hash of the full immutable task reference. Its pipeline identity stays the same
 across selections, including when differently named tasks share content.
 Earlier build-time working directories are retained; actor and verifier execution
 use the final literal absolute working directory.
-Conversion retains the native `environment/` files as an
+For the pinned email-writing and interview-synthesis packages listed in `STAGED_INPUT_DIRECTORIES`,
+conversion uses the upstream Python image for both roles. The agent receives the released input files at
+startup. The grader clears its staged workspace before restoring the submission.
+Other packages retain the native `environment/` files as an
 unresolved `DockerBuildContext`. The verifier context adds capture-directory clearing
 so submitted deletions are preserved. Private tests and reference solutions
 remain separate from both build contexts. The runtime rejects unresolved
@@ -46,7 +49,7 @@ run graders or admit training tasks. Retained build recipes do not freeze the
 results of package downloads during a later build.
 
 Resolving these build contexts to pinned images and configuring native resource
-limits remain follow-up work. The converted tasks
+limits remain follow-up work. Tasks with unresolved contexts
 cannot execute in SAMPLE/FULL while their build contexts remain unresolved.
 
 Without an input override, the normal source-download step acquires and caches

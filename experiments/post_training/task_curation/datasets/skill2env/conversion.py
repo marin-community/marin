@@ -42,6 +42,13 @@ ADAPTER_PATH = "curation-adapter.py"
 CONTRACT_PATH = "curation-contract.json"
 RELEASE = "skill2env/skill2env@sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c"
 
+SHARED_PYTHON_IMAGE = "python:3.12-slim-bookworm@sha256:6e13e65c55e33adf203d77ee371cf8bf5d81bd4902ef07565721f46bf44917af"
+# These released Dockerfiles copy one input directory and create /workspace/output.
+STAGED_INPUT_DIRECTORIES = {
+    "sha256:b7c4a0f3051ed8f198721e43d32983411657de6645e7894d2e03308d726ed523": "inputs",  # email-writing
+    "sha256:0f34bf8caffcacee362dcbbb0c7ffc0c41a27a711dda7816f569f6869e192d96": "research",  # interview-synthesis
+}
+
 # These native verifiers read complete state directories, not just the declared artifacts.
 # Scope exceptions to the audited package contents; later releases need another audit.
 CAPTURE_ROOTS = {
@@ -262,6 +269,41 @@ def read_task(path: StoragePath, _context: ConversionContext) -> Iterator[dict]:
     yield {"release": RELEASE, "task_ref": task_ref, "files": files, "modes": modes}
 
 
+def native_build_contexts(
+    files: dict[str, bytes],
+    modes: dict[str, str],
+    dockerfile: str,
+    output_paths: tuple[str, ...],
+    working_directory: str,
+    task_digest: str,
+) -> tuple[DockerBuildContext, DockerBuildContext]:
+    context = tuple(
+        native_resource(files, modes, path, path.removeprefix("environment/"))
+        for path in sorted(files)
+        if path.startswith("environment/")
+    )
+    actor_build = DockerBuildContext(files=context)
+    # Clear every captured directory so the image cannot resurrect submitted deletions.
+    clear_paths = shlex.join(output_paths)
+    verifier_dockerfile = (
+        dockerfile.rstrip()
+        + f"\nUSER root\nRUN rm -rf {clear_paths} && mkdir -p {shlex.quote(working_directory)}\n"
+        + f"WORKDIR {working_directory}\n"
+    )
+    if task_digest == PYTHON_GRADER_TASK:
+        verifier_dockerfile += (
+            "RUN apt-get update && apt-get install -y --no-install-recommends python3"
+            " && rm -rf /var/lib/apt/lists/*\n"
+        )
+    grader_build = DockerBuildContext(
+        files=tuple(
+            inline_resource("Dockerfile", verifier_dockerfile.encode()) if resource.path == "Dockerfile" else resource
+            for resource in context
+        )
+    )
+    return actor_build, grader_build
+
+
 def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     data = row.data
     if data["release"] != RELEASE:
@@ -309,42 +351,39 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
         return unsupported("native_commands", "Expected native verifier and reference solution scripts")
     if any(path in files for path in (f"tests/{ADAPTER_PATH}", f"tests/{CONTRACT_PATH}")):
         return unsupported("adapter_collision", "Native tests occupy the adapter's private paths")
-    context = tuple(
-        native_resource(files, data["modes"], path, path.removeprefix("environment/"))
-        for path in sorted(files)
-        if path.startswith("environment/")
-    )
-    actor_build = DockerBuildContext(files=context)
-    # Clear every captured directory so the image cannot resurrect submitted deletions.
-    clear_paths = shlex.join(output_paths)
-    verifier_dockerfile = (
-        dockerfile.rstrip()
-        + f"\nUSER root\nRUN rm -rf {clear_paths} && mkdir -p {shlex.quote(working_directory)}\n"
-        + f"WORKDIR {working_directory}\n"
-    )
-    if task_digest == PYTHON_GRADER_TASK:
-        verifier_dockerfile += (
-            "RUN apt-get update && apt-get install -y --no-install-recommends python3"
-            " && rm -rf /var/lib/apt/lists/*\n"
+    actor_build = grader_build = image = None
+    worker = ()
+    actor_setup = STARTUP_COMMANDS.get(task_digest, ())
+    grader_setup = ()
+    if directory := STAGED_INPUT_DIRECTORIES.get(task_digest):
+        image = SHARED_PYTHON_IMAGE
+        worker = tuple(
+            native_resource(files, data["modes"], path, "workspace/" + path.removeprefix("environment/"))
+            for path in sorted(files)
+            if path.startswith(f"environment/{directory}/")
         )
-    grader_build = DockerBuildContext(
-        files=tuple(
-            inline_resource("Dockerfile", verifier_dockerfile.encode()) if resource.path == "Dockerfile" else resource
-            for resource in context
+        actor_setup = ("mkdir -p /workspace/output",)
+        # Grading stages worker resources before restoring the submission, which may omit deleted inputs.
+        grader_setup = ("rm -rf /workspace && mkdir -p /workspace",)
+    else:
+        actor_build, grader_build = native_build_contexts(
+            files, data["modes"], dockerfile, output_paths, working_directory, task_digest
         )
-    )
     environment_variables = dict(config["environment"].get("env", {}))
     actor = EnvironmentRequirements(
         capabilities=("shell", "filesystem"),
         command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_build=actor_build,
-        setup_commands=STARTUP_COMMANDS.get(task_digest, ()),
+        docker_image=image,
+        setup_commands=actor_setup,
         working_directory=working_directory,
         environment_variables={**environment_variables, **config["agent"].get("env", {})},
     )
     verifier_environment = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_build=grader_build,
+        docker_image=image,
+        setup_commands=grader_setup,
         working_directory=working_directory,
         environment_variables=environment_variables,
     )
@@ -366,6 +405,7 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
         context=ConversationInput(events=(TextMessage(role="user", content=files["instruction.md"].decode()),)),
         environment_requirements=actor,
         resources=ResourceGroups(
+            worker=worker,
             verifier=(
                 *verifier,
                 inline_resource(ADAPTER_PATH, Path(grade.__file__).read_bytes()),
