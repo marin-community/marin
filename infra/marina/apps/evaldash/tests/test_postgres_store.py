@@ -567,4 +567,4 @@ def test_scheduled_ingest_publishes_multiple_batches_without_loading_a_serving_s
     assert sum(materialized_sizes) == len(expected)
     assert max(materialized_sizes) < len(expected)
     assert results_db.prefix_statuses(engine)[0].error is None
-    assert [row["report_id"] for row in fetch_report_summaries(engine)] == ["2026-11-18-090000-bbbb"]
+    assert [row["report_id"] for row in fetch_report_summaries(engine)["reports"]] == ["2026-11-18-090000-bbbb"]

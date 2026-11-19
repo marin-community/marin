@@ -4,18 +4,17 @@
 """Playground reports: model-feedback reports saved by the marin-serve dashboard.
 
 The serve dashboard's Report issue button writes one immutable JSON object per report under
-``{prefix}/{YYYY-MM-DD}/{id}.json`` (see ``marin.inference.model_feedback``). The scheduled ingest job
+``{prefix}/{YYYY-MM-DD}/{id}.json`` (format in ``evalrecords.model_feedback``). The scheduled ingest job
 copies objects it has not seen into ``playground_reports``.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from typing import Literal
 
 import sqlalchemy
-from pydantic import BaseModel, ConfigDict, ValidationError
+from evalrecords.model_feedback import FeedbackRecord
+from pydantic import ValidationError
 from rigging.filesystem.factory import open_url, url_to_fs
 from sqlalchemy import Boolean, Column, DateTime, Index, Table, Text
 from sqlalchemy.engine import Engine
@@ -24,12 +23,6 @@ from .results_db import _dialect_insert, _utc, json_type, metadata
 
 logger = logging.getLogger(__name__)
 
-# Where marin.inference.model_feedback writes reports; EvalDash cannot import marin at runtime, and a
-# test checks the two stay in sync.
-DEFAULT_REPORT_PREFIXES = (
-    "gs://marin-eval-metadata/model-feedback",
-    "s3://marin-us-east-02a/marin/model-feedback",
-)
 MAX_REPORT_SUMMARIES = 1000
 
 
@@ -46,27 +39,6 @@ reports = Table(
     Column("record", json_type, nullable=False),
     Index("playground_reports_created_at", "created_at"),
 )
-
-
-class FeedbackReport(BaseModel):
-    """What the reporter entered, plus the conversation when they included it."""
-
-    model_config = ConfigDict(extra="allow")
-    description: str
-    reporter: str = ""
-    model: str
-    conversation: dict[str, object] | None
-
-
-class FeedbackRecord(BaseModel):
-    """Version 1 of the object the serve dashboard writes for each report."""
-
-    model_config = ConfigDict(extra="allow")
-    version: Literal[1]
-    id: str
-    created_at: datetime
-    serving: dict[str, object]
-    report: FeedbackReport
 
 
 def list_report_paths(prefix: str) -> list[str]:
@@ -104,7 +76,8 @@ def report_row(url: str, record: FeedbackRecord) -> dict:
 
 
 def _read_report(url: str) -> FeedbackRecord | None:
-    with open_url(url, "r") as handle:
+    """Parse one report object; None, with a warning, when it is not a valid record."""
+    with open_url(url, "rb") as handle:
         body = handle.read()
     try:
         return FeedbackRecord.model_validate_json(body)
@@ -114,7 +87,7 @@ def _read_report(url: str) -> FeedbackRecord | None:
 
 
 def ingest_reports(engine: Engine, prefixes: tuple[str, ...]) -> tuple[str, ...]:
-    """Copy unseen report objects into the catalog; return the prefixes whose listing failed."""
+    """Copy unseen report objects into the catalog; return the prefixes with a listing or read failure."""
     with engine.begin() as conn:
         known = set(conn.execute(sqlalchemy.select(reports.c.source_url)).scalars())
     failed: list[str] = []
@@ -129,7 +102,14 @@ def ingest_reports(engine: Engine, prefixes: tuple[str, ...]) -> tuple[str, ...]
         for url in paths:
             if url in known:
                 continue
-            record = _read_report(url)
+            try:
+                record = _read_report(url)
+            except Exception:
+                # Insert the readable reports anyway; this one is retried on the next pass.
+                logger.exception("playground reports: reading %s failed", url)
+                if prefix not in failed:
+                    failed.append(prefix)
+                continue
             if record is not None:
                 rows.append(report_row(url, record))
         if rows:
@@ -140,8 +120,8 @@ def ingest_reports(engine: Engine, prefixes: tuple[str, ...]) -> tuple[str, ...]
     return tuple(failed)
 
 
-def fetch_report_summaries(engine: Engine, limit: int = MAX_REPORT_SUMMARIES) -> list[dict]:
-    """The newest reports without their conversations."""
+def fetch_report_summaries(engine: Engine, limit: int = MAX_REPORT_SUMMARIES) -> dict:
+    """The newest ``limit`` reports without their conversations, and whether older ones were left out."""
     stmt = sqlalchemy.select(
         reports.c.report_id,
         reports.c.created_at,
@@ -151,8 +131,8 @@ def fetch_report_summaries(engine: Engine, limit: int = MAX_REPORT_SUMMARIES) ->
         reports.c.has_conversation,
     ).order_by(reports.c.created_at.desc(), reports.c.report_id.desc())
     with engine.begin() as conn:
-        rows = conn.execute(stmt.limit(limit)).mappings().all()
-    return [
+        rows = conn.execute(stmt.limit(limit + 1)).mappings().all()
+    summaries = [
         {
             "report_id": row["report_id"],
             "created_at": _utc(row["created_at"]).isoformat(),
@@ -161,8 +141,9 @@ def fetch_report_summaries(engine: Engine, limit: int = MAX_REPORT_SUMMARIES) ->
             "description": row["description"],
             "has_conversation": row["has_conversation"],
         }
-        for row in rows
+        for row in rows[:limit]
     ]
+    return {"reports": summaries, "truncated": len(rows) > limit}
 
 
 def fetch_report(engine: Engine, report_id: str) -> dict | None:

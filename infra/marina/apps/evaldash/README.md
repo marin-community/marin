@@ -6,7 +6,7 @@ the same Marina service.
 
 Cloud Run has a `marina` web service and a separate `marina-evaldash` job.
 The job is the scheduled ingestion worker; it scans evaluation records and
-updates the serving catalog. It serves no web traffic. Both use the Marina
+playground reports and updates the serving catalog. It serves no web traffic. Both use the Marina
 base image, while the released EvalDash package supplies the UI, API and
 ingestion module.
 
@@ -90,6 +90,17 @@ selector, an opt-in qualified aggregate, and archive controls), runs (a "by laun
 expanding each serve group to its evals, plus a flat filterable table), run detail (grade with its
 interval and ungraded-item breakdown, metrics, version + description, live iris job/attempt status,
 live finelog logs, a per-sample browser, and group siblings), and status (per-prefix ingest probes).
+A Playground Reports tab lists the reports described below.
+
+Playground reports are the model-feedback reports that the marin-serve dashboard's Report issue
+button saves, one immutable JSON object per report under `{prefix}/{YYYY-MM-DD}/{id}.json` in
+`gs://marin-eval-metadata/model-feedback` and `s3://marin-us-east-02a/marin/model-feedback`. The
+format and prefixes live in `evalrecords.model_feedback`, shared with the serve dashboard. Each
+ingest pass copies objects it has not seen into the `playground_reports` table and never rereads
+one it has. An object that fails validation is skipped with a warning on every pass; a listing or
+read failure is logged and reported as a failed prefix, and the other reports are still copied.
+The list shows the newest 1,000 reports and says when older ones were left out. The local store has
+no database for reports, so their endpoints return 503 there.
 
 Run filters search the full catalog before applying the result limit. Model and eval pickers
 search the catalog's names by case-insensitive word fragments and support arrow keys, Enter,
@@ -154,6 +165,8 @@ GET  /meta              distinct models / evals / suites / families / users / st
 GET  /status            store info + per-prefix ingest probes (last probe/success/error)
 POST /refresh           queue the EvalDash Cloud Run rescan; returns 202 + operation + /status
 POST /models/{model_name}/archive   set a model's archive flag ({"archived": bool})
+GET  /playground-reports            the newest playground reports without conversations, and whether older ones were left out
+GET  /playground-reports/{report_id}   one stored report with its source URL (404 if absent)
 ```
 
 `/panel` answers one selection request against the statistics engine in
@@ -293,6 +306,7 @@ Resolved once when the kernel mounts the app, from the environment:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `RECORDS_PREFIXES` | the four roots above | Comma-separated record roots, highest precedence first. |
+| `PLAYGROUND_REPORT_PREFIXES` | the two report prefixes above | Comma-separated playground report roots. |
 | `EVALDASH_STORE` | `postgres` | `local` serves from the record snapshot with no database. |
 | `EVALDASH_INGEST_INTERVAL` | `600` | Local-store polling cadence. Production uses the manifest's ten-minute schedule. |
 | `EVALDASH_INGEST_JOB` | unset | Full Cloud Run job resource queued by `POST /refresh`; Marina derives it from the manifest in production. |
@@ -312,6 +326,7 @@ results_db.py           serving catalog, source inventory, and transactional pro
 db_migrations.py        the migration runner and its schema ledger
 migrations/             frozen numbered database migrations
 record_reconciliation.py  version checks and record validation
+playground_reports.py   playground report ingest, list, and detail
 metrics.py              panel and comparison views over the shared statistics engine
 discovery.py            resolve a VM internal IP from a GCE list filter
 cluster.py              Iris and finelog generated Connect clients over Direct VPC egress

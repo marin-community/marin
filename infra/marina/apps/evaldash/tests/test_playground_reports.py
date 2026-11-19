@@ -10,8 +10,7 @@ import sqlalchemy
 from evaldash import app as evaldash_app
 from evaldash import results_db
 from evaldash.db_migrations import apply_migrations
-from evaldash.playground_reports import DEFAULT_REPORT_PREFIXES, ingest_reports
-from marin.inference.model_feedback import COREWEAVE_FEEDBACK_PREFIX, GCS_FEEDBACK_PREFIX
+from evaldash.playground_reports import fetch_report_summaries, ingest_reports
 from sqlalchemy.pool import StaticPool
 from starlette.testclient import TestClient
 
@@ -58,14 +57,17 @@ def test_ingest_copies_new_reports_once_and_skips_malformed_objects(tmp_path):
     )
     _write_report(prefix, "2026-11-18", "090000-bbbb", "2026-11-18T09:00:00+00:00", description="Too verbose.")
     (prefix / "2026-11-18" / "broken.json").write_text("{not json")
+    (prefix / "2026-11-18" / "binary.json").write_bytes(b"\xff\xfe")
 
     assert ingest_reports(engine, (str(prefix),)) == ()
     assert ingest_reports(engine, (str(prefix),)) == ()
 
     with _client(engine, prefix) as client:
-        summaries = client.get("/playground-reports").json()
+        listing = client.get("/playground-reports").json()
         detail = client.get("/playground-reports/2026-11-17-205725-aaaa").json()
 
+    summaries = listing["reports"]
+    assert listing["truncated"] is False
     assert [row["report_id"] for row in summaries] == ["2026-11-18-090000-bbbb", "2026-11-17-205725-aaaa"]
     assert summaries[1]["reporter"] == "Ada"
     assert summaries[1]["has_conversation"] is True
@@ -84,5 +86,39 @@ def test_local_store_reports_that_playground_reports_need_postgres():
         assert client.get("/playground-reports").status_code == 503
 
 
-def test_default_prefixes_are_where_the_serve_dashboard_writes():
-    assert set(DEFAULT_REPORT_PREFIXES) == {GCS_FEEDBACK_PREFIX, COREWEAVE_FEEDBACK_PREFIX}
+def test_unreadable_report_fails_its_prefix_without_blocking_other_reports(tmp_path):
+    engine = _engine()
+    first, second = tmp_path / "first", tmp_path / "second"
+    _write_report(first, "2026-11-18", "090000-aaaa", "2026-11-18T09:00:00+00:00", description="Readable.")
+    _write_report(first, "2026-11-18", "091500-bbbb", "2026-11-18T09:15:00+00:00", description="Unreadable.")
+    _write_report(second, "2026-11-18", "100000-cccc", "2026-11-18T10:00:00+00:00", description="Other bucket.")
+    unreadable = first / "2026-11-18" / "091500-bbbb.json"
+    unreadable.chmod(0)
+    try:
+        failed = ingest_reports(engine, (str(first), str(second)))
+    finally:
+        unreadable.chmod(0o644)
+
+    assert failed == (str(first),)
+    with _client(engine, first) as client:
+        ids = [row["report_id"] for row in client.get("/playground-reports").json()["reports"]]
+    assert ids == ["2026-11-18-100000-cccc", "2026-11-18-090000-aaaa"]
+
+    assert ingest_reports(engine, (str(first), str(second))) == ()
+    with _client(engine, first) as client:
+        assert len(client.get("/playground-reports").json()["reports"]) == 3
+
+
+def test_summaries_say_when_older_reports_were_left_out(tmp_path):
+    engine = _engine()
+    prefix = tmp_path / "model-feedback"
+    for minute in range(3):
+        _write_report(
+            prefix, "2026-11-18", f"09{minute:02d}00-aaaa", f"2026-11-18T09:{minute:02d}:00+00:00", description="x"
+        )
+    ingest_reports(engine, (str(prefix),))
+
+    assert fetch_report_summaries(engine, limit=3)["truncated"] is False
+    capped = fetch_report_summaries(engine, limit=2)
+    assert capped["truncated"] is True
+    assert [row["report_id"] for row in capped["reports"]] == ["2026-11-18-090200-aaaa", "2026-11-18-090100-aaaa"]

@@ -669,6 +669,12 @@ export interface ReportSummary {
   has_conversation: boolean
 }
 
+// /api/playground-reports: the newest reports; truncated when older ones were left out.
+export interface ReportListing {
+  reports: ReportSummary[]
+  truncated: boolean
+}
+
 // The serve dashboard's saved chat (marin.inference dashboard `Conversation`); only rendered fields.
 export interface PlaygroundToolCall {
   id: string

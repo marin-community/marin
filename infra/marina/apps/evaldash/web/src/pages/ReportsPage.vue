@@ -4,7 +4,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatTimestamp } from '@/utils/formatting'
-import type { ReportSummary } from '@/types/api'
+import type { ReportListing, ReportSummary } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import FilterBar, { type Facet } from '@/components/shared/FilterBar.vue'
 
@@ -34,11 +34,11 @@ const selected = computed<Record<string, string>>({
   set: (values) => setQuery(Object.fromEntries(FACET_KEYS.map((key) => [key, values[key] ?? ''])), 'push'),
 })
 
-const { data, loading, error, refresh } = useApi<ReportSummary[]>(() => 'api/playground-reports')
+const { data, loading, error, refresh } = useApi<ReportListing>(() => 'api/playground-reports')
 onMounted(refresh)
 onViewRefresh(refresh)
 
-const reports = computed(() => data.value ?? [])
+const reports = computed(() => data.value?.reports ?? [])
 
 function distinct(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))].sort()
@@ -105,6 +105,11 @@ const resultLabel = computed(() => {
         </label>
       </template>
     </FilterBar>
+
+    <p v-if="data?.truncated" class="mb-4 text-xs text-text-muted">
+      Showing the newest {{ reports.length }} reports. Search, filters, and oldest-first order cover only
+      these; older reports are in the report buckets.
+    </p>
 
     <div v-if="error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2 mb-4">
       {{ error }}
