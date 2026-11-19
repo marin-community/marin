@@ -7,9 +7,9 @@ name = "marin-verifyit"
 version = "0.1.0"
 description = "One grader for TaskTrove Clean tasks: reads tests/verifier.toml, writes /logs/verifier/reward.json."
 readme = "README.md"
-requires-python = ">=3.11"
-# Grading dependencies remain optional.
-dependencies = ["tomli-w>=1.2"]
+requires-python = ">=3.10"
+# Grading dependencies remain optional. tomli backs the tomllib import on 3.10 grader machines.
+dependencies = ["tomli-w>=1.2", 'tomli>=2.0.1; python_version < "3.11"']
 
 [project.scripts]
 verifyit = "verifyit.grade:main"
