@@ -85,6 +85,8 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
         container_profile=job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         max_retries=0,
         timeout=600,
+        scheduling_timeout=21600,
+        max_retries_preemption=0,
     )
     previous = get_job_info()
     set_job_info(JobInfo(task_id=JobName.from_wire("/alice/coordinator/0")))
@@ -97,6 +99,9 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     [(address, request)] = requests
     assert address == "http://parent-controller:8080"
     assert request.name == result.job_id
+    assert request.timeout.milliseconds == 600_000
+    assert request.scheduling_timeout.milliseconds == 21_600_000
+    assert request.max_retries_preemption == 0
     assert tuple(request.coscheduling.group_sizes) == groups
     assert request.coscheduling.group_by == ("nvlink.domain" if groups else "leafgroup")
     assert all(constraint.key != CLUSTER_CONSTRAINT_KEY for constraint in request.constraints)

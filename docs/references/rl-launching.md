@@ -209,6 +209,11 @@ data artifacts, a starting native checkpoint, topology, seed, retention, and the
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
 
+Set `scheduling_timeout_seconds` to bound the wait for the GPU gang and
+`job_timeout_seconds` to bound each GPU attempt after it starts. A zero timeout
+leaves the corresponding Iris limit unset. Set `max_retries_preemption=0` when
+the allocation budget cannot absorb a replacement attempt.
+
 `IrisSkyRLExecution.container_profile` accepts an `iris.rpc.job_pb2.ContainerProfile` enum for the
 coordinator and trainer jobs. Enum names are serialized at the launch boundary. It defaults to `None`,
 which leaves the Iris default in effect. In-pod sandbox graders need namespace capabilities: use

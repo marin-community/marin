@@ -464,6 +464,8 @@ class IrisSkyRLExecution:
     coordinator_timeout_hours: int
     wandb_entity: str | None = None
     job_timeout_seconds: int = 0
+    scheduling_timeout_seconds: int = 0
+    max_retries_preemption: int | None = None
     required_env_vars: tuple[str, ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
     role_topology: RoleTopologyMode | None = None
@@ -473,6 +475,10 @@ class IrisSkyRLExecution:
             raise ValueError("SkyRL coordinator_timeout_hours must be positive")
         if self.job_timeout_seconds < 0:
             raise ValueError("SkyRL job_timeout_seconds cannot be negative")
+        if self.scheduling_timeout_seconds < 0:
+            raise ValueError("SkyRL scheduling_timeout_seconds cannot be negative")
+        if self.max_retries_preemption is not None and self.max_retries_preemption < 0:
+            raise ValueError("SkyRL max_retries_preemption cannot be negative")
         if (self.target_cluster is None) != (self.parent_cluster_config is None):
             raise ValueError("SkyRL target_cluster and parent_cluster_config must be set together")
         if self.target_cluster is not None and self.target_cluster != self.cluster:
@@ -918,6 +924,8 @@ def _launch_config_yaml(
             "priority": execution.priority,
             "max_retries": execution.max_retries,
             "timeout": execution.job_timeout_seconds,
+            "scheduling_timeout": execution.scheduling_timeout_seconds,
+            "max_retries_preemption": execution.max_retries_preemption,
             "target_cluster": execution.target_cluster,
             "parent_cluster_config": execution.parent_cluster_config,
         },
