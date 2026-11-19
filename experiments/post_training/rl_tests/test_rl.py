@@ -272,13 +272,13 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
 
 def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch):
     revisions = {
-        "speed-short": {"2026.11.13.1": "96e0d088", "2026.11.17.1": "363225a9"},
-        "data-short": {"2026.11.13.1": "7d9a590f", "2026.11.17.1": "772467a8"},
-        "speed-medium": {"2026.11.12.1": "e75349ff", "2026.11.17.1": "5cd852f4"},
-        "learning-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2"},
-        "data-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2"},
-        "speed-long": {"2026.11.11.1": "cd0a5f4e", "2026.11.17.1": "f29155cc"},
-        "train-long": {"2026.11.11.1": "4945b701", "2026.11.17.1": "b411c765"},
+        "speed-short": {"2026.11.13.1": "96e0d088", "2026.11.17.1": "363225a9", "2026.11.19.1": "d54e1bae"},
+        "data-short": {"2026.11.13.1": "7d9a590f", "2026.11.17.1": "772467a8", "2026.11.19.1": "f6d53410"},
+        "speed-medium": {"2026.11.12.1": "e75349ff", "2026.11.17.1": "5cd852f4", "2026.11.19.1": "180849ef"},
+        "learning-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2", "2026.11.19.1": "549c5f28"},
+        "data-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2", "2026.11.19.1": "549c5f28"},
+        "speed-long": {"2026.11.11.1": "cd0a5f4e", "2026.11.17.1": "f29155cc", "2026.11.19.1": "e69093f8"},
+        "train-long": {"2026.11.11.1": "4945b701", "2026.11.17.1": "b411c765", "2026.11.19.1": "b079be4a"},
     }
     configs = assert_revisioned_native_configs(
         snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch

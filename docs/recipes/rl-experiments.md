@@ -205,6 +205,29 @@ by task ID and count as scored only after successful verification without an exc
 Equal-family mean averages answers per task, tasks per family, then families. Slices use family, AAII
 category and agentic status. Task selection versions are immutable; follow the EvalLite reference to change one.
 
+To compute each EvalLite version for a run, read the stored task rows for one attempt, evaluation
+and checkpoint step. Load each version's selection with `read_selection_strata` and pass it to
+`score_eval_lite_version`.
+
+```python
+from finestore.rl.run_records import read_evaluations
+from finestore.rl.strata import read_selection_strata
+from experiments.post_training.rl_scoring import score_eval_lite_version
+
+rows = read_evaluations(export_root, attempt_id=attempt_id, evaluation="eval/eval_lite_100/", step=step)
+for root in version_roots:
+    panel = read_selection_strata(root)
+    if panel is None:
+        raise ValueError(f"Missing selection manifest: {root}")
+    print(panel.definition.version, score_eval_lite_version(rows, panel))
+```
+
+Use the evaluation name stored on the rows. A primary evaluation uses `eval/`. The result reports
+how many active tasks scored, which are missing verified answers, and which have missing or different
+content digests. A version has a score only when every active task has verified answers with matching
+content. To compare earlier versions whose active tasks have since retired, evaluate the retained
+pool so the run includes those tasks.
+
 ## What a run writes
 
 The status block names the run's artifact output and native job. Submission prints an open-ended
@@ -219,7 +242,7 @@ best checkpoint step, or `none eligible`.
 | `resolved-launch.yaml`, `terminal.json` | Native configuration and result; `read_stored_skyrl_attempt(output)` in `marin.rl.skyrl_records` reads the retained attempt without Iris. |
 | `gate_inputs.json` | The runner's declared task, initializer, settings and requirements. |
 | `exports/run-records/` | FineStore attempt receipts, numeric metrics and per-task evaluations. `read_skyrl_metrics(output, attempt_id=...)` reads a selected attempt. |
-| FineStore `evaluations` table | One task per attempt, evaluation and step, with ordered answers, native rewards, verifier bounds, normalized verifier scores, outcomes and canonical strata. `finestore.rl.run_records.read_evaluations(export_root, attempt_id=...)` reads it; `rl_scoring.evaluation_scores` joins a selected panel's membership and content to these rows. |
+| FineStore `evaluations` table | One task per attempt, evaluation and step, with task content digest, ordered answers, native rewards, verifier bounds, normalized verifier scores, outcomes and canonical strata. `finestore.rl.run_records.read_evaluations` reads it. |
 | `exports/dumped_evals/<attempt_id>/...` | JSONL answers carrying attempt, step and final-turn identity; named evaluations also have their own export subtree. |
 | Native checkpoint root | Recovery checkpoints in the 14-day TTL bucket. The receipt records their location and lineage; they are separate from durable exports. |
 | `exports/best_checkpoint.json` | The selected native checkpoint step and its evaluation evidence, written when a checkpoint is eligible. |

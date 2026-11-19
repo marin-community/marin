@@ -20,8 +20,8 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from finestore.rl.rl_progress import Comparison, ComparisonRole, Invariant
-from finestore.rl.run_records import AttemptRecord, read_evaluations
-from finestore.rl.strata import MembershipState, read_selection_strata
+from finestore.rl.run_records import AttemptRecord, EvaluationAnswerRow, EvaluationTaskRow, read_evaluations
+from finestore.rl.strata import MembershipState, SelectionStrata, read_selection_strata
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
     RecordedLaunch,
@@ -59,6 +59,58 @@ EVAL_SCORE_SCHEMA = pa.schema(
 
 class InvalidComparison(ValueError):
     """The recorded runs cannot support this calibrated comparison."""
+
+
+@dataclass(frozen=True)
+class EvalLiteVersionScore:
+    score: float | None
+    scored: int
+    missing: tuple[str, ...]
+    digest_mismatches: tuple[str, ...]
+
+
+def _verified_score(answer: EvaluationAnswerRow) -> bool:
+    return answer.verification_status == "verified" and answer.verifier_score is not None
+
+
+def _scored_answer(answer: EvaluationAnswerRow) -> bool:
+    return _verified_score(answer) and not answer.error_type and not answer.error_treatment
+
+
+def score_eval_lite_version(rows: Sequence[EvaluationTaskRow], panel: SelectionStrata) -> EvalLiteVersionScore:
+    """Score one attempt, evaluation and step against an EvalLite version's active tasks.
+
+    Every task needs a matching digest and verified answers. Each task contributes
+    the mean of its normalized answer scores, with equal weight across tasks.
+    """
+    if len({(row.attempt_id, row.evaluation, row.step) for row in rows}) > 1:
+        raise ValueError("select one evaluation, attempt and step before scoring an EvalLite version")
+    measured = {row.task_id: row for row in rows}
+    if len(measured) != len(rows):
+        raise ValueError("duplicate per-task evaluation rows")
+
+    scores, missing, mismatches = [], [], []
+    for task_id, expected in sorted(panel.tasks.items()):
+        if expected.state != MembershipState.ACTIVE:
+            continue
+        row = measured.get(task_id)
+        if row is None:
+            missing.append(task_id)
+        elif row.task_digest is None or row.task_digest != expected.task_digest:
+            mismatches.append(task_id)
+        else:
+            verified = [
+                answer.verifier_score
+                for answer in row.answers
+                if _scored_answer(answer) and answer.verifier_score is not None and 0 <= answer.verifier_score <= 1
+            ]
+            if verified and len(verified) == len(row.answers):
+                scores.append(statistics.mean(verified))
+            else:
+                missing.append(task_id)
+
+    score = statistics.mean(scores) if scores and not (missing or mismatches) else None
+    return EvalLiteVersionScore(score, len(scores), tuple(missing), tuple(mismatches))
 
 
 def paths(pattern: StoragePath) -> list[StoragePath]:
@@ -236,7 +288,7 @@ def evaluation_scores(
     ):
         identity = panel.tasks[task.task_id] if panel is not None else task
         strata = identity.strata
-        verified = answer.verification_status == "verified" and answer.verifier_score is not None
+        verified = _verified_score(answer)
         rows.append(
             {
                 "evaluation": evaluation.name,
@@ -244,9 +296,8 @@ def evaluation_scores(
                 "item": task.task_id,
                 "attempt": attempts[task.step, task.task_id],
                 **strata.model_dump(),
-                "agentic": identity.agentic,
                 "score": answer.verifier_score if verified else 0.0,
-                "scored": verified and not answer.error_type and not answer.error_treatment,
+                "scored": _scored_answer(answer),
             }
         )
         attempts[task.step, task.task_id] += 1
