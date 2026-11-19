@@ -15,7 +15,6 @@ from experiments.post_training.task_curation.datasets import (
     campaign_releases,
     crosscode_python_repair,
     native_releases,
-    repair_releases,
     structure_closure,
     terminus_pivot,
     thoughtcrime,
@@ -155,7 +154,6 @@ def configured_sources() -> list[RlDataSource]:
         *thoughtcrime.sources(),
         *campaign_releases.sources(),
         *native_releases.sources(),
-        *repair_releases.sources(),
         *terminus_pivot.sources(),
         *prime_multiswe.sources(),
     ]
