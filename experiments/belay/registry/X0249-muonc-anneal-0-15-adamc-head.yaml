@@ -4,7 +4,7 @@ name: MuonC anneal 0.15 + AdamC head/router/embed
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7022075928
@@ -12,3 +12,18 @@ intake:
   approved_by: armorfaye (trusted)
 code_commits:
 - 98482e0b709c7ceb35a1822ad41b26abe30d1f6e
+trials:
+- id: t001
+  variant: X0247 at lambda 0.15 + AdamC head, router/embed decay 0.3
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0249
+  date: '2026-11-19'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0249
+  wandb: []
+  settings:
+    muonc_anneal_decay: '0.15'
+    muonc_anneal_adamc: '12.5'
+    adamc_adam_decay: '0.3'
+  commit: 744f10495b
+  priority: interactive
