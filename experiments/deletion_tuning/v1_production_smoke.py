@@ -58,6 +58,8 @@ logger = logging.getLogger(__name__)
 SMOKE_NAME = "deletion-tuning/v1-production-smoke"
 DEFAULT_BASE = "s3://marin-rno2a/marin/users/benfeuer/snowball-deletion-tuning/inputs/base-hf/2026.11.19.1"
 TOKENIZER = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
+# KB-sized diagnostics land here regardless of the cluster log path
+DIAGNOSTICS_PREFIX = "s3://marin-us-east-02a/tmp/ttl=7d/benfeuer/snowball-deletion-tuning/smoke/production"
 SMOKE_STEPS = 3
 SMOKE_BATCH = 8
 SMOKE_CALIBRATION_BATCHES = 2
@@ -188,7 +190,7 @@ def run_production_smoke(output_root: Path | None = None, base: str = DEFAULT_BA
         except Exception:
             # the direct-cluster log path is not always fetchable; the failure
             # lands in storage either way
-            StoragePath(f"{SMOKE_PREFIX}/last-error.txt").write_text(traceback.format_exc())
+            StoragePath(f"{DIAGNOSTICS_PREFIX}/last-error.txt").write_text(traceback.format_exc())
             raise
 
         exports = sorted(str(path) for path in output_path.rglob("*.safetensors"))
@@ -209,7 +211,7 @@ def run_production_smoke(output_root: Path | None = None, base: str = DEFAULT_BA
             "mask_artifact": {"entries": len(keep_masks), "kept": kept, "total": total},
         }
         logger.info("production smoke complete: %s", json.dumps(summary, indent=2))
-        StoragePath(f"{SMOKE_PREFIX}/last-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+        StoragePath(f"{DIAGNOSTICS_PREFIX}/last-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         if output_root is not None:
             output_root.mkdir(parents=True, exist_ok=True)
             (output_root / "v1-production-smoke-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
