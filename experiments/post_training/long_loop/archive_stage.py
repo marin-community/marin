@@ -35,6 +35,7 @@ from wandb.apis.public.runhistory.downloads import IncompleteRunHistoryError
 from experiments.grug.moe_hero_ep.ops.upload_hf import RESPONSIBLE_USE, WARNING
 from experiments.post_training.long_loop.archive import (
     ArchiveInput,
+    assert_final_sft_checkpoint,
     checkpoint_cleanup,
     digest,
     seal_archive,
@@ -112,9 +113,13 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
             )
         )
     seal_archive(output, inputs, provenance)
+    final_sft = provenance.get("final_sft_checkpoint")
+    if not isinstance(final_sft, dict) or not final_sft.get("uri"):
+        raise ValueError("Archive plan must record the final SFT checkpoint")
     inventory = provenance["checkpoint_inventory"]
     blockers = provenance.get("cleanup_blockers", [])
     if missing or declared_missing or blockers:
+        assert_final_sft_checkpoint(output, final_sft)
         write_once(
             prefix_join(output, "cleanup-blocked.json"),
             json.dumps(
@@ -132,7 +137,9 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
         inventory["root"],
         inventory["selected"],
         [item["source"] for item in inventory["disposable_files"]],
+        protected=[final_sft["uri"]],
     )
+    assert_final_sft_checkpoint(output, final_sft)
 
 
 def archive_step(version: str, plan: dict, completed_report: ArtifactStep) -> ArtifactStep:
@@ -562,6 +569,10 @@ def derive_archive_plan(
         if digest(item["source"])[1] != item["sha256"]:
             raise ValueError(f"Pinned additional evidence changed: {item['name']}")
         inputs.append(_input(item["source"], prefix_join("additional", item["name"]), item["category"]))
+    selection = documents[("sft", "selected.json")]
+    if "checkpoint" not in selection or "step" not in selection:
+        raise ValueError("The SFT selection must name its final checkpoint and step")
+    final_sft_checkpoint = {"uri": selection["checkpoint"], "step": selection["step"]}
     full_sft = documents[("sft", "consumed-config.json")]
     shared_sft = full_sft.get("format") == "SFTSpec"
     sft = full_sft["train_config"]["trainer"] if shared_sft else full_sft["trainer"]["trainer"]
@@ -700,6 +711,7 @@ def derive_archive_plan(
             "marin_commit": revision,
             "experimental_controls": resolved_spec.get("experimental_controls"),
             "rl_terminal": documents[("rl", "terminal.json")]["result"],
+            "final_sft_checkpoint": final_sft_checkpoint,
             "evaluation_complete": evaluation["all_verified"],
             "wandb_runs": wandb_status,
             "missing_evidence": missing,

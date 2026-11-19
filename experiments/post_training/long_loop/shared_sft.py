@@ -7,6 +7,7 @@ import copy
 import hashlib
 import json
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import draccus
@@ -134,8 +135,10 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
     )
 
 
-def native_sft_step(name: str, version: str, recipe: dict) -> ArtifactStep:
-    spec = shared_sft_spec(name, version, recipe)
+def native_sft_step(
+    name: str, version: str, recipe: dict, *, spec_builder: Callable[[str, str, dict], SFTSpec] = shared_sft_spec
+) -> ArtifactStep:
+    spec = spec_builder(name, version, recipe)
     trained = sft_step(spec, draccus.decode(ResourceConfig, recipe["resources"]))
     builder = trained.build_config
 

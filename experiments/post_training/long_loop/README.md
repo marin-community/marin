@@ -424,6 +424,13 @@ Archive cleanup reads `trainer.max_ckpts_to_keep` from the consumed RL launch an
 preserves that rolling window plus the selected best. Its sealed inventory names
 the retained checkpoints, and cleanup rejects any retained path.
 
+Post-run archival and pruning never remove the final SFT checkpoint. The archive
+plan records that checkpoint from the SFT stage's `selected.json`, cleanup rejects
+any candidate at or under it, and after cleanup the archive verifies the
+checkpoint again: permanent metadata, weights plus optimizer state in the
+manifest, a complete OCDBT chunk inventory, and sample decodes. The verification
+receipt lands in `final-sft-checkpoint.json` beside the sealed archive.
+
 For a BixBench verifier timeout, a separately verified grade of the retained
 original answer can be incorporated with `bixbench.merge_verifier_recovery`.
 Pass the original evaluation, frozen selection, recovery receipt root and pinned
@@ -546,6 +553,8 @@ consume the selected final update. Graceful time-limit and maximum-update stops
 use this path. Exhausting the dataset also preserves the last completed update,
 but fails controlled-run admission. This policy does not alter already submitted
 jobs: Exp3 artifact `2026.11.16.51` retains its pinned 30-minute interval.
+Retention keeps the final SFT checkpoint at its permanent path for the run's
+whole lifetime; rolling temporary checkpoints may still be pruned.
 
 Before requesting approval, run the graph preflight with no `--run`:
 

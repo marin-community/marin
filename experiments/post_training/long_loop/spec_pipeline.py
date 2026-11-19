@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import replace
 
 import draccus
@@ -77,6 +78,7 @@ def build_spec_graph(
     data_artifacts: dict[str, ArtifactStep] | None = None,
     curriculum: RlCurriculum | None = None,
     sft_release: ArtifactStep | None = None,
+    sft_step_builder: Callable[[str, str, dict], ArtifactStep] = native_sft_step,
 ) -> ArtifactStep:
     blockers = stage_blockers(resolved, through)
     if blockers:
@@ -131,7 +133,7 @@ def build_spec_graph(
         base = ArtifactStep.adopt(f"{name}/base", version, base_manifest["uri"], config=base_manifest)
         sft_evidence.append(base)
         if resolved["sft_format"] == "sft_spec":
-            trained = timed(native_sft_step(f"{name}/sft", version, recipe))
+            trained = timed(sft_step_builder(f"{name}/sft", version, recipe))
         else:
             trained = timed(
                 legacy_sft_step(
