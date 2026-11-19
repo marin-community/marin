@@ -7,7 +7,7 @@ from typing import TypeAlias
 
 from verifyit.compat import StrEnum
 
-# The verifier package supports Python 3.11, before the type statement was introduced.
+# The verifier package supports Python 3.10, before the type statement was introduced.
 JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]  # noqa: UP040
 
 

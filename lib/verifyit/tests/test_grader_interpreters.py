@@ -26,6 +26,9 @@ GRADER_INTERPRETERS = ("3.10", "3.11")
 # missing third-party root, never on the staged package's own imports.
 UNINSTALLED_EXTRA_ROOTS = ("reasoning_gym", "sympy", "math_verify")
 
+# Cold uv caches download the interpreter and wheels; the pytest and subprocess budgets stay in step.
+TIMEOUT_SECONDS = 300
+
 SWEEP_SCRIPT = f"""
 import importlib
 import pkgutil
@@ -68,22 +71,24 @@ def grader_venv(tmp_path_factory, request):
     return venv
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(TIMEOUT_SECONDS)
 def test_staged_imports_survive_the_grader_interpreter(grader_venv):
     result = subprocess.run(
         [str(grader_venv / "bin" / "python"), "-c", SWEEP_SCRIPT],
         capture_output=True,
         text=True,
-        timeout=300,
+        timeout=TIMEOUT_SECONDS,
     )
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(TIMEOUT_SECONDS)
 def test_entry_grades_on_the_grader_interpreter(tmp_path, grader_venv):
     config = tmp_path / "verifier.toml"
     config.write_text(
-        render_spec(replace(NumericSpec("0.3", tolerance_abs=0.0, tolerance_rel=0.0), output=str(tmp_path / "answer.txt")))
+        render_spec(
+            replace(NumericSpec("0.3", tolerance_abs=0.0, tolerance_rel=0.0), output=str(tmp_path / "answer.txt"))
+        )
     )
     (tmp_path / "answer.txt").write_text("0.3")
     logs = tmp_path / "logs"
@@ -98,7 +103,7 @@ def test_entry_grades_on_the_grader_interpreter(tmp_path, grader_venv):
         ],
         capture_output=True,
         text=True,
-        timeout=300,
+        timeout=TIMEOUT_SECONDS,
     )
     assert result.returncode == 0, result.stderr
     assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
