@@ -444,9 +444,13 @@ def load_catalog(
 
     if resume_load_id is not None:
         execute(
-            "UPDATE atlas_loads SET catalog_root = :catalog_root, snapshot_id = :snapshot_id, "
-            "created_at = :created_at, review_completeness_version = :review_completeness_version, "
-            "display_policy = :display_policy WHERE load_id = :load_id",
+            "INSERT INTO atlas_loads"
+            " (load_id, catalog_root, snapshot_id, created_at, review_completeness_version, display_policy)"
+            " VALUES (:load_id, :catalog_root, :snapshot_id, :created_at, :review_completeness_version, :display_policy)"
+            " ON CONFLICT (load_id) DO UPDATE SET catalog_root = EXCLUDED.catalog_root,"
+            " snapshot_id = EXCLUDED.snapshot_id, created_at = EXCLUDED.created_at,"
+            " review_completeness_version = EXCLUDED.review_completeness_version,"
+            " display_policy = EXCLUDED.display_policy",
             {
                 "load_id": load_id,
                 "catalog_root": catalog.root,
