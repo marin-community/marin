@@ -115,6 +115,9 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     config["generator"]["engine_init_kwargs"]["moe_backend"] = serving["moe_backend"]
     config["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"] = serving_recipe["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"]
     config["generator"]["enforce_eager"] = False
+    config["generator"]["engine_init_kwargs"]["marin_native_environment_control"] = json.loads(
+        Path(__file__).with_name("native_environment_13.json").read_text()
+    )
     for role in ("policy", "ref"):
         config["trainer"][role]["megatron_config"]["expert_model_parallel_size"] = 4
     agent = config["terminal_bench"]["installed_agent"]["agent"]["kwargs"]
