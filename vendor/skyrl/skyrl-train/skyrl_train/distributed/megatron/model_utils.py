@@ -155,7 +155,7 @@ def from_parallel_logits_to_logprobs_packed_sequences(
 
     if cp_size > 1:
         # per-sequence cp_allgather
-        final_probs = torch.zeros(probs.shape[0] * cp_size, device=probs.device)
+        final_probs = torch.zeros(probs.shape[0] * cp_size, dtype=probs.dtype, device=probs.device)
         for i in range(batch_size):
             start_idx = cu_seqlens_padded[i].item()
             end_idx = cu_seqlens_padded[i + 1].item()
@@ -265,9 +265,12 @@ class AllGatherCPTensor(torch.autograd.Function):
             *grad_output.shape[(seq_dim + 1) :],
         )
 
-        index = torch.tensor([cp_rank, (2 * cp_size - cp_rank - 1)], device="cpu", pin_memory=True).cuda(
-            non_blocking=True
-        )
+        if grad_output.is_cuda:
+            index = torch.tensor([cp_rank, (2 * cp_size - cp_rank - 1)], device="cpu", pin_memory=True).cuda(
+                non_blocking=True
+            )
+        else:
+            index = torch.tensor([cp_rank, (2 * cp_size - cp_rank - 1)], device=grad_output.device)
 
         grad_input = grad_output.index_select(seq_dim, index)
         grad_input = grad_input.view(*grad_input.shape[0:seq_dim], -1, *grad_input.shape[(seq_dim + 2) :])
