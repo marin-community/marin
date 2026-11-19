@@ -14,7 +14,8 @@ app (the app directory and the caller's identity); ``/`` lists the apps. A per-a
 Content-Security-Policy restricts what the page may fetch to itself, the manifest's
 ``connect_src``, and the configured Loom origin for apps that enable the agent panel.
 The public-applet deployment uses the same kernel without named application routes and
-admits only GET and HEAD routes for applets whose stored mode is public.
+admits only GET and HEAD routes for applets whose stored mode is public, including through
+the named hosts it is configured to resolve.
 """
 
 import html
@@ -1365,10 +1366,11 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         return response
 
     authenticated = RouteAuthMiddleware(api, policy)
-    if config.surface is MarinaSurface.PUBLIC_APPLETS:
-        return public_applet_surface(authenticated)
-    if config.applet_domains:
-        if applet_store is None:
-            raise ValueError(f"{APPLET_DOMAINS_ENV} requires a database")
-        return named_applet_hosts(authenticated, applet_store, config.applet_domains)
-    return authenticated
+    served = public_applet_surface(authenticated) if config.surface is MarinaSurface.PUBLIC_APPLETS else authenticated
+    if not config.applet_domains:
+        return served
+    if applet_store is None:
+        raise ValueError(f"{APPLET_DOMAINS_ENV} requires a database")
+    # On the public surface, the rewritten /a/<id>/ routes still check the bound app's stored
+    # mode on each request, so a host bound to a private app answers 404.
+    return named_applet_hosts(served, applet_store, config.applet_domains)

@@ -237,6 +237,13 @@ or Failed after a primary upload timeout even when training succeeds. Some W&B
 records may remain unuploaded. Other cleanup can still exhaust the existing
 120-second teardown watchdog.
 
+Marin sets the run's export root (`trainer.export_path`) to `<run output>/exports`.
+Set `trainer.dump_data_batch: true` to save diagnostic `TrainingInputBatch`
+pickle files under `<trainer.export_path>/dumped_data/global_step_<step>_training_input.pkl`.
+Local and cloud export paths use the same format. Dumps contain the batch after
+importance-sampling corrections and advantage calculation. Group UIDs and raw
+rewards are removed before dumping.
+
 SkyRL keeps the two most recent recovery checkpoints by default. For an RSI loop
 that needs only the latest recovery point, set
 `retention=SkyRLRetentionPolicy(resume_checkpoint_count=1)` in `SkyRLSpec`.
@@ -341,3 +348,23 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 
 For the current curation, training and evaluation recipe, see the
 [quick RL loop](../recipes/quick-rl-loop.md).
+
+### NCCL SIMPLE buffers
+
+Policy and reference roles resolve `nccl_buffer_size_bytes` to 4,194,304 bytes
+(4 MiB) by default. The role runtime environment sets `NCCL_BUFFSIZE` explicitly,
+including inference engines that receive the policy's weight-sync setting. This
+prevents an inherited small-buffer value from replacing the resolved default.
+A `null` value deliberately delegates sizing to the process environment and NCCL
+config files.
+
+NCCL 2.30.7 can return incorrect NVLSTree reductions when its tuned staging payload
+exceeds a SIMPLE FIFO slot. A 256-KiB buffer reproduced this failure through both
+the native C API and ProcessGroupNCCL. A 1-MiB buffer also failed at 512-MiB
+messages; 4-MiB controls passed the tested 16–512-MiB range. See
+[the investigation and source-library A/B](https://github.com/marin-community/marin/issues/11649).
+This mitigation uses the existing library and preserves byte verification. It
+does not establish correctness for every message size or topology. Check resolved
+role settings and the effective `NCCL_BUFFSIZE` in worker INIT logs before scaling
+a new configuration. Reference workers now retain larger buffers, so include that
+memory in colocated-role capacity estimates.
