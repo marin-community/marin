@@ -21,6 +21,7 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     MegatronGeometry,
+    ResolvedModelLocator,
     SkyRLGenerationPlan,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
@@ -464,4 +465,4 @@ class StoredResume(BaseModel, frozen=True):
     artifact_version: str
     step: PositiveInt
     checkpoint: str
-    model: HfInitializer | None = None
+    model: ResolvedModelLocator | None = None

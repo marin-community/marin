@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping
-from dataclasses import asdict, replace
+from dataclasses import asdict, fields, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
@@ -279,7 +279,7 @@ def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
 
 
 def published_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
-    """Pin the latest committed native checkpoint and its starting model."""
+    """Pin a finished run's latest committed native checkpoint and its starting model."""
     name, separator, version = value.rpartition("@")
     if not name or not separator or is_mutable_version(version):
         raise click.BadParameter("use NAME@VERSION with an immutable run version")
@@ -305,26 +305,33 @@ def published_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
     recorded = config.get("inputs", {}).get("model", {})
     recorded_identity = recorded.get("identity")
     try:
-        initializer = read_gate_inputs(output).init
+        inputs = read_gate_inputs(output)
     except FileNotFoundError:
-        if recorded_identity is not None and recorded_identity != artifact_identity(preset.model.step):
-            raise click.BadParameter(f"{value} has a non-default starting model and no saved initializer") from None
-        initializer = None
+        inputs = GateInputs(preset_name=preset.name)
     model = None
-    if initializer is not None:
-        identity = f"{initializer.artifact_name}@{initializer.artifact_version}:"
-        identity += fingerprint_hash(initializer.fingerprint_payload)
-        if recorded_identity != identity:
-            raise click.BadParameter(f"{value} has a starting model that differs from its saved initializer")
-        model = HfInitializer(
-            artifact_name=initializer.artifact_name,
-            artifact_version=initializer.artifact_version,
-            artifact_root=recorded["uri"],
-            fingerprint_payload=initializer.fingerprint_payload,
-            relative_path="",
-            tokenizer_uri=recorded.get("tokenizer_uri"),
-            tokenizer_revision=recorded.get("tokenizer_revision"),
-        )
+    inherited = inputs.resume.model if inputs.resume is not None else None
+    if inputs.init is not None or inherited is not None:
+        model = ResolvedModelLocator(**{field.name: recorded[field.name] for field in fields(ResolvedModelLocator)})
+        if inherited is not None:
+            matches = inherited == model
+        else:
+            assert inputs.init is not None
+            fingerprint = fingerprint_hash(inputs.init.fingerprint_payload)
+            matches = model.identity == f"{inputs.init.artifact_name}@{inputs.init.artifact_version}:{fingerprint}"
+        if not matches:
+            raise click.BadParameter(f"{value} has a starting model that differs from its saved inputs")
+    elif recorded_identity is not None:
+        default = preset.model
+        expected = {
+            "identity": artifact_identity(default.step),
+            "tokenizer_uri": default.tokenizer_uri,
+            "tokenizer_revision": default.tokenizer_revision,
+        }
+        if default.relative_path is not None:
+            root = default.step.path(artifact_prefix(preset.recipe.layout.cluster))
+            expected["uri"] = prefix_join(root, default.relative_path)
+        if any(recorded.get(key) != value for key, value in expected.items()):
+            raise click.BadParameter(f"{value} has a starting model that differs from the preset's default")
     return presets.StoredResume(
         artifact_name=name, artifact_version=version, step=step, checkpoint=str(checkpoint), model=model
     )
@@ -502,8 +509,13 @@ def run_spec(
             RecipePatch(trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(groups_per_family=groups)))
         )
     preset = preset.with_updates(config.trainer.max_steps)
-    model = preset.model if init is None else init
-    initial_model_uri = model.step.path(artifact_prefix(preset.recipe.layout.cluster))
+    inherited_model = resume.model if resume is not None else None
+    model = init or preset.model
+    initial_model_uri = (
+        inherited_model.uri
+        if inherited_model is not None
+        else model.step.path(artifact_prefix(preset.recipe.layout.cluster))
+    )
     validation_data = ()
     evaluation_data = []
     profiles = {}
@@ -560,7 +572,7 @@ def run_spec(
         name=name,
         version=preset.revision,
         config_yaml=yaml.safe_dump(SkyRLRecipe.from_document(config.to_skyrl()).to_skyrl(), sort_keys=False),
-        model=model,
+        model=inherited_model or model,
         model_name=model_name,
         train_data=workload.training_data(selection),
         validation_data=validation_data,

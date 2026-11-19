@@ -189,9 +189,6 @@ def build_run(
             raise click.BadParameter("the initial model must build under the RL layout's storage prefix")
         if preset.gated and not step_is_built(init.step.lower()):
             raise click.BadParameter("gated presets require an initial model that is already built")
-    if resume is not None and resume.model is not None:
-        initializer = resume.model
-        init = recipe.model_from_reference(initializer)
     spec = recipe.run_spec(
         preset, name="rl-config", tasks=tasks, init=init, resume=resume, settings=settings, model_name=table.model
     )
@@ -640,6 +637,7 @@ def command(
         model = preset.model
         if (
             run.inputs.init is None
+            and (run.inputs.resume is None or run.inputs.resume.model is None)
             and isinstance(model, ArtifactHfModel)
             and model.step.adopt_source is not None
             and model.tokenizer_uri is None

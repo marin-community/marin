@@ -642,7 +642,7 @@ class SkyRLSpec:
     name: str
     version: str
     config_yaml: str
-    model: SkyRLModelSource
+    model: SkyRLModelSource | ResolvedModelLocator
     train_data: tuple[SkyRLDataSource, ...]
     validation_data: tuple[SkyRLDataSource, ...]
     topology: SkyRLTopology
@@ -1100,10 +1100,11 @@ def skyrl_step(
 ) -> ArtifactStep[SkyRLRun]:
     """Build a versioned SkyRL training artifact."""
     step_name = spec.name
+    model_deps = () if isinstance(spec.model, ResolvedModelLocator) else spec.model.deps()
     deps = tuple(
         dict.fromkeys(
             (
-                *spec.model.deps(),
+                *model_deps,
                 *(dep for source in spec.train_data for dep in source.deps()),
                 *(dep for source in spec.validation_data for dep in source.deps()),
                 *(dep for _, sources in spec.evaluation_data for source in sources for dep in source.deps()),
@@ -1139,7 +1140,7 @@ def skyrl_step(
             else None
         )
         run_id = f"{step_name}-{spec.version}"
-        model = spec.model.resolve(ctx)
+        model = spec.model if isinstance(spec.model, ResolvedModelLocator) else spec.model.resolve(ctx)
         train_data = tuple(source.resolve(ctx) for source in spec.train_data)
         validation_data = tuple(source.resolve(ctx) for source in spec.validation_data)
         evaluation_data = tuple(
