@@ -74,6 +74,41 @@ fi
 # Keep the development linker name in this environment, outside uv's package cache.
 ln -sf "$CUDA_HOME/lib/libcudart.so.13" "$environment/lib/libcudart.so"
 ln -sf "$CUDA_HOME/lib/libnvrtc.so.13" "$environment/lib/libnvrtc.so"
+# Test-only substitution for an unreleased validated wheel. The frozen setup
+# installs the released vllm from the vendored lock; when the task environment
+# carries MOCHI_TEST_WHEEL_URI and MOCHI_TEST_WHEEL_SHA256, download that exact
+# wheel from regional object storage, verify its SHA256, and reinstall it into
+# this environment without dependency resolution, before any runtime check
+# imports vllm. The submitted spec pins both values; they are unset afterwards
+# so nothing downstream re-triggers the substitution.
+if [[ -n "${MOCHI_TEST_WHEEL_URI:-}" && -n "${MOCHI_TEST_WHEEL_SHA256:-}" ]]; then
+  test_wheels_dir="$environment/wheels"
+  mkdir -p "$test_wheels_dir"
+  test_wheel="$test_wheels_dir/${MOCHI_TEST_WHEEL_URI##*/}"
+  "$python" - "$MOCHI_TEST_WHEEL_URI" "$MOCHI_TEST_WHEEL_SHA256" "$test_wheel" <<'MOCHI_TEST_WHEEL_PY'
+import hashlib
+import sys
+
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+
+uri, expected, destination = sys.argv[1], sys.argv[2], sys.argv[3]
+configure_coreweave_s3()
+fs, key = filesystem_for(uri)
+digest = hashlib.sha256()
+with fs.open(key, "rb") as stream, open(destination, "wb") as out:
+    for chunk in iter(lambda: stream.read(8 << 20), b""):
+        digest.update(chunk)
+        out.write(chunk)
+actual = digest.hexdigest()
+assert actual == expected, f"test wheel sha256 mismatch: {actual} != {expected}"
+print(f"[rl-iris] test wheel downloaded and sha-verified: {destination} {actual}")
+MOCHI_TEST_WHEEL_PY
+  uv tool run --from "uv==$uv_version" --python "$system_python" --no-python-downloads \
+    uv pip install --python "$python" --no-deps --reinstall "$test_wheel"
+  "$python" -c 'import importlib.metadata as md; dist = md.distribution("vllm"); print("[rl-iris] test wheel installed:", dist.version)'
+  unset MOCHI_TEST_WHEEL_URI MOCHI_TEST_WHEEL_SHA256
+fi
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 check_pids=()

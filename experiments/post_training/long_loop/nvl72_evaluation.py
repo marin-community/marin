@@ -34,6 +34,19 @@ from experiments.post_training.long_loop.nvl72 import EXECUTION, RECIPE_PATH, SE
 
 RECIPE = Path(__file__).with_name("specs") / "evaluation.yaml"
 
+# Test-only wheel substitution for smoke108: the unreleased workspace-fix wheel
+# (vLLM #131 head) that build-6 built and -6v validated on GB200. The vendored
+# bootstrap reinstalls this exact wheel over the frozen released vllm, after
+# the frozen setup and before the runtime checks, when the task environment
+# carries these two values. Receipt:
+# s3://marin-us-east-08a/marin/users/benfeuer/mochi-bringup/unreleased-vllm-tests/e67862f7bf7979e1ec855ceebb16c9468f62d296/build-6v/UNRELEASED-test-validate-receipt.json
+TEST_WHEEL_URI = (
+    "s3://marin-us-east-08a/marin/users/benfeuer/mochi-bringup/unreleased-vllm-tests/"
+    "e67862f7bf7979e1ec855ceebb16c9468f62d296/build-6v/"
+    "vllm-0.0.0.dev20261118+marin.e67862f7bf79.test1.cu132-cp38-abi3-manylinux_2_28_aarch64.whl"
+)
+TEST_WHEEL_SHA256 = "513f412276d81f71e08254ae686bd2e8bad4e4c790c2f36a2528cb93e67524bb"
+
 
 @dataclass(frozen=True)
 class NVL72EvaluationSpec:
@@ -114,6 +127,9 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     )
     config["generator"]["engine_init_kwargs"]["moe_backend"] = serving["moe_backend"]
     config["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"] = serving_recipe["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"]
+    # Test-only: reinstate the validated unreleased wheel over the frozen release in-pod.
+    config["extra_env"]["MOCHI_TEST_WHEEL_URI"] = TEST_WHEEL_URI
+    config["extra_env"]["MOCHI_TEST_WHEEL_SHA256"] = TEST_WHEEL_SHA256
     config["generator"]["enforce_eager"] = False
     for role in ("policy", "ref"):
         config["trainer"][role]["megatron_config"]["expert_model_parallel_size"] = 4
