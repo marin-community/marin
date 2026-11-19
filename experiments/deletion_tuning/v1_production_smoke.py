@@ -27,7 +27,6 @@ import logging
 import tempfile
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 import click
 import draccus
@@ -50,7 +49,7 @@ from experiments.deletion_tuning.v1_sft import VERSION, v1_data_release, v1_dele
 from experiments.post_training.long_loop.exp3_production import production_sft_recipe
 from experiments.post_training.long_loop.exp3_recipe import exp3_controls
 from experiments.post_training.long_loop.source_loss import prepared_supervision_data, source_loss_metadata
-from experiments.sft.launcher import SFTSpec, _levanter_pod_config
+from experiments.sft.launcher import SFTSpec, _levanter_train_config
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +170,7 @@ def run_production_smoke(output_root: Path | None = None) -> dict:
             output_path=str(output_path),
             resources=_gpu_resources(),
             env_vars={"WANDB_MODE": "disabled", "JAX_TRACEBACK_FILTERING": "off"},
-            train_config=_pod_train_config(spec, str(output_path)),
+            train_config=_pod_train_config(spec),
         )
         run_deletion_train_lm(pod_config)
 
@@ -199,20 +198,18 @@ def run_production_smoke(output_root: Path | None = None) -> dict:
         return summary
 
 
-def _pod_train_config(spec: SFTSpec, output_path: str):
-    """The pod config the launcher would dispatch, built against a local output path."""
-    ctx = SimpleNamespace(is_fingerprint=False, output_path=output_path)
-    return _levanter_pod_config(
-        ctx,
+def _pod_train_config(spec: SFTSpec):
+    """The TrainLmConfig the launcher would dispatch (the pod wrapper is built by the caller)."""
+    return _levanter_train_config(
         spec,
-        spec.prepared_data,
-        _gpu_resources(),
-        spec.num_train_steps,
         model_config=spec.model_config,
+        data_config=spec.prepared_data,
+        num_train_steps=spec.num_train_steps,
         initialize_from_hf=spec.model.model_ref,
         initialize_model_from_checkpoint_path=None,
         use_hf_model_config=True,
         eos_token_ids=spec.model.eos_token_ids,
+        gpu_allocator=True,
     )
 
 
