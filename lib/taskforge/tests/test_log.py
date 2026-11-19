@@ -22,7 +22,7 @@ from taskforge.effects.events import (
     event_digest,
 )
 from taskforge.effects.issues import LogFailure
-from taskforge.effects.log import EventLog, JsonlSink, Record, Status, fold
+from taskforge.effects.log import EventLog, JsonlSink, Missing, Record, Status, fold
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.llm import Completion, Message, Role
 from taskforge.model.stage import Stage
@@ -81,6 +81,15 @@ async def test_replay_preserves_float_keys_after_numeric_coercion(tmp_path: Path
     await log.record(Resolved(Timed(5), (), 3))
     reloaded = EventLog(replay_from=await sink.read())
     assert reloaded.lookup(Timed(5.0), ()) == 3.0
+
+
+async def test_non_replayable_result_is_recorded_but_not_served_from_cache(tmp_path: Path) -> None:
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    log = EventLog(sink=sink, replayable=lambda _: False)
+    resolved = Resolved(Timed(5), (), 3.0)
+    await log.record(resolved)
+    assert isinstance(log.lookup(Timed(5), ()), Missing)
+    assert [record.event for record in await sink.read()] == [resolved]
 
 
 async def test_frozen_set_payloads_roundtrip_with_stable_replay_keys(tmp_path: Path) -> None:

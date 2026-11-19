@@ -252,6 +252,7 @@ class EventLog:
     ) -> None:
         self._sink = sink
         self._sleep = sleep
+        self._replayable = replayable
         self._records = list(replay_from)
         self._pending: list[Record] = []
         self._index: dict[tuple[str, tuple[Fingerprint, ...]], object] = {
@@ -273,7 +274,7 @@ class EventLog:
             raise LogFailure("Cannot encode the event") from error
         record = Record(len(self._records) + 1, time.time(), event)
         self._records.append(record)
-        if isinstance(event, Resolved):
+        if isinstance(event, Resolved) and self._replayable(event):
             self._index[event_digest(event.request), event.fingerprints] = event.value
         if self._sink is None:
             return
