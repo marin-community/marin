@@ -1,4 +1,4 @@
-# Controller rows in Finelog
+# Observability rows: controller DB copies in Finelog
 
 The `iris.controller_db__*` namespaces are durable copies of the controller DB's
 tables of the same names: `jobs`, `job_config`, `tasks` and `task_attempts`. The
@@ -52,7 +52,7 @@ Copied columns that differ from the controller DB:
 
 **When the controller DB schema changes:**
 `test_every_controller_db_column_is_classified` in
-`tests/cluster/controller/test_controller_rows.py` lists every column of the four
+`tests/cluster/controller/test_observability_rows.py` lists every column of the four
 tables as COPIED (with its Finelog field) or EXCLUDED (with a reason), and fails
 on a column it does not list. A new DB column needs a one-line decision there by
 the rule above; copying it also adds a nullable field to the row dataclass. A
@@ -69,7 +69,7 @@ best-effort: an error can still echo a short value or URL from a command.
 
 **Environment variables:** `iris.controller_db__job_config.env_vars` is a JSON
 object holding the job's allowlisted environment variables, or NULL when it sets
-none. The allowlist is `CONTROLLER_ROW_ENV_VARS` in
+none. The allowlist is `OBSERVABILITY_ROW_ENV_VARS` in
 `iris/cluster/redaction.py`, the module the dashboard's masking also uses. Every
 other variable, and every secret, is dropped. It holds one variable,
 `MARIN_PROVENANCE`, the launch's git provenance, which is stored as its parsed
@@ -175,8 +175,8 @@ SELECT * FROM (
 ```
 
 Rows can be lost without blocking the controller: a failed snapshot (logged
-as `controller rows: snapshot failed`), a failed enqueue (logged as
-`controller rows: write failed`, for that table only) or a failed Finelog
+as `observability rows: snapshot failed`), a failed enqueue (logged as
+`observability rows: write failed`, for that table only) or a failed Finelog
 flush drops those rows. To find gaps, compare daily row counts with the
 controller DB.
 

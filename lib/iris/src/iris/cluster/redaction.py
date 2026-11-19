@@ -183,13 +183,13 @@ def _redacted_provenance(raw: str) -> dict[str, object] | None:
 # The environment variables whose values the controller copies into its Finelog
 # rows (``iris.controller_db__job_config.env_vars``), each with its redactor.
 # Every other variable, and every secret, is dropped.
-CONTROLLER_ROW_ENV_VARS: dict[str, Callable[[str], object | None]] = {
+OBSERVABILITY_ROW_ENV_VARS: dict[str, Callable[[str], object | None]] = {
     LAUNCH_PROVENANCE_ENV: _redacted_provenance,
 }
 
 
-def redact_controller_row_env_vars(env_vars: Mapping[str, str]) -> str | None:
-    """The :data:`CONTROLLER_ROW_ENV_VARS` among *env_vars*, redacted, as a JSON object.
+def redact_observability_row_env_vars(env_vars: Mapping[str, str]) -> str | None:
+    """The :data:`OBSERVABILITY_ROW_ENV_VARS` among *env_vars*, redacted, as a JSON object.
 
     ``MARIN_PROVENANCE`` is stored parsed, as its ``Provenance`` fields: the
     remote URL loses its userinfo, the command line is redacted like a submit
@@ -198,7 +198,7 @@ def redact_controller_row_env_vars(env_vars: Mapping[str, str]) -> str | None:
     when no allowed key is set.
     """
     inputs: dict[str, object] = {}
-    for key, redact in CONTROLLER_ROW_ENV_VARS.items():
+    for key, redact in OBSERVABILITY_ROW_ENV_VARS.items():
         raw = env_vars.get(key)
         value = redact(raw) if raw is not None else None
         if value is not None:

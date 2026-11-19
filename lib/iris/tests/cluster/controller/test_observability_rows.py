@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import load_config
-from iris.cluster.controller import controller_rows, ops, writes
-from iris.cluster.controller.controller_rows import ControllerRowTables
+from iris.cluster.controller import observability_rows, ops, writes
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.federation_store import ControllerFederationStore
+from iris.cluster.controller.observability_rows import ObservabilityRowTables
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec
@@ -24,7 +24,7 @@ from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisT
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
-from iris.testing import controller_rows_check
+from iris.testing import observability_rows_check
 from iris.testing.controller import (
     fail_worker,
     make_controller_state,
@@ -43,7 +43,7 @@ from rigging.timing import Timestamp
 
 @dataclass
 class RecordedRows:
-    tables: ControllerRowTables
+    tables: ObservabilityRowTables
 
     def _rows(self, table) -> list:
         assert isinstance(table, FakeStatsTable)
@@ -67,14 +67,14 @@ class RecordedRows:
 
 
 def _attach(state: ControllerTestState, cluster: str) -> RecordedRows:
-    tables = ControllerRowTables(
+    tables = ObservabilityRowTables(
         cluster=cluster,
         job_table=FakeStatsTable(),
         job_config_table=FakeStatsTable(),
         job_task_table=FakeStatsTable(),
         task_attempt_table=FakeStatsTable(),
     )
-    state._db.attach_controller_rows(tables)
+    state._db.attach_observability_rows(tables)
     return RecordedRows(tables)
 
 
@@ -216,14 +216,14 @@ def test_rolled_back_transaction_writes_no_rows(state):
 
 
 def test_failed_snapshot_drops_rows_but_commits_the_controller_change(state, monkeypatch):
-    controller_rows_check.uninstall(state._db)  # this test drops rows on purpose
+    observability_rows_check.uninstall(state._db)  # this test drops rows on purpose
     rows = _attach(state, "marin")
 
     def broken_snapshot(cur, tables, marked):
         marked.job_rows.append(object())  # a partial snapshot must be dropped too
         raise RuntimeError("snapshot bug")
 
-    monkeypatch.setattr(controller_rows, "_snapshot", broken_snapshot)
+    monkeypatch.setattr(observability_rows, "_snapshot", broken_snapshot)
     tasks = submit_job(state, "train", make_job_request("train"))
 
     assert len(tasks) == 1
@@ -236,9 +236,9 @@ class _ClosedTable(FakeStatsTable):
 
 
 def test_failed_write_commits_and_runs_later_post_commit_hooks(state):
-    controller_rows_check.uninstall(state._db)  # this test drops rows on purpose
-    state._db.attach_controller_rows(
-        ControllerRowTables(
+    observability_rows_check.uninstall(state._db)  # this test drops rows on purpose
+    state._db.attach_observability_rows(
+        ObservabilityRowTables(
             cluster="marin",
             job_table=_ClosedTable(),
             job_config_table=FakeStatsTable(),
@@ -488,7 +488,7 @@ def test_job_config_drops_a_malformed_launch_provenance_and_keeps_the_rows(state
 @dataclass(frozen=True)
 class _Classified:
     """One controller DB table's columns, classified by the rule in
-    docs/controller-rows.md ("Which columns are copied")."""
+    docs/observability-rows.md ("Which columns are copied")."""
 
     row_class: type
     # DB column -> the Finelog field it is copied to.
@@ -556,7 +556,7 @@ _COLUMNS: dict[str, _Classified] = {
             "container_profile": "container_profile",
             "egress_policy": "egress_policy",
             # Only the allowlisted variables, redacted; other variables and every
-            # secret are dropped (iris.cluster.redaction.CONTROLLER_ROW_ENV_VARS).
+            # secret are dropped (iris.cluster.redaction.OBSERVABILITY_ROW_ENV_VARS).
             "environment_json": "env_vars",
         },
         {
@@ -622,8 +622,8 @@ _COLUMNS: dict[str, _Classified] = {
         _JOB_KEY | {"job_id"},
     ),
 }
-_THIS_TEST = "lib/iris/tests/cluster/controller/test_controller_rows.py"
-_RULE = 'lib/iris/docs/controller-rows.md, "Which columns are copied"'
+_THIS_TEST = "lib/iris/tests/cluster/controller/test_observability_rows.py"
+_RULE = 'lib/iris/docs/observability-rows.md, "Which columns are copied"'
 
 
 @pytest.mark.parametrize("table", sorted(_COLUMNS))

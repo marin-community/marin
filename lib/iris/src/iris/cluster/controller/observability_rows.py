@@ -3,6 +3,10 @@
 
 """Durable Finelog copies of the controller's job, job config, task and attempt rows.
 
+This is observability data, off the scheduling critical path: the controller
+never reads these copies, and a failure here only loses rows (see the end of
+this docstring).
+
 The controller DB deletes terminal jobs after a few days. A write path that
 changes a job, task or attempt marks its id here. Just before the transaction
 commits, the marked rows are read back in batches, so each row is the entity's
@@ -31,7 +35,7 @@ from datetime import datetime
 from itertools import batched
 from typing import NamedTuple, Protocol
 
-from finelog.client.log_client import Table
+from finelog.client.log_client import Table as FinelogTable
 from rigging.timing import Timestamp
 from sqlalchemy import select, tuple_
 from sqlalchemy.engine.cursor import CursorResult
@@ -39,36 +43,36 @@ from sqlalchemy.engine.cursor import CursorResult
 from iris.cluster.constraints import get_device_variant
 from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
-from iris.cluster.redaction import redact_controller_row_env_vars, redact_string
+from iris.cluster.redaction import redact_observability_row_env_vars, redact_string
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-_MEMO_KEY = "controller_rows"
+_MEMO_KEY = "observability_rows"
 # Keeps each IN list under SQLite's 999 bound parameters (an attempt key is two).
 _ID_CHUNK_SIZE = 400
 
 
 @dataclass(frozen=True)
-class ControllerRowTables:
-    """The Finelog tables the controller copies its rows to.
+class ObservabilityRowTables:
+    """The Finelog tables the controller copies its rows to, not the controller DB's own tables.
 
     ``cluster`` is this cluster's name, written to every row's ``cluster`` column.
     """
 
     cluster: str
-    job_table: Table
-    job_config_table: Table
-    job_task_table: Table
-    task_attempt_table: Table
+    job_table: FinelogTable
+    job_config_table: FinelogTable
+    job_task_table: FinelogTable
+    task_attempt_table: FinelogTable
 
 
 class RowCursor(Protocol):
     """The write-transaction surface this module needs (``db.Tx``)."""
 
-    controller_rows: ControllerRowTables | None
+    observability_rows: ObservabilityRowTables | None
     memo: dict[str, object]
 
     def execute(self, stmt, params=None) -> CursorResult: ...
@@ -95,7 +99,7 @@ class _Marked:
 
 
 def _marked(cur: RowCursor) -> _Marked | None:
-    tables = cur.controller_rows
+    tables = cur.observability_rows
     if tables is None:
         return None
     marked = cur.memo.get(_MEMO_KEY)
@@ -161,7 +165,7 @@ def record_worker_removal(cur: RowCursor, worker_id: WorkerId) -> None:
     marked.tasks.update(dict.fromkeys(cur.execute(select(t.task_id).where(t.current_worker_id == worker_id)).scalars()))
 
 
-def _write(tables: ControllerRowTables, marked: _Marked) -> None:
+def _write(tables: ObservabilityRowTables, marked: _Marked) -> None:
     """Enqueue the snapshotted rows; a table whose write fails is logged and its rows dropped."""
     for table, rows in (
         (tables.job_table, marked.job_rows),
@@ -176,7 +180,7 @@ def _write(tables: ControllerRowTables, marked: _Marked) -> None:
         # This runs among the post-commit hooks: raising would reach the caller of a
         # committed transaction and skip the hooks registered after it (cache invalidations).
         except Exception:
-            logger.exception("controller rows: write failed, dropping %d %s rows", len(rows), type(rows[0]).__name__)
+            logger.exception("observability rows: write failed, dropping %d %s rows", len(rows), type(rows[0]).__name__)
 
 
 class _Accelerator(NamedTuple):
@@ -209,7 +213,7 @@ def _dt(value: Timestamp | None) -> datetime | None:
     return value.as_naive_utc() if value is not None else None
 
 
-def _snapshot_or_drop(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> None:
+def _snapshot_or_drop(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked) -> None:
     """Snapshot the marked rows; on failure, log and drop them so the transaction still commits.
 
     These rows are a telemetry copy: a bug here must not block scheduling.
@@ -218,7 +222,7 @@ def _snapshot_or_drop(cur: RowCursor, tables: ControllerRowTables, marked: _Mark
         _snapshot(cur, tables, marked)
     except Exception:
         logger.exception(
-            "controller rows: snapshot failed, dropping %d job, %d attempt rows (jobs %s, attempts %s)",
+            "observability rows: snapshot failed, dropping %d job, %d attempt rows (jobs %s, attempts %s)",
             len(marked.jobs),
             len(marked.attempts),
             [j.to_wire() for j in list(marked.jobs)[:5]],
@@ -230,7 +234,7 @@ def _snapshot_or_drop(cur: RowCursor, tables: ControllerRowTables, marked: _Mark
         marked.attempt_rows.clear()
 
 
-def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> None:
+def _snapshot(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked) -> None:
     ts = stats_timestamp()
     _snapshot_jobs(cur, tables, marked, ts)
     _snapshot_configs(cur, tables, marked, ts)
@@ -238,7 +242,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
     _snapshot_attempts(cur, tables, marked, ts)
 
 
-def _snapshot_jobs(cur: RowCursor, tables: ControllerRowTables, marked: _Marked, ts: datetime) -> None:
+def _snapshot_jobs(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked, ts: datetime) -> None:
     j = jobs_table.c
     for chunk in batched(marked.jobs, _ID_CHUNK_SIZE):
         for r in cur.execute(select(jobs_table).where(j.job_id.in_(chunk), j.cluster == LOCAL_CLUSTER)):
@@ -268,7 +272,7 @@ def _snapshot_jobs(cur: RowCursor, tables: ControllerRowTables, marked: _Marked,
             )
 
 
-def _snapshot_configs(cur: RowCursor, tables: ControllerRowTables, marked: _Marked, ts: datetime) -> None:
+def _snapshot_configs(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked, ts: datetime) -> None:
     """Config rows for the jobs submitted in this transaction."""
     j, c = jobs_table.c, job_config_table.c
     for chunk in batched(marked.submitted, _ID_CHUNK_SIZE):
@@ -310,7 +314,7 @@ def _snapshot_configs(cur: RowCursor, tables: ControllerRowTables, marked: _Mark
                     fail_if_exists=bool(r.fail_if_exists),
                     container_profile=job_pb2.ContainerProfile.Name(r.container_profile),
                     egress_policy=job_pb2.EgressPolicy.Name(r.egress_policy),
-                    env_vars=redact_controller_row_env_vars(
+                    env_vars=redact_observability_row_env_vars(
                         proto_from_json(r.environment_json, job_pb2.EnvironmentConfig).env_vars
                     ),
                     ts=ts,
@@ -318,7 +322,7 @@ def _snapshot_configs(cur: RowCursor, tables: ControllerRowTables, marked: _Mark
             )
 
 
-def _snapshot_tasks(cur: RowCursor, tables: ControllerRowTables, marked: _Marked, ts: datetime) -> None:
+def _snapshot_tasks(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked, ts: datetime) -> None:
     j, t = jobs_table.c, tasks_table.c
     for chunk in batched(marked.tasks, _ID_CHUNK_SIZE):
         query = (
@@ -360,7 +364,7 @@ def _snapshot_tasks(cur: RowCursor, tables: ControllerRowTables, marked: _Marked
             )
 
 
-def _snapshot_attempts(cur: RowCursor, tables: ControllerRowTables, marked: _Marked, ts: datetime) -> None:
+def _snapshot_attempts(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked, ts: datetime) -> None:
     j, a, t = jobs_table.c, task_attempts_table.c, tasks_table.c
     for chunk in batched(marked.attempts, _ID_CHUNK_SIZE):
         query = (

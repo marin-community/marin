@@ -3,8 +3,8 @@
 
 """A test-time check that every committed job, task or attempt change has a controller row.
 
-Controller rows are marked at the write sites that change ``jobs``, ``tasks`` and
-``task_attempts`` (see ``iris.cluster.controller.controller_rows``). A new write
+Observability rows are marked at the write sites that change ``jobs``, ``tasks`` and
+``task_attempts`` (see ``iris.cluster.controller.observability_rows``). A new write
 path that forgets to mark its rows would drop them silently in production. This
 check wraps a test DB's ``transaction()``: after each commit, every locally owned
 job or attempt whose columns changed, and every task whose trigger columns
@@ -24,8 +24,8 @@ from pathlib import Path
 from sqlalchemy import select
 
 import iris
-from iris.cluster.controller.controller_rows import ControllerRowTables
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.observability_rows import ObservabilityRowTables
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.types import LOCAL_CLUSTER
 from iris.test_util import FakeStatsTable
@@ -96,7 +96,7 @@ def _opened_by_a_test_file() -> bool:
     return module_file is not None and str(Path(module_file).resolve()).startswith(_PACKAGE_TESTS_DIR)
 
 
-def _written_keys(tables: ControllerRowTables, marks: dict[int, int]) -> _WrittenKeys:
+def _written_keys(tables: ObservabilityRowTables, marks: dict[int, int]) -> _WrittenKeys:
     def keys(table, key) -> set:
         assert isinstance(table, FakeStatsTable)
         return {key(row) for write in table.writes[marks.get(id(table), 0) :] for row in write}
@@ -108,7 +108,7 @@ def _written_keys(tables: ControllerRowTables, marks: dict[int, int]) -> _Writte
     )
 
 
-def _write_marks(tables: ControllerRowTables) -> dict[int, int]:
+def _write_marks(tables: ObservabilityRowTables) -> dict[int, int]:
     return {
         id(table): len(table.writes)
         for table in (tables.job_table, tables.job_task_table, tables.task_attempt_table)
@@ -122,8 +122,8 @@ def install(db: ControllerDB) -> None:
     A test that attaches its own fake tables keeps the check; a test that makes
     row writes fail on purpose disables it with :func:`uninstall`.
     """
-    db.attach_controller_rows(
-        ControllerRowTables(
+    db.attach_observability_rows(
+        ObservabilityRowTables(
             cluster="test",
             job_table=FakeStatsTable(),
             job_config_table=FakeStatsTable(),
@@ -137,7 +137,7 @@ def install(db: ControllerDB) -> None:
 
     @contextmanager
     def checked() -> Iterator[Tx]:
-        tables = db._controller_rows
+        tables = db._observability_rows
         if tables is None or not isinstance(tables.job_table, FakeStatsTable) or _opened_by_a_test_file():
             with unchecked() as cur:
                 yield cur
@@ -166,8 +166,8 @@ def install(db: ControllerDB) -> None:
             if k not in written.attempts
         ]
         assert not missed_jobs and not missed_tasks and not missed_attempts, (
-            "a committed transaction changed jobs, tasks or attempts without writing their controller rows; "
-            "mark them at the write site (controller_rows.record_*): "
+            "a committed transaction changed jobs, tasks or attempts without writing their observability rows; "
+            "mark them at the write site (observability_rows.record_*): "
             f"jobs {missed_jobs}, tasks {missed_tasks}, attempts {missed_attempts}"
         )
 
