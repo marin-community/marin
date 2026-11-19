@@ -115,6 +115,19 @@ fn collect_int_ranges(
     }
 }
 
+/// Mirror a comparison operator for `literal <op> column` ⇒ `column <flipped>
+/// literal`. `None` for non-orderings (so they don't constrain the range).
+pub(crate) fn flip_comparison(op: Operator) -> Option<Operator> {
+    match op {
+        Operator::Lt => Some(Operator::Gt),
+        Operator::LtEq => Some(Operator::GtEq),
+        Operator::Gt => Some(Operator::Lt),
+        Operator::GtEq => Some(Operator::LtEq),
+        Operator::Eq => Some(Operator::Eq),
+        _ => None,
+    }
+}
+
 fn tighten_lower(bound: &mut Option<i64>, candidate: i64) {
     *bound = Some(bound.map_or(candidate, |current| current.max(candidate)));
 }
@@ -189,15 +202,7 @@ fn float_cast_range(expr: &Expr, schema: &ArrowSchema) -> Option<(String, Inclus
             ) else {
                 return None;
             };
-            let operator = match binary.op {
-                Operator::Lt => Operator::Gt,
-                Operator::LtEq => Operator::GtEq,
-                Operator::Gt => Operator::Lt,
-                Operator::GtEq => Operator::LtEq,
-                Operator::Eq => Operator::Eq,
-                _ => return None,
-            };
-            (column, operator, value)
+            (column, flip_comparison(binary.op)?, value)
         }
     };
     if !schema

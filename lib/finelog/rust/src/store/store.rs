@@ -5476,7 +5476,7 @@ mod tests {
                 "timestamp_ms >= 2000",
                 "timestamp_ms BETWEEN 1200 AND 2100",
                 "timestamp_ms > 2400.5",
-                // The OPS form: `extract(epoch ...) * 1000` is a Float64.
+                // The unconverted form OPS.md allows: `extract(epoch ...) * 1000` is a Float64.
                 "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400",
                 "timestamp_ms < 1000",
             ];
