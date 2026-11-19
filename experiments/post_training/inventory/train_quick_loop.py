@@ -81,11 +81,10 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
         extra_env={
             **base.extra_env,
             "VERIFYIT_JUDGE_MODEL": "openai/gpt-oss-120b",
-            # InfiniBand between some cw-us-east-02a nodes fails the first inter-node collective with
-            # IBV_WC_RETRY_EXC_ERR(12), and retries land on the same nodes. TCP is slower but completes.
-            "NCCL_NET": "Socket",
-            "NCCL_IB_DISABLE": "1",
-            "NCCL_SOCKET_FAMILY": "AF_INET",
+            # The privileged profile below exposes the front-end Ethernet NIC's RoCE functions
+            # (mlx5_*) beside the InfiniBand rails. NCCL routes some channels over them, which fails
+            # with IBV_WC_RETRY_EXC_ERR(12). Pin NCCL to the rails (ibp0-ibp7).
+            "NCCL_IB_HCA": "ibp",
         },
     )
     config = config.merge(
