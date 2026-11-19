@@ -81,6 +81,32 @@ def exp3_controls() -> SnowballSftConfig:
     return SnowballSftConfig(TOKEN_IDS, ANCHOR_IDS, math.sqrt(32), True, True)
 
 
+def whole_run_lr_receipt(spec: SFTSpec) -> dict:
+    """Validate whole-run annealing against the optimizer's actual update indices."""
+    horizon = spec.optimizer_num_train_steps
+    if horizon != spec.num_train_steps or spec.trainer_config is None or horizon != spec.trainer_config.num_train_steps:
+        raise ValueError("SFT optimizer schedule horizon must equal num_train_steps")
+    optimizer = spec.optimizer
+    if not isinstance(optimizer, GrugMoeMuonHConfig):
+        raise ValueError("Whole-run SFT annealing requires the qualified GrugMoeMuonH optimizer")
+    if optimizer.warmup != 0 or optimizer.decay != horizon or optimizer.lr_schedule != "linear":
+        raise ValueError("SFT requires zero warmup and linear decay across the entire horizon")
+    if optimizer.min_lr_ratio != 0.1:
+        raise ValueError("SFT requires min_lr_ratio=0.1")
+    assert horizon is not None
+    samples = []
+    for fraction in (0, 0.25, 0.5, 0.75, 1):
+        index = min(int(horizon * fraction), horizon - 1)
+        rates = {}
+        for name, peak in (("muonh", optimizer.learning_rate), ("adam", optimizer.adam_lr)):
+            schedule = optimizer.lr_scheduler(horizon, override_lr=peak)
+            rates[name] = float(schedule(index))
+            if fraction == 1 and abs(rates[name] - peak * 0.1) > peak * 0.1 * 0.1:
+                raise ValueError(f"SFT final-update {name} LR is not within 10% of min_lr")
+        samples.append({"fraction": fraction, "optimizer_update_index": index, "learning_rates": rates})
+    return {"num_train_steps": horizon, "optimizer_num_train_steps": horizon, "samples": samples}
+
+
 def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
     """Bind a pinned candidate and required gate, trainer and budget before allocation."""
     StageGuard(**recipe["stage_guard"])
@@ -113,7 +139,7 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
     mesh = draccus.decode(MeshConfig, recipe["mesh"])
     mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
     gate = draccus.decode(InitialEvalMatchConfig, recipe["initial_eval_match"])
-    return SFTSpec(
+    spec = SFTSpec(
         name=name,
         version=version,
         model=HFModel(
@@ -154,3 +180,19 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         wandb_entity=recipe["wandb_entity"],
         xla_flags=tuple(recipe["xla_flags"]),
     )
+    if "optimizer_schedule" not in recipe:
+        return spec
+    schedule = recipe["optimizer_schedule"]
+    spec = replace(
+        spec,
+        optimizer=replace(
+            exp3_optimizer(weight_decay=recipe["weight_decay"]),
+            warmup=schedule["warmup"],
+            decay=schedule["decay"],
+            min_lr_ratio=schedule["min_lr_ratio"],
+            lr_schedule=schedule["lr_schedule"],
+        ),
+        optimizer_num_train_steps=schedule["horizon"],
+    )
+    whole_run_lr_receipt(spec)
+    return spec

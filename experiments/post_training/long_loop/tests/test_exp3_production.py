@@ -3,7 +3,7 @@
 
 import hashlib
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -19,7 +19,7 @@ from marin.execution.lazy import StepContext
 
 from experiments.post_training.long_loop import exp3_production
 from experiments.post_training.long_loop.exp3_production import GEOMETRY, production_sft_recipe, read_data_release
-from experiments.post_training.long_loop.exp3_recipe import exp3_sft_spec
+from experiments.post_training.long_loop.exp3_recipe import exp3_sft_spec, whole_run_lr_receipt
 from experiments.post_training.long_loop.run_spec import resolve_spec
 from experiments.post_training.long_loop.shared_sft import select_shared_sft, shared_sft_spec
 from experiments.post_training.long_loop.tests.test_initializer_stage import prepared_sources as prepared_sources
@@ -84,10 +84,24 @@ def production_recipe(preview_release, monkeypatch):
     return production_sft_recipe(release)
 
 
-def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(preview_release, production_recipe):
+@pytest.mark.parametrize("schedule_horizon", [None, 360])
+def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
+    preview_release, production_recipe, schedule_horizon
+):
     root = preview_release.parent
     release = read_data_release(str(preview_release), require_ready=False)
     recipe = production_recipe
+    steps = schedule_horizon or 746
+    if schedule_horizon is not None:
+        recipe["stop_after_steps"] = steps
+        recipe["trainer"]["num_train_steps"] = steps
+        recipe["optimizer_schedule"] = {
+            "horizon": steps,
+            "warmup": 0,
+            "decay": steps,
+            "min_lr_ratio": 0.1,
+            "lr_schedule": "linear",
+        }
     spec = exp3_sft_spec("exp3-production-test", "2026.11.16.48", recipe)
     resources = draccus.decode(ResourceConfig, recipe["resources"])
     step = sft_step(spec, resources)
@@ -96,7 +110,7 @@ def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
     request = levanter_train_request(pod, task_timeout_seconds=72000, priority=priority_band_value("production"))
     [worker] = request.entrypoint.callable_entrypoint.args
     config = draccus.decode(TrainLmConfig, json.loads(json.dumps(draccus.encode(worker.train_config))))
-    assert config.trainer.num_train_steps == 746
+    assert config.trainer.num_train_steps == steps
     assert config.trainer.train_batch_size * config.train_seq_len == 67_108_864
     ici, dcn = config.trainer.mesh.axis_shapes(num_devices=256, num_slices=32)
     assert ici["expert"] == 8 and dcn["context"] == 32
@@ -105,10 +119,24 @@ def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
     assert config.trainer.training_budget.duration == timedelta(hours=20)
     assert config.trainer.checkpointer.keep_last_temporary_checkpoints == 3
     assert config.trainer.mp.param_dtype == jnp.float32
-    assert config.optimizer_num_train_steps == 4750
+    assert config.optimizer_num_train_steps == (schedule_horizon or 4750)
     assert config.trainer.seed == config.data_seed == 0
     assert draccus.encode(config.data)["train_weights"] == release.data["train_weights"]
-    assert config.hf_save_steps > 746
+    assert config.hf_save_steps > steps
+    if schedule_horizon is not None:
+        for peak in (config.optimizer.learning_rate, config.optimizer.adam_lr):
+            scheduler = config.optimizer.lr_scheduler(config.optimizer_num_train_steps, override_lr=peak)
+            for index in (0, 90, 180, 270, 359):
+                assert float(scheduler(index)) == pytest.approx(peak * (1 - 0.9 * index / 360), rel=1e-6)
+
+
+def test_whole_run_preflight_rejects_the_inherited_flat_prefix_and_wrong_decay(production_recipe):
+    spec = exp3_sft_spec("lr-admission", "fixture", production_recipe)
+    with pytest.raises(ValueError, match="horizon must equal num_train_steps"):
+        whole_run_lr_receipt(spec)
+    flat = replace(spec, optimizer_num_train_steps=spec.num_train_steps)
+    with pytest.raises(ValueError, match="entire horizon"):
+        whole_run_lr_receipt(flat)
 
 
 @pytest.mark.parametrize("final_step", [4, 5])

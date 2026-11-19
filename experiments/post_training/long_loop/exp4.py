@@ -28,17 +28,21 @@ from experiments.post_training.long_loop.exp3_production import (
     baseline_files,
     production_plan,
 )
-from experiments.post_training.long_loop.exp3_recipe import verified_initializer_model
+from experiments.post_training.long_loop.exp3_recipe import verified_initializer_model, whole_run_lr_receipt
 from experiments.post_training.long_loop.exp3_rl_restart import restart_recipe
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE, pool_steps
 from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
+from experiments.post_training.long_loop.shared_sft import shared_sft_spec
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 from experiments.post_training.task_curation.exp4_curriculum import SOURCE_ROUTES, exp4_rl_curriculum
 
 OUTPUT_PREFIX = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4"
 REFERENCE_URI = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3/evidence/restart53/frozen51-reference.json"
 REFERENCE_SHA256 = "897f22035802380a63fb748739ae8a66ef208ea67f1fe1e5470bbec417b3e1bb"
+# Exp3 completed 388 updates inside the same 20-hour budget. Leave 28 updates
+# of margin; retain V7's absolute mixture phase coordinates rather than rescaling them.
+SFT_UPDATES = 360
 
 QUALIFIED_V7 = StoragePin(
     "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.18-v7-option-g/release-v7/release-complete-v7.json",
@@ -140,6 +144,17 @@ def release_artifact(uri: str, sha256: str, *, require_ready: bool) -> tuple[Dat
 
 def exp4_plan(release: DataRelease, source_revision: str, version: str) -> dict:
     resolved = production_plan(release, source_revision, baseline_files())
+    sft = resolved["sft"]
+    sft["stop_after_steps"] = SFT_UPDATES
+    sft["trainer"]["num_train_steps"] = SFT_UPDATES
+    sft["target_positions"] = SFT_UPDATES * sft["batch_size"] * sft["seq_len"]
+    sft["optimizer_schedule"] = {
+        "horizon": SFT_UPDATES,
+        "warmup": 0,
+        "decay": SFT_UPDATES,
+        "min_lr_ratio": 0.1,
+        "lr_schedule": "linear",
+    }
     raw = StoragePath(REFERENCE_URI).read_bytes()
     if hashlib.sha256(raw).hexdigest() != REFERENCE_SHA256:
         raise ValueError("Exp3 comparison reference changed")
@@ -266,6 +281,11 @@ def main(
     (validation_output / "resolved-plan.json").write_text(json.dumps(resolved, indent=2))
     (validation_output / "optimizer-groups.json").write_text(
         json.dumps(optimizer_group_receipt(resolved["sft"]), indent=2)
+    )
+    (validation_output / "sft-lr-schedule.json").write_text(
+        json.dumps(
+            whole_run_lr_receipt(shared_sft_spec("long-loop-exp4/round4/sft", version, resolved["sft"])), indent=2
+        )
     )
     model = verified_initializer_model(INITIALIZER_RECEIPT, INITIALIZER_SHA256)
     validate_graph(
