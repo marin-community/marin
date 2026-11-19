@@ -11,8 +11,8 @@ from harbor.agents.terminus_2.tmux_session import (
     _BatchMarkers,
     ModelInitiatedTmuxFailure,
     TmuxBatchProtocolError,
-    TmuxBatchTimeoutError,
     TmuxCommandError,
+    TmuxExecTimeoutError,
     TmuxKeystrokeBatch,
     TmuxSession,
     TmuxSessionEndedError,
@@ -523,7 +523,7 @@ async def test_send_keys_and_capture_classifies_sandbox_timeout(tmux_session):
         side_effect=TimeoutError("Sandbox command timed out")
     )
 
-    with pytest.raises(TmuxBatchTimeoutError) as exc_info:
+    with pytest.raises(TmuxExecTimeoutError) as exc_info:
         await tmux_session.send_keys_and_capture([_batch("cargo build\n")])
 
     assert error_category(type(exc_info.value).__name__) is ErrorCategory.INFRASTRUCTURE

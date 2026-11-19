@@ -35,8 +35,8 @@ class TmuxBatchProtocolError(RuntimeError):
     """A batched tmux call returned without its response markers."""
 
 
-class TmuxBatchTimeoutError(RuntimeError):
-    """A batched tmux call timed out before returning."""
+class TmuxExecTimeoutError(RuntimeError):
+    """A tmux command's sandbox exec did not return before its deadline."""
 
 
 class ModelInitiatedTmuxFailure(NonZeroAgentExitCodeError):
@@ -797,7 +797,7 @@ class TmuxSession:
                 command=script, timeout_sec=timeout_sec, user=self._user
             )
         except TimeoutError as error:
-            raise TmuxBatchTimeoutError(
+            raise TmuxExecTimeoutError(
                 f"{self.environment.session_id}: batched tmux call exceeded "
                 f"{timeout_sec}s"
             ) from error
