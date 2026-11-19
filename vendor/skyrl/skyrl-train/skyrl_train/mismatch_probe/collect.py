@@ -203,7 +203,6 @@ class ProbeCollector:
         trajectory = concatenate_trajectory_batches(
             batches,
             require_rollout_logprobs=True,
-            tis_lcs_alert_threshold=float(trainer.cfg.trainer.algorithm.tis_lcs_alert_threshold),
         )
         return ProbeSamples(trajectory, uids, sample_ids, seeds)
 

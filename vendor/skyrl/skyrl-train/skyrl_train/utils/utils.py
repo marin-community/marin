@@ -551,11 +551,6 @@ def validate_cfg(cfg: DictConfig):
             "trainer.algorithm.group_admission.stall_timeout must be positive when set; got "
             f"{group_admission_stall_timeout}"
         )
-    if cfg.trainer.algorithm.tis_lcs_alert_threshold < 0:
-        raise ValueError(
-            "trainer.algorithm.tis_lcs_alert_threshold must be non-negative; "
-            f"got {cfg.trainer.algorithm.tis_lcs_alert_threshold}"
-        )
     if cfg.trainer.progress.mode not in {"auto", "tqdm", "logging"}:
         raise ValueError(f"trainer.progress.mode must be one of auto, tqdm, logging; got {cfg.trainer.progress.mode!r}")
     if cfg.generator.r3_transport not in set(R3Transport):

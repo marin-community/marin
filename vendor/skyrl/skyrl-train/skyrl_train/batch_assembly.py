@@ -126,7 +126,7 @@ def plan_worker_batch(
         ),
         num_experts=num_experts,
     )
-    metrics = rollout_metrics(facts, tis_lcs_alert_threshold=float(cfg.trainer.algorithm.tis_lcs_alert_threshold))
+    metrics = rollout_metrics(facts)
     metrics.update(reward_metrics(facts, plan.uids, n_samples_per_prompt=cfg.generator.n_samples_per_prompt))
     metrics.update(
         rollout_staleness_metrics(staleness, global_step=global_step, max_staleness_steps=max_staleness_steps)

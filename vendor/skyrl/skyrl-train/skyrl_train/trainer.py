@@ -1773,10 +1773,7 @@ class RayPPOTrainer:
                     self.cfg.trainer.algorithm,
                     loss_spec=PolicyLossRegistry.spec(self.cfg.trainer.algorithm.policy_loss_type),
                 ),
-                metrics=rollout_metrics(
-                    facts, tis_lcs_alert_threshold=float(self.cfg.trainer.algorithm.tis_lcs_alert_threshold)
-                ),
-                tis_lcs_alert_threshold=float(self.cfg.trainer.algorithm.tis_lcs_alert_threshold),
+                metrics=rollout_metrics(facts),
             )
             if any(group.loop_credit for group in facts):
                 refresh_trajectory_reward_shaping_metrics(trajectory_batch)

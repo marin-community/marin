@@ -424,7 +424,6 @@ class Algorithm(Section):
         None
     )
     off_policy_correction_rules: tuple[CorrectionRule, ...] | None = field(None)
-    tis_lcs_alert_threshold: int | float = field(0.005)
     enable_token_reward_channel: bool = field(False)
     think_token_weight: int | float = field(1.0)
     sapo: Sapo = Field(default_factory=Sapo)

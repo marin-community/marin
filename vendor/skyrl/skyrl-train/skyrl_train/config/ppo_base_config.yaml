@@ -194,7 +194,6 @@ trainer:
     clip_ratio_c: 3.0
     off_policy_correction: null
     off_policy_correction_rules: null
-    tis_lcs_alert_threshold: 0.005
     enable_token_reward_channel: false
     think_token_weight: 1.0
     sapo:
