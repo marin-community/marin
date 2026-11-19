@@ -11,21 +11,22 @@ the grader runs in the same workspace image, with the grader packages installed 
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from finestore.rl.status_taxonomy import DataRestriction
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import EnvironmentRequirements, TaskResource
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.environments import (
     GRADER_PACKAGES,
     PYTHON_TEST_GRADERS,
-    STACK_PYTEST_TASKS,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
     SOLUTION_PATHS,
+    PinnedInstall,
     solve_script,
     tasktrove_archive_task,
     workspace_grader_environment,
@@ -169,83 +170,135 @@ tests.
 {PYMETHODS_COMMON_CRITERIA}"""
 
 
-TOMLI_FOR_GRADER_MACHINES = "\"tomli==2.5.0; python_version < '3.11'\""
-"""The ``tomllib`` backport a Python 3.10 grader machine's interpreter imports.
-
-Quoted for the setup shell, whose semicolon would otherwise split the install command.
-"""
-
 PYTHON_TEST_GRADER_INSTALL = "python3 -m pip install --no-cache-dir --break-system-packages " + " ".join(
-    (*PYTHON_TEST_GRADERS, TOMLI_FOR_GRADER_MACHINES)
+    PYTHON_TEST_GRADERS
 )
-"""The declared pytest grader packages, installed after the workspace setup on an inherited-image grader.
+"""The declared pytest grader packages, installed after the workspace setup on an inherited-image
+grader that carries no compiled lock (the synthetic fixtures and the sources without locks)."""
 
-Verifyit's pytest mode needs pytest, the json-report plugin and tomli-w in the grader machine, and
-the hidden tests import hypothesis. PEP 668 images (Stack Overflow's Ubuntu base) need
-``--break-system-packages``; every other pinned base accepts the flag.
-"""
-
-STACK_PYTEST_GRADER_INSTALL = "python3 -m pip install --no-cache-dir --break-system-packages " + " ".join(
-    (*PYTHON_TEST_GRADERS, TOMLI_FOR_GRADER_MACHINES, *STACK_PYTEST_TASKS)
-)
-"""The Stack Overflow tasks' declared grader packages, on top of the pytest grader packages.
-
-Those hidden tests import the agent-image package set ``STACK_PYTEST_TASKS`` declares, and the
-source's Ubuntu base runs Python 3.12, which those pins require. The other sources' bases run
-Python 3.10 and 3.11, where several of these pins have no distribution, so only this source
-installs them.
-"""
+LOCKS_PACKAGE = Path(__file__).resolve().parent / "locks"
+"""The compiled hashed requirement locks, one actor and one grader lock per source."""
 
 
 def python_tests_grader_environment(
     context: ConversionContext, environment: EnvironmentRequirements
 ) -> EnvironmentRequirements:
-    """The grader image for a hidden-pytest task: the workspace image, with the grader packages after it.
-
-    The source grader declares only a packages lock, which no Daytona grader machine can create, so
-    the hidden tests grade in the task's own workspace image; the machine replays the workspace setup
-    and installs the declared grader packages on top of it.
+    """The unpinned grader image for a hidden-pytest task: the workspace image with the declared
+    grader packages after it. The compiled-lock path supersedes this for the sources that carry
+    locks; the synthetic test fixtures and the sources without locks keep this construction.
     """
     return workspace_grader_environment(
         environment, required_grader_environment(context), extra_setup=PYTHON_TEST_GRADER_INSTALL
     )
 
 
+LOCK_RESOURCE_PREFIX = "locks"
+ACTOR_LOCK_RESOURCE = f"{LOCK_RESOURCE_PREFIX}/actor.lock"
+GRADER_LOCK_RESOURCE = f"{LOCK_RESOURCE_PREFIX}/grader.lock"
+"""The compiled hashed requirement locks, one actor and one grader lock per source, staged as
+task resources: the actor lock rides as a worker resource (both machines replay the actor setup)
+and the grader lock as a verifier resource (grader only)."""
+
+LOCK_INSTALL = "python3 -m pip install --no-cache-dir --require-hashes -r {lock}"
+
+
+def _lock_resource(path: Path, resource_path: str) -> TaskResource:
+    from taskcompendium.runtime.resources import inline_resource  # noqa: PLC0415
+
+    return inline_resource(resource_path, path.read_bytes())
+
+
+def pinned_setup(
+    config: str, actor_environment: EnvironmentRequirements
+) -> tuple[EnvironmentRequirements, EnvironmentRequirements | None, PinnedInstall | None]:
+    """The pinned actor and grader environments for one source, with the lock resources.
+
+    Every floating ``pip install`` the archive's Dockerfile ships is replaced by the
+    hashed-lock install compiled for that source's base interpreter (ruling 2026-11-19:
+    a task's environment spec must fully determine its behavior). The grader environment
+    inherits the pinned actor setup and appends the grader lock's install. Sources whose
+    archive installs nothing (the Stack Overflow apt base) keep their steps and only the
+    grader lock applies.
+    """
+    directory = LOCKS_PACKAGE / config
+    if not directory.exists():
+        # No compiled locks for this config: the unpinned path applies (the campaign's nine
+        # sources carry locks; other TaskTrove configs keep their floating installs until
+        # their own locks compile).
+        return actor_environment, None, None
+    actor_lock = directory / "actor.lock"
+    grader_lock = directory / "grader.lock"
+    actor_command = LOCK_INSTALL.format(lock=f"/{ACTOR_LOCK_RESOURCE}")
+    grader_command = LOCK_INSTALL.format(lock=f"/tests/{GRADER_LOCK_RESOURCE}")
+    if not actor_lock.exists():
+        # Nothing in the actor setup floats; only the grader lock applies.
+        grader_environment = actor_environment.model_copy(
+            update={"setup_commands": (*actor_environment.setup_commands, grader_command)}
+        )
+        pinned = PinnedInstall(
+            command=None,
+            grader_command=grader_command,
+            actor_lock=None,
+            grader_lock=_lock_resource(grader_lock, GRADER_LOCK_RESOURCE),
+            requirements=(),
+        )
+        return actor_environment, grader_environment, pinned
+    pinned_actor = actor_environment.model_copy(
+        update={
+            "setup_commands": tuple(
+                actor_command if "pip install" in step else step for step in actor_environment.setup_commands
+            )
+        }
+    )
+    grader_environment = pinned_actor.model_copy(
+        update={"setup_commands": (*pinned_actor.setup_commands, grader_command)}
+    )
+    requirements = tuple(
+        line.split("==")[0].strip()
+        for line in actor_lock.read_text().splitlines()
+        if line and not line.startswith(("#", " ", "-"))
+    )
+    pinned = PinnedInstall(
+        command=actor_command,
+        grader_command=grader_command,
+        actor_lock=_lock_resource(actor_lock, ACTOR_LOCK_RESOURCE),
+        grader_lock=_lock_resource(grader_lock, GRADER_LOCK_RESOURCE),
+        requirements=requirements,
+    )
+    return pinned_actor, grader_environment, pinned
+
+
 def convert_python_tests(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     """Capture the implementation and assets under the source workspace."""
     environment = archive_environment(row.data["files"])
+    config = row.source.row.split("/", 1)[0]
+    pinned_actor, grader_environment, pinned = pinned_setup(config, environment)
+    if pinned is None:
+        grader_environment = python_tests_grader_environment(context, environment)
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=environment,
-        grader_environment=python_tests_grader_environment(context, environment),
+        environment=pinned_actor,
+        grader_environment=grader_environment,
         output_paths=("/app",),
+        pinned=pinned,
     )
 
 
 def convert_unitsyn(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     """Capture the fixed solution files, as the source's grader did."""
     environment = archive_environment(row.data["files"])
+    config = row.source.row.split("/", 1)[0]
+    pinned_actor, grader_environment, pinned = pinned_setup(config, environment)
+    if pinned is None:
+        grader_environment = python_tests_grader_environment(context, environment)
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=environment,
-        grader_environment=python_tests_grader_environment(context, environment),
+        environment=pinned_actor,
+        grader_environment=grader_environment,
         output_paths=SOLUTION_PATHS,
-    )
-
-
-def convert_stack_pytest(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    """Grade the Stack Overflow tasks' hidden tests with the agent-image package set they import."""
-    environment = archive_environment(row.data["files"])
-    return tasktrove_archive_task(
-        row,
-        convert=convert_unit_tests,
-        environment=environment,
-        grader_environment=workspace_grader_environment(
-            environment, required_grader_environment(context), extra_setup=STACK_PYTEST_GRADER_INSTALL
-        ),
-        output_paths=("/app",),
+        pinned=pinned,
     )
 
 
@@ -461,7 +514,7 @@ SOURCES = {
     ),
     "stack_pytest": PythonTestsSource(
         "DCAgent__exp_rpt_stack-pytest-v2",
-        convert_stack_pytest,
+        convert_python_tests,
         STACK_PYTEST_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,

@@ -62,13 +62,22 @@ def dockerfile_of(files: Mapping[str, str]) -> str | None:
 
 
 def environment_unused(
-    spec: Mapping, archive_files: Mapping[str, str], *, bases: Mapping[str, str] | None = None
+    spec: Mapping,
+    archive_files: Mapping[str, str],
+    *,
+    bases: Mapping[str, str] | None = None,
+    pinned_pip_install: str | None = None,
 ) -> str | None:
     """Why a converted task ignores its archive's environment, if it does.
 
     ``spec`` is a TaskCompendium task dict. A task whose archive defines
     ``environment/Dockerfile`` must declare its build context or replay its lowered
     steps, working directory and variables on the matching digest-pinned base.
+
+    ``pinned_pip_install`` accepts a deterministic replay: every lowered ``pip install``
+    step is then expected replaced by exactly this hashed-lock install command (ruling
+    2026-11-19: a task's environment spec must fully determine its behavior, so the
+    floating installs the archives ship are pinned at conversion).
     """
     dockerfile = dockerfile_of(archive_files)
     if dockerfile is None:
@@ -84,7 +93,34 @@ def environment_unused(
             return f"archive environment is not lowered: {error}"
         if requirements.get("docker_image") != lowered.base_ref:
             return "spec does not use the archive's base image"
-        if tuple(requirements.get("setup_commands") or ()) != lowered.setup_commands:
+        expected_steps = lowered.setup_commands
+        actual_steps = tuple(requirements.get("setup_commands") or ())
+        pinned_in_actual = [
+            step for step in actual_steps if "pip install" in step and "--require-hashes" in step and "/locks/" in step
+        ]
+        if pinned_pip_install is not None:
+            expected_steps = tuple(pinned_pip_install if "pip install" in step else step for step in expected_steps)
+        elif pinned_in_actual:
+            # The pinned-install replay: every lowered pip install step replaced by one
+            # identical hashed-lock command referencing a lock the task carries as a
+            # resource (ruling 2026-11-19: the environment spec must fully determine the
+            # machine's behavior, so floating installs are pinned at conversion).
+            pinned_commands = set(pinned_in_actual)
+            if len(pinned_commands) != 1:
+                return "spec does not replay the archive's steps"
+            pinned_command = next(iter(pinned_commands))
+            lock_name = pinned_command.rsplit("-r ", 1)[-1].strip()
+            resources = spec.get("resources")
+            declared_resources = (
+                {row["path"] for group in resources.values() for row in group or []}
+                if isinstance(resources, dict)
+                else set()
+            )
+            lock_suffix = lock_name.lstrip("/")
+            if not any(path == lock_suffix or path.endswith("/" + lock_suffix) for path in declared_resources):
+                return "pinned install references no staged lock resource"
+            expected_steps = tuple(pinned_command if "pip install" in step else step for step in expected_steps)
+        if tuple(actual_steps) != expected_steps:
             return "spec does not replay the archive's steps"
         if requirements.get("working_directory") != lowered.working_directory:
             return "spec does not use the archive's working directory"

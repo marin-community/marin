@@ -12,7 +12,7 @@ stay with the oracle role, which only grader controls mount.
 import hashlib
 import json
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.convert.tasks import workspace_task
@@ -24,6 +24,7 @@ from taskcompendium.models import (
     NoGrader,
     PlainText,
     ProviderRequirement,
+    TaskResource,
     TaskSpec,
     TextMessage,
 )
@@ -134,6 +135,24 @@ def workspace_grader_environment(
     return environment.model_copy(update={"setup_commands": setup})
 
 
+@dataclass(frozen=True)
+class PinnedInstall:
+    """The hashed-lock replacement for an archive's floating pip installs (ruling 2026-11-19).
+
+    ``command`` replaces every lowered ``pip install`` step in the actor setup (None when the
+    archive installs nothing and nothing floats). ``grader_command`` appends the grader lock's
+    install to the grader setup. ``actor_lock`` rides as a worker resource (both machines replay
+    the actor setup); the grader lock rides as a verifier resource. ``requirements`` echoes the
+    archive's pip requirements the lock was compiled from, so the conversion can prove coverage.
+    """
+
+    command: str | None
+    grader_command: str
+    actor_lock: TaskResource | None
+    grader_lock: TaskResource
+    requirements: tuple[str, ...]
+
+
 def tasktrove_archive_task(
     row: RawRow,
     *,
@@ -141,6 +160,7 @@ def tasktrove_archive_task(
     environment: EnvironmentRequirements,
     grader_environment: EnvironmentRequirements,
     output_paths: tuple[str, ...],
+    pinned: PinnedInstall | None = None,
 ) -> NormalizedTask | ImportRejection:
     """Convert an unpacked TaskTrove archive with ``convert`` into a workspace task."""
     converted = archive_conversion(row.data, convert)
@@ -154,9 +174,22 @@ def tasktrove_archive_task(
         grader_environment=grader_environment,
         output_paths=output_paths,
     )
+    if pinned is not None:
+        worker = (*task.resources.worker, pinned.actor_lock) if pinned.actor_lock else task.resources.worker
+        task = task.model_copy(
+            update={
+                "resources": task.resources.model_copy(
+                    update={"worker": worker, "verifier": (*task.resources.verifier, pinned.grader_lock)}
+                )
+            }
+        )
     # The archive's environment is part of the task; a spec that replaces it with an
     # image while the archive defines environment/Dockerfile is not admissible.
-    substituted = environment_unused(task.model_dump(mode="json"), row.data["files"])
+    substituted = environment_unused(
+        task.model_dump(mode="json"),
+        row.data["files"],
+        pinned_pip_install=pinned.command if pinned is not None else None,
+    )
     if substituted is not None:
         return ImportRejection(
             kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=substituted

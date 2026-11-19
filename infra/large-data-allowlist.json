@@ -4,6 +4,7 @@
   "experiments/datakit/hero_data_emb_paths.json": 37681,
   "experiments/datakit/hero_data_fusion_score_paths.json": 34469,
   "experiments/datakit/hero_data_paths.json": 388339,
+  "experiments/post_training/task_curation/datasets/tasktrove/locks/DCAgent__exp_rpt_stack-pytest-v2/grader.lock": 173093,
   "experiments/post_training/task_curation/retired-inventory-only.json": 276,
   "experiments/post_training/task_curation/source_fingerprint_index.json": 278,
   "experiments/post_training/task_curation/source_population_locators.json": 280,
