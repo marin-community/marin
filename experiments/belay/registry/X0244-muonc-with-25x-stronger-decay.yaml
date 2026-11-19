@@ -38,7 +38,8 @@ trials:
   batch: X0244
   date: '2026-11-19'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0244
-  wandb: []
+  wandb:
+  - belay-X0244-seed0-t
   settings:
     muonc_decay_mult: '12.5'
   commit: 4d0d620f2d
