@@ -578,6 +578,8 @@ class SFTSpec:
     chat_template: str  # any jinja carrying a {% generation %} block (completions-only mask)
     datasets: Sequence[DatasetSpec | ArtifactDatasetSpec]  # the instruction mixture
     optimizer: OptimizerConfig  # e.g. AdamConfig for the Levanter backend
+    mp: jmp.Policy = field(default_factory=lambda: jmp.get_policy(_MARIN_PRECISION))
+    """Training parameter/compute precision; independent of HF export dtype."""
     prepared_data: LmDataConfig | None = None
     """Already prepared caches and their complete mixture schedule; excludes message datasets."""
     data_dependencies: tuple[ArtifactStep, ...] = ()
@@ -742,7 +744,7 @@ def _trainer(
         num_train_steps=num_train_steps,
         steps_per_eval=500,
         jax_config=jax_config,
-        mp=jmp.get_policy(_MARIN_PRECISION),
+        mp=spec.mp,
         per_device_parallelism=spec.per_device_parallelism,
         use_explicit_mesh_axes=use_explicit_mesh_axes,
         mesh=spec.mesh if spec.mesh is not None else MeshConfig(),

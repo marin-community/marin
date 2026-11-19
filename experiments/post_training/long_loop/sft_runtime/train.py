@@ -14,6 +14,7 @@ from collections.abc import Callable
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from pathlib import Path
 from uuid import uuid4
 
 import equinox as eqx
@@ -81,6 +82,15 @@ from experiments.post_training.long_loop.sft_runtime.model import (
     RematMode,
     Transformer,
     _histogram_from_expert_counts,
+)
+from experiments.post_training.long_loop.sft_runtime.state_rebind import HostRebindConfig, rebind_first_state
+from experiments.post_training.long_loop.sft_runtime.temperature_matching import (
+    TemperatureMatchingConfig,
+    chunked_linear_tempered_kl_weighted_sum,
+    global_l2_norm,
+    tm_row_mask_for_mixture_indices,
+    validate_temperature_matching_trainer_config,
+    validate_tm_source_names,
 )
 from experiments.post_training.long_loop.sft_runtime.validation_checkpoint import (
     BestValidationCheckpoint,
@@ -375,6 +385,7 @@ class GrugTrainerConfig:
     # measured to pay off at 65K, gained only 0.4% at 16K on one rack, and its full-batch gather crosses racks.
     balance_attention_rows: bool = False
     sharding_dump_path: str | None = None
+    temperature_matching: TemperatureMatchingConfig = field(default_factory=TemperatureMatchingConfig)
 
     def __post_init__(self):
         if self.gradient_accumulation_steps < 1:
@@ -385,6 +396,11 @@ class GrugTrainerConfig:
             raise ValueError("Each special token needs one anchor")
         if self.gc_interval is not None and self.gc_interval <= 0:
             raise ValueError("GC interval must be positive")
+        validate_temperature_matching_trainer_config(
+            self.temperature_matching,
+            gradient_accumulation_steps=self.gradient_accumulation_steps,
+            expert_axis_size=self.expert_axis_size,
+        )
 
 
 def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
@@ -458,6 +474,7 @@ class GrugRunConfig:
     # long schedule requires the two to differ. None runs the whole schedule.
     stop_after_steps: int | None = None
     first_checkpoint_restore_step: int | None = None
+    first_step_host_rebind: HostRebindConfig | None = None
     native_timing_root: str | None = None
     flops_baseline: FlopsBaseline | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
@@ -767,6 +784,8 @@ def initialize_snowball_sft(
         loaded.params,
         (loaded.params.stacked_blocks.stacked.shared,),
     )
+    # Checkpoint storage dtype can differ from the requested fresh-training policy.
+    params = config.trainer.mp.cast_to_param(params)
     params = reseed_lm_head(params, config.special_token_ids, config.anchor_token_ids)
     return dataclasses.replace(loaded, params=params, ema_params=params if state.ema_params is not None else None)
 
@@ -875,15 +894,11 @@ def _drop_metrics(
     }
 
 
-def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
-    """Balance packed attention work across batch shards while retaining all tokens.
-
-    Row assignment can change which tokens exceed expert capacity. Batches without
-    segment ids, or with one row per shard, are returned unchanged.
-    """
+def _attention_row_permutation(batch: GrugLmExample) -> jax.Array | None:
+    """Return the balanced row permutation for ``batch``, or ``None`` if no reorder applies."""
     segment_ids = batch.attn_mask.segment_ids
     if segment_ids is None:
-        return batch
+        return None
     mesh = jax.sharding.get_abstract_mesh()
     shards = math.prod(mesh.shape[axis] for axis in _BATCH_AXES)
     rows, seq_len = batch.tokens.shape
@@ -891,7 +906,7 @@ def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
         raise ValueError(f"{rows} batch rows do not divide over {shards} batch shards")
     # A shard's work is then its one row's, wherever that row goes.
     if rows == shards:
-        return batch
+        return None
     q_segment_ids = segment_ids[0]
     document_start, valid = fa4_cute_segment_bounds(
         AttentionMask(is_causal=True, segment_ids=(q_segment_ids, q_segment_ids)),
@@ -906,21 +921,134 @@ def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
     shard = np.where(deal_round % 2 == 0, deal_index, shards - 1 - deal_index)
     rows_by_shard = order[np.argsort(shard, stable=True)].reshape(shards, rows // shards)
     rows_by_shard = jnp.roll(rows_by_shard, order[0] // (rows // shards), axis=0)
-    source_row = jnp.sort(rows_by_shard, axis=1).reshape(rows)
+    return jnp.sort(rows_by_shard, axis=1).reshape(rows)
 
-    def permute(x: jax.Array) -> jax.Array:
-        gathered = jax.sharding.reshard(x, P())[source_row]
-        return jax.sharding.reshard(gathered, jax.typeof(x).sharding.spec)
 
+def _permute_batch_rows(x: jax.Array, source_row: jax.Array) -> jax.Array:
+    gathered = jax.sharding.reshard(x, P())[source_row]
+    return jax.sharding.reshard(gathered, jax.typeof(x).sharding.spec)
+
+
+def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
+    """Balance packed attention work across batch shards while retaining all tokens.
+
+    Row assignment can change which tokens exceed expert capacity. Batches without
+    segment ids, or with one row per shard, are returned unchanged.
+    """
+    source_row = _attention_row_permutation(batch)
+    if source_row is None:
+        return batch
+    segment_ids = batch.attn_mask.segment_ids
+    assert segment_ids is not None
+    q_segment_ids = segment_ids[0]
     # The model reads only the q segment ids, so gather them once and reuse them for kv.
     return GrugLmExample(
-        tokens=permute(batch.tokens),
-        loss_weight=permute(batch.loss_weight),
-        attn_mask=batch.attn_mask.with_segment_ids(permute(q_segment_ids)),
+        tokens=_permute_batch_rows(batch.tokens, source_row),
+        loss_weight=_permute_batch_rows(batch.loss_weight, source_row),
+        attn_mask=batch.attn_mask.with_segment_ids(_permute_batch_rows(q_segment_ids, source_row)),
     )
 
 
-def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, *, loss_denominator=None):
+def _balance_attention_rows_with_mask(
+    batch: GrugLmExample,
+    row_mask: jax.Array | None,
+) -> tuple[GrugLmExample, jax.Array | None]:
+    """Permute ``batch`` and an optional per-row TM mask in lockstep."""
+    source_row = _attention_row_permutation(batch)
+    if source_row is None:
+        return batch, row_mask
+    segment_ids = batch.attn_mask.segment_ids
+    assert segment_ids is not None
+    q_segment_ids = segment_ids[0]
+    balanced_batch = GrugLmExample(
+        tokens=_permute_batch_rows(batch.tokens, source_row),
+        loss_weight=_permute_batch_rows(batch.loss_weight, source_row),
+        attn_mask=batch.attn_mask.with_segment_ids(_permute_batch_rows(q_segment_ids, source_row)),
+    )
+    balanced_mask = _permute_batch_rows(row_mask, source_row) if row_mask is not None else None
+    return balanced_batch, balanced_mask
+
+
+def cast_teacher_params(params: Transformer, mp: jmp.Policy) -> Transformer:
+    """Return a detached frozen copy of teacher parameters in the compute dtype (BF16 in production SFT).
+
+    Explicitly copies leaves so ``teacher_params`` never aliases ``state.params`` buffers donated
+    to ``train_step`` via ``donate_argnums=(0,)`` or deleted during ``first_step_host_rebind``.
+    """
+    casted = mp.cast_to_compute(params)
+    return jax.tree.map(lambda leaf: leaf.copy() if isinstance(leaf, jax.Array) else leaf, casted)
+
+
+def prepare_frozen_teacher(
+    state: GrugTrainState,
+    *,
+    config: GrugRunConfig,
+    mesh: Mesh,
+) -> Transformer:
+    """Load or snapshot the frozen teacher outside ``GrugTrainState`` (never checkpointed).
+
+    On a fresh step-0 start from ``trainer.initialize_from``, reuses the post-init step-0
+    parameters directly. On resumed runs (``step > 0``) or when ``teacher_checkpoint_path``
+    is set explicitly, loads the frozen teacher from disk so preempted resumes always anchor
+    to the same step-0 teacher without doubling checkpoint size.
+    """
+    tm_cfg = config.trainer.temperature_matching
+    trainer_cfg = config.trainer.trainer
+    teacher_ckpt = tm_cfg.teacher_checkpoint_path or trainer_cfg.initialize_from
+    if teacher_ckpt is None:
+        raise ValueError(
+            "Temperature matching requires an explicit teacher_checkpoint_path or trainer.initialize_from"
+        )
+
+    if int(state.step) == 0 and teacher_ckpt == trainer_cfg.initialize_from:
+        teacher_fp32 = state.params
+    else:
+        dummy_state = GrugTrainState(
+            step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
+            params=state.params,
+            master_params=None,
+            opt_state=None,
+            ema_params=None,
+            pending_qb_betas=state.pending_qb_betas,
+        )
+        if teacher_ckpt == trainer_cfg.initialize_from:
+            teacher_fp32 = initialize_snowball_sft(dummy_state, teacher_ckpt, mesh, config.trainer).params
+        else:
+            try:
+                loaded_dict = load_grug_checkpoint(
+                    state={"params": state.params},
+                    candidate=teacher_ckpt,
+                    mesh=mesh,
+                    allow_partial=False,
+                )
+                teacher_fp32 = loaded_dict["params"]
+            except (FileNotFoundError, ValueError, KeyError):
+                # Do not apply student special-token LM-head reseeding to an external teacher checkpoint.
+                external_teacher_cfg = replace(config.trainer, special_token_ids=(), anchor_token_ids=())
+                teacher_fp32 = initialize_snowball_sft(dummy_state, teacher_ckpt, mesh, external_teacher_cfg).params
+
+    teacher_params = cast_teacher_params(teacher_fp32, trainer_cfg.mp)
+    del teacher_fp32
+    if tm_cfg.offload_teacher:
+        teacher_params = _tree_to_memory_kind(teacher_params, "pinned_host")
+    logger.info(
+        "Prepared frozen temperature-matching teacher from %s (compute_dtype=%s, offload_teacher=%s)",
+        teacher_ckpt,
+        trainer_cfg.mp.compute_dtype,
+        tm_cfg.offload_teacher,
+    )
+    return teacher_params
+
+
+def _loss_and_grads(
+    params,
+    batch,
+    mp: jmp.Policy,
+    z_loss: float | None,
+    *,
+    loss_denominator=None,
+    loss_scale: float = 1.0,
+):
     def loss_fn(model):
         model = eqx.tree_at(
             lambda m: m.stacked_blocks.stacked.mlp.router_bias,
@@ -939,9 +1067,35 @@ def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, *, loss
         if loss_denominator is not None:
             loss = loss / loss_denominator
             metrics = {**metrics, "train/cross_entropy_loss": loss}
+        if loss_scale != 1.0:
+            loss = loss * jnp.asarray(loss_scale, dtype=jnp.float32)
         return loss, metrics
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
+
+
+def _reduce_microbatch_metrics(metrics_by_microbatch: dict[str, jax.Array]) -> dict[str, object]:
+    sum_metrics = {
+        "train/cross_entropy_loss",
+        "train/router/routing_counts_per_layer",
+        MOE_DROPPED_ASSIGNMENTS_METRIC,
+        MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
+        MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
+        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+        MOE_VALID_ASSIGNMENTS_METRIC,
+    }
+    metrics = {}
+    for name, value in metrics_by_microbatch.items():
+        reduction = jnp.sum if name in sum_metrics else jnp.mean
+        if name.endswith("_min"):
+            reduction = jnp.min
+        elif name.endswith("_max"):
+            reduction = jnp.max
+        metrics[name] = jax.tree.map(functools.partial(reduction, axis=0), value)
+    counts = metrics["train/router/routing_counts_per_layer"]
+    for layer in range(counts.shape[0]):
+        metrics[f"train/router/layer_{layer}/routing_hist"] = _histogram_from_expert_counts(counts[layer])
+    return metrics
 
 
 def _accumulated_loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, steps: int):
@@ -967,27 +1121,361 @@ def _accumulated_loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | N
 
     accumulated, (losses, metrics_by_microbatch) = jax.lax.scan(accumulate, accumulated, microbatches)
     grads = jax.tree.map(lambda value, param: value.astype(param.dtype), accumulated, params)
-    sum_metrics = {
-        "train/cross_entropy_loss",
-        "train/router/routing_counts_per_layer",
-        MOE_DROPPED_ASSIGNMENTS_METRIC,
-        MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
-        MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
-        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
-        MOE_VALID_ASSIGNMENTS_METRIC,
-    }
-    metrics = {}
-    for name, value in metrics_by_microbatch.items():
-        reduction = jnp.sum if name in sum_metrics else jnp.mean
-        if name.endswith("_min"):
-            reduction = jnp.min
-        elif name.endswith("_max"):
-            reduction = jnp.max
-        metrics[name] = jax.tree.map(functools.partial(reduction, axis=0), value)
-    counts = metrics["train/router/routing_counts_per_layer"]
-    for layer in range(counts.shape[0]):
-        metrics[f"train/router/layer_{layer}/routing_hist"] = _histogram_from_expert_counts(counts[layer])
+    metrics = _reduce_microbatch_metrics(metrics_by_microbatch)
     return (jnp.sum(losses), metrics), grads
+
+
+def _default_tm_row_mask(batch: GrugLmExample) -> jax.Array:
+    batch_size = batch.tokens.shape[0]
+    mask = jnp.ones((batch_size,), dtype=jnp.float32)
+    sharding = jax.typeof(batch.loss_weight).sharding
+    if isinstance(sharding, NamedSharding):
+        mask = jax.sharding.reshard(mask, NamedSharding(sharding.mesh, P(sharding.spec[0])))
+    return mask
+
+
+def _teacher_hiddens_for_microbatches(
+    teacher_params: Transformer,
+    tm_microbatches,
+    shared,
+    *,
+    stream_from_host: bool,
+) -> jax.Array:
+    """Run decoupled frozen-teacher forwards on the TM microbatches, returning only hidden states.
+
+    Streams teacher weights layer-by-layer from ``pinned_host`` when ``stream_from_host`` is True
+    so the teacher backbone is freed before student ``value_and_grad`` executes.
+    """
+    stream_fn = functools.partial(_tree_to_memory_kind, memory_kind="device") if stream_from_host else None
+
+    def run_one(_, mb):
+        microbatch = eqx.combine(mb, shared)
+        hidden = teacher_params.hidden_states(
+            microbatch.tokens,
+            mask=microbatch.attn_mask,
+            stream_layer_fn=stream_fn,
+        )
+        return None, jax.lax.stop_gradient(hidden)
+
+    _, teacher_hiddens = jax.lax.scan(run_one, None, tm_microbatches)
+    return jax.lax.stop_gradient(teacher_hiddens)
+
+
+def _loss_and_grads_with_tm(
+    params: Transformer,
+    batch: GrugLmExample,
+    teacher_hidden: jax.Array,
+    teacher_output_proj: jax.Array,
+    tm_weight: jax.Array,
+    mp: jmp.Policy,
+    z_loss: float | None,
+    *,
+    ce_denominator: jax.Array,
+    tm_coeff: jax.Array,
+    tm_config: TemperatureMatchingConfig,
+):
+    assert tm_config.temperature is not None
+    ce_scale = jnp.asarray(tm_config.ce_weight, dtype=jnp.float32)
+
+    def loss_fn(model):
+        model = eqx.tree_at(
+            lambda m: m.stacked_blocks.stacked.mlp.router_bias,
+            model,
+            replace_fn=jax.lax.stop_gradient,
+        )
+        compute_params = mp.cast_to_compute(model)
+        hidden, router_metrics = compute_params(batch.tokens, mask=batch.attn_mask)
+        ce_sum, metrics = compute_params.next_token_loss_from_hidden(
+            hidden,
+            router_metrics,
+            batch.tokens,
+            batch.loss_weight,
+            reduction="sum",
+            logsumexp_weight=z_loss,
+            return_router_metrics=True,
+        )
+        ce_loss = ce_sum / ce_denominator
+        t_out = (
+            _tree_to_memory_kind(teacher_output_proj, "device")
+            if tm_config.offload_teacher
+            else teacher_output_proj
+        )
+        kl_sum = chunked_linear_tempered_kl_weighted_sum(
+            hidden,
+            compute_params.output_proj,
+            teacher_hidden,
+            jax.lax.stop_gradient(t_out),
+            tm_weight,
+            temperature=tm_config.temperature,
+            token_block_size=tm_config.token_block_size,
+        )
+        total_loss = ce_scale * ce_loss + tm_coeff * kl_sum
+        metrics = {**metrics, "train/cross_entropy_loss": ce_loss, "train/tm/kl_sum": kl_sum}
+        return total_loss, metrics
+
+    return jax.value_and_grad(loss_fn, has_aux=True)(params)
+
+
+def _tm_only_loss_and_grads(
+    params: Transformer,
+    batch: GrugLmExample,
+    teacher_hidden: jax.Array,
+    teacher_output_proj: jax.Array,
+    tm_weight: jax.Array,
+    mp: jmp.Policy,
+    *,
+    tm_coeff: jax.Array,
+    tm_config: TemperatureMatchingConfig,
+):
+    assert tm_config.temperature is not None
+
+    def loss_fn(model):
+        model = eqx.tree_at(
+            lambda m: m.stacked_blocks.stacked.mlp.router_bias,
+            model,
+            replace_fn=jax.lax.stop_gradient,
+        )
+        compute_params = mp.cast_to_compute(model)
+        hidden, _ = compute_params(batch.tokens, mask=batch.attn_mask)
+        t_out = (
+            _tree_to_memory_kind(teacher_output_proj, "device")
+            if tm_config.offload_teacher
+            else teacher_output_proj
+        )
+        kl_sum = chunked_linear_tempered_kl_weighted_sum(
+            hidden,
+            compute_params.output_proj,
+            teacher_hidden,
+            jax.lax.stop_gradient(t_out),
+            tm_weight,
+            temperature=tm_config.temperature,
+            token_block_size=tm_config.token_block_size,
+        )
+        return tm_coeff * kl_sum
+
+    return jax.value_and_grad(loss_fn)(params)
+
+
+def _split_tm_microbatches(
+    batch: GrugLmExample,
+    tm_row_mask: jax.Array | None,
+    steps: int,
+    tm_count: int,
+):
+    batch_size = batch.tokens.shape[0]
+    if batch_size % steps:
+        raise ValueError(f"Batch size {batch_size} must divide into {steps} microbatches")
+    if tm_count < 1 or tm_count > steps:
+        raise ValueError(f"temperature_matching.microbatch_count ({tm_count}) must be in [1, {steps}]")
+    row_mask = _default_tm_row_mask(batch) if tm_row_mask is None else tm_row_mask.astype(jnp.float32)
+    batched, shared = eqx.partition(
+        batch, lambda value: eqx.is_array(value) and value.ndim > 0 and value.shape[0] == batch_size
+    )
+    microbatches = jax.tree.map(lambda value: reshape_array_into_microbatches(value, steps), batched)
+    row_mask_mbs = reshape_array_into_microbatches(row_mask, steps)
+    tm_mbs = jax.tree.map(lambda value: value[:tm_count], microbatches)
+    ce_only_mbs = jax.tree.map(lambda value: value[tm_count:], microbatches)
+    tm_row_mask_mbs = row_mask_mbs[:tm_count]
+    tm_weights_selected = tm_mbs.loss_weight.astype(jnp.float32) * tm_row_mask_mbs[:, :, None]
+    tm_weight_sum = jnp.sum(tm_weights_selected, dtype=jnp.float32)
+    tm_supervised_sum = jnp.sum(tm_mbs.loss_weight, dtype=jnp.float32)
+    return shared, tm_mbs, ce_only_mbs, tm_weights_selected, tm_weight_sum, tm_supervised_sum
+
+
+def _accumulated_loss_and_grads_with_tm(
+    params: Transformer,
+    batch: GrugLmExample,
+    teacher_params: Transformer,
+    tm_row_mask: jax.Array | None,
+    mp: jmp.Policy,
+    z_loss: float | None,
+    steps: int,
+    tm_config: TemperatureMatchingConfig,
+):
+    """Accumulate CE over all ``steps`` microbatches and full-vocab TM over ``tm_config.microbatch_count``."""
+    assert tm_config.microbatch_count is not None and tm_config.weight is not None
+    tm_count = tm_config.microbatch_count
+    shared, tm_mbs, ce_only_mbs, tm_weights_selected, tm_weight_sum, tm_supervised_sum = _split_tm_microbatches(
+        batch, tm_row_mask, steps, tm_count
+    )
+
+    # Phase 1: decoupled frozen-teacher forward so teacher backbone exits HBM before student backward.
+    teacher_hiddens = _teacher_hiddens_for_microbatches(
+        teacher_params, tm_mbs, shared, stream_from_host=tm_config.offload_teacher
+    )
+
+    denom_ce = jnp.maximum(jnp.sum(batch.loss_weight, dtype=jnp.float32), 1.0)
+    denom_tm = jnp.maximum(tm_weight_sum, 1.0)
+    tm_coeff = jnp.where(
+        tm_weight_sum > 0,
+        jnp.asarray(tm_config.weight, dtype=jnp.float32) / denom_tm,
+        jnp.asarray(0.0, dtype=jnp.float32),
+    )
+
+    # Phase 2: single FP32 gradient accumulator across TM microbatches and CE-only microbatches.
+    accumulated = jax.tree.map(lambda value: jnp.zeros_like(value, dtype=jnp.float32), params)
+
+    def accumulate_tm(grads, item):
+        mb, t_hidden, tm_w = item
+        microbatch = eqx.combine(mb, shared)
+        (loss, metrics), new_grads = _loss_and_grads_with_tm(
+            params,
+            microbatch,
+            t_hidden,
+            teacher_params.output_proj,
+            tm_w,
+            mp,
+            z_loss,
+            ce_denominator=denom_ce,
+            tm_coeff=tm_coeff,
+            tm_config=tm_config,
+        )
+        grads = jax.tree.map(lambda total, value: total + value.astype(jnp.float32), grads, new_grads)
+        return grads, (loss, metrics)
+
+    accumulated, (tm_losses, tm_metrics_by_mb) = jax.lax.scan(
+        accumulate_tm, accumulated, (tm_mbs, teacher_hiddens, tm_weights_selected)
+    )
+    kl_sums = tm_metrics_by_mb.pop("train/tm/kl_sum")
+
+    if tm_count < steps:
+        def accumulate_ce(grads, mb):
+            microbatch = eqx.combine(mb, shared)
+            (loss, metrics), new_grads = _loss_and_grads(
+                params,
+                microbatch,
+                mp,
+                z_loss,
+                loss_denominator=denom_ce,
+                loss_scale=tm_config.ce_weight,
+            )
+            grads = jax.tree.map(lambda total, value: total + value.astype(jnp.float32), grads, new_grads)
+            return grads, (loss, metrics)
+
+        accumulated, (ce_losses, ce_metrics_by_mb) = jax.lax.scan(accumulate_ce, accumulated, ce_only_mbs)
+        all_losses = jnp.concatenate([tm_losses, ce_losses], axis=0)
+        all_metrics_by_mb = {
+            name: jax.tree.map(lambda a, b: jnp.concatenate([a, b], axis=0), tm_metrics_by_mb[name], ce_metrics_by_mb[name])
+            for name in tm_metrics_by_mb
+        }
+    else:
+        all_losses = tm_losses
+        all_metrics_by_mb = tm_metrics_by_mb
+
+    grads = jax.tree.map(lambda value, param: value.astype(param.dtype), accumulated, params)
+    metrics = _reduce_microbatch_metrics(all_metrics_by_mb)
+    total_kl_sum = jnp.sum(kl_sums, dtype=jnp.float32)
+    tm_loss = jnp.where(tm_weight_sum > 0, total_kl_sum / denom_tm, jnp.asarray(0.0, dtype=jnp.float32))
+    metrics["train/tm/loss"] = tm_loss
+    metrics["train/tm/weighted_loss"] = tm_coeff * total_kl_sum
+    metrics["train/tm/active_tokens"] = tm_weight_sum
+    metrics["train/tm/active_fraction"] = jnp.where(
+        tm_supervised_sum > 0, tm_weight_sum / tm_supervised_sum, jnp.asarray(0.0, dtype=jnp.float32)
+    )
+    return (jnp.sum(all_losses), metrics), grads
+
+
+def _make_tm_grad_ratio_step(
+    mp: jmp.Policy,
+    *,
+    z_loss_weight: float,
+    balance_rows: bool = False,
+    accumulation_steps: int = 1,
+    temperature_matching: TemperatureMatchingConfig,
+):
+    """Build a JIT step computing exact ||grad_TM|| / ||grad_CE|| using one gradient buffer sequentially."""
+    z_loss = z_loss_weight if z_loss_weight > 0 else None
+
+    @jax.jit
+    def tm_grad_ratio_step(
+        params: Transformer,
+        batch: GrugLmExample,
+        teacher_params: Transformer,
+        tm_row_mask: jax.Array | None = None,
+    ) -> dict[str, jax.Array]:
+        if balance_rows:
+            batch, tm_row_mask = _balance_attention_rows_with_mask(batch, tm_row_mask)
+
+        # Pass 1: pure full-batch CE gradient norm (scaled by ce_weight as applied in train_step).
+        _, grads_ce = _accumulated_loss_and_grads(params, batch, mp, z_loss, accumulation_steps)
+        ce_grad_norm = jnp.asarray(temperature_matching.ce_weight, dtype=jnp.float32) * global_l2_norm(grads_ce)
+
+        # Pass 2: pure scaled TM gradient norm on the selected microbatches.
+        assert temperature_matching.microbatch_count is not None and temperature_matching.weight is not None
+        tm_count = temperature_matching.microbatch_count
+        shared, tm_mbs, _, tm_weights_selected, tm_weight_sum, _ = _split_tm_microbatches(
+            batch, tm_row_mask, accumulation_steps, tm_count
+        )
+        denom_tm = jnp.maximum(tm_weight_sum, 1.0)
+        tm_coeff = jnp.where(
+            tm_weight_sum > 0,
+            jnp.asarray(temperature_matching.weight, dtype=jnp.float32) / denom_tm,
+            jnp.asarray(0.0, dtype=jnp.float32),
+        )
+        teacher_hiddens = _teacher_hiddens_for_microbatches(
+            teacher_params, tm_mbs, shared, stream_from_host=temperature_matching.offload_teacher
+        )
+        accum_tm = jax.tree.map(lambda value: jnp.zeros_like(value, dtype=jnp.float32), params)
+
+        def accumulate_tm_only(grads, item):
+            mb, t_hidden, tm_w = item
+            microbatch = eqx.combine(mb, shared)
+            _, new_grads = _tm_only_loss_and_grads(
+                params,
+                microbatch,
+                t_hidden,
+                teacher_params.output_proj,
+                tm_w,
+                mp,
+                tm_coeff=tm_coeff,
+                tm_config=temperature_matching,
+            )
+            grads = jax.tree.map(lambda total, value: total + value.astype(jnp.float32), grads, new_grads)
+            return grads, None
+
+        accum_tm, _ = jax.lax.scan(accumulate_tm_only, accum_tm, (tm_mbs, teacher_hiddens, tm_weights_selected))
+        tm_grad_norm = global_l2_norm(accum_tm)
+        ratio = jnp.where(ce_grad_norm > 0, tm_grad_norm / ce_grad_norm, jnp.asarray(0.0, dtype=jnp.float32))
+        return {
+            "watch/tm/ce_grad_norm": ce_grad_norm,
+            "watch/tm/grad_norm": tm_grad_norm,
+            "watch/tm/grad_norm_ratio": ratio,
+        }
+
+    return tm_grad_ratio_step
+
+
+def _compile_first_step_and_rebind(
+    train_step,
+    state: GrugTrainState,
+    batch,
+    *,
+    extra_args: tuple = (),
+    compile_first_step: bool,
+    rebind_config: HostRebindConfig | None,
+    timing,
+    step: int,
+) -> GrugTrainState:
+    """AOT-compile the first train step with the exact live arguments and optionally run host state rebind."""
+    compiled_first_step = None
+    first_rebind = rebind_config is not None
+    if compile_first_step or first_rebind:
+        with timing.span("first_step_compile", step=step):
+            compiled_first_step = train_step.lower(state, batch, *extra_args).compile()
+        if not first_rebind:
+            del compiled_first_step
+            compiled_first_step = None
+    if first_rebind and rebind_config is not None:
+        with timing.span("first_step_host_rebind", step=step):
+            state = rebind_first_state(
+                state,
+                (batch, *extra_args) if extra_args else batch,
+                cgroup_path=Path(rebind_config.cgroup_path),
+                observe=lambda phase, sample: logger.info("Host rebind %s: %s", phase, sample),
+            )
+        # Match the v7a2 diagnostic's AOT reference lifetime.
+        del compiled_first_step
+    return state
 
 
 def _compute_diagnostic_watch_stats(
@@ -1046,9 +1534,11 @@ def _make_train_step(
     special_token_ids: tuple[int, ...] = (),
     special_token_lr_multiplier: float = 1.0,
     accumulation_steps: int = 1,
+    temperature_matching: TemperatureMatchingConfig | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
+    tm_enabled = temperature_matching is not None and temperature_matching.enabled
     if watch_config is not None:
         if isinstance(watch_config.watch_targets, str):
             watch_targets = tuple(t.strip() for t in watch_config.watch_targets.split(","))
@@ -1058,18 +1548,40 @@ def _make_train_step(
         watch_targets = ()
 
     @functools.partial(jax.jit, donate_argnums=(0,))
-    def train_step(state: GrugTrainState, batch):
+    def train_step(
+        state: GrugTrainState,
+        batch,
+        teacher_params: Transformer | None = None,
+        tm_row_mask: jax.Array | None = None,
+    ):
         # HF initialization already carries the effective router biases. SFT
         # freezes those values rather than applying pretraining QB state again.
         train_params = state.params
         previous_ema_params = state.ema_params
 
-        if balance_rows:
-            # Moves rows between batch shards; see `balance_attention_rows` for its effect on the loss.
-            batch = balance_attention_rows(batch)
-        (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
-            train_params, batch, mp, z_loss, accumulation_steps
-        )
+        if tm_enabled:
+            assert temperature_matching is not None
+            if teacher_params is None:
+                raise ValueError("teacher_params must be passed when temperature_matching.enabled is True")
+            if balance_rows:
+                batch, tm_row_mask = _balance_attention_rows_with_mask(batch, tm_row_mask)
+            (loss, summarized_metrics), grads = _accumulated_loss_and_grads_with_tm(
+                train_params,
+                batch,
+                teacher_params,
+                tm_row_mask,
+                mp,
+                z_loss,
+                accumulation_steps,
+                temperature_matching,
+            )
+        else:
+            if balance_rows:
+                # Moves rows between batch shards; see `balance_attention_rows` for its effect on the loss.
+                batch = balance_attention_rows(batch)
+            (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
+                train_params, batch, mp, z_loss, accumulation_steps
+            )
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         updates, opt_state = optimizer.update(grads, opt_state_in, train_params)
@@ -1155,6 +1667,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             accumulation_steps=config.trainer.gradient_accumulation_steps,
         )
         inline_watch_config = None
+    tm_cfg = config.trainer.temperature_matching
+    tm_grad_ratio_step = None
+    if tm_cfg.enabled and tm_cfg.log_grad_norm_ratio:
+        tm_grad_ratio_step = _make_tm_grad_ratio_step(
+            trainer.mp,
+            z_loss_weight=config.trainer.z_loss_weight,
+            balance_rows=config.trainer.balance_attention_rows,
+            accumulation_steps=config.trainer.gradient_accumulation_steps,
+            temperature_matching=tm_cfg,
+        )
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
@@ -1166,6 +1688,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         special_token_ids=config.trainer.special_token_ids,
         special_token_lr_multiplier=config.trainer.special_token_lr_multiplier,
         accumulation_steps=config.trainer.gradient_accumulation_steps,
+        temperature_matching=tm_cfg,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -1237,6 +1760,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 if trainer.initialize_from is None:
                     raise ValueError("Snowball SFT requires an explicit base checkpoint")
                 state = initialize_snowball_sft(state, trainer.initialize_from, mesh, config.trainer)
+            teacher_params = (
+                prepare_frozen_teacher(state, config=config, mesh=mesh) if tm_cfg.enabled else None
+            )
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -1255,10 +1781,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 batch_schedule=batch_schedule,
                 key=data_key,
             )
+            validate_tm_source_names(train_dataset, tm_cfg)
             train_loader = build_train_loader(
                 train_dataset,
                 batch_schedule=batch_schedule,
                 mesh=mesh,
+            )
+        elif tm_cfg.enabled and (tm_cfg.disabled_sources or tm_cfg.enabled_sources is not None):
+            raise ValueError(
+                "temperature_matching.disabled_sources / enabled_sources require TrainingDataMode.MIXTURE"
             )
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
@@ -1448,6 +1979,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_step_duration = 0.0
 
         current_step = int(state.step)
+        initial_step = current_step
         gc_start_step = current_step + GC_WARMUP_STEPS
 
         try:
@@ -1460,23 +1992,59 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     levanter.tracker.log({GC_TIME_METRIC: time.perf_counter() - gc_start}, step=current_step)
                 with timing.span("data_loading", step=current_step), jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
+                tm_row_mask = None
+                if tm_cfg.enabled:
+                    batch_size_now = batch.tokens.shape[0]
+                    if train_dataset is not None and (tm_cfg.disabled_sources or tm_cfg.enabled_sources is not None):
+                        offset = batch_schedule.global_data_offset_by_step(current_step)
+                        row_mask_np = tm_row_mask_for_mixture_indices(
+                            train_dataset, range(offset, offset + batch_size_now), tm_cfg
+                        )
+                    else:
+                        row_mask_np = np.ones((batch_size_now,), dtype=np.float32)
+                    row_mask_sharding = NamedSharding(mesh, P(_BATCH_AXES))
+                    tm_row_mask = jax.make_array_from_callback(
+                        row_mask_np.shape, row_mask_sharding, lambda index, arr=row_mask_np: arr[index]
+                    )
                 watch_due = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
+                tm_grad_ratio_due = False
+                if tm_grad_ratio_step is not None:
+                    if tm_cfg.grad_norm_ratio_interval is not None:
+                        tm_grad_ratio_due = current_step % tm_cfg.grad_norm_ratio_interval == 0
+                    else:
+                        tm_grad_ratio_due = watch_due
                 if watch_due and diagnostic_watch_step is not None:
                     watch_stats = diagnostic_watch_step(state.params, batch)
                     jax.block_until_ready(watch_stats)
                 else:
                     watch_stats = None
+                tm_watch_stats = None
+                if tm_grad_ratio_due and tm_grad_ratio_step is not None:
+                    assert teacher_params is not None
+                    tm_watch_stats = tm_grad_ratio_step(state.params, batch, teacher_params, tm_row_mask)
+                    jax.block_until_ready(tm_watch_stats)
                 step_start = time.perf_counter()
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
-                if config.first_checkpoint_restore_step is not None and current_step == 0:
-                    with timing.span("first_step_compile", step=current_step):
-                        train_step.lower(state, batch).compile()
+                step_extra_args = (teacher_params, tm_row_mask) if tm_cfg.enabled else ()
+                first_rebind_cfg = config.first_step_host_rebind if current_step == initial_step else None
+                state = _compile_first_step_and_rebind(
+                    train_step,
+                    state,
+                    batch,
+                    extra_args=step_extra_args,
+                    compile_first_step=config.first_checkpoint_restore_step is not None and current_step == 0,
+                    rebind_config=first_rebind_cfg,
+                    timing=timing,
+                    step=current_step,
+                )
                 with timing.span("train_step", step=current_step):
-                    state, metrics, inline_watch_stats = train_step(state, batch)
+                    state, metrics, inline_watch_stats = train_step(state, batch, *step_extra_args)
                     if inline_watch_stats is not None and watch_due:
                         watch_stats = inline_watch_stats
+                    if tm_watch_stats is not None:
+                        watch_stats = {**(watch_stats or {}), **tm_watch_stats}
                     current_step = int(state.step)
                     step = current_step - 1
 
@@ -1506,6 +2074,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
                         )
+                    tm_metrics = {key: value for key, value in metrics.items() if key.startswith("train/tm/")}
+                    if tm_metrics:
+                        levanter.tracker.log(tm_metrics, step=step)
                     if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:
                         drop_metrics = _drop_metrics(
                             metrics[MOE_DROPPED_ASSIGNMENTS_METRIC],

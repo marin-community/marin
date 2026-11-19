@@ -9,6 +9,7 @@ import jax
 import jmp
 import numpy as np
 import optax
+import pytest
 import yaml
 from jax.sharding import AxisType, Mesh
 from levanter.checkpoint import save_checkpoint
@@ -21,7 +22,8 @@ from experiments.post_training.long_loop.sft_runtime.model import grugmoe_infere
 from experiments.post_training.long_loop.sft_runtime.train import initial_state, initialize_snowball_sft
 
 
-def test_fresh_sft_loads_base_without_resume_manifest_lookup(tmp_path):
+@pytest.mark.parametrize("parameter_policy", ["bfloat16", "float32"])
+def test_fresh_sft_loads_base_without_resume_manifest_lookup(tmp_path, parameter_policy):
     recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
     recipe["trainer"]["trainer"]["load_checkpoint"] = True
     config = fresh_sft_config(
@@ -47,15 +49,20 @@ def test_fresh_sft_loads_base_without_resume_manifest_lookup(tmp_path):
         attention_implementation="reference",
         moe_implementation="fixed_all_to_all",
     )
-    trainer = replace(config.trainer, special_token_ids=(30, 31), anchor_token_ids=(2, 3))
+    trainer = replace(
+        config.trainer,
+        trainer=replace(config.trainer.trainer, mp=jmp.get_policy(parameter_policy)),
+        special_token_ids=(30, 31),
+        anchor_token_ids=(2, 3),
+    )
     mesh = Mesh(
         np.asarray(jax.devices("cpu")[:1]).reshape(1, 1, 1, 1, 1),
         ("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
     with jax.set_mesh(mesh):
-        kwargs = dict(optimizer=optax.adam(0.001), mp=jmp.get_policy("float32"), ema_beta=None)
-        base = initial_state(model, key=jax.random.key(1), **kwargs)
+        kwargs = dict(optimizer=optax.adam(0.001), mp=trainer.trainer.mp, ema_beta=None)
+        base = initial_state(model, key=jax.random.key(1), **{**kwargs, "mp": jmp.get_policy("bfloat16")})
         fresh = initial_state(model, key=jax.random.key(2), **kwargs)
         legacy = eqx.tree_at(
             lambda p: p.stacked_blocks.stacked.shared, base.params, base.params.stacked_blocks.stacked.shared[0]
@@ -79,6 +86,7 @@ def test_fresh_sft_loads_base_without_resume_manifest_lookup(tmp_path):
             template_for_candidate=forbidden_manifest_lookup,
         )
         actual = initialize_snowball_sft(restored, config.trainer.trainer.initialize_from, mesh, trainer)
+        assert all(leaf.dtype == trainer.trainer.mp.param_dtype for leaf in jax.tree.leaves(actual.params))
         np.testing.assert_array_equal(actual.params.token_embed, base.params.token_embed)
         np.testing.assert_array_equal(actual.params.output_proj[:, 30], base.params.output_proj[:, 2])
         for a, b in zip(jax.tree.leaves(actual.opt_state), jax.tree.leaves(fresh.opt_state), strict=True):
