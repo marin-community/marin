@@ -118,6 +118,22 @@ def _converter_changes(row: RawRow, converted: ConvertedTask) -> tuple[Normaliza
     )
 
 
+def workspace_grader_environment(
+    environment: EnvironmentRequirements, grader_environment: EnvironmentRequirements, *, extra_setup: str | None = None
+) -> EnvironmentRequirements:
+    """The grader machine's environment for a workspace task.
+
+    A source grader that declares a registry image or build context grades in it. A grader with only
+    a packages lock has no machine a Daytona grader can create, so its grading runs in the task's own
+    workspace image instead: the same pinned base, setup steps, working directory and variables the
+    agent works in, followed by ``extra_setup`` when the grader needs more than that setup provides.
+    """
+    if grader_environment.docker_image is not None or grader_environment.docker_build is not None:
+        return grader_environment
+    setup = (*environment.setup_commands, extra_setup) if extra_setup is not None else environment.setup_commands
+    return environment.model_copy(update={"setup_commands": setup})
+
+
 def tasktrove_archive_task(
     row: RawRow,
     *,

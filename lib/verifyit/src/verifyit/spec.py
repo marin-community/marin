@@ -12,14 +12,11 @@ or missing fields; ``render_spec`` writes it back. Paths in a spec (``schema``, 
 
 import dataclasses
 import json
-import tomllib
 from dataclasses import dataclass, field, fields
-from enum import StrEnum
 from typing import Any
 
-import tomli_w
-
 from verifyit.closure_scoring import ClosureFormat
+from verifyit.compat import StrEnum, tomllib
 from verifyit.json_comparison import JsonValue, NumericTypePolicy
 from verifyit.json_objects import unique_object
 
@@ -588,4 +585,8 @@ def render_spec(spec: Spec) -> str:
         ]
     if isinstance(spec, StructuredExactSpec):
         table["expected"] = json.dumps(spec.expected, allow_nan=False)
+    # Rendering is host-side staging; the grader machine never imports this, so the
+    # writer dependency stays off the machine's interpreter (issue #11721).
+    import tomli_w  # noqa: PLC0415
+
     return tomli_w.dumps(table)

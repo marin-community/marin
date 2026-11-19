@@ -20,6 +20,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.code import ANSW
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
     solve_script,
     tasktrove_archive_task,
+    workspace_grader_environment,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH, convert_nl2bash
 from experiments.post_training.task_curation.environment_fidelity import archive_environment
@@ -44,11 +45,12 @@ minimal answer to the public request; unstated oracle output prefixes are a grad
 
 
 def convert_nl2bash_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
+    environment = archive_environment(row.data["files"])
     return tasktrove_archive_task(
         row,
         convert=convert_nl2bash,
-        environment=archive_environment(row.data["files"]),
-        grader_environment=required_grader_environment(context),
+        environment=environment,
+        grader_environment=workspace_grader_environment(environment, required_grader_environment(context)),
         output_paths=(OUTPUT_PATH,),
     )
 
