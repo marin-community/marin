@@ -9,7 +9,7 @@ import json
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.evaluation.catalog import evaluation_benchmarks
-from experiments.evaluation.test_judged_publication import published_cases
+from experiments.evaluation.publication_cases import published_cases
 
 # Longer than the standard library CSV reader's default 131,072-character field limit.
 LONG_DOCUMENT = "The museum opens at nine. " * 6000
