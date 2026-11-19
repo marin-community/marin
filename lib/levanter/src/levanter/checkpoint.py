@@ -533,6 +533,7 @@ class Checkpointer:
         self._last_save_time = self._dt_now_injection()
         self._last_save_step = 0
         self._last_save_permanent = False
+        self._last_save_path: str | None = None
         self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
         self.write_config = write_config or TensorStoreWriteConfig()
@@ -752,6 +753,11 @@ class Checkpointer:
             return None
         return current_policy.every
 
+    @property
+    def last_saved_checkpoint_path(self) -> str | None:
+        """Path of the most recent checkpoint this checkpointer saved, under the root it was routed to."""
+        return self._last_save_path
+
     def wait_until_finished(self):
         self._manager.wait_until_finished()
         if jax.process_index() == 0:
@@ -810,6 +816,7 @@ class Checkpointer:
         )
         self._last_save_step = step
         self._last_save_permanent = not is_temporary
+        self._last_save_path = path
         self._last_save_time = self._dt_now_injection()
 
     def _async_checkpoint_remover(self):

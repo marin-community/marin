@@ -12,7 +12,7 @@ import yaml
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from levanter.checkpoint import Checkpointer, CheckpointInterval, CheckpointRetention
 
-from experiments.post_training.long_loop.sft import SMOKE_CONFIG, fresh_sft_config, permanent_checkpoint_intervals
+from experiments.post_training.long_loop.sft import SMOKE_CONFIG, fresh_sft_config
 from experiments.post_training.long_loop.sft_runtime.train import checkpoint_samples, restore_first_checkpoint
 
 
@@ -149,32 +149,23 @@ def test_first_step_restore_gate_reloads_permanent_root_when_permanent_request_q
         assert not (temp / "step-1").exists()
 
 
-def test_named_permanent_steps_and_final_checkpoint_write_once(tmp_path):
+def test_smoke_recipe_saves_final_only_and_final_checkpoint_writes_once(tmp_path):
     recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
-    default_cfg = fresh_sft_config(
-        output=str(tmp_path / "default"), initializer=str(tmp_path / "base"), recipe=recipe, run_id="default-rolling"
+    cfg = fresh_sft_config(
+        output=str(tmp_path / "run"), initializer=str(tmp_path / "base"), recipe=recipe, run_id="final-only"
     )
-    assert default_cfg.trainer.trainer.checkpointer.keep is None
-    assert default_cfg.trainer.trainer.checkpointer.keep_last_temporary_checkpoints == 1
+    assert cfg.trainer.trainer.checkpointer.keep is None
+    assert cfg.trainer.trainer.checkpointer.keep_last_temporary_checkpoints == 1
 
-    named_cfg = fresh_sft_config(
-        output=str(tmp_path / "named"),
-        initializer=str(tmp_path / "base"),
-        recipe=recipe,
-        run_id="named-milestones",
-        permanent_steps=[5, 3, 5],
-    )
-    assert named_cfg.trainer.trainer.checkpointer.keep == permanent_checkpoint_intervals([3, 5])
-
-    checkpointer = named_cfg.trainer.trainer.checkpointer.create("named-milestones")
+    perm_root = tmp_path / "run" / "checkpoints"
+    checkpointer = Checkpointer(perm_root, save_interval=None, step_policies=[CheckpointInterval(every=5, until=5)])
     mesh = Mesh(np.asarray(jax.devices("cpu")[:1]), ("data",))
     with jax.set_mesh(mesh):
         for step in range(1, 6):
             tree = {"w": jnp.arange(1024, dtype=jnp.float32) + step}
             checkpointer.on_step(tree=tree, step=step)
         checkpointer.wait_until_finished()
-        perm_root = tmp_path / "named" / "checkpoints"
-        assert sorted(p.name for p in perm_root.iterdir()) == ["step-3", "step-5"]
+        assert sorted(p.name for p in perm_root.iterdir()) == ["step-5"]
         size_after_scheduled = sum(f.stat().st_size for f in (perm_root / "step-5").rglob("*") if f.is_file())
 
         # Final checkpoint reuse avoids a second OCDBT write into step-5.

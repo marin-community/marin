@@ -207,7 +207,8 @@ def restore_first_checkpoint(state, checkpointer, mesh):
 
     Requests a temporary checkpoint so an unlisted restore-gate step rolls away
     under the checkpointer's retention policy while preserving any explicitly
-    scheduled or queued permanent checkpoint at that step.
+    scheduled or queued permanent checkpoint at that step. The checkpointer must
+    retain at least one temporary checkpoint, or the gate copy is pruned at commit.
     """
     step = int(state.step)
     if step <= 0:
@@ -216,14 +217,11 @@ def restore_first_checkpoint(state, checkpointer, mesh):
     checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
     checkpointer.on_step(tree=state, step=step)
     checkpointer.wait_until_finished()
-    if checkpointer._last_save_step != step:
+    saved = checkpointer.last_saved_checkpoint_path
+    if saved is None or os.path.basename(saved) != f"step-{step}":
         raise ValueError(f"First-step restore gate did not commit a checkpoint at step {step}")
-    use_temporary_root = checkpointer.temporary_base_path is not None and not checkpointer._last_save_permanent
-    save_root = checkpointer.temporary_base_path if use_temporary_root else checkpointer.base_path
     template = restore_template_from(state)
-    restored = load_grug_checkpoint(
-        state=template, candidate=prefix_join(save_root, f"step-{step}"), mesh=mesh, allow_partial=False
-    )
+    restored = load_grug_checkpoint(state=template, candidate=saved, mesh=mesh, allow_partial=False)
     jax.block_until_ready(restored)
     if int(restored.step) != step or checkpoint_samples(restored) != expected:
         raise ValueError("First SFT checkpoint restore changed the step or sampled state values")
@@ -483,6 +481,12 @@ class GrugRunConfig:
     max_retries_preemption: int = 0
     max_retries_failure: int = 0
     max_task_failures: int = 10
+
+    def __post_init__(self):
+        checkpointer = self.trainer.trainer.checkpointer
+        if self.first_checkpoint_restore_step is not None and checkpointer.keep_last_temporary_checkpoints < 1:
+            # The restore gate saves a temporary checkpoint and reloads it after commit-time pruning.
+            raise ValueError("first_checkpoint_restore_step requires keep_last_temporary_checkpoints >= 1")
 
 
 def build_train_dataset(
