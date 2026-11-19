@@ -31,7 +31,7 @@ RESEARCH_METRICS = (
 )
 
 
-def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
+def sources(output_fit: OutputFit = OutputFit.REQUIRE) -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
@@ -49,15 +49,16 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                         "openai/frontierscience", SOURCE_REVISION, (f"{track}/test.jsonl",), SourceFormat.JSONL
                     ),
                     convert=convert,
-                    version=version,
+                    version=version if output_fit is OutputFit.REQUIRE else f"{version}-remaining-context",
                     intended_use=IntendedUse.EVAL,
                 ),
+                protocol_name="evalchemy" if output_fit is OutputFit.REQUIRE else "remaining-context",
                 protocol=EvaluationProtocol(
                     benchmark=f"frontierscience-{track}",
-                    version=version,
+                    version=version if output_fit is OutputFit.REQUIRE else f"{version}-remaining-context",
                     operation=OperationKind.CHAT_GENERATION,
                     requires_judge=True,
-                    context_policy=ContextPolicy(output_fit=OutputFit.REQUIRE),
+                    context_policy=ContextPolicy(output_fit=output_fit),
                     sampling=Sampling(
                         temperature=None, top_p=None, top_k=None, max_tokens=None, stop=(), chat_template_kwargs={}
                     ),
@@ -79,4 +80,4 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
 
 
 def benchmarks() -> list[EvaluationBenchmark]:
-    return fixed_benchmarks(sources())
+    return fixed_benchmarks([*sources(), *sources(OutputFit.SHRINK)])
