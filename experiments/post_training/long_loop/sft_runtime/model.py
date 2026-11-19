@@ -1388,6 +1388,69 @@ class Transformer(eqx.Module):
         return hidden, router_metrics
 
     @named_call
+    def hidden_states(
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: AttentionMask | jax.Array | None = None,
+        *,
+        stream_layer_fn: Any = None,
+    ) -> Float[Array, "B S D"]:
+        """Forward-only hidden states without checkpointing or router-metric reductions.
+
+        Used for the frozen teacher pass in temperature matching. When ``stream_layer_fn``
+        is provided (for example moving leaves from ``pinned_host`` to ``device``), it is
+        applied to embeddings, each individual layer inside ``lax.scan``, and final norms
+        so only one layer of teacher weights is resident on device at a time.
+        """
+        if mask is None:
+            mask = AttentionMask.causal()
+
+        def _stage(tree):
+            return stream_layer_fn(tree) if stream_layer_fn is not None else tree
+
+        cfg = self.config
+        token_embed, embed_norm, embed_gated_norm = _stage((self.token_embed, self.embed_norm, self.embed_gated_norm))
+        hidden = _embedding_gather(token_embed, token_ids)
+        hidden = embed_gated_norm(embed_norm(hidden))
+
+        segment_ids = None
+        if isinstance(mask, AttentionMask) and mask.segment_ids is not None:
+            q_segment_ids, _ = mask.segment_ids
+            q_segment_ids = _batch_reshard(q_segment_ids)
+            segment_ids = (q_segment_ids, q_segment_ids)
+        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+
+        mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every)
+        batch_size, seq_len = hidden.shape[0], hidden.shape[1]
+        long_lower_bounds, valid = fa4_cute_segment_bounds(
+            long_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+        )
+        short_lower_bounds, _ = fa4_cute_segment_bounds(
+            short_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.sliding_window
+        )
+        bounds_spec = P(_BATCH_AXES, _seq_axis(get_abstract_mesh()))
+        long_lower_bounds = reshard(long_lower_bounds, bounds_spec)
+        short_lower_bounds = reshard(short_lower_bounds, bounds_spec)
+        valid = reshard(valid, bounds_spec)
+
+        def _scan_layers(
+            carry_hidden: Float[Array, "B S D"],
+            scan_inputs: tuple[Block, jax.Array],
+        ) -> tuple[Float[Array, "B S D"], None]:
+            layer, layer_use_long_mask = scan_inputs
+            layer = _stage(layer)
+            use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
+            lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
+            layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
+            next_hidden, _ = layer(carry_hidden, layer_mask, use_long, use_long)
+            return next_hidden, None
+
+        hidden, _ = jax.lax.scan(_scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule))
+        final_norm, final_gated_norm = _stage((self.final_norm, self.final_gated_norm))
+        return final_gated_norm(final_norm(hidden))
+
+    @named_call
     def logits(
         self,
         token_ids: Int[Array, "B S"],
@@ -1399,18 +1462,18 @@ class Transformer(eqx.Module):
     def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
         return grugmoe_inference_state_dict(self, prefix=prefix)
 
-    def next_token_loss(
+    def next_token_loss_from_hidden(
         self,
+        hidden: Float[Array, "B S D"],
+        router_metrics: dict[str, jax.Array],
         token_ids: Int[Array, "B S"],
         loss_weight: Float[Array, "B S"],
         *,
-        mask: AttentionMask | jax.Array | None = None,
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        hidden, router_metrics = self(token_ids, mask=mask)
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
@@ -1472,6 +1535,29 @@ class Transformer(eqx.Module):
                 )
             return loss, summarized_metrics
         return loss
+
+    def next_token_loss(
+        self,
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        *,
+        mask: AttentionMask | jax.Array | None = None,
+        reduction: str = "mean",
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype = jnp.float32,
+        return_router_metrics: bool = False,
+    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
+        hidden, router_metrics = self(token_ids, mask=mask)
+        return self.next_token_loss_from_hidden(
+            hidden,
+            router_metrics,
+            token_ids,
+            loss_weight,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+            return_router_metrics=return_router_metrics,
+        )
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
