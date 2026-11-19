@@ -25,6 +25,7 @@ from iris.cluster.types import JobName
 from iris.managed_thread import thread_container_scope
 from iris.test_util import SentinelFile
 from iris.testing.config import make_controller_only_config
+from rigging.pytest_config import hermetic_cluster_config as hermetic_cluster_config
 from rigging.timing import Duration, ExponentialBackoff
 
 HOST_REQUIREMENTS = {

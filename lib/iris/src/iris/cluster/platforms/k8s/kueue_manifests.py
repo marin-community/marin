@@ -94,9 +94,11 @@ TOPOLOGIES = {
 
 TOPOLOGY_CRD = "topologies.kueue.x-k8s.io"
 RESOURCE_FLAVOR_NAME = "cw-tas"
-# One TAS ResourceFlavor spans every Iris-managed CoreWeave NodePool. CPU
-# NodePools carry synthetic topology levels so Kueue can assign them at the
-# hostname level; GPU/RDMA requests exclude those nodes by allocatable capacity.
+CPU_RESOURCE_FLAVOR_NAME = "iris-cpu"
+CPU_TOPOLOGY_NAME = "iris-cpu-hostname"
+CPU_TOPOLOGY_LEVELS = [_K8S_HOSTNAME_LABEL]
+# The shared flavor uses physical topology. A separate hostname-only flavor
+# can expose a CPU pool without synthetic labels in the provider's namespace.
 RESOURCE_FLAVOR_NODE_LABELS = {KUEUE_NODE_LABEL: "true"}
 
 # Resources the ClusterQueue covers when --with-queues is set. A Kueue
@@ -109,9 +111,8 @@ RESOURCE_FLAVOR_NODE_LABELS = {KUEUE_NODE_LABEL: "true"}
 # Iris uses binding accelerator quota to enter Kueue's preemption path. Pulumi
 # derives that quota from scale-group max_slices, so it agrees with the Iris
 # autoscaler's configured upper bound. Other resources keep sentinel quotas and
-# do not become independent capacity limits. Every Iris Pod uses the same TAS
-# flavor so Kueue can check whether removing lower-priority victims creates a
-# compatible accelerator placement.
+# do not become independent capacity limits. CPU spillover onto accelerator
+# nodes stays in this shared TAS flavor so it remains reclaimable by GPU work.
 NON_BINDING_QUOTA = {
     # Use "1G" not "1000000000" because the Kubernetes API server canonicalizes to 1G
     # and always returns that, which causes a perpetual, cosmetic `pulumi preview` diff
@@ -122,6 +123,7 @@ NON_BINDING_QUOTA = {
     RDMA_RESOURCE: "1G",
 }
 COVERED_RESOURCES = list(NON_BINDING_QUOTA)
+CPU_NOMINAL_QUOTAS = {**NON_BINDING_QUOTA, NVIDIA_GPU_RESOURCE: "0", RDMA_RESOURCE: "0"}
 
 
 # Kueue-only priorities within each Iris band. Batch and interactive Workloads
@@ -319,8 +321,7 @@ def build_topology_cr(name: str, levels: list[str], api_version: str) -> dict:
 def build_resource_flavor(topology_name: str = INFINIBAND_TOPOLOGY_NAME) -> dict:
     """Return the cluster-scoped ResourceFlavor tied to the named Kueue Topology.
 
-    Defaults to the InfiniBand topology (fabric/superpod/leafgroup). CPU
-    NodePools carry a synthetic value for these levels; pass
+    Defaults to InfiniBand (fabric/superpod/leafgroup). Pass
     ``multinode-nvlink-ib`` to also expose nvlink.domain for GB200 placement.
     """
     return {
@@ -336,6 +337,19 @@ def build_resource_flavor(topology_name: str = INFINIBAND_TOPOLOGY_NAME) -> dict
     }
 
 
+def build_cpu_resource_flavor(node_labels: Mapping[str, str]) -> dict:
+    """Return a CPU-pool TAS flavor independent of physical fabric labels."""
+    return {
+        "apiVersion": "kueue.x-k8s.io/v1beta1",
+        "kind": "ResourceFlavor",
+        "metadata": {"name": CPU_RESOURCE_FLAVOR_NAME},
+        "spec": {
+            "nodeLabels": {**RESOURCE_FLAVOR_NODE_LABELS, **node_labels},
+            "topologyName": CPU_TOPOLOGY_NAME,
+        },
+    }
+
+
 def build_workload_priority_class(name: str, value: int) -> dict:
     """Return a Kueue WorkloadPriorityClass for Iris admission ordering."""
     return {
@@ -347,12 +361,17 @@ def build_workload_priority_class(name: str, value: int) -> dict:
     }
 
 
-def build_cluster_queue(name: str, *, nominal_quotas: Mapping[str, str] | None = None) -> dict:
+def build_cluster_queue(
+    name: str,
+    *,
+    nominal_quotas: Mapping[str, str] | None = None,
+    cpu_nominal_quotas: Mapping[str, str] | None = None,
+) -> dict:
     """Return a cluster-scoped ClusterQueue with covered-resource quota overrides.
 
-    Every resource in ``COVERED_RESOURCES`` appears once. Resources omitted from
+    Every flavor covers all resources in one resource group. Resources omitted from
     ``nominal_quotas`` use their ``NON_BINDING_QUOTA`` value. Unknown resources
-    are rejected.
+    are rejected. Optional CPU quotas prepend a hostname-only CPU-pool flavor.
     """
     nominal_quotas = nominal_quotas or {}
     unknown_resources = nominal_quotas.keys() - NON_BINDING_QUOTA.keys()
@@ -365,6 +384,22 @@ def build_cluster_queue(name: str, *, nominal_quotas: Mapping[str, str] | None =
             "resources": [{"name": resource, "nominalQuota": quotas[resource]} for resource in COVERED_RESOURCES],
         },
     ]
+    if cpu_nominal_quotas is not None:
+        if set(cpu_nominal_quotas) != set(COVERED_RESOURCES):
+            raise ValueError("CPU flavor quotas must cover the same resource group as cw-tas")
+        if any(cpu_nominal_quotas[key] != "0" for key in (NVIDIA_GPU_RESOURCE, RDMA_RESOURCE)):
+            raise ValueError("CPU flavor must have zero GPU and RDMA quota")
+        flavors.insert(
+            0,
+            {
+                "name": CPU_RESOURCE_FLAVOR_NAME,
+                # Kueue validates that every flavor's resources list coveredResources
+                # in the same order; order by COVERED_RESOURCES, not the caller's mapping.
+                "resources": [
+                    {"name": resource, "nominalQuota": cpu_nominal_quotas[resource]} for resource in COVERED_RESOURCES
+                ],
+            },
+        )
     return {
         "apiVersion": "kueue.x-k8s.io/v1beta1",
         "kind": "ClusterQueue",

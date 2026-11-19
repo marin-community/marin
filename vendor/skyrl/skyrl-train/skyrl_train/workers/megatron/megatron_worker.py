@@ -33,7 +33,7 @@ from skyrl_train.distributed.megatron.optimizer import (
     get_megatron_optimizer,
     get_megatron_optimizer_param_scheduler,
 )
-from skyrl_train.distributed.megatron.remote_model import install_remote_hf_state
+from skyrl_train.distributed.megatron.remote_model import install_remote_hf_state, make_prefetch_hook
 from skyrl_train.distributed.utils import init_worker_process_group_with_device
 from skyrl_train.mismatch_probe.modes import TRAINER_MODES
 from skyrl_train.models.grug_moe import GRUG_MOE_MODEL_TYPE, validate_grug_training_strategy
@@ -76,6 +76,7 @@ from transformers import AutoConfig, AutoTokenizer
 
 from marinskyrl.hugging_face_retry import load_hugging_face_with_retry
 from marinskyrl.runtime_options import WeightSyncTransport
+from skyrl_train.training_batch import TrainingInputBatch
 
 
 class _MegatronInitMode(StrEnum):
@@ -143,9 +144,7 @@ class MegatronWorker:
         # in the selected profile. This observation does not establish a cuDNN defect.
         flash_attn = flash_attn or (bf16 and getattr(hf_config, "model_type", None) == GRUG_MOE_MODEL_TYPE)
         transformer_config_kwargs = OmegaConf.to_container(transformer_config_kwargs, resolve=True)
-        transformer_config_kwargs["attention_backend"] = (
-            AttnBackend.flash if flash_attn else AttnBackend.auto
-        )
+        transformer_config_kwargs["attention_backend"] = AttnBackend.flash if flash_attn else AttnBackend.auto
 
         if not self.cfg.trainer.gradient_checkpointing:
             for key in ("recompute_granularity", "recompute_method", "recompute_num_layers"):
@@ -165,6 +164,8 @@ class MegatronWorker:
             expert_tensor_parallel_size=megatron_config.expert_tensor_parallel_size,
             bf16=bf16,
         )
+        if self.remote_hf_state is not None:
+            provider.register_pre_wrap_hook(make_prefetch_hook(bridge, self.remote_hf_state.store), prepend=True)
 
         for k, v in transformer_config_kwargs.items():
             setattr(provider, k, v)
@@ -195,11 +196,35 @@ class MegatronWorker:
         if ddp_config is not None:
             for k, v in ddp_config.items():
                 setattr(default_ddp_config, k, v)
-        model = self.provider.provide_distributed_model(
-            ddp_config=default_ddp_config, wrap_with_ddp=wrap_with_ddp, bf16=bf16
-        )
+        try:
+            model = self.provider.provide_distributed_model(
+                ddp_config=default_ddp_config, wrap_with_ddp=wrap_with_ddp, bf16=bf16
+            )
+        finally:
+            if self.remote_hf_state is not None:
+                self.remote_hf_state.store.close()
         install_dpo_batch_major_output_projection(model, self.provider, self.cfg.trainer.algorithm.policy_loss_type)
         return model
+
+    def _forward_loaded_logprobs(self, data: TrainingInputBatch) -> torch.Tensor:
+        """Give every pipeline stage the last stage's response logprobs."""
+        scores = self.forward(data)["output"]
+        if self.mesh_rank.pp_size == 1:
+            return scores
+        shape = (data.batch_size, data.metadata["response_length"])
+        device = self.strategy.collective_device()
+        if mpu.is_pipeline_last_stage(ignore_virtual=True):
+            scores = scores.to(device)
+            if scores.dtype != torch.float32 or tuple(scores.shape) != shape:
+                raise ValueError("worker pipeline forward requires float32 response scores with the global width")
+        else:
+            scores = torch.empty(shape, dtype=torch.float32, device=device)
+        torch.distributed.broadcast(
+            scores,
+            src=mpu.get_pipeline_model_parallel_last_rank(),
+            group=mpu.get_pipeline_model_parallel_group(),
+        )
+        return scores.cpu()
 
     def forward(self, data, *, probe_micro_batch_size: int | None = None):
         """
@@ -426,7 +451,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             self.actor_module, self.optimizer, non_blocking, backload_optimizer, backload_model
         )
 
-    def init_worker_process_group(self):
+    def init_worker_process_group(self, master_addr: str, master_port: int):
         """
         Override DistributedTorchRayActor.init_worker_process_group to use megatron distributed setup to create the mesh.
         """
@@ -435,7 +460,9 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         # The guess deadlocks the first collective (weight-init barrier) on unmasked-CVD clusters
         # where every actor sees all GPUs (cw-rno2a); see init_worker_process_group_with_device.
         init_worker_process_group_with_device(
-            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds)
+            master_addr=master_addr,
+            master_port=master_port,
+            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
         )
 
         # Explicitly wrap torch.distributed.broadcast in torch.no_grad() to avoid a warning in Megatron training where the
@@ -505,10 +532,12 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         torch.distributed.barrier()
 
         if self.remote_hf_state is not None:
+            stats = self.remote_hf_state.store.read_stats
             logger.info(
-                "Loaded Megatron policy weights directly from {} (rank range bytes read: {})",
+                "Loaded Megatron policy weights directly from {} (rank range bytes read: {}; {})",
                 self.cfg.trainer.policy.model.source_uri,
-                self.remote_hf_state.store.bytes_read,
+                stats.bytes_read,
+                stats,
             )
 
         if self._rank == 0:
@@ -947,14 +976,16 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
     def backload_to_gpu(self, non_blocking=True, **kwargs):
         self.strategy.backload_to_gpu(self.actor_module, None, non_blocking)
 
-    def init_worker_process_group(self):
+    def init_worker_process_group(self, master_addr: str, master_port: int):
         """
         Override DistributedTorchRayActor.init_worker_process_group to use megatron distributed setup to create the mesh.
         """
         # Device-pinned NCCL PG init via the shared helper (see init_worker_process_group_with_device) —
         # avoids the ProcessGroupNCCL device-guess collective deadlock on unmasked-CVD clusters (cw-rno2a).
         init_worker_process_group_with_device(
-            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds)
+            master_addr=master_addr,
+            master_port=master_port,
+            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
         )
 
         self.strategy = MegatronStrategy(

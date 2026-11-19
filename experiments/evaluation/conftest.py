@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Offline Hub metadata at the launcher boundary."""
+"""Offline Hub metadata and submitter credentials at the launcher boundary."""
 
 import json
 from types import SimpleNamespace
@@ -28,3 +28,10 @@ def hub_metadata(tmp_path_factory, monkeypatch):
     )
     monkeypatch.setattr(HfApi, "model_info", lambda *_args, **_kwargs: SimpleNamespace(sha="f" * 40, siblings=()))
     monkeypatch.setattr("marin.evaluation.serving_config.hf_hub_download", lambda *_args, **_kwargs: str(config))
+
+
+@pytest.fixture(autouse=True)
+def coreweave_credentials(monkeypatch):
+    """Stand in for the submitter's storage keys that CoreWeave launches require."""
+    monkeypatch.setenv("CW_KEY_ID", "local-test-id")
+    monkeypatch.setenv("CW_KEY_SECRET", "local-test-secret")

@@ -22,7 +22,7 @@ The base wheel contains the machine API and guest source. The [vendored Harbor p
 
 `factory.check_environment(requirements, spec)` checks task semantics, capabilities and software support before acquisition. Factories retain the requested `MachineSpec`; prepared images and bundles are backend inputs. The check does not promise available capacity or installed executables.
 
-The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`, `PreparedImage` and registry references. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
+The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`, `PreparedImage` and registry references. Daytona accepts registry images and Dockerfiles at the build context root. By default it builds each distinct image once into a reusable account snapshot; `DaytonaImageBuild.DECLARATIVE` builds the image for every sandbox instead and creates no snapshot. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
 Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. Harbor owns the local, Daytona, QEMU and ShellSim environment adapters. Machines retain their runtime between commands; QEMU and ShellSim also support persistent Bash sessions.
 
@@ -44,6 +44,14 @@ Iris commands and file transfer use the existing `ExecInContainer` RPC and requi
 `/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
 for commands and directory transfer.
+Daytona uploads each control wrapper into a private command directory before execution,
+so nested shell quoting does not enlarge the argument sent to its execution API.
+The original argv, stdin, environment and working directory are preserved;
+Linux limits still apply to each original argument. The wrapper is removed with
+the command's other temporary files.
+If command execution fails or is cancelled, later sandbox-deletion failures are
+attached as exception notes. Cleanup failure after a successful command still
+raises an error.
 Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
 expired jobs about once a minute. An expired, killed or preempted machine raises
 `MachineTerminated`; uncertain command failures are not replayed.
@@ -268,15 +276,16 @@ Model commands that run as root can stop other root-owned processes.
 
 For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
 Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
-Each machine owns and closes its client. The factory creates sandboxes from shared
-snapshots. Snapshot names derive from the registry reference or build-context contents
-and the requested resources. Use immutable image references. A mutable tag can
-select a snapshot built from an earlier image. Snapshot creation requires available organization quota.
+Each machine owns and closes its client. In the default build mode, the factory
+creates sandboxes from shared snapshots. Snapshot names derive from the registry
+reference or build-context contents and the requested resources. Use immutable
+image references. A mutable tag can select a snapshot built from an earlier image.
+Snapshot creation requires available organization quota.
 Machine cleanup deletes the sandbox and retains the snapshot for reuse.
 The factory accepts `DaytonaNetworkPolicy` with `block_all`, `unrestricted`,
 `network_allow_list`, or `domain_allow_list`. The two allow-list modes require a
 `value`. Without a policy override, the factory uses `MachineSpec.network`.
-`MachineSpec.startup_timeout` bounds snapshot preparation and sandbox creation. Without
+`MachineSpec.startup_timeout` bounds image preparation and sandbox creation. Without
 this value, the factory uses its `create_timeout` setting.
 Daytona gives stdout and stderr collection a shared 60-second deadline after a
 command exits. `DaytonaMachineFactory(output_collection_timeout=...)` changes
@@ -412,7 +421,7 @@ finally:
 - Commands never inherit the host environment, which can hold cluster credentials. Host-program commands get `PATH` with `bin_dirs` ahead of the standard system directories, `HOME=/home/shellbox`, `LANG=C.UTF-8`, and `PYTHONHASHSEED` when the factory has a `hash_seed`, then `MachineSpec.env` and `Command.env`. The trusted host launcher reads configuration through a private file descriptor, keeping environment values out of host process listings, and applies task and command variables after isolation. Its own fixed environment prevents loader options such as `LD_PRELOAD` from affecting it.
 - `/bin/sh` enters the working directory and starts the program, so a missing program exits with status 127, as in the container backends. Command output goes to private temporary files, subject to the 1 GiB file-size limit; returned bytes are truncated to `output_limit_bytes` and report truncation flags.
 - Commands have no capabilities and run with `no_new_privs`, so setuid programs cannot raise their privileges. They have no core files and files of at most 1 GiB. Command deadlines reclaim the command cgroup when delegated, or close the namespace otherwise; no inherited CPU-time limit later kills a background service started by a successful command. `RLIMIT_NPROC` counts all of a user's tasks on the host, so the backend limits the command's user to the host's task count when the command starts plus 256; the kernel does not apply it to root.
-- The factory discovers the worker's writable cgroup v2 delegation and creates a machine parent with keeper and command children. `cgroup_parent` supplies an operator override. Containment requires writable `cgroup.kill` and permission to move children within the hierarchy. Each machine owns and reclaims its groups; successful commands may leave background processes in their tracked child groups, and session close reclaims only its own group. Execution preflight admits `retained_command_cancellation` and `process_scope` only when delegation is available. Declare either capability in `ExecutionRequirements.capabilities` to reject unsupported hosts before allocation. The guest sees no writable cgroup filesystem.
+- The factory discovers the worker's writable cgroup v2 delegation and creates a machine parent with keeper and command children. `cgroup_parent` supplies an operator override. Discovery stays inside the worker's own container: it takes the empty delegated unit above a `DelegateSubgroup` subgroup when present, and otherwise uses the worker's own unit or scope after moving the worker's processes into a child leaf group (`<scope>/worker`), which lets the scope enable controllers for children. Sandbox groups are then siblings of that leaf and never reach a pod slice or other parent above the container. Containment requires writable `cgroup.kill` and permission to move children within the hierarchy. Each machine owns and reclaims its groups; successful commands may leave background processes in their tracked child groups, and session close reclaims only its own group. Execution preflight admits `retained_command_cancellation` and `process_scope` only when delegation is available. Declare either capability in `ExecutionRequirements.capabilities` to reject unsupported hosts before allocation. The guest sees no writable cgroup filesystem.
 - `MachineSpec.cpus` and `memory_mb` request aggregate limits across every process in a machine. The backend enables each requested controller separately and disables swapping when memory is limited. Unavailable controllers or failed limit writes produce warnings and execution continues. Process containment and cleanup still must succeed. Disk quotas and GPU allocation remain unsupported.
 - `Command.user` keeps the process's user when it is omitted or names that user. Another user requires a root process; the command then runs with that account's UID and primary group, no supplementary groups and no capabilities. A user without a host account raises `UnsupportedMachineSpec`.
 

@@ -257,8 +257,10 @@ executors receive their resolved roots. Catalog publication remains in the curat
 workflow. Native generation menus publish
 raw and chat variants separately; no runtime task registry is loaded.
 
-Evaldash imports raw FineStore stores, selects one latest finished retry per logical
-trial, and applies these reductions. Its sample browser uses the same trial selection.
+`score_curated_record` in `evalrecords.rollout_results` selects one latest
+finished retry per logical trial and applies these reductions. Evaldash uses it to
+import raw FineStore stores; `experiments.evaluation.cli scores` prints the same
+result for a run. Its sample browser uses the same trial selection.
 The PostgreSQL reconciler checks both the producer record and the raw store version.
 Curation identities and the summary revision participate in dashboard protocol
 comparison when both records carry identities. The canonical curation graph records

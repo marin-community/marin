@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import logging
 import socket
 import subprocess as sp
 import threading
@@ -1203,8 +1204,9 @@ def _worker_with_log_sink(
 
 
 def test_start_publishes_worker_logs_before_controller_registration(
-    mock_bundle_store, mock_runtime, tmp_path, monkeypatch
+    mock_bundle_store, mock_runtime, tmp_path, monkeypatch, caplog
 ):
+    caplog.set_level(logging.INFO, logger="iris.cluster.worker.worker")
     sink = _RecordingLogClient()
 
     class _ControllerBoundary:
@@ -1242,11 +1244,12 @@ def test_start_publishes_worker_logs_before_controller_registration(
         threads=ThreadContainer(name="worker-log-test"),
     )
 
-    worker.start()
-    wait_for_condition(controller.registration_seen.is_set)
-
-    assert controller.worker_log_visible
-    worker.stop()
+    try:
+        worker.start()
+        wait_for_condition(controller.registration_seen.is_set)
+        assert controller.worker_log_visible
+    finally:
+        worker.stop()
 
 
 def test_handle_reconcile_publishes_worker_stat(mock_bundle_store, mock_runtime, tmp_path):

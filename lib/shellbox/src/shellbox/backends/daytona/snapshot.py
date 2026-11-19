@@ -108,7 +108,7 @@ class SnapshotPurgeReport:
 def validate_source(
     source: RegistryImage | DockerfileSource,
 ) -> RegistryImage | DockerfileSource:
-    """Reject Daytona build inputs it cannot snapshot."""
+    """Reject Daytona build inputs the provider cannot use."""
     if isinstance(source, RegistryImage):
         return source
     source = DockerfileSource(source.context.resolve(), source.dockerfile.resolve())
@@ -143,8 +143,13 @@ def snapshot_name(source: RegistryImage | DockerfileSource, resources: Resources
     return f"{SNAPSHOT_PREFIX}{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
 
 
+def daytona_image(source: RegistryImage | DockerfileSource) -> str | Image:
+    """Convert a validated source to the image argument Daytona builds from."""
+    return source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
+
+
 def snapshot_request_for_spec(spec: MachineSpec) -> SnapshotRequest:
-    """Derive the snapshot a machine spec will create."""
+    """Derive a machine spec's validated image source and provider resources."""
     source = spec.source
     if not isinstance(source, (RegistryImage, DockerfileSource)):
         raise UnsupportedMachineSpec("Daytona requires a registry image or Docker build context")
@@ -179,14 +184,9 @@ async def ensure_snapshot(client: AsyncDaytona, request: SnapshotRequest) -> str
     try:
         snapshot = await _snapshot_metadata(client, name)
     except DaytonaNotFoundError:
-        image = (
-            request.source.reference
-            if isinstance(request.source, RegistryImage)
-            else Image.from_dockerfile(request.source.dockerfile)
-        )
         try:
             snapshot = await client.snapshot.create(
-                CreateSnapshotParams(name=name, image=image, resources=request.resources)
+                CreateSnapshotParams(name=name, image=daytona_image(request.source), resources=request.resources)
             )
         except DaytonaConflictError:
             # Another rollout can create this image through a separate client.

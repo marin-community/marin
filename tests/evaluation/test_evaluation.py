@@ -17,17 +17,7 @@ import pytest
 from click.testing import CliRunner
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
-from iris.resources.state import JobState, TaskState
-from iris.rpc import job_pb2
-from marin.evaluation.harbor.driver_config import (
-    HarborDatasetKind,
-    HarborErrorTaxonomy,
-    ValidatedHarborConfig,
-)
-from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
-from marin.evaluation.records import (
+from evalrecords.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
@@ -39,6 +29,16 @@ from marin.evaluation.records import (
     read_record,
     record_path,
 )
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
+from iris.resources.state import JobState, TaskState
+from iris.rpc import job_pb2
+from marin.evaluation.harbor.driver_config import (
+    HarborDatasetKind,
+    HarborErrorTaxonomy,
+    ValidatedHarborConfig,
+)
+from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.runner import (
     EndpointRoute,
     Evaluation,
@@ -52,7 +52,7 @@ from marin.evaluation.runner import (
     run_with_inference_recovery,
 )
 from marin.evaluation.serving_config import inference_config_for_model
-from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
+from marin.execution.step_status import StatusFile
 from marin.inference.config import (
     EffectiveServing,
     ResolvedModelLocator,
@@ -63,6 +63,7 @@ from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupE
 from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.step_status import STATUS_FAILED, STATUS_SUCCESS
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
 
@@ -565,7 +566,10 @@ def test_evaluation_steps_record_failures_without_blocking_other_steps(tmp_path,
     assert failed.serving == succeeded.serving
     assert succeeded.provenance.eval_runtime == "test-runtime"
     assert succeeded.model.config is not None
-    assert succeeded.model.config.model_dump(mode="json") == json.loads(json.dumps(asdict(batch.model)))
+    expected_config = json.loads(json.dumps(asdict(batch.model)))
+    # An unset NCCL setting is omitted from records so that earlier records keep their config digests.
+    del expected_config["serve"]["vllm_use_nccl_symm_mem"]
+    assert succeeded.model.config.model_dump(mode="json") == expected_config
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
     assert {(row.run_id, row.status) for row in catalog_rows} == {
         ("run-failure", "failed"),
@@ -1060,7 +1064,7 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
 
     assert batch.secret_env == {
         "DAYTONA_API_KEY": (
-            "env:DAYTONA_API_KEY",
+            "env:DAYTONA_EVAL_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         )
     }
@@ -1089,7 +1093,7 @@ def test_build_evaluation_batch_routes_declared_verifier_host_secrets(monkeypatc
 
     assert batch.secret_env == {
         "DAYTONA_API_KEY": (
-            "env:DAYTONA_API_KEY",
+            "env:DAYTONA_EVAL_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         ),
         "TOGETHER_API_KEY": (
@@ -1372,7 +1376,13 @@ def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
         execution = replace(batch, records_prefix=str(tmp_path / "records"), evaluations=(evaluation,))
         _evaluate_with_session(execution, _remote_session(), orchestrator_job_id="/test")
         submitted.append(evaluation.identity)
-        return SimpleNamespace(group_id=batch.group_id, model_name=batch.model.name, evaluations=())
+        return SimpleNamespace(
+            group_id=batch.group_id,
+            job=SimpleNamespace(job_id="/test/eval"),
+            records_prefix=batch.records_prefix,
+            model_name=batch.model.name,
+            evaluations=(),
+        )
 
     monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", lambda **_kwargs: nullcontext(object()))
     monkeypatch.setattr("experiments.evaluation.cli.launch_group", launch)

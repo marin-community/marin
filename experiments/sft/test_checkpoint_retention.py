@@ -14,7 +14,7 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.optim.config import AdamConfig
 from levanter.testing.helpers import use_test_mesh
 from marin.execution.lazy import StepContext
-from marin.training.training import apply_output_path
+from marin.training.levanter import apply_output_path
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.sft.launcher import HFModel, SFTSpec

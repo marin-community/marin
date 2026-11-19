@@ -8,7 +8,7 @@ import runpy
 from pathlib import Path
 
 import yaml
-from marin.evaluation.historical_protocols import HISTORICAL_PROTOCOLS
+from evalrecords.historical_protocols import HISTORICAL_PROTOCOLS
 from taskcompendium.importers.evalchemy.code import CRUX_DIRECTIONS
 
 from experiments.evaluation.catalog import evaluation_benchmarks
