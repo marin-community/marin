@@ -399,7 +399,7 @@ def atlas_curriculum_rows() -> dict[str, dict]:
 
 
 def atlas_contract_receipts() -> dict[str, list[DerivedContractReceipt]]:
-    """Read every archived receipt; publication requires evidence in the served applet."""
+    """Read the archive and select only explicitly superseded, input-bound corrections."""
     result = atlas_applet_query()("SELECT source_id, receipt FROM atlas_derived_contracts ORDER BY receipt_id", {})
     # Select exact archived JSON identities before typed parsing adds legacy defaults.
     populations = defaultdict(list)

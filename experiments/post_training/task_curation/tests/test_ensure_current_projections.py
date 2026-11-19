@@ -334,22 +334,21 @@ def test_served_contract_reader_applies_exact_corrections_before_parsing_legacy_
     fixture = Path(__file__).parents[4] / "infra/marina/apps/rl_data_catalog/tests/fixtures/contract_supersessions.json"
     pair = json.loads(fixture.read_text())[0]
     historical = copy.deepcopy(pair["selected"])
-    historical["input"]["dataset_revision"] = "f" * 40
+    historical_revision = "f" * 40
+    historical["input"]["dataset_revision"] = historical_revision
     rows = [
         {"source_id": pair["source_id"], "receipt": payload}
         for payload in [pair["previous"], pair["selected"], historical]
     ]
-    monkeypatch.setattr(ensure_current_projections, "atlas_applet_query", lambda: lambda sql, params: {"rows": rows})
+    monkeypatch.setattr(ensure_current_projections, "atlas_applet_query", lambda: lambda _sql, _params: {"rows": rows})
     receipts = ensure_current_projections.atlas_contract_receipts()[pair["source_id"]]
     assert len(receipts) == 2
     assert {receipt.input.dataset_revision for receipt in receipts} == {
         pair["selected"]["input"]["dataset_revision"],
         historical["input"]["dataset_revision"],
     }
-    assert (
-        next(receipt for receipt in receipts if receipt.input.dataset_revision != "f" * 40).summary.single_turn_count
-        == pair["selected"]["summary"]["single_turn_count"]
-    )
+    selected = next(receipt for receipt in receipts if receipt.input.dataset_revision != historical_revision)
+    assert selected.summary.single_turn_count == pair["selected"]["summary"]["single_turn_count"]
     unlisted = copy.deepcopy(pair["selected"])
     unlisted["summary"]["single_turn_count"] -= 1
     rows.append({"source_id": pair["source_id"], "receipt": unlisted})
