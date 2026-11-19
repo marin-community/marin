@@ -565,7 +565,7 @@ class SFTSpec:
     optimizer: OptimizerConfig  # e.g. AdamConfig for the Levanter backend
     mesh: MeshConfig | None = None
     seq_len: int = 4096
-    pack: bool = True  # chat packs by default; a step count must count packed examples
+    pack: bool | int = True  # chat packs by default; an integer caps the number of conversations per example
     batch_size: int = 16
     # Training length is exactly one of these. ``num_train_epochs`` (single dataset only) resolves the
     # step count at run time from the chat cache's token total -- ``ceil(epochs * tokens / (seq_len *
@@ -667,14 +667,14 @@ def resources_from_accelerator(accelerator: str) -> ResourceConfig:
 def _chat_format(spec: SFTSpec) -> ChatLmDatasetFormat:
     """Chat format carrying the spec's template plus completions-only (assistant-span) masking.
 
-    ``pack=None`` selects Levanter's default (packs multiple conversations per sequence); ``False``
-    is one conversation per sequence, padded — slower but parity-neutral.
+    ``True`` uses Levanter's default packing limit. An integer sets the limit explicitly.
+    ``False`` pads each conversation and rejects conversations that exceed the context window.
     """
     return ChatLmDatasetFormat(
         messages_field="messages",
         chat_template=spec.chat_template,
         mask_user_turns=True,
-        pack=None if spec.pack else False,
+        pack=None if spec.pack is True else spec.pack,
     )
 
 

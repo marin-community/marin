@@ -3,6 +3,8 @@
 
 """Snowball chat SFT presets for four-node OpenThoughts and #11120 Experiment 2.
 
+OpenThoughts uses one conversation per sequence and keeps its first 32,768 tokens.
+
 Experiment 2's stored sft.yaml at source 442bf9d878 pins 204 updates, 256 sequences of
 262,144 tokens, CP32/EP8, chat packing at 256, per-device parallelism 1, the XLA
 autotuning setting, and a 72,000-second deadline on 32 eight-H100 workers.
@@ -79,7 +81,7 @@ OPENTHOUGHTS_SPEC = SFTSpec(
     ),
     mesh=snowball_mesh(OPENTHOUGHTS_NODES),
     seq_len=32768,
-    pack=False,
+    pack=1,
     batch_size=8,
     num_train_steps=10,
     wandb_project="snowball-sft",
