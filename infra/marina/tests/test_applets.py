@@ -762,8 +762,6 @@ def test_public_applet_surface_serves_only_public_reads(tmp_path: Path, database
     assert updated.status_code == 201
     assert updated.json()["mode"] == "public"
 
-    # Publishing a new selection must close every anonymous route into the old
-    # backend, including its content API and static pages. History stays private.
     for suffix in ("", "app.js", "api/problems", "api/identity"):
         for method in ("GET", "HEAD"):
             assert public_client.request(method, f"{revision_path}{suffix}").status_code == 404
