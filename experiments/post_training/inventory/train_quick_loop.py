@@ -148,7 +148,14 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
                         max_grad_norm=0.5,
                         scheduler="constant_with_warmup",
                         num_warmup_steps=0,
-                    )
+                    ),
+                    # A multi-turn trajectory fills the request window. At that length the last pipeline stage's
+                    # vocabulary log-softmax runs out of memory beside the GPU optimizer state.
+                    megatron_config=sections.PolicyMegatronConfig(
+                        optimizer_config_kwargs=sections.OptimizerConfigKwargs(
+                            optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
+                        )
+                    ),
                 ),
             ),
         )
