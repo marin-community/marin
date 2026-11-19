@@ -4,7 +4,6 @@ import time
 import sys
 import logging
 import math
-import socket
 
 import ray
 import torch
@@ -50,7 +49,7 @@ from marinskyrl.distillation import (
     validate_generation_logprobs,
 )
 from marinskyrl.inference_placement import validate_expert_block_transport
-from marinskyrl.runtime_options import GDNBackend, R3Transport, BatchBuilder, OUTCOME_ADVANTAGE_ESTIMATORS
+from marinskyrl.runtime_options import R3Transport, BatchBuilder, OUTCOME_ADVANTAGE_ESTIMATORS
 
 from .constants import DEFAULT_RAY_PLACEMENT_GROUP_TIMEOUT_SECONDS
 from .algorithm_registry import (
@@ -413,7 +412,6 @@ def validate_batch_sizes(cfg: DictConfig):
 def validate_megatron_cfg(cfg: DictConfig):
     # not yet supported + tested features
     assert cfg.generator.weight_sync_backend == "nccl", "only nccl is supported for megatron weight sync"
-    assert cfg.trainer.critic.model.path is None, "only GRPO training is currently supported for megatron"
 
     worker_configs = [(cfg.trainer.policy, "policy"), (cfg.trainer.ref, "ref")]
     for config, worker_type in worker_configs:
@@ -505,8 +503,6 @@ def validate_cfg(cfg: DictConfig):
     validate_mismatch_probe_config(cfg)
     if cfg.trainer.strategy != "megatron":
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")
-    if cfg.trainer.critic.model.path:
-        raise ValueError("Megatron does not support a critic worker")
     distillation_plan = compile_distillation_plan_from_config(cfg)
     validate_distillation_runtime_support(distillation_plan)
     validate_nemotron_ultra_grading(cfg, distillation_plan)
@@ -555,19 +551,12 @@ def validate_cfg(cfg: DictConfig):
             "trainer.algorithm.group_admission.stall_timeout must be positive when set; got "
             f"{group_admission_stall_timeout}"
         )
-    if cfg.trainer.algorithm.tis_lcs_alert_threshold < 0:
-        raise ValueError(
-            "trainer.algorithm.tis_lcs_alert_threshold must be non-negative; "
-            f"got {cfg.trainer.algorithm.tis_lcs_alert_threshold}"
-        )
     if cfg.trainer.progress.mode not in {"auto", "tqdm", "logging"}:
         raise ValueError(f"trainer.progress.mode must be one of auto, tqdm, logging; got {cfg.trainer.progress.mode!r}")
     if cfg.generator.r3_transport not in set(R3Transport):
         raise ValueError(
             f"generator.r3_transport must be one of by_value, resident, decentral; got {cfg.generator.r3_transport!r}"
         )
-    if cfg.generator.gdn_backend not in set(GDNBackend):
-        raise ValueError(f"generator.gdn_backend must be one of torch, flashqla; got {cfg.generator.gdn_backend!r}")
     available_policy_losses = PolicyLossRegistry.list_available()
     assert available_policy_losses != [], "Policy loss registry is not populated."
     assert cfg.trainer.algorithm.policy_loss_type in available_policy_losses, (
@@ -583,12 +572,6 @@ def validate_cfg(cfg: DictConfig):
         resolve_grug_query_bias_update(cfg.trainer.policy)
     except ValueError as error:
         raise AssertionError(str(error)) from error
-
-    # if advantage estimator is GAE, then critic path should be provided
-    if cfg.trainer.algorithm.advantage_estimator == "gae":
-        assert cfg.trainer.critic.model.path, (
-            "`trainer.critic.model.path` should be provided for PPO training, got `None`"
-        )
 
     assert not (cfg.trainer.algorithm.use_kl_in_reward and cfg.trainer.algorithm.use_kl_loss), (
         "use_kl_in_reward and use_kl_loss should be mutually exclusive"
@@ -1140,7 +1123,6 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
         gpu_counts.extend(
             [
                 placement.policy_num_gpus_per_node,
-                placement.critic_num_gpus_per_node,
                 placement.ref_num_gpus_per_node,
             ]
         )
@@ -1451,11 +1433,3 @@ def get_tcp_url(host: str, port: int) -> str:
         # not a literal IP, probably a hostname
         pass
     return f"tcp://{host}:{port}"
-
-
-def get_free_port():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
