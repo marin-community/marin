@@ -133,7 +133,7 @@ def _write_sample(selection: str, filename: str, count: int, seed: int, output: 
             annotation = panel.tasks.get(task_id)
             if annotation is None:
                 identity = panel.identity(task_id)
-                annotation = SelectionTaskRow(task_id=task_id, **identity.strata.model_dump(), agentic=identity.agentic)
+                annotation = SelectionTaskRow(task_id=task_id, **identity.strata.model_dump())
             annotations.append(
                 annotation.model_copy(
                     update={"task_digest": canonical_sha256(document), "state": MembershipState.ACTIVE}

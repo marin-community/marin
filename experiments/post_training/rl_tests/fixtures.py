@@ -475,7 +475,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                             task_id=item,
                             data_source="fixture",
                             strata=panel.identity(item).strata if panel is not None else TaskStrata(),
-                            agentic=panel.identity(item).agentic if panel is not None else None,
+                            task_digest=panel.tasks[item].task_digest if panel is not None else None,
                             score=sum(answer.verifier_score or 0.0 for answer in answers) / len(answers),
                             outcome=Outcome.GRADED,
                             error_type=None,

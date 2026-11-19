@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Versioned task strata shared by selection writers and evaluation readers."""
+"""Versioned task strata shared by selection writers and evaluation readers.
+
+Add labels as fields with defaults so readers can fill them in for older stores.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +29,17 @@ class TaskStrata(BaseModel):
     source: str = "untagged"
     topic: str = "untagged"
     difficulty: str = "untagged"
+    agentic: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_missing_labels(cls, value):
+        # Arrow fills absent fields with null when scanning shards with different schemas.
+        if isinstance(value, dict):
+            return {
+                key: field for key, field in value.items() if field is not None or key not in TaskStrata.model_fields
+            }
+        return value
 
 
 class TaskEvaluationIdentity(BaseModel):
@@ -34,7 +48,7 @@ class TaskEvaluationIdentity(BaseModel):
     panel_name: str | None = None
     panel_version: str | None = None
     strata: TaskStrata = TaskStrata()
-    agentic: bool | None = None
+    task_digest: str | None = None
 
 
 class MembershipState(StrEnum):
@@ -67,7 +81,6 @@ class SelectionTaskRow(TaskStrata):
 
     task_id: str
     task_digest: str | None = None
-    agentic: bool | None = None
     measured_difficulty: float | None = None
     state: MembershipState = MembershipState.CANDIDATE
     retirement_reason: str | None = None
@@ -127,7 +140,7 @@ class SelectionStrata:
             panel_name=self.definition.name,
             panel_version=self.definition.version,
             strata=row.strata,
-            agentic=row.agentic,
+            task_digest=row.task_digest,
         )
 
 
