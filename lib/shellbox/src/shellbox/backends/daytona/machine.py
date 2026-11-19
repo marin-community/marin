@@ -121,7 +121,8 @@ async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
     async with asyncio.timeout(INTERRUPT_TIMEOUT):
         while True:
             try:
-                await client.delete(await client.get(name))
+                sandbox = await client.get(name)
+                await client.delete(sandbox)
                 return
             except DaytonaNotFoundError:
                 return
